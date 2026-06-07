@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>VoiceOfML Search</title>
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body class="dark">
+
+<!-- ═══════════ Header ═══════════ -->
+<header id="header">
+  <div class="header-left">
+    <button id="hamburger-btn" class="icon-btn" aria-label="菜单" title="侧边栏 (Ctrl+B)">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="4" y1="6" x2="20" y2="6"/>
+        <line x1="4" y1="12" x2="20" y2="12"/>
+        <line x1="4" y1="18" x2="20" y2="18"/>
+      </svg>
+    </button>
+    <a id="header-logo" class="header-logo" href="/" title="VoiceOfML">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+      </svg>
+      <span id="header-title">VoiceOfML</span>
+    </a>
+  </div>
+
+  <div class="header-center">
+    <div class="search-box" id="search-box">
+      <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input type="search" id="search-input" class="search-input"
+             placeholder="搜索 VoiceOfML 数据仓库..."
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <kbd class="search-kbd" id="search-kbd">/</kbd>
+    </div>
+  </div>
+
+  <div class="header-right">
+    <button id="settings-btn" class="icon-btn" aria-label="搜索设置" title="搜索过滤">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        <line x1="8" y1="11" x2="14" y2="11"/>
+        <line x1="11" y1="8" x2="11" y2="14"/>
+      </svg>
+    </button>
+    <button id="theme-btn" class="icon-btn" aria-label="切换主题" title="深色/浅色模式">
+      <svg id="theme-icon-light" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>
+      <svg id="theme-icon-dark" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+      </svg>
+    </button>
+    <button id="mobile-toggle-btn" class="icon-btn" aria-label="切换视图" title="手机/电脑版">
+      <svg id="mobile-icon-phone" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none">
+        <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
+        <line x1="12" y1="18" x2="12.01" y2="18"/>
+      </svg>
+      <svg id="mobile-icon-desktop" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+        <line x1="8" y1="21" x2="16" y2="21"/>
+        <line x1="12" y1="17" x2="12" y2="21"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<!-- ═══════════ Layout Body ═══════════ -->
+<div id="app-body" class="app-body">
+
+  <!-- Left Sidebar -->
+  <aside id="left-sidebar" class="sidebar left-sidebar">
+    <div class="sidebar-header">
+      <span id="sidebar-title">仓库列表</span>
+      <button id="sidebar-expand-btn" class="icon-btn-sm" title="展开/收起侧边栏" style="display:none">↔</button>
+    </div>
+    <div id="sidebar-content" class="sidebar-content">
+      <div class="sidebar-loading">加载中...</div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main id="main-content" class="main-content">
+
+    <!-- Status Bar -->
+    <div id="status-bar" class="status-bar">
+      <div class="status-left">
+        <span id="result-count" class="result-count"></span>
+        <span id="did-you-mean" class="did-you-mean"></span>
+      </div>
+      <div class="status-right">
+        <button id="clear-filters-btn" class="text-btn" style="display:none">清空筛选</button>
+        <div class="sort-group">
+          <span class="sort-label">排序:</span>
+          <select id="sort-select" class="sort-select">
+            <option value="relevance">相关度</option>
+            <option value="name">文件名</option>
+            <option value="size">文件大小</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="results-container" class="results-container">
+      <div id="results-list" class="results-list"></div>
+      <div id="results-loading" class="loading-spinner" style="display:none">
+        <div class="spinner"></div>
+      </div>
+      <div id="empty-state" class="empty-state" style="display:none">
+        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          <line x1="8" y1="11" x2="14" y2="11"/>
+        </svg>
+        <div class="empty-title">没有找到结果</div>
+        <div id="empty-desc" class="empty-desc">试试其他关键词</div>
+        <button id="empty-random-btn" class="random-big-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
+            <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+          </svg>
+          随机来本书
+        </button>
+      </div>
+    </div>
+
+    <!-- Load Info -->
+    <div id="load-info" class="load-info" style="display:none">
+      已加载 <span id="loaded-count">0</span> / <span id="total-count">0</span> 条
+    </div>
+
+    <!-- Quick Scroll -->
+    <div id="scroll-track" class="scroll-track">
+      <div id="scroll-thumb" class="scroll-thumb"></div>
+    </div>
+  </main>
+
+  <!-- Right Sidebar (Filters) -->
+  <aside id="right-sidebar" class="sidebar right-sidebar">
+    <div class="sidebar-header">
+      <span>搜索过滤</span>
+      <button id="close-filters-btn" class="icon-btn-sm" aria-label="关闭过滤">&times;</button>
+    </div>
+    <div class="sidebar-content">
+      <!-- 搜索文件夹名开关 -->
+      <div class="filter-section" id="search-folders-section">
+        <label class="toggle-row">
+          <span class="toggle-label">搜索文件夹名</span>
+          <input type="checkbox" id="search-folders-toggle" checked>
+          <span class="toggle-switch"></span>
+        </label>
+      </div>
+      
+      <!-- Repo Filter -->
+      <div id="filter-repo-section" class="filter-section">
+        <div class="filter-section-title">仓库过滤</div>
+        <div id="filter-repo-list" class="filter-checkbox-list"></div>
+      </div>
+
+      <!-- Folder Tree Filter -->
+      <div id="filter-folder-section" class="filter-section">
+        <div class="filter-section-title">
+          <span>路径过滤</span>
+          <span class="filter-actions">
+            <button id="folder-select-all" class="text-btn-sm">全选</button>
+            <button id="folder-deselect-all" class="text-btn-sm">反选</button>
+          </span>
+        </div>
+        <div id="filter-folder-tree" class="filter-folder-tree"></div>
+      </div>
+
+      <!-- Extension Filter -->
+      <div class="filter-section">
+        <div class="filter-section-title">
+          <span>文件类型</span>
+          <span class="filter-actions">
+            <button id="ext-select-all" class="text-btn-sm">全选</button>
+            <button id="ext-deselect-all" class="text-btn-sm">反选</button>
+          </span>
+        </div>
+        <div id="filter-ext-list" class="filter-checkbox-list"></div>
+      </div>
+
+      <!-- Size Filter -->
+      <div class="filter-section">
+        <div class="filter-section-title">文件大小</div>
+        <div class="filter-size-row">
+          <input type="number" id="filter-min-size" class="size-input" placeholder="最小 (字节)" min="0" step="1">
+          <span class="size-sep">—</span>
+          <input type="number" id="filter-max-size" class="size-input" placeholder="最大 (字节)" min="0" step="1">
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ═══════════ Footer ═══════════ -->
+<footer id="footer" class="footer">
+  <div id="hitokoto" class="hitokoto"></div>
+  <button id="random-book-btn" class="random-book-btn" title="随机来本书">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
+      <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+    </svg>
+    随机来本书
+  </button>
+</footer>
+
+<!-- Overlay (mobile) -->
+<div id="overlay" class="overlay" style="display:none"></div>
+
+<!-- Toast -->
+<div id="toast" class="toast" style="display:none"></div>
+
+<script src="static/app.js"></script>
+</body>
+</html>
