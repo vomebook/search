@@ -315,6 +315,20 @@ function doSearchLocal(params) {
   return { results: paged, total, page, pageSize, didYouMean };
 }
 
+function getCurrentExtensionCounts() {
+  if (STATE.mode === "repo" && STATE.repoFull) {
+    var counts = {};
+    for (var i = 0; i < RECORDS.length; i++) {
+      if (RECORDS[i].Repo === STATE.repoFull) {
+        var ext = (RECORDS[i].Extension || "").toLowerCase();
+        if (ext) counts[ext] = (counts[ext] || 0) + 1;
+      }
+    }
+    return counts;
+  }
+  return extensionCounts;
+}
+
 /* ═══════════════════════════════════════════════════════════
    Folder Tree
    ========================================================== */
@@ -985,15 +999,16 @@ function renderRepoFilter() {
 }
 
 function renderExtensionFilter() {
+  var currentCounts = getCurrentExtensionCounts();
   var ordered = [];
   var rest = [];
   for (var i = 0; i < extensionList.length; i++) {
     var ext = extensionList[i];
     var idx = ORDERED_EXTENSIONS.indexOf(ext);
     if (idx >= 0) {
-      ordered.push({ name: ext, _idx: idx, count: extensionCounts[ext] || 0 });
+      ordered.push({ name: ext, _idx: idx, count: currentCounts[ext] || 0 });
     } else {
-      rest.push({ name: ext, count: extensionCounts[ext] || 0 });
+      rest.push({ name: ext, count: currentCounts[ext] || 0 });
     }
   }
   ordered.sort(function(a, b) { return a._idx - b._idx; });
