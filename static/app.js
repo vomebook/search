@@ -583,7 +583,7 @@ const ROUTER = {
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
     if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
-    if (STATE.filterFolders.length) sp.set("path", STATE.filterFolders.join(","));
+    if (STATE.browserPath) sp.set("path", STATE.browserPath);
     if (DOM.sortSelect.value !== "relevance") sp.set("sort", DOM.sortSelect.value);
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
@@ -635,9 +635,9 @@ const ROUTER = {
     }
  
     if (route.params.path) {
-      STATE.filterFolders = route.params.path.split(",").filter(Boolean);
+      STATE.browserPath = route.params.path;
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
-      STATE.filterFolders = [];
+      STATE.browserPath = "";
     }
  
     if (route.params.sort) DOM.sortSelect.value = route.params.sort;
@@ -701,7 +701,6 @@ function syncStateToURL() {
     });
   }
   if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
-  if (STATE.filterFolders.length) sp.set("path", STATE.filterFolders.join(","));
   if (DOM.sortSelect.value !== "relevance") sp.set("sort", DOM.sortSelect.value);
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
