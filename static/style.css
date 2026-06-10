@@ -627,6 +627,14 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  contain: layout style paint;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  will-change: scroll-position;
+}
+
+.results-list {
+  contain: layout style;
 }
 
 /* ── Result Item ─────────────────────────────────────── */
