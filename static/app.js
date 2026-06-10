@@ -858,7 +858,7 @@ function vsTotalHeight() {
 }
 
 function vsCalcRange() {
-  if (vsItems.length === 0) { vsStart = 0; vsEnd = 0; return; }
+  if (vsItems.length === 0) { vsStart = 0; vsEnd = 0; vsFlush(); return; }
   var st = DOM.resultsContainer.scrollTop;
   var vh = DOM.resultsContainer.clientHeight;
   var acc = 0, ns = 0, ne = 0;
