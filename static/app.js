@@ -146,15 +146,6 @@ function buildIndex() {
   extensionList = Object.keys(extensionCounts).sort();
 }
  
-function normalizeLink(link) {
-  if (typeof link !== "string" || !link) return link;
-  const qIdx = link.indexOf("?/datasets/VoiceOfML/");
-  if (qIdx === -1) return link;
-  const etagIdx = link.indexOf("=&etag=", qIdx);
-  if (etagIdx === -1) return link;
-  return "https://huggingface.co" + link.substring(qIdx + 1, etagIdx);
-}
-
 async function loadData() {
   try {
     const resp = await fetch(DATA_URL);
@@ -164,16 +155,7 @@ async function loadData() {
     const stream = new Response(new Uint8Array(buf)).body.pipeThrough(ds);
     const text = await new Response(stream).text();
     RECORDS = JSON.parse(text);
-    let fixed = 0;
-    for (let i = 0; i < RECORDS.length; i++) {
-      const orig = RECORDS[i].Link;
-      const norm = normalizeLink(orig);
-      if (norm !== orig) {
-        RECORDS[i].Link = norm;
-        fixed++;
-      }
-    }
-    console.log("Loaded " + RECORDS.length.toLocaleString() + " records" + (fixed > 0 ? " (fixed " + fixed + " bad links)" : ""));
+    console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
     buildIndex();
     console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
     return true;
@@ -558,7 +540,15 @@ function formatSize(bytes) {
 function getFileIconType(ext) {
   return FILE_ICON_MAP[(ext || "").toLowerCase()] || "file";
 }
- 
+
+function sanitizeDownloadLink(link, ext) {
+  if (!link) return link;
+  if (ext === "html" || ext === "htm") {
+    return link.replace("/resolve/main/", "/raw/main/");
+  }
+  return link;
+}
+
 function highlightText(text, query) {
   if (!query || !text) return escapeHTML(text);
   const escaped = escapeHTML(text);
@@ -852,6 +842,7 @@ function buildResultHTML(rec) {
   const titleHTML = highlightText(rec.File, STATE.query);
   const repoShort = (rec.Repo || "").split("/").pop();
   const sizeStr = formatSize(rec.Size);
+  const dlLink = sanitizeDownloadLink(rec.Link, rec.Extension);
 
   const breadcrumb = (rec.Folder || []).map((f, j) => {
     const accum = (rec.Folder || []).slice(0, j + 1).join("/");
@@ -872,8 +863,8 @@ function buildResultHTML(rec) {
       '</div>' +
     '</div>' +
     '<div class="result-actions">' +
-      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(rec.Link) + '">复制链接</button>' +
-      '<a href="' + escapeHTML(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
+      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(dlLink) + '">复制链接</button>' +
+      '<a href="' + escapeHTML(dlLink) + '" class="result-action-btn primary" target="_blank">下载</a>' +
       '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
       (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
@@ -1084,7 +1075,7 @@ function renderBrowser(path) {
             window.open(TXT_BASE + "/" + encodeURIComponent(txtPath) + ".txt", "_blank");
             return;
           }
-          if (ff.link) window.open(ff.link, "_blank");
+          if (ff.link) window.open(sanitizeDownloadLink(ff.link, ff.ext), "_blank");
         };
       }(f2));
       list.appendChild(div2);
@@ -1399,7 +1390,7 @@ function typewriter(el, text, speed) {
 function randomBook() {
   const rec = getRandom(STATE.repoFull);
   if (rec && rec.Link) {
-    window.open(rec.Link, "_blank");
+    window.open(sanitizeDownloadLink(rec.Link, rec.Extension), "_blank");
   } else {
     showToast("暂无可用记录");
   }
@@ -1667,7 +1658,7 @@ function setupKeyboard() {
       }
       if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
         const rec = STATE.results[keyboardResultIndex];
-        if (rec && rec.Link) window.open(rec.Link, "_blank");
+        if (rec && rec.Link) window.open(sanitizeDownloadLink(rec.Link, rec.Extension), "_blank");
         return;
       }
     }
