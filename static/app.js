@@ -543,7 +543,12 @@ function getFileIconType(ext) {
 
 function sanitizeDownloadLink(link, ext) {
   if (!link) return link;
-  if (ext === "html" || ext === "htm") {
+  var resolveCacheExts = {
+    html:1, htm:1, css:1, js:1, xml:1, json:1, md:1, markdown:1,
+    csv:1, ini:1, bat:1, vcf:1, url:1, mht:1, aspx:1, php:1,
+    hhc:1, rtf:1, tif:1, svg:1
+  };
+  if (resolveCacheExts[(ext || "").toLowerCase()]) {
     return link.replace("/resolve/main/", "/raw/main/");
   }
   return link;
@@ -864,7 +869,7 @@ function buildResultHTML(rec) {
     '</div>' +
     '<div class="result-actions">' +
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(dlLink) + '">复制链接</button>' +
-      '<a href="' + escapeHTML(dlLink) + '" class="result-action-btn primary" target="_blank">下载</a>' +
+      '<a href="' + escapeHTML(dlLink) + '" class="result-action-btn primary" target="_blank" download>下载</a>' +
       '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
       (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
