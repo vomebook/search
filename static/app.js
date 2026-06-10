@@ -540,20 +540,7 @@ function formatSize(bytes) {
 function getFileIconType(ext) {
   return FILE_ICON_MAP[(ext || "").toLowerCase()] || "file";
 }
-
-function sanitizeDownloadLink(link, ext) {
-  if (!link) return link;
-  var resolveCacheExts = {
-    html:1, htm:1, css:1, js:1, xml:1, json:1, md:1, markdown:1,
-    csv:1, ini:1, bat:1, vcf:1, url:1, mht:1, aspx:1, php:1,
-    hhc:1, rtf:1, tif:1, svg:1
-  };
-  if (resolveCacheExts[(ext || "").toLowerCase()]) {
-    return link.replace("/resolve/main/", "/raw/main/");
-  }
-  return link;
-}
-
+ 
 function highlightText(text, query) {
   if (!query || !text) return escapeHTML(text);
   const escaped = escapeHTML(text);
@@ -847,7 +834,6 @@ function buildResultHTML(rec) {
   const titleHTML = highlightText(rec.File, STATE.query);
   const repoShort = (rec.Repo || "").split("/").pop();
   const sizeStr = formatSize(rec.Size);
-  const dlLink = sanitizeDownloadLink(rec.Link, rec.Extension);
 
   const breadcrumb = (rec.Folder || []).map((f, j) => {
     const accum = (rec.Folder || []).slice(0, j + 1).join("/");
@@ -868,8 +854,8 @@ function buildResultHTML(rec) {
       '</div>' +
     '</div>' +
     '<div class="result-actions">' +
-      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(dlLink) + '">复制链接</button>' +
-      '<a href="' + escapeHTML(dlLink) + '" class="result-action-btn primary" target="_blank" download>下载</a>' +
+      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(rec.Link) + '">复制链接</button>' +
+      '<a href="' + escapeHTML(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
       '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
       (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
@@ -1080,7 +1066,7 @@ function renderBrowser(path) {
             window.open(TXT_BASE + "/" + encodeURIComponent(txtPath) + ".txt", "_blank");
             return;
           }
-          if (ff.link) window.open(sanitizeDownloadLink(ff.link, ff.ext), "_blank");
+          if (ff.link) window.open(ff.link, "_blank");
         };
       }(f2));
       list.appendChild(div2);
@@ -1395,7 +1381,7 @@ function typewriter(el, text, speed) {
 function randomBook() {
   const rec = getRandom(STATE.repoFull);
   if (rec && rec.Link) {
-    window.open(sanitizeDownloadLink(rec.Link, rec.Extension), "_blank");
+    window.open(rec.Link, "_blank");
   } else {
     showToast("暂无可用记录");
   }
@@ -1663,7 +1649,7 @@ function setupKeyboard() {
       }
       if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
         const rec = STATE.results[keyboardResultIndex];
-        if (rec && rec.Link) window.open(sanitizeDownloadLink(rec.Link, rec.Extension), "_blank");
+        if (rec && rec.Link) window.open(rec.Link, "_blank");
         return;
       }
     }
