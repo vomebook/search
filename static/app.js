@@ -71,6 +71,8 @@ let extensionCounts = {};
 let repoCounts = {};
 let folderIndex = {};
 let didYouMeanVocab = {};
+let sortedVocab = [];
+let folderPrefixSets = [];
 let repoList = [];
 let extensionList = [];
  
@@ -113,15 +115,19 @@ function buildIndex() {
   repoCounts = {};
   folderIndex = {};
   didYouMeanVocab = {};
- 
+  folderPrefixSets = new Array(RECORDS.length);
+
   for (let i = 0; i < RECORDS.length; i++) {
     const rec = RECORDS[i];
     const repo = rec.Repo || "";
     const ext = (rec.Extension || "").toLowerCase();
- 
+
+    rec._repoLower = repo.toLowerCase();
+    rec._fileLower = (rec.File || "").toLowerCase();
+
     repoCounts[repo] = (repoCounts[repo] || 0) + 1;
     if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
- 
+
     const folders = rec.Folder || [];
     const text = [rec.File || "", ...folders].join(" ");
     const tokens = tokenize(text);
@@ -130,33 +136,53 @@ function buildIndex() {
       wordIndex[tok].push(i);
       didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
     }
- 
+
     if (!folderIndex[repo]) folderIndex[repo] = {};
     for (let d = 0; d <= folders.length; d++) {
       const fp = d === 0 ? "" : folders.slice(0, d).join("/");
       if (!folderIndex[repo][fp]) folderIndex[repo][fp] = [];
       folderIndex[repo][fp].push(i);
     }
+
+    var prefixes = new Set();
+    for (var d2 = 0; d2 <= folders.length; d2++) {
+      prefixes.add(d2 === 0 ? "" : folders.slice(0, d2).join("/"));
+    }
+    folderPrefixSets[i] = prefixes;
   }
- 
+
   repoList = Object.entries(repoCounts)
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => a.name.localeCompare(b.name));
- 
+
   extensionList = Object.keys(extensionCounts).sort();
+
+  sortedVocab = Object.entries(didYouMeanVocab)
+    .sort((a, b) => b[1] - a[1])
+    .map(function(e) { return e[0]; });
 }
  
 async function loadData() {
   try {
+    DOM.loadingBarFill.style.width = "10%";
+    DOM.loadingBarText.textContent = "正在下载搜索索引...";
     const resp = await fetch(DATA_URL);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
+    DOM.loadingBarFill.style.width = "50%";
+    DOM.loadingBarText.textContent = "正在解压...";
     const buf = await resp.arrayBuffer();
+    DOM.loadingBarFill.style.width = "60%";
     const ds = new DecompressionStream("gzip");
     const stream = new Response(new Uint8Array(buf)).body.pipeThrough(ds);
     const text = await new Response(stream).text();
+    DOM.loadingBarFill.style.width = "85%";
+    DOM.loadingBarText.textContent = "正在解析...";
     RECORDS = JSON.parse(text);
+    DOM.loadingBarFill.style.width = "92%";
+    DOM.loadingBarText.textContent = "正在建立索引...";
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
     buildIndex();
+    DOM.loadingBarFill.style.width = "100%";
     console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
     return true;
   } catch (e) {
@@ -172,13 +198,14 @@ async function loadData() {
 function scoreRecord(recIdx, tokens, searchFolders) {
   const rec = RECORDS[recIdx];
   let score = 0;
-  const fname = (rec.File || "").toLowerCase();
-  const repo = (rec.Repo || "").toLowerCase();
+  const fname = rec._fileLower;
+  const repo = rec._repoLower;
   for (const tok of tokens) {
     if (fname.includes(tok)) score += 3;
     if (searchFolders) {
-      for (const folder of (rec.Folder || [])) {
-        if (folder.toLowerCase().includes(tok)) score += 2;
+      const folders = rec.Folder || [];
+      for (let fi = 0; fi < folders.length; fi++) {
+        if (folders[fi].toLowerCase().includes(tok)) score += 2;
       }
     }
     if (repo.includes(tok)) score += 1;
@@ -187,6 +214,13 @@ function scoreRecord(recIdx, tokens, searchFolders) {
 }
  
 function applyFilters(indices, repos, extensions, folders, minSize, maxSize) {
+  var cleanFolders = null;
+  if (folders && folders.length > 0) {
+    cleanFolders = [];
+    for (var fi = 0; fi < folders.length; fi++) {
+      cleanFolders.push(folders[fi].replace(/^\/+|\/+$/g, ""));
+    }
+  }
   return indices.filter(idx => {
     const rec = RECORDS[idx];
     if (repos && repos.length > 0 && !repos.includes(rec.Repo)) return false;
@@ -194,20 +228,12 @@ function applyFilters(indices, repos, extensions, folders, minSize, maxSize) {
       const ext = (rec.Extension || "").toLowerCase();
       if (!extensions.includes(ext)) return false;
     }
-    if (folders && folders.length > 0) {
-      const recFolders = rec.Folder || [];
-      let matched = false;
-      for (const f of folders) {
-        const clean = f.replace(/^\/+|\/+$/g, "");
-        if (clean === "") {
-          if (recFolders.length === 0) { matched = true; break; }
-        } else {
-          for (let d = 0; d <= recFolders.length; d++) {
-            const prefix = d === 0 ? "" : recFolders.slice(0, d).join("/");
-            if (prefix === clean) { matched = true; break; }
-          }
-          if (matched) break;
-        }
+    if (cleanFolders) {
+      var pset = folderPrefixSets[idx];
+      if (!pset) return false;
+      var matched = false;
+      for (var ci = 0; ci < cleanFolders.length; ci++) {
+        if (pset.has(cleanFolders[ci])) { matched = true; break; }
       }
       if (!matched) return false;
     }
@@ -231,15 +257,20 @@ function doSearchLocal(params) {
   const searchFolders = params.searchFolders !== false;
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
- 
+
   let matched = [];
   let didYouMean = null;
- 
+  const hasFilters = repos || extensions || folders || minSize !== null || maxSize !== null;
+
   if (!q) {
-    matched = Array.from({ length: RECORDS.length }, (_, i) => i);
+    if (hasFilters) {
+      for (var i = 0; i < RECORDS.length; i++) matched.push(i);
+    } else {
+      matched = Array.from({ length: RECORDS.length }, function(_, i) { return i; });
+    }
   } else {
     const tokens = tokenize(q);
- 
+
     let exact = null;
     for (const tok of tokens) {
       const idxs = wordIndex[tok];
@@ -247,16 +278,19 @@ function doSearchLocal(params) {
       if (exact === null) exact = [...idxs];
       else exact = exact.filter(i => idxs.includes(i));
     }
- 
+
     let fuzzy = [];
     for (const tok of tokens) {
       if (wordIndex[tok]) continue;
       const candidates = [];
-      const sortedVocab = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
-      for (const [vocab] of sortedVocab) {
+      for (var vi = 0; vi < sortedVocab.length; vi++) {
+        const vocab = sortedVocab[vi];
         if (Math.abs(vocab.length - tok.length) > 2) continue;
         if (editDistance(tok, vocab) <= 2) {
-          candidates.push(...(wordIndex[vocab] || []));
+          var vIdxs = wordIndex[vocab];
+          if (vIdxs) {
+            for (var vj = 0; vj < vIdxs.length; vj++) candidates.push(vIdxs[vj]);
+          }
           if (candidates.length >= 200) break;
         }
       }
@@ -265,20 +299,21 @@ function doSearchLocal(params) {
         else fuzzy = fuzzy.filter(i => candidates.includes(i));
       }
     }
- 
+
     if (exact && exact.length > 0) {
       matched = exact;
       if (fuzzy.length > 0) matched = [...matched, ...fuzzy.filter(i => !exact.includes(i))];
     } else if (fuzzy.length > 0) {
       matched = fuzzy;
     }
- 
+
     if (matched.length < 10) {
       const suggestions = [];
       for (const tok of tokens) {
         if (wordIndex[tok]) continue;
         let best = null, bestDist = 999;
-        for (const vocab of Object.keys(didYouMeanVocab)) {
+        for (var si = 0; si < sortedVocab.length; si++) {
+          const vocab = sortedVocab[si];
           if (Math.abs(vocab.length - tok.length) > 2) continue;
           const dist = editDistance(tok, vocab);
           if (dist < bestDist) { bestDist = dist; best = vocab; }
@@ -288,14 +323,14 @@ function doSearchLocal(params) {
       if (suggestions.length > 0) didYouMean = suggestions.join(" ");
     }
   }
- 
+
   let filtered = applyFilters(matched, repos, extensions, folders, minSize, maxSize);
   const tokens = q ? tokenize(q) : [];
   const scored = filtered.map(idx => ({
     idx,
     score: q ? scoreRecord(idx, tokens, searchFolders) : 0
   }));
- 
+
   if (sort === "name") {
     scored.sort((a, b) => (RECORDS[a.idx].File || "").localeCompare(RECORDS[b.idx].File || "", "zh"));
   } else if (sort === "size") {
@@ -307,11 +342,11 @@ function doSearchLocal(params) {
   } else {
     scored.sort((a, b) => b.score - a.score);
   }
- 
+
   const total = scored.length;
   const start = (page - 1) * pageSize;
   const paged = scored.slice(start, start + pageSize).map(s => RECORDS[s.idx]);
- 
+
   return { results: paged, total, page, pageSize, didYouMean };
 }
  
@@ -363,45 +398,42 @@ function buildFilterFolderTree(repo) {
 function getFolderContents(repo, path) {
   const pathParts = path ? path.split("/").filter(Boolean) : [];
   const pathDepth = pathParts.length;
- 
-  const matching = RECORDS.filter(rec => {
-    if (rec.Repo !== repo) return false;
-    const folders = rec.Folder || [];
-    if (folders.length < pathDepth) return false;
-    for (let i = 0; i < pathDepth; i++) {
-      if (folders[i] !== pathParts[i]) return false;
-    }
-    return true;
-  });
- 
+
+  const candidates = (folderIndex[repo] && folderIndex[repo][path || ""]) ? folderIndex[repo][path || ""] : [];
+
   const subfolders = {};
-  for (const rec of matching) {
+  const fileList = [];
+
+  for (var ci = 0; ci < candidates.length; ci++) {
+    const rec = RECORDS[candidates[ci]];
+    if (rec.Repo !== repo) continue;
     const folders = rec.Folder || [];
+    if (folders.length < pathDepth) continue;
+    for (var pd = 0; pd < pathDepth; pd++) {
+      if (folders[pd] !== pathParts[pd]) { pd = -1; break; }
+    }
+    if (pd === -1) continue;
     if (folders.length > pathDepth) {
       const name = folders[pathDepth];
       subfolders[name] = (subfolders[name] || 0) + 1;
+    } else {
+      fileList.push({
+        name: rec.File || "",
+        ext: rec.Extension || "",
+        link: rec.Link || "",
+        path: rec.Path || "",
+        hasTxt: rec.HasTxt || false,
+        size: rec.Size || "",
+      });
     }
   }
+
   const folderList = Object.entries(subfolders)
-    .map(([name, count]) => ({
-      name,
-      path: pathParts.concat([name]).join("/"),
-      count,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
- 
-  const fileList = matching
-    .filter(rec => (rec.Folder || []).length === pathDepth)
-    .map(rec => ({
-      name: rec.File || "",
-      ext: rec.Extension || "",
-      link: rec.Link || "",
-      path: rec.Path || "",
-      hasTxt: rec.HasTxt || false,
-      size: rec.Size || "",
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
- 
+    .map(function(e) { return { name: e[0], path: pathParts.concat([e[0]]).join("/"), count: e[1] }; })
+    .sort(function(a, b) { return a.name.localeCompare(b.name); });
+
+  fileList.sort(function(a, b) { return a.name.localeCompare(b.name); });
+
   return { folders: folderList, files: fileList, current_path: path };
 }
  
@@ -472,6 +504,9 @@ function cacheDOM() {
   DOM.resultsList = $("#results-list");
   DOM.resultsContainer = $("#results-container");
   DOM.resultsLoading = $("#results-loading");
+  DOM.loadingBarContainer = $("#results-loading-bar");
+  DOM.loadingBarFill = $("#loading-bar-fill");
+  DOM.loadingBarText = document.querySelector(".loading-bar-text");
   DOM.emptyState = $("#empty-state");
   DOM.emptyDesc = $("#empty-desc");
   DOM.emptyRandomBtn = $("#empty-random-btn");
@@ -582,8 +617,12 @@ const ROUTER = {
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
+    if (mode === "global") {
+      STATE.filterRepos.forEach(function(r) {
+        sp.append("repo", r.split("/").pop());
+      });
+    }
     if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
-    if (STATE.filterFolders.length) sp.set("path", STATE.filterFolders.join(","));
     if (DOM.sortSelect.value !== "relevance") sp.set("sort", DOM.sortSelect.value);
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
@@ -635,9 +674,9 @@ const ROUTER = {
     }
  
     if (route.params.path) {
-      STATE.filterFolders = route.params.path.split(",").filter(Boolean);
-    } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
-      STATE.filterFolders = [];
+      STATE.browserPath = route.params.path;
+    } else {
+      STATE.browserPath = "";
     }
  
     if (route.params.sort) DOM.sortSelect.value = route.params.sort;
@@ -701,16 +740,15 @@ function syncStateToURL() {
     });
   }
   if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
-  if (STATE.filterFolders.length) sp.set("path", STATE.filterFolders.join(","));
+  if (STATE.browserPath) sp.set("path", STATE.browserPath);
   if (DOM.sortSelect.value !== "relevance") sp.set("sort", DOM.sortSelect.value);
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (STATE.browserPath) sp.set("path", STATE.browserPath);
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
- 
+
   if (window.location.hash !== hash) {
     history.replaceState(null, "", hash);
   }
@@ -752,6 +790,13 @@ function doSearch(append) {
   DOM.resultsLoading.style.display = "flex";
   DOM.emptyState.style.display = "none";
   DOM.didYouMean.style.display = "none";
+
+  if (!append) {
+    vsItems = [];
+    vsHeights = [];
+    vsStart = 0;
+    vsEnd = 0;
+  }
  
   setTimeout(function() {
     try {
@@ -766,7 +811,7 @@ function doSearch(append) {
       }
  
       STATE.hasMore = STATE.results.length < STATE.total;
-      renderResults();
+      renderResults(append ? data.results : undefined);
       updateStatusBar();
       updateLoadInfo();
  
@@ -787,61 +832,170 @@ function doSearch(append) {
 }
  
 /* ═══════════════════════════════════════════════════════════
-   Results Rendering
+   Results Rendering (Virtual Scroll)
    ═══════════════════════════════════════════════════════════ */
- 
-function renderResults(newItems) {
-  const items = newItems || STATE.results;
-  if (!newItems) DOM.resultsList.innerHTML = "";
- 
-  if (items.length === 0 && !newItems) {
-    DOM.emptyState.style.display = "flex";
-    DOM.emptyDesc.textContent = STATE.query
-      ? '没有找到与 "' + STATE.query + '" 相关的结果'
-      : "暂无数据";
+
+let vsItems = [];
+let vsHeights = [];
+let vsStart = 0;
+let vsEnd = 0;
+let vsEst = 65;
+const VS_OVERSCAN = 8;
+let vsMeasureRAF = null;
+
+function vsTopHeight() {
+  var sum = 0;
+  for (var i = 0; i < vsStart; i++) sum += vsHeights[i] || vsEst;
+  return sum;
+}
+
+function vsTotalHeight() {
+  var sum = 0;
+  for (var i = 0; i < vsItems.length; i++) sum += vsHeights[i] || vsEst;
+  return sum;
+}
+
+function vsCalcRange() {
+  if (vsItems.length === 0) { vsStart = 0; vsEnd = 0; return; }
+  var st = DOM.resultsContainer.scrollTop;
+  var vh = DOM.resultsContainer.clientHeight;
+  var acc = 0, ns = 0, ne = 0;
+  for (var i = 0; i < vsItems.length; i++) {
+    var h = vsHeights[i] || vsEst;
+    if (acc + h > st) { ns = i; break; }
+    acc += h;
+    ns = i + 1;
+  }
+  ns = Math.max(0, ns - VS_OVERSCAN);
+  acc = 0;
+  for (var j = 0; j < ns; j++) acc += vsHeights[j] || vsEst;
+  for (var k = ns; k < vsItems.length; k++) {
+    acc += vsHeights[k] || vsEst;
+    ne = k + 1;
+    if (acc > st + vh + VS_OVERSCAN * vsEst) break;
+  }
+  ne = Math.min(vsItems.length, ne + VS_OVERSCAN);
+  if (ns !== vsStart || ne !== vsEnd) { vsStart = ns; vsEnd = ne; vsFlush(); }
+}
+
+function vsFlush() {
+  if (vsItems.length === 0) {
+    DOM.resultsList.innerHTML = "";
+    DOM.resultsList.style.minHeight = "0";
     return;
   }
- 
-  DOM.emptyState.style.display = "none";
- 
-  const fragment = document.createDocumentFragment();
-  for (let i = 0; i < items.length; i++) {
-    const rec = items[i];
-    const item = document.createElement("div");
-    item.className = "result-item";
-    const iconType = getFileIconType(rec.Extension);
-    const titleHTML = highlightText(rec.File, STATE.query);
-    const repoShort = (rec.Repo || "").split("/").pop();
-    const sizeStr = formatSize(rec.Size);
- 
-    const breadcrumb = (rec.Folder || []).map((f, j) => {
-      const accum = (rec.Folder || []).slice(0, j + 1).join("/");
-      const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
-      return '<span class="path-sep">/</span><span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + '</span>';
-    }).join("");
- 
-    item.innerHTML =
-      '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
-      '<div class="result-info">' +
-        '<div class="result-title">' + titleHTML +
-          (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
-        '</div>' +
-        '<div class="result-path"><span class="path-folder" data-folder="" data-repo="' + repoShort + '">' + repoShort + '</span>' + breadcrumb + '</div>' +
-        '<div class="result-meta">' +
-          (STATE.mode === "global" ? '<span class="result-repo-tag" data-repo="' + repoShort + '">' + repoShort + '</span>' : '') +
-          (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
-        '</div>' +
-      '</div>' +
-      '<div class="result-actions">' +
-        '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(rec.Link) + '">复制链接</button>' +
-        '<a href="' + escapeHTML(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
-        '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
-        (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
-      '</div>';
- 
-    fragment.appendChild(item);
+  DOM.resultsList.style.minHeight = vsTotalHeight() + "px";
+  DOM.resultsList.innerHTML = "";
+
+  var th = vsTopHeight();
+  if (th > 0) {
+    var ds = document.createElement("div");
+    ds.style.height = th + "px";
+    ds.style.width = "1px";
+    DOM.resultsList.appendChild(ds);
   }
-  DOM.resultsList.appendChild(fragment);
+
+  var frag = document.createDocumentFragment();
+  for (var i = vsStart; i < vsEnd; i++) {
+    frag.appendChild(vsBuildItem(vsItems[i], i));
+  }
+  DOM.resultsList.appendChild(frag);
+
+  if (vsMeasureRAF) cancelAnimationFrame(vsMeasureRAF);
+  vsMeasureRAF = requestAnimationFrame(vsMeasureHeights);
+}
+
+function vsMeasureHeights() {
+  var items = DOM.resultsList.querySelectorAll(".result-item");
+  var totalH = 0, cnt = 0;
+  for (var i = 0; i < items.length; i++) {
+    var h = items[i].getBoundingClientRect().height;
+    if (h > 0) {
+      var idx = vsStart + i;
+      vsHeights[idx] = h;
+      totalH += h;
+      cnt++;
+    }
+  }
+  if (cnt > 0) vsEst = totalH / cnt;
+  vsMeasureRAF = null;
+}
+
+function vsBuildItem(rec, index) {
+  var item = document.createElement("div");
+  item.className = "result-item";
+  item.dataset.vsIdx = index;
+  var iconType = getFileIconType(rec.Extension);
+  var titleHTML = highlightText(rec.File, STATE.query);
+  var repoShort = (rec.Repo || "").split("/").pop();
+  var sizeStr = formatSize(rec.Size);
+
+  var breadcrumb = (rec.Folder || []).map(function(f, j) {
+    var accum = (rec.Folder || []).slice(0, j + 1).join("/");
+    var folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
+    return '<span class="path-sep">/</span><span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + '</span>';
+  }).join("");
+
+  item.innerHTML =
+    '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
+    '<div class="result-info">' +
+      '<div class="result-title">' + titleHTML +
+        (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
+      '</div>' +
+      '<div class="result-path"><span class="path-folder" data-folder="" data-repo="' + repoShort + '">' + repoShort + '</span>' + breadcrumb + '</div>' +
+      '<div class="result-meta">' +
+        (STATE.mode === "global" ? '<span class="result-repo-tag" data-repo="' + repoShort + '">' + repoShort + '</span>' : '') +
+        (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
+      '</div>' +
+    '</div>' +
+    '<div class="result-actions">' +
+      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(rec.Link) + '">复制链接</button>' +
+      '<a href="' + escapeHTML(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
+      '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
+      (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
+    '</div>';
+
+  return item;
+}
+
+function vsSetItems(items) {
+  vsItems = items;
+  vsHeights = new Array(items.length);
+  vsStart = 0; vsEnd = 0;
+  vsCalcRange();
+  updateQuickScrollThumb();
+}
+
+function vsScrollToIndex(idx) {
+  var acc = 0;
+  for (var i = 0; i < idx && i < vsItems.length; i++) acc += vsHeights[i] || vsEst;
+  DOM.resultsContainer.scrollTop = Math.max(0, acc - DOM.resultsContainer.clientHeight / 3);
+  vsCalcRange();
+}
+
+function vsAppendItems(newItems) {
+  var oldLen = vsItems.length;
+  vsItems = vsItems.concat(newItems);
+  for (var i = 0; i < newItems.length; i++) vsHeights.push(undefined);
+  vsCalcRange();
+  updateQuickScrollThumb();
+}
+
+function renderResults(newItems) {
+  if (!newItems) {
+    DOM.emptyState.style.display = "none";
+    if (STATE.results.length === 0) {
+      DOM.emptyState.style.display = "flex";
+      DOM.emptyDesc.textContent = STATE.query
+        ? '没有找到与 "' + STATE.query + '" 相关的结果'
+        : "暂无数据";
+      vsSetItems([]);
+      return;
+    }
+    vsSetItems(STATE.results);
+  } else {
+    vsAppendItems(newItems);
+  }
 }
  
 function updateStatusBar() {
@@ -869,7 +1023,7 @@ function renderSidebar() {
   if (STATE.mode === "global") {
     renderRepoList();
   } else {
-    renderBrowser("");
+    renderBrowser(STATE.browserPath || "");
   }
 }
  
@@ -894,13 +1048,13 @@ function renderRepoList() {
 function renderBrowser(path) {
   STATE.browserPath = path;
   DOM.sidebarContent.innerHTML = "";
- 
+
   const backBtn = document.createElement("div");
   backBtn.className = "back-to-global";
   backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
   backBtn.addEventListener("click", function() { ROUTER.navigate("global"); });
   DOM.sidebarContent.appendChild(backBtn);
- 
+
   if (path) {
     const bc = document.createElement("div");
     bc.className = "sidebar-breadcrumb";
@@ -918,47 +1072,40 @@ function renderBrowser(path) {
     });
     DOM.sidebarContent.appendChild(bc);
   }
- 
+
   const list = document.createElement("div");
   list.className = "browser-list";
   list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
   DOM.sidebarContent.appendChild(list);
- 
+
   try {
     const data = getFolderContents(STATE.repoFull, path);
     list.innerHTML = "";
- 
+
     for (let j = 0; j < (data.folders || []).length; j++) {
       const f = data.folders[j];
       const div = document.createElement("div");
-      div.className = "browser-item";
+      div.className = "browser-item browser-folder-item";
+      div.dataset.action = "browse";
+      div.dataset.path = f.path;
       div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
-      div.addEventListener("click", (function(fp) { return function() { renderBrowser(fp); }; })(f.path));
       list.appendChild(div);
     }
- 
+
     for (let k = 0; k < (data.files || []).length; k++) {
       const f2 = data.files[k];
       const div2 = document.createElement("div");
-      div2.className = "browser-item";
+      div2.className = "browser-item browser-file-item";
+      div2.dataset.action = "open";
+      div2.dataset.link = f2.link || "";
+      div2.dataset.readLink = f2.hasTxt ? (TXT_BASE + "/" + encodeURIComponent((f2.ext ? f2.name : f2.name)) + ".txt") : "";
+      div2.dataset.readPath = (path ? path + "/" : "") + (f2.ext ? f2.name : f2.name);
       const iconType = getFileIconType(f2.ext);
       const sizeStr = formatSize(f2.size);
       div2.innerHTML = (ICONS[iconType] || ICONS.file) +
         '<span class="browser-name">' + escapeHTML(f2.name) + (f2.ext ? '.' + escapeHTML(f2.ext) : '') + '</span>' +
         (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '') +
-        (f2.hasTxt ? '<span class="browser-action" data-read="1">📖 阅读</span>' : '');
-      div2.addEventListener("click", function(ff) {
-        return function(e) {
-          if (e.target.closest(".browser-action")) {
-            e.stopPropagation();
-            const stem = ff.ext ? ff.name : ff.name;
-            const txtPath = (path ? path + "/" : "") + stem;
-            window.open(TXT_BASE + "/" + encodeURIComponent(txtPath) + ".txt", "_blank");
-            return;
-          }
-          if (ff.link) window.open(ff.link, "_blank");
-        };
-      }(f2));
+        (f2.hasTxt ? '<span class="browser-action" data-action="read" data-path="' + escapeHTML((path ? path + "/" : "") + (f2.ext ? f2.name : f2.name)) + '">📖 阅读</span>' : '');
       list.appendChild(div2);
     }
   } catch (e) {
@@ -1299,19 +1446,22 @@ function showToast(msg, dur) {
 /* ═══════════════════════════════════════════════════════════
    Infinite Scroll & Quick Scroll
    ═══════════════════════════════════════════════════════════ */
- 
+
 let scrollTicking = false;
- 
+
 function setupInfiniteScroll() {
-  DOM.resultsContainer.addEventListener("scroll", () => {
+  DOM.resultsContainer.addEventListener("scroll", function() {
     if (!scrollTicking) {
-      requestAnimationFrame(() => {
-        updateScrollThumb();
+      requestAnimationFrame(function() {
+        vsCalcRange();
+        updateQuickScrollThumb();
         if (!STATE.isLoading && STATE.hasMore) {
-          const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-          const loadedHeight = DOM.resultsList.scrollHeight;
-          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.05;
-          if (scrollTop >= triggerPoint) {
+          var st = DOM.resultsContainer.scrollTop;
+          var sh = DOM.resultsContainer.scrollHeight;
+          var ch = DOM.resultsContainer.clientHeight;
+          var loadedH = vsTotalHeight();
+          var trigger = sh - ch - loadedH * 0.05;
+          if (st >= trigger) {
             STATE.page++;
             doSearch(true);
           }
@@ -1322,13 +1472,14 @@ function setupInfiniteScroll() {
     }
   });
 }
- 
-function updateScrollThumb() {
-  const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-  if (scrollHeight <= clientHeight) { DOM.scrollTrack.classList.remove("visible"); return; }
+
+function updateQuickScrollThumb() {
+  var cnt = DOM.resultsContainer;
+  var st = cnt.scrollTop, sh = cnt.scrollHeight, ch = cnt.clientHeight;
+  if (sh <= ch) { DOM.scrollTrack.classList.remove("visible"); return; }
   DOM.scrollTrack.classList.add("visible");
-  const th = Math.max(30, (clientHeight / scrollHeight) * DOM.scrollTrack.clientHeight);
-  const tt = (scrollTop / (scrollHeight - clientHeight)) * (DOM.scrollTrack.clientHeight - th);
+  var th = Math.max(30, (ch / sh) * DOM.scrollTrack.clientHeight);
+  var tt = (st / (sh - ch)) * (DOM.scrollTrack.clientHeight - th);
   DOM.scrollThumb.style.height = th + "px";
   DOM.scrollThumb.style.top = tt + "px";
 }
@@ -1496,21 +1647,24 @@ function setupKeyboard() {
     }
  
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      if (STATE.results.length === 0) return;
+      if (vsItems.length === 0) return;
       e.preventDefault();
-      const items = DOM.resultsList.querySelectorAll(".result-item");
-      if (items.length === 0) return;
-      items.forEach(function(it) { it.style.background = ""; });
       if (e.key === "ArrowDown") {
-        keyboardResultIndex = Math.min(keyboardResultIndex + 1, items.length - 1);
+        keyboardResultIndex = Math.min(keyboardResultIndex + 1, vsItems.length - 1);
       } else {
         keyboardResultIndex = Math.max(keyboardResultIndex - 1, 0);
       }
-      items[keyboardResultIndex].style.background = "var(--surface-variant)";
-      items[keyboardResultIndex].scrollIntoView({ block: "nearest" });
+      vsScrollToIndex(keyboardResultIndex);
+      var sel = DOM.resultsList.querySelector('.result-item[data-vs-idx="' + keyboardResultIndex + '"]');
+      if (sel) {
+        DOM.resultsList.querySelectorAll('.result-item.keyboard-active').forEach(function(el) {
+          el.classList.remove('keyboard-active');
+        });
+        sel.classList.add('keyboard-active');
+      }
       return;
     }
- 
+
     if (e.key === "Enter") {
       if (isInput && document.activeElement === DOM.searchInput) {
         e.preventDefault();
@@ -1522,9 +1676,9 @@ function setupKeyboard() {
         DOM.searchInput.blur();
         return;
       }
-      if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
-        const rec = STATE.results[keyboardResultIndex];
-        if (rec && rec.Link) window.open(rec.Link, "_blank");
+      if (keyboardResultIndex >= 0 && keyboardResultIndex < vsItems.length) {
+        var recv = vsItems[keyboardResultIndex];
+        if (recv && recv.Link) window.open(recv.Link, "_blank");
         return;
       }
     }
@@ -1632,6 +1786,26 @@ function setupResultDelegation() {
     const repoItem = e.target.closest(".repo-list-item");
     if (repoItem) {
       ROUTER.navigate("repo", repoItem.dataset.repo);
+      return;
+    }
+
+    const readAction = e.target.closest(".browser-action");
+    if (readAction && readAction.dataset.action === "read") {
+      e.stopPropagation();
+      window.open(TXT_BASE + "/" + encodeURIComponent(readAction.dataset.path) + ".txt", "_blank");
+      return;
+    }
+
+    const browserFile = e.target.closest(".browser-file-item");
+    if (browserFile) {
+      if (browserFile.dataset.link) window.open(browserFile.dataset.link, "_blank");
+      return;
+    }
+
+    const browserFolder = e.target.closest(".browser-folder-item");
+    if (browserFolder && browserFolder.dataset.path) {
+      renderBrowser(browserFolder.dataset.path);
+      return;
     }
   });
 }
@@ -1642,19 +1816,24 @@ function setupResultDelegation() {
  
 function init() {
   cacheDOM();
- 
+
   STATE.isDark = localStorage.getItem("theme") !== "light";
   applyTheme();
- 
+
   const savedMobile = localStorage.getItem("mobileMode");
   if (savedMobile === "mobile") STATE.isMobile = true;
   else if (savedMobile === "desktop") STATE.isMobile = false;
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
- 
+
+  window.addEventListener("hashchange", function() {
+    ROUTER.apply();
+  });
+
   console.log("Loading data...");
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
+    DOM.loadingBarContainer.style.display = "none";
     if (!ok) {
       DOM.resultsList.innerHTML = '<div class="empty-state"><div class="empty-title">数据加载失败</div><div class="empty-desc">请检查网络连接后刷新页面</div></div>';
       return;
@@ -1757,10 +1936,6 @@ function init() {
     setupQuickScroll();
     setupKeyboard();
     setupResultDelegation();
- 
-    window.addEventListener("hashchange", function() {
-      ROUTER.apply();
-    });
  
     window.addEventListener("resize", function() {
       if (!localStorage.getItem("mobileMode")) {
