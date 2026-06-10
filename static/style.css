@@ -627,14 +627,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  contain: layout style paint;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  will-change: scroll-position;
-}
-
-.results-list {
-  contain: layout style;
 }
 
 /* ── Result Item ─────────────────────────────────────── */
@@ -644,17 +636,9 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   padding: 10px 16px;
   border-bottom: 1px solid var(--outline-variant);
   transition: background var(--transition);
-  content-visibility: auto;
-  contain-intrinsic-size: auto 60px;
-}
-.result-item:nth-child(even) {
-  background: var(--surface-variant);
-}
-.result-item:nth-child(even):hover {
-  background: var(--secondary-container);
 }
 .result-item:hover {
-  background: var(--surface-variant);
+  background: var(--secondary-container) !important;
 }
 
 .result-file-icon {
