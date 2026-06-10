@@ -146,6 +146,15 @@ function buildIndex() {
   extensionList = Object.keys(extensionCounts).sort();
 }
  
+function normalizeLink(link) {
+  if (typeof link !== "string" || !link) return link;
+  const qIdx = link.indexOf("?/datasets/VoiceOfML/");
+  if (qIdx === -1) return link;
+  const etagIdx = link.indexOf("=&etag=", qIdx);
+  if (etagIdx === -1) return link;
+  return "https://huggingface.co" + link.substring(qIdx + 1, etagIdx);
+}
+
 async function loadData() {
   try {
     const resp = await fetch(DATA_URL);
@@ -155,7 +164,16 @@ async function loadData() {
     const stream = new Response(new Uint8Array(buf)).body.pipeThrough(ds);
     const text = await new Response(stream).text();
     RECORDS = JSON.parse(text);
-    console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
+    let fixed = 0;
+    for (let i = 0; i < RECORDS.length; i++) {
+      const orig = RECORDS[i].Link;
+      const norm = normalizeLink(orig);
+      if (norm !== orig) {
+        RECORDS[i].Link = norm;
+        fixed++;
+      }
+    }
+    console.log("Loaded " + RECORDS.length.toLocaleString() + " records" + (fixed > 0 ? " (fixed " + fixed + " bad links)" : ""));
     buildIndex();
     console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
     return true;
