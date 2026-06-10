@@ -2,14 +2,14 @@
  * VoiceOfML Search — Static Edition
  * Hash Router | In-Memory Search Index | GitHub Pages
  */
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Constants
    ═══════════════════════════════════════════════════════════ */
-
+ 
 const DATA_URL = "data/search_data.json.gz";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
-
+ 
 const ORDERED_EXTENSIONS = [
   "pdf", "txt",
   "epub", "mobi", "azw3", "fb2", "djvu", "chm", "caj",
@@ -22,7 +22,7 @@ const ORDERED_EXTENSIONS = [
   "mp3", "wav",
   "iso", "dat", "exe",
 ];
-
+ 
 const FILE_ICON_MAP = {
   pdf: "pdf", txt: "text", mht: "text",
   epub: "book", mobi: "book", azw3: "book", fb2: "book", djvu: "book", chm: "book", caj: "book",
@@ -41,7 +41,7 @@ const FILE_ICON_MAP = {
   url: "text", vcf: "text", hhc: "text",
   md: "markdown", markdown: "markdown",
 };
-
+ 
 const ICONS = {
   folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>',
   pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="9" y2="9"/></svg>',
@@ -60,11 +60,11 @@ const ICONS = {
   file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   database: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
 };
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Data & Index (In-Memory)
    ========================================================== */
-
+ 
 let RECORDS = [];
 let wordIndex = {};
 let extensionCounts = {};
@@ -73,7 +73,7 @@ let folderIndex = {};
 let didYouMeanVocab = {};
 let repoList = [];
 let extensionList = [];
-
+ 
 function tokenize(text) {
   const tokens = [];
   const lower = text.toLowerCase();
@@ -86,7 +86,7 @@ function tokenize(text) {
   }
   return [...new Set(tokens)];
 }
-
+ 
 function editDistance(s1, s2, maxDist) {
   maxDist = maxDist || 2;
   if (Math.abs(s1.length - s2.length) > maxDist) return 999;
@@ -106,22 +106,22 @@ function editDistance(s1, s2, maxDist) {
   }
   return prev[prev.length - 1];
 }
-
+ 
 function buildIndex() {
   wordIndex = {};
   extensionCounts = {};
   repoCounts = {};
   folderIndex = {};
   didYouMeanVocab = {};
-
+ 
   for (let i = 0; i < RECORDS.length; i++) {
     const rec = RECORDS[i];
     const repo = rec.Repo || "";
     const ext = (rec.Extension || "").toLowerCase();
-
+ 
     repoCounts[repo] = (repoCounts[repo] || 0) + 1;
     if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
-
+ 
     const folders = rec.Folder || [];
     const text = [rec.File || "", ...folders].join(" ");
     const tokens = tokenize(text);
@@ -130,7 +130,7 @@ function buildIndex() {
       wordIndex[tok].push(i);
       didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
     }
-
+ 
     if (!folderIndex[repo]) folderIndex[repo] = {};
     for (let d = 0; d <= folders.length; d++) {
       const fp = d === 0 ? "" : folders.slice(0, d).join("/");
@@ -138,14 +138,14 @@ function buildIndex() {
       folderIndex[repo][fp].push(i);
     }
   }
-
+ 
   repoList = Object.entries(repoCounts)
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => a.name.localeCompare(b.name));
-
+ 
   extensionList = Object.keys(extensionCounts).sort();
 }
-
+ 
 async function loadData() {
   try {
     const resp = await fetch(DATA_URL);
@@ -164,11 +164,11 @@ async function loadData() {
     return false;
   }
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Search Engine
    ========================================================== */
-
+ 
 function scoreRecord(recIdx, tokens, searchFolders) {
   const rec = RECORDS[recIdx];
   let score = 0;
@@ -185,7 +185,7 @@ function scoreRecord(recIdx, tokens, searchFolders) {
   }
   return score;
 }
-
+ 
 function applyFilters(indices, repos, extensions, folders, minSize, maxSize) {
   return indices.filter(idx => {
     const rec = RECORDS[idx];
@@ -219,7 +219,7 @@ function applyFilters(indices, repos, extensions, folders, minSize, maxSize) {
     return true;
   });
 }
-
+ 
 function doSearchLocal(params) {
   const q = (params.q || "").trim();
   const repos = params.repos || null;
@@ -231,15 +231,15 @@ function doSearchLocal(params) {
   const searchFolders = params.searchFolders !== false;
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
-
+ 
   let matched = [];
   let didYouMean = null;
-
+ 
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
   } else {
     const tokens = tokenize(q);
-
+ 
     let exact = null;
     for (const tok of tokens) {
       const idxs = wordIndex[tok];
@@ -247,7 +247,7 @@ function doSearchLocal(params) {
       if (exact === null) exact = [...idxs];
       else exact = exact.filter(i => idxs.includes(i));
     }
-
+ 
     let fuzzy = [];
     for (const tok of tokens) {
       if (wordIndex[tok]) continue;
@@ -265,14 +265,14 @@ function doSearchLocal(params) {
         else fuzzy = fuzzy.filter(i => candidates.includes(i));
       }
     }
-
+ 
     if (exact && exact.length > 0) {
       matched = exact;
       if (fuzzy.length > 0) matched = [...matched, ...fuzzy.filter(i => !exact.includes(i))];
     } else if (fuzzy.length > 0) {
       matched = fuzzy;
     }
-
+ 
     if (matched.length < 10) {
       const suggestions = [];
       for (const tok of tokens) {
@@ -288,14 +288,14 @@ function doSearchLocal(params) {
       if (suggestions.length > 0) didYouMean = suggestions.join(" ");
     }
   }
-
+ 
   let filtered = applyFilters(matched, repos, extensions, folders, minSize, maxSize);
   const tokens = q ? tokenize(q) : [];
   const scored = filtered.map(idx => ({
     idx,
     score: q ? scoreRecord(idx, tokens, searchFolders) : 0
   }));
-
+ 
   if (sort === "name") {
     scored.sort((a, b) => (RECORDS[a.idx].File || "").localeCompare(RECORDS[b.idx].File || "", "zh"));
   } else if (sort === "size") {
@@ -307,24 +307,38 @@ function doSearchLocal(params) {
   } else {
     scored.sort((a, b) => b.score - a.score);
   }
-
+ 
   const total = scored.length;
   const start = (page - 1) * pageSize;
   const paged = scored.slice(start, start + pageSize).map(s => RECORDS[s.idx]);
-
+ 
   return { results: paged, total, page, pageSize, didYouMean };
 }
-
+ 
+function getCurrentExtensionCounts() {
+  if (STATE.mode === "repo" && STATE.repoFull) {
+    const counts = {};
+    for (let i = 0; i < RECORDS.length; i++) {
+      if (RECORDS[i].Repo === STATE.repoFull) {
+        const ext = (RECORDS[i].Extension || "").toLowerCase();
+        if (ext) counts[ext] = (counts[ext] || 0) + 1;
+      }
+    }
+    return counts;
+  }
+  return extensionCounts;
+}
+ 
 /* ═══════════════════════════════════════════════════════════
    Folder Tree
    ========================================================== */
-
+ 
 function buildFilterFolderTree(repo) {
   if (!folderIndex[repo]) return [];
   const paths = Object.keys(folderIndex[repo]);
   const root = { name: repo.split("/").pop(), path: "", children: [], count: 0 };
   const nodeMap = { "": root };
-
+ 
   for (const p of paths.sort()) {
     if (!p) continue;
     const parts = p.split("/");
@@ -338,18 +352,18 @@ function buildFilterFolderTree(repo) {
       if (parent) parent.children.push(node);
     }
   }
-
+ 
   for (const [fp, idxs] of Object.entries(folderIndex[repo])) {
     if (nodeMap[fp]) nodeMap[fp].count = idxs.length;
   }
-
+ 
   return [root];
 }
-
+ 
 function getFolderContents(repo, path) {
   const pathParts = path ? path.split("/").filter(Boolean) : [];
   const pathDepth = pathParts.length;
-
+ 
   const matching = RECORDS.filter(rec => {
     if (rec.Repo !== repo) return false;
     const folders = rec.Folder || [];
@@ -359,7 +373,7 @@ function getFolderContents(repo, path) {
     }
     return true;
   });
-
+ 
   const subfolders = {};
   for (const rec of matching) {
     const folders = rec.Folder || [];
@@ -375,7 +389,7 @@ function getFolderContents(repo, path) {
       count,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
-
+ 
   const fileList = matching
     .filter(rec => (rec.Folder || []).length === pathDepth)
     .map(rec => ({
@@ -387,21 +401,21 @@ function getFolderContents(repo, path) {
       size: rec.Size || "",
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
-
+ 
   return { folders: folderList, files: fileList, current_path: path };
 }
-
+ 
 function getRandom(repo) {
   let pool = RECORDS;
   if (repo) pool = RECORDS.filter(r => r.Repo === repo);
   if (pool.length === 0) return null;
   return pool[Math.floor(Math.random() * pool.length)];
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    State
    ═══════════════════════════════════════════════════════════ */
-
+ 
 const STATE = {
   mode: "global",
   repo: null,
@@ -430,14 +444,14 @@ const STATE = {
   searchFolders: true,
   dataLoaded: false,
 };
-
+ 
 /* ═══════════════════════════════════════════════════════════
    DOM References
    ═══════════════════════════════════════════════════════════ */
-
+ 
 const $ = (sel) => document.querySelector(sel);
 const DOM = {};
-
+ 
 function cacheDOM() {
   DOM.headerTitle = $("#header-title");
   DOM.headerLogo = $("#header-logo");
@@ -488,62 +502,69 @@ function cacheDOM() {
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Utilities
    ═══════════════════════════════════════════════════════════ */
-
+ 
+const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 function escapeHTML(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
+  return String(str).replace(/[&<>"']/g, (ch) => HTML_ESCAPE_MAP[ch]);
 }
-
+ 
+const sizeCache = {};
 function formatSize(bytes) {
   if (!bytes && bytes !== 0) return "";
+  if (sizeCache[bytes] !== undefined) return sizeCache[bytes];
   if (typeof bytes === "string") bytes = parseInt(bytes);
-  if (isNaN(bytes) || bytes === 0) return "";
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+  if (isNaN(bytes) || bytes === 0) return (sizeCache[bytes] = "");
+  let result;
+  if (bytes < 1024) result = bytes + " B";
+  else if (bytes < 1048576) result = (bytes / 1024).toFixed(1) + " KB";
+  else if (bytes < 1073741824) result = (bytes / 1048576).toFixed(1) + " MB";
+  else result = (bytes / 1073741824).toFixed(2) + " GB";
+  return (sizeCache[bytes] = result);
 }
-
+ 
 function getFileIconType(ext) {
   return FILE_ICON_MAP[(ext || "").toLowerCase()] || "file";
 }
-
+ 
 function highlightText(text, query) {
   if (!query || !text) return escapeHTML(text);
-  let result = escapeHTML(text);
-  const tokens = query.split(/\s+/).filter(function(t) { return t.length > 0; });
-  for (var i = 0; i < tokens.length; i++) {
-    var tok = tokens[i];
-    var escaped = tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    var regex = new RegExp("(" + escaped + ")", "gi");
+  const escaped = escapeHTML(text);
+  const tokens = query.split(/\s+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) return escaped;
+  let result = escaped;
+  for (const tok of tokens) {
+    const escapedTok = escapeHTML(tok);
+    const regex = new RegExp(
+      `(${escapedTok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+      "gi"
+    );
     result = result.replace(regex, "<mark>$1</mark>");
   }
   return result;
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Router (Hash-based)
    ═══════════════════════════════════════════════════════════ */
-
+ 
 const ROUTER = {
   parse: function() {
-    var hash = window.location.hash.replace(/^#/, "");
-    var qIdx = hash.indexOf("?");
-    var path = qIdx >= 0 ? hash.substring(0, qIdx) : hash;
-    var queryString = qIdx >= 0 ? hash.substring(qIdx + 1) : "";
-
-    var parts = path.split("/").filter(Boolean);
-    var mode = parts.length === 0 ? "global" : "repo";
-    var repo = parts.length === 0 ? null : parts[0];
-
-    var params = {};
+    const hash = window.location.hash.replace(/^#/, "");
+    const qIdx = hash.indexOf("?");
+    const path = qIdx >= 0 ? hash.substring(0, qIdx) : hash;
+    const queryString = qIdx >= 0 ? hash.substring(qIdx + 1) : "";
+ 
+    const parts = path.split("/").filter(Boolean);
+    const mode = parts.length === 0 ? "global" : "repo";
+    const repo = parts.length === 0 ? null : parts[0];
+ 
+    const params = {};
     if (queryString) {
-      var sp = new URLSearchParams(queryString);
+      const sp = new URLSearchParams(queryString);
       sp.forEach(function(v, k) {
         if (k === "repo") {
           if (!params[k]) params[k] = [];
@@ -553,13 +574,13 @@ const ROUTER = {
         }
       });
     }
-
+ 
     return { mode: mode, repo: repo, params: params };
   },
-
+ 
   navigate: function(mode, repo) {
-    var hash = mode === "global" ? "#/" : "#/" + repo;
-    var sp = new URLSearchParams();
+    let hash = mode === "global" ? "#/" : "#/" + repo;
+    const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
     if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
     if (STATE.filterFolders.length) sp.set("path", STATE.filterFolders.join(","));
@@ -567,20 +588,20 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
-    var qs = sp.toString();
+    const qs = sp.toString();
     if (qs) hash += "?" + qs;
     window.location.hash = hash;
   },
-
+ 
   apply: function() {
-    var route = this.parse();
-    var prevMode = STATE.mode;
-    var prevRepo = STATE.repo;
-
+    const route = this.parse();
+    const prevMode = STATE.mode;
+    const prevRepo = STATE.repo;
+ 
     STATE.mode = route.mode;
     STATE.repo = route.repo;
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
-
+ 
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.page = 1;
       STATE.results = [];
@@ -591,7 +612,7 @@ const ROUTER = {
       DOM.leftSidebar.classList.remove("expanded-wide");
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
     }
-
+ 
     if (route.params.q !== undefined) {
       STATE.query = route.params.q;
       DOM.searchInput.value = STATE.query;
@@ -599,26 +620,26 @@ const ROUTER = {
       STATE.query = "";
       DOM.searchInput.value = "";
     }
-
+ 
     if (route.params.repo) {
       STATE.filterRepos = (Array.isArray(route.params.repo) ? route.params.repo : [route.params.repo])
         .map(function(r) { return r.includes("/") ? r : "VoiceOfML/" + r; });
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.filterRepos = [];
     }
-
+ 
     if (route.params.ext) {
       STATE.filterExtensions = route.params.ext.split(",").filter(Boolean);
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.filterExtensions = [];
     }
-
+ 
     if (route.params.path) {
       STATE.filterFolders = route.params.path.split(",").filter(Boolean);
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.filterFolders = [];
     }
-
+ 
     if (route.params.sort) DOM.sortSelect.value = route.params.sort;
     STATE.filterMinSize = route.params.min_size ? parseInt(route.params.min_size) : null;
     STATE.filterMaxSize = route.params.max_size ? parseInt(route.params.max_size) : null;
@@ -626,11 +647,11 @@ const ROUTER = {
     DOM.filterMaxSize.value = STATE.filterMaxSize || "";
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
-
+ 
     this.updateUI();
-
+ 
     if (!STATE.dataLoaded) return;
-
+ 
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       this.onModeChanged();
     } else {
@@ -639,7 +660,7 @@ const ROUTER = {
       doSearch();
     }
   },
-
+ 
   updateUI: function() {
     if (STATE.mode === "global") {
       DOM.headerTitle.textContent = "VoiceOfML";
@@ -653,7 +674,7 @@ const ROUTER = {
       DOM.sidebarTitle.textContent = STATE.repo;
     }
   },
-
+ 
   onModeChanged: function() {
     if (DOM.sidebarExpandBtn) {
       DOM.sidebarExpandBtn.style.display = STATE.mode === "repo" ? "" : "none";
@@ -665,14 +686,14 @@ const ROUTER = {
     doSearch();
   },
 };
-
+ 
 /* ═══════════════════════════════════════════════════════════
    URL Sync
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function syncStateToURL() {
-  var hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
-  var sp = new URLSearchParams();
+  let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
+  const sp = new URLSearchParams();
   if (STATE.query) sp.set("q", STATE.query);
   if (STATE.mode === "global") {
     STATE.filterRepos.forEach(function(r) {
@@ -685,20 +706,22 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  var qs = sp.toString();
+  if (STATE.browserPath) sp.set("path", STATE.browserPath);
+  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
+  const qs = sp.toString();
   if (qs) hash += "?" + qs;
-
+ 
   if (window.location.hash !== hash) {
     history.replaceState(null, "", hash);
   }
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Debounce & Search Execution
    ═══════════════════════════════════════════════════════════ */
-
-var searchTimer = null;
-
+ 
+let searchTimer = null;
+ 
 function debouncedSearch() {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
@@ -708,11 +731,11 @@ function debouncedSearch() {
     doSearch();
   }, 300);
 }
-
+ 
 function doSearch(append) {
   if (!STATE.dataLoaded || STATE.isLoading) return;
-
-  var params = {
+ 
+  const params = {
     q: STATE.query,
     repos: STATE.mode === "repo" ? [STATE.repoFull] : (STATE.filterRepos.length > 0 ? STATE.filterRepos : null),
     extensions: STATE.filterExtensions.length > 0 ? STATE.filterExtensions : null,
@@ -724,34 +747,34 @@ function doSearch(append) {
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
-
+ 
   STATE.isLoading = true;
   DOM.resultsLoading.style.display = "flex";
   DOM.emptyState.style.display = "none";
   DOM.didYouMean.style.display = "none";
-
+ 
   setTimeout(function() {
     try {
-      var data = doSearchLocal(params);
+      const data = doSearchLocal(params);
       STATE.total = data.total;
       STATE.didYouMean = data.didYouMean || null;
-
+ 
       if (append) {
         STATE.results = STATE.results.concat(data.results);
       } else {
         STATE.results = data.results;
       }
-
+ 
       STATE.hasMore = STATE.results.length < STATE.total;
       renderResults();
       updateStatusBar();
       updateLoadInfo();
-
+ 
       if (STATE.didYouMean) {
         DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
         DOM.didYouMean.style.display = "inline";
       }
-
+ 
       syncStateToURL();
     } catch (err) {
       console.error(err);
@@ -762,43 +785,41 @@ function doSearch(append) {
     }
   }, 0);
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Results Rendering
    ═══════════════════════════════════════════════════════════ */
-
-function renderResults() {
-  DOM.resultsList.innerHTML = "";
-
-  if (STATE.results.length === 0 && !STATE.isLoading) {
+ 
+function renderResults(newItems) {
+  const items = newItems || STATE.results;
+  if (!newItems) DOM.resultsList.innerHTML = "";
+ 
+  if (items.length === 0 && !newItems) {
     DOM.emptyState.style.display = "flex";
     DOM.emptyDesc.textContent = STATE.query
       ? '没有找到与 "' + STATE.query + '" 相关的结果'
       : "暂无数据";
     return;
   }
-
+ 
   DOM.emptyState.style.display = "none";
-
-  for (var i = 0; i < STATE.results.length; i++) {
-    var rec = STATE.results[i];
-    var item = document.createElement("div");
+ 
+  const fragment = document.createDocumentFragment();
+  for (let i = 0; i < items.length; i++) {
+    const rec = items[i];
+    const item = document.createElement("div");
     item.className = "result-item";
-    var iconType = getFileIconType(rec.Extension);
-    var titleHTML = highlightText(rec.File, STATE.query);
-    var repoShort = (rec.Repo || "").split("/").pop();
-    var sizeStr = formatSize(rec.Size);
-
-    var breadcrumb = "";
-    var folders = rec.Folder || [];
-    for (var j = 0; j < folders.length; j++) {
-      var accum = folders.slice(0, j + 1).join("/");
-      breadcrumb += '<span class="path-sep">/</span>';
-      breadcrumb += '<span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">';
-      breadcrumb += highlightText(folders[j], STATE.query);
-      breadcrumb += '</span>';
-    }
-
+    const iconType = getFileIconType(rec.Extension);
+    const titleHTML = highlightText(rec.File, STATE.query);
+    const repoShort = (rec.Repo || "").split("/").pop();
+    const sizeStr = formatSize(rec.Size);
+ 
+    const breadcrumb = (rec.Folder || []).map((f, j) => {
+      const accum = (rec.Folder || []).slice(0, j + 1).join("/");
+      const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
+      return '<span class="path-sep">/</span><span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + '</span>';
+    }).join("");
+ 
     item.innerHTML =
       '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
       '<div class="result-info">' +
@@ -817,18 +838,19 @@ function renderResults() {
         '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
         (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
       '</div>';
-
-    DOM.resultsList.appendChild(item);
+ 
+    fragment.appendChild(item);
   }
+  DOM.resultsList.appendChild(fragment);
 }
-
+ 
 function updateStatusBar() {
   DOM.resultCount.textContent = STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "";
-  var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolders.length ||
+  const has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolders.length ||
             STATE.filterMinSize !== null || STATE.filterMaxSize !== null;
   DOM.clearFiltersBtn.style.display = has ? "" : "none";
 }
-
+ 
 function updateLoadInfo() {
   if (STATE.total === 0 && STATE.results.length === 0) {
     DOM.loadInfo.style.display = "none";
@@ -838,11 +860,11 @@ function updateLoadInfo() {
   DOM.loadedCount.textContent = STATE.results.length.toLocaleString();
   DOM.totalCount.textContent = STATE.total.toLocaleString();
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Sidebar — Browser (Enter/Exit)
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function renderSidebar() {
   if (STATE.mode === "global") {
     renderRepoList();
@@ -850,16 +872,16 @@ function renderSidebar() {
     renderBrowser("");
   }
 }
-
+ 
 function renderRepoList() {
   if (!repoList || repoList.length === 0) {
     DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
     return;
   }
-  var html = "";
-  for (var i = 0; i < repoList.length; i++) {
-    var repo = repoList[i];
-    var short = repo.name.split("/").pop();
+  let html = "";
+  for (let i = 0; i < repoList.length; i++) {
+    const repo = repoList[i];
+    const short = repo.name.split("/").pop();
     html += '<div class="repo-list-item" data-repo="' + escapeHTML(short) + '">';
     html += '<svg class="repo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
     html += '<span class="repo-name">' + escapeHTML(short) + '</span>';
@@ -868,24 +890,24 @@ function renderRepoList() {
   }
   DOM.sidebarContent.innerHTML = html;
 }
-
+ 
 function renderBrowser(path) {
   STATE.browserPath = path;
   DOM.sidebarContent.innerHTML = "";
-
-  var backBtn = document.createElement("div");
+ 
+  const backBtn = document.createElement("div");
   backBtn.className = "back-to-global";
   backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
   backBtn.addEventListener("click", function() { ROUTER.navigate("global"); });
   DOM.sidebarContent.appendChild(backBtn);
-
+ 
   if (path) {
-    var bc = document.createElement("div");
+    const bc = document.createElement("div");
     bc.className = "sidebar-breadcrumb";
-    var parts = path.split("/");
+    const parts = path.split("/");
     bc.innerHTML = '<span class="crumb-item" data-path="">根目录</span>';
-    for (var i = 0; i < parts.length; i++) {
-      var pp = parts.slice(0, i + 1).join("/");
+    for (let i = 0; i < parts.length; i++) {
+      const pp = parts.slice(0, i + 1).join("/");
       bc.innerHTML += '<span class="crumb-sep">/</span>';
       bc.innerHTML += '<span class="crumb-item' + (i === parts.length - 1 ? ' current' : '') + '" data-path="' + escapeHTML(pp) + '">' + escapeHTML(parts[i]) + '</span>';
     }
@@ -896,31 +918,31 @@ function renderBrowser(path) {
     });
     DOM.sidebarContent.appendChild(bc);
   }
-
-  var list = document.createElement("div");
+ 
+  const list = document.createElement("div");
   list.className = "browser-list";
   list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
   DOM.sidebarContent.appendChild(list);
-
+ 
   try {
-    var data = getFolderContents(STATE.repoFull, path);
+    const data = getFolderContents(STATE.repoFull, path);
     list.innerHTML = "";
-
-    for (var j = 0; j < (data.folders || []).length; j++) {
-      var f = data.folders[j];
-      var div = document.createElement("div");
+ 
+    for (let j = 0; j < (data.folders || []).length; j++) {
+      const f = data.folders[j];
+      const div = document.createElement("div");
       div.className = "browser-item";
       div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
       div.addEventListener("click", (function(fp) { return function() { renderBrowser(fp); }; })(f.path));
       list.appendChild(div);
     }
-
-    for (var k = 0; k < (data.files || []).length; k++) {
-      var f2 = data.files[k];
-      var div2 = document.createElement("div");
+ 
+    for (let k = 0; k < (data.files || []).length; k++) {
+      const f2 = data.files[k];
+      const div2 = document.createElement("div");
       div2.className = "browser-item";
-      var iconType = getFileIconType(f2.ext);
-      var sizeStr = formatSize(f2.size);
+      const iconType = getFileIconType(f2.ext);
+      const sizeStr = formatSize(f2.size);
       div2.innerHTML = (ICONS[iconType] || ICONS.file) +
         '<span class="browser-name">' + escapeHTML(f2.name) + (f2.ext ? '.' + escapeHTML(f2.ext) : '') + '</span>' +
         (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '') +
@@ -929,9 +951,9 @@ function renderBrowser(path) {
         return function(e) {
           if (e.target.closest(".browser-action")) {
             e.stopPropagation();
-            var stem = ff.ext ? ff.name : ff.name;
-            var txtPath = (path ? path + "/" : "") + stem;
-            window.open(TXT_BASE + "/" + encodeURI(txtPath) + ".txt", "_blank");
+            const stem = ff.ext ? ff.name : ff.name;
+            const txtPath = (path ? path + "/" : "") + stem;
+            window.open(TXT_BASE + "/" + encodeURIComponent(txtPath) + ".txt", "_blank");
             return;
           }
           if (ff.link) window.open(ff.link, "_blank");
@@ -943,11 +965,11 @@ function renderBrowser(path) {
     list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
   }
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Filters (Right Sidebar)
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function renderFilters() {
   if (STATE.mode === "global") {
     DOM.filterRepoSection.style.display = "";
@@ -955,7 +977,7 @@ function renderFilters() {
   } else {
     DOM.filterRepoSection.style.display = "none";
   }
-
+ 
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
     if (!STATE.folderTree) STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
@@ -963,13 +985,13 @@ function renderFilters() {
   } else {
     DOM.filterFolderSection.style.display = "none";
   }
-
+ 
   renderExtensionFilter();
 }
-
+ 
 function renderRepoFilter() {
-  var items = [];
-  for (var i = 0; i < repoList.length; i++) {
+  const items = [];
+  for (let i = 0; i < repoList.length; i++) {
     items.push({
       key: repoList[i].name,
       label: repoList[i].name.split("/").pop(),
@@ -983,35 +1005,36 @@ function renderRepoFilter() {
     doSearch();
   });
 }
-
+ 
 function renderExtensionFilter() {
-  var ordered = [];
-  var rest = [];
-  for (var i = 0; i < extensionList.length; i++) {
-    var ext = extensionList[i];
-    var idx = ORDERED_EXTENSIONS.indexOf(ext);
+  const currentCounts = getCurrentExtensionCounts();
+  const ordered = [];
+  const rest = [];
+  for (let i = 0; i < extensionList.length; i++) {
+    const ext = extensionList[i];
+    const idx = ORDERED_EXTENSIONS.indexOf(ext);
     if (idx >= 0) {
-      ordered.push({ name: ext, _idx: idx, count: extensionCounts[ext] || 0 });
+      ordered.push({ name: ext, _idx: idx, count: currentCounts[ext] || 0 });
     } else {
-      rest.push({ name: ext, count: extensionCounts[ext] || 0 });
+      rest.push({ name: ext, count: currentCounts[ext] || 0 });
     }
   }
   ordered.sort(function(a, b) { return a._idx - b._idx; });
-
-  var items = [];
-  for (var j = 0; j < ordered.length; j++) {
+ 
+  const items = [];
+  for (let j = 0; j < ordered.length; j++) {
     items.push({ key: ordered[j].name, label: "." + ordered[j].name, count: ordered[j].count });
   }
   if (rest.length > 0) {
-    var total = 0;
-    for (var k = 0; k < rest.length; k++) { total += rest[k].count; }
+    let total = 0;
+    for (let k = 0; k < rest.length; k++) { total += rest[k].count; }
     items.push({ key: "__OTHER__", label: "其他 (" + rest.length + "种)", count: total });
   }
-
+ 
   renderCheckboxList(DOM.filterExtList, items, STATE.filterExtensions, function(vals) {
     STATE.filterExtensions = vals.filter(function(v) { return v !== "__OTHER__"; });
     if (vals.indexOf("__OTHER__") >= 0) {
-      for (var m = 0; m < rest.length; m++) {
+      for (let m = 0; m < rest.length; m++) {
         STATE.filterExtensions.push(rest[m].name);
       }
     }
@@ -1020,34 +1043,37 @@ function renderExtensionFilter() {
     doSearch();
   });
 }
-
+ 
 function renderCheckboxList(container, items, selected, onChange) {
   if (items.length === 0) {
     container.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6;padding:4px 0">暂无</div>';
+    container._itemsKey = '';
     return;
   }
-  var html = "";
-  for (var i = 0; i < items.length; i++) {
-    var item = items[i];
-    var checked = selected.indexOf(item.key) >= 0 ? "checked" : "";
-    html += '<label class="filter-checkbox-item">';
-    html += '<input type="checkbox" value="' + escapeHTML(item.key) + '" ' + checked + '>';
-    html += '<span>' + escapeHTML(item.label) + '</span>';
-    if (item.count !== undefined) {
-      html += '<span class="checkbox-count">' + item.count.toLocaleString() + '</span>';
+  const itemsKey = items.map(i => i.key).join(',') + '|' + items.map(i => i.count || 0).join(',');
+  if (container._itemsKey !== itemsKey) {
+    container.innerHTML = items.map(function(item) {
+      return '<label class="filter-checkbox-item"><input type="checkbox" value="' + escapeHTML(item.key) + '" ' + (selected.indexOf(item.key) >= 0 ? 'checked' : '') + '><span>' + escapeHTML(item.label) + '</span>' + (item.count !== undefined ? '<span class="checkbox-count">' + item.count.toLocaleString() + '</span>' : '') + '</label>';
+    }).join("");
+    container._itemsKey = itemsKey;
+    container._onChange = onChange;
+    if (!container._hasDelegate) {
+      container.addEventListener("change", function() {
+        if (container._updating) return;
+        container._onChange(Array.from(container.querySelectorAll("input:checked")).map(function(c) { return c.value; }));
+      });
+      container._hasDelegate = true;
     }
-    html += '</label>';
-  }
-  container.innerHTML = html;
-  container.querySelectorAll("input").forEach(function(cb) {
-    cb.addEventListener("change", function() {
-      var vals = [];
-      container.querySelectorAll("input:checked").forEach(function(c) { vals.push(c.value); });
-      onChange(vals);
+  } else {
+    container._updating = true;
+    container.querySelectorAll("input").forEach(function(cb) {
+      cb.checked = selected.indexOf(cb.value) >= 0;
     });
-  });
+    container._updating = false;
+  }
+  container._onChange = onChange;
 }
-
+ 
 function renderFilterFolderTree() {
   DOM.filterFolderTree.innerHTML = "";
   if (!STATE.folderTree || STATE.folderTree.length === 0) {
@@ -1056,94 +1082,94 @@ function renderFilterFolderTree() {
   }
   renderFilterTreeNodes(DOM.filterFolderTree, STATE.folderTree, 0);
 }
-
+ 
 function renderFilterTreeNodes(container, nodes, depth) {
-  for (var i = 0; i < nodes.length; i++) {
-    var node = nodes[i];
-    var has = node.children && node.children.length > 0;
-
-    var row = document.createElement("div");
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const has = node.children && node.children.length > 0;
+ 
+    const row = document.createElement("div");
     row.className = "filter-folder-item";
     row.style.setProperty("--fdepth", depth);
-
-    var checked = STATE.filterFolders.indexOf(node.path) >= 0 ? "checked" : "";
+ 
+    const checked = STATE.filterFolders.indexOf(node.path) >= 0 ? "checked" : "";
     row.innerHTML = (has ? '<span class="tree-toggle expanded">▶</span>' : '<span style="width:16px;flex-shrink:0"></span>') +
       '<input type="checkbox" value="' + escapeHTML(node.path) + '" ' + checked + '>' +
       '<span>' + escapeHTML(node.name) + '</span>' +
       '<span style="font-size:10px;color:var(--on-surface-variant);margin-left:auto">' + (node.count || 0).toLocaleString() + '</span>';
-
-    var toggle = row.querySelector(".tree-toggle");
-    var cb = row.querySelector("input[type='checkbox']");
-
+ 
+    const toggle = row.querySelector(".tree-toggle");
+    const cb = row.querySelector("input[type='checkbox']");
+ 
     cb.addEventListener("change", function() {
       handleFolderCheckboxChange(this);
     });
-
+ 
     container.appendChild(row);
-
+ 
     if (has) {
-      var childDiv = document.createElement("div");
+      const childDiv = document.createElement("div");
       childDiv.className = "tree-children";
       renderFilterTreeNodes(childDiv, node.children, depth + 1);
-
+ 
       toggle.addEventListener("click", function(childContainer, tgl) {
         return function(e) {
           e.stopPropagation();
-          var hidden = childContainer.style.display === "none";
+          const hidden = childContainer.style.display === "none";
           childContainer.style.display = hidden ? "block" : "none";
           tgl.classList.toggle("expanded", hidden);
         };
       }(childDiv, toggle));
-
+ 
       container.appendChild(childDiv);
     }
   }
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Folder Filter Cascade Logic
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function cascadeDown(cb) {
-  var row = cb.closest(".filter-folder-item");
+  const row = cb.closest(".filter-folder-item");
   if (!row) return;
-  var childContainer = row.nextElementSibling;
+  const childContainer = row.nextElementSibling;
   if (!childContainer || !childContainer.classList.contains("tree-children")) return;
-
+ 
   childContainer.querySelectorAll("input[type='checkbox']").forEach(function(childCb) {
     childCb.checked = cb.checked;
     childCb.indeterminate = false;
     cascadeDown(childCb);
   });
 }
-
+ 
 function syncParent(cb) {
-  var row = cb.closest(".filter-folder-item");
+  const row = cb.closest(".filter-folder-item");
   if (!row) return;
-
-  var parentChildren = row.parentElement;
+ 
+  const parentChildren = row.parentElement;
   if (!parentChildren || !parentChildren.classList.contains("tree-children")) return;
-
-  var parentRow = parentChildren.previousElementSibling;
+ 
+  const parentRow = parentChildren.previousElementSibling;
   if (!parentRow || !parentRow.classList.contains("filter-folder-item")) return;
-  var parentCb = parentRow.querySelector("input[type='checkbox']");
+  const parentCb = parentRow.querySelector("input[type='checkbox']");
   if (!parentCb) return;
-
-  var childCbs = [];
-  for (var i = 0; i < parentChildren.children.length; i++) {
-    var child = parentChildren.children[i];
+ 
+  const childCbs = [];
+  for (let i = 0; i < parentChildren.children.length; i++) {
+    const child = parentChildren.children[i];
     if (child.classList.contains("filter-folder-item")) {
-      var c = child.querySelector("input[type='checkbox']");
+      const c = child.querySelector("input[type='checkbox']");
       if (c) childCbs.push(c);
     }
   }
   if (childCbs.length === 0) return;
-
-  var checkedCount = 0;
-  for (var j = 0; j < childCbs.length; j++) {
+ 
+  let checkedCount = 0;
+  for (let j = 0; j < childCbs.length; j++) {
     if (childCbs[j].checked) checkedCount++;
   }
-
+ 
   if (checkedCount === 0) {
     parentCb.checked = false;
     parentCb.indeterminate = false;
@@ -1154,24 +1180,24 @@ function syncParent(cb) {
     parentCb.checked = false;
     parentCb.indeterminate = true;
   }
-
+ 
   syncParent(parentCb);
 }
-
+ 
 function updateIndeterminate(cb) {
-  var row = cb.closest(".filter-folder-item");
+  const row = cb.closest(".filter-folder-item");
   if (!row) return;
-  var childContainer = row.nextElementSibling;
+  const childContainer = row.nextElementSibling;
   if (!childContainer || !childContainer.classList.contains("tree-children")) {
     cb.indeterminate = false;
     return;
   }
-
-  var childCbs = [];
-  for (var i = 0; i < childContainer.children.length; i++) {
-    var child = childContainer.children[i];
+ 
+  const childCbs = [];
+  for (let i = 0; i < childContainer.children.length; i++) {
+    const child = childContainer.children[i];
     if (child.classList.contains("filter-folder-item")) {
-      var c = child.querySelector("input[type='checkbox']");
+      const c = child.querySelector("input[type='checkbox']");
       if (c) childCbs.push(c);
     }
   }
@@ -1179,49 +1205,49 @@ function updateIndeterminate(cb) {
     cb.indeterminate = false;
     return;
   }
-
-  var checkedCount = 0;
-  for (var j = 0; j < childCbs.length; j++) {
+ 
+  let checkedCount = 0;
+  for (let j = 0; j < childCbs.length; j++) {
     if (childCbs[j].checked) checkedCount++;
   }
-
+ 
   cb.indeterminate = (checkedCount > 0 && checkedCount < childCbs.length);
 }
-
+ 
 function collectFolderFilter() {
-  var cbs = DOM.filterFolderTree.querySelectorAll("input[type='checkbox']:checked");
+  const cbs = DOM.filterFolderTree.querySelectorAll("input[type='checkbox']:checked");
   STATE.filterFolders = [];
-  for (var i = 0; i < cbs.length; i++) {
+  for (let i = 0; i < cbs.length; i++) {
     STATE.filterFolders.push(cbs[i].value);
   }
   STATE.page = 1;
   STATE.results = [];
   doSearch();
+  syncStateToURL();
 }
-
+ 
 function handleFolderCheckboxChange(cb) {
   cascadeDown(cb);
-  var allCbs = DOM.filterFolderTree.querySelectorAll("input[type='checkbox']");
+  const allCbs = DOM.filterFolderTree.querySelectorAll("input[type='checkbox']");
   allCbs.forEach(function(c) { syncParent(c); });
   allCbs.forEach(function(c) { updateIndeterminate(c); });
   collectFolderFilter();
-  syncStateToURL();
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Hitokoto
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function fetchHitokoto() {
   fetch("https://vomebook-hitokoto.hf.space/")
     .then(function(resp) { return resp.json(); })
     .then(function(data) {
-      var text = data.hitokoto || data.text || data.content || data.sentence || "";
+      const text = data.hitokoto || data.text || data.content || data.sentence || "";
       if (text) typewriter(DOM.hitokoto, text);
     })
     .catch(function() { DOM.hitokoto.textContent = ""; });
 }
-
+ 
 function typewriter(el, text, speed) {
   speed = speed || 60;
   el.style.opacity = "0";
@@ -1230,33 +1256,33 @@ function typewriter(el, text, speed) {
     el.style.transition = "opacity 0.5s ease";
     el.style.opacity = "0.55";
   }, 100);
-  var i = 0;
-  var t = setInterval(function() {
+  let i = 0;
+  const t = setInterval(function() {
     el.textContent = text.slice(0, i + 1);
     i++;
     if (i >= text.length) clearInterval(t);
   }, speed);
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Random Book
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function randomBook() {
-  var rec = getRandom(STATE.repoFull);
+  const rec = getRandom(STATE.repoFull);
   if (rec && rec.Link) {
     window.open(rec.Link, "_blank");
   } else {
     showToast("暂无可用记录");
   }
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Toast
    ═══════════════════════════════════════════════════════════ */
-
-var toastTimer;
-
+ 
+let toastTimer;
+ 
 function showToast(msg, dur) {
   dur = dur || 2000;
   DOM.toast.textContent = msg;
@@ -1269,87 +1295,95 @@ function showToast(msg, dur) {
     DOM.toast.style.display = "none";
   }, dur);
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Infinite Scroll & Quick Scroll
    ═══════════════════════════════════════════════════════════ */
-
+ 
+let scrollTicking = false;
+ 
 function setupInfiniteScroll() {
-  DOM.resultsContainer.addEventListener("scroll", function() {
-    updateScrollThumb();
-    if (STATE.isLoading || !STATE.hasMore) return;
-    var st = DOM.resultsContainer.scrollTop;
-    var sh = DOM.resultsContainer.scrollHeight;
-    var ch = DOM.resultsContainer.clientHeight;
-    if (sh - st - ch < 200) {
-      STATE.page++;
-      doSearch(true);
+  DOM.resultsContainer.addEventListener("scroll", () => {
+    if (!scrollTicking) {
+      requestAnimationFrame(() => {
+        updateScrollThumb();
+        if (!STATE.isLoading && STATE.hasMore) {
+          const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
+          const loadedHeight = DOM.resultsList.scrollHeight;
+          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.05;
+          if (scrollTop >= triggerPoint) {
+            STATE.page++;
+            doSearch(true);
+          }
+        }
+        scrollTicking = false;
+      });
+      scrollTicking = true;
     }
   });
 }
-
+ 
 function updateScrollThumb() {
-  var st = DOM.resultsContainer.scrollTop;
-  var sh = DOM.resultsContainer.scrollHeight;
-  var ch = DOM.resultsContainer.clientHeight;
-  if (sh <= ch) {
-    DOM.scrollTrack.classList.remove("visible");
-    return;
-  }
+  const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
+  if (scrollHeight <= clientHeight) { DOM.scrollTrack.classList.remove("visible"); return; }
   DOM.scrollTrack.classList.add("visible");
-  var th = Math.max(30, (ch / sh) * DOM.scrollTrack.clientHeight);
-  var tt = (st / (sh - ch)) * (DOM.scrollTrack.clientHeight - th);
+  const th = Math.max(30, (clientHeight / scrollHeight) * DOM.scrollTrack.clientHeight);
+  const tt = (scrollTop / (scrollHeight - clientHeight)) * (DOM.scrollTrack.clientHeight - th);
   DOM.scrollThumb.style.height = th + "px";
   DOM.scrollThumb.style.top = tt + "px";
 }
-
+ 
 function setupQuickScroll() {
-  var dragging = false;
-  var startY = 0;
-  var startST = 0;
-
-  DOM.scrollThumb.addEventListener("mousedown", function(e) {
-    dragging = true;
-    startY = e.clientY;
-    startST = DOM.resultsContainer.scrollTop;
-    e.preventDefault();
+  let dragging = false, startY, startST;
+  DOM.scrollThumb.addEventListener("mousedown", (e) => {
+    dragging = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault();
   });
-
-  document.addEventListener("mousemove", function(e) {
+  document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
-    var delta = e.clientY - startY;
-    var ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
+    const delta = e.clientY - startY;
+    const ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     DOM.resultsContainer.scrollTop = startST + ratio * (DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
   });
-
-  document.addEventListener("mouseup", function() { dragging = false; });
-
-  DOM.scrollThumb.addEventListener("touchstart", function(e) {
-    dragging = true;
-    startY = e.touches[0].clientY;
-    startST = DOM.resultsContainer.scrollTop;
+  document.addEventListener("mouseup", () => { dragging = false; });
+  DOM.scrollThumb.addEventListener("touchstart", (e) => {
+    dragging = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop;
   });
-
-  document.addEventListener("touchmove", function(e) {
+  document.addEventListener("touchmove", (e) => {
     if (!dragging) return;
-    var delta = e.touches[0].clientY - startY;
-    var ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
+    const delta = e.touches[0].clientY - startY;
+    const ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     DOM.resultsContainer.scrollTop = startST + ratio * (DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
   });
-
-  document.addEventListener("touchend", function() { dragging = false; });
+  document.addEventListener("touchend", () => { dragging = false; });
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Theme & Mobile
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function toggleTheme() {
+  const btn = DOM.themeBtn;
+  const rect = btn.getBoundingClientRect();
+  const ripple = document.createElement("div");
+  ripple.className = "theme-ripple";
+  ripple.style.left = (rect.left + rect.width / 2) + "px";
+  ripple.style.top = (rect.top + rect.height / 2) + "px";
+  ripple.style.background = STATE.isDark ? "#fff" : "#1a1c1e";
+  ripple.style.marginLeft = "-0px";
+  ripple.style.marginTop = "-0px";
+  document.body.appendChild(ripple);
+  document.body.classList.add("theme-transitioning");
+ 
   STATE.isDark = !STATE.isDark;
   applyTheme();
   localStorage.setItem("theme", STATE.isDark ? "dark" : "light");
+ 
+  ripple.addEventListener("animationend", () => {
+    ripple.remove();
+    document.body.classList.remove("theme-transitioning");
+  });
 }
-
+ 
 function applyTheme() {
   if (STATE.isDark) {
     document.body.classList.remove("light");
@@ -1361,13 +1395,13 @@ function applyTheme() {
     DOM.themeIconDark.style.display = "none";
   }
 }
-
+ 
 function toggleMobile() {
   STATE.isMobile = !STATE.isMobile;
   applyMobileMode();
   localStorage.setItem("mobileMode", STATE.isMobile ? "mobile" : "desktop");
 }
-
+ 
 function applyMobileMode() {
   if (STATE.isMobile) {
     document.body.classList.add("mobile");
@@ -1386,67 +1420,56 @@ function applyMobileMode() {
   }
   updateSidebarVisibility();
 }
-
-function autoDetectMobile() {
-  return window.innerWidth <= 768;
-}
-
+ 
+function autoDetectMobile() { return window.innerWidth <= 768; }
+ 
 /* ═══════════════════════════════════════════════════════════
    Sidebar Visibility
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function toggleLeftSidebar() {
   STATE.leftSidebarOpen = !STATE.leftSidebarOpen;
   if (!STATE.leftSidebarOpen) {
     DOM.leftSidebar.classList.remove("expanded-wide");
-    if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
+    DOM.sidebarExpandBtn.textContent = "↔";
+    syncStateToURL();
   }
   if (STATE.leftSidebarOpen && STATE.rightSidebarOpen) STATE.rightSidebarOpen = false;
   updateSidebarVisibility();
 }
-
+ 
 function toggleRightSidebar() {
   STATE.rightSidebarOpen = !STATE.rightSidebarOpen;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
 }
-
+ 
 function updateSidebarVisibility() {
-  if (STATE.leftSidebarOpen) {
-    DOM.leftSidebar.classList.remove("collapsed");
-    DOM.leftSidebar.classList.add("open");
-  } else {
-    DOM.leftSidebar.classList.add("collapsed");
-    DOM.leftSidebar.classList.remove("open");
-  }
-  if (STATE.rightSidebarOpen) {
-    DOM.rightSidebar.classList.remove("collapsed");
-    DOM.rightSidebar.classList.add("open");
-  } else {
-    DOM.rightSidebar.classList.add("collapsed");
-    DOM.rightSidebar.classList.remove("open");
-  }
+  DOM.leftSidebar.classList.toggle("collapsed", !STATE.leftSidebarOpen);
+  DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
+  DOM.rightSidebar.classList.toggle("collapsed", !STATE.rightSidebarOpen);
+  DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
   DOM.overlay.style.display = (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) ? "" : "none";
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Keyboard
    ═══════════════════════════════════════════════════════════ */
-
-var keyboardResultIndex = -1;
-
+ 
+let keyboardResultIndex = -1;
+ 
 function setupKeyboard() {
   document.addEventListener("keydown", function(e) {
-    var tag = document.activeElement.tagName;
-    var isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-
+    const tag = document.activeElement.tagName;
+    const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+ 
     if (e.key === "/" && !isInput) {
       e.preventDefault();
       DOM.searchInput.focus();
       DOM.searchInput.select();
       return;
     }
-
+ 
     if (e.key === "Escape") {
       if (STATE.rightSidebarOpen || STATE.leftSidebarOpen) {
         STATE.leftSidebarOpen = false;
@@ -1465,19 +1488,19 @@ function setupKeyboard() {
       DOM.searchInput.blur();
       return;
     }
-
+ 
     if (e.key === "b" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       toggleLeftSidebar();
       return;
     }
-
+ 
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (STATE.results.length === 0) return;
       e.preventDefault();
-      var items = DOM.resultsList.querySelectorAll(".result-item");
+      const items = DOM.resultsList.querySelectorAll(".result-item");
       if (items.length === 0) return;
-      for (var i = 0; i < items.length; i++) { items[i].style.background = ""; }
+      items.forEach(function(it) { it.style.background = ""; });
       if (e.key === "ArrowDown") {
         keyboardResultIndex = Math.min(keyboardResultIndex + 1, items.length - 1);
       } else {
@@ -1487,7 +1510,7 @@ function setupKeyboard() {
       items[keyboardResultIndex].scrollIntoView({ block: "nearest" });
       return;
     }
-
+ 
     if (e.key === "Enter") {
       if (isInput && document.activeElement === DOM.searchInput) {
         e.preventDefault();
@@ -1500,13 +1523,13 @@ function setupKeyboard() {
         return;
       }
       if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
-        var rec = STATE.results[keyboardResultIndex];
+        const rec = STATE.results[keyboardResultIndex];
         if (rec && rec.Link) window.open(rec.Link, "_blank");
         return;
       }
     }
   });
-
+ 
   DOM.searchInput.addEventListener("keydown", function(e) {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -1519,11 +1542,11 @@ function setupKeyboard() {
     }
   });
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Clear Filters
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function clearAllFilters() {
   STATE.filterRepos = [];
   STATE.filterExtensions = [];
@@ -1539,17 +1562,17 @@ function clearAllFilters() {
   showToast("已清空所有筛选条件");
   syncStateToURL();
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Event Delegation
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function setupResultDelegation() {
   DOM.resultsList.addEventListener("click", function(e) {
-    var actionBtn = e.target.closest("[data-action]");
+    const actionBtn = e.target.closest("[data-action]");
     if (actionBtn) {
       e.preventDefault();
-      var action = actionBtn.dataset.action;
+      const action = actionBtn.dataset.action;
       if (action === "copy") {
         navigator.clipboard.writeText(actionBtn.dataset.link)
           .then(function() { showToast("链接已复制"); })
@@ -1557,34 +1580,34 @@ function setupResultDelegation() {
         return;
       }
       if (action === "read") {
-        var link = actionBtn.dataset.link;
-        var repoShort = actionBtn.dataset.repo || STATE.repo;
-        var prefix = "https://huggingface.co/datasets/VoiceOfML/" + repoShort + "/resolve/main/";
-        var relPath = "";
+        const link = actionBtn.dataset.link;
+        const repoShort = actionBtn.dataset.repo || STATE.repo;
+        const prefix = "https://huggingface.co/datasets/VoiceOfML/" + repoShort + "/resolve/main/";
+        let relPath = "";
         if (link.indexOf(prefix) === 0) {
           relPath = decodeURIComponent(link.substring(prefix.length));
         }
-        var stem = relPath;
+        let stem = relPath;
         if (stem.indexOf(".") >= 0) {
-          var lastDot = stem.lastIndexOf(".");
-          var slashAfterDot = stem.indexOf("/", lastDot);
+          const lastDot = stem.lastIndexOf(".");
+          const slashAfterDot = stem.indexOf("/", lastDot);
           if (slashAfterDot === -1) stem = stem.substring(0, lastDot);
         }
-        window.open(TXT_BASE + "/" + encodeURI(stem) + ".txt", "_blank");
+        window.open(TXT_BASE + "/" + encodeURIComponent(stem) + ".txt", "_blank");
         return;
       }
     }
-
-    var repoTag = e.target.closest(".result-repo-tag");
+ 
+    const repoTag = e.target.closest(".result-repo-tag");
     if (repoTag) {
       ROUTER.navigate("repo", repoTag.dataset.repo);
       return;
     }
-
-    var folderLink = e.target.closest(".path-folder");
+ 
+    const folderLink = e.target.closest(".path-folder");
     if (folderLink) {
-      var folder = folderLink.dataset.folder;
-      var frepo = folderLink.dataset.repo;
+      const folder = folderLink.dataset.folder;
+      const frepo = folderLink.dataset.repo;
       if (frepo && STATE.mode === "global") {
         ROUTER.navigate("repo", frepo);
         setTimeout(function() {
@@ -1604,31 +1627,31 @@ function setupResultDelegation() {
       return;
     }
   });
-
+ 
   DOM.sidebarContent.addEventListener("click", function(e) {
-    var repoItem = e.target.closest(".repo-list-item");
+    const repoItem = e.target.closest(".repo-list-item");
     if (repoItem) {
       ROUTER.navigate("repo", repoItem.dataset.repo);
     }
   });
 }
-
+ 
 /* ═══════════════════════════════════════════════════════════
    Init
    ═══════════════════════════════════════════════════════════ */
-
+ 
 function init() {
   cacheDOM();
-
+ 
   STATE.isDark = localStorage.getItem("theme") !== "light";
   applyTheme();
-
-  var savedMobile = localStorage.getItem("mobileMode");
+ 
+  const savedMobile = localStorage.getItem("mobileMode");
   if (savedMobile === "mobile") STATE.isMobile = true;
   else if (savedMobile === "desktop") STATE.isMobile = false;
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
-
+ 
   console.log("Loading data...");
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
@@ -1636,10 +1659,10 @@ function init() {
       DOM.resultsList.innerHTML = '<div class="empty-state"><div class="empty-title">数据加载失败</div><div class="empty-desc">请检查网络连接后刷新页面</div></div>';
       return;
     }
-
+ 
     STATE.repoList = repoList;
     STATE.extensionList = extensionList;
-
+ 
     DOM.searchInput.addEventListener("input", debouncedSearch);
     DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
     DOM.settingsBtn.addEventListener("click", toggleRightSidebar);
@@ -1647,24 +1670,36 @@ function init() {
       STATE.rightSidebarOpen = false;
       updateSidebarVisibility();
     });
+    DOM.sidebarExpandBtn.addEventListener("click", function() {
+      DOM.leftSidebar.classList.toggle("expanded-wide");
+      DOM.sidebarExpandBtn.textContent = DOM.leftSidebar.classList.contains("expanded-wide") ? "→" : "↔";
+      syncStateToURL();
+    });
     DOM.themeBtn.addEventListener("click", toggleTheme);
     DOM.mobileToggleBtn.addEventListener("click", toggleMobile);
     DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
-    DOM.sortSelect.addEventListener("change", function() {
+    DOM.searchFoldersToggle.addEventListener("change", function() {
+      STATE.searchFolders = DOM.searchFoldersToggle.checked;
       STATE.page = 1;
       STATE.results = [];
       doSearch();
     });
-    DOM.randomBookBtn.addEventListener("click", randomBook);
-    DOM.emptyRandomBtn.addEventListener("click", randomBook);
+    DOM.sortSelect.addEventListener("change", function() {
+      STATE.page = 1;
+      STATE.results = [];
+      doSearch();
+      syncStateToURL();
+    });
     DOM.overlay.addEventListener("click", function() {
       STATE.leftSidebarOpen = false;
       STATE.rightSidebarOpen = false;
       updateSidebarVisibility();
     });
-
-    var sizeTimer;
-    var onSize = function() {
+    DOM.randomBookBtn.addEventListener("click", randomBook);
+    DOM.emptyRandomBtn.addEventListener("click", randomBook);
+ 
+    let sizeTimer;
+    const onSize = function() {
       clearTimeout(sizeTimer);
       sizeTimer = setTimeout(function() {
         STATE.filterMinSize = DOM.filterMinSize.value ? parseInt(DOM.filterMinSize.value) : null;
@@ -1676,21 +1711,7 @@ function init() {
     };
     DOM.filterMinSize.addEventListener("input", onSize);
     DOM.filterMaxSize.addEventListener("input", onSize);
-
-    if (DOM.sidebarExpandBtn) {
-      DOM.sidebarExpandBtn.addEventListener("click", function() {
-        DOM.leftSidebar.classList.toggle("expanded-wide");
-        DOM.sidebarExpandBtn.textContent = DOM.leftSidebar.classList.contains("expanded-wide") ? "→" : "↔";
-      });
-    }
-
-    DOM.searchFoldersToggle.addEventListener("change", function() {
-      STATE.searchFolders = DOM.searchFoldersToggle.checked;
-      STATE.page = 1;
-      STATE.results = [];
-      doSearch();
-    });
-
+ 
     DOM.extSelectAll.addEventListener("click", function() {
       STATE.filterExtensions = extensionList.slice();
       STATE.page = 1;
@@ -1699,7 +1720,9 @@ function init() {
       renderExtensionFilter();
     });
     DOM.extDeselectAll.addEventListener("click", function() {
-      STATE.filterExtensions = [];
+      const allExtNames = extensionList.slice();
+      const currentSet = new Set(STATE.filterExtensions);
+      STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
       STATE.page = 1;
       STATE.results = [];
       doSearch();
@@ -1714,12 +1737,12 @@ function init() {
     });
     DOM.folderDeselectAll.addEventListener("click", function() {
       DOM.filterFolderTree.querySelectorAll("input[type='checkbox']").forEach(function(c) {
-        c.checked = false;
+        c.checked = !c.checked;
         c.indeterminate = false;
       });
       collectFolderFilter();
     });
-
+ 
     DOM.didYouMean.addEventListener("click", function() {
       if (STATE.didYouMean) {
         DOM.searchInput.value = STATE.didYouMean;
@@ -1729,29 +1752,29 @@ function init() {
         doSearch();
       }
     });
-
+ 
     setupInfiniteScroll();
     setupQuickScroll();
     setupKeyboard();
     setupResultDelegation();
-
+ 
     window.addEventListener("hashchange", function() {
       ROUTER.apply();
     });
-
+ 
     window.addEventListener("resize", function() {
       if (!localStorage.getItem("mobileMode")) {
-        var wasMobile = STATE.isMobile;
+        const wasMobile = STATE.isMobile;
         STATE.isMobile = autoDetectMobile();
         if (wasMobile !== STATE.isMobile) applyMobileMode();
       }
     });
-
+ 
     ROUTER.apply();
-
+ 
     fetchHitokoto();
     setInterval(fetchHitokoto, 30000);
   });
 }
-
+ 
 document.addEventListener("DOMContentLoaded", init);

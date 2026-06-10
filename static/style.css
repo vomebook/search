@@ -1,4 +1,4 @@
-/* ═══════════════════════════════════════════════════════════
+    /* ═══════════════════════════════════════════════════════════
    VoiceOfML Search — MD3 Design System
    ═══════════════════════════════════════════════════════════ */
 
@@ -210,7 +210,7 @@ ul, li {
 }
 .search-box:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(138,180,248,0.25);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .search-icon {
@@ -345,6 +345,8 @@ ul, li {
   justify-content: space-between;
   padding: 10px 12px;
   font-size: 12px;
+  height: 36px;
+  min-height: 36px;
   font-weight: 600;
   color: var(--on-surface-variant);
   text-transform: uppercase;
@@ -444,6 +446,24 @@ ul, li {
   color: var(--on-surface);
 }
 .browser-item:hover {
+  background: var(--surface-variant);
+}
+
+/* 默认：无条纹 */
+.browser-item:nth-child(even) {
+  background: transparent;
+}
+
+/* 展开后：显示条纹 */
+.left-sidebar.expanded-wide .browser-item:nth-child(even) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.left-sidebar.expanded-wide .browser-item:nth-child(even):hover {
   background: var(--surface-variant);
 }
 
@@ -555,6 +575,7 @@ ul, li {
   border-bottom: 1px solid var(--outline-variant);
   flex-shrink: 0;
   min-height: 36px;
+  height: 36px;
 }
 
 .status-left {
@@ -615,6 +636,14 @@ ul, li {
   padding: 10px 16px;
   border-bottom: 1px solid var(--outline-variant);
   transition: background var(--transition);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 60px;
+}
+.result-item:nth-child(even) {
+  background: var(--surface-variant);
+}
+.result-item:nth-child(even):hover {
+  background: var(--secondary-container);
 }
 .result-item:hover {
   background: var(--surface-variant);
@@ -649,14 +678,10 @@ ul, li {
 }
 
 .result-title mark {
-  background: #5c4a1f;
-  color: #fde68a;
+  background: var(--primary-container);
+  color: var(--on-primary-container);
   border-radius: 2px;
   padding: 0 1px;
-}
-body.light .result-title mark {
-  background: #fde68a;
-  color: #1a1c1e;
 }
 
 .result-path {
@@ -699,14 +724,10 @@ body.light .result-title mark {
 }
 
 .result-preview mark {
-  background: #5c4a1f;
-  color: #fde68a;
+  background: var(--primary-container);
+  color: var(--on-primary-container);
   border-radius: 2px;
   padding: 0 1px;
-}
-body.light .result-preview mark {
-  background: #fde68a;
-  color: #1a1c1e;
 }
 
 .result-meta {
@@ -1291,4 +1312,24 @@ body.mobile .result-actions {
 
 input[type="checkbox"]:indeterminate {
   accent-color: var(--primary);
+}
+body.theme-transitioning *,
+body.theme-transitioning *::before,
+body.theme-transitioning *::after {
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease !important;
+}
+
+.theme-ripple {
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 9999;
+  width: 0;
+  height: 0;
+  animation: theme-ripple-expand 0.6s ease-out forwards;
+}
+
+@keyframes theme-ripple-expand {
+  0%   { width: 0; height: 0; opacity: 0.6; }
+  100% { width: 300vmax; height: 300vmax; opacity: 0; transform: translate(-150vmax, -150vmax); }
 }
