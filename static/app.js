@@ -1309,7 +1309,7 @@ function setupInfiniteScroll() {
         if (!STATE.isLoading && STATE.hasMore) {
           const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
           const loadedHeight = DOM.resultsList.scrollHeight;
-          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.05;
+          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
           if (scrollTop >= triggerPoint) {
             STATE.page++;
             doSearch(true);
