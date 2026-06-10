@@ -164,25 +164,25 @@ function buildIndex() {
  
 async function loadData() {
   try {
-    DOM.loadingBarFill.style.width = "10%";
-    DOM.loadingBarText.textContent = "正在下载搜索索引...";
+    if (DOM.loadingBarFill) DOM.loadingBarFill.style.width = "10%";
+    if (DOM.loadingBarText) DOM.loadingBarText.textContent = "正在下载搜索索引...";
     const resp = await fetch(DATA_URL);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
-    DOM.loadingBarFill.style.width = "50%";
-    DOM.loadingBarText.textContent = "正在解压...";
+    if (DOM.loadingBarFill) DOM.loadingBarFill.style.width = "50%";
+    if (DOM.loadingBarText) DOM.loadingBarText.textContent = "正在解压...";
     const buf = await resp.arrayBuffer();
-    DOM.loadingBarFill.style.width = "60%";
+    if (DOM.loadingBarFill) DOM.loadingBarFill.style.width = "60%";
     const ds = new DecompressionStream("gzip");
     const stream = new Response(new Uint8Array(buf)).body.pipeThrough(ds);
     const text = await new Response(stream).text();
-    DOM.loadingBarFill.style.width = "85%";
-    DOM.loadingBarText.textContent = "正在解析...";
+    if (DOM.loadingBarFill) DOM.loadingBarFill.style.width = "85%";
+    if (DOM.loadingBarText) DOM.loadingBarText.textContent = "正在解析...";
     RECORDS = JSON.parse(text);
-    DOM.loadingBarFill.style.width = "92%";
-    DOM.loadingBarText.textContent = "正在建立索引...";
+    if (DOM.loadingBarFill) DOM.loadingBarFill.style.width = "92%";
+    if (DOM.loadingBarText) DOM.loadingBarText.textContent = "正在建立索引...";
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
     buildIndex();
-    DOM.loadingBarFill.style.width = "100%";
+    if (DOM.loadingBarFill) DOM.loadingBarFill.style.width = "100%";
     console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
     return true;
   } catch (e) {
@@ -651,13 +651,13 @@ const ROUTER = {
       DOM.leftSidebar.classList.remove("expanded-wide");
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
     }
- 
+
     if (route.params.q !== undefined) {
       STATE.query = route.params.q;
-      DOM.searchInput.value = STATE.query;
+      if (DOM.searchInput) DOM.searchInput.value = STATE.query;
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.query = "";
-      DOM.searchInput.value = "";
+      if (DOM.searchInput) DOM.searchInput.value = "";
     }
  
     if (route.params.repo) {
@@ -1538,12 +1538,12 @@ function toggleTheme() {
 function applyTheme() {
   if (STATE.isDark) {
     document.body.classList.remove("light");
-    DOM.themeIconLight.style.display = "none";
-    DOM.themeIconDark.style.display = "";
+    if (DOM.themeIconLight) DOM.themeIconLight.style.display = "none";
+    if (DOM.themeIconDark) DOM.themeIconDark.style.display = "";
   } else {
     document.body.classList.add("light");
-    DOM.themeIconLight.style.display = "";
-    DOM.themeIconDark.style.display = "none";
+    if (DOM.themeIconLight) DOM.themeIconLight.style.display = "";
+    if (DOM.themeIconDark) DOM.themeIconDark.style.display = "none";
   }
 }
  
@@ -1557,15 +1557,15 @@ function applyMobileMode() {
   if (STATE.isMobile) {
     document.body.classList.add("mobile");
     document.body.classList.remove("force-desktop");
-    DOM.mobileIconPhone.style.display = "";
-    DOM.mobileIconDesktop.style.display = "none";
+    if (DOM.mobileIconPhone) DOM.mobileIconPhone.style.display = "";
+    if (DOM.mobileIconDesktop) DOM.mobileIconDesktop.style.display = "none";
     STATE.leftSidebarOpen = false;
     STATE.rightSidebarOpen = false;
   } else {
     document.body.classList.remove("mobile");
     document.body.classList.add("force-desktop");
-    DOM.mobileIconPhone.style.display = "none";
-    DOM.mobileIconDesktop.style.display = "";
+    if (DOM.mobileIconPhone) DOM.mobileIconPhone.style.display = "none";
+    if (DOM.mobileIconDesktop) DOM.mobileIconDesktop.style.display = "";
     STATE.leftSidebarOpen = true;
     STATE.rightSidebarOpen = false;
   }
@@ -1596,11 +1596,15 @@ function toggleRightSidebar() {
 }
  
 function updateSidebarVisibility() {
-  DOM.leftSidebar.classList.toggle("collapsed", !STATE.leftSidebarOpen);
-  DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
-  DOM.rightSidebar.classList.toggle("collapsed", !STATE.rightSidebarOpen);
-  DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
-  DOM.overlay.style.display = (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) ? "" : "none";
+  if (DOM.leftSidebar) {
+    DOM.leftSidebar.classList.toggle("collapsed", !STATE.leftSidebarOpen);
+    DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
+  }
+  if (DOM.rightSidebar) {
+    DOM.rightSidebar.classList.toggle("collapsed", !STATE.rightSidebarOpen);
+    DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
+  }
+  if (DOM.overlay) DOM.overlay.style.display = (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) ? "" : "none";
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1832,12 +1836,13 @@ function init() {
 
   console.log("Loading data...");
   loadData().then(function(ok) {
-    STATE.dataLoaded = ok;
-    DOM.loadingBarContainer.style.display = "none";
-    if (!ok) {
-      DOM.resultsList.innerHTML = '<div class="empty-state"><div class="empty-title">数据加载失败</div><div class="empty-desc">请检查网络连接后刷新页面</div></div>';
-      return;
-    }
+    try {
+      STATE.dataLoaded = ok;
+      if (DOM.loadingBarContainer) DOM.loadingBarContainer.style.display = "none";
+      if (!ok) {
+        DOM.resultsList.innerHTML = '<div class="empty-state"><div class="empty-title">数据加载失败</div><div class="empty-desc">请检查网络连接后刷新页面</div></div>';
+        return;
+      }
  
     STATE.repoList = repoList;
     STATE.extensionList = extensionList;
@@ -1949,6 +1954,10 @@ function init() {
  
     fetchHitokoto();
     setInterval(fetchHitokoto, 30000);
+    } catch (initErr) {
+      console.error("Init error:", initErr);
+      DOM.resultsList.innerHTML = '<div class="empty-state"><div class="empty-title">初始化失败</div><div class="empty-desc">' + initErr.message + '</div></div>';
+    }
   });
 }
  
