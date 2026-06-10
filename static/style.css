@@ -649,10 +649,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   background: var(--surface-variant);
 }
 
-.result-item.keyboard-active {
-  background: var(--secondary-container) !important;
-}
-
 .result-file-icon {
   width: 24px;
   height: 24px;
@@ -1085,42 +1081,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-/* ═══════════════════════════════════════════════════════════
-   Loading Bar
-   ═══════════════════════════════════════════════════════════ */
-
-.loading-bar-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 32px 16px;
-}
-
-.loading-bar-text {
-  font-size: 13px;
-  color: var(--on-surface-variant);
-  opacity: 0.7;
-}
-
-.loading-bar-track {
-  width: 280px;
-  max-width: 80%;
-  height: 4px;
-  background: var(--outline-variant);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.loading-bar-fill {
-  height: 100%;
-  background: var(--primary);
-  border-radius: 2px;
-  width: 0%;
-  transition: width 0.3s ease;
 }
 
 /* ═══════════════════════════════════════════════════════════
