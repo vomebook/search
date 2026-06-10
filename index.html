@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>VoiceOfML Search</title>
-<link rel="stylesheet" href="static/style.css">
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="dark">
 
@@ -116,6 +116,10 @@
       <div id="results-loading" class="loading-spinner" style="display:none">
         <div class="spinner"></div>
       </div>
+      <div id="results-loading-bar" class="loading-bar-container">
+        <div class="loading-bar-text">正在加载搜索数据索引...</div>
+        <div class="loading-bar-track"><div class="loading-bar-fill" id="loading-bar-fill"></div></div>
+      </div>
       <div id="empty-state" class="empty-state" style="display:none">
         <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -221,6 +225,6 @@
 <!-- Toast -->
 <div id="toast" class="toast" style="display:none"></div>
 
-<script src="static/app.js"></script>
+<script src="/static/app.js"></script>
 </body>
 </html>
