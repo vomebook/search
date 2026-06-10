@@ -2,6 +2,8 @@
  * VoiceOfML Search — Static Edition
  * Hash Router | In-Memory Search Index | GitHub Pages
  */
+
+console.log("[VoiceOfML] script loaded, v=2");
  
 /* ═══════════════════════════════════════════════════════════
    Constants
