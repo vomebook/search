@@ -481,6 +481,7 @@ const STATE = {
   repo: null,
   repoFull: null,
   query: "",
+  sort: "relevance",
   page: 1,
   pageSize: 100,
   total: 0,
@@ -658,7 +659,7 @@ const ROUTER = {
     if (STATE.query) sp.set("q", STATE.query);
     if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
     if (STATE.browserPath) sp.set("path", STATE.browserPath);
-    if (DOM.sortSelect.value !== "relevance") sp.set("sort", DOM.sortSelect.value);
+    if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
@@ -666,7 +667,7 @@ const ROUTER = {
     if (qs) hash += "?" + qs;
     window.location.hash = hash;
   },
- 
+
   apply: function() {
     const route = this.parse();
     const prevMode = STATE.mode;
@@ -714,7 +715,8 @@ const ROUTER = {
       STATE.browserPath = "";
     }
  
-    if (route.params.sort) DOM.sortSelect.value = route.params.sort;
+    STATE.sort = route.params.sort || "relevance";
+    DOM.sortSelect.value = STATE.sort;
     STATE.filterMinSize = route.params.min_size ? parseInt(route.params.min_size) : null;
     STATE.filterMaxSize = route.params.max_size ? parseInt(route.params.max_size) : null;
     DOM.filterMinSize.value = STATE.filterMinSize || "";
@@ -775,7 +777,7 @@ function syncStateToURL() {
     });
   }
   if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
-  if (DOM.sortSelect.value !== "relevance") sp.set("sort", DOM.sortSelect.value);
+  if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
@@ -794,7 +796,8 @@ function syncStateToURL() {
    ═══════════════════════════════════════════════════════════ */
  
 let searchTimer = null;
- 
+let searchId = 0;
+
 function debouncedSearch() {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
@@ -804,10 +807,12 @@ function debouncedSearch() {
     doSearch();
   }, 300);
 }
- 
+
 function doSearch(append) {
-  if (!STATE.dataLoaded || STATE.isLoading) return;
- 
+  if (!STATE.dataLoaded) return;
+
+  const id = ++searchId;
+
   const params = {
     q: STATE.query,
     repos: STATE.mode === "repo" ? [STATE.repoFull] : (STATE.filterRepos.length > 0 ? STATE.filterRepos : null),
@@ -815,39 +820,40 @@ function doSearch(append) {
     folders: STATE.filterFolders.length > 0 ? STATE.filterFolders : null,
     minSize: STATE.filterMinSize,
     maxSize: STATE.filterMaxSize,
-    sort: DOM.sortSelect.value,
+    sort: STATE.sort,
     searchFolders: STATE.searchFolders,
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
- 
+
   STATE.isLoading = true;
   DOM.resultsLoading.style.display = "flex";
   DOM.emptyState.style.display = "none";
   DOM.didYouMean.style.display = "none";
- 
+
   setTimeout(function() {
+    if (id !== searchId) return;
     try {
       const data = doSearchLocal(params);
       STATE.total = data.total;
       STATE.didYouMean = data.didYouMean || null;
- 
+
       if (append) {
         STATE.results = STATE.results.concat(data.results);
       } else {
         STATE.results = data.results;
       }
- 
+
       STATE.hasMore = STATE.results.length < STATE.total;
       renderResults();
       updateStatusBar();
       updateLoadInfo();
- 
+
       if (STATE.didYouMean) {
         DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
         DOM.didYouMean.style.display = "inline";
       }
- 
+
       syncStateToURL();
     } catch (err) {
       console.error(err);
@@ -1873,6 +1879,7 @@ function init() {
       doSearch();
     });
     DOM.sortSelect.addEventListener("change", function() {
+      STATE.sort = DOM.sortSelect.value;
       STATE.page = 1;
       STATE.results = [];
       doSearch();
