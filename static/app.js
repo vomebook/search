@@ -71,7 +71,6 @@ let extensionCounts = {};
 let repoCounts = {};
 let folderIndex = {};
 let didYouMeanVocab = {};
-let sortedVocabCache = [];
 let repoList = [];
 let extensionList = [];
  
@@ -108,54 +107,43 @@ function editDistance(s1, s2, maxDist) {
   return prev[prev.length - 1];
 }
  
-async function buildIndex() {
+function buildIndex() {
   wordIndex = {};
   extensionCounts = {};
   repoCounts = {};
   folderIndex = {};
   didYouMeanVocab = {};
-
-  const CHUNK = 5000;
-  const total = RECORDS.length;
-  const bar = DOM.progressBar;
-  const text = DOM.progressText;
-
-  for (let i = 0; i < total; i++) {
+ 
+  for (let i = 0; i < RECORDS.length; i++) {
     const rec = RECORDS[i];
     const repo = rec.Repo || "";
     const ext = (rec.Extension || "").toLowerCase();
-
+ 
     repoCounts[repo] = (repoCounts[repo] || 0) + 1;
     if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
-
+ 
     const folders = rec.Folder || [];
-    const text_tok = [rec.File || "", ...folders].join(" ");
-    const tokens = tokenize(text_tok);
+    const text = [rec.File || "", ...folders].join(" ");
+    const tokens = tokenize(text);
     for (const tok of tokens) {
       if (!wordIndex[tok]) wordIndex[tok] = [];
       wordIndex[tok].push(i);
       didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
     }
-
+ 
     if (!folderIndex[repo]) folderIndex[repo] = {};
     for (let d = 0; d <= folders.length; d++) {
       const fp = d === 0 ? "" : folders.slice(0, d).join("/");
-      folderIndex[repo][fp] = (folderIndex[repo][fp] || 0) + 1;
-    }
-
-    if (i % CHUNK === 0 && i > 0) {
-      bar.style.width = (95 + Math.round((i / total) * 4)) + "%";
-      await new Promise(function(r) { setTimeout(r, 0); });
+      if (!folderIndex[repo][fp]) folderIndex[repo][fp] = [];
+      folderIndex[repo][fp].push(i);
     }
   }
-
+ 
   repoList = Object.entries(repoCounts)
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => a.name.localeCompare(b.name));
-
+ 
   extensionList = Object.keys(extensionCounts).sort();
-
-  sortedVocabCache = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
 }
  
 async function loadData() {
@@ -217,7 +205,7 @@ async function loadData() {
     bar.style.width = "95%";
     text.textContent = "建立索引...";
 
-    await buildIndex();
+    buildIndex();
     console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
 
     bar.style.width = "100%";
@@ -324,7 +312,8 @@ function doSearchLocal(params) {
     for (const tok of tokens) {
       if (wordIndex[tok]) continue;
       const candidates = [];
-      for (const [vocab] of sortedVocabCache) {
+      const sortedVocab = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
+      for (const [vocab] of sortedVocab) {
         if (Math.abs(vocab.length - tok.length) > 2) continue;
         if (editDistance(tok, vocab) <= 2) {
           candidates.push(...(wordIndex[vocab] || []));
@@ -424,19 +413,14 @@ function buildFilterFolderTree(repo) {
     }
   }
  
-  for (const [fp, count] of Object.entries(folderIndex[repo])) {
-    if (nodeMap[fp]) nodeMap[fp].count = count;
+  for (const [fp, idxs] of Object.entries(folderIndex[repo])) {
+    if (nodeMap[fp]) nodeMap[fp].count = idxs.length;
   }
  
   return [root];
 }
  
-let folderCache = {};
-
 function getFolderContents(repo, path) {
-  const key = repo + "|" + (path || "");
-  if (folderCache[key]) return folderCache[key];
-
   const pathParts = path ? path.split("/").filter(Boolean) : [];
   const pathDepth = pathParts.length;
  
@@ -478,7 +462,7 @@ function getFolderContents(repo, path) {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
  
-  return folderCache[key] = { folders: folderList, files: fileList, current_path: path };
+  return { folders: folderList, files: fileList, current_path: path };
 }
  
 function getRandom(repo) {
@@ -520,7 +504,6 @@ const STATE = {
   folderTree: null,
   searchFolders: true,
   dataLoaded: false,
-  resizeTimer: null,
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -769,7 +752,6 @@ const ROUTER = {
   },
  
   onModeChanged: function() {
-    folderCache = {};
     if (DOM.sidebarExpandBtn) {
       DOM.sidebarExpandBtn.style.display = STATE.mode === "repo" ? "" : "none";
     }
@@ -991,24 +973,13 @@ function renderVisible() {
   let bottomH = 0;
   for (let i = end; i < len; i++) bottomH += VSCROLL.heights[i] || est;
 
-  VSCROLL._topSpacer = VSCROLL._topSpacer || (function() {
-    var s = document.createElement("div");
-    s.style.flexShrink = "0";
-    s.setAttribute("aria-hidden", "true");
-    return s;
-  }());
-  VSCROLL._bottomSpacer = VSCROLL._bottomSpacer || (function() {
-    var s = document.createElement("div");
-    s.style.flexShrink = "0";
-    s.setAttribute("aria-hidden", "true");
-    return s;
-  }());
-
-  DOM.resultsList.replaceChildren();
+  DOM.resultsList.innerHTML = "";
 
   if (topH > 0) {
-    VSCROLL._topSpacer.style.height = topH + "px";
-    DOM.resultsList.appendChild(VSCROLL._topSpacer);
+    const spacer = document.createElement("div");
+    spacer.style.height = topH + "px";
+    spacer.style.flexShrink = "0";
+    DOM.resultsList.appendChild(spacer);
   }
 
   const fragment = document.createDocumentFragment();
@@ -1024,8 +995,10 @@ function renderVisible() {
   DOM.resultsList.appendChild(fragment);
 
   if (bottomH > 0) {
-    VSCROLL._bottomSpacer.style.height = bottomH + "px";
-    DOM.resultsList.appendChild(VSCROLL._bottomSpacer);
+    const spacer = document.createElement("div");
+    spacer.style.height = bottomH + "px";
+    spacer.style.flexShrink = "0";
+    DOM.resultsList.appendChild(spacer);
   }
 
   requestAnimationFrame(function() {
@@ -1157,7 +1130,7 @@ function renderBrowser(path) {
         return function(e) {
           if (e.target.closest(".browser-action")) {
             e.stopPropagation();
-            const stem = ff.name;
+            const stem = ff.ext ? ff.name : ff.name;
             const txtPath = (path ? path + "/" : "") + stem;
             window.open(TXT_BASE + "/" + encodeURIComponent(txtPath) + ".txt", "_blank");
             return;
@@ -1986,12 +1959,9 @@ function init() {
  
     window.addEventListener("resize", function() {
       if (!localStorage.getItem("mobileMode")) {
-        clearTimeout(STATE.resizeTimer);
-        STATE.resizeTimer = setTimeout(function() {
-          const wasMobile = STATE.isMobile;
-          STATE.isMobile = autoDetectMobile();
-          if (wasMobile !== STATE.isMobile) applyMobileMode();
-        }, 200);
+        const wasMobile = STATE.isMobile;
+        STATE.isMobile = autoDetectMobile();
+        if (wasMobile !== STATE.isMobile) applyMobileMode();
       }
     });
  
