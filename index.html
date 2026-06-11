@@ -2,17 +2,11 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>VoiceOfML Search</title>
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body class="dark">
-
-<!-- ═══════════ Progress Bar ═══════════ -->
-<div id="progress-container" class="progress-container">
-  <div id="progress-bar" class="progress-bar"></div>
-  <span id="progress-text" class="progress-text">连接中...</span>
-</div>
 
 <!-- ═══════════ Header ═══════════ -->
 <header id="header">
@@ -118,7 +112,7 @@
 
     <!-- Results -->
     <div id="results-container" class="results-container">
-      <div id="results-list" class="results-list" role="listbox" aria-label="搜索结果"></div>
+      <div id="results-list" class="results-list"></div>
       <div id="results-loading" class="loading-spinner" style="display:none">
         <div class="spinner"></div>
       </div>
