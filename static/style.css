@@ -118,7 +118,9 @@ body {
 .random-big-btn:focus-visible,
 .filter-checkbox-item:focus-visible,
 .back-to-global:focus-visible,
-.sidebar-breadcrumb .crumb-item:focus-visible {
+.sidebar-breadcrumb .crumb-item:focus-visible,
+input:focus-visible,
+select:focus-visible {
   outline: none;
 }
 
