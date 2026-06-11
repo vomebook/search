@@ -891,9 +891,9 @@ function renderResults() {
     for (let i = oldLen; i < len; i++) {
       VSCROLL.heights[i] = VSCROLL.estimatedHeight;
     }
-    VSCROLL.renderStart = 0;
-    VSCROLL.renderEnd = 0;
   }
+  VSCROLL.renderStart = 0;
+  VSCROLL.renderEnd = 0;
 
   renderVisible();
 }
