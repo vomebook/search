@@ -147,20 +147,80 @@ function buildIndex() {
 }
  
 async function loadData() {
+  const bar = DOM.progressBar;
+  const text = DOM.progressText;
+  bar.style.width = "0%";
+  text.textContent = "连接中...";
+
   try {
     const resp = await fetch(DATA_URL);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const buf = await resp.arrayBuffer();
+
+    const total = parseInt(resp.headers.get("Content-Length") || "0", 10);
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (total > 0) {
+        const pct = Math.round((received / total) * 70);
+        bar.style.width = pct + "%";
+        text.textContent = "下载中 " + (pct > 40 ? formatSize(received) : "");
+      } else {
+        bar.style.width = Math.min(70, Math.round(received / 1024)) + "%";
+        text.textContent = "下载中 " + formatSize(received);
+      }
+    }
+
+    bar.style.width = "75%";
+    text.textContent = "解压中...";
+
+    let buf;
+    if (chunks.length === 1) {
+      buf = chunks[0];
+    } else {
+      buf = new Uint8Array(received);
+      let pos = 0;
+      for (const chunk of chunks) {
+        buf.set(chunk, pos);
+        pos += chunk.length;
+      }
+    }
+
+    bar.style.width = "82%";
     const ds = new DecompressionStream("gzip");
-    const stream = new Response(new Uint8Array(buf)).body.pipeThrough(ds);
-    const text = await new Response(stream).text();
-    RECORDS = JSON.parse(text);
+    const stream = new Response(buf).body.pipeThrough(ds);
+    const jsonText = await new Response(stream).text();
+
+    bar.style.width = "90%";
+    text.textContent = "解析中...";
+
+    RECORDS = JSON.parse(jsonText);
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
+
+    bar.style.width = "95%";
+    text.textContent = "建立索引...";
+
     buildIndex();
     console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
+
+    bar.style.width = "100%";
+    text.textContent = "完成";
+
+    setTimeout(function() {
+      DOM.progressContainer.classList.add("progress-done");
+    }, 400);
+
     return true;
   } catch (e) {
     console.error("Data load failed:", e);
+    bar.style.width = "100%";
+    bar.style.background = "var(--error)";
+    text.textContent = "加载失败";
     return false;
   }
 }
@@ -464,6 +524,9 @@ const $ = (sel) => document.querySelector(sel);
 const DOM = {};
  
 function cacheDOM() {
+  DOM.progressContainer = $("#progress-container");
+  DOM.progressBar = $("#progress-bar");
+  DOM.progressText = $("#progress-text");
   DOM.headerTitle = $("#header-title");
   DOM.headerLogo = $("#header-logo");
   DOM.searchInput = $("#search-input");
