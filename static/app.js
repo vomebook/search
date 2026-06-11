@@ -1012,7 +1012,9 @@ function renderVisible() {
   if (bottomH > 0) {
     html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
   }
-  DOM.resultsList.innerHTML = html;
+  var tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  DOM.resultsList.replaceChildren(tpl.content);
 
   requestAnimationFrame(function() {
     measureHeights();
