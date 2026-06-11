@@ -653,7 +653,7 @@ const ROUTER = {
     return { mode: mode, repo: repo, params: params };
   },
  
-  navigate: function(mode, repo) {
+  navigate: function(mode, repo, folder) {
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
@@ -663,6 +663,7 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
+    if (folder) sp.set("f", folder);
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     window.location.hash = hash;
@@ -714,7 +715,11 @@ const ROUTER = {
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.browserPath = "";
     }
- 
+
+    if (route.params.f) {
+      STATE.filterFolders = [route.params.f];
+    }
+
     STATE.sort = route.params.sort || "relevance";
     DOM.sortSelect.value = STATE.sort;
     STATE.filterMinSize = route.params.min_size ? parseInt(route.params.min_size) : null;
@@ -778,6 +783,7 @@ function syncStateToURL() {
   }
   if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
   if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
+  if (STATE.filterFolders.length) sp.set("f", STATE.filterFolders.join(","));
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
@@ -1130,7 +1136,9 @@ function renderBrowser(path) {
         return function(e) {
           if (e.target.closest(".browser-action")) {
             e.stopPropagation();
-            const stem = ff.ext ? ff.name : ff.name;
+            const stem = ff.ext && ff.name.toLowerCase().endsWith("." + ff.ext.toLowerCase())
+              ? ff.name.slice(0, ff.name.lastIndexOf("."))
+              : ff.name;
             const txtPath = (path ? path + "/" : "") + stem;
             window.open(TXT_BASE + "/" + encodeURIComponent(txtPath) + ".txt", "_blank");
             return;
@@ -1803,14 +1811,7 @@ function setupResultDelegation() {
       const folder = folderLink.dataset.folder;
       const frepo = folderLink.dataset.repo;
       if (frepo && STATE.mode === "global") {
-        ROUTER.navigate("repo", frepo);
-        setTimeout(function() {
-          STATE.filterFolders = folder ? [folder] : [];
-          STATE.page = 1;
-          STATE.results = [];
-          renderFilters();
-          doSearch();
-        }, 200);
+        ROUTER.navigate("repo", frepo, folder || null);
       } else if (folder !== undefined) {
         STATE.filterFolders = folder ? [folder] : [];
         STATE.page = 1;
