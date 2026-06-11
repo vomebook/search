@@ -636,9 +636,17 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   padding: 10px 16px;
   border-bottom: 1px solid var(--outline-variant);
   transition: background var(--transition);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 60px;
+}
+.result-item:nth-child(even) {
+  background: var(--surface-variant);
+}
+.result-item:nth-child(even):hover {
+  background: var(--secondary-container);
 }
 .result-item:hover {
-  background: var(--secondary-container) !important;
+  background: var(--surface-variant);
 }
 
 .result-file-icon {
