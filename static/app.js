@@ -725,7 +725,6 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (folder) sp.set("f", folder);
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     window.location.hash = hash;
@@ -777,10 +776,6 @@ const ROUTER = {
       STATE.browserPath = route.params.path;
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.browserPath = "";
-    }
-
-    if (route.params.f) {
-      STATE.filterFolders = [route.params.f];
     }
 
     STATE.sort = route.params.sort || "relevance";
