@@ -67,11 +67,14 @@ const ICONS = {
  
 let RECORDS = [];
 let wordIndex = {};
+let wordIndexFilesOnly = {};
 let extensionCounts = {};
 let repoCounts = {};
 let folderIndex = {};
 let didYouMeanVocab = {};
+let didYouMeanVocabFilesOnly = {};
 let didYouMeanSorted = [];
+let didYouMeanSortedFilesOnly = [];
 let repoList = [];
 let extensionList = [];
  
@@ -111,10 +114,12 @@ function editDistance(s1, s2, maxDist) {
 function buildIndex() {
   return new Promise(function(resolve) {
     wordIndex = {};
+    wordIndexFilesOnly = {};
     extensionCounts = {};
     repoCounts = {};
     folderIndex = {};
     didYouMeanVocab = {};
+    didYouMeanVocabFilesOnly = {};
 
     var i = 0;
     var chunkSize = 5000;
@@ -138,6 +143,13 @@ function buildIndex() {
           didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
         }
 
+        const fileTokens = tokenize(rec.File || "");
+        for (const tok of fileTokens) {
+          if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
+          wordIndexFilesOnly[tok].push(i);
+          didYouMeanVocabFilesOnly[tok] = (didYouMeanVocabFilesOnly[tok] || 0) + 1;
+        }
+
         if (!folderIndex[repo]) folderIndex[repo] = {};
         for (let d = 0; d <= folders.length; d++) {
           const fp = d === 0 ? "" : folders.slice(0, d).join("/");
@@ -153,6 +165,7 @@ function buildIndex() {
           .sort((a, b) => a.name.localeCompare(b.name));
         extensionList = Object.keys(extensionCounts).sort();
         didYouMeanSorted = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
+        didYouMeanSortedFilesOnly = Object.entries(didYouMeanVocabFilesOnly).sort((a, b) => b[1] - a[1]);
         resolve();
       }
     }
@@ -309,28 +322,32 @@ function doSearchLocal(params) {
  
   let matched = [];
   let didYouMean = null;
- 
+
+  const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
+  const activeVocabSorted = searchFolders ? didYouMeanSorted : didYouMeanSortedFilesOnly;
+  const activeVocab = searchFolders ? didYouMeanVocab : didYouMeanVocabFilesOnly;
+
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
   } else {
     const tokens = tokenize(q);
- 
+
     let exact = null;
     for (const tok of tokens) {
-      const idxs = wordIndex[tok];
+      const idxs = activeIndex[tok];
       if (!idxs) { exact = []; break; }
       if (exact === null) exact = [...idxs];
       else exact = exact.filter(i => idxs.includes(i));
     }
- 
+
     let fuzzy = [];
     for (const tok of tokens) {
-      if (wordIndex[tok]) continue;
+      if (activeIndex[tok]) continue;
       const candidates = [];
-      for (const [vocab] of didYouMeanSorted) {
+      for (const [vocab] of activeVocabSorted) {
         if (Math.abs(vocab.length - tok.length) > 2) continue;
         if (editDistance(tok, vocab) <= 2) {
-          candidates.push(...(wordIndex[vocab] || []));
+          candidates.push(...(activeIndex[vocab] || []));
           if (candidates.length >= 200) break;
         }
       }
@@ -339,20 +356,20 @@ function doSearchLocal(params) {
         else fuzzy = fuzzy.filter(i => candidates.includes(i));
       }
     }
- 
+
     if (exact && exact.length > 0) {
       matched = exact;
       if (fuzzy.length > 0) matched = [...matched, ...fuzzy.filter(i => !exact.includes(i))];
     } else if (fuzzy.length > 0) {
       matched = fuzzy;
     }
- 
+
     if (matched.length < 10) {
       const suggestions = [];
       for (const tok of tokens) {
-        if (wordIndex[tok]) continue;
+        if (activeIndex[tok]) continue;
         let best = null, bestDist = 999;
-        for (const vocab of Object.keys(didYouMeanVocab)) {
+        for (const vocab of Object.keys(activeVocab)) {
           if (Math.abs(vocab.length - tok.length) > 2) continue;
           const dist = editDistance(tok, vocab);
           if (dist < bestDist) { bestDist = dist; best = vocab; }
@@ -1517,7 +1534,8 @@ function setupVirtualScroll() {
         renderVisible();
         if (!STATE.isLoading && STATE.hasMore) {
           const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-          const triggerPoint = scrollHeight - clientHeight * 1.5;
+          const loadedHeight = DOM.resultsList.scrollHeight;
+          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
           if (scrollTop >= triggerPoint) {
             STATE.page++;
             doSearch(true);
