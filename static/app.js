@@ -946,7 +946,7 @@ function renderVisible() {
   const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
-  const overscanItems = 5;
+  const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
 
   let cum = 0;
   let start = 0;
@@ -976,36 +976,22 @@ function renderVisible() {
   let topH = 0;
   for (let i = 0; i < start; i++) topH += VSCROLL.heights[i] || est;
 
-  let bottomH = 0;
-  for (let i = end; i < len; i++) bottomH += VSCROLL.heights[i] || est;
-
-  DOM.resultsList.innerHTML = "";
-
+  let html = "";
   if (topH > 0) {
-    const spacer = document.createElement("div");
-    spacer.style.height = topH + "px";
-    spacer.style.flexShrink = "0";
-    DOM.resultsList.appendChild(spacer);
+    html += '<div style="height:' + topH + 'px;flex-shrink:0"></div>';
   }
-
-  const fragment = document.createDocumentFragment();
-  for (let i = start; i < end; i++) {
-    const rec = items[i];
-    const item = document.createElement("div");
-    item.className = "result-item";
-    item.dataset.index = i;
-    if (i % 2 === 1) item.style.background = "var(--surface-variant)";
-    item.innerHTML = buildResultHTML(rec);
-    fragment.appendChild(item);
+  for (let ri = start; ri < end; ri++) {
+    const rec = items[ri];
+    html += '<div class="result-item" data-index="' + ri + '"' +
+      (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
+      '>' + buildResultHTML(rec) + '</div>';
   }
-  DOM.resultsList.appendChild(fragment);
-
+  let bottomH = 0;
+  for (let bi = end; bi < len; bi++) bottomH += VSCROLL.heights[bi] || est;
   if (bottomH > 0) {
-    const spacer = document.createElement("div");
-    spacer.style.height = bottomH + "px";
-    spacer.style.flexShrink = "0";
-    DOM.resultsList.appendChild(spacer);
+    html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
   }
+  DOM.resultsList.innerHTML = html;
 
   requestAnimationFrame(function() {
     measureHeights();
