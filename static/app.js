@@ -71,6 +71,7 @@ let extensionCounts = {};
 let repoCounts = {};
 let folderIndex = {};
 let didYouMeanVocab = {};
+let didYouMeanSorted = [];
 let repoList = [];
 let extensionList = [];
  
@@ -108,42 +109,56 @@ function editDistance(s1, s2, maxDist) {
 }
  
 function buildIndex() {
-  wordIndex = {};
-  extensionCounts = {};
-  repoCounts = {};
-  folderIndex = {};
-  didYouMeanVocab = {};
- 
-  for (let i = 0; i < RECORDS.length; i++) {
-    const rec = RECORDS[i];
-    const repo = rec.Repo || "";
-    const ext = (rec.Extension || "").toLowerCase();
- 
-    repoCounts[repo] = (repoCounts[repo] || 0) + 1;
-    if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
- 
-    const folders = rec.Folder || [];
-    const text = [rec.File || "", ...folders].join(" ");
-    const tokens = tokenize(text);
-    for (const tok of tokens) {
-      if (!wordIndex[tok]) wordIndex[tok] = [];
-      wordIndex[tok].push(i);
-      didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
+  return new Promise(function(resolve) {
+    wordIndex = {};
+    extensionCounts = {};
+    repoCounts = {};
+    folderIndex = {};
+    didYouMeanVocab = {};
+
+    var i = 0;
+    var chunkSize = 5000;
+
+    function processChunk() {
+      var end = Math.min(i + chunkSize, RECORDS.length);
+      for (; i < end; i++) {
+        const rec = RECORDS[i];
+        const repo = rec.Repo || "";
+        const ext = (rec.Extension || "").toLowerCase();
+
+        repoCounts[repo] = (repoCounts[repo] || 0) + 1;
+        if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
+
+        const folders = rec.Folder || [];
+        const text = [rec.File || "", ...folders].join(" ");
+        const tokens = tokenize(text);
+        for (const tok of tokens) {
+          if (!wordIndex[tok]) wordIndex[tok] = [];
+          wordIndex[tok].push(i);
+          didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
+        }
+
+        if (!folderIndex[repo]) folderIndex[repo] = {};
+        for (let d = 0; d <= folders.length; d++) {
+          const fp = d === 0 ? "" : folders.slice(0, d).join("/");
+          folderIndex[repo][fp] = (folderIndex[repo][fp] || 0) + 1;
+        }
+      }
+
+      if (i < RECORDS.length) {
+        setTimeout(processChunk, 0);
+      } else {
+        repoList = Object.entries(repoCounts)
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        extensionList = Object.keys(extensionCounts).sort();
+        didYouMeanSorted = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
+        resolve();
+      }
     }
- 
-    if (!folderIndex[repo]) folderIndex[repo] = {};
-    for (let d = 0; d <= folders.length; d++) {
-      const fp = d === 0 ? "" : folders.slice(0, d).join("/");
-      if (!folderIndex[repo][fp]) folderIndex[repo][fp] = [];
-      folderIndex[repo][fp].push(i);
-    }
-  }
- 
-  repoList = Object.entries(repoCounts)
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => a.name.localeCompare(b.name));
- 
-  extensionList = Object.keys(extensionCounts).sort();
+
+    processChunk();
+  });
 }
  
 async function loadData() {
@@ -205,7 +220,7 @@ async function loadData() {
     bar.style.width = "95%";
     text.textContent = "建立索引...";
 
-    buildIndex();
+    await buildIndex();
     console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
 
     bar.style.width = "100%";
@@ -312,8 +327,7 @@ function doSearchLocal(params) {
     for (const tok of tokens) {
       if (wordIndex[tok]) continue;
       const candidates = [];
-      const sortedVocab = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
-      for (const [vocab] of sortedVocab) {
+      for (const [vocab] of didYouMeanSorted) {
         if (Math.abs(vocab.length - tok.length) > 2) continue;
         if (editDistance(tok, vocab) <= 2) {
           candidates.push(...(wordIndex[vocab] || []));
@@ -413,17 +427,22 @@ function buildFilterFolderTree(repo) {
     }
   }
  
-  for (const [fp, idxs] of Object.entries(folderIndex[repo])) {
-    if (nodeMap[fp]) nodeMap[fp].count = idxs.length;
+  for (const [fp, count] of Object.entries(folderIndex[repo])) {
+    if (nodeMap[fp]) nodeMap[fp].count = count;
   }
  
   return [root];
 }
  
+const folderContentsCache = {};
+
 function getFolderContents(repo, path) {
+  const cacheKey = repo + "|" + (path || "");
+  if (folderContentsCache[cacheKey]) return folderContentsCache[cacheKey];
+
   const pathParts = path ? path.split("/").filter(Boolean) : [];
   const pathDepth = pathParts.length;
- 
+
   const matching = RECORDS.filter(rec => {
     if (rec.Repo !== repo) return false;
     const folders = rec.Folder || [];
@@ -433,7 +452,7 @@ function getFolderContents(repo, path) {
     }
     return true;
   });
- 
+
   const subfolders = {};
   for (const rec of matching) {
     const folders = rec.Folder || [];
@@ -449,7 +468,7 @@ function getFolderContents(repo, path) {
       count,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
- 
+
   const fileList = matching
     .filter(rec => (rec.Folder || []).length === pathDepth)
     .map(rec => ({
@@ -461,8 +480,10 @@ function getFolderContents(repo, path) {
       size: rec.Size || "",
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
- 
-  return { folders: folderList, files: fileList, current_path: path };
+
+  const result = { folders: folderList, files: fileList, current_path: path };
+  folderContentsCache[cacheKey] = result;
+  return result;
 }
  
 function getRandom(repo) {
