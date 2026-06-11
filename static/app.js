@@ -444,17 +444,6 @@ const STATE = {
   searchFolders: true,
   dataLoaded: false,
 };
-
-/* ═══════════════════════════════════════════════════════════
-   Virtual Scroll State
-   ═══════════════════════════════════════════════════════════ */
-
-const VSCROLL = {
-  renderStart: 0,
-  renderEnd: 0,
-  heights: [],
-  estimatedHeight: 60,
-};
  
 /* ═══════════════════════════════════════════════════════════
    DOM References
@@ -594,7 +583,7 @@ const ROUTER = {
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
     if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
-    if (STATE.browserPath) sp.set("path", STATE.browserPath);
+    if (STATE.filterFolders.length) sp.set("path", STATE.filterFolders.join(","));
     if (DOM.sortSelect.value !== "relevance") sp.set("sort", DOM.sortSelect.value);
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
@@ -646,9 +635,9 @@ const ROUTER = {
     }
  
     if (route.params.path) {
-      STATE.browserPath = route.params.path;
+      STATE.filterFolders = route.params.path.split(",").filter(Boolean);
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
-      STATE.browserPath = "";
+      STATE.filterFolders = [];
     }
  
     if (route.params.sort) DOM.sortSelect.value = route.params.sort;
@@ -712,6 +701,7 @@ function syncStateToURL() {
     });
   }
   if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
+  if (STATE.filterFolders.length) sp.set("path", STATE.filterFolders.join(","));
   if (DOM.sortSelect.value !== "relevance") sp.set("sort", DOM.sortSelect.value);
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
@@ -800,158 +790,58 @@ function doSearch(append) {
    Results Rendering
    ═══════════════════════════════════════════════════════════ */
  
-function renderResults() {
-  if (STATE.results.length === 0) {
-    DOM.resultsList.innerHTML = "";
-    VSCROLL.renderStart = 0;
-    VSCROLL.renderEnd = 0;
-    VSCROLL.heights = [];
+function renderResults(newItems) {
+  const items = newItems || STATE.results;
+  if (!newItems) DOM.resultsList.innerHTML = "";
+ 
+  if (items.length === 0 && !newItems) {
     DOM.emptyState.style.display = "flex";
     DOM.emptyDesc.textContent = STATE.query
       ? '没有找到与 "' + STATE.query + '" 相关的结果'
       : "暂无数据";
     return;
   }
-
+ 
   DOM.emptyState.style.display = "none";
-
-  const len = STATE.results.length;
-  if (VSCROLL.heights.length < len) {
-    const oldLen = VSCROLL.heights.length;
-    VSCROLL.heights.length = len;
-    for (let i = oldLen; i < len; i++) {
-      VSCROLL.heights[i] = VSCROLL.estimatedHeight;
-    }
-    VSCROLL.renderStart = 0;
-    VSCROLL.renderEnd = 0;
-  }
-
-  renderVisible();
-}
-
-function buildResultHTML(rec) {
-  const iconType = getFileIconType(rec.Extension);
-  const titleHTML = highlightText(rec.File, STATE.query);
-  const repoShort = (rec.Repo || "").split("/").pop();
-  const sizeStr = formatSize(rec.Size);
-
-  const breadcrumb = (rec.Folder || []).map((f, j) => {
-    const accum = (rec.Folder || []).slice(0, j + 1).join("/");
-    const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
-    return '<span class="path-sep">/</span><span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + '</span>';
-  }).join("");
-
-  return (
-    '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
-    '<div class="result-info">' +
-      '<div class="result-title">' + titleHTML +
-        (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
-      '</div>' +
-      '<div class="result-path"><span class="path-folder" data-folder="" data-repo="' + repoShort + '">' + repoShort + '</span>' + breadcrumb + '</div>' +
-      '<div class="result-meta">' +
-        (STATE.mode === "global" ? '<span class="result-repo-tag" data-repo="' + repoShort + '">' + repoShort + '</span>' : '') +
-        (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
-      '</div>' +
-    '</div>' +
-    '<div class="result-actions">' +
-      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(rec.Link) + '">复制链接</button>' +
-      '<a href="' + escapeHTML(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
-      '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
-      (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
-    '</div>'
-  );
-}
-
-function renderVisible() {
-  const items = STATE.results;
-  const len = items.length;
-  if (len === 0) return;
-
-  const container = DOM.resultsContainer;
-  const scrollTop = container.scrollTop;
-  const viewH = container.clientHeight;
-  const est = VSCROLL.estimatedHeight;
-  const overscanItems = 5;
-
-  let cum = 0;
-  let start = 0;
-  for (let i = 0; i < len; i++) {
-    const h = VSCROLL.heights[i] || est;
-    if (cum + h > scrollTop - overscanItems * est) {
-      start = i;
-      break;
-    }
-    cum += h;
-  }
-  if (start < 0) start = 0;
-
-  let end = start;
-  let running = cum;
-  while (end < len && running - scrollTop < viewH + overscanItems * est) {
-    running += VSCROLL.heights[end] || est;
-    end++;
-  }
-  if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
-
-  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
-
-  VSCROLL.renderStart = start;
-  VSCROLL.renderEnd = end;
-
-  let topH = 0;
-  for (let i = 0; i < start; i++) topH += VSCROLL.heights[i] || est;
-
-  let bottomH = 0;
-  for (let i = end; i < len; i++) bottomH += VSCROLL.heights[i] || est;
-
-  DOM.resultsList.innerHTML = "";
-
-  if (topH > 0) {
-    const spacer = document.createElement("div");
-    spacer.style.height = topH + "px";
-    spacer.style.flexShrink = "0";
-    DOM.resultsList.appendChild(spacer);
-  }
-
+ 
   const fragment = document.createDocumentFragment();
-  for (let i = start; i < end; i++) {
+  for (let i = 0; i < items.length; i++) {
     const rec = items[i];
     const item = document.createElement("div");
     item.className = "result-item";
-    item.dataset.index = i;
-    if (i % 2 === 1) item.style.background = "var(--surface-variant)";
-    item.innerHTML = buildResultHTML(rec);
+    const iconType = getFileIconType(rec.Extension);
+    const titleHTML = highlightText(rec.File, STATE.query);
+    const repoShort = (rec.Repo || "").split("/").pop();
+    const sizeStr = formatSize(rec.Size);
+ 
+    const breadcrumb = (rec.Folder || []).map((f, j) => {
+      const accum = (rec.Folder || []).slice(0, j + 1).join("/");
+      const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
+      return '<span class="path-sep">/</span><span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + '</span>';
+    }).join("");
+ 
+    item.innerHTML =
+      '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
+      '<div class="result-info">' +
+        '<div class="result-title">' + titleHTML +
+          (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
+        '</div>' +
+        '<div class="result-path"><span class="path-folder" data-folder="" data-repo="' + repoShort + '">' + repoShort + '</span>' + breadcrumb + '</div>' +
+        '<div class="result-meta">' +
+          (STATE.mode === "global" ? '<span class="result-repo-tag" data-repo="' + repoShort + '">' + repoShort + '</span>' : '') +
+          (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="result-actions">' +
+        '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(rec.Link) + '">复制链接</button>' +
+        '<a href="' + escapeHTML(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
+        '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
+        (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
+      '</div>';
+ 
     fragment.appendChild(item);
   }
   DOM.resultsList.appendChild(fragment);
-
-  if (bottomH > 0) {
-    const spacer = document.createElement("div");
-    spacer.style.height = bottomH + "px";
-    spacer.style.flexShrink = "0";
-    DOM.resultsList.appendChild(spacer);
-  }
-
-  requestAnimationFrame(function() {
-    measureHeights();
-  });
-}
-
-function measureHeights() {
-  const els = DOM.resultsList.querySelectorAll(".result-item");
-  for (let i = 0; i < els.length; i++) {
-    const idx = parseInt(els[i].dataset.index);
-    if (idx >= 0) {
-      const h = els[i].getBoundingClientRect().height;
-      if (h > 0) VSCROLL.heights[idx] = h;
-    }
-  }
-  const measured = VSCROLL.heights.filter(function(h) { return h > 0; });
-  if (measured.length > 10) {
-    let sum = 0;
-    for (let i = 0; i < measured.length; i++) sum += measured[i];
-    VSCROLL.estimatedHeight = sum / measured.length;
-  }
 }
  
 function updateStatusBar() {
@@ -1412,16 +1302,15 @@ function showToast(msg, dur) {
  
 let scrollTicking = false;
  
-function setupVirtualScroll() {
+function setupInfiniteScroll() {
   DOM.resultsContainer.addEventListener("scroll", () => {
     if (!scrollTicking) {
       requestAnimationFrame(() => {
         updateScrollThumb();
-        renderVisible();
         if (!STATE.isLoading && STATE.hasMore) {
           const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
           const loadedHeight = DOM.resultsList.scrollHeight;
-          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
+          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.05;
           if (scrollTop >= triggerPoint) {
             STATE.page++;
             doSearch(true);
@@ -1609,30 +1498,16 @@ function setupKeyboard() {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (STATE.results.length === 0) return;
       e.preventDefault();
+      const items = DOM.resultsList.querySelectorAll(".result-item");
+      if (items.length === 0) return;
+      items.forEach(function(it) { it.style.background = ""; });
       if (e.key === "ArrowDown") {
-        keyboardResultIndex = Math.min(keyboardResultIndex + 1, STATE.results.length - 1);
+        keyboardResultIndex = Math.min(keyboardResultIndex + 1, items.length - 1);
       } else {
         keyboardResultIndex = Math.max(keyboardResultIndex - 1, 0);
       }
-      var targetY = 0;
-      var estH = VSCROLL.estimatedHeight;
-      for (var vi = 0; vi < keyboardResultIndex; vi++) {
-        targetY += VSCROLL.heights[vi] || estH;
-      }
-      DOM.resultsContainer.scrollTop = targetY;
-      requestAnimationFrame(function() {
-        var all = DOM.resultsList.querySelectorAll(".result-item");
-        for (var ai = 0; ai < all.length; ai++) {
-          var aidx = parseInt(all[ai].dataset.index);
-          all[ai].style.background = (aidx % 2 === 1) ? "var(--surface-variant)" : "";
-        }
-        for (var ai = 0; ai < all.length; ai++) {
-          if (parseInt(all[ai].dataset.index) === keyboardResultIndex) {
-            all[ai].style.background = "var(--surface-variant)";
-            break;
-          }
-        }
-      });
+      items[keyboardResultIndex].style.background = "var(--surface-variant)";
+      items[keyboardResultIndex].scrollIntoView({ block: "nearest" });
       return;
     }
  
@@ -1878,7 +1753,7 @@ function init() {
       }
     });
  
-    setupVirtualScroll();
+    setupInfiniteScroll();
     setupQuickScroll();
     setupKeyboard();
     setupResultDelegation();
