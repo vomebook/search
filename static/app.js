@@ -83,10 +83,15 @@ function tokenize(text) {
   const lower = text.toLowerCase();
   const alpha = lower.match(/[a-z0-9]+/g);
   if (alpha) tokens.push(...alpha);
+  const chineseChars = [];
   for (const ch of lower) {
     if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
+      chineseChars.push(ch);
       tokens.push(ch);
     }
+  }
+  for (let i = 0; i < chineseChars.length - 1; i++) {
+    tokens.push(chineseChars[i] + chineseChars[i + 1]);
   }
   return [...new Set(tokens)];
 }
@@ -121,11 +126,11 @@ function buildIndex() {
     didYouMeanVocab = {};
     didYouMeanVocabFilesOnly = {};
 
-    var i = 0;
-    var chunkSize = 5000;
+    let i = 0;
+    const chunkSize = 5000;
 
     function processChunk() {
-      var end = Math.min(i + chunkSize, RECORDS.length);
+      const end = Math.min(i + chunkSize, RECORDS.length);
       for (; i < end; i++) {
         const rec = RECORDS[i];
         const repo = rec.Repo || "";
@@ -337,7 +342,10 @@ function doSearchLocal(params) {
       const idxs = activeIndex[tok];
       if (!idxs) { exact = []; break; }
       if (exact === null) exact = [...idxs];
-      else exact = exact.filter(i => idxs.includes(i));
+      else {
+        const idxsSet = new Set(idxs);
+        exact = exact.filter(i => idxsSet.has(i));
+      }
     }
 
     let fuzzy = [];
@@ -353,13 +361,19 @@ function doSearchLocal(params) {
       }
       if (candidates.length > 0) {
         if (fuzzy.length === 0) fuzzy = [...new Set(candidates)];
-        else fuzzy = fuzzy.filter(i => candidates.includes(i));
+        else {
+          const candidateSet = new Set(candidates);
+          fuzzy = fuzzy.filter(i => candidateSet.has(i));
+        }
       }
     }
 
     if (exact && exact.length > 0) {
       matched = exact;
-      if (fuzzy.length > 0) matched = [...matched, ...fuzzy.filter(i => !exact.includes(i))];
+      if (fuzzy.length > 0) {
+        const exactSet = new Set(exact);
+        matched = [...matched, ...fuzzy.filter(i => !exactSet.has(i))];
+      }
     } else if (fuzzy.length > 0) {
       matched = fuzzy;
     }
@@ -886,7 +900,7 @@ function doSearch(append) {
   DOM.emptyState.style.display = "none";
   DOM.didYouMean.style.display = "none";
 
-  setTimeout(function() {
+  requestAnimationFrame(function() {
     if (id !== searchId) return;
     try {
       const data = doSearchLocal(params);
@@ -1744,11 +1758,7 @@ function setupKeyboard() {
       } else {
         keyboardResultIndex = Math.max(keyboardResultIndex - 1, 0);
       }
-      var targetY = 0;
-      var estH = VSCROLL.estimatedHeight;
-      for (var vi = 0; vi < keyboardResultIndex; vi++) {
-        targetY += VSCROLL.heights[vi] || estH;
-      }
+      var targetY = keyboardResultIndex * VSCROLL.estimatedHeight;
       DOM.resultsContainer.scrollTop = targetY;
       requestAnimationFrame(function() {
         var all = DOM.resultsList.querySelectorAll(".result-item");
