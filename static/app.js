@@ -434,11 +434,17 @@ function buildFilterFolderTree(repo) {
   return [root];
 }
  
-const folderContentsCache = {};
+const folderContentsCache = new Map();
+const FOLDER_CACHE_MAX = 100;
 
 function getFolderContents(repo, path) {
   const cacheKey = repo + "|" + (path || "");
-  if (folderContentsCache[cacheKey]) return folderContentsCache[cacheKey];
+  if (folderContentsCache.has(cacheKey)) {
+    const val = folderContentsCache.get(cacheKey);
+    folderContentsCache.delete(cacheKey);
+    folderContentsCache.set(cacheKey, val);
+    return val;
+  }
 
   const pathParts = path ? path.split("/").filter(Boolean) : [];
   const pathDepth = pathParts.length;
@@ -482,7 +488,11 @@ function getFolderContents(repo, path) {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const result = { folders: folderList, files: fileList, current_path: path };
-  folderContentsCache[cacheKey] = result;
+  if (folderContentsCache.size >= FOLDER_CACHE_MAX) {
+    const firstKey = folderContentsCache.keys().next().value;
+    folderContentsCache.delete(firstKey);
+  }
+  folderContentsCache.set(cacheKey, result);
   return result;
 }
  
@@ -706,6 +716,7 @@ const ROUTER = {
       STATE.browserPath = "";
       STATE.filterFolders = [];
       STATE.folderTree = null;
+      folderContentsCache.clear();
       DOM.leftSidebar.classList.remove("expanded-wide");
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
     }
@@ -1506,8 +1517,7 @@ function setupVirtualScroll() {
         renderVisible();
         if (!STATE.isLoading && STATE.hasMore) {
           const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-          const loadedHeight = DOM.resultsList.scrollHeight;
-          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
+          const triggerPoint = scrollHeight - clientHeight * 1.5;
           if (scrollTop >= triggerPoint) {
             STATE.page++;
             doSearch(true);
@@ -1517,7 +1527,7 @@ function setupVirtualScroll() {
       });
       scrollTicking = true;
     }
-  });
+  }, { passive: true });
 }
  
 function updateScrollThumb() {
@@ -1532,26 +1542,42 @@ function updateScrollThumb() {
  
 function setupQuickScroll() {
   let dragging = false, startY, startST;
-  DOM.scrollThumb.addEventListener("mousedown", (e) => {
-    dragging = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault();
-  });
-  document.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
+
+  function onMouseMove(e) {
     const delta = e.clientY - startY;
     const ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     DOM.resultsContainer.scrollTop = startST + ratio * (DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
+  }
+
+  function onMouseUp() {
+    dragging = false;
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+  }
+
+  DOM.scrollThumb.addEventListener("mousedown", (e) => {
+    dragging = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault();
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
   });
-  document.addEventListener("mouseup", () => { dragging = false; });
-  DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    dragging = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop;
-  });
-  document.addEventListener("touchmove", (e) => {
-    if (!dragging) return;
+
+  function onTouchMove(e) {
     const delta = e.touches[0].clientY - startY;
     const ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     DOM.resultsContainer.scrollTop = startST + ratio * (DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
+  }
+
+  function onTouchEnd() {
+    dragging = false;
+    document.removeEventListener("touchmove", onTouchMove);
+    document.removeEventListener("touchend", onTouchEnd);
+  }
+
+  DOM.scrollThumb.addEventListener("touchstart", (e) => {
+    dragging = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop;
+    document.addEventListener("touchmove", onTouchMove, { passive: true });
+    document.addEventListener("touchend", onTouchEnd);
   });
-  document.addEventListener("touchend", () => { dragging = false; });
 }
  
 /* ═══════════════════════════════════════════════════════════
