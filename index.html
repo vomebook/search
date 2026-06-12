@@ -4,6 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VoiceOfML Search</title>
+
+<!-- PWA -->
+<link rel="manifest" href="/search/manifest.json">
+<meta name="theme-color" content="#1a1c1e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="VoiceOfML">
+<link rel="apple-touch-icon" href="/search/icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/search/icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/search/icons/icon-512.png">
+
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body class="dark">
@@ -227,6 +239,11 @@
 <!-- Toast -->
 <div id="toast" class="toast" style="display:none"></div>
 
+<script>
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/search/sw.js", { scope: "/search/" });
+}
+</script>
 <script src="static/app.js"></script>
 </body>
 </html>
