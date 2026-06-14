@@ -1380,10 +1380,7 @@ function doSearchFallbackLocal(params, append, id) {
       syncStateToURL();
     } catch (err) {
       console.error("Local fallback crashed:", err);
-      DOM.resultsList.innerHTML = "";
-      DOM.emptyState.style.display = "flex";
-      DOM.emptyDesc.textContent = "本地搜索出错，请刷新重试";
-      VSCROLL.heights = [];
+      showToast("搜索失败");
     } finally {
       STATE.isLoading = false;
       DOM.resultsLoading.style.display = "none";
