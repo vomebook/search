@@ -1079,64 +1079,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Progress Bar (Initial Load)
-   ═══════════════════════════════════════════════════════════ */
-
-.progress-container {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 16px;
-  height: 3px;
-  background: var(--surface-variant);
-  transition: height 0.3s ease, opacity 0.5s ease;
-}
-.progress-container.progress-done {
-  opacity: 0;
-  pointer-events: none;
-  height: 0;
-  padding: 0;
-}
-.progress-bar {
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, var(--primary), #6dd5ed);
-  border-radius: 0 2px 2px 0;
-  transition: width 0.3s ease;
-  min-width: 0;
-}
-.progress-text {
-  font-size: 12px;
-  font-family: var(--font-sans);
-  color: var(--on-surface-variant);
-  white-space: nowrap;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-.progress-container:hover, .progress-container:focus-visible {
-  height: 28px;
-  padding: 0 16px;
-}
-.progress-container:hover .progress-text,
-.progress-container:focus-visible .progress-text {
-  opacity: 1;
-}
-.progress-container:hover .progress-bar,
-.progress-container:focus-visible .progress-bar {
-  border-radius: var(--radius-sm);
-}
-.progress-container.progress-done:hover,
-.progress-container.progress-done:focus-visible {
-  height: 0;
-  padding: 0;
-}
-
 /* ═══════════════════════════════════════════════════════════
    Loading Spinner
    ═══════════════════════════════════════════════════════════ */
