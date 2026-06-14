@@ -2410,8 +2410,34 @@ function init() {
     if (DOM.searchInput.value.trim() === "") renderDropdown();
   });
   DOM.searchInput.addEventListener("blur", hideDropdown);
+
+  var longPressTimer = null;
+  var removeHistoryItem = function(q) {
+    var list = getHistory();
+    var idx = list.indexOf(q);
+    if (idx >= 0) list.splice(idx, 1);
+    saveHistory(list);
+    renderDropdown();
+  };
   DOM.historyDropdown.addEventListener("mousedown", function(e) {
-    e.preventDefault();
+    var item = e.target.closest(".history-item");
+    if (!item) {
+      if (e.target.closest(".history-clear-all")) { saveHistory([]); DOM.historyDropdown.style.display = "none"; }
+      return;
+    }
+    // Long press to delete
+    longPressTimer = setTimeout(function() { removeHistoryItem(item.dataset.query); }, 600);
+  });
+  DOM.historyDropdown.addEventListener("mouseup", function() { clearTimeout(longPressTimer); });
+  DOM.historyDropdown.addEventListener("mouseleave", function() { clearTimeout(longPressTimer); });
+  DOM.historyDropdown.addEventListener("touchstart", function(e) {
+    var item = e.target.closest(".history-item");
+    if (!item) return;
+    longPressTimer = setTimeout(function() { removeHistoryItem(item.dataset.query); }, 600);
+  }, { passive: true });
+  DOM.historyDropdown.addEventListener("touchend", function() { clearTimeout(longPressTimer); });
+  DOM.historyDropdown.addEventListener("touchmove", function() { clearTimeout(longPressTimer); });
+  DOM.historyDropdown.addEventListener("click", function(e) {
     var item = e.target.closest(".history-item");
     if (item) {
       var q = item.dataset.query;
@@ -2424,20 +2450,9 @@ function init() {
       DOM.searchInput.blur();
       return;
     }
-    var del = e.target.closest(".history-del");
-    if (del) {
-      var dq = del.dataset.del;
-      var list = getHistory();
-      var didx = list.indexOf(dq);
-      if (didx >= 0) list.splice(didx, 1);
-      saveHistory(list);
-      renderDropdown();
-      return;
-    }
-    var clearBtn = e.target.closest(".history-clear-all");
-    if (clearBtn) {
-      saveHistory([]);
-      DOM.historyDropdown.style.display = "none";
+    var delBtn = e.target.closest(".history-del");
+    if (delBtn) {
+      removeHistoryItem(delBtn.dataset.del);
       return;
     }
   });

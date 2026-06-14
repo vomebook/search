@@ -311,14 +311,10 @@ ul, li {
   color: var(--on-surface-variant);
   font-size: 16px;
   cursor: pointer;
-  padding: 0 4px;
-  opacity: 0;
-  transition: opacity 0.1s;
+  padding: 0 6px;
+  opacity: 0.5;
 }
-.search-history-dropdown .history-item:hover .history-del {
-  opacity: 0.6;
-}
-.search-history-dropdown .history-item:hover .history-del:hover {
+.search-history-dropdown .history-del:hover {
   opacity: 1;
   color: var(--error);
 }
