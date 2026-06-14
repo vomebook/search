@@ -1084,7 +1084,33 @@ function doSearch(append) {
 
     doSearchAPI(params, append).then(function() {
       if (id !== searchId) return;
-      renderResults();
+      if (append) {
+        // Incremental: extend heights, let next scroll render new items
+        var newLen = STATE.results.length;
+        if (VSCROLL.heights.length < newLen) {
+          var oldLen = VSCROLL.heights.length;
+          VSCROLL.heights.length = newLen;
+          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
+        }
+        VSCROLL.renderStart = 0;
+        VSCROLL.renderEnd = 0;
+        // Force a renderVisible on next animation frame to include new items
+        requestAnimationFrame(function() { renderVisible(); });
+      } else {
+        VSCROLL.renderStart = 0;
+        VSCROLL.renderEnd = 0;
+        VSCROLL.heights = [];
+        if (STATE.results.length === 0) {
+          DOM.resultsList.innerHTML = "";
+          DOM.emptyState.style.display = "flex";
+          DOM.emptyDesc.textContent = STATE.query
+            ? '没有找到与 "' + STATE.query + '" 相关的结果'
+            : "暂无数据";
+        } else {
+          DOM.emptyState.style.display = "none";
+          renderResults();
+        }
+      }
       updateStatusBar();
       updateLoadInfo();
       if (STATE.didYouMean) {
@@ -1137,7 +1163,32 @@ function doSearchFallbackLocal(params, append, id) {
       }
 
       STATE.hasMore = STATE.results.length < STATE.total;
-      renderResults();
+
+      if (append) {
+        var newLen = STATE.results.length;
+        if (VSCROLL.heights.length < newLen) {
+          var oldLen = VSCROLL.heights.length;
+          VSCROLL.heights.length = newLen;
+          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
+        }
+        VSCROLL.renderStart = 0;
+        VSCROLL.renderEnd = 0;
+        requestAnimationFrame(function() { renderVisible(); });
+      } else {
+        VSCROLL.renderStart = 0;
+        VSCROLL.renderEnd = 0;
+        VSCROLL.heights = [];
+        if (STATE.results.length === 0) {
+          DOM.resultsList.innerHTML = "";
+          DOM.emptyState.style.display = "flex";
+          DOM.emptyDesc.textContent = STATE.query
+            ? '没有找到与 "' + STATE.query + '" 相关的结果'
+            : "暂无数据";
+        } else {
+          DOM.emptyState.style.display = "none";
+          renderResults();
+        }
+      }
       updateStatusBar();
       updateLoadInfo();
 
