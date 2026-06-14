@@ -81,19 +81,79 @@ let extensionList = [];
 function tokenize(text) {
   const tokens = [];
   const lower = text.toLowerCase();
+
+  // ── English / numbers ──
   const alpha = lower.match(/[a-z0-9]+/g);
   if (alpha) tokens.push(...alpha);
-  const chineseChars = [];
-  for (const ch of lower) {
-    if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
-      chineseChars.push(ch);
-      tokens.push(ch);
+
+  // ── Chinese (jieba-wasm, with fallback) ──
+  // Mirror huggingface's tokenize: strip non-CJK, feed to jieba.lcut
+  var chineseText = lower.replace(/[a-z0-9\s]+/g, " ");
+  chineseText = chineseText.replace(/[^\u4e00-\u9fff\u3400-\u4dbf\s]+/g, " ");
+
+  if (chineseText.trim()) {
+    if (window._jiebaCut) {
+      // jieba-wasm loaded → exact same behavior as Python jieba.lcut
+      try {
+        var jt = window._jiebaCut(chineseText.trim());
+        for (var ji = 0; ji < jt.length; ji++) {
+          var t = jt[ji].trim();
+          if (t) tokens.push(t);
+        }
+      } catch (e) {
+        console.warn("[tokenize] jieba error, falling back", e);
+        jiebaFallback(lower, tokens);
+      }
+    } else {
+      jiebaFallback(lower, tokens);
+    }
+
+    // Fallback: single chars for any CJK not covered by jieba
+    // (jieba should cover all, but keep for safety — matches Python behavior)
+    if (window._jiebaCut) {
+      var jtJoined = " " + (window._jiebaCut(chineseText.trim()) || []).join(" ") + " ";
+      for (var ci = 0; ci < lower.length; ci++) {
+        var ch = lower[ci];
+        if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
+          if (jtJoined.indexOf(" " + ch + " ") < 0 && jtJoined.indexOf(ch) < 0) {
+            tokens.push(ch);
+          }
+        }
+      }
     }
   }
-  for (let i = 0; i < chineseChars.length - 1; i++) {
-    tokens.push(chineseChars[i] + chineseChars[i + 1]);
-  }
+
   return [...new Set(tokens)];
+}
+
+function jiebaFallback(lower, tokens) {
+  var cjkChars = [];
+  for (var i = 0; i < lower.length; i++) {
+    if (("\u4e00" <= lower[i] && lower[i] <= "\u9fff") || ("\u3400" <= lower[i] && lower[i] <= "\u4dbf")) {
+      cjkChars.push(lower[i]);
+    }
+  }
+  if (cjkChars.length === 0) return;
+  tokens.push.apply(tokens, cjkChars);
+
+  var hasWordTokens = false;
+  if (typeof Intl !== "undefined" && Intl.Segmenter) {
+    try {
+      var seg = new Intl.Segmenter("zh-CN", { granularity: "word" });
+      var segments = seg.segment(cjkChars.join(""));
+      for (var iter = segments[Symbol.iterator](), s; !(s = iter.next()).done;) {
+        if (s.value.isWordLike && s.value.segment.length > 1) {
+          tokens.push(s.value.segment);
+          hasWordTokens = true;
+        }
+      }
+    } catch (e) {}
+  }
+  if (!hasWordTokens) {
+    for (var j = 0; j < cjkChars.length - 1; j++) {
+      tokens.push(cjkChars[j] + cjkChars[j + 1]);
+    }
+  }
 }
  
 function editDistance(s1, s2, maxDist) {
@@ -322,11 +382,41 @@ function doSearchLocal(params) {
   const maxSize = params.maxSize !== null ? params.maxSize : null;
   const sort = params.sort || "relevance";
   const searchFolders = params.searchFolders !== false;
+  const exactMode = params.exact === true;
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
- 
+
   let matched = [];
   let didYouMean = null;
+
+  // ── Exact (substring) mode ──
+  if (exactMode && q) {
+    const qLower = q.toLowerCase();
+    matched = [];
+    for (let i = 0; i < RECORDS.length; i++) {
+      const rec = RECORDS[i];
+      const fname = (rec.File || "").toLowerCase();
+      const repo = (rec.Repo || "").toLowerCase();
+      const folderPath = (rec.Folder || []).join("/").toLowerCase();
+      if (fname.indexOf(qLower) !== -1 || folderPath.indexOf(qLower) !== -1 || repo.indexOf(qLower) !== -1) {
+        matched.push(i);
+      }
+    }
+    let filtered = applyFilters(matched, repos, extensions, folders, minSize, maxSize);
+    if (sort === "name") {
+      filtered.sort(function(a, b) { return (RECORDS[a].File || "").localeCompare(RECORDS[b].File || "", "zh"); });
+    } else if (sort === "size") {
+      filtered.sort(function(a, b) {
+        var sa = typeof RECORDS[a].Size === "number" ? RECORDS[a].Size : 0;
+        var sb = typeof RECORDS[b].Size === "number" ? RECORDS[b].Size : 0;
+        return sb - sa;
+      });
+    }
+    var total = filtered.length;
+    var start = (page - 1) * pageSize;
+    var paged = filtered.slice(start, start + pageSize).map(function(i) { return RECORDS[i]; });
+    return { results: paged, total: total, page: page, pageSize: pageSize, didYouMean: null };
+  }
 
   const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
   const activeVocabSorted = searchFolders ? didYouMeanSorted : didYouMeanSortedFilesOnly;
@@ -337,18 +427,18 @@ function doSearchLocal(params) {
   } else {
     const tokens = tokenize(q);
 
-    let exact = null;
+    let exactHits = null;
     for (const tok of tokens) {
       const idxs = activeIndex[tok];
-      if (!idxs) { exact = []; break; }
-      if (exact === null) exact = [...idxs];
+      if (!idxs) { exactHits = []; break; }
+      if (exactHits === null) exactHits = [...idxs];
       else {
         const idxsSet = new Set(idxs);
-        exact = exact.filter(i => idxsSet.has(i));
+        exactHits = exactHits.filter(i => idxsSet.has(i));
       }
     }
 
-    let fuzzy = [];
+    let fuzzy = new Set();
     for (const tok of tokens) {
       if (activeIndex[tok]) continue;
       const candidates = [];
@@ -360,22 +450,18 @@ function doSearchLocal(params) {
         }
       }
       if (candidates.length > 0) {
-        if (fuzzy.length === 0) fuzzy = [...new Set(candidates)];
-        else {
-          const candidateSet = new Set(candidates);
-          fuzzy = fuzzy.filter(i => candidateSet.has(i));
-        }
+        for (var ci = 0; ci < candidates.length; ci++) fuzzy.add(candidates[ci]);
       }
     }
 
-    if (exact && exact.length > 0) {
-      matched = exact;
-      if (fuzzy.length > 0) {
-        const exactSet = new Set(exact);
-        matched = [...matched, ...fuzzy.filter(i => !exactSet.has(i))];
+    if (exactHits && exactHits.length > 0) {
+      matched = exactHits;
+      if (fuzzy.size > 0) {
+        const exactSet = new Set(exactHits);
+        fuzzy.forEach(function(i) { if (!exactSet.has(i)) matched.push(i); });
       }
-    } else if (fuzzy.length > 0) {
-      matched = fuzzy;
+    } else if (fuzzy.size > 0) {
+      matched = Array.from(fuzzy);
     }
 
     if (matched.length < 10) {
@@ -393,7 +479,7 @@ function doSearchLocal(params) {
       if (suggestions.length > 0) didYouMean = suggestions.join(" ");
     }
   }
- 
+
   let filtered = applyFilters(matched, repos, extensions, folders, minSize, maxSize);
   const tokens = q ? tokenize(q) : [];
   const scored = filtered.map(idx => ({
@@ -561,6 +647,7 @@ const STATE = {
   isLoading: false,
   hasMore: false,
   browserPath: "",
+  exact: false,
   repoList: [],
   extensionList: [],
   folderTree: null,
@@ -638,6 +725,7 @@ function cacheDOM() {
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
+  DOM.exactSearchToggle = $("#exact-search-toggle");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -725,6 +813,7 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
+  if (STATE.exact) sp.set("exact", "1");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -746,6 +835,8 @@ const ROUTER = {
       STATE.total = 0;
       STATE.browserPath = "";
       STATE.filterFolders = [];
+      STATE.exact = false;
+      if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = false;
       STATE.folderTree = null;
       folderContentsCache.clear();
       DOM.leftSidebar.classList.remove("expanded-wide");
@@ -787,6 +878,8 @@ const ROUTER = {
     DOM.filterMaxSize.value = STATE.filterMaxSize || "";
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
+    STATE.exact = route.params.exact === "1";
+    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
@@ -859,6 +952,7 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
+  if (STATE.exact) sp.set("exact", "1");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
@@ -901,6 +995,7 @@ function doSearch(append) {
     maxSize: STATE.filterMaxSize,
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
+    exact: STATE.exact,
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
@@ -1923,6 +2018,9 @@ function init() {
   applyMobileMode();
  
   console.log("Loading data...");
+  // Wait for jieba-wasm (if available) before building index
+  var ready = window._jiebaReady || Promise.resolve(null);
+  ready.then(function() {
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
     if (!ok) {
@@ -1954,6 +2052,14 @@ function init() {
       STATE.results = [];
       doSearch();
     });
+    if (DOM.exactSearchToggle) {
+      DOM.exactSearchToggle.addEventListener("change", function() {
+        STATE.exact = DOM.exactSearchToggle.checked;
+        STATE.page = 1;
+        STATE.results = [];
+        doSearch();
+      });
+    }
     DOM.sortSelect.addEventListener("change", function() {
       STATE.sort = DOM.sortSelect.value;
       STATE.page = 1;
@@ -2045,6 +2151,7 @@ function init() {
  
     fetchHitokoto();
     setInterval(fetchHitokoto, 30000);
+  });
   });
 }
  
