@@ -131,6 +131,21 @@ function buildIndex() {
     let i = 0;
     const chunkSize = 5000;
 
+    function isCJK(c) {
+      return ("\u4e00" <= c && c <= "\u9fff") || ("\u3400" <= c && c <= "\u4dbf");
+    }
+
+    function extractBigrams(text) {
+      var cjk = [];
+      for (var j = 0; j < text.length; j++) {
+        if (isCJK(text[j])) cjk.push(text[j]);
+      }
+      for (var k = 0; k + 1 < cjk.length; k++) {
+        cjk.push(cjk[k] + cjk[k + 1]);
+      }
+      return cjk;
+    }
+
     function processChunk() {
       const end = Math.min(i + chunkSize, RECORDS.length);
       for (; i < end; i++) {
@@ -142,15 +157,33 @@ function buildIndex() {
         if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
 
         const folders = rec.Folder || [];
-        const text = [rec.File || "", ...folders].join(" ");
-        const tokens = tokenize(text);
+        var tokens, fileTokens;
+
+        if (rec._Tokens) {
+          tokens = rec._Tokens.slice();
+          var fullText = ((rec.File || "") + " " + (folders || []).join(" ")).toLowerCase();
+          var bigrams = extractBigrams(fullText);
+          for (var b = 0; b < bigrams.length; b++) tokens.push(bigrams[b]);
+        } else {
+          const text = [rec.File || "", ...folders].join(" ");
+          tokens = tokenize(text);
+        }
+
         for (const tok of tokens) {
           if (!wordIndex[tok]) wordIndex[tok] = [];
           wordIndex[tok].push(i);
           didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
         }
 
-        const fileTokens = tokenize(rec.File || "");
+        if (rec._Tokens) {
+          fileTokens = rec._Tokens.slice();
+          var fileText = (rec.File || "").toLowerCase();
+          var fileBigrams = extractBigrams(fileText);
+          for (var fb = 0; fb < fileBigrams.length; fb++) fileTokens.push(fileBigrams[fb]);
+        } else {
+          fileTokens = tokenize(rec.File || "");
+        }
+
         for (const tok of fileTokens) {
           if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
           wordIndexFilesOnly[tok].push(i);
