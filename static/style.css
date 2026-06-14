@@ -1483,7 +1483,7 @@ body.theme-transitioning *::after {
 }
 .multi-action-btn.primary {
   background: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
   border-color: var(--primary);
 }
 .multi-action-btn:hover { opacity: 0.85; }
