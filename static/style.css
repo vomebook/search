@@ -1330,6 +1330,11 @@ body.mobile .result-actions {
   transform: translateX(18px);
 }
 
+.toggle-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 input[type="checkbox"]:indeterminate {
   accent-color: var(--primary);
 }
