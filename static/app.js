@@ -2018,9 +2018,6 @@ function init() {
   applyMobileMode();
  
   console.log("Loading data...");
-  // Wait for jieba-wasm (if available) before building index
-  var ready = window._jiebaReady || Promise.resolve(null);
-  ready.then(function() {
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
     if (!ok) {
@@ -2151,7 +2148,6 @@ function init() {
  
     fetchHitokoto();
     setInterval(fetchHitokoto, 30000);
-  });
   });
 }
  
