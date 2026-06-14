@@ -517,6 +517,8 @@ ul, li {
   border-bottom: 1px solid var(--outline-variant);
   transition: background var(--transition);
   flex-shrink: 0;
+  min-height: 24px;
+  box-sizing: border-box;
 }
 .back-to-global:hover, .back-to-global:focus-visible {
   background: var(--surface-variant);
@@ -977,7 +979,7 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .filter-section {
   border-bottom: 1px solid var(--outline-variant);
-  padding: 10px 12px;
+  padding: 8px 12px;
 }
 
 .filter-section-title {
@@ -1468,9 +1470,11 @@ body.theme-transitioning *::after {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 16px;
+  padding: 8px 12px;
   background: var(--surface-variant);
   border-bottom: 1px solid var(--outline-variant);
+  min-height: 24px;
+  box-sizing: border-box;
 }
 .multi-action-btn {
   padding: 4px 12px;
