@@ -2573,10 +2573,12 @@ function init() {
     var links = getSelectedLinks();
     var names = getSelectedFilenames();
     if (links.length === 0) { showToast("未选中任何文件"); return; }
+    showToast("正在打包 " + links.length + " 个文件...");
     var files = [];
     for (var zi = 0; zi < links.length; zi++) {
       files.push({ name: names[zi], link: links[zi] });
     }
+    console.log("[zip] requesting", files.length, "files");
     fetch(API_BASE + "/api/zip", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
