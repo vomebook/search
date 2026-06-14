@@ -1513,6 +1513,23 @@ body.theme-transitioning *::after {
   color: var(--on-surface-variant);
 }
 
+.mobile-info-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 40px;
+  background: var(--surface-variant);
+  border-bottom: 1px solid var(--outline-variant);
+  box-sizing: border-box;
+}
+body.mobile .mobile-info-bar {
+  display: flex;
+}
+body.mobile #clear-filters-btn {
+  display: none !important;
+}
+
 .result-checkbox {
   display: none;
   flex-shrink: 0;
