@@ -1124,6 +1124,7 @@ function renderRepoList() {
  
 function renderBrowser(path) {
   STATE.browserPath = path;
+  syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
  
   const backBtn = document.createElement("div");
