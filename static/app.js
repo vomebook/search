@@ -481,6 +481,23 @@ function doSearchLocal(params) {
    ═══════════════════════════════════════════════════════════ */
 
 async function doSearchAPI(params, append) {
+  // Cache hit: consume prefetched page directly, skip network
+  if (append && STATE._pageCache[params.page]) {
+    var cp = params.page;
+    STATE.results = STATE.results.concat(STATE._pageCache[cp]);
+    delete STATE._pageCache[cp];
+    STATE._loadedPage = cp;
+    var np = cp + 1;
+    while (STATE._pageCache[np]) {
+      STATE.results = STATE.results.concat(STATE._pageCache[np]);
+      delete STATE._pageCache[np];
+      np++;
+    }
+    STATE._loadedPage = np - 1;
+    STATE.hasMore = STATE.results.length < STATE.total;
+    return;
+  }
+
   const q = params.q || "";
   const isRepo = !!STATE.repoFull;
   const base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
@@ -530,6 +547,45 @@ async function doSearchAPI(params, append) {
   }
 
   STATE.hasMore = STATE.results.length < STATE.total;
+}
+
+function prefetchNextPage() {
+  if (!apiAvailable) return;
+  var nextPage = STATE._loadedPage + 1;
+  var totalPages = Math.ceil(STATE.total / STATE.pageSize);
+  if (nextPage > totalPages) return;
+  if (STATE._pageCache[nextPage]) return;
+
+  var reqId = searchRequestId;
+  var q = STATE.query || "";
+  var isRepo = !!STATE.repoFull;
+  var base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
+  var body = {};
+  if (q) body.q = q;
+  body.page = nextPage;
+  body.page_size = STATE.pageSize;
+  if (!isRepo && STATE.filterRepos.length > 0) body.repos = STATE.filterRepos;
+  if (STATE.filterExtensions.length > 0) body.extensions = STATE.filterExtensions;
+  if (STATE.filterFolders.length > 0) body.folders = STATE.filterFolders;
+  if (STATE.filterMinSize !== null) body.min_size = STATE.filterMinSize;
+  if (STATE.filterMaxSize !== null) body.max_size = STATE.filterMaxSize;
+  body.sort = STATE.sort || "relevance";
+  if (!STATE.searchFolders) body.search_folders = false;
+  if (STATE.exact) body.exact = true;
+
+  fetch(base, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(function(resp) {
+    if (!resp.ok) return;
+    return resp.json();
+  }).then(function(data) {
+    if (reqId !== searchRequestId) return;
+    if (data && data.results) {
+      STATE._pageCache[nextPage] = data.results;
+    }
+  }).catch(function() {});
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1117,9 +1173,8 @@ function doSearch(append) {
         DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
         DOM.didYouMean.style.display = "inline";
       }
+      prefetchNextPage();
       syncStateToURL();
-    }).catch(function(err) {
-      if (err.name === "AbortError") {
         if (id === searchId) {
           STATE.isLoading = false;
           DOM.resultsLoading.style.display = "none";
