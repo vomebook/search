@@ -183,112 +183,95 @@ async function loadAndBuild(url) {
   var chunks = [];
   var received = 0;
 
-  while (true) {
-    var result = await reader.read();
-    if (result.done) break;
-    chunks.push(result.value);
-    received += result.value.length;
-    var pct = total > 0 ? Math.round((received / total) * 65) : Math.min(65, Math.round(received / 1024));
+  try {
+    while (true) {
+      var result = await reader.read();
+      if (result.done) break;
+      chunks.push(result.value);
+      received += result.value.length;
+      var pct = total > 0 ? Math.round((received / total) * 65) : Math.min(65, Math.round(received / 1024));
+      self.postMessage({
+        type: "progress",
+        stage: "download",
+        percent: pct,
+        text: "下载中 " + formatSize(received),
+      });
+    }
+
+    // Decompress
+    self.postMessage({ type: "progress", stage: "decompress", percent: 72, text: "解压中..." });
+
+    var buf;
+    if (chunks.length === 1) {
+      buf = chunks[0];
+    } else {
+      buf = new Uint8Array(received);
+      var pos = 0;
+      for (var c = 0; c < chunks.length; c++) {
+        buf.set(chunks[c], pos);
+        pos += chunks[c].length;
+      }
+    }
+
+    var ds = new DecompressionStream("gzip");
+    var stream = new Response(buf).body.pipeThrough(ds);
+    var jsonText = await new Response(stream).text();
+
+    // Parse
+    self.postMessage({ type: "progress", stage: "parse", percent: 82, text: "解析中..." });
+    var records = JSON.parse(jsonText);
+
     self.postMessage({
       type: "progress",
-      stage: "download",
-      percent: pct,
-      text: "下载中 " + formatSize(received),
+      stage: "parsed",
+      percent: 85,
+      text: "已加载 " + records.length.toLocaleString() + " 条记录",
     });
-  }
 
-  // Decompress
-  self.postMessage({ type: "progress", stage: "decompress", percent: 72, text: "解压中..." });
+    // Build Index
+    self.postMessage({ type: "progress", stage: "index", percent: 88, text: "建立索引..." });
+    var index = await buildIndex(records);
 
-  var buf;
-  if (chunks.length === 1) {
-    buf = chunks[0];
-  } else {
-    buf = new Uint8Array(received);
-    var pos = 0;
-    for (var c = 0; c < chunks.length; c++) {
-      buf.set(chunks[c], pos);
-      pos += chunks[c].length;
-    }
-  }
+    var tokenCount = Object.keys(index.wordIndex).length;
+    self.postMessage({
+      type: "progress",
+      stage: "index",
+      percent: 96,
+      text: "索引完成: " + tokenCount.toLocaleString() + " tokens",
+    });
 
-  var ds = new DecompressionStream("gzip");
-  var stream = new Response(buf).body.pipeThrough(ds);
-  var jsonText = await new Response(stream).text();
+    // Store in IndexedDB
+    self.postMessage({ type: "progress", stage: "cache", percent: 98, text: "缓存中..." });
 
-  // Parse
-  self.postMessage({ type: "progress", stage: "parse", percent: 82, text: "解析中..." });
+    var db = await openDB();
+    var tx = db.transaction(STORE, "readwrite");
+    var store = tx.objectStore(STORE);
 
-  var records;
-  try {
-    records = JSON.parse(jsonText);
+    store.put({
+      version: records.length + "|" + received,
+      count: records.length,
+      size: received,
+      etag: etag,
+      builtAt: Date.now(),
+    }, "meta");
+    store.put(records, "records");
+    store.put(index, "index");
+
+    await new Promise(function(resolve, reject) {
+      tx.oncomplete = function() { resolve(); };
+      tx.onerror = function(e) { reject(e.target.error); };
+    });
+
+    db.close();
+
+    // Done
+    self.postMessage({
+      type: "ready",
+      meta: { count: records.length, size: received, tokenCount: tokenCount },
+    });
   } catch (e) {
-    self.postMessage({ type: "error", message: "数据解析失败" });
-    return;
+    self.postMessage({ type: "error", message: e.message || "未知错误" });
   }
-
-  self.postMessage({
-    type: "progress",
-    stage: "parsed",
-    percent: 85,
-    text: "已加载 " + records.length.toLocaleString() + " 条记录",
-  });
-
-  // Build Index
-  self.postMessage({ type: "progress", stage: "index", percent: 88, text: "建立索引..." });
-
-  var index;
-  try {
-    index = await buildIndex(records);
-  } catch (e) {
-    self.postMessage({ type: "error", message: "索引构建失败" });
-    return;
-  }
-
-  var tokenCount = Object.keys(index.wordIndex).length;
-  self.postMessage({
-    type: "progress",
-    stage: "index",
-    percent: 96,
-    text: "索引完成: " + tokenCount.toLocaleString() + " tokens",
-  });
-
-  // Store in IndexedDB
-  self.postMessage({ type: "progress", stage: "cache", percent: 98, text: "缓存中..." });
-
-  var db = await openDB();
-
-  // Store records and index in a single batch
-  var tx = db.transaction(STORE, "readwrite");
-  var store = tx.objectStore(STORE);
-
-  // Store meta
-  store.put({
-    version: records.length + "|" + received,
-    count: records.length,
-    size: received,
-    etag: etag,
-    builtAt: Date.now(),
-  }, "meta");
-
-  // Store records
-  store.put(records, "records");
-
-  // Store index (as a single object)
-  store.put(index, "index");
-
-  await new Promise(function(resolve, reject) {
-    tx.oncomplete = function() { resolve(); };
-    tx.onerror = function(e) { reject(e.target.error); };
-  });
-
-  db.close();
-
-  // Done
-  self.postMessage({
-    type: "ready",
-    meta: { count: records.length, size: received, tokenCount: tokenCount },
-  });
 }
 
 self.onmessage = function(e) {

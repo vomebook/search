@@ -2394,6 +2394,7 @@ function init() {
       return;
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
+    console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
     STATE.page = 1;
     STATE.results = [];
     doSearch();
