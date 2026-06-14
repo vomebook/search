@@ -801,6 +801,10 @@ const ROUTER = {
  
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       this.onModeChanged();
+      if (route.params.wide === "1") {
+        DOM.leftSidebar.classList.add("expanded-wide");
+        if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "→";
+      }
     } else {
       renderSidebar();
       renderFilters();
