@@ -763,6 +763,7 @@ const STATE = {
   searchFolders: true,
   exact: false,
   useLocalMode: false,
+  recordHistory: true,
   dataLoaded: false,
   _pendingPage: 0,
   _loadedPage: 0,
@@ -842,6 +843,8 @@ function cacheDOM() {
   DOM.exactSearchSection = $("#exact-search-section");
   DOM.localModeToggle = $("#local-mode-toggle");
   DOM.localModeToggleRow = $("#local-mode-toggle-row");
+  DOM.historyToggle = $("#history-toggle");
+  DOM.historyDropdown = $("#search-history-dropdown");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -931,6 +934,7 @@ const ROUTER = {
     if (!STATE.searchFolders) sp.set("search_folders", "false");
     if (STATE.exact) sp.set("exact", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
+  if (!STATE.recordHistory) sp.set("history", "0");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -1019,6 +1023,8 @@ const ROUTER = {
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
     if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
     if (STATE.useLocalMode) STATE.exact = false;
+    STATE.recordHistory = route.params.history !== "0";
+    if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
@@ -1091,6 +1097,7 @@ function syncStateToURL() {
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (!STATE.useLocalMode && STATE.exact) sp.set("exact", "1");
   if (STATE.useLocalMode) sp.set("local", "1");
+  if (!STATE.recordHistory) sp.set("history", "0");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
@@ -1118,6 +1125,7 @@ function debouncedSearch() {
     STATE.query = DOM.searchInput.value.trim();
     STATE.page = 1;
     STATE.results = [];
+    addHistoryItem(STATE.query);
     doSearch();
   }, 300);
 }
@@ -2221,6 +2229,7 @@ function setupKeyboard() {
         STATE.page = 1;
         STATE.results = [];
         keyboardResultIndex = -1;
+        addHistoryItem(STATE.query);
         doSearch();
         DOM.searchInput.blur();
         return;
@@ -2240,6 +2249,7 @@ function setupKeyboard() {
       STATE.page = 1;
       STATE.results = [];
       keyboardResultIndex = -1;
+      addHistoryItem(STATE.query);
       doSearch();
       DOM.searchInput.blur();
     }
@@ -2347,6 +2357,97 @@ function init() {
   else if (savedMobile === "desktop") STATE.isMobile = false;
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
+
+  var HISTORY_KEY = "voml_search_history";
+  var HISTORY_MAX = 20;
+
+  function getHistory() {
+    try {
+      return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+    } catch (e) { return []; }
+  }
+
+  function saveHistory(list) {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
+    } catch (e) {}
+  }
+
+  function addHistoryItem(q) {
+    if (!q || !STATE.recordHistory) return;
+    var list = getHistory();
+    var idx = list.indexOf(q);
+    if (idx >= 0) list.splice(idx, 1);
+    list.unshift(q);
+    saveHistory(list);
+  }
+
+  function renderHistoryDropdown() {
+    var list = getHistory();
+    if (list.length === 0) {
+      DOM.historyDropdown.style.display = "none";
+      return;
+    }
+    var html = "";
+    for (var h = 0; h < list.length; h++) {
+      html += '<div class="history-item" data-query="' + escapeHTML(list[h]) + '">' +
+        '<svg class="history-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' +
+        '<span class="history-text">' + escapeHTML(list[h]) + '</span>' +
+        '<button class="history-del" data-del="' + escapeHTML(list[h]) + '">&times;</button>' +
+        '</div>';
+    }
+    html += '<div class="history-footer"><button class="history-clear-all">清空历史</button></div>';
+    DOM.historyDropdown.innerHTML = html;
+    DOM.historyDropdown.style.display = "";
+  }
+
+  function hideHistoryDropdown() {
+    setTimeout(function() {
+      DOM.historyDropdown.style.display = "none";
+    }, 150);
+  }
+
+  DOM.searchInput.addEventListener("focus", function() {
+    if (DOM.searchInput.value.trim() === "") renderHistoryDropdown();
+  });
+  DOM.searchInput.addEventListener("blur", hideHistoryDropdown);
+
+  DOM.historyDropdown.addEventListener("mousedown", function(e) {
+    e.preventDefault();
+    var item = e.target.closest(".history-item");
+    if (item) {
+      var q = item.dataset.query;
+      DOM.searchInput.value = q;
+      STATE.query = q;
+      STATE.page = 1;
+      STATE.results = [];
+      doSearch();
+      hideHistoryDropdown();
+      DOM.searchInput.blur();
+      return;
+    }
+    var del = e.target.closest(".history-del");
+    if (del) {
+      var dq = del.dataset.del;
+      var list = getHistory();
+      var didx = list.indexOf(dq);
+      if (didx >= 0) list.splice(didx, 1);
+      saveHistory(list);
+      renderHistoryDropdown();
+      return;
+    }
+    var clearBtn = e.target.closest(".history-clear-all");
+    if (clearBtn) {
+      saveHistory([]);
+      DOM.historyDropdown.style.display = "none";
+      return;
+    }
+  });
+
+  DOM.historyToggle.addEventListener("change", function() {
+    STATE.recordHistory = DOM.historyToggle.checked;
+    if (!STATE.recordHistory) saveHistory([]);
+  });
 
   DOM.searchInput.addEventListener("input", debouncedSearch);
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
@@ -2466,6 +2567,7 @@ function init() {
       STATE.query = STATE.didYouMean;
       STATE.page = 1;
       STATE.results = [];
+      addHistoryItem(STATE.query);
       doSearch();
     }
   });
