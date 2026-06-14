@@ -1709,6 +1709,23 @@ async function renderExtensionFilter() {
     } catch (e) {}
   }
 
+  // Clean up extensions that don't exist in current repo
+  if (STATE.filterExtensions.length > 0) {
+    var availNames = {};
+    if (extData && Array.isArray(extData)) {
+      for (var axe = 0; axe < extData.length; axe++) { availNames[extData[axe].name] = true; }
+    } else {
+      for (var axe = 0; axe < extensionList.length; axe++) { availNames[extensionList[axe]] = true; }
+    }
+    var cleaned = STATE.filterExtensions.filter(function(ext) { return availNames[ext]; });
+    if (cleaned.length !== STATE.filterExtensions.length) {
+      STATE.filterExtensions = cleaned;
+      STATE.page = 1;
+      STATE.results = [];
+      doSearch();
+    }
+  }
+
   var ordered = [];
   var rest = [];
 
