@@ -4,6 +4,12 @@
  */
  
 /* ═══════════════════════════════════════════════════════════
+   Imports
+   ═══════════════════════════════════════════════════════════ */
+
+import initJieba, { cut as jiebaCut } from 'https://cdn.jsdelivr.net/npm/jieba-wasm@0.0.3/pkg/jieba_wasm.js';
+
+/* ═══════════════════════════════════════════════════════════
    Constants
    ═══════════════════════════════════════════════════════════ */
  
@@ -81,18 +87,44 @@ let extensionList = [];
 function tokenize(text) {
   const tokens = [];
   const lower = text.toLowerCase();
+
   const alpha = lower.match(/[a-z0-9]+/g);
   if (alpha) tokens.push(...alpha);
-  const chineseChars = [];
-  for (const ch of lower) {
-    if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
-      chineseChars.push(ch);
-      tokens.push(ch);
+
+  if (window._jiebaCut) {
+    try {
+      const words = window._jiebaCut(lower);
+      for (const w of words) {
+        const t = w.trim();
+        if (!t) continue;
+        if (/[a-z0-9\u4e00-\u9fff\u3400-\u4dbf]/.test(t)) {
+          tokens.push(t);
+        }
+      }
+      const hasCJK = tokens.some(function(t) { return /[\u4e00-\u9fff\u3400-\u4dbf]/.test(t); });
+      if (!hasCJK) {
+        for (const ch of lower) {
+          if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
+            tokens.push(ch);
+          }
+        }
+      }
+    } catch (e) {
+      window._jiebaCut = null;
+    }
+  } else {
+    const chineseChars = [];
+    for (const ch of lower) {
+      if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
+        chineseChars.push(ch);
+        tokens.push(ch);
+      }
+    }
+    for (let i = 0; i < chineseChars.length - 1; i++) {
+      tokens.push(chineseChars[i] + chineseChars[i + 1]);
     }
   }
-  for (let i = 0; i < chineseChars.length - 1; i++) {
-    tokens.push(chineseChars[i] + chineseChars[i + 1]);
-  }
+
   return [...new Set(tokens)];
 }
  
@@ -322,11 +354,42 @@ function doSearchLocal(params) {
   const maxSize = params.maxSize !== null ? params.maxSize : null;
   const sort = params.sort || "relevance";
   const searchFolders = params.searchFolders !== false;
+  const exact = params.exact === true;
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
  
   let matched = [];
   let didYouMean = null;
+
+  if (exact && q) {
+    const qLower = q.toLowerCase();
+    const rawMatched = [];
+    for (let i = 0; i < RECORDS.length; i++) {
+      const rec = RECORDS[i];
+      const fname = (rec.File || "").toLowerCase();
+      const folderPath = (rec.Folder || []).join("/").toLowerCase();
+      const rname = (rec.Repo || "").toLowerCase();
+      if (fname.indexOf(qLower) >= 0 || folderPath.indexOf(qLower) >= 0 || rname.indexOf(qLower) >= 0) {
+        rawMatched.push(i);
+      }
+    }
+    matched = applyFilters(rawMatched, repos, extensions, folders, minSize, maxSize);
+
+    if (sort === "name") {
+      matched.sort(function(a, b) { return (RECORDS[a].File || "").localeCompare(RECORDS[b].File || "", "zh"); });
+    } else if (sort === "size") {
+      matched.sort(function(a, b) {
+        const sa = typeof RECORDS[a].Size === "number" ? RECORDS[a].Size : 0;
+        const sb = typeof RECORDS[b].Size === "number" ? RECORDS[b].Size : 0;
+        return sb - sa;
+      });
+    }
+
+    const total = matched.length;
+    const start = (page - 1) * pageSize;
+    const paged = matched.slice(start, start + pageSize).map(function(s) { return RECORDS[s]; });
+    return { results: paged, total: total, page: page, pageSize: pageSize, didYouMean: null };
+  }
 
   const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
   const activeVocabSorted = searchFolders ? didYouMeanSorted : didYouMeanSortedFilesOnly;
@@ -565,6 +628,7 @@ const STATE = {
   extensionList: [],
   folderTree: null,
   searchFolders: true,
+  exact: false,
   dataLoaded: false,
 };
 
@@ -638,6 +702,7 @@ function cacheDOM() {
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
+  DOM.exactSearchToggle = $("#exact-search-toggle");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -725,6 +790,7 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
+    if (STATE.exact) sp.set("exact", "1");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -787,6 +853,8 @@ const ROUTER = {
     DOM.filterMaxSize.value = STATE.filterMaxSize || "";
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
+    STATE.exact = route.params.exact === "1";
+    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
@@ -859,6 +927,7 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
+  if (STATE.exact) sp.set("exact", "1");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
@@ -901,6 +970,7 @@ function doSearch(append) {
     maxSize: STATE.filterMaxSize,
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
+    exact: STATE.exact,
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
@@ -1910,7 +1980,7 @@ function setupResultDelegation() {
    Init
    ═══════════════════════════════════════════════════════════ */
  
-function init() {
+async function init() {
   cacheDOM();
  
   STATE.isDark = localStorage.getItem("theme") !== "light";
@@ -1923,6 +1993,15 @@ function init() {
   applyMobileMode();
  
   console.log("Loading data...");
+
+  try {
+    await initJieba();
+    window._jiebaCut = jiebaCut;
+    console.log("jieba WASM loaded");
+  } catch (e) {
+    console.warn("jieba load failed, using fallback tokenizer:", e);
+  }
+
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
     if (!ok) {
@@ -1954,6 +2033,14 @@ function init() {
       STATE.results = [];
       doSearch();
     });
+    if (DOM.exactSearchToggle) {
+      DOM.exactSearchToggle.addEventListener("change", function() {
+        STATE.exact = DOM.exactSearchToggle.checked;
+        STATE.page = 1;
+        STATE.results = [];
+        doSearch();
+      });
+    }
     DOM.sortSelect.addEventListener("change", function() {
       STATE.sort = DOM.sortSelect.value;
       STATE.page = 1;
