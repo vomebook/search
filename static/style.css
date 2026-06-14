@@ -988,9 +988,14 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 #local-mode-section {
   padding: 0 12px;
   height: 40px;
-  display: flex;
-  align-items: center;
   box-sizing: border-box;
+}
+
+#history-toggle-section .toggle-row,
+#search-folders-section .toggle-row,
+#exact-search-section .toggle-row,
+#local-mode-section .toggle-row {
+  height: 100%;
 }
 
 .filter-section-title {
