@@ -181,6 +181,36 @@ function buildIndex() {
 }
  
 /* ═══════════════════════════════════════════════════════════
+   Size helpers (global — used by ROUTER.apply + syncStateToURL)
+   ═══════════════════════════════════════════════════════════ */
+
+function bytesToDisplay(bytes) {
+  if (bytes === null || bytes === undefined || bytes === 0) return { value: "", unit: "MB" };
+  if (bytes >= 1073741824) return { value: (bytes / 1073741824).toFixed(2).replace(/\.?0+$/, ""), unit: "GB" };
+  if (bytes >= 1048576) return { value: (bytes / 1048576).toFixed(1).replace(/\.0$/, ""), unit: "MB" };
+  if (bytes >= 1024) return { value: (bytes / 1024).toFixed(1).replace(/\.0$/, ""), unit: "KB" };
+  return { value: String(bytes), unit: "B" };
+}
+
+function fmtSizeUrl(bytes) {
+  if (bytes === null || bytes === undefined) return null;
+  var d = bytesToDisplay(bytes);
+  return d.value + d.unit;
+}
+
+function parseSizeStr(str) {
+  if (!str) return null;
+  var m = String(str).match(/^([\d.]+)\s*(GB|MB|KB|B)?$/i);
+  if (!m) return parseInt(str) || null;
+  var val = parseFloat(m[1]);
+  var unit = (m[2] || "B").toUpperCase();
+  if (unit === "GB") val *= 1073741824;
+  else if (unit === "MB") val *= 1048576;
+  else if (unit === "KB") val *= 1024;
+  return Math.round(val);
+}
+
+/* ═══════════════════════════════════════════════════════════
    Data Loading (main thread, chunked — API covers search meanwhile)
    ═══════════════════════════════════════════════════════════ */
 
@@ -2382,29 +2412,6 @@ function init() {
     if (unit === "KB") val *= 1024;
     else if (unit === "MB") val *= 1048576;
     else if (unit === "GB") val *= 1073741824;
-    return Math.round(val);
-  };
-  var bytesToDisplay = function(bytes) {
-    if (bytes === null || bytes === undefined || bytes === 0) return { value: "", unit: "MB" };
-    if (bytes >= 1073741824) return { value: (bytes / 1073741824).toFixed(2).replace(/\.?0+$/, ""), unit: "GB" };
-    if (bytes >= 1048576) return { value: (bytes / 1048576).toFixed(1).replace(/\.0$/, ""), unit: "MB" };
-    if (bytes >= 1024) return { value: (bytes / 1024).toFixed(1).replace(/\.0$/, ""), unit: "KB" };
-    return { value: String(bytes), unit: "B" };
-  };
-  var fmtSizeUrl = function(bytes) {
-    if (bytes === null || bytes === undefined) return null;
-    var d = bytesToDisplay(bytes);
-    return d.value + d.unit;
-  };
-  var parseSizeStr = function(str) {
-    if (!str) return null;
-    var m = String(str).match(/^([\d.]+)\s*(GB|MB|KB|B)?$/i);
-    if (!m) return parseInt(str) || null;
-    var val = parseFloat(m[1]);
-    var unit = (m[2] || "B").toUpperCase();
-    if (unit === "GB") val *= 1073741824;
-    else if (unit === "MB") val *= 1048576;
-    else if (unit === "KB") val *= 1024;
     return Math.round(val);
   };
   var applySizeFilter = function() {
