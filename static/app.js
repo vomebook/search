@@ -800,6 +800,8 @@ function cacheDOM() {
   DOM.filterExtList = $("#filter-ext-list");
   DOM.filterMinSize = $("#filter-min-size");
   DOM.filterMaxSize = $("#filter-max-size");
+  DOM.filterMinUnit = $("#filter-min-unit");
+  DOM.filterMaxUnit = $("#filter-max-unit");
   DOM.closeFiltersBtn = $("#close-filters-btn");
   DOM.folderSelectAll = $("#folder-select-all");
   DOM.folderDeselectAll = $("#folder-deselect-all");
@@ -894,8 +896,8 @@ const ROUTER = {
     if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
     if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
     if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-    if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
-    if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
+    if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
+    if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
     if (!STATE.searchFolders) sp.set("search_folders", "false");
     if (STATE.exact) sp.set("exact", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
@@ -955,10 +957,30 @@ const ROUTER = {
 
     STATE.sort = route.params.sort || "relevance";
     DOM.sortSelect.value = STATE.sort;
-    STATE.filterMinSize = route.params.min_size ? parseInt(route.params.min_size) : null;
-    STATE.filterMaxSize = route.params.max_size ? parseInt(route.params.max_size) : null;
-    DOM.filterMinSize.value = STATE.filterMinSize || "";
-    DOM.filterMaxSize.value = STATE.filterMaxSize || "";
+    var ms = route.params.min_size;
+    if (ms) {
+      var parsed = parseSizeStr(ms);
+      STATE.filterMinSize = parsed;
+      var disp = bytesToDisplay(parsed);
+      DOM.filterMinSize.value = disp.value;
+      DOM.filterMinUnit.value = disp.unit;
+    } else {
+      STATE.filterMinSize = null;
+      DOM.filterMinSize.value = "";
+      DOM.filterMinUnit.value = "MB";
+    }
+    var mx = route.params.max_size;
+    if (mx) {
+      var parsedMx = parseSizeStr(mx);
+      STATE.filterMaxSize = parsedMx;
+      var dispMx = bytesToDisplay(parsedMx);
+      DOM.filterMaxSize.value = dispMx.value;
+      DOM.filterMaxUnit.value = dispMx.unit;
+    } else {
+      STATE.filterMaxSize = null;
+      DOM.filterMaxSize.value = "";
+      DOM.filterMaxUnit.value = "MB";
+    }
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
     STATE.exact = route.params.exact === "1";
@@ -2353,18 +2375,52 @@ function init() {
   DOM.emptyRandomBtn.addEventListener("click", randomBook);
 
   var sizeTimer_local;
-  const onSize = function() {
+  var sizeInputToBytes = function(input, unitSelect) {
+    var val = parseFloat(input.value);
+    if (isNaN(val) || val < 0) return null;
+    var unit = unitSelect.value;
+    if (unit === "KB") val *= 1024;
+    else if (unit === "MB") val *= 1048576;
+    else if (unit === "GB") val *= 1073741824;
+    return Math.round(val);
+  };
+  var bytesToDisplay = function(bytes) {
+    if (bytes === null || bytes === undefined || bytes === 0) return { value: "", unit: "MB" };
+    if (bytes >= 1073741824) return { value: (bytes / 1073741824).toFixed(2).replace(/\.?0+$/, ""), unit: "GB" };
+    if (bytes >= 1048576) return { value: (bytes / 1048576).toFixed(1).replace(/\.0$/, ""), unit: "MB" };
+    if (bytes >= 1024) return { value: (bytes / 1024).toFixed(1).replace(/\.0$/, ""), unit: "KB" };
+    return { value: String(bytes), unit: "B" };
+  };
+  var fmtSizeUrl = function(bytes) {
+    if (bytes === null || bytes === undefined) return null;
+    var d = bytesToDisplay(bytes);
+    return d.value + d.unit;
+  };
+  var parseSizeStr = function(str) {
+    if (!str) return null;
+    var m = String(str).match(/^([\d.]+)\s*(GB|MB|KB|B)?$/i);
+    if (!m) return parseInt(str) || null;
+    var val = parseFloat(m[1]);
+    var unit = (m[2] || "B").toUpperCase();
+    if (unit === "GB") val *= 1073741824;
+    else if (unit === "MB") val *= 1048576;
+    else if (unit === "KB") val *= 1024;
+    return Math.round(val);
+  };
+  var applySizeFilter = function() {
     clearTimeout(sizeTimer_local);
     sizeTimer_local = setTimeout(function() {
-      STATE.filterMinSize = DOM.filterMinSize.value ? parseInt(DOM.filterMinSize.value) : null;
-      STATE.filterMaxSize = DOM.filterMaxSize.value ? parseInt(DOM.filterMaxSize.value) : null;
+      STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
+      STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
       STATE.page = 1;
       STATE.results = [];
       doSearch();
     }, 500);
   };
-  DOM.filterMinSize.addEventListener("input", onSize);
-  DOM.filterMaxSize.addEventListener("input", onSize);
+  DOM.filterMinSize.addEventListener("input", applySizeFilter);
+  DOM.filterMaxSize.addEventListener("input", applySizeFilter);
+  DOM.filterMinUnit.addEventListener("change", applySizeFilter);
+  DOM.filterMaxUnit.addEventListener("change", applySizeFilter);
 
   DOM.extSelectAll.addEventListener("click", function() {
     STATE.filterExtensions = extensionList.slice();

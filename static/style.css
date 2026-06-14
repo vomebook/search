@@ -1021,6 +1021,15 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 .size-input:focus {
   border-color: var(--primary);
 }
+.size-unit {
+  font-size: 12px;
+  padding: 6px 4px;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--on-surface);
+  cursor: pointer;
+}
 
 .size-sep {
   font-size: 12px;
