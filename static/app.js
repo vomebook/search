@@ -180,83 +180,146 @@ function buildIndex() {
   });
 }
  
-async function loadData() {
-  const bar = DOM.progressBar;
-  const text = DOM.progressText;
-  bar.style.width = "0%";
-  text.textContent = "连接中...";
+/* ═══════════════════════════════════════════════════════════
+   IndexedDB Cache
+   ═══════════════════════════════════════════════════════════ */
 
+function openSearchDB() {
+  return new Promise(function(resolve, reject) {
+    var req = indexedDB.open("VoiceOfMLSearch", 1);
+    req.onupgradeneeded = function(e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains("cache")) {
+        db.createObjectStore("cache");
+      }
+    };
+    req.onsuccess = function(e) { resolve(e.target.result); };
+    req.onerror = function(e) { reject(e.target.error); };
+  });
+}
+
+function dbGet(db, key) {
+  return new Promise(function(resolve, reject) {
+    var tx = db.transaction("cache", "readonly");
+    var req = tx.objectStore("cache").get(key);
+    req.onsuccess = function() { resolve(req.result); };
+    req.onerror = function(e) { reject(e.target.error); };
+  });
+}
+
+async function checkDataCache() {
   try {
-    const resp = await fetch(DATA_URL);
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var db = await openSearchDB();
+    var meta = await dbGet(db, "meta");
+    db.close();
+    if (meta && meta.count > 0) return meta;
+  } catch (e) {
+    console.warn("IndexedDB check failed:", e);
+  }
+  return null;
+}
 
-    const total = parseInt(resp.headers.get("Content-Length") || "0", 10);
-    const reader = resp.body.getReader();
-    const chunks = [];
-    let received = 0;
+async function loadFromCache() {
+  try {
+    var db = await openSearchDB();
+    var records = await dbGet(db, "records");
+    var index = await dbGet(db, "index");
+    db.close();
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (total > 0) {
-        const pct = Math.round((received / total) * 70);
-        bar.style.width = pct + "%";
-        text.textContent = "下载中 " + (pct > 40 ? formatSize(received) : "");
-      } else {
-        bar.style.width = Math.min(70, Math.round(received / 1024)) + "%";
-        text.textContent = "下载中 " + formatSize(received);
-      }
-    }
+    if (!records || !index) return false;
 
-    bar.style.width = "75%";
-    text.textContent = "解压中...";
+    RECORDS = records;
+    wordIndex = index.wordIndex;
+    wordIndexFilesOnly = index.wordIndexFilesOnly;
+    extensionCounts = index.extensionCounts;
+    repoCounts = index.repoCounts;
+    folderIndex = index.folderIndex;
+    didYouMeanVocab = index.didYouMeanVocab;
+    didYouMeanVocabFilesOnly = index.didYouMeanVocabFilesOnly;
+    didYouMeanSorted = index.didYouMeanSorted;
+    didYouMeanSortedFilesOnly = index.didYouMeanSortedFilesOnly;
+    repoList = index.repoList;
+    extensionList = index.extensionList;
 
-    let buf;
-    if (chunks.length === 1) {
-      buf = chunks[0];
-    } else {
-      buf = new Uint8Array(received);
-      let pos = 0;
-      for (const chunk of chunks) {
-        buf.set(chunk, pos);
-        pos += chunk.length;
-      }
-    }
-
-    bar.style.width = "82%";
-    const ds = new DecompressionStream("gzip");
-    const stream = new Response(buf).body.pipeThrough(ds);
-    const jsonText = await new Response(stream).text();
-
-    bar.style.width = "90%";
-    text.textContent = "解析中...";
-
-    RECORDS = JSON.parse(jsonText);
-    console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
-
-    bar.style.width = "95%";
-    text.textContent = "建立索引...";
-
-    await buildIndex();
-    console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
-
-    bar.style.width = "100%";
-    text.textContent = "完成";
-
-    setTimeout(function() {
-      DOM.progressContainer.classList.add("progress-done");
-    }, 400);
-
+    console.log("Loaded " + RECORDS.length.toLocaleString() + " records from cache");
     return true;
   } catch (e) {
-    console.error("Data load failed:", e);
-    bar.style.width = "100%";
-    bar.style.background = "var(--error)";
-    text.textContent = "加载失败";
+    console.error("Cache load failed:", e);
     return false;
   }
+}
+
+function loadDataViaWorker() {
+  return new Promise(function(resolve) {
+    var bar = DOM.progressBar;
+    var text = DOM.progressText;
+    bar.style.width = "0%";
+    text.textContent = "连接中...";
+
+    var worker;
+    try {
+      worker = new Worker("static/worker.js");
+    } catch (e) {
+      console.error("Worker creation failed:", e);
+      bar.style.width = "100%";
+      bar.style.background = "var(--error)";
+      text.textContent = "浏览器不支持";
+      resolve(false);
+      return;
+    }
+
+    worker.onmessage = function(e) {
+      var data = e.data;
+      if (data.type === "progress") {
+        bar.style.width = data.percent + "%";
+        text.textContent = data.text || "";
+      } else if (data.type === "error") {
+        console.error("Worker error:", data.message);
+        bar.style.width = "100%";
+        bar.style.background = "var(--error)";
+        text.textContent = "加载失败";
+        worker.terminate();
+        resolve(false);
+      } else if (data.type === "ready") {
+        bar.style.width = "100%";
+        text.textContent = "完成";
+        worker.terminate();
+        setTimeout(function() {
+          DOM.progressContainer.classList.add("progress-done");
+        }, 400);
+        resolve(true);
+      }
+    };
+
+    worker.onerror = function(err) {
+      console.error("Worker error:", err);
+      bar.style.width = "100%";
+      bar.style.background = "var(--error)";
+      text.textContent = "加载失败";
+      worker.terminate();
+      resolve(false);
+    };
+
+    worker.postMessage({ type: "load", url: DATA_URL });
+  });
+}
+
+async function loadData() {
+  var cached = await checkDataCache();
+  if (cached) {
+    console.log("Found cached data: " + cached.count.toLocaleString() + " records");
+    var ok = await loadFromCache();
+    if (ok) {
+      DOM.progressContainer.classList.add("progress-done");
+      return true;
+    }
+  }
+
+  var ok = await loadDataViaWorker();
+  if (ok) {
+    ok = await loadFromCache();
+  }
+  return ok;
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -488,6 +551,51 @@ async function doSearchAPI(params, append) {
   }
 
   STATE.hasMore = STATE.results.length < STATE.total;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   API Helpers for Sidebar & Filters
+   ═══════════════════════════════════════════════════════════ */
+
+async function fetchRepos() {
+  if (!apiAvailable) return null;
+  try {
+    var resp = await fetch(API_BASE + "/api/repos");
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) { return null; }
+}
+
+async function fetchExtensions(repo) {
+  if (!apiAvailable) return null;
+  try {
+    var url = repo
+      ? API_BASE + "/api/extensions?repo=" + encodeURIComponent(repo)
+      : API_BASE + "/api/extensions";
+    var resp = await fetch(url);
+    if (!resp.ok) return null;
+    var data = await resp.json();
+    return data;
+  } catch (e) { return null; }
+}
+
+async function fetchFolderTree(repo) {
+  if (!apiAvailable) return null;
+  try {
+    var resp = await fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo));
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) { return null; }
+}
+
+async function fetchFolderContents(repo, path) {
+  if (!apiAvailable) return null;
+  try {
+    var qs = path ? "?path=" + encodeURIComponent(path) : "";
+    var resp = await fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo) + "/contents" + qs);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) { return null; }
 }
 
 function getCurrentExtensionCounts() {
@@ -1247,16 +1355,21 @@ function renderSidebar() {
     renderBrowser(STATE.browserPath || "");
   }
 }
- 
-function renderRepoList() {
-  if (!repoList || repoList.length === 0) {
+
+async function renderRepoList() {
+  var repos = null;
+  if (apiAvailable) repos = await fetchRepos();
+  if (!repos || !Array.isArray(repos) || repos.length === 0) {
+    repos = repoList;
+  }
+  if (!repos || !Array.isArray(repos) || repos.length === 0) {
     DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
     return;
   }
-  let html = "";
-  for (let i = 0; i < repoList.length; i++) {
-    const repo = repoList[i];
-    const short = repo.name.split("/").pop();
+  var html = "";
+  for (var i = 0; i < repos.length; i++) {
+    var repo = repos[i];
+    var short = repo.name.split("/").pop();
     html += '<div class="repo-list-item" data-repo="' + escapeHTML(short) + '">';
     html += '<svg class="repo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
     html += '<span class="repo-name">' + escapeHTML(short) + '</span>';
@@ -1266,26 +1379,26 @@ function renderRepoList() {
   DOM.sidebarContent.innerHTML = html;
 }
  
-function renderBrowser(path) {
+async function renderBrowser(path) {
   STATE.browserPath = path;
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
- 
+
   const backBtn = document.createElement("div");
   backBtn.className = "back-to-global";
   backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
   backBtn.addEventListener("click", function() { ROUTER.navigate("global"); });
   DOM.sidebarContent.appendChild(backBtn);
- 
+
   if (path) {
     const bc = document.createElement("div");
     bc.className = "sidebar-breadcrumb";
     const parts = path.split("/");
     bc.innerHTML = '<span class="crumb-item" data-path="">根目录</span>';
-    for (let i = 0; i < parts.length; i++) {
-      const pp = parts.slice(0, i + 1).join("/");
+    for (var p = 0; p < parts.length; p++) {
+      var pp = parts.slice(0, p + 1).join("/");
       bc.innerHTML += '<span class="crumb-sep">/</span>';
-      bc.innerHTML += '<span class="crumb-item' + (i === parts.length - 1 ? ' current' : '') + '" data-path="' + escapeHTML(pp) + '">' + escapeHTML(parts[i]) + '</span>';
+      bc.innerHTML += '<span class="crumb-item' + (p === parts.length - 1 ? ' current' : '') + '" data-path="' + escapeHTML(pp) + '">' + escapeHTML(parts[p]) + '</span>';
     }
     bc.querySelectorAll(".crumb-item").forEach(function(el) {
       el.addEventListener("click", function() {
@@ -1294,53 +1407,69 @@ function renderBrowser(path) {
     });
     DOM.sidebarContent.appendChild(bc);
   }
- 
+
   const list = document.createElement("div");
   list.className = "browser-list";
   list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
   DOM.sidebarContent.appendChild(list);
- 
-  try {
-    const data = getFolderContents(STATE.repoFull, path);
-    list.innerHTML = "";
- 
-    for (let j = 0; j < (data.folders || []).length; j++) {
-      const f = data.folders[j];
-      const div = document.createElement("div");
-      div.className = "browser-item";
-      div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
-      div.addEventListener("click", (function(fp) { return function() { renderBrowser(fp); }; })(f.path));
-      list.appendChild(div);
-    }
- 
-    for (let k = 0; k < (data.files || []).length; k++) {
-      const f2 = data.files[k];
-      const div2 = document.createElement("div");
-      div2.className = "browser-item";
-      const iconType = getFileIconType(f2.ext);
-      const sizeStr = formatSize(f2.size);
-      div2.innerHTML = (ICONS[iconType] || ICONS.file) +
-        '<span class="browser-name">' + escapeHTML(f2.name) + (f2.ext ? '.' + escapeHTML(f2.ext) : '') + '</span>' +
-        (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '') +
-        (f2.hasTxt ? '<span class="browser-action" data-read="1">📖 阅读</span>' : '');
-      div2.addEventListener("click", function(ff) {
-        return function(e) {
-          if (e.target.closest(".browser-action")) {
-            e.stopPropagation();
-            const stem = ff.ext && ff.name.toLowerCase().endsWith("." + ff.ext.toLowerCase())
-              ? ff.name.slice(0, ff.name.lastIndexOf("."))
-              : ff.name;
-            const txtPath = (path ? path + "/" : "") + stem;
-            window.open(TXT_BASE + "/" + encodeURIComponent(txtPath) + ".txt", "_blank");
-            return;
-          }
-          if (ff.link) window.open(ff.link, "_blank");
-        };
-      }(f2));
-      list.appendChild(div2);
-    }
-  } catch (e) {
+
+  var data = null;
+
+  // Try API first
+  if (apiAvailable) {
+    try {
+      data = await fetchFolderContents(STATE.repo, path);
+    } catch (e) {}
+  }
+
+  // Fallback to local
+  if (!data && STATE.dataLoaded) {
+    try {
+      data = getFolderContents(STATE.repoFull, path);
+    } catch (e) {}
+  }
+
+  if (!data || (!data.folders && !data.files)) {
     list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
+    return;
+  }
+
+  list.innerHTML = "";
+
+  for (var j = 0; j < (data.folders || []).length; j++) {
+    var f = data.folders[j];
+    var div = document.createElement("div");
+    div.className = "browser-item";
+    div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
+    div.addEventListener("click", (function(fp) { return function() { renderBrowser(fp); }; })(f.path));
+    list.appendChild(div);
+  }
+
+  for (var k = 0; k < (data.files || []).length; k++) {
+    var f2 = data.files[k];
+    var div2 = document.createElement("div");
+    div2.className = "browser-item";
+    var iconType = getFileIconType(f2.ext);
+    var sizeStr = formatSize(f2.size);
+    div2.innerHTML = (ICONS[iconType] || ICONS.file) +
+      '<span class="browser-name">' + escapeHTML(f2.name) + (f2.ext ? '.' + escapeHTML(f2.ext) : '') + '</span>' +
+      (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '') +
+      (f2.hasTxt ? '<span class="browser-action" data-read="1">📖 阅读</span>' : '');
+    div2.addEventListener("click", function(ff, ppath) {
+      return function(e) {
+        if (e.target.closest(".browser-action")) {
+          e.stopPropagation();
+          var stem = ff.ext && ff.name && ff.name.toLowerCase().endsWith("." + ff.ext.toLowerCase())
+            ? ff.name.slice(0, ff.name.lastIndexOf("."))
+            : (ff.name || "");
+          var txtPath_v = (ppath ? ppath + "/" : "") + stem;
+          window.open(TXT_BASE + "/" + encodeURIComponent(txtPath_v) + ".txt", "_blank");
+          return;
+        }
+        if (ff.link) window.open(ff.link, "_blank");
+      };
+    }(f2, path || ""));
+    list.appendChild(div2);
   }
 }
  
@@ -1348,32 +1477,43 @@ function renderBrowser(path) {
    Filters (Right Sidebar)
    ═══════════════════════════════════════════════════════════ */
  
-function renderFilters() {
+async function renderFilters() {
   if (STATE.mode === "global") {
     DOM.filterRepoSection.style.display = "";
-    renderRepoFilter();
+    await renderRepoFilter();
   } else {
     DOM.filterRepoSection.style.display = "none";
   }
- 
+
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
+    if (apiAvailable && !STATE.folderTree) {
+      try {
+        STATE.folderTree = await fetchFolderTree(STATE.repo);
+      } catch (e) {}
+    }
     if (!STATE.folderTree) STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
     renderFilterFolderTree();
   } else {
     DOM.filterFolderSection.style.display = "none";
   }
- 
-  renderExtensionFilter();
+
+  await renderExtensionFilter();
 }
- 
-function renderRepoFilter() {
-  const items = [];
-  for (let i = 0; i < repoList.length; i++) {
+
+async function renderRepoFilter() {
+  var repos = repoList;
+  if (apiAvailable && (!repos || repos.length === 0)) {
+    try {
+      repos = await fetchRepos();
+    } catch (e) {}
+  }
+  var items = [];
+  for (var i = 0; i < repos.length; i++) {
     items.push({
-      key: repoList[i].name,
-      label: repoList[i].name.split("/").pop(),
-      count: repoList[i].count,
+      key: repos[i].name,
+      label: repos[i].name.split("/").pop(),
+      count: repos[i].count,
     });
   }
   renderCheckboxList(DOM.filterRepoList, items, STATE.filterRepos, function(vals) {
@@ -1383,36 +1523,60 @@ function renderRepoFilter() {
     doSearch();
   });
 }
- 
-function renderExtensionFilter() {
-  const currentCounts = getCurrentExtensionCounts();
-  const ordered = [];
-  const rest = [];
-  for (let i = 0; i < extensionList.length; i++) {
-    const ext = extensionList[i];
-    const idx = ORDERED_EXTENSIONS.indexOf(ext);
-    if (idx >= 0) {
-      ordered.push({ name: ext, _idx: idx, count: currentCounts[ext] || 0 });
-    } else {
-      rest.push({ name: ext, count: currentCounts[ext] || 0 });
+
+async function renderExtensionFilter() {
+  var extData = null;
+  if (apiAvailable) {
+    try {
+      extData = await fetchExtensions(STATE.repo);
+    } catch (e) {}
+  }
+
+  var ordered = [];
+  var rest = [];
+
+  if (extData && Array.isArray(extData) && extData.length > 0) {
+    // API format: [{name, count}, ...]
+    for (var n = 0; n < extData.length; n++) {
+      var e = extData[n];
+      if (!e || typeof e.name !== "string") continue;
+      var idx_e = ORDERED_EXTENSIONS.indexOf(e.name);
+      if (idx_e >= 0) {
+        ordered.push({ name: e.name, _idx: idx_e, count: e.count || 0 });
+      } else {
+        rest.push(e);
+      }
+    }
+  } else {
+    // Local fallback
+    var currentCounts = getCurrentExtensionCounts();
+    for (var i = 0; i < extensionList.length; i++) {
+      var ext = extensionList[i];
+      var idx = ORDERED_EXTENSIONS.indexOf(ext);
+      if (idx >= 0) {
+        ordered.push({ name: ext, _idx: idx, count: currentCounts[ext] || 0 });
+      } else {
+        rest.push({ name: ext, count: currentCounts[ext] || 0 });
+      }
     }
   }
+
   ordered.sort(function(a, b) { return a._idx - b._idx; });
- 
-  const items = [];
-  for (let j = 0; j < ordered.length; j++) {
+
+  var items = [];
+  for (var j = 0; j < ordered.length; j++) {
     items.push({ key: ordered[j].name, label: "." + ordered[j].name, count: ordered[j].count });
   }
   if (rest.length > 0) {
-    let total = 0;
-    for (let k = 0; k < rest.length; k++) { total += rest[k].count; }
+    var total = 0;
+    for (var k = 0; k < rest.length; k++) { total += rest[k].count || 0; }
     items.push({ key: "__OTHER__", label: "其他 (" + rest.length + "种)", count: total });
   }
- 
+
   renderCheckboxList(DOM.filterExtList, items, STATE.filterExtensions, function(vals) {
     STATE.filterExtensions = vals.filter(function(v) { return v !== "__OTHER__"; });
     if (vals.indexOf("__OTHER__") >= 0) {
-      for (let m = 0; m < rest.length; m++) {
+      for (var m = 0; m < rest.length; m++) {
         STATE.filterExtensions.push(rest[m].name);
       }
     }
