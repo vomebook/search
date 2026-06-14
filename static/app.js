@@ -181,124 +181,53 @@ function buildIndex() {
 }
  
 /* ═══════════════════════════════════════════════════════════
-   IndexedDB Cache
+   Data Loading (main thread, chunked — API covers search meanwhile)
    ═══════════════════════════════════════════════════════════ */
 
-function openSearchDB() {
-  return new Promise(function(resolve, reject) {
-    var req = indexedDB.open("VoiceOfMLSearch", 1);
-    req.onupgradeneeded = function(e) {
-      var db = e.target.result;
-      if (!db.objectStoreNames.contains("cache")) {
-        db.createObjectStore("cache");
+async function loadData() {
+  try {
+    var resp = await fetch(DATA_URL);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+
+    var total = parseInt(resp.headers.get("Content-Length") || "0", 10);
+    var reader = resp.body.getReader();
+    var chunks = [];
+    var received = 0;
+
+    while (true) {
+      var doneVal = await reader.read();
+      if (doneVal.done) break;
+      chunks.push(doneVal.value);
+      received += doneVal.value.length;
+    }
+
+    var buf;
+    if (chunks.length === 1) {
+      buf = chunks[0];
+    } else {
+      buf = new Uint8Array(received);
+      var pos = 0;
+      for (var c = 0; c < chunks.length; c++) {
+        buf.set(chunks[c], pos);
+        pos += chunks[c].length;
       }
-    };
-    req.onsuccess = function(e) { resolve(e.target.result); };
-    req.onerror = function(e) { reject(e.target.error); };
-  });
-}
+    }
 
-function dbGet(db, key) {
-  return new Promise(function(resolve, reject) {
-    var tx = db.transaction("cache", "readonly");
-    var req = tx.objectStore("cache").get(key);
-    req.onsuccess = function() { resolve(req.result); };
-    req.onerror = function(e) { reject(e.target.error); };
-  });
-}
+    var ds = new DecompressionStream("gzip");
+    var stream = new Response(buf).body.pipeThrough(ds);
+    var jsonText = await new Response(stream).text();
 
-async function checkDataCache() {
-  try {
-    var db = await openSearchDB();
-    var meta = await dbGet(db, "meta");
-    db.close();
-    if (meta && meta.count > 0) return meta;
-  } catch (e) {
-    console.warn("IndexedDB check failed:", e);
-  }
-  return null;
-}
+    RECORDS = JSON.parse(jsonText);
+    console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
 
-async function loadFromCache() {
-  try {
-    var db = await openSearchDB();
-    var records = await dbGet(db, "records");
-    var index = await dbGet(db, "index");
-    db.close();
+    await buildIndex();
+    console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
 
-    if (!records || !index) return false;
-
-    RECORDS = records;
-    wordIndex = index.wordIndex;
-    wordIndexFilesOnly = index.wordIndexFilesOnly;
-    extensionCounts = index.extensionCounts;
-    repoCounts = index.repoCounts;
-    folderIndex = index.folderIndex;
-    didYouMeanVocab = index.didYouMeanVocab;
-    didYouMeanVocabFilesOnly = index.didYouMeanVocabFilesOnly;
-    didYouMeanSorted = index.didYouMeanSorted;
-    didYouMeanSortedFilesOnly = index.didYouMeanSortedFilesOnly;
-    repoList = index.repoList;
-    extensionList = index.extensionList;
-
-    console.log("Loaded " + RECORDS.length.toLocaleString() + " records from cache");
     return true;
   } catch (e) {
-    console.error("Cache load failed:", e);
+    console.error("Data load failed:", e);
     return false;
   }
-}
-
-function loadDataViaWorker() {
-  return new Promise(function(resolve) {
-    var worker;
-    try {
-      worker = new Worker("static/worker.js");
-    } catch (e) {
-      console.error("Worker creation failed:", e);
-      resolve(false);
-      return;
-    }
-
-    worker.onmessage = function(e) {
-      var data = e.data;
-      if (data.type === "progress") {
-        // Background loading, no UI needed
-      } else if (data.type === "error") {
-        console.error("Worker error:", data.message);
-        worker.terminate();
-        resolve(false);
-      } else if (data.type === "ready") {
-        worker.terminate();
-        resolve(true);
-      }
-    };
-
-    worker.onerror = function(err) {
-      console.error("Worker error:", err);
-      worker.terminate();
-      resolve(false);
-    };
-
-    worker.postMessage({ type: "load", url: DATA_URL });
-  });
-}
-
-async function loadData() {
-  var cached = await checkDataCache();
-  if (cached) {
-    console.log("Found cached data: " + cached.count.toLocaleString() + " records");
-    var ok = await loadFromCache();
-    if (ok) {
-      return true;
-    }
-  }
-
-  var ok = await loadDataViaWorker();
-  if (ok) {
-    ok = await loadFromCache();
-  }
-  return ok;
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1949,7 +1878,9 @@ function randomBook() {
   fetch(url).then(function(resp) { return resp.json(); })
     .then(function(rec) {
       if (rec && rec.Link) {
-        window.open(rec.Link, "_blank");
+        var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
+        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(rec.Link);
+        window.open(proxyUrl, "_blank");
       } else {
         showToast("暂无可用记录");
       }
@@ -1957,7 +1888,9 @@ function randomBook() {
     .catch(function() {
       var rec = getRandom(STATE.repoFull);
       if (rec && rec.Link) {
-        window.open(rec.Link, "_blank");
+        var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
+        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(rec.Link);
+        window.open(proxyUrl, "_blank");
       } else {
         showToast("暂无可用记录");
       }
