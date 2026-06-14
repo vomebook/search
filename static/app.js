@@ -1994,13 +1994,12 @@ async function init() {
  
   console.log("Loading data...");
 
-  try {
-    await initJieba();
+  initJieba().then(function() {
     window._jiebaCut = jiebaCut;
     console.log("jieba WASM loaded");
-  } catch (e) {
+  }).catch(function(e) {
     console.warn("jieba load failed, using fallback tokenizer:", e);
-  }
+  });
 
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
@@ -2135,4 +2134,4 @@ async function init() {
   });
 }
  
-document.addEventListener("DOMContentLoaded", init);
+init();
