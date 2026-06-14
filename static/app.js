@@ -926,6 +926,7 @@ function cacheDOM() {
   DOM.multiBatchDownload = $("#multi-batch-download");
   DOM.multiZipDownload = $("#multi-zip-download");
   DOM.multiSelectedCount = $("#multi-selected-count");
+  DOM.multiDeselect = $("#multi-deselect");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -2596,6 +2597,12 @@ function init() {
       console.error(e);
       showToast("合并下载失败");
     });
+  });
+
+  if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
+    selectedIndices = {};
+    lastSelectedIndex = -1;
+    updateSelectionUI();
   });
 
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
