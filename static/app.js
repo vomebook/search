@@ -241,14 +241,32 @@ function tokenize(text) {
   var tokens = [];
   var lower = text.toLowerCase();
 
+  // Extract pure alphanumeric tokens (like Python's re.findall)
   var alpha = lower.match(/[a-z0-9]+/g);
   if (alpha) tokens.push.apply(tokens, alpha);
 
   if (jiebaReady) {
-    var words = jiebaCut(lower);
+    // Isolate CJK text (like Python's re.sub + re_han processing)
+    var cjkText = lower;
+    cjkText = cjkText.replace(/[a-z0-9\s]+/g, ' ');
+    cjkText = cjkText.replace(/[^\u4e00-\u9fff\u3400-\u4dbf\s]+/g, ' ');
+    var words = jiebaCut(cjkText);
     for (var w = 0; w < words.length; w++) {
-      var t = words[w];
-      if (/[a-z0-9\u4e00-\u9fff\u3400-\u4dbf]/.test(t)) tokens.push(t);
+      var t = words[w].trim();
+      if (t && /[a-z0-9\u4e00-\u9fff\u3400-\u4dbf]/.test(t)) tokens.push(t);
+    }
+
+    // Fallback: if jieba produced no CJK tokens, use single chars
+    var hasCJK = tokens.some(function(t) {
+      return /[\u4e00-\u9fff\u3400-\u4dbf]/.test(t);
+    });
+    if (!hasCJK) {
+      for (var ch2 = 0; ch2 < lower.length; ch2++) {
+        var c = lower[ch2];
+        if (("\u4e00" <= c && c <= "\u9fff") || ("\u3400" <= c && c <= "\u4dbf")) {
+          tokens.push(c);
+        }
+      }
     }
   } else {
     var chineseChars = [];
@@ -297,6 +315,9 @@ function buildIndex() {
     didYouMeanVocab = {};
     didYouMeanVocabFilesOnly = {};
 
+    var usePrecomputed = RECORDS.length > 0 && RECORDS[0]._Tokens !== undefined;
+    if (usePrecomputed) console.log("Using pre-computed _Tokens (Python jieba)");
+
     let i = 0;
     const chunkSize = 5000;
 
@@ -311,15 +332,23 @@ function buildIndex() {
         if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
 
         const folders = rec.Folder || [];
-        const text = [rec.File || "", ...folders].join(" ");
-        const tokens = tokenize(text);
+        var tokens, fileTokens;
+
+        if (usePrecomputed) {
+          tokens = rec._Tokens || [];
+          fileTokens = rec._Tokens || [];
+        } else {
+          const text = [rec.File || "", ...folders].join(" ");
+          tokens = tokenize(text);
+          fileTokens = tokenize(rec.File || "");
+        }
+
         for (const tok of tokens) {
           if (!wordIndex[tok]) wordIndex[tok] = [];
           wordIndex[tok].push(i);
           didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
         }
 
-        const fileTokens = tokenize(rec.File || "");
         for (const tok of fileTokens) {
           if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
           wordIndexFilesOnly[tok].push(i);
