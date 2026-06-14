@@ -1569,9 +1569,10 @@ function renderSidebar() {
 
 async function renderRepoList() {
   var repos = null;
-  if (apiAvailable) repos = await fetchRepos();
-  if (!repos || !Array.isArray(repos) || repos.length === 0) {
+  if (repoList && repoList.length > 0) {
     repos = repoList;
+  } else if (apiAvailable) {
+    repos = await fetchRepos();
   }
   if (!repos || !Array.isArray(repos) || repos.length === 0) {
     DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
@@ -1626,17 +1627,17 @@ async function renderBrowser(path) {
 
   var data = null;
 
-  // Try API first
-  if (apiAvailable) {
+  // Local first (instant if data loaded)
+  if (STATE.dataLoaded) {
     try {
-      data = await fetchFolderContents(STATE.repo, path);
+      data = getFolderContents(STATE.repoFull, path);
     } catch (e) {}
   }
 
-  // Fallback to local
-  if (!data && STATE.dataLoaded) {
+  // Fallback to API
+  if (!data && apiAvailable) {
     try {
-      data = getFolderContents(STATE.repoFull, path);
+      data = await fetchFolderContents(STATE.repo, path);
     } catch (e) {}
   }
 
@@ -1698,12 +1699,12 @@ async function renderFilters() {
 
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
-    if (apiAvailable && !STATE.folderTree) {
-      try {
-        STATE.folderTree = await fetchFolderTree(STATE.repo);
-      } catch (e) {}
-    }
     if (!STATE.folderTree) STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
+    if (!STATE.folderTree || !STATE.folderTree.length) {
+      if (apiAvailable) {
+        try { STATE.folderTree = await fetchFolderTree(STATE.repo); } catch (e) {}
+      }
+    }
     renderFilterFolderTree();
   } else {
     DOM.filterFolderSection.style.display = "none";
@@ -1737,20 +1738,24 @@ async function renderRepoFilter() {
 
 async function renderExtensionFilter() {
   var extData = null;
-  if (apiAvailable) {
+  // Local first
+  if (extensionList && extensionList.length > 0) {
+    var currentCounts = getCurrentExtensionCounts();
+    extData = [];
+    for (var li = 0; li < extensionList.length; li++) {
+      var lext = extensionList[li];
+      extData.push({ name: lext, count: currentCounts[lext] || 0 });
+    }
+  } else if (apiAvailable) {
     try {
       extData = await fetchExtensions(STATE.repo);
     } catch (e) {}
   }
 
   // Clean up extensions that don't exist in current repo
-  if (STATE.filterExtensions.length > 0) {
+  if (STATE.filterExtensions.length > 0 && extData && Array.isArray(extData)) {
     var availNames = {};
-    if (extData && Array.isArray(extData)) {
-      for (var axe = 0; axe < extData.length; axe++) { availNames[extData[axe].name] = true; }
-    } else {
-      for (var axe = 0; axe < extensionList.length; axe++) { availNames[extensionList[axe]] = true; }
-    }
+    for (var axe = 0; axe < extData.length; axe++) { availNames[extData[axe].name] = true; }
     var cleaned = STATE.filterExtensions.filter(function(ext) { return availNames[ext]; });
     if (cleaned.length !== STATE.filterExtensions.length) {
       STATE.filterExtensions = cleaned;
@@ -1764,7 +1769,6 @@ async function renderExtensionFilter() {
   var rest = [];
 
   if (extData && Array.isArray(extData) && extData.length > 0) {
-    // API format: [{name, count}, ...]
     for (var n = 0; n < extData.length; n++) {
       var e = extData[n];
       if (!e || typeof e.name !== "string") continue;
@@ -1773,18 +1777,6 @@ async function renderExtensionFilter() {
         ordered.push({ name: e.name, _idx: idx_e, count: e.count || 0 });
       } else {
         rest.push(e);
-      }
-    }
-  } else {
-    // Local fallback
-    var currentCounts = getCurrentExtensionCounts();
-    for (var i = 0; i < extensionList.length; i++) {
-      var ext = extensionList[i];
-      var idx = ORDERED_EXTENSIONS.indexOf(ext);
-      if (idx >= 0) {
-        ordered.push({ name: ext, _idx: idx, count: currentCounts[ext] || 0 });
-      } else {
-        rest.push({ name: ext, count: currentCounts[ext] || 0 });
       }
     }
   }
