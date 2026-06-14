@@ -8,6 +8,7 @@
    ═══════════════════════════════════════════════════════════ */
  
 const DATA_URL = "data/search_data.json.gz";
+const REMOTE_API = "https://voiceofml-search.hf.space";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
  
 const ORDERED_EXTENSIONS = [
@@ -650,7 +651,50 @@ function doSearchLocal(params) {
  
   return { results: paged, total, page, pageSize, didYouMean };
 }
- 
+
+async function doSearchRemote(params) {
+  var repoName = null;
+  if (params.repos && params.repos.length === 1) {
+    repoName = params.repos[0].split("/").pop();
+  }
+
+  var url = repoName
+    ? REMOTE_API + "/api/search/" + repoName
+    : REMOTE_API + "/api/search";
+
+  var body = {
+    q: params.q,
+    repos: params.repos,
+    extensions: params.extensions,
+    folders: params.folders,
+    min_size: params.minSize,
+    max_size: params.maxSize,
+    page: params.page,
+    page_size: params.pageSize,
+    search_folders: params.searchFolders,
+    sort: params.sort,
+    exact: params.exact,
+  };
+
+  var controller = new AbortController();
+  var timeout = setTimeout(function() { controller.abort(); }, 5000);
+
+  try {
+    var resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    return await resp.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+}
+
 function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
     const counts = {};
@@ -798,6 +842,7 @@ const STATE = {
   searchFolders: true,
   exact: false,
   dataLoaded: false,
+  remoteAvailable: null,
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -1127,9 +1172,9 @@ function debouncedSearch() {
 function doSearch(append) {
   if (!STATE.dataLoaded) return;
 
-  const id = ++searchId;
+  var id = ++searchId;
 
-  const params = {
+  var params = {
     q: STATE.query,
     repos: STATE.mode === "repo" ? [STATE.repoFull] : (STATE.filterRepos.length > 0 ? STATE.filterRepos : null),
     extensions: STATE.filterExtensions.length > 0 ? STATE.filterExtensions : null,
@@ -1148,38 +1193,65 @@ function doSearch(append) {
   DOM.emptyState.style.display = "none";
   DOM.didYouMean.style.display = "none";
 
-  requestAnimationFrame(function() {
-    if (id !== searchId) return;
-    try {
-      const data = doSearchLocal(params);
-      STATE.total = data.total;
-      STATE.didYouMean = data.didYouMean || null;
+  function processResults(data) {
+    if (id !== searchId) return false;
+    STATE.total = data.total;
+    STATE.didYouMean = data.did_you_mean || data.didYouMean || null;
 
-      if (append) {
-        STATE.results = STATE.results.concat(data.results);
-      } else {
-        STATE.results = data.results;
-      }
-
-      STATE.hasMore = STATE.results.length < STATE.total;
-      renderResults();
-      updateStatusBar();
-      updateLoadInfo();
-
-      if (STATE.didYouMean) {
-        DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
-        DOM.didYouMean.style.display = "inline";
-      }
-
-      syncStateToURL();
-    } catch (err) {
-      console.error(err);
-      showToast("搜索失败");
-    } finally {
-      STATE.isLoading = false;
-      DOM.resultsLoading.style.display = "none";
+    if (append) {
+      STATE.results = STATE.results.concat(data.results);
+    } else {
+      STATE.results = data.results;
     }
-  }, 0);
+
+    STATE.hasMore = STATE.results.length < STATE.total;
+    renderResults();
+    updateStatusBar();
+    updateLoadInfo();
+
+    if (STATE.didYouMean) {
+      DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
+      DOM.didYouMean.style.display = "inline";
+    }
+
+    syncStateToURL();
+    return true;
+  }
+
+  function finishLoading() {
+    STATE.isLoading = false;
+    DOM.resultsLoading.style.display = "none";
+  }
+
+  function runLocal() {
+    requestAnimationFrame(function() {
+      if (id !== searchId) return;
+      try {
+        var data = doSearchLocal(params);
+        processResults(data);
+      } catch (err) {
+        console.error(err);
+        showToast("搜索失败");
+      } finally {
+        finishLoading();
+      }
+    });
+  }
+
+  if (STATE.remoteAvailable !== false) {
+    doSearchRemote(params).then(function(data) {
+      if (processResults(data)) {
+        STATE.remoteAvailable = true;
+        finishLoading();
+      }
+    }).catch(function(err) {
+      if (id !== searchId) return;
+      STATE.remoteAvailable = false;
+      runLocal();
+    });
+  } else {
+    runLocal();
+  }
 }
  
 /* ═══════════════════════════════════════════════════════════
