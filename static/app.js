@@ -477,7 +477,7 @@ function getFolderContents(repo, path) {
     return val;
   }
 
-  const pathParts = path ? path.split("/").filter(Boolean) : [];
+  const pathParts = (path || "").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
   const pathDepth = pathParts.length;
 
   const matching = RECORDS.filter(rec => {
@@ -1100,7 +1100,7 @@ function renderSidebar() {
   if (STATE.mode === "global") {
     renderRepoList();
   } else {
-    renderBrowser("");
+    renderBrowser(STATE.browserPath || "");
   }
 }
  
