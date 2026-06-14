@@ -267,7 +267,6 @@ function updateSelectionUI() {
   if (!DOM.multiSelectToggle || !DOM.multiActionBar) return;
   var count = Object.keys(selectedIndices).length;
   DOM.multiSelectedCount.textContent = count > 0 ? "已选 " + count + " 项" : "";
-  if (DOM.mobileSelectedCount) DOM.mobileSelectedCount.textContent = count > 0 ? "已选 " + count + " 项" : "";
   DOM.multiActionBar.style.display = DOM.multiSelectToggle.checked ? "" : "none";
   if (DOM.multiSelectToggle.checked) {
     document.body.classList.add("multiselect");
@@ -928,9 +927,6 @@ function cacheDOM() {
   DOM.multiZipDownload = $("#multi-zip-download");
   DOM.multiSelectedCount = $("#multi-selected-count");
   DOM.multiDeselect = $("#multi-deselect");
-  DOM.mobileInfoBar = $("#mobile-info-bar");
-  DOM.mobileClearFiltersBtn = $("#mobile-clear-filters-btn");
-  DOM.mobileSelectedCount = $("#mobile-selected-count");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1547,7 +1543,6 @@ function updateStatusBar() {
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolders.length ||
             STATE.filterMinSize !== null || STATE.filterMaxSize !== null;
   DOM.clearFiltersBtn.style.display = has ? "" : "none";
-  if (DOM.mobileClearFiltersBtn) DOM.mobileClearFiltersBtn.style.display = has ? "" : "none";
   if (DOM.multiToggleLabel) DOM.multiToggleLabel.style.display = STATE.total > 0 ? "" : "none";
 }
  
@@ -2609,8 +2604,6 @@ function init() {
     lastSelectedIndex = -1;
     updateSelectionUI();
   });
-
-  if (DOM.mobileClearFiltersBtn) DOM.mobileClearFiltersBtn.addEventListener("click", clearAllFilters);
 
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
   DOM.settingsBtn.addEventListener("click", toggleRightSidebar);
