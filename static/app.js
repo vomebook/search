@@ -4,12 +4,6 @@
  */
  
 /* ═══════════════════════════════════════════════════════════
-   Imports
-   ═══════════════════════════════════════════════════════════ */
-
-import initJieba, { cut as jiebaCut } from 'https://cdn.jsdelivr.net/npm/jieba-wasm@0.0.3/pkg/jieba_wasm.js';
-
-/* ═══════════════════════════════════════════════════════════
    Constants
    ═══════════════════════════════════════════════════════════ */
  
@@ -84,44 +78,189 @@ let didYouMeanSortedFilesOnly = [];
 let repoList = [];
 let extensionList = [];
  
+/* ═══════════════════════════════════════════════════════════
+   Jieba Segmentation (DAG + DP + HMM/Viterbi)
+   ========================================================== */
+
+var jiebaReady = false;
+var jiebaPrefix = null;   // { word: true } — all known words
+var jiebaMaxLen = 0;
+
+function buildJiebaPrefix() {
+  if (!window.JIEBA_FREQ) return;
+  jiebaPrefix = {};
+  jiebaMaxLen = 0;
+  var words = Object.keys(window.JIEBA_FREQ);
+  for (var i = 0; i < words.length; i++) {
+    var w = words[i];
+    jiebaPrefix[w] = true;
+    if (w.length > jiebaMaxLen) jiebaMaxLen = w.length;
+  }
+  jiebaReady = true;
+}
+
+function getDAG(sentence) {
+  var dag = {};
+  var N = sentence.length;
+  for (var k = 0; k < N; k++) {
+    var tmplist = [];
+    var remaining = N - k;
+    var maxW = Math.min(jiebaMaxLen, remaining);
+    for (var fragLen = maxW; fragLen >= 1; fragLen--) {
+      var frag = sentence.substring(k, k + fragLen);
+      if (jiebaPrefix[frag] !== undefined) {
+        tmplist.push(fragLen);
+      }
+    }
+    if (tmplist.length === 0) tmplist.push(1);
+    dag[k] = tmplist;
+  }
+  return dag;
+}
+
+function calc(sentence, dag) {
+  var N = sentence.length;
+  var logtotal = Math.log(window.JIEBA_TOTAL || 1);
+  var route = {};
+  route[N] = [0.0, 0];
+  for (var idx = N - 1; idx >= 0; idx--) {
+    var best = -Infinity;
+    var bestFrag = 1;
+    var cands = dag[idx];
+    for (var c = 0; c < cands.length; c++) {
+      var fragLen = cands[c];
+      var word = sentence.substring(idx, idx + fragLen);
+      var f = window.JIEBA_FREQ[word];
+      var logProb = f !== undefined ? f - logtotal : -20.0;
+      var totalProb = logProb + route[idx + fragLen][0];
+      if (totalProb > best) { best = totalProb; bestFrag = fragLen; }
+    }
+    route[idx] = [best, bestFrag];
+  }
+  return route;
+}
+
+function cutDAG(sentence, dag, route) {
+  var N = sentence.length;
+  var x = 0;
+  var buf = '';
+  var result = [];
+  while (x < N) {
+    var y = route[x][1] + x;
+    var word = sentence.substring(x, y);
+    if (y - x === 1) {
+      buf += word;
+    } else {
+      if (buf.length > 0) {
+        var hmmResult = viterbi(buf);
+        for (var h = 0; h < hmmResult.length; h++) result.push(hmmResult[h]);
+        buf = '';
+      }
+      result.push(word);
+    }
+    x = y;
+  }
+  if (buf.length > 0) {
+    var hmmResult2 = viterbi(buf);
+    for (var h2 = 0; h2 < hmmResult2.length; h2++) result.push(hmmResult2[h2]);
+  }
+  return result;
+}
+
+var HMM_STATES = ['B', 'M', 'E', 'S'];
+var MIN_FLOAT = -3.14e+100;
+
+function getEmitProb(ch, state) {
+  var em = window.HMM_EMIT;
+  if (em && em[state] && em[state][ch] !== undefined) return em[state][ch];
+  var def = window.HMM_EMIT_DEFAULT;
+  return (def && def[state]) || -10.0;
+}
+
+function viterbi(obs) {
+  if (obs.length === 0) return [];
+  var V = [{}];
+  var path = {};
+  var N = obs.length;
+
+  for (var y = 0; y < 4; y++) {
+    var st = HMM_STATES[y];
+    V[0][st] = (window.HMM_START[st] || MIN_FLOAT) + getEmitProb(obs[0], st);
+    path[st] = [st];
+  }
+
+  for (var t = 1; t < N; t++) {
+    var newV = {};
+    var newPath = {};
+    for (var y2 = 0; y2 < 4; y2++) {
+      var s = HMM_STATES[y2];
+      var emitP = getEmitProb(obs[t], s);
+      var best = -Infinity;
+      var bestPrev = null;
+      for (var y0 = 0; y0 < 4; y0++) {
+        var s0 = HMM_STATES[y0];
+        var tp = window.HMM_TRANS[s0] && window.HMM_TRANS[s0][s] !== undefined ? window.HMM_TRANS[s0][s] : MIN_FLOAT;
+        var prob = V[t-1][s0] + tp + emitP;
+        if (prob > best) { best = prob; bestPrev = s0; }
+      }
+      newV[s] = best;
+      newPath[s] = path[bestPrev || HMM_STATES[0]].concat([s]);
+    }
+    V.push(newV);
+    path = newPath;
+  }
+
+  var bestFinal = HMM_STATES[0];
+  var bestProb = -Infinity;
+  for (var ep = 0; ep < 4; ep++) {
+    if (V[N-1][HMM_STATES[ep]] > bestProb) {
+      bestProb = V[N-1][HMM_STATES[ep]];
+      bestFinal = HMM_STATES[ep];
+    }
+  }
+  var stateSeq = path[bestFinal];
+  var words = [];
+  var buf = '';
+  for (var i = 0; i < N; i++) {
+    var st2 = stateSeq[i] || 'S';
+    buf += obs[i];
+    if (st2 === 'E' || st2 === 'S') { words.push(buf); buf = ''; }
+  }
+  if (buf.length > 0) words.push(buf);
+  return words;
+}
+
+function jiebaCut(sentence) {
+  if (!jiebaReady || sentence.length === 0) return [];
+  var dag = getDAG(sentence);
+  var route = calc(sentence, dag);
+  return cutDAG(sentence, dag, route);
+}
+
 function tokenize(text) {
-  const tokens = [];
-  const lower = text.toLowerCase();
+  var tokens = [];
+  var lower = text.toLowerCase();
 
-  const alpha = lower.match(/[a-z0-9]+/g);
-  if (alpha) tokens.push(...alpha);
+  var alpha = lower.match(/[a-z0-9]+/g);
+  if (alpha) tokens.push.apply(tokens, alpha);
 
-  if (window._jiebaCut) {
-    try {
-      const words = window._jiebaCut(lower);
-      for (const w of words) {
-        const t = w.trim();
-        if (!t) continue;
-        if (/[a-z0-9\u4e00-\u9fff\u3400-\u4dbf]/.test(t)) {
-          tokens.push(t);
-        }
-      }
-      const hasCJK = tokens.some(function(t) { return /[\u4e00-\u9fff\u3400-\u4dbf]/.test(t); });
-      if (!hasCJK) {
-        for (const ch of lower) {
-          if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
-            tokens.push(ch);
-          }
-        }
-      }
-    } catch (e) {
-      window._jiebaCut = null;
+  if (jiebaReady) {
+    var words = jiebaCut(lower);
+    for (var w = 0; w < words.length; w++) {
+      var t = words[w];
+      if (/[a-z0-9\u4e00-\u9fff\u3400-\u4dbf]/.test(t)) tokens.push(t);
     }
   } else {
-    const chineseChars = [];
-    for (const ch of lower) {
+    var chineseChars = [];
+    for (var j = 0; j < lower.length; j++) {
+      var ch = lower[j];
       if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
         chineseChars.push(ch);
         tokens.push(ch);
       }
     }
-    for (let i = 0; i < chineseChars.length - 1; i++) {
-      tokens.push(chineseChars[i] + chineseChars[i + 1]);
+    for (var k = 0; k < chineseChars.length - 1; k++) {
+      tokens.push(chineseChars[k] + chineseChars[k + 1]);
     }
   }
 
@@ -1980,7 +2119,7 @@ function setupResultDelegation() {
    Init
    ═══════════════════════════════════════════════════════════ */
  
-async function init() {
+function init() {
   cacheDOM();
  
   STATE.isDark = localStorage.getItem("theme") !== "light";
@@ -1993,13 +2132,7 @@ async function init() {
   applyMobileMode();
  
   console.log("Loading data...");
-
-  initJieba().then(function() {
-    window._jiebaCut = jiebaCut;
-    console.log("jieba WASM loaded");
-  }).catch(function(e) {
-    console.warn("jieba load failed, using fallback tokenizer:", e);
-  });
+  buildJiebaPrefix();
 
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
