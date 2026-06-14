@@ -95,6 +95,20 @@ function tokenize(text) {
   }
   return [...new Set(tokens)];
 }
+
+async function tokenizeJieba(text) {
+  if (window.jiebaCut) {
+    try {
+      const words = await window.jiebaCut(text);
+      if (words && words.length > 0) {
+        const lower = text.toLowerCase();
+        const alpha = lower.match(/[a-z0-9]+/g) || [];
+        return [...new Set([...alpha, ...words])];
+      }
+    } catch (e) { /* fallback */ }
+  }
+  return tokenize(text);
+}
  
 function editDistance(s1, s2, maxDist) {
   maxDist = maxDist || 2;
@@ -313,7 +327,7 @@ function applyFilters(indices, repos, extensions, folders, minSize, maxSize) {
   });
 }
  
-function doSearchLocal(params) {
+async function doSearchLocal(params) {
   const q = (params.q || "").trim();
   const repos = params.repos || null;
   const extensions = params.extensions || null;
@@ -336,8 +350,22 @@ function doSearchLocal(params) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
   } else {
     const tokens = tokenize(q);
+    const jiebaTokens = await tokenizeJieba(q);
+    const queryTokens = tokens.length >= jiebaTokens.length ? tokens : jiebaTokens;
 
     let exact = null;
+
+    // Exact mode: substring match across all fields
+    if (params.exact) {
+      const qLower = q.toLowerCase();
+      for (let i = 0; i < RECORDS.length; i++) {
+        const r = RECORDS[i];
+        const haystack = [r.File||"", r.Repo||"", r.Path||"", ...(r.Folder||[])].join(" ").toLowerCase();
+        if (haystack.indexOf(qLower) !== -1) matched.push(i);
+      }
+      exact = null; // skip normal token matching
+    }
+
     for (const tok of tokens) {
       const idxs = activeIndex[tok];
       if (!idxs) { exact = []; break; }
@@ -395,7 +423,7 @@ function doSearchLocal(params) {
   }
  
   let filtered = applyFilters(matched, repos, extensions, folders, minSize, maxSize);
-  const tokens = q ? tokenize(q) : [];
+  const tokens = q ? (params.exact ? tokenize(q) : await tokenizeJieba(q)) : [];
   const scored = filtered.map(idx => ({
     idx,
     score: q ? scoreRecord(idx, tokens, searchFolders) : 0
@@ -565,6 +593,7 @@ const STATE = {
   extensionList: [],
   folderTree: null,
   searchFolders: true,
+  exact: false,
   dataLoaded: false,
 };
 
@@ -638,6 +667,7 @@ function cacheDOM() {
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
+  DOM.exactSearchToggle = $("#exact-search-toggle");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -788,6 +818,9 @@ const ROUTER = {
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
  
+    STATE.exact = route.params.exact === "1";
+    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
+
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
       updateSidebarVisibility();
@@ -860,6 +893,7 @@ function syncStateToURL() {
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
+  if (STATE.exact) sp.set("exact", "1");
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
@@ -901,6 +935,7 @@ function doSearch(append) {
     maxSize: STATE.filterMaxSize,
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
+    exact: STATE.exact,
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
@@ -913,7 +948,7 @@ function doSearch(append) {
   requestAnimationFrame(function() {
     if (id !== searchId) return;
     try {
-      const data = doSearchLocal(params);
+      const data = await doSearchLocal(params);
       STATE.total = data.total;
       STATE.didYouMean = data.didYouMean || null;
 
@@ -1953,6 +1988,13 @@ function init() {
       STATE.page = 1;
       STATE.results = [];
       doSearch();
+    });
+    DOM.exactSearchToggle.addEventListener("change", function() {
+      STATE.exact = DOM.exactSearchToggle.checked;
+      STATE.page = 1;
+      STATE.results = [];
+      doSearch();
+      syncStateToURL();
     });
     DOM.sortSelect.addEventListener("change", function() {
       STATE.sort = DOM.sortSelect.value;
