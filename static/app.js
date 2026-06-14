@@ -787,6 +787,14 @@ const ROUTER = {
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
  
+    if (route.params.sidebar !== undefined) {
+      STATE.leftSidebarOpen = route.params.sidebar !== "0";
+      updateSidebarVisibility();
+    }
+    if (route.params.wide !== undefined) {
+      DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
+      if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
+    }
     this.updateUI();
  
     if (!STATE.dataLoaded) return;
@@ -846,6 +854,7 @@ function syncStateToURL() {
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (STATE.browserPath) sp.set("path", STATE.browserPath);
+  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
@@ -1683,8 +1692,8 @@ function toggleLeftSidebar() {
   if (!STATE.leftSidebarOpen) {
     DOM.leftSidebar.classList.remove("expanded-wide");
     DOM.sidebarExpandBtn.textContent = "↔";
-    syncStateToURL();
   }
+  syncStateToURL();
   if (STATE.leftSidebarOpen && STATE.rightSidebarOpen) STATE.rightSidebarOpen = false;
   updateSidebarVisibility();
 }
