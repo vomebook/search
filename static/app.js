@@ -1943,29 +1943,25 @@ function typewriter(el, text, speed) {
    ═══════════════════════════════════════════════════════════ */
  
 function randomBook() {
-  if (apiAvailable) {
-    var url = STATE.repoFull
-      ? API_BASE + "/api/random?repo=" + encodeURIComponent(STATE.repoFull)
-      : API_BASE + "/api/random";
-    fetch(url).then(function(resp) { return resp.json(); })
-      .then(function(rec) {
-        if (rec && rec.Link) {
-          window.open(rec.Link, "_blank");
-        } else {
-          showToast("暂无可用记录");
-        }
-      })
-      .catch(function() {
-        showToast("获取失败");
-      });
-    return;
-  }
-  var rec = getRandom(STATE.repoFull);
-  if (rec && rec.Link) {
-    window.open(rec.Link, "_blank");
-  } else {
-    showToast("暂无可用记录");
-  }
+  var url = STATE.repoFull
+    ? API_BASE + "/api/random?repo=" + encodeURIComponent(STATE.repoFull)
+    : API_BASE + "/api/random";
+  fetch(url).then(function(resp) { return resp.json(); })
+    .then(function(rec) {
+      if (rec && rec.Link) {
+        window.open(rec.Link, "_blank");
+      } else {
+        showToast("暂无可用记录");
+      }
+    })
+    .catch(function() {
+      var rec = getRandom(STATE.repoFull);
+      if (rec && rec.Link) {
+        window.open(rec.Link, "_blank");
+      } else {
+        showToast("暂无可用记录");
+      }
+    });
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -2392,6 +2388,11 @@ function init() {
     doSearch();
   });
   DOM.localModeToggle.addEventListener("change", function() {
+    if (!STATE.dataLoaded) {
+      DOM.localModeToggle.checked = false;
+      showToast("本地数据尚未加载完成");
+      return;
+    }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     STATE.page = 1;
     STATE.results = [];
@@ -2491,7 +2492,6 @@ function init() {
       STATE.repoList = repoList;
       STATE.extensionList = extensionList;
       console.log("Local data ready for offline search");
-      DOM.localModeToggle.disabled = false;
       DOM.localModeToggleRow.classList.remove("toggle-disabled");
       renderSidebar();
       renderFilters();
