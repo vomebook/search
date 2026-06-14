@@ -925,14 +925,8 @@ const ROUTER = {
   navigate: function(mode, repo, folder) {
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
-    if (STATE.query) sp.set("q", STATE.query);
-    if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
     if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
     if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-    if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
-    if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
-    if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (STATE.exact) sp.set("exact", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
     const qs = sp.toString();
