@@ -1236,7 +1236,7 @@ function doSearch(append) {
     DOM.didYouMean.style.display = "none";
     selectedIndices = {};
     lastSelectedIndex = -1;
-    if (DOM.multiSelectToggle.checked) updateSelectionUI();
+    if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
     if (apiAvailable && searchAbortController) searchAbortController.abort();
     if (apiAvailable) searchAbortController = new AbortController();
   }
@@ -1308,7 +1308,6 @@ function doSearch(append) {
         return;
       }
       console.warn("API search failed, falling back to local:", err);
-      apiAvailable = false;
       doSearchFallbackLocal(params, append, id);
     }).finally(function() {
       if (id === searchId) {
@@ -1380,8 +1379,11 @@ function doSearchFallbackLocal(params, append, id) {
 
       syncStateToURL();
     } catch (err) {
-      console.error(err);
-      showToast("搜索失败");
+      console.error("Local fallback crashed:", err);
+      DOM.resultsList.innerHTML = "";
+      DOM.emptyState.style.display = "flex";
+      DOM.emptyDesc.textContent = "本地搜索出错，请刷新重试";
+      VSCROLL.heights = [];
     } finally {
       STATE.isLoading = false;
       DOM.resultsLoading.style.display = "none";
@@ -1422,7 +1424,7 @@ function renderResults() {
   renderVisible();
 }
 
-function buildResultHTML(rec) {
+function buildResultHTML(rec, idx) {
   const iconType = getFileIconType(rec.Extension);
   const titleHTML = highlightText(rec.File, STATE.query);
   const repoShort = (rec.Repo || "").split("/").pop();
@@ -1435,7 +1437,7 @@ function buildResultHTML(rec) {
   }).join("");
 
   return (
-    '<input type="checkbox" class="result-checkbox" data-index="' + recIdx + '">' +
+    '<input type="checkbox" class="result-checkbox" data-index="' + idx + '">' +
     '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
     '<div class="result-info">' +
       '<div class="result-title">' + titleHTML +
@@ -1503,7 +1505,7 @@ function renderVisible() {
     const rec = items[ri];
     html += '<div class="result-item" data-index="' + ri + '"' +
       (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
-      '>' + buildResultHTML(rec) + '</div>';
+      '>' + buildResultHTML(rec, ri) + '</div>';
   }
   let bottomH = 0;
   for (let bi = end; bi < len; bi++) bottomH += VSCROLL.heights[bi] || est;
@@ -1543,7 +1545,7 @@ function updateStatusBar() {
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolders.length ||
             STATE.filterMinSize !== null || STATE.filterMaxSize !== null;
   DOM.clearFiltersBtn.style.display = has ? "" : "none";
-  DOM.multiToggleLabel.style.display = STATE.total > 0 ? "" : "none";
+  if (DOM.multiToggleLabel) DOM.multiToggleLabel.style.display = STATE.total > 0 ? "" : "none";
 }
  
 function updateLoadInfo() {
@@ -2518,10 +2520,10 @@ function init() {
   });
 
   // Multi-select
-  DOM.multiSelectToggle.addEventListener("change", updateSelectionUI);
+  if (DOM.multiSelectToggle) DOM.multiSelectToggle.addEventListener("change", updateSelectionUI);
 
   DOM.resultsList.addEventListener("click", function(e) {
-    if (!DOM.multiSelectToggle.checked) return;
+    if (!DOM.multiSelectToggle || !DOM.multiSelectToggle.checked) return;
     var cb = e.target.closest(".result-checkbox");
     if (!cb) return;
     e.stopPropagation();
@@ -2559,7 +2561,7 @@ function init() {
     return names;
   };
 
-  DOM.multiCopyLinks.addEventListener("click", function() {
+  if (DOM.multiCopyLinks) DOM.multiCopyLinks.addEventListener("click", function() {
     var links = getSelectedLinks();
     if (links.length === 0) { showToast("未选中任何文件"); return; }
     navigator.clipboard.writeText(links.join("\n")).then(function() {
@@ -2567,7 +2569,7 @@ function init() {
     }).catch(function() { showToast("复制失败"); });
   });
 
-  DOM.multiBatchDownload.addEventListener("click", function() {
+  if (DOM.multiBatchDownload) DOM.multiBatchDownload.addEventListener("click", function() {
     var links = getSelectedLinks();
     var names = getSelectedFilenames();
     if (links.length === 0) { showToast("未选中任何文件"); return; }
@@ -2578,7 +2580,7 @@ function init() {
     showToast("正在打开 " + links.length + " 个下载");
   });
 
-  DOM.multiZipDownload.addEventListener("click", function() {
+  if (DOM.multiZipDownload) DOM.multiZipDownload.addEventListener("click", function() {
     var links = getSelectedLinks();
     var names = getSelectedFilenames();
     if (links.length === 0) { showToast("未选中任何文件"); return; }
