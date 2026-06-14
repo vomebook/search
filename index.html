@@ -108,6 +108,10 @@
     <div id="status-bar" class="status-bar">
       <div class="status-left">
         <span id="result-count" class="result-count"></span>
+        <label class="multi-toggle" id="multi-toggle-label" style="display:none">
+          <input type="checkbox" id="multi-select-toggle">
+          <span>多选</span>
+        </label>
         <span id="did-you-mean" class="did-you-mean"></span>
       </div>
       <div class="status-right">
@@ -121,6 +125,13 @@
           </select>
         </div>
       </div>
+    </div>
+
+    <div id="multi-action-bar" class="multi-action-bar" style="display:none">
+      <button id="multi-copy-links" class="multi-action-btn">复制链接</button>
+      <button id="multi-batch-download" class="multi-action-btn primary">批量下载</button>
+      <button id="multi-zip-download" class="multi-action-btn primary">合并下载</button>
+      <span id="multi-selected-count" class="multi-selected-count"></span>
     </div>
 
     <!-- Results -->
