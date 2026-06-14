@@ -519,11 +519,35 @@ async function doSearchAPI(params, append) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   };
-  if (params.signal) fetchOptions.signal = params.signal;
 
-  const resp = await fetch(base, fetchOptions);
-  if (!resp.ok) throw new Error("HTTP " + resp.status);
-  const data = await resp.json();
+  // Timeout: 10s for non-append (initial search), 5s for append (pagination)
+  var timeoutMs = append ? 5000 : 10000;
+  var timeoutAbort = false;
+  var timeoutController = new AbortController();
+  var timeoutId = setTimeout(function() {
+    timeoutAbort = true;
+    timeoutController.abort();
+  }, timeoutMs);
+  fetchOptions.signal = timeoutController.signal;
+
+  // If caller also has a signal, abort on whichever fires first
+  if (params.signal) {
+    params.signal.addEventListener("abort", function() { timeoutController.abort(); });
+  }
+
+  var resp, data;
+  try {
+    resp = await fetch(base, fetchOptions);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    data = await resp.json();
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (timeoutAbort && (e.name === "AbortError" || e.name === "TimeoutError")) {
+      throw new Error("API_TIMEOUT");
+    }
+    throw e;
+  }
+  clearTimeout(timeoutId);
 
   STATE.total = data.total;
   STATE.didYouMean = data.did_you_mean || null;
@@ -1193,6 +1217,14 @@ function doSearch(append) {
       }
       prefetchNextPage();
       syncStateToURL();
+    }).catch(function(err) {
+      if (err.message === "API_TIMEOUT") {
+        console.warn("API timeout, falling back to local");
+        apiAvailable = false;
+        doSearchFallbackLocal(params, append, id);
+        return;
+      }
+      if (err.name === "AbortError") {
         if (id === searchId) {
           STATE.isLoading = false;
           DOM.resultsLoading.style.display = "none";
