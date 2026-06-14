@@ -8,7 +8,6 @@
    ═══════════════════════════════════════════════════════════ */
  
 const DATA_URL = "data/search_data.json.gz";
-const REMOTE_API = "https://voiceofml-search.hf.space";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
  
 const ORDERED_EXTENSIONS = [
@@ -80,20 +79,19 @@ let repoList = [];
 let extensionList = [];
  
 function tokenize(text) {
-  var tokens = [];
-  var lower = text.toLowerCase();
-  var alpha = lower.match(/[a-z0-9]+/g);
-  if (alpha) tokens.push.apply(tokens, alpha);
-  var chineseChars = [];
-  for (var j = 0; j < lower.length; j++) {
-    var ch = lower[j];
+  const tokens = [];
+  const lower = text.toLowerCase();
+  const alpha = lower.match(/[a-z0-9]+/g);
+  if (alpha) tokens.push(...alpha);
+  const chineseChars = [];
+  for (const ch of lower) {
     if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
       chineseChars.push(ch);
       tokens.push(ch);
     }
   }
-  for (var k = 0; k < chineseChars.length - 1; k++) {
-    tokens.push(chineseChars[k] + chineseChars[k + 1]);
+  for (let i = 0; i < chineseChars.length - 1; i++) {
+    tokens.push(chineseChars[i] + chineseChars[i + 1]);
   }
   return [...new Set(tokens)];
 }
@@ -131,21 +129,6 @@ function buildIndex() {
     let i = 0;
     const chunkSize = 5000;
 
-    function isCJK(c) {
-      return ("\u4e00" <= c && c <= "\u9fff") || ("\u3400" <= c && c <= "\u4dbf");
-    }
-
-    function extractBigrams(text) {
-      var cjk = [];
-      for (var j = 0; j < text.length; j++) {
-        if (isCJK(text[j])) cjk.push(text[j]);
-      }
-      for (var k = 0; k + 1 < cjk.length; k++) {
-        cjk.push(cjk[k] + cjk[k + 1]);
-      }
-      return cjk;
-    }
-
     function processChunk() {
       const end = Math.min(i + chunkSize, RECORDS.length);
       for (; i < end; i++) {
@@ -157,33 +140,15 @@ function buildIndex() {
         if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
 
         const folders = rec.Folder || [];
-        var tokens, fileTokens;
-
-        if (rec._Tokens) {
-          tokens = rec._Tokens.slice();
-          var fullText = ((rec.File || "") + " " + (folders || []).join(" ")).toLowerCase();
-          var bigrams = extractBigrams(fullText);
-          for (var b = 0; b < bigrams.length; b++) tokens.push(bigrams[b]);
-        } else {
-          const text = [rec.File || "", ...folders].join(" ");
-          tokens = tokenize(text);
-        }
-
+        const text = [rec.File || "", ...folders].join(" ");
+        const tokens = tokenize(text);
         for (const tok of tokens) {
           if (!wordIndex[tok]) wordIndex[tok] = [];
           wordIndex[tok].push(i);
           didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
         }
 
-        if (rec._Tokens) {
-          fileTokens = rec._Tokens.slice();
-          var fileText = (rec.File || "").toLowerCase();
-          var fileBigrams = extractBigrams(fileText);
-          for (var fb = 0; fb < fileBigrams.length; fb++) fileTokens.push(fileBigrams[fb]);
-        } else {
-          fileTokens = tokenize(rec.File || "");
-        }
-
+        const fileTokens = tokenize(rec.File || "");
         for (const tok of fileTokens) {
           if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
           wordIndexFilesOnly[tok].push(i);
@@ -357,42 +322,11 @@ function doSearchLocal(params) {
   const maxSize = params.maxSize !== null ? params.maxSize : null;
   const sort = params.sort || "relevance";
   const searchFolders = params.searchFolders !== false;
-  const exact = params.exact === true;
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
  
   let matched = [];
   let didYouMean = null;
-
-  if (exact && q) {
-    const qLower = q.toLowerCase();
-    const rawMatched = [];
-    for (let i = 0; i < RECORDS.length; i++) {
-      const rec = RECORDS[i];
-      const fname = (rec.File || "").toLowerCase();
-      const folderPath = (rec.Folder || []).join("/").toLowerCase();
-      const rname = (rec.Repo || "").toLowerCase();
-      if (fname.indexOf(qLower) >= 0 || folderPath.indexOf(qLower) >= 0 || rname.indexOf(qLower) >= 0) {
-        rawMatched.push(i);
-      }
-    }
-    matched = applyFilters(rawMatched, repos, extensions, folders, minSize, maxSize);
-
-    if (sort === "name") {
-      matched.sort(function(a, b) { return (RECORDS[a].File || "").localeCompare(RECORDS[b].File || "", "zh"); });
-    } else if (sort === "size") {
-      matched.sort(function(a, b) {
-        const sa = typeof RECORDS[a].Size === "number" ? RECORDS[a].Size : 0;
-        const sb = typeof RECORDS[b].Size === "number" ? RECORDS[b].Size : 0;
-        return sb - sa;
-      });
-    }
-
-    const total = matched.length;
-    const start = (page - 1) * pageSize;
-    const paged = matched.slice(start, start + pageSize).map(function(s) { return RECORDS[s]; });
-    return { results: paged, total: total, page: page, pageSize: pageSize, didYouMean: null };
-  }
 
   const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
   const activeVocabSorted = searchFolders ? didYouMeanSorted : didYouMeanSortedFilesOnly;
@@ -485,50 +419,7 @@ function doSearchLocal(params) {
  
   return { results: paged, total, page, pageSize, didYouMean };
 }
-
-async function doSearchRemote(params) {
-  var repoName = null;
-  if (params.repos && params.repos.length === 1) {
-    repoName = params.repos[0].split("/").pop();
-  }
-
-  var url = repoName
-    ? REMOTE_API + "/api/search/" + repoName
-    : REMOTE_API + "/api/search";
-
-  var body = {
-    q: params.q,
-    repos: params.repos,
-    extensions: params.extensions,
-    folders: params.folders,
-    min_size: params.minSize,
-    max_size: params.maxSize,
-    page: params.page,
-    page_size: params.pageSize,
-    search_folders: params.searchFolders,
-    sort: params.sort,
-    exact: params.exact,
-  };
-
-  var controller = new AbortController();
-  var timeout = setTimeout(function() { controller.abort(); }, 5000);
-
-  try {
-    var resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    return await resp.json();
-  } catch (err) {
-    clearTimeout(timeout);
-    throw err;
-  }
-}
-
+ 
 function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
     const counts = {};
@@ -674,9 +565,7 @@ const STATE = {
   extensionList: [],
   folderTree: null,
   searchFolders: true,
-  exact: false,
   dataLoaded: false,
-  remoteAvailable: null,
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -749,7 +638,6 @@ function cacheDOM() {
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
-  DOM.exactSearchToggle = $("#exact-search-toggle");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -837,7 +725,6 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (STATE.exact) sp.set("exact", "1");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -900,8 +787,6 @@ const ROUTER = {
     DOM.filterMaxSize.value = STATE.filterMaxSize || "";
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
-    STATE.exact = route.params.exact === "1";
-    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
@@ -974,7 +859,6 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (STATE.exact) sp.set("exact", "1");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
@@ -1006,9 +890,9 @@ function debouncedSearch() {
 function doSearch(append) {
   if (!STATE.dataLoaded) return;
 
-  var id = ++searchId;
+  const id = ++searchId;
 
-  var params = {
+  const params = {
     q: STATE.query,
     repos: STATE.mode === "repo" ? [STATE.repoFull] : (STATE.filterRepos.length > 0 ? STATE.filterRepos : null),
     extensions: STATE.filterExtensions.length > 0 ? STATE.filterExtensions : null,
@@ -1017,7 +901,6 @@ function doSearch(append) {
     maxSize: STATE.filterMaxSize,
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
-    exact: STATE.exact,
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
@@ -1027,65 +910,38 @@ function doSearch(append) {
   DOM.emptyState.style.display = "none";
   DOM.didYouMean.style.display = "none";
 
-  function processResults(data) {
-    if (id !== searchId) return false;
-    STATE.total = data.total;
-    STATE.didYouMean = data.did_you_mean || data.didYouMean || null;
+  requestAnimationFrame(function() {
+    if (id !== searchId) return;
+    try {
+      const data = doSearchLocal(params);
+      STATE.total = data.total;
+      STATE.didYouMean = data.didYouMean || null;
 
-    if (append) {
-      STATE.results = STATE.results.concat(data.results);
-    } else {
-      STATE.results = data.results;
-    }
-
-    STATE.hasMore = STATE.results.length < STATE.total;
-    renderResults();
-    updateStatusBar();
-    updateLoadInfo();
-
-    if (STATE.didYouMean) {
-      DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
-      DOM.didYouMean.style.display = "inline";
-    }
-
-    syncStateToURL();
-    return true;
-  }
-
-  function finishLoading() {
-    STATE.isLoading = false;
-    DOM.resultsLoading.style.display = "none";
-  }
-
-  function runLocal() {
-    requestAnimationFrame(function() {
-      if (id !== searchId) return;
-      try {
-        var data = doSearchLocal(params);
-        processResults(data);
-      } catch (err) {
-        console.error(err);
-        showToast("搜索失败");
-      } finally {
-        finishLoading();
+      if (append) {
+        STATE.results = STATE.results.concat(data.results);
+      } else {
+        STATE.results = data.results;
       }
-    });
-  }
 
-  if (STATE.remoteAvailable !== false) {
-    doSearchRemote(params).then(function(data) {
-      if (processResults(data)) {
-        STATE.remoteAvailable = true;
-        finishLoading();
+      STATE.hasMore = STATE.results.length < STATE.total;
+      renderResults();
+      updateStatusBar();
+      updateLoadInfo();
+
+      if (STATE.didYouMean) {
+        DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
+        DOM.didYouMean.style.display = "inline";
       }
-    }).catch(function(err) {
-      if (id !== searchId) return;
-      STATE.remoteAvailable = false;
-      runLocal();
-    });
-  } else {
-    runLocal();
-  }
+
+      syncStateToURL();
+    } catch (err) {
+      console.error(err);
+      showToast("搜索失败");
+    } finally {
+      STATE.isLoading = false;
+      DOM.resultsLoading.style.display = "none";
+    }
+  }, 0);
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -2067,7 +1923,6 @@ function init() {
   applyMobileMode();
  
   console.log("Loading data...");
-
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
     if (!ok) {
@@ -2099,14 +1954,6 @@ function init() {
       STATE.results = [];
       doSearch();
     });
-    if (DOM.exactSearchToggle) {
-      DOM.exactSearchToggle.addEventListener("change", function() {
-        STATE.exact = DOM.exactSearchToggle.checked;
-        STATE.page = 1;
-        STATE.results = [];
-        doSearch();
-      });
-    }
     DOM.sortSelect.addEventListener("change", function() {
       STATE.sort = DOM.sortSelect.value;
       STATE.page = 1;
@@ -2201,4 +2048,4 @@ function init() {
   });
 }
  
-init();
+document.addEventListener("DOMContentLoaded", init);
