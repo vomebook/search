@@ -323,9 +323,10 @@ function doSearchLocal(params) {
   const maxSize = params.maxSize !== null ? params.maxSize : null;
   const sort = params.sort || "relevance";
   const searchFolders = params.searchFolders !== false;
+  const exactMode = params.exact || false;
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
- 
+
   let matched = [];
   let didYouMean = null;
 
@@ -335,6 +336,18 @@ function doSearchLocal(params) {
 
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
+  } else if (exactMode) {
+    // 精准搜索：跳过 token + 模糊匹配，直接子串查找
+    var ql = q.toLowerCase();
+    for (var ei = 0; ei < RECORDS.length; ei++) {
+      var rec = RECORDS[ei];
+      var fn = (rec.File || "").toLowerCase();
+      var rn = (rec.Repo || "").toLowerCase();
+      var pf = (rec.Folder || []).join("/").toLowerCase();
+      if (fn.indexOf(ql) >= 0 || rn.indexOf(ql) >= 0 || (searchFolders && pf.indexOf(ql) >= 0)) {
+        matched.push(ei);
+      }
+    }
   } else {
     const tokens = tokenize(q);
 
@@ -440,6 +453,7 @@ async function doSearchAPI(params, append) {
   if (params.maxSize !== null) body.max_size = params.maxSize;
   body.sort = params.sort || "relevance";
   if (!params.searchFolders) body.search_folders = false;
+  if (params.exact) body.exact = true;
 
   const fetchOptions = {
     method: "POST",
@@ -621,6 +635,7 @@ const STATE = {
   extensionList: [],
   folderTree: null,
   searchFolders: true,
+  exact: false,
   dataLoaded: false,
   _pendingPage: 0,
   _loadedPage: 0,
@@ -697,6 +712,7 @@ function cacheDOM() {
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
+  DOM.exactSearchToggle = $("#exact-search-toggle");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -784,6 +800,7 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
+    if (STATE.exact) sp.set("exact", "1");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -846,6 +863,8 @@ const ROUTER = {
     DOM.filterMaxSize.value = STATE.filterMaxSize || "";
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
+    STATE.exact = route.params.exact === "1";
+    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
@@ -916,6 +935,7 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
+  if (STATE.exact) sp.set("exact", "1");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
@@ -959,6 +979,7 @@ function doSearch(append) {
     maxSize: STATE.filterMaxSize,
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
+    exact: STATE.exact,
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
@@ -2064,6 +2085,12 @@ function init() {
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
   DOM.searchFoldersToggle.addEventListener("change", function() {
     STATE.searchFolders = DOM.searchFoldersToggle.checked;
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+  });
+  DOM.exactSearchToggle.addEventListener("change", function() {
+    STATE.exact = DOM.exactSearchToggle.checked;
     STATE.page = 1;
     STATE.results = [];
     doSearch();
