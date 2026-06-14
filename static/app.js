@@ -211,6 +211,34 @@ function parseSizeStr(str) {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   Search History (localStorage)
+   ═══════════════════════════════════════════════════════════ */
+
+var HISTORY_KEY = "voml_search_history";
+var HISTORY_MAX = 20;
+
+function getHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+  } catch (e) { return []; }
+}
+
+function saveHistory(list) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
+  } catch (e) {}
+}
+
+function addHistoryItem(q) {
+  if (!q || !STATE.recordHistory) return;
+  var list = getHistory();
+  var idx = list.indexOf(q);
+  if (idx >= 0) list.splice(idx, 1);
+  list.unshift(q);
+  saveHistory(list);
+}
+
+/* ═══════════════════════════════════════════════════════════
    Data Loading (main thread, chunked — API covers search meanwhile)
    ═══════════════════════════════════════════════════════════ */
 
@@ -2357,36 +2385,12 @@ function init() {
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
 
-  var HISTORY_KEY = "voml_search_history";
-  var HISTORY_MAX = 20;
+  DOM.searchInput.addEventListener("input", debouncedSearch);
 
-  function getHistory() {
-    try {
-      return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-    } catch (e) { return []; }
-  }
-
-  function saveHistory(list) {
-    try {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
-    } catch (e) {}
-  }
-
-  function addHistoryItem(q) {
-    if (!q || !STATE.recordHistory) return;
+  // History dropdown
+  var renderDropdown = function() {
     var list = getHistory();
-    var idx = list.indexOf(q);
-    if (idx >= 0) list.splice(idx, 1);
-    list.unshift(q);
-    saveHistory(list);
-  }
-
-  function renderHistoryDropdown() {
-    var list = getHistory();
-    if (list.length === 0) {
-      DOM.historyDropdown.style.display = "none";
-      return;
-    }
+    if (list.length === 0) { DOM.historyDropdown.style.display = "none"; return; }
     var html = "";
     for (var h = 0; h < list.length; h++) {
       html += '<div class="history-item" data-query="' + escapeHTML(list[h]) + '">' +
@@ -2398,19 +2402,14 @@ function init() {
     html += '<div class="history-footer"><button class="history-clear-all">清空历史</button></div>';
     DOM.historyDropdown.innerHTML = html;
     DOM.historyDropdown.style.display = "";
-  }
-
-  function hideHistoryDropdown() {
-    setTimeout(function() {
-      DOM.historyDropdown.style.display = "none";
-    }, 150);
-  }
-
+  };
+  var hideDropdown = function() {
+    setTimeout(function() { DOM.historyDropdown.style.display = "none"; }, 150);
+  };
   DOM.searchInput.addEventListener("focus", function() {
-    if (DOM.searchInput.value.trim() === "") renderHistoryDropdown();
+    if (DOM.searchInput.value.trim() === "") renderDropdown();
   });
-  DOM.searchInput.addEventListener("blur", hideHistoryDropdown);
-
+  DOM.searchInput.addEventListener("blur", hideDropdown);
   DOM.historyDropdown.addEventListener("mousedown", function(e) {
     e.preventDefault();
     var item = e.target.closest(".history-item");
@@ -2421,7 +2420,7 @@ function init() {
       STATE.page = 1;
       STATE.results = [];
       doSearch();
-      hideHistoryDropdown();
+      hideDropdown();
       DOM.searchInput.blur();
       return;
     }
@@ -2432,7 +2431,7 @@ function init() {
       var didx = list.indexOf(dq);
       if (didx >= 0) list.splice(didx, 1);
       saveHistory(list);
-      renderHistoryDropdown();
+      renderDropdown();
       return;
     }
     var clearBtn = e.target.closest(".history-clear-all");
@@ -2442,13 +2441,11 @@ function init() {
       return;
     }
   });
-
   DOM.historyToggle.addEventListener("change", function() {
     STATE.recordHistory = DOM.historyToggle.checked;
     if (!STATE.recordHistory) saveHistory([]);
   });
 
-  DOM.searchInput.addEventListener("input", debouncedSearch);
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
   DOM.settingsBtn.addEventListener("click", toggleRightSidebar);
   DOM.closeFiltersBtn.addEventListener("click", function() {
