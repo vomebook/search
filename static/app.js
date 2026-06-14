@@ -238,6 +238,31 @@ function addHistoryItem(q) {
   saveHistory(list);
 }
 
+function renderDropdown() {
+  if (!DOM.historyDropdown) return;
+  var list = getHistory();
+  if (list.length === 0) { DOM.historyDropdown.style.display = "none"; return; }
+  var html = "";
+  for (var h = 0; h < list.length; h++) {
+    html += '<div class="history-item" data-query="' + escapeHTML(list[h]) + '">' +
+      '<svg class="history-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' +
+      '<span class="history-text">' + escapeHTML(list[h]) + '</span>' +
+      '<button class="history-del" data-del="' + escapeHTML(list[h]) + '">&times;</button>' +
+      '</div>';
+  }
+  html += '<div class="history-footer"><button class="history-clear-all">清空历史</button></div>';
+  DOM.historyDropdown.innerHTML = html;
+  DOM.historyDropdown.style.display = "";
+}
+
+function removeHistoryItem(q) {
+  var list = getHistory();
+  var idx = list.indexOf(q);
+  if (idx >= 0) list.splice(idx, 1);
+  saveHistory(list);
+  renderDropdown();
+}
+
 /* ═══════════════════════════════════════════════════════════
    Data Loading (main thread, chunked — API covers search meanwhile)
    ═══════════════════════════════════════════════════════════ */
@@ -1154,6 +1179,7 @@ function debouncedSearch() {
     STATE.page = 1;
     STATE.results = [];
     addHistoryItem(STATE.query);
+    renderDropdown();
     doSearch();
   }, 300);
 }
@@ -2388,37 +2414,20 @@ function init() {
   DOM.searchInput.addEventListener("input", debouncedSearch);
 
   // History dropdown
-  var renderDropdown = function() {
-    var list = getHistory();
-    if (list.length === 0) { DOM.historyDropdown.style.display = "none"; return; }
-    var html = "";
-    for (var h = 0; h < list.length; h++) {
-      html += '<div class="history-item" data-query="' + escapeHTML(list[h]) + '">' +
-        '<svg class="history-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' +
-        '<span class="history-text">' + escapeHTML(list[h]) + '</span>' +
-        '<button class="history-del" data-del="' + escapeHTML(list[h]) + '">&times;</button>' +
-        '</div>';
-    }
-    html += '<div class="history-footer"><button class="history-clear-all">清空历史</button></div>';
-    DOM.historyDropdown.innerHTML = html;
-    DOM.historyDropdown.style.display = "";
-  };
   var hideDropdown = function() {
-    setTimeout(function() { DOM.historyDropdown.style.display = "none"; }, 150);
+    setTimeout(function() {
+      if (!dropdownActive) DOM.historyDropdown.style.display = "none";
+    }, 150);
   };
+  var dropdownActive = false;
   DOM.searchInput.addEventListener("focus", function() {
     renderDropdown();
   });
   DOM.searchInput.addEventListener("blur", hideDropdown);
 
   var longPressTimer = null;
-  var removeHistoryItem = function(q) {
-    var list = getHistory();
-    var idx = list.indexOf(q);
-    if (idx >= 0) list.splice(idx, 1);
-    saveHistory(list);
-    renderDropdown();
-  };
+  DOM.historyDropdown.addEventListener("mouseenter", function() { dropdownActive = true; });
+  DOM.historyDropdown.addEventListener("mouseleave", function() { dropdownActive = false; });
   DOM.historyDropdown.addEventListener("mousedown", function(e) {
     if (e.target.closest(".history-del")) return;
     if (e.target.closest(".history-clear-all")) { saveHistory([]); DOM.historyDropdown.style.display = "none"; return; }
