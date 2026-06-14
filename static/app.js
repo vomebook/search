@@ -779,6 +779,7 @@ const STATE = {
   folderTree: null,
   searchFolders: true,
   exact: false,
+  useLocalMode: false,
   dataLoaded: false,
   _pendingPage: 0,
   _loadedPage: 0,
@@ -853,6 +854,8 @@ function cacheDOM() {
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
   DOM.exactSearchToggle = $("#exact-search-toggle");
+  DOM.localModeToggle = $("#local-mode-toggle");
+  DOM.localModeToggleRow = $("#local-mode-toggle-row");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -941,6 +944,7 @@ const ROUTER = {
     if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
     if (!STATE.searchFolders) sp.set("search_folders", "false");
     if (STATE.exact) sp.set("exact", "1");
+    if (STATE.useLocalMode) sp.set("local", "1");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -1005,6 +1009,8 @@ const ROUTER = {
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
     STATE.exact = route.params.exact === "1";
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
+    STATE.useLocalMode = route.params.local === "1";
+    if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
@@ -1076,6 +1082,7 @@ function syncStateToURL() {
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (STATE.exact) sp.set("exact", "1");
+  if (STATE.useLocalMode) sp.set("local", "1");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
@@ -1131,6 +1138,17 @@ function doSearch(append) {
     DOM.didYouMean.style.display = "none";
     if (apiAvailable && searchAbortController) searchAbortController.abort();
     if (apiAvailable) searchAbortController = new AbortController();
+  }
+
+  if (STATE.useLocalMode) {
+    if (!STATE.dataLoaded) {
+      STATE.isLoading = false;
+      DOM.resultsLoading.style.display = "none";
+      showToast("本地数据尚未加载完成");
+      return;
+    }
+    doSearchFallbackLocal(params, append, id);
+    return;
   }
 
   if (apiAvailable) {
@@ -1322,7 +1340,7 @@ function buildResultHTML(rec) {
     '</div>' +
     '<div class="result-actions">' +
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(rec.Link) + '">复制链接</button>' +
-      '<a href="' + escapeHTML(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
+      '<a href="' + API_BASE + '/api/download?file=' + encodeURIComponent(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '&link=' + encodeURIComponent(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
       '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
       (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
@@ -2341,6 +2359,12 @@ function init() {
     STATE.results = [];
     doSearch();
   });
+  DOM.localModeToggle.addEventListener("change", function() {
+    STATE.useLocalMode = DOM.localModeToggle.checked;
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+  });
   DOM.sortSelect.addEventListener("change", function() {
     STATE.sort = DOM.sortSelect.value;
     STATE.page = 1;
@@ -2435,8 +2459,15 @@ function init() {
       STATE.repoList = repoList;
       STATE.extensionList = extensionList;
       console.log("Local data ready for offline search");
+      DOM.localModeToggle.disabled = false;
+      DOM.localModeToggleRow.classList.remove("toggle-disabled");
       renderSidebar();
       renderFilters();
+      if (STATE.useLocalMode) {
+        STATE.page = 1;
+        STATE.results = [];
+        doSearch();
+      }
     } else {
       console.warn("Local data load failed, API-only mode");
     }
