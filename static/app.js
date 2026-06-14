@@ -263,6 +263,27 @@ function removeHistoryItem(q) {
   renderDropdown();
 }
 
+function updateSelectionUI() {
+  if (!DOM.multiSelectToggle || !DOM.multiActionBar) return;
+  var count = Object.keys(selectedIndices).length;
+  DOM.multiSelectedCount.textContent = count > 0 ? "已选 " + count + " 项" : "";
+  DOM.multiActionBar.style.display = DOM.multiSelectToggle.checked ? "" : "none";
+  if (DOM.multiSelectToggle.checked) {
+    document.body.classList.add("multiselect");
+  } else {
+    document.body.classList.remove("multiselect");
+    selectedIndices = {};
+    lastSelectedIndex = -1;
+  }
+  var cbs = DOM.resultsList.querySelectorAll(".result-checkbox");
+  for (var ci = 0; ci < cbs.length; ci++) {
+    var idx = parseInt(cbs[ci].dataset.index);
+    cbs[ci].checked = !!selectedIndices[idx];
+    var item = cbs[ci].closest(".result-item");
+    if (item) item.classList.toggle("selected", !!selectedIndices[idx]);
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════
    Data Loading (main thread, chunked — API covers search meanwhile)
    ═══════════════════════════════════════════════════════════ */
@@ -898,6 +919,13 @@ function cacheDOM() {
   DOM.localModeToggleRow = $("#local-mode-toggle-row");
   DOM.historyToggle = $("#history-toggle");
   DOM.historyDropdown = $("#search-history-dropdown");
+  DOM.multiToggleLabel = $("#multi-toggle-label");
+  DOM.multiSelectToggle = $("#multi-select-toggle");
+  DOM.multiActionBar = $("#multi-action-bar");
+  DOM.multiCopyLinks = $("#multi-copy-links");
+  DOM.multiBatchDownload = $("#multi-batch-download");
+  DOM.multiZipDownload = $("#multi-zip-download");
+  DOM.multiSelectedCount = $("#multi-selected-count");
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1206,6 +1234,9 @@ function doSearch(append) {
   if (!append) {
     DOM.emptyState.style.display = "none";
     DOM.didYouMean.style.display = "none";
+    selectedIndices = {};
+    lastSelectedIndex = -1;
+    if (DOM.multiSelectToggle.checked) updateSelectionUI();
     if (apiAvailable && searchAbortController) searchAbortController.abort();
     if (apiAvailable) searchAbortController = new AbortController();
   }
@@ -1404,6 +1435,7 @@ function buildResultHTML(rec) {
   }).join("");
 
   return (
+    '<input type="checkbox" class="result-checkbox" data-index="' + recIdx + '">' +
     '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
     '<div class="result-info">' +
       '<div class="result-title">' + titleHTML +
@@ -1482,6 +1514,8 @@ function renderVisible() {
   tpl.innerHTML = html;
   DOM.resultsList.replaceChildren(tpl.content);
 
+  if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
+
   requestAnimationFrame(function() {
     measureHeights();
   });
@@ -1506,9 +1540,10 @@ function measureHeights() {
  
 function updateStatusBar() {
   DOM.resultCount.textContent = STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "";
-  const has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolders.length ||
+  var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolders.length ||
             STATE.filterMinSize !== null || STATE.filterMaxSize !== null;
   DOM.clearFiltersBtn.style.display = has ? "" : "none";
+  DOM.multiToggleLabel.style.display = STATE.total > 0 ? "" : "none";
 }
  
 function updateLoadInfo() {
@@ -2054,6 +2089,8 @@ function showToast(msg, dur) {
    ═══════════════════════════════════════════════════════════ */
  
 let scrollTicking = false;
+var selectedIndices = {};
+var lastSelectedIndex = -1;
  
 function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("scroll", () => {
@@ -2478,6 +2515,94 @@ function init() {
   DOM.historyToggle.addEventListener("change", function() {
     STATE.recordHistory = DOM.historyToggle.checked;
     if (!STATE.recordHistory) saveHistory([]);
+  });
+
+  // Multi-select
+  DOM.multiSelectToggle.addEventListener("change", updateSelectionUI);
+
+  DOM.resultsList.addEventListener("click", function(e) {
+    if (!DOM.multiSelectToggle.checked) return;
+    var cb = e.target.closest(".result-checkbox");
+    if (!cb) return;
+    e.stopPropagation();
+    var idx = parseInt(cb.dataset.index);
+    if (e.shiftKey && lastSelectedIndex >= 0) {
+      var lo = Math.min(lastSelectedIndex, idx);
+      var hi = Math.max(lastSelectedIndex, idx);
+      for (var si = lo; si <= hi; si++) selectedIndices[si] = true;
+    } else if (cb.checked) {
+      selectedIndices[idx] = true;
+    } else {
+      delete selectedIndices[idx];
+    }
+    lastSelectedIndex = idx;
+    updateSelectionUI();
+  });
+
+  var getSelectedLinks = function() {
+    var links = [];
+    var indices = Object.keys(selectedIndices).map(Number);
+    for (var li = 0; li < indices.length; li++) {
+      var rec = STATE.results[indices[li]];
+      if (rec && rec.Link) links.push(rec.Link);
+    }
+    return links;
+  };
+
+  var getSelectedFilenames = function() {
+    var names = [];
+    var indices = Object.keys(selectedIndices).map(Number);
+    for (var ni = 0; ni < indices.length; ni++) {
+      var rec = STATE.results[indices[ni]];
+      if (rec) names.push(rec.File + (rec.Extension ? "." + rec.Extension : ""));
+    }
+    return names;
+  };
+
+  DOM.multiCopyLinks.addEventListener("click", function() {
+    var links = getSelectedLinks();
+    if (links.length === 0) { showToast("未选中任何文件"); return; }
+    navigator.clipboard.writeText(links.join("\n")).then(function() {
+      showToast("已复制 " + links.length + " 条链接");
+    }).catch(function() { showToast("复制失败"); });
+  });
+
+  DOM.multiBatchDownload.addEventListener("click", function() {
+    var links = getSelectedLinks();
+    var names = getSelectedFilenames();
+    if (links.length === 0) { showToast("未选中任何文件"); return; }
+    for (var bi = 0; bi < links.length; bi++) {
+      var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(names[bi]) + "&link=" + encodeURIComponent(links[bi]);
+      setTimeout(function(url) { window.open(url, "_blank"); }, bi * 300, proxyUrl);
+    }
+    showToast("正在打开 " + links.length + " 个下载");
+  });
+
+  DOM.multiZipDownload.addEventListener("click", function() {
+    var links = getSelectedLinks();
+    var names = getSelectedFilenames();
+    if (links.length === 0) { showToast("未选中任何文件"); return; }
+    var files = [];
+    for (var zi = 0; zi < links.length; zi++) {
+      files.push({ name: names[zi], link: links[zi] });
+    }
+    fetch(API_BASE + "/api/zip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files: files }),
+    }).then(function(resp) {
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return resp.blob();
+    }).then(function(blob) {
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "voml_batch_" + Date.now() + ".zip";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }).catch(function(e) {
+      console.error(e);
+      showToast("合并下载失败");
+    });
   });
 
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
