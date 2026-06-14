@@ -251,19 +251,11 @@ async function loadFromCache() {
 
 function loadDataViaWorker() {
   return new Promise(function(resolve) {
-    var bar = DOM.progressBar;
-    var text = DOM.progressText;
-    bar.style.width = "0%";
-    text.textContent = "连接中...";
-
     var worker;
     try {
       worker = new Worker("static/worker.js");
     } catch (e) {
       console.error("Worker creation failed:", e);
-      bar.style.width = "100%";
-      bar.style.background = "var(--error)";
-      text.textContent = "浏览器不支持";
       resolve(false);
       return;
     }
@@ -271,31 +263,19 @@ function loadDataViaWorker() {
     worker.onmessage = function(e) {
       var data = e.data;
       if (data.type === "progress") {
-        bar.style.width = data.percent + "%";
-        text.textContent = data.text || "";
+        // Background loading, no UI needed
       } else if (data.type === "error") {
         console.error("Worker error:", data.message);
-        bar.style.width = "100%";
-        bar.style.background = "var(--error)";
-        text.textContent = "加载失败";
         worker.terminate();
         resolve(false);
       } else if (data.type === "ready") {
-        bar.style.width = "100%";
-        text.textContent = "完成";
         worker.terminate();
-        setTimeout(function() {
-          DOM.progressContainer.classList.add("progress-done");
-        }, 400);
         resolve(true);
       }
     };
 
     worker.onerror = function(err) {
       console.error("Worker error:", err);
-      bar.style.width = "100%";
-      bar.style.background = "var(--error)";
-      text.textContent = "加载失败";
       worker.terminate();
       resolve(false);
     };
@@ -310,7 +290,6 @@ async function loadData() {
     console.log("Found cached data: " + cached.count.toLocaleString() + " records");
     var ok = await loadFromCache();
     if (ok) {
-      DOM.progressContainer.classList.add("progress-done");
       return true;
     }
   }
@@ -769,9 +748,6 @@ const $ = (sel) => document.querySelector(sel);
 const DOM = {};
  
 function cacheDOM() {
-  DOM.progressContainer = $("#progress-container");
-  DOM.progressBar = $("#progress-bar");
-  DOM.progressText = $("#progress-text");
   DOM.headerTitle = $("#header-title");
   DOM.headerLogo = $("#header-logo");
   DOM.searchInput = $("#search-input");
