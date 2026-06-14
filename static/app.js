@@ -807,6 +807,7 @@ function cacheDOM() {
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
   DOM.exactSearchToggle = $("#exact-search-toggle");
+  DOM.exactSearchSection = $("#exact-search-section");
   DOM.localModeToggle = $("#local-mode-toggle");
   DOM.localModeToggleRow = $("#local-mode-toggle-row");
 }
@@ -964,6 +965,8 @@ const ROUTER = {
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
+    if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
+    if (STATE.useLocalMode) STATE.exact = false;
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
@@ -1034,7 +1037,7 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (STATE.exact) sp.set("exact", "1");
+  if (!STATE.useLocalMode && STATE.exact) sp.set("exact", "1");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
@@ -2328,6 +2331,8 @@ function init() {
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
+    DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
+    if (STATE.useLocalMode) STATE.exact = false;
     STATE.page = 1;
     STATE.results = [];
     doSearch();
