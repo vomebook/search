@@ -2407,7 +2407,7 @@ function init() {
     setTimeout(function() { DOM.historyDropdown.style.display = "none"; }, 150);
   };
   DOM.searchInput.addEventListener("focus", function() {
-    if (DOM.searchInput.value.trim() === "") renderDropdown();
+    renderDropdown();
   });
   DOM.searchInput.addEventListener("blur", hideDropdown);
 
@@ -2420,39 +2420,32 @@ function init() {
     renderDropdown();
   };
   DOM.historyDropdown.addEventListener("mousedown", function(e) {
+    if (e.target.closest(".history-del")) return;
+    if (e.target.closest(".history-clear-all")) { saveHistory([]); DOM.historyDropdown.style.display = "none"; return; }
     var item = e.target.closest(".history-item");
-    if (!item) {
-      if (e.target.closest(".history-clear-all")) { saveHistory([]); DOM.historyDropdown.style.display = "none"; }
-      return;
-    }
-    // Long press to delete
-    longPressTimer = setTimeout(function() { removeHistoryItem(item.dataset.query); }, 600);
+    if (item) longPressTimer = setTimeout(function() { removeHistoryItem(item.dataset.query); }, 600);
   });
   DOM.historyDropdown.addEventListener("mouseup", function() { clearTimeout(longPressTimer); });
   DOM.historyDropdown.addEventListener("mouseleave", function() { clearTimeout(longPressTimer); });
   DOM.historyDropdown.addEventListener("touchstart", function(e) {
+    if (e.target.closest(".history-del")) return;
     var item = e.target.closest(".history-item");
-    if (!item) return;
-    longPressTimer = setTimeout(function() { removeHistoryItem(item.dataset.query); }, 600);
+    if (item) longPressTimer = setTimeout(function() { removeHistoryItem(item.dataset.query); }, 600);
   }, { passive: true });
   DOM.historyDropdown.addEventListener("touchend", function() { clearTimeout(longPressTimer); });
   DOM.historyDropdown.addEventListener("touchmove", function() { clearTimeout(longPressTimer); });
   DOM.historyDropdown.addEventListener("click", function(e) {
+    var delBtn = e.target.closest(".history-del");
+    if (delBtn) { removeHistoryItem(delBtn.dataset.del); return; }
     var item = e.target.closest(".history-item");
     if (item) {
-      var q = item.dataset.query;
-      DOM.searchInput.value = q;
-      STATE.query = q;
+      DOM.searchInput.value = item.dataset.query;
+      STATE.query = item.dataset.query;
       STATE.page = 1;
       STATE.results = [];
       doSearch();
       hideDropdown();
       DOM.searchInput.blur();
-      return;
-    }
-    var delBtn = e.target.closest(".history-del");
-    if (delBtn) {
-      removeHistoryItem(delBtn.dataset.del);
       return;
     }
   });
