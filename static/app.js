@@ -9,6 +9,7 @@
  
 const DATA_URL = "data/search_data.json.gz";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
+const API_BASE = "https://voiceofml-search.hf.space";
  
 const ORDERED_EXTENSIONS = [
   "pdf", "txt",
@@ -419,7 +420,62 @@ function doSearchLocal(params) {
  
   return { results: paged, total, page, pageSize, didYouMean };
 }
- 
+
+/* ═══════════════════════════════════════════════════════════
+   API Search (HuggingFace Space Backend)
+   ═══════════════════════════════════════════════════════════ */
+
+async function doSearchAPI(params, append) {
+  const q = params.q || "";
+  const isRepo = !!STATE.repoFull;
+  const base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
+  const body = {};
+  if (q) body.q = q;
+  body.page = params.page || 1;
+  body.page_size = params.pageSize || STATE.pageSize;
+  if (!isRepo && params.repos && params.repos.length > 0) body.repos = params.repos;
+  if (params.extensions && params.extensions.length > 0) body.extensions = params.extensions;
+  if (params.folders && params.folders.length > 0) body.folders = params.folders;
+  if (params.minSize !== null) body.min_size = params.minSize;
+  if (params.maxSize !== null) body.max_size = params.maxSize;
+  body.sort = params.sort || "relevance";
+  if (!params.searchFolders) body.search_folders = false;
+
+  const fetchOptions = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+  if (params.signal) fetchOptions.signal = params.signal;
+
+  const resp = await fetch(base, fetchOptions);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const data = await resp.json();
+
+  STATE.total = data.total;
+  STATE.didYouMean = data.did_you_mean || null;
+
+  if (append) {
+    STATE._pageCache[data.page] = data.results;
+    var nextPage = STATE._loadedPage + 1;
+    var combinedNew = [];
+    while (STATE._pageCache[nextPage]) {
+      var pageItems = STATE._pageCache[nextPage];
+      STATE.results = STATE.results.concat(pageItems);
+      combinedNew = combinedNew.concat(pageItems);
+      delete STATE._pageCache[nextPage];
+      nextPage++;
+    }
+    STATE._loadedPage = nextPage - 1;
+  } else {
+    STATE.results = data.results;
+    STATE._loadedPage = 1;
+    STATE._pageCache = {};
+  }
+
+  STATE.hasMore = STATE.results.length < STATE.total;
+}
+
 function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
     const counts = {};
@@ -566,6 +622,9 @@ const STATE = {
   folderTree: null,
   searchFolders: true,
   dataLoaded: false,
+  _pendingPage: 0,
+  _loadedPage: 0,
+  _pageCache: {},
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -797,9 +856,7 @@ const ROUTER = {
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
     }
     this.updateUI();
- 
-    if (!STATE.dataLoaded) return;
- 
+
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       this.onModeChanged();
       if (route.params.wide === "1") {
@@ -876,6 +933,9 @@ function syncStateToURL() {
  
 let searchTimer = null;
 let searchId = 0;
+let searchAbortController = null;
+let searchRequestId = 0;
+let apiAvailable = true;
 
 function debouncedSearch() {
   clearTimeout(searchTimer);
@@ -888,8 +948,6 @@ function debouncedSearch() {
 }
 
 function doSearch(append) {
-  if (!STATE.dataLoaded) return;
-
   const id = ++searchId;
 
   const params = {
@@ -907,9 +965,59 @@ function doSearch(append) {
 
   STATE.isLoading = true;
   DOM.resultsLoading.style.display = "flex";
-  DOM.emptyState.style.display = "none";
-  DOM.didYouMean.style.display = "none";
+  if (!append) {
+    DOM.emptyState.style.display = "none";
+    DOM.didYouMean.style.display = "none";
+    if (apiAvailable && searchAbortController) searchAbortController.abort();
+    if (apiAvailable) searchAbortController = new AbortController();
+  }
 
+  if (apiAvailable) {
+    if (append && STATE._pendingPage === STATE.page) return;
+    STATE._pendingPage = STATE.page;
+    if (append) params.signal = searchAbortController.signal;
+
+    doSearchAPI(params, append).then(function() {
+      if (id !== searchId) return;
+      renderResults();
+      updateStatusBar();
+      updateLoadInfo();
+      if (STATE.didYouMean) {
+        DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
+        DOM.didYouMean.style.display = "inline";
+      }
+      syncStateToURL();
+    }).catch(function(err) {
+      if (err.name === "AbortError") {
+        if (id === searchId) {
+          STATE.isLoading = false;
+          DOM.resultsLoading.style.display = "none";
+        }
+        return;
+      }
+      console.warn("API search failed, falling back to local:", err);
+      apiAvailable = false;
+      doSearchFallbackLocal(params, append, id);
+    }).finally(function() {
+      if (id === searchId) {
+        STATE.isLoading = false;
+        DOM.resultsLoading.style.display = "none";
+      }
+    });
+    return;
+  }
+
+  if (!STATE.dataLoaded) {
+    STATE.isLoading = false;
+    DOM.resultsLoading.style.display = "none";
+    showToast("数据加载中，请稍后...");
+    return;
+  }
+
+  doSearchFallbackLocal(params, append, id);
+}
+
+function doSearchFallbackLocal(params, append, id) {
   requestAnimationFrame(function() {
     if (id !== searchId) return;
     try {
@@ -1518,7 +1626,24 @@ function typewriter(el, text, speed) {
    ═══════════════════════════════════════════════════════════ */
  
 function randomBook() {
-  const rec = getRandom(STATE.repoFull);
+  if (apiAvailable) {
+    var url = STATE.repoFull
+      ? API_BASE + "/api/random?repo=" + encodeURIComponent(STATE.repoFull)
+      : API_BASE + "/api/random";
+    fetch(url).then(function(resp) { return resp.json(); })
+      .then(function(rec) {
+        if (rec && rec.Link) {
+          window.open(rec.Link, "_blank");
+        } else {
+          showToast("暂无可用记录");
+        }
+      })
+      .catch(function() {
+        showToast("获取失败");
+      });
+    return;
+  }
+  var rec = getRandom(STATE.repoFull);
   if (rec && rec.Link) {
     window.open(rec.Link, "_blank");
   } else {
@@ -1912,140 +2037,141 @@ function setupResultDelegation() {
  
 function init() {
   cacheDOM();
- 
+
   STATE.isDark = localStorage.getItem("theme") !== "light";
   applyTheme();
- 
+
   const savedMobile = localStorage.getItem("mobileMode");
   if (savedMobile === "mobile") STATE.isMobile = true;
   else if (savedMobile === "desktop") STATE.isMobile = false;
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
- 
-  console.log("Loading data...");
+
+  DOM.searchInput.addEventListener("input", debouncedSearch);
+  DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
+  DOM.settingsBtn.addEventListener("click", toggleRightSidebar);
+  DOM.closeFiltersBtn.addEventListener("click", function() {
+    STATE.rightSidebarOpen = false;
+    updateSidebarVisibility();
+  });
+  DOM.sidebarExpandBtn.addEventListener("click", function() {
+    DOM.leftSidebar.classList.toggle("expanded-wide");
+    DOM.sidebarExpandBtn.textContent = DOM.leftSidebar.classList.contains("expanded-wide") ? "→" : "↔";
+    syncStateToURL();
+  });
+  DOM.themeBtn.addEventListener("click", toggleTheme);
+  DOM.mobileToggleBtn.addEventListener("click", toggleMobile);
+  DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
+  DOM.searchFoldersToggle.addEventListener("change", function() {
+    STATE.searchFolders = DOM.searchFoldersToggle.checked;
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+  });
+  DOM.sortSelect.addEventListener("change", function() {
+    STATE.sort = DOM.sortSelect.value;
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+    syncStateToURL();
+  });
+  DOM.overlay.addEventListener("click", function() {
+    STATE.leftSidebarOpen = false;
+    STATE.rightSidebarOpen = false;
+    updateSidebarVisibility();
+  });
+  DOM.randomBookBtn.addEventListener("click", randomBook);
+  DOM.emptyRandomBtn.addEventListener("click", randomBook);
+
+  var sizeTimer_local;
+  const onSize = function() {
+    clearTimeout(sizeTimer_local);
+    sizeTimer_local = setTimeout(function() {
+      STATE.filterMinSize = DOM.filterMinSize.value ? parseInt(DOM.filterMinSize.value) : null;
+      STATE.filterMaxSize = DOM.filterMaxSize.value ? parseInt(DOM.filterMaxSize.value) : null;
+      STATE.page = 1;
+      STATE.results = [];
+      doSearch();
+    }, 500);
+  };
+  DOM.filterMinSize.addEventListener("input", onSize);
+  DOM.filterMaxSize.addEventListener("input", onSize);
+
+  DOM.extSelectAll.addEventListener("click", function() {
+    STATE.filterExtensions = extensionList.slice();
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+    renderExtensionFilter();
+  });
+  DOM.extDeselectAll.addEventListener("click", function() {
+    var allExtNames = extensionList.slice();
+    var currentSet = new Set(STATE.filterExtensions);
+    STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+    renderExtensionFilter();
+  });
+  DOM.folderSelectAll.addEventListener("click", function() {
+    DOM.filterFolderTree.querySelectorAll("input[type='checkbox']").forEach(function(c) {
+      c.checked = true;
+      c.indeterminate = false;
+    });
+    collectFolderFilter();
+  });
+  DOM.folderDeselectAll.addEventListener("click", function() {
+    DOM.filterFolderTree.querySelectorAll("input[type='checkbox']").forEach(function(c) {
+      c.checked = !c.checked;
+      c.indeterminate = false;
+    });
+    collectFolderFilter();
+  });
+
+  DOM.didYouMean.addEventListener("click", function() {
+    if (STATE.didYouMean) {
+      DOM.searchInput.value = STATE.didYouMean;
+      STATE.query = STATE.didYouMean;
+      STATE.page = 1;
+      STATE.results = [];
+      doSearch();
+    }
+  });
+
+  setupVirtualScroll();
+  setupQuickScroll();
+  setupKeyboard();
+  setupResultDelegation();
+
+  window.addEventListener("hashchange", function() {
+    ROUTER.apply();
+  });
+
+  window.addEventListener("resize", function() {
+    if (!localStorage.getItem("mobileMode")) {
+      var wasMobile = STATE.isMobile;
+      STATE.isMobile = autoDetectMobile();
+      if (wasMobile !== STATE.isMobile) applyMobileMode();
+    }
+  });
+
+  console.log("Loading data in background for offline fallback...");
   loadData().then(function(ok) {
     STATE.dataLoaded = ok;
-    if (!ok) {
-      DOM.resultsList.innerHTML = '<div class="empty-state"><div class="empty-title">数据加载失败</div><div class="empty-desc">请检查网络连接后刷新页面</div></div>';
-      return;
+    if (ok) {
+      STATE.repoList = repoList;
+      STATE.extensionList = extensionList;
+      console.log("Local data ready for offline search");
+      renderSidebar();
+      renderFilters();
+    } else {
+      console.warn("Local data load failed, API-only mode");
     }
- 
-    STATE.repoList = repoList;
-    STATE.extensionList = extensionList;
- 
-    DOM.searchInput.addEventListener("input", debouncedSearch);
-    DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
-    DOM.settingsBtn.addEventListener("click", toggleRightSidebar);
-    DOM.closeFiltersBtn.addEventListener("click", function() {
-      STATE.rightSidebarOpen = false;
-      updateSidebarVisibility();
-    });
-    DOM.sidebarExpandBtn.addEventListener("click", function() {
-      DOM.leftSidebar.classList.toggle("expanded-wide");
-      DOM.sidebarExpandBtn.textContent = DOM.leftSidebar.classList.contains("expanded-wide") ? "→" : "↔";
-      syncStateToURL();
-    });
-    DOM.themeBtn.addEventListener("click", toggleTheme);
-    DOM.mobileToggleBtn.addEventListener("click", toggleMobile);
-    DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
-    DOM.searchFoldersToggle.addEventListener("change", function() {
-      STATE.searchFolders = DOM.searchFoldersToggle.checked;
-      STATE.page = 1;
-      STATE.results = [];
-      doSearch();
-    });
-    DOM.sortSelect.addEventListener("change", function() {
-      STATE.sort = DOM.sortSelect.value;
-      STATE.page = 1;
-      STATE.results = [];
-      doSearch();
-      syncStateToURL();
-    });
-    DOM.overlay.addEventListener("click", function() {
-      STATE.leftSidebarOpen = false;
-      STATE.rightSidebarOpen = false;
-      updateSidebarVisibility();
-    });
-    DOM.randomBookBtn.addEventListener("click", randomBook);
-    DOM.emptyRandomBtn.addEventListener("click", randomBook);
- 
-    let sizeTimer;
-    const onSize = function() {
-      clearTimeout(sizeTimer);
-      sizeTimer = setTimeout(function() {
-        STATE.filterMinSize = DOM.filterMinSize.value ? parseInt(DOM.filterMinSize.value) : null;
-        STATE.filterMaxSize = DOM.filterMaxSize.value ? parseInt(DOM.filterMaxSize.value) : null;
-        STATE.page = 1;
-        STATE.results = [];
-        doSearch();
-      }, 500);
-    };
-    DOM.filterMinSize.addEventListener("input", onSize);
-    DOM.filterMaxSize.addEventListener("input", onSize);
- 
-    DOM.extSelectAll.addEventListener("click", function() {
-      STATE.filterExtensions = extensionList.slice();
-      STATE.page = 1;
-      STATE.results = [];
-      doSearch();
-      renderExtensionFilter();
-    });
-    DOM.extDeselectAll.addEventListener("click", function() {
-      const allExtNames = extensionList.slice();
-      const currentSet = new Set(STATE.filterExtensions);
-      STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
-      STATE.page = 1;
-      STATE.results = [];
-      doSearch();
-      renderExtensionFilter();
-    });
-    DOM.folderSelectAll.addEventListener("click", function() {
-      DOM.filterFolderTree.querySelectorAll("input[type='checkbox']").forEach(function(c) {
-        c.checked = true;
-        c.indeterminate = false;
-      });
-      collectFolderFilter();
-    });
-    DOM.folderDeselectAll.addEventListener("click", function() {
-      DOM.filterFolderTree.querySelectorAll("input[type='checkbox']").forEach(function(c) {
-        c.checked = !c.checked;
-        c.indeterminate = false;
-      });
-      collectFolderFilter();
-    });
- 
-    DOM.didYouMean.addEventListener("click", function() {
-      if (STATE.didYouMean) {
-        DOM.searchInput.value = STATE.didYouMean;
-        STATE.query = STATE.didYouMean;
-        STATE.page = 1;
-        STATE.results = [];
-        doSearch();
-      }
-    });
- 
-    setupVirtualScroll();
-    setupQuickScroll();
-    setupKeyboard();
-    setupResultDelegation();
- 
-    window.addEventListener("hashchange", function() {
-      ROUTER.apply();
-    });
- 
-    window.addEventListener("resize", function() {
-      if (!localStorage.getItem("mobileMode")) {
-        const wasMobile = STATE.isMobile;
-        STATE.isMobile = autoDetectMobile();
-        if (wasMobile !== STATE.isMobile) applyMobileMode();
-      }
-    });
- 
-    ROUTER.apply();
- 
-    fetchHitokoto();
-    setInterval(fetchHitokoto, 30000);
   });
+
+  ROUTER.apply();
+  fetchHitokoto();
+  setInterval(fetchHitokoto, 30000);
 }
  
 document.addEventListener("DOMContentLoaded", init);
