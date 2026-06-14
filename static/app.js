@@ -830,7 +830,7 @@ const ROUTER = {
  
   onModeChanged: function() {
     if (DOM.sidebarExpandBtn) {
-      DOM.sidebarExpandBtn.style.display = STATE.mode === "repo" ? "" : "none";
+      DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
     }
     DOM.leftSidebar.classList.remove("expanded-wide");
     if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
@@ -1685,6 +1685,7 @@ function applyMobileMode() {
     STATE.rightSidebarOpen = false;
   }
   updateSidebarVisibility();
+  if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
 }
  
 function autoDetectMobile() { return window.innerWidth <= 768; }
