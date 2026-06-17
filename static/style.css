@@ -1065,7 +1065,8 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   cursor: pointer;
   white-space: nowrap;
   flex-wrap: nowrap;
-  min-width: 0;
+  width: max-content;
+  min-width: 100%;
 }
 
 .filter-folder-item .tree-toggle {
@@ -1091,10 +1092,7 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 }
 
 .filter-folder-item .folder-name {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
 .folder-self-toggle {
