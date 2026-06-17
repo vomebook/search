@@ -1089,6 +1089,35 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   flex-shrink: 0;
 }
 
+.filter-folder-item .folder-name {
+  min-width: 0;
+}
+
+.folder-self-toggle {
+  border: 1px solid var(--outline-variant);
+  background: transparent;
+  color: var(--on-surface-variant);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+  flex-shrink: 0;
+}
+
+.folder-self-toggle:hover,
+.folder-self-toggle:focus-visible {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.folder-self-toggle.active {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 /* ── Size Filter ─────────────────────────────────────── */
 .filter-size-row {
   display: flex;
