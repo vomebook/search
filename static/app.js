@@ -8,8 +8,11 @@
    ═══════════════════════════════════════════════════════════ */
  
 const DATA_URL = "data/search_data.json.gz";
+const FOLDER_TREE_URL = "data/folder_tree.json.gz";
+const FOLDER_BROWSER_URL = "data/folder_browser.json.gz";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
+const MIRROR_HOST = "hf-mirror.com";
  
 const ORDERED_EXTENSIONS = [
   "pdf", "txt",
@@ -67,6 +70,8 @@ const ICONS = {
    ========================================================== */
  
 let RECORDS = [];
+let PRECOMPUTED_FOLDER_TREES = {};
+let PRECOMPUTED_FOLDER_BROWSER = {};
 let wordIndex = {};
 let wordIndexFilesOnly = {};
 let extensionCounts = {};
@@ -290,38 +295,15 @@ function updateSelectionUI() {
 
 async function loadData() {
   try {
-    var resp = await fetch(DATA_URL);
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const loaded = await Promise.all([
+      loadGzipJSON(DATA_URL),
+      loadGzipJSON(FOLDER_TREE_URL).catch(function() { return {}; }),
+      loadGzipJSON(FOLDER_BROWSER_URL).catch(function() { return {}; }),
+    ]);
 
-    var total = parseInt(resp.headers.get("Content-Length") || "0", 10);
-    var reader = resp.body.getReader();
-    var chunks = [];
-    var received = 0;
-
-    while (true) {
-      var doneVal = await reader.read();
-      if (doneVal.done) break;
-      chunks.push(doneVal.value);
-      received += doneVal.value.length;
-    }
-
-    var buf;
-    if (chunks.length === 1) {
-      buf = chunks[0];
-    } else {
-      buf = new Uint8Array(received);
-      var pos = 0;
-      for (var c = 0; c < chunks.length; c++) {
-        buf.set(chunks[c], pos);
-        pos += chunks[c].length;
-      }
-    }
-
-    var ds = new DecompressionStream("gzip");
-    var stream = new Response(buf).body.pipeThrough(ds);
-    var jsonText = await new Response(stream).text();
-
-    RECORDS = JSON.parse(jsonText);
+    RECORDS = loaded[0] || [];
+    PRECOMPUTED_FOLDER_TREES = loaded[1] || {};
+    PRECOMPUTED_FOLDER_BROWSER = loaded[2] || {};
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
 
     await buildIndex();
@@ -332,6 +314,56 @@ async function loadData() {
     console.error("Data load failed:", e);
     return false;
   }
+}
+
+async function loadGzipJSON(url) {
+  var resp = await fetch(url);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  var reader = resp.body.getReader();
+  var chunks = [];
+  var received = 0;
+
+  while (true) {
+    var doneVal = await reader.read();
+    if (doneVal.done) break;
+    chunks.push(doneVal.value);
+    received += doneVal.value.length;
+  }
+
+  var buf;
+  if (chunks.length === 1) {
+    buf = chunks[0];
+  } else {
+    buf = new Uint8Array(received);
+    var pos = 0;
+    for (var c = 0; c < chunks.length; c++) {
+      buf.set(chunks[c], pos);
+      pos += chunks[c].length;
+    }
+  }
+
+  var ds = new DecompressionStream("gzip");
+  var stream = new Response(buf).body.pipeThrough(ds);
+  return JSON.parse(await new Response(stream).text());
+}
+
+function toMirrorURL(url) {
+  if (!url) return url;
+  try {
+    var parsed = new URL(url, window.location.origin);
+    if (parsed.hostname === "huggingface.co") parsed.hostname = MIRROR_HOST;
+    return parsed.toString();
+  } catch (e) {
+    return url;
+  }
+}
+
+function getCopyableLink(link) {
+  return STATE.useMirrorLinks ? toMirrorURL(link) : link;
+}
+
+function getPreviewLink(path) {
+  return STATE.useMirrorLinks ? toMirrorURL(path) : path;
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -749,6 +781,9 @@ function getCurrentExtensionCounts() {
    ========================================================== */
  
 function buildFilterFolderTree(repo) {
+  if (PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[repo]) {
+    return PRECOMPUTED_FOLDER_TREES[repo];
+  }
   if (!folderIndex[repo]) return [];
   const paths = Object.keys(folderIndex[repo]);
   const root = { name: repo.split("/").pop(), path: "", children: [], count: 0, isRoot: true };
@@ -797,6 +832,9 @@ const folderContentsCache = new Map();
 const FOLDER_CACHE_MAX = 100;
 
 function getFolderContents(repo, path) {
+  if (PRECOMPUTED_FOLDER_BROWSER && PRECOMPUTED_FOLDER_BROWSER[repo] && PRECOMPUTED_FOLDER_BROWSER[repo][path || ""]) {
+    return PRECOMPUTED_FOLDER_BROWSER[repo][path || ""];
+  }
   const cacheKey = repo + "|" + (path || "");
   if (folderContentsCache.has(cacheKey)) {
     const val = folderContentsCache.get(cacheKey);
@@ -884,6 +922,7 @@ const STATE = {
   filterFolderSelfs: [],
   filterMinSize: null,
   filterMaxSize: null,
+  useMirrorLinks: true,
   leftSidebarOpen: true,
   rightSidebarOpen: false,
   isMobile: false,
@@ -949,6 +988,7 @@ function cacheDOM() {
   DOM.didYouMean = $("#did-you-mean");
   DOM.clearFiltersBtn = $("#clear-filters-btn");
   DOM.sortSelect = $("#sort-select");
+  DOM.mirrorLinksToggle = $("#mirror-links-toggle");
   DOM.loadInfo = $("#load-info");
   DOM.loadedCount = $("#loaded-count");
   DOM.totalCount = $("#total-count");
@@ -1076,7 +1116,8 @@ const ROUTER = {
     if (!STATE.searchFolders) sp.set("search_folders", "false");
     if (STATE.exact) sp.set("exact", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
-  if (!STATE.recordHistory) sp.set("history", "0");
+    if (!STATE.recordHistory) sp.set("history", "0");
+    if (!STATE.useMirrorLinks) sp.set("mirror", "0");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -1169,6 +1210,8 @@ const ROUTER = {
     if (STATE.useLocalMode) STATE.exact = false;
     STATE.recordHistory = route.params.history !== "0";
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
+    STATE.useMirrorLinks = route.params.mirror !== "0";
+    if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.checked = STATE.useMirrorLinks;
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
@@ -1241,6 +1284,7 @@ function syncStateToURL() {
   if (!STATE.useLocalMode && STATE.exact) sp.set("exact", "1");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
+  if (!STATE.useMirrorLinks) sp.set("mirror", "0");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
@@ -1523,9 +1567,9 @@ function buildResultHTML(rec, idx) {
       '</div>' +
     '</div>' +
     '<div class="result-actions">' +
-      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(rec.Link) + '">复制链接</button>' +
+      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(rec.Link)) + '">复制链接</button>' +
       '<a href="' + API_BASE + '/api/download?file=' + encodeURIComponent(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '&link=' + encodeURIComponent(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
-      '<a href="' + escapeHTML(rec.Path) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
+      '<a href="' + escapeHTML(getPreviewLink(rec.Path)) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
       (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
   );
@@ -2625,6 +2669,11 @@ function init() {
     STATE.recordHistory = DOM.historyToggle.checked;
     if (!STATE.recordHistory) saveHistory([]);
   });
+  if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.addEventListener("change", function() {
+    STATE.useMirrorLinks = DOM.mirrorLinksToggle.checked;
+    syncStateToURL();
+    if (STATE.results.length > 0) renderResults();
+  });
 
   // Multi-select
   if (DOM.multiSelectToggle) DOM.multiSelectToggle.addEventListener("change", updateSelectionUI);
@@ -2653,7 +2702,7 @@ function init() {
     var indices = Object.keys(selectedIndices).map(Number);
     for (var li = 0; li < indices.length; li++) {
       var rec = STATE.results[indices[li]];
-      if (rec && rec.Link) links.push(rec.Link);
+      if (rec && rec.Link) links.push(getCopyableLink(rec.Link));
     }
     return links;
   };
