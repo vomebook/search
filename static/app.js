@@ -2003,6 +2003,17 @@ function persistFolderSelection(subtreeSet, selfSet) {
   doSearch();
 }
 
+function collectFolderNodePaths(nodes, subtreePaths, selfPaths) {
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (!node.isRoot && node.path) subtreePaths.push(node.path);
+    if (!node.isRoot && node.hasDirectFiles) selfPaths.push(node.path);
+    if (node.children && node.children.length > 0) {
+      collectFolderNodePaths(node.children, subtreePaths, selfPaths);
+    }
+  }
+}
+
 function applyFolderSelectionToNode(node, row, subtreeSet, selfSet) {
   const cb = row.querySelector("input[type='checkbox']");
   if (!cb) return;
@@ -2033,9 +2044,9 @@ function renderFilterTreeNodes(container, nodes, depth) {
  
     row.innerHTML = (has ? '<span class="tree-toggle expanded">▶</span>' : '<span style="width:16px;flex-shrink:0"></span>') +
       '<input type="checkbox" value="' + escapeHTML(node.path) + '">' +
-      '<span class="folder-name">' + escapeHTML(node.name) + '</span>' +
+      '<span class="folder-name" title="' + escapeHTML(node.name) + '">' + escapeHTML(node.name) + '</span>' +
       (node.showSelfToggle ? '<button type="button" class="folder-self-toggle" data-path="' + escapeHTML(node.path) + '">本层文件</button>' : '') +
-      '<span style="font-size:10px;color:var(--on-surface-variant);margin-left:auto">' + (node.count || 0).toLocaleString() + '</span>';
+      '<span class="folder-count">' + (node.count || 0).toLocaleString() + '</span>';
  
     const toggle = row.querySelector(".tree-toggle");
     const cb = row.querySelector("input[type='checkbox']");
@@ -2821,26 +2832,21 @@ function init() {
     if (!STATE.folderTree || STATE.folderTree.length === 0) return;
     var subtreeSet = getFolderSubtreeSet();
     var selfSet = getFolderSelfSet();
-    var allSelected = true;
-    for (var i = 0; i < STATE.folderTree.length; i++) {
-      if (!isNodeFullySelected(STATE.folderTree[i], subtreeSet, selfSet)) {
-        allSelected = false;
-        break;
-      }
+    var allSubtreePaths = [];
+    var allSelfPaths = [];
+    collectFolderNodePaths(STATE.folderTree, allSubtreePaths, allSelfPaths);
+
+    var nextSubtreeSet = new Set();
+    var nextSelfSet = new Set();
+
+    for (var i = 0; i < allSubtreePaths.length; i++) {
+      if (!subtreeSet.has(allSubtreePaths[i])) nextSubtreeSet.add(allSubtreePaths[i]);
+    }
+    for (var j = 0; j < allSelfPaths.length; j++) {
+      if (!selfSet.has(allSelfPaths[j])) nextSelfSet.add(allSelfPaths[j]);
     }
 
-    if (allSelected) {
-      subtreeSet.clear();
-      selfSet.clear();
-    } else {
-      subtreeSet.clear();
-      selfSet.clear();
-      for (var j = 0; j < STATE.folderTree.length; j++) {
-        setNodeSubtreeSelection(STATE.folderTree[j], true, subtreeSet, selfSet);
-      }
-    }
-
-    persistFolderSelection(subtreeSet, selfSet);
+    persistFolderSelection(nextSubtreeSet, nextSelfSet);
     renderFilterFolderTree();
   });
 

@@ -1065,6 +1065,7 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   cursor: pointer;
   white-space: nowrap;
   flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .filter-folder-item .tree-toggle {
@@ -1091,6 +1092,9 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .filter-folder-item .folder-name {
   min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .folder-self-toggle {
@@ -1103,6 +1107,14 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   padding: 4px 8px;
   cursor: pointer;
   transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.filter-folder-item .folder-count {
+  font-size: 10px;
+  color: var(--on-surface-variant);
+  margin-left: auto;
   flex-shrink: 0;
 }
 
