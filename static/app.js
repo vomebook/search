@@ -1676,7 +1676,7 @@ async function renderBrowser(path) {
             ? ff.name.slice(0, ff.name.lastIndexOf("."))
             : (ff.name || "");
           var txtPath_v = (ppath ? ppath + "/" : "") + stem;
-          window.open(TXT_BASE + "/" + encodeURIComponent(txtPath_v) + ".txt", "_blank");
+          window.open(TXT_BASE + "/" + encodeURI(txtPath_v) + ".txt", "_blank");
           return;
         }
         if (ff.link) window.open(ff.link, "_blank");
@@ -2405,7 +2405,7 @@ function setupResultDelegation() {
           const slashAfterDot = stem.indexOf("/", lastDot);
           if (slashAfterDot === -1) stem = stem.substring(0, lastDot);
         }
-        window.open(TXT_BASE + "/" + encodeURIComponent(stem) + ".txt", "_blank");
+        window.open(TXT_BASE + "/" + encodeURI(stem) + ".txt", "_blank");
         return;
       }
     }
