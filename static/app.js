@@ -271,9 +271,8 @@ function removeHistoryItem(q) {
 function updateSelectionUI() {
   if (!DOM.multiSelectToggle || !DOM.multiActionBar) return;
   var count = Object.keys(selectedIndices).length;
-  DOM.multiSelectedCount.textContent = count > 0 ? "已选 " + count + " 项" : "";
+  DOM.multiSelectedCount.textContent = count > 0 ? (STATE.isMobile ? ("已选" + count) : ("已选" + count + "项")) : "";
   DOM.multiActionBar.style.display = DOM.multiSelectToggle.checked ? "" : "none";
-  if (DOM.multiSelectAll) DOM.multiSelectAll.style.display = DOM.multiSelectToggle.checked ? "" : "none";
   if (DOM.multiCopyLinks) DOM.multiCopyLinks.textContent = STATE.isMobile ? "复制" : "复制链接";
   if (DOM.multiDeselect) DOM.multiDeselect.textContent = STATE.isMobile ? "取消" : "取消选择";
   if (DOM.multiSelectToggle.checked) {
