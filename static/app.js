@@ -273,6 +273,9 @@ function updateSelectionUI() {
   var count = Object.keys(selectedIndices).length;
   DOM.multiSelectedCount.textContent = count > 0 ? "已选 " + count + " 项" : "";
   DOM.multiActionBar.style.display = DOM.multiSelectToggle.checked ? "" : "none";
+  if (DOM.multiSelectAll) DOM.multiSelectAll.style.display = DOM.multiSelectToggle.checked ? "" : "none";
+  if (DOM.multiCopyLinks) DOM.multiCopyLinks.textContent = STATE.isMobile ? "复制" : "复制链接";
+  if (DOM.multiDeselect) DOM.multiDeselect.textContent = STATE.isMobile ? "取消" : "取消选择";
   if (DOM.multiSelectToggle.checked) {
     document.body.classList.add("multiselect");
   } else {
@@ -1025,6 +1028,7 @@ function cacheDOM() {
   DOM.multiCopyLinks = $("#multi-copy-links");
   DOM.multiBatchDownload = $("#multi-batch-download");
   DOM.multiZipDownload = $("#multi-zip-download");
+  DOM.multiSelectAll = $("#multi-select-all");
   DOM.multiSelectedCount = $("#multi-selected-count");
   DOM.multiDeselect = $("#multi-deselect");
 }
@@ -2376,6 +2380,7 @@ function applyMobileMode() {
   }
   updateSidebarVisibility();
   if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
+  updateSelectionUI();
 }
  
 function autoDetectMobile() { return window.innerWidth <= 768; }
@@ -2768,6 +2773,12 @@ function init() {
   if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
     selectedIndices = {};
     lastSelectedIndex = -1;
+    updateSelectionUI();
+  });
+
+  if (DOM.multiSelectAll) DOM.multiSelectAll.addEventListener("click", function() {
+    for (var si = 0; si < STATE.results.length; si++) selectedIndices[si] = true;
+    lastSelectedIndex = STATE.results.length > 0 ? STATE.results.length - 1 : -1;
     updateSelectionUI();
   });
 
