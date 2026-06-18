@@ -274,7 +274,7 @@ function updateSelectionUI() {
   DOM.multiSelectedCount.textContent = count > 0 ? (STATE.isMobile ? "" : ("已选" + count + "项")) : "";
   if (DOM.mobileSelectedCount) {
     DOM.mobileSelectedCount.textContent = count > 0 ? ("已选" + count) : "";
-    DOM.mobileSelectedCount.style.display = (STATE.isMobile && DOM.multiSelectToggle.checked && count > 0) ? "" : "none";
+    DOM.mobileSelectedCount.style.display = (STATE.isMobile && DOM.multiSelectToggle.checked && count > 0) ? "inline-block" : "none";
   }
   DOM.multiActionBar.style.display = DOM.multiSelectToggle.checked ? "" : "none";
   if (DOM.multiCopyLinks) DOM.multiCopyLinks.textContent = STATE.isMobile ? "复制" : "复制链接";
