@@ -892,6 +892,12 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   flex-shrink: 0;
 }
 
+.mobile-selected-count {
+  display: none;
+  margin-right: 10px;
+  color: var(--on-surface-variant);
+}
+
 /* ═══════════════════════════════════════════════════════════
    Quick Scroll Track
    ═══════════════════════════════════════════════════════════ */
@@ -1557,17 +1563,6 @@ body.theme-transitioning *::after {
   color: var(--on-surface-variant);
   white-space: nowrap;
   flex-shrink: 0;
-}
-
-body.mobile .multi-action-bar {
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-
-body.mobile .multi-action-bar::-webkit-scrollbar {
-  display: none;
 }
 
 body.mobile .multi-action-btn {
