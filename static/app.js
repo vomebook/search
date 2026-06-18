@@ -2813,7 +2813,7 @@ function init() {
     doSearch();
   });
   DOM.localModeToggle.addEventListener("change", function() {
-    if (!STATE.dataLoaded) {
+    if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       DOM.localModeToggle.checked = false;
       showToast("本地数据尚未加载完成");
       return;
@@ -2822,9 +2822,11 @@ function init() {
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
     DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
     if (STATE.useLocalMode) STATE.exact = false;
+    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.page = 1;
     STATE.results = [];
     doSearch();
+    syncStateToURL();
   });
   DOM.sortSelect.addEventListener("change", function() {
     STATE.sort = DOM.sortSelect.value;
