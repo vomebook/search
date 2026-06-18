@@ -890,12 +890,25 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   color: var(--on-surface-variant);
   border-top: 1px solid var(--outline-variant);
   flex-shrink: 0;
+  position: relative;
 }
 
 .mobile-selected-count {
   display: none;
-  margin-right: 10px;
   color: var(--on-surface-variant);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+body.mobile .load-info {
+  text-align: center;
+}
+
+body.mobile .mobile-selected-count {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 /* ═══════════════════════════════════════════════════════════
