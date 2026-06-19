@@ -7,9 +7,9 @@
    Constants
    ═══════════════════════════════════════════════════════════ */
  
+const META_URL = "data/meta.json.gz";
 const DATA_URL = "data/search_data.json.gz";
-const FOLDER_TREE_URL = "data/folder_tree.json.gz";
-const FOLDER_BROWSER_URL = "data/folder_browser.json.gz";
+const REPO_DATA_BASE = "data/repos/";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
@@ -72,6 +72,7 @@ const ICONS = {
 let RECORDS = [];
 let PRECOMPUTED_FOLDER_TREES = {};
 let PRECOMPUTED_FOLDER_BROWSER = {};
+let EXTENSION_META = [];
 let wordIndex = {};
 let wordIndexFilesOnly = {};
 let extensionCounts = {};
@@ -83,6 +84,62 @@ let didYouMeanSorted = [];
 let didYouMeanSortedFilesOnly = [];
 let repoList = [];
 let extensionList = [];
+
+function repoToId(repo) {
+  return String(repo || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
+}
+
+function getRepoFullName(repo) {
+  if (!repo) return null;
+  if (repo.indexOf("/") >= 0) return repo;
+  return "VoiceOfML/" + repo;
+}
+
+function getRepoId(repo) {
+  return repoToId(getRepoFullName(repo) || repo);
+}
+
+async function loadMeta() {
+  try {
+    const meta = await loadGzipJSON(META_URL);
+    repoList = Array.isArray(meta && meta.repos) ? meta.repos : [];
+    EXTENSION_META = Array.isArray(meta && meta.extensions) ? meta.extensions : [];
+    extensionList = EXTENSION_META.map(function(item) { return item.name; });
+    return true;
+  } catch (e) {
+    console.warn("Meta load failed:", e);
+    repoList = [];
+    EXTENSION_META = [];
+    extensionList = [];
+    return false;
+  }
+}
+
+async function loadRepoTreeLocal(repo) {
+  const repoFull = getRepoFullName(repo);
+  if (!repoFull) return null;
+  if (PRECOMPUTED_FOLDER_TREES[repoFull]) return PRECOMPUTED_FOLDER_TREES[repoFull];
+  const tree = await loadGzipJSON(REPO_DATA_BASE + getRepoId(repoFull) + "/tree.json.gz");
+  PRECOMPUTED_FOLDER_TREES[repoFull] = tree;
+  return tree;
+}
+
+async function loadRepoBrowserLocal(repo) {
+  const repoFull = getRepoFullName(repo);
+  if (!repoFull) return null;
+  if (PRECOMPUTED_FOLDER_BROWSER[repoFull]) return PRECOMPUTED_FOLDER_BROWSER[repoFull];
+  const browser = await loadGzipJSON(REPO_DATA_BASE + getRepoId(repoFull) + "/browser.json.gz");
+  PRECOMPUTED_FOLDER_BROWSER[repoFull] = browser;
+  return browser;
+}
+
+async function getFolderContentsLocal(repo, path) {
+  const repoFull = getRepoFullName(repo);
+  if (!repoFull) return null;
+  const browser = await loadRepoBrowserLocal(repoFull);
+  if (!browser) return null;
+  return browser[path || ""] || null;
+}
  
 function tokenize(text) {
   const tokens = [];
@@ -301,15 +358,7 @@ function updateSelectionUI() {
 
 async function loadData() {
   try {
-    const loaded = await Promise.all([
-      loadGzipJSON(DATA_URL),
-      loadGzipJSON(FOLDER_TREE_URL).catch(function() { return {}; }),
-      loadGzipJSON(FOLDER_BROWSER_URL).catch(function() { return {}; }),
-    ]);
-
-    RECORDS = loaded[0] || [];
-    PRECOMPUTED_FOLDER_TREES = loaded[1] || {};
-    PRECOMPUTED_FOLDER_BROWSER = loaded[2] || {};
+    RECORDS = await loadGzipJSON(DATA_URL) || [];
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
 
     await buildIndex();
@@ -1139,7 +1188,7 @@ const ROUTER = {
  
     STATE.mode = route.mode;
     STATE.repo = route.repo;
-    STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
+    STATE.repoFull = getRepoFullName(route.repo);
  
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.page = 1;
@@ -1756,7 +1805,13 @@ async function renderBrowser(path) {
   var data = null;
 
   // Local first (instant if data loaded)
-  if (STATE.dataLoaded) {
+  if (STATE.repoFull) {
+    try {
+      data = await getFolderContentsLocal(STATE.repoFull, path);
+    } catch (e) {}
+  }
+
+  if (!data && STATE.dataLoaded) {
     try {
       data = getFolderContents(STATE.repoFull, path);
     } catch (e) {}
@@ -1827,7 +1882,12 @@ async function renderFilters() {
 
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
-    if (!STATE.folderTree) STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
+    if (!STATE.folderTree && STATE.repoFull) {
+      try { STATE.folderTree = await loadRepoTreeLocal(STATE.repoFull); } catch (e) {}
+    }
+    if ((!STATE.folderTree || !STATE.folderTree.length) && STATE.dataLoaded) {
+      STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
+    }
     if (!STATE.folderTree || !STATE.folderTree.length) {
       if (apiAvailable) {
         try { STATE.folderTree = await fetchFolderTree(STATE.repo); } catch (e) {}
@@ -1866,8 +1926,9 @@ async function renderRepoFilter() {
 
 async function renderExtensionFilter() {
   var extData = null;
-  // Local first
-  if (extensionList && extensionList.length > 0) {
+  if (STATE.mode === "global" && EXTENSION_META && EXTENSION_META.length > 0) {
+    extData = EXTENSION_META.slice();
+  } else if (STATE.mode === "repo" && STATE.dataLoaded && extensionList && extensionList.length > 0) {
     var currentCounts = getCurrentExtensionCounts();
     extData = [];
     for (var li = 0; li < extensionList.length; li++) {
@@ -2942,6 +3003,14 @@ function init() {
       STATE.isMobile = autoDetectMobile();
       if (wasMobile !== STATE.isMobile) applyMobileMode();
     }
+  });
+
+  loadMeta().then(function(ok) {
+    if (!ok) return;
+    STATE.repoList = repoList;
+    STATE.extensionList = extensionList;
+    renderSidebar();
+    renderFilters();
   });
 
   console.log("Loading data in background for offline fallback...");
