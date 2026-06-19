@@ -38,18 +38,18 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // ── Data file: cache first, network fallback ─────
+  // ── Data file: stale-while-revalidate ─────────────
   if (url.pathname.endsWith("search_data.json.gz")) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((cached) => {
-          if (cached) return cached;
-          return fetch(event.request).then((response) => {
+          const fetchPromise = fetch(event.request).then((response) => {
             if (response.ok) {
               cache.put(event.request, response.clone());
             }
             return response;
           }).catch(() => cached);
+          return cached || fetchPromise;
         });
       })
     );
