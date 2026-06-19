@@ -1001,18 +1001,16 @@ async function fetchFolderContents(repo, path) {
   } catch (e) { return null; }
 }
 
-function getCurrentExtensionCounts() {
+async function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
-    const counts = {};
-    for (let i = 0; i < RECORDS.length; i++) {
-      if (RECORDS[i].Repo === STATE.repoFull) {
-        const ext = (RECORDS[i].Extension || "").toLowerCase();
-        if (ext) counts[ext] = (counts[ext] || 0) + 1;
-      }
-    }
-    return counts;
+    const dataset = await loadSearchDatasetLocal(STATE.repoFull);
+    return dataset.extensionCounts || {};
   }
-  return extensionCounts;
+  const counts = {};
+  for (let i = 0; i < EXTENSION_META.length; i++) {
+    counts[EXTENSION_META[i].name] = EXTENSION_META[i].count || 0;
+  }
+  return counts;
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1134,9 +1132,18 @@ function getFolderContents(repo, path) {
  
 function getRandom(repo) {
   let pool = RECORDS;
-  if (repo) pool = RECORDS.filter(r => r.Repo === repo);
+  if (repo) pool = RECORDS.filter(function(r) { return r.Repo === repo; });
   if (pool.length === 0) return null;
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+async function getRandomLocal(repo) {
+  const dataset = await loadSearchDatasetLocal(repo || null);
+  const pool = dataset.records || [];
+  if (pool.length === 0) return null;
+  const picked = pool[Math.floor(Math.random() * pool.length)];
+  const hydrated = await hydrateLocalResults([picked]);
+  return hydrated[0] || null;
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1603,13 +1610,6 @@ function doSearch(append) {
   }
 
   if (STATE.useLocalMode || folderMatchMode === "mixed") {
-    var canUseShardLocal = STATE.useLocalMode || (folderMatchMode === "mixed" && STATE.mode === "repo");
-    if (!STATE.dataLoaded && !canUseShardLocal) {
-      STATE.isLoading = false;
-      DOM.resultsLoading.style.display = "none";
-      showToast(folderMatchMode === "mixed" ? "目录筛选数据尚未加载完成" : "本地数据尚未加载完成");
-      return;
-    }
     doSearchFallbackLocal(params, append, id);
     return;
   }
@@ -1677,13 +1677,6 @@ function doSearch(append) {
         DOM.resultsLoading.style.display = "none";
       }
     });
-    return;
-  }
-
-  if (!STATE.dataLoaded) {
-    STATE.isLoading = false;
-    DOM.resultsLoading.style.display = "none";
-    showToast("数据加载中，请稍后...");
     return;
   }
 
@@ -2123,8 +2116,8 @@ async function renderExtensionFilter() {
   var extData = null;
   if (STATE.mode === "global" && EXTENSION_META && EXTENSION_META.length > 0) {
     extData = EXTENSION_META.slice();
-  } else if (STATE.mode === "repo" && STATE.dataLoaded && extensionList && extensionList.length > 0) {
-    var currentCounts = getCurrentExtensionCounts();
+  } else if (STATE.mode === "repo" && extensionList && extensionList.length > 0) {
+    var currentCounts = await getCurrentExtensionCounts();
     extData = [];
     for (var li = 0; li < extensionList.length; li++) {
       var lext = extensionList[li];
@@ -2466,13 +2459,17 @@ function randomBook() {
         showToast("暂无可用记录");
       }
     })
-    .catch(function() {
-      var rec = getRandom(STATE.repoFull);
-      if (rec && rec.Link) {
-        var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(rec.Link);
-        window.open(proxyUrl, "_blank");
-      } else {
+    .catch(async function() {
+      try {
+        var rec = await getRandomLocal(STATE.repoFull);
+        if (rec && rec.Link) {
+          var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
+          var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(rec.Link);
+          window.open(proxyUrl, "_blank");
+        } else {
+          showToast("暂无可用记录");
+        }
+      } catch (e) {
         showToast("暂无可用记录");
       }
     });
@@ -3069,11 +3066,6 @@ function init() {
     doSearch();
   });
   DOM.localModeToggle.addEventListener("change", function() {
-    if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
-      DOM.localModeToggle.checked = false;
-      showToast("本地数据尚未加载完成");
-      return;
-    }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
     DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
@@ -3208,25 +3200,7 @@ function init() {
     renderFilters();
   });
 
-  console.log("Loading data in background for offline fallback...");
-  loadData().then(function(ok) {
-    STATE.dataLoaded = ok;
-    if (ok) {
-      STATE.repoList = repoList;
-      STATE.extensionList = extensionList;
-      console.log("Local data ready for offline search");
-      DOM.localModeToggleRow.classList.remove("toggle-disabled");
-      renderSidebar();
-      renderFilters();
-      if (STATE.useLocalMode) {
-        STATE.page = 1;
-        STATE.results = [];
-        doSearch();
-      }
-    } else {
-      console.warn("Local data load failed, API-only mode");
-    }
-  });
+  DOM.localModeToggleRow.classList.remove("toggle-disabled");
 
   ROUTER.apply();
   fetchHitokoto();
