@@ -1267,7 +1267,13 @@ const ROUTER = {
     if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
     renderSidebar();
     renderFilters();
-    doSearch();
+    if (STATE.mode === "repo" && !STATE.query) {
+      setTimeout(function() {
+        if (STATE.mode === "repo" && !STATE.query) doSearch();
+      }, 0);
+    } else {
+      doSearch();
+    }
   },
 };
  
