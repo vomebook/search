@@ -1319,13 +1319,19 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
   if (STATE.dataLoaded) return Promise.resolve(true);
   if (localDataPromise) return localDataPromise;
 
+  STATE.isLoading = true;
+  DOM.resultsLoading.style.display = "flex";
+  DOM.emptyState.style.display = "none";
+  STATE.page = 1;
+  STATE.results = [];
+  DOM.resultsList.innerHTML = "";
+  updateStatusBar();
+  updateLoadInfo();
   showToast("正在加载本地数据...");
-  if (DOM.localModeToggleRow) DOM.localModeToggleRow.classList.add("toggle-disabled");
 
   localDataPromise = loadData().then(function(ok) {
     STATE.dataLoaded = ok;
     localDataPromise = null;
-    if (DOM.localModeToggleRow) DOM.localModeToggleRow.classList.remove("toggle-disabled");
     if (ok) {
       STATE.repoList = repoList;
       STATE.extensionList = extensionList;
@@ -1346,7 +1352,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
     console.error("Local data load failed:", err);
     STATE.dataLoaded = false;
     localDataPromise = null;
-    if (DOM.localModeToggleRow) DOM.localModeToggleRow.classList.remove("toggle-disabled");
     if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
     STATE.useLocalMode = false;
     showToast("本地数据加载失败");
@@ -2862,6 +2867,12 @@ function init() {
       DOM.exactSearchSection.style.display = "none";
       STATE.exact = false;
       if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
+      STATE.page = 1;
+      STATE.results = [];
+      DOM.resultsList.innerHTML = "";
+      DOM.emptyState.style.display = "none";
+      updateStatusBar();
+      updateLoadInfo();
       syncStateToURL();
       ensureLocalDataLoaded(true);
       return;
