@@ -7,10 +7,9 @@
    Constants
    ═══════════════════════════════════════════════════════════ */
  
-const META_URL = "data/meta.json.gz";
 const DATA_URL = "data/search_data.json.gz";
-const REPO_DATA_BASE = "data/repos/";
-const SEARCH_DATA_BASE = "data/search/";
+const FOLDER_TREE_URL = "data/folder_tree.json.gz";
+const FOLDER_BROWSER_URL = "data/folder_browser.json.gz";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
@@ -73,9 +72,6 @@ const ICONS = {
 let RECORDS = [];
 let PRECOMPUTED_FOLDER_TREES = {};
 let PRECOMPUTED_FOLDER_BROWSER = {};
-let EXTENSION_META = [];
-let LOCAL_SEARCH_DATASETS = {};
-let LOCAL_DETAILS_CACHE = {};
 let wordIndex = {};
 let wordIndexFilesOnly = {};
 let extensionCounts = {};
@@ -87,243 +83,6 @@ let didYouMeanSorted = [];
 let didYouMeanSortedFilesOnly = [];
 let repoList = [];
 let extensionList = [];
-
-function repoToId(repo) {
-  return String(repo || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
-}
-
-function getRepoFullName(repo) {
-  if (!repo) return null;
-  if (repo.indexOf("/") >= 0) return repo;
-  return "VoiceOfML/" + repo;
-}
-
-function getRepoId(repo) {
-  return repoToId(getRepoFullName(repo) || repo);
-}
-
-async function loadMeta() {
-  try {
-    const meta = await loadGzipJSON(META_URL);
-    repoList = Array.isArray(meta && meta.repos) ? meta.repos : [];
-    EXTENSION_META = Array.isArray(meta && meta.extensions) ? meta.extensions : [];
-    extensionList = EXTENSION_META.map(function(item) { return item.name; });
-    return true;
-  } catch (e) {
-    console.warn("Meta load failed:", e);
-    repoList = [];
-    EXTENSION_META = [];
-    extensionList = [];
-    return false;
-  }
-}
-
-async function loadRepoTreeLocal(repo) {
-  const repoFull = getRepoFullName(repo);
-  if (!repoFull) return null;
-  if (PRECOMPUTED_FOLDER_TREES[repoFull]) return PRECOMPUTED_FOLDER_TREES[repoFull];
-  const tree = await loadGzipJSON(REPO_DATA_BASE + getRepoId(repoFull) + "/tree.json.gz");
-  PRECOMPUTED_FOLDER_TREES[repoFull] = tree;
-  return tree;
-}
-
-async function loadRepoBrowserLocal(repo) {
-  const repoFull = getRepoFullName(repo);
-  if (!repoFull) return null;
-  if (PRECOMPUTED_FOLDER_BROWSER[repoFull]) return PRECOMPUTED_FOLDER_BROWSER[repoFull];
-  const browser = await loadGzipJSON(REPO_DATA_BASE + getRepoId(repoFull) + "/browser.json.gz");
-  PRECOMPUTED_FOLDER_BROWSER[repoFull] = browser;
-  return browser;
-}
-
-async function getFolderContentsLocal(repo, path) {
-  const repoFull = getRepoFullName(repo);
-  if (!repoFull) return null;
-  const browser = await loadRepoBrowserLocal(repoFull);
-  if (!browser) return null;
-  return browser[path || ""] || null;
-}
-
-function buildDatasetFromSearchRecords(records) {
-  const datasetRecords = [];
-  const datasetWordIndex = {};
-  const datasetWordIndexFilesOnly = {};
-  const datasetExtensionCounts = {};
-  const datasetRepoCounts = {};
-  const datasetFolderIndex = {};
-  const datasetDidYouMeanVocab = {};
-  const datasetDidYouMeanVocabFilesOnly = {};
-
-  for (let i = 0; i < records.length; i++) {
-    const src = records[i] || {};
-    const rec = {
-      Id: src.id,
-      RepoId: src.repoId || repoToId(src.repo || ""),
-      Repo: src.repo || "",
-      File: src.file || "",
-      Extension: src.ext || "",
-      Folder: src.folders || [],
-      Size: typeof src.size === "number" ? src.size : parseInt(src.size || 0, 10) || 0,
-      Link: "",
-      Path: "",
-      HasTxt: false,
-    };
-    datasetRecords.push(rec);
-
-    const repo = rec.Repo;
-    const ext = (rec.Extension || "").toLowerCase();
-    datasetRepoCounts[repo] = (datasetRepoCounts[repo] || 0) + 1;
-    if (ext) datasetExtensionCounts[ext] = (datasetExtensionCounts[ext] || 0) + 1;
-
-    const folders = rec.Folder || [];
-    const text = [rec.File || "", ...folders].join(" ");
-    const tokens = tokenize(text);
-    for (const tok of tokens) {
-      if (!datasetWordIndex[tok]) datasetWordIndex[tok] = [];
-      datasetWordIndex[tok].push(i);
-      datasetDidYouMeanVocab[tok] = (datasetDidYouMeanVocab[tok] || 0) + 1;
-    }
-
-    const fileTokens = tokenize(rec.File || "");
-    for (const tok of fileTokens) {
-      if (!datasetWordIndexFilesOnly[tok]) datasetWordIndexFilesOnly[tok] = [];
-      datasetWordIndexFilesOnly[tok].push(i);
-      datasetDidYouMeanVocabFilesOnly[tok] = (datasetDidYouMeanVocabFilesOnly[tok] || 0) + 1;
-    }
-
-    if (!datasetFolderIndex[repo]) datasetFolderIndex[repo] = {};
-    for (let d = 0; d <= folders.length; d++) {
-      const fp = d === 0 ? "" : folders.slice(0, d).join("/");
-      datasetFolderIndex[repo][fp] = (datasetFolderIndex[repo][fp] || 0) + 1;
-    }
-  }
-
-  return {
-    records: datasetRecords,
-    wordIndex: datasetWordIndex,
-    wordIndexFilesOnly: datasetWordIndexFilesOnly,
-    extensionCounts: datasetExtensionCounts,
-    repoCounts: datasetRepoCounts,
-    folderIndex: datasetFolderIndex,
-    didYouMeanVocab: datasetDidYouMeanVocab,
-    didYouMeanVocabFilesOnly: datasetDidYouMeanVocabFilesOnly,
-    didYouMeanSorted: Object.entries(datasetDidYouMeanVocab).sort((a, b) => b[1] - a[1]),
-    didYouMeanSortedFilesOnly: Object.entries(datasetDidYouMeanVocabFilesOnly).sort((a, b) => b[1] - a[1]),
-    repoList: Object.entries(datasetRepoCounts).map(function(entry) {
-      return { name: entry[0], count: entry[1] };
-    }).sort(function(a, b) { return a.name.localeCompare(b.name); }),
-    extensionList: Object.keys(datasetExtensionCounts).sort(),
-  };
-}
-
-async function loadSearchDatasetLocal(repo) {
-  const repoFull = getRepoFullName(repo);
-  const cacheKey = repoFull || "__global__";
-  if (LOCAL_SEARCH_DATASETS[cacheKey]) return LOCAL_SEARCH_DATASETS[cacheKey];
-  const url = repoFull
-    ? SEARCH_DATA_BASE + getRepoId(repoFull) + ".json.gz"
-    : SEARCH_DATA_BASE + "global.json.gz";
-  const records = await loadGzipJSON(url);
-  const dataset = buildDatasetFromSearchRecords(Array.isArray(records) ? records : []);
-  LOCAL_SEARCH_DATASETS[cacheKey] = dataset;
-  return dataset;
-}
-
-async function loadDetailsMapLocal(repo) {
-  const repoFull = getRepoFullName(repo);
-  if (!repoFull) return {};
-  if (LOCAL_DETAILS_CACHE[repoFull]) return LOCAL_DETAILS_CACHE[repoFull];
-  const details = await loadGzipJSON(REPO_DATA_BASE + getRepoId(repoFull) + "/details.json.gz");
-  const map = {};
-  for (let i = 0; i < details.length; i++) {
-    const item = details[i] || {};
-    map[item.id] = item;
-  }
-  LOCAL_DETAILS_CACHE[repoFull] = map;
-  return map;
-}
-
-function runSearchAgainstDataset(dataset, params) {
-  const saved = {
-    records: RECORDS,
-    wordIndex: wordIndex,
-    wordIndexFilesOnly: wordIndexFilesOnly,
-    extensionCounts: extensionCounts,
-    repoCounts: repoCounts,
-    folderIndex: folderIndex,
-    didYouMeanVocab: didYouMeanVocab,
-    didYouMeanVocabFilesOnly: didYouMeanVocabFilesOnly,
-    didYouMeanSorted: didYouMeanSorted,
-    didYouMeanSortedFilesOnly: didYouMeanSortedFilesOnly,
-    repoList: repoList,
-    extensionList: extensionList,
-  };
-
-  RECORDS = dataset.records;
-  wordIndex = dataset.wordIndex;
-  wordIndexFilesOnly = dataset.wordIndexFilesOnly;
-  extensionCounts = dataset.extensionCounts;
-  repoCounts = dataset.repoCounts;
-  folderIndex = dataset.folderIndex;
-  didYouMeanVocab = dataset.didYouMeanVocab;
-  didYouMeanVocabFilesOnly = dataset.didYouMeanVocabFilesOnly;
-  didYouMeanSorted = dataset.didYouMeanSorted;
-  didYouMeanSortedFilesOnly = dataset.didYouMeanSortedFilesOnly;
-  repoList = dataset.repoList;
-  extensionList = dataset.extensionList;
-
-  try {
-    return doSearchLocal(params);
-  } finally {
-    RECORDS = saved.records;
-    wordIndex = saved.wordIndex;
-    wordIndexFilesOnly = saved.wordIndexFilesOnly;
-    extensionCounts = saved.extensionCounts;
-    repoCounts = saved.repoCounts;
-    folderIndex = saved.folderIndex;
-    didYouMeanVocab = saved.didYouMeanVocab;
-    didYouMeanVocabFilesOnly = saved.didYouMeanVocabFilesOnly;
-    didYouMeanSorted = saved.didYouMeanSorted;
-    didYouMeanSortedFilesOnly = saved.didYouMeanSortedFilesOnly;
-    repoList = saved.repoList;
-    extensionList = saved.extensionList;
-  }
-}
-
-async function hydrateLocalResults(results) {
-  const reposNeeded = {};
-  for (let i = 0; i < results.length; i++) {
-    const rec = results[i];
-    if (rec && rec.Repo) reposNeeded[rec.Repo] = true;
-  }
-
-  const detailMaps = {};
-  const repoNames = Object.keys(reposNeeded);
-  for (let i = 0; i < repoNames.length; i++) {
-    const repo = repoNames[i];
-    try {
-      detailMaps[repo] = await loadDetailsMapLocal(repo);
-    } catch (e) {
-      detailMaps[repo] = {};
-    }
-  }
-
-  return results.map(function(rec) {
-    const detail = (detailMaps[rec.Repo] && detailMaps[rec.Repo][rec.Id]) || {};
-    return {
-      Id: rec.Id,
-      RepoId: rec.RepoId,
-      Repo: rec.Repo,
-      File: rec.File,
-      Extension: rec.Extension,
-      Folder: rec.Folder,
-      Size: rec.Size,
-      Link: detail.link || "",
-      Path: detail.path || "",
-      HasTxt: !!detail.hasTxt,
-    };
-  });
-}
  
 function tokenize(text) {
   const tokens = [];
@@ -542,7 +301,15 @@ function updateSelectionUI() {
 
 async function loadData() {
   try {
-    RECORDS = await loadGzipJSON(DATA_URL) || [];
+    const loaded = await Promise.all([
+      loadGzipJSON(DATA_URL),
+      loadGzipJSON(FOLDER_TREE_URL).catch(function() { return {}; }),
+      loadGzipJSON(FOLDER_BROWSER_URL).catch(function() { return {}; }),
+    ]);
+
+    RECORDS = loaded[0] || [];
+    PRECOMPUTED_FOLDER_TREES = loaded[1] || {};
+    PRECOMPUTED_FOLDER_BROWSER = loaded[2] || {};
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
 
     await buildIndex();
@@ -1001,16 +768,18 @@ async function fetchFolderContents(repo, path) {
   } catch (e) { return null; }
 }
 
-async function getCurrentExtensionCounts() {
+function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
-    const dataset = await loadSearchDatasetLocal(STATE.repoFull);
-    return dataset.extensionCounts || {};
+    const counts = {};
+    for (let i = 0; i < RECORDS.length; i++) {
+      if (RECORDS[i].Repo === STATE.repoFull) {
+        const ext = (RECORDS[i].Extension || "").toLowerCase();
+        if (ext) counts[ext] = (counts[ext] || 0) + 1;
+      }
+    }
+    return counts;
   }
-  const counts = {};
-  for (let i = 0; i < EXTENSION_META.length; i++) {
-    counts[EXTENSION_META[i].name] = EXTENSION_META[i].count || 0;
-  }
-  return counts;
+  return extensionCounts;
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1132,18 +901,9 @@ function getFolderContents(repo, path) {
  
 function getRandom(repo) {
   let pool = RECORDS;
-  if (repo) pool = RECORDS.filter(function(r) { return r.Repo === repo; });
+  if (repo) pool = RECORDS.filter(r => r.Repo === repo);
   if (pool.length === 0) return null;
   return pool[Math.floor(Math.random() * pool.length)];
-}
-
-async function getRandomLocal(repo) {
-  const dataset = await loadSearchDatasetLocal(repo || null);
-  const pool = dataset.records || [];
-  if (pool.length === 0) return null;
-  const picked = pool[Math.floor(Math.random() * pool.length)];
-  const hydrated = await hydrateLocalResults([picked]);
-  return hydrated[0] || null;
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1379,7 +1139,7 @@ const ROUTER = {
  
     STATE.mode = route.mode;
     STATE.repo = route.repo;
-    STATE.repoFull = getRepoFullName(route.repo);
+    STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
  
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.page = 1;
@@ -1610,6 +1370,12 @@ function doSearch(append) {
   }
 
   if (STATE.useLocalMode || folderMatchMode === "mixed") {
+    if (!STATE.dataLoaded) {
+      STATE.isLoading = false;
+      DOM.resultsLoading.style.display = "none";
+      showToast(folderMatchMode === "mixed" ? "目录筛选数据尚未加载完成" : "本地数据尚未加载完成");
+      return;
+    }
     doSearchFallbackLocal(params, append, id);
     return;
   }
@@ -1680,76 +1446,73 @@ function doSearch(append) {
     return;
   }
 
+  if (!STATE.dataLoaded) {
+    STATE.isLoading = false;
+    DOM.resultsLoading.style.display = "none";
+    showToast("数据加载中，请稍后...");
+    return;
+  }
+
   doSearchFallbackLocal(params, append, id);
 }
 
 function doSearchFallbackLocal(params, append, id) {
   requestAnimationFrame(function() {
-    (async function() {
-      if (id !== searchId) return;
-      try {
-        var data;
-        if (STATE.mode === "repo" || !STATE.dataLoaded) {
-          var dataset = await loadSearchDatasetLocal(STATE.mode === "repo" ? STATE.repoFull : null);
-          data = runSearchAgainstDataset(dataset, params);
-          data.results = await hydrateLocalResults(data.results);
-        } else {
-          data = doSearchLocal(params);
-        }
+    if (id !== searchId) return;
+    try {
+      const data = doSearchLocal(params);
+      STATE.total = data.total;
+      STATE.didYouMean = data.didYouMean || null;
 
-        STATE.total = data.total;
-        STATE.didYouMean = data.didYouMean || null;
-
-        if (append) {
-          STATE.results = STATE.results.concat(data.results);
-        } else {
-          STATE.results = data.results;
-        }
-
-        STATE.hasMore = STATE.results.length < STATE.total;
-
-        if (append) {
-          var newLen = STATE.results.length;
-          if (VSCROLL.heights.length < newLen) {
-            var oldLen = VSCROLL.heights.length;
-            VSCROLL.heights.length = newLen;
-            for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
-          }
-          VSCROLL.renderStart = 0;
-          VSCROLL.renderEnd = 0;
-          requestAnimationFrame(function() { renderVisible(); });
-        } else {
-          VSCROLL.renderStart = 0;
-          VSCROLL.renderEnd = 0;
-          VSCROLL.heights = [];
-          if (STATE.results.length === 0) {
-            DOM.resultsList.innerHTML = "";
-            DOM.emptyState.style.display = "flex";
-            DOM.emptyDesc.textContent = STATE.query
-              ? '没有找到与 "' + STATE.query + '" 相关的结果'
-              : "暂无数据";
-          } else {
-            DOM.emptyState.style.display = "none";
-            renderResults();
-          }
-        }
-        updateStatusBar();
-        updateLoadInfo();
-
-        if (STATE.didYouMean) {
-          DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
-          DOM.didYouMean.style.display = "inline";
-        }
-
-        syncStateToURL();
-      } catch (err) {
-        console.error("Local fallback crashed:", err);
-        showToast("搜索失败");
-      } finally {
-        STATE.isLoading = false;
-        DOM.resultsLoading.style.display = "none";
+      if (append) {
+        STATE.results = STATE.results.concat(data.results);
+      } else {
+        STATE.results = data.results;
       }
-    })();
+
+      STATE.hasMore = STATE.results.length < STATE.total;
+
+      if (append) {
+        var newLen = STATE.results.length;
+        if (VSCROLL.heights.length < newLen) {
+          var oldLen = VSCROLL.heights.length;
+          VSCROLL.heights.length = newLen;
+          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
+        }
+        VSCROLL.renderStart = 0;
+        VSCROLL.renderEnd = 0;
+        requestAnimationFrame(function() { renderVisible(); });
+      } else {
+        VSCROLL.renderStart = 0;
+        VSCROLL.renderEnd = 0;
+        VSCROLL.heights = [];
+        if (STATE.results.length === 0) {
+          DOM.resultsList.innerHTML = "";
+          DOM.emptyState.style.display = "flex";
+          DOM.emptyDesc.textContent = STATE.query
+            ? '没有找到与 "' + STATE.query + '" 相关的结果'
+            : "暂无数据";
+        } else {
+          DOM.emptyState.style.display = "none";
+          renderResults();
+        }
+      }
+      updateStatusBar();
+      updateLoadInfo();
+
+      if (STATE.didYouMean) {
+        DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
+        DOM.didYouMean.style.display = "inline";
+      }
+
+      syncStateToURL();
+    } catch (err) {
+      console.error("Local fallback crashed:", err);
+      showToast("搜索失败");
+    } finally {
+      STATE.isLoading = false;
+      DOM.resultsLoading.style.display = "none";
+    }
   }, 0);
 }
  
@@ -1993,13 +1756,7 @@ async function renderBrowser(path) {
   var data = null;
 
   // Local first (instant if data loaded)
-  if (STATE.repoFull) {
-    try {
-      data = await getFolderContentsLocal(STATE.repoFull, path);
-    } catch (e) {}
-  }
-
-  if (!data && STATE.dataLoaded) {
+  if (STATE.dataLoaded) {
     try {
       data = getFolderContents(STATE.repoFull, path);
     } catch (e) {}
@@ -2070,12 +1827,7 @@ async function renderFilters() {
 
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
-    if (!STATE.folderTree && STATE.repoFull) {
-      try { STATE.folderTree = await loadRepoTreeLocal(STATE.repoFull); } catch (e) {}
-    }
-    if ((!STATE.folderTree || !STATE.folderTree.length) && STATE.dataLoaded) {
-      STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
-    }
+    if (!STATE.folderTree) STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
     if (!STATE.folderTree || !STATE.folderTree.length) {
       if (apiAvailable) {
         try { STATE.folderTree = await fetchFolderTree(STATE.repo); } catch (e) {}
@@ -2114,10 +1866,9 @@ async function renderRepoFilter() {
 
 async function renderExtensionFilter() {
   var extData = null;
-  if (STATE.mode === "global" && EXTENSION_META && EXTENSION_META.length > 0) {
-    extData = EXTENSION_META.slice();
-  } else if (STATE.mode === "repo" && extensionList && extensionList.length > 0) {
-    var currentCounts = await getCurrentExtensionCounts();
+  // Local first
+  if (extensionList && extensionList.length > 0) {
+    var currentCounts = getCurrentExtensionCounts();
     extData = [];
     for (var li = 0; li < extensionList.length; li++) {
       var lext = extensionList[li];
@@ -2459,17 +2210,13 @@ function randomBook() {
         showToast("暂无可用记录");
       }
     })
-    .catch(async function() {
-      try {
-        var rec = await getRandomLocal(STATE.repoFull);
-        if (rec && rec.Link) {
-          var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-          var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(rec.Link);
-          window.open(proxyUrl, "_blank");
-        } else {
-          showToast("暂无可用记录");
-        }
-      } catch (e) {
+    .catch(function() {
+      var rec = getRandom(STATE.repoFull);
+      if (rec && rec.Link) {
+        var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
+        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(rec.Link);
+        window.open(proxyUrl, "_blank");
+      } else {
         showToast("暂无可用记录");
       }
     });
@@ -3066,6 +2813,11 @@ function init() {
     doSearch();
   });
   DOM.localModeToggle.addEventListener("change", function() {
+    if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
+      DOM.localModeToggle.checked = false;
+      showToast("本地数据尚未加载完成");
+      return;
+    }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
     DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
@@ -3192,15 +2944,25 @@ function init() {
     }
   });
 
-  loadMeta().then(function(ok) {
-    if (!ok) return;
-    STATE.repoList = repoList;
-    STATE.extensionList = extensionList;
-    renderSidebar();
-    renderFilters();
+  console.log("Loading data in background for offline fallback...");
+  loadData().then(function(ok) {
+    STATE.dataLoaded = ok;
+    if (ok) {
+      STATE.repoList = repoList;
+      STATE.extensionList = extensionList;
+      console.log("Local data ready for offline search");
+      DOM.localModeToggleRow.classList.remove("toggle-disabled");
+      renderSidebar();
+      renderFilters();
+      if (STATE.useLocalMode) {
+        STATE.page = 1;
+        STATE.results = [];
+        doSearch();
+      }
+    } else {
+      console.warn("Local data load failed, API-only mode");
+    }
   });
-
-  DOM.localModeToggleRow.classList.remove("toggle-disabled");
 
   ROUTER.apply();
   fetchHitokoto();
