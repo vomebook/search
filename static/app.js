@@ -1313,6 +1313,49 @@ let searchId = 0;
 let searchAbortController = null;
 let searchRequestId = 0;
 let apiAvailable = true;
+let localDataPromise = null;
+
+function ensureLocalDataLoaded(triggerSearchAfterLoad) {
+  if (STATE.dataLoaded) return Promise.resolve(true);
+  if (localDataPromise) return localDataPromise;
+
+  showToast("正在加载本地数据...");
+  if (DOM.localModeToggleRow) DOM.localModeToggleRow.classList.add("toggle-disabled");
+
+  localDataPromise = loadData().then(function(ok) {
+    STATE.dataLoaded = ok;
+    localDataPromise = null;
+    if (DOM.localModeToggleRow) DOM.localModeToggleRow.classList.remove("toggle-disabled");
+    if (ok) {
+      STATE.repoList = repoList;
+      STATE.extensionList = extensionList;
+      console.log("Local data ready for offline search");
+      if (triggerSearchAfterLoad) {
+        STATE.page = 1;
+        STATE.results = [];
+        doSearch();
+      }
+    } else {
+      showToast("本地数据加载失败");
+      if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
+      STATE.useLocalMode = false;
+      syncStateToURL();
+    }
+    return ok;
+  }).catch(function(err) {
+    console.error("Local data load failed:", err);
+    STATE.dataLoaded = false;
+    localDataPromise = null;
+    if (DOM.localModeToggleRow) DOM.localModeToggleRow.classList.remove("toggle-disabled");
+    if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
+    STATE.useLocalMode = false;
+    showToast("本地数据加载失败");
+    syncStateToURL();
+    return false;
+  });
+
+  return localDataPromise;
+}
 
 function debouncedSearch() {
   clearTimeout(searchTimer);
@@ -1373,7 +1416,8 @@ function doSearch(append) {
     if (!STATE.dataLoaded) {
       STATE.isLoading = false;
       DOM.resultsLoading.style.display = "none";
-      showToast(folderMatchMode === "mixed" ? "目录筛选数据尚未加载完成" : "本地数据尚未加载完成");
+      if (STATE.useLocalMode) ensureLocalDataLoaded(true);
+      else showToast("目录筛选数据尚未加载完成");
       return;
     }
     doSearchFallbackLocal(params, append, id);
@@ -2814,8 +2858,12 @@ function init() {
   });
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
-      DOM.localModeToggle.checked = false;
-      showToast("本地数据尚未加载完成");
+      STATE.useLocalMode = true;
+      DOM.exactSearchSection.style.display = "none";
+      STATE.exact = false;
+      if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
+      syncStateToURL();
+      ensureLocalDataLoaded(true);
       return;
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
@@ -2944,27 +2992,8 @@ function init() {
     }
   });
 
-  console.log("Loading data in background for offline fallback...");
-  loadData().then(function(ok) {
-    STATE.dataLoaded = ok;
-    if (ok) {
-      STATE.repoList = repoList;
-      STATE.extensionList = extensionList;
-      console.log("Local data ready for offline search");
-      DOM.localModeToggleRow.classList.remove("toggle-disabled");
-      renderSidebar();
-      renderFilters();
-      if (STATE.useLocalMode) {
-        STATE.page = 1;
-        STATE.results = [];
-        doSearch();
-      }
-    } else {
-      console.warn("Local data load failed, API-only mode");
-    }
-  });
-
   ROUTER.apply();
+  if (STATE.useLocalMode) ensureLocalDataLoaded(true);
   fetchHitokoto();
   setInterval(fetchHitokoto, 30000);
 }
