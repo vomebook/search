@@ -10,6 +10,7 @@
 const META_URL = "data/meta.json.gz";
 const DATA_URL = "data/search_data.json.gz";
 const REPO_DATA_BASE = "data/repos/";
+const SEARCH_DATA_BASE = "data/search/";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
@@ -73,6 +74,8 @@ let RECORDS = [];
 let PRECOMPUTED_FOLDER_TREES = {};
 let PRECOMPUTED_FOLDER_BROWSER = {};
 let EXTENSION_META = [];
+let LOCAL_SEARCH_DATASETS = {};
+let LOCAL_DETAILS_CACHE = {};
 let wordIndex = {};
 let wordIndexFilesOnly = {};
 let extensionCounts = {};
@@ -139,6 +142,187 @@ async function getFolderContentsLocal(repo, path) {
   const browser = await loadRepoBrowserLocal(repoFull);
   if (!browser) return null;
   return browser[path || ""] || null;
+}
+
+function buildDatasetFromSearchRecords(records) {
+  const datasetRecords = [];
+  const datasetWordIndex = {};
+  const datasetWordIndexFilesOnly = {};
+  const datasetExtensionCounts = {};
+  const datasetRepoCounts = {};
+  const datasetFolderIndex = {};
+  const datasetDidYouMeanVocab = {};
+  const datasetDidYouMeanVocabFilesOnly = {};
+
+  for (let i = 0; i < records.length; i++) {
+    const src = records[i] || {};
+    const rec = {
+      Id: src.id,
+      RepoId: src.repoId || repoToId(src.repo || ""),
+      Repo: src.repo || "",
+      File: src.file || "",
+      Extension: src.ext || "",
+      Folder: src.folders || [],
+      Size: typeof src.size === "number" ? src.size : parseInt(src.size || 0, 10) || 0,
+      Link: "",
+      Path: "",
+      HasTxt: false,
+    };
+    datasetRecords.push(rec);
+
+    const repo = rec.Repo;
+    const ext = (rec.Extension || "").toLowerCase();
+    datasetRepoCounts[repo] = (datasetRepoCounts[repo] || 0) + 1;
+    if (ext) datasetExtensionCounts[ext] = (datasetExtensionCounts[ext] || 0) + 1;
+
+    const folders = rec.Folder || [];
+    const text = [rec.File || "", ...folders].join(" ");
+    const tokens = tokenize(text);
+    for (const tok of tokens) {
+      if (!datasetWordIndex[tok]) datasetWordIndex[tok] = [];
+      datasetWordIndex[tok].push(i);
+      datasetDidYouMeanVocab[tok] = (datasetDidYouMeanVocab[tok] || 0) + 1;
+    }
+
+    const fileTokens = tokenize(rec.File || "");
+    for (const tok of fileTokens) {
+      if (!datasetWordIndexFilesOnly[tok]) datasetWordIndexFilesOnly[tok] = [];
+      datasetWordIndexFilesOnly[tok].push(i);
+      datasetDidYouMeanVocabFilesOnly[tok] = (datasetDidYouMeanVocabFilesOnly[tok] || 0) + 1;
+    }
+
+    if (!datasetFolderIndex[repo]) datasetFolderIndex[repo] = {};
+    for (let d = 0; d <= folders.length; d++) {
+      const fp = d === 0 ? "" : folders.slice(0, d).join("/");
+      datasetFolderIndex[repo][fp] = (datasetFolderIndex[repo][fp] || 0) + 1;
+    }
+  }
+
+  return {
+    records: datasetRecords,
+    wordIndex: datasetWordIndex,
+    wordIndexFilesOnly: datasetWordIndexFilesOnly,
+    extensionCounts: datasetExtensionCounts,
+    repoCounts: datasetRepoCounts,
+    folderIndex: datasetFolderIndex,
+    didYouMeanVocab: datasetDidYouMeanVocab,
+    didYouMeanVocabFilesOnly: datasetDidYouMeanVocabFilesOnly,
+    didYouMeanSorted: Object.entries(datasetDidYouMeanVocab).sort((a, b) => b[1] - a[1]),
+    didYouMeanSortedFilesOnly: Object.entries(datasetDidYouMeanVocabFilesOnly).sort((a, b) => b[1] - a[1]),
+    repoList: Object.entries(datasetRepoCounts).map(function(entry) {
+      return { name: entry[0], count: entry[1] };
+    }).sort(function(a, b) { return a.name.localeCompare(b.name); }),
+    extensionList: Object.keys(datasetExtensionCounts).sort(),
+  };
+}
+
+async function loadSearchDatasetLocal(repo) {
+  const repoFull = getRepoFullName(repo);
+  const cacheKey = repoFull || "__global__";
+  if (LOCAL_SEARCH_DATASETS[cacheKey]) return LOCAL_SEARCH_DATASETS[cacheKey];
+  const url = repoFull
+    ? SEARCH_DATA_BASE + getRepoId(repoFull) + ".json.gz"
+    : SEARCH_DATA_BASE + "global.json.gz";
+  const records = await loadGzipJSON(url);
+  const dataset = buildDatasetFromSearchRecords(Array.isArray(records) ? records : []);
+  LOCAL_SEARCH_DATASETS[cacheKey] = dataset;
+  return dataset;
+}
+
+async function loadDetailsMapLocal(repo) {
+  const repoFull = getRepoFullName(repo);
+  if (!repoFull) return {};
+  if (LOCAL_DETAILS_CACHE[repoFull]) return LOCAL_DETAILS_CACHE[repoFull];
+  const details = await loadGzipJSON(REPO_DATA_BASE + getRepoId(repoFull) + "/details.json.gz");
+  const map = {};
+  for (let i = 0; i < details.length; i++) {
+    const item = details[i] || {};
+    map[item.id] = item;
+  }
+  LOCAL_DETAILS_CACHE[repoFull] = map;
+  return map;
+}
+
+function runSearchAgainstDataset(dataset, params) {
+  const saved = {
+    records: RECORDS,
+    wordIndex: wordIndex,
+    wordIndexFilesOnly: wordIndexFilesOnly,
+    extensionCounts: extensionCounts,
+    repoCounts: repoCounts,
+    folderIndex: folderIndex,
+    didYouMeanVocab: didYouMeanVocab,
+    didYouMeanVocabFilesOnly: didYouMeanVocabFilesOnly,
+    didYouMeanSorted: didYouMeanSorted,
+    didYouMeanSortedFilesOnly: didYouMeanSortedFilesOnly,
+    repoList: repoList,
+    extensionList: extensionList,
+  };
+
+  RECORDS = dataset.records;
+  wordIndex = dataset.wordIndex;
+  wordIndexFilesOnly = dataset.wordIndexFilesOnly;
+  extensionCounts = dataset.extensionCounts;
+  repoCounts = dataset.repoCounts;
+  folderIndex = dataset.folderIndex;
+  didYouMeanVocab = dataset.didYouMeanVocab;
+  didYouMeanVocabFilesOnly = dataset.didYouMeanVocabFilesOnly;
+  didYouMeanSorted = dataset.didYouMeanSorted;
+  didYouMeanSortedFilesOnly = dataset.didYouMeanSortedFilesOnly;
+  repoList = dataset.repoList;
+  extensionList = dataset.extensionList;
+
+  try {
+    return doSearchLocal(params);
+  } finally {
+    RECORDS = saved.records;
+    wordIndex = saved.wordIndex;
+    wordIndexFilesOnly = saved.wordIndexFilesOnly;
+    extensionCounts = saved.extensionCounts;
+    repoCounts = saved.repoCounts;
+    folderIndex = saved.folderIndex;
+    didYouMeanVocab = saved.didYouMeanVocab;
+    didYouMeanVocabFilesOnly = saved.didYouMeanVocabFilesOnly;
+    didYouMeanSorted = saved.didYouMeanSorted;
+    didYouMeanSortedFilesOnly = saved.didYouMeanSortedFilesOnly;
+    repoList = saved.repoList;
+    extensionList = saved.extensionList;
+  }
+}
+
+async function hydrateLocalResults(results) {
+  const reposNeeded = {};
+  for (let i = 0; i < results.length; i++) {
+    const rec = results[i];
+    if (rec && rec.Repo) reposNeeded[rec.Repo] = true;
+  }
+
+  const detailMaps = {};
+  const repoNames = Object.keys(reposNeeded);
+  for (let i = 0; i < repoNames.length; i++) {
+    const repo = repoNames[i];
+    try {
+      detailMaps[repo] = await loadDetailsMapLocal(repo);
+    } catch (e) {
+      detailMaps[repo] = {};
+    }
+  }
+
+  return results.map(function(rec) {
+    const detail = (detailMaps[rec.Repo] && detailMaps[rec.Repo][rec.Id]) || {};
+    return {
+      Id: rec.Id,
+      RepoId: rec.RepoId,
+      Repo: rec.Repo,
+      File: rec.File,
+      Extension: rec.Extension,
+      Folder: rec.Folder,
+      Size: rec.Size,
+      Link: detail.link || "",
+      Path: detail.path || "",
+      HasTxt: !!detail.hasTxt,
+    };
+  });
 }
  
 function tokenize(text) {
@@ -1419,7 +1603,8 @@ function doSearch(append) {
   }
 
   if (STATE.useLocalMode || folderMatchMode === "mixed") {
-    if (!STATE.dataLoaded) {
+    var canUseShardLocal = STATE.useLocalMode || (folderMatchMode === "mixed" && STATE.mode === "repo");
+    if (!STATE.dataLoaded && !canUseShardLocal) {
       STATE.isLoading = false;
       DOM.resultsLoading.style.display = "none";
       showToast(folderMatchMode === "mixed" ? "目录筛选数据尚未加载完成" : "本地数据尚未加载完成");
@@ -1507,61 +1692,71 @@ function doSearch(append) {
 
 function doSearchFallbackLocal(params, append, id) {
   requestAnimationFrame(function() {
-    if (id !== searchId) return;
-    try {
-      const data = doSearchLocal(params);
-      STATE.total = data.total;
-      STATE.didYouMean = data.didYouMean || null;
-
-      if (append) {
-        STATE.results = STATE.results.concat(data.results);
-      } else {
-        STATE.results = data.results;
-      }
-
-      STATE.hasMore = STATE.results.length < STATE.total;
-
-      if (append) {
-        var newLen = STATE.results.length;
-        if (VSCROLL.heights.length < newLen) {
-          var oldLen = VSCROLL.heights.length;
-          VSCROLL.heights.length = newLen;
-          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
-        }
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        requestAnimationFrame(function() { renderVisible(); });
-      } else {
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        VSCROLL.heights = [];
-        if (STATE.results.length === 0) {
-          DOM.resultsList.innerHTML = "";
-          DOM.emptyState.style.display = "flex";
-          DOM.emptyDesc.textContent = STATE.query
-            ? '没有找到与 "' + STATE.query + '" 相关的结果'
-            : "暂无数据";
+    (async function() {
+      if (id !== searchId) return;
+      try {
+        var data;
+        if (STATE.mode === "repo" || !STATE.dataLoaded) {
+          var dataset = await loadSearchDatasetLocal(STATE.mode === "repo" ? STATE.repoFull : null);
+          data = runSearchAgainstDataset(dataset, params);
+          data.results = await hydrateLocalResults(data.results);
         } else {
-          DOM.emptyState.style.display = "none";
-          renderResults();
+          data = doSearchLocal(params);
         }
-      }
-      updateStatusBar();
-      updateLoadInfo();
 
-      if (STATE.didYouMean) {
-        DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
-        DOM.didYouMean.style.display = "inline";
-      }
+        STATE.total = data.total;
+        STATE.didYouMean = data.didYouMean || null;
 
-      syncStateToURL();
-    } catch (err) {
-      console.error("Local fallback crashed:", err);
-      showToast("搜索失败");
-    } finally {
-      STATE.isLoading = false;
-      DOM.resultsLoading.style.display = "none";
-    }
+        if (append) {
+          STATE.results = STATE.results.concat(data.results);
+        } else {
+          STATE.results = data.results;
+        }
+
+        STATE.hasMore = STATE.results.length < STATE.total;
+
+        if (append) {
+          var newLen = STATE.results.length;
+          if (VSCROLL.heights.length < newLen) {
+            var oldLen = VSCROLL.heights.length;
+            VSCROLL.heights.length = newLen;
+            for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
+          }
+          VSCROLL.renderStart = 0;
+          VSCROLL.renderEnd = 0;
+          requestAnimationFrame(function() { renderVisible(); });
+        } else {
+          VSCROLL.renderStart = 0;
+          VSCROLL.renderEnd = 0;
+          VSCROLL.heights = [];
+          if (STATE.results.length === 0) {
+            DOM.resultsList.innerHTML = "";
+            DOM.emptyState.style.display = "flex";
+            DOM.emptyDesc.textContent = STATE.query
+              ? '没有找到与 "' + STATE.query + '" 相关的结果'
+              : "暂无数据";
+          } else {
+            DOM.emptyState.style.display = "none";
+            renderResults();
+          }
+        }
+        updateStatusBar();
+        updateLoadInfo();
+
+        if (STATE.didYouMean) {
+          DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
+          DOM.didYouMean.style.display = "inline";
+        }
+
+        syncStateToURL();
+      } catch (err) {
+        console.error("Local fallback crashed:", err);
+        showToast("搜索失败");
+      } finally {
+        STATE.isLoading = false;
+        DOM.resultsLoading.style.display = "none";
+      }
+    })();
   }, 0);
 }
  
