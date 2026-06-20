@@ -758,14 +758,55 @@ async function fetchFolderTree(repo) {
   } catch (e) { return null; }
 }
 
+const browserApiCache = new Map();
+const browserApiPending = new Map();
+const BROWSER_API_CACHE_MAX = 200;
+
+function setBrowserApiCache(cacheKey, data) {
+  if (browserApiCache.has(cacheKey)) browserApiCache.delete(cacheKey);
+  browserApiCache.set(cacheKey, data);
+  if (browserApiCache.size > BROWSER_API_CACHE_MAX) {
+    const firstKey = browserApiCache.keys().next().value;
+    browserApiCache.delete(firstKey);
+  }
+}
+
 async function fetchFolderContents(repo, path) {
   if (!apiAvailable) return null;
+  var cacheKey = repo + "|" + (path || "");
+  if (browserApiCache.has(cacheKey)) return browserApiCache.get(cacheKey);
+  if (browserApiPending.has(cacheKey)) return browserApiPending.get(cacheKey);
+
   try {
     var qs = path ? "?path=" + encodeURIComponent(path) : "";
-    var resp = await fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo) + "/contents" + qs);
-    if (!resp.ok) return null;
-    return await resp.json();
+    var promise = fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo) + "/contents" + qs)
+      .then(function(resp) {
+        if (!resp.ok) return null;
+        return resp.json();
+      })
+      .then(function(data) {
+        browserApiPending.delete(cacheKey);
+        if (data) setBrowserApiCache(cacheKey, data);
+        return data;
+      })
+      .catch(function() {
+        browserApiPending.delete(cacheKey);
+        return null;
+      });
+    browserApiPending.set(cacheKey, promise);
+    return await promise;
   } catch (e) { return null; }
+}
+
+function scheduleBrowserRootPrefetch(repos) {
+  var run = function() {
+    for (var i = 0; i < repos.length; i++) {
+      var short = repos[i] && repos[i].name ? repos[i].name.split("/").pop() : "";
+      if (short) fetchFolderContents(short, "").catch(function() {});
+    }
+  };
+  if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 1500 });
+  else setTimeout(run, 200);
 }
 
 function getCurrentExtensionCounts() {
@@ -1769,6 +1810,7 @@ async function renderRepoList() {
     html += '</div>';
   }
   DOM.sidebarContent.innerHTML = html;
+  scheduleBrowserRootPrefetch(repos);
 }
  
 async function renderBrowser(path) {
