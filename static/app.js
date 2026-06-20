@@ -664,17 +664,24 @@ async function doSearchAPI(params, append) {
   STATE.didYouMean = data.did_you_mean || null;
 
   if (append) {
-    STATE._pageCache[data.page] = data.results;
-    var nextPage = STATE._loadedPage + 1;
-    var combinedNew = [];
-    while (STATE._pageCache[nextPage]) {
-      var pageItems = STATE._pageCache[nextPage];
-      STATE.results = STATE.results.concat(pageItems);
-      combinedNew = combinedNew.concat(pageItems);
-      delete STATE._pageCache[nextPage];
-      nextPage++;
+    if (params.fillFirstPage) {
+      STATE.results = data.results;
+      STATE._loadedPage = 1;
+      STATE._pageCache = {};
+      STATE.page = 1;
+    } else {
+      STATE._pageCache[data.page] = data.results;
+      var nextPage = STATE._loadedPage + 1;
+      var combinedNew = [];
+      while (STATE._pageCache[nextPage]) {
+        var pageItems = STATE._pageCache[nextPage];
+        STATE.results = STATE.results.concat(pageItems);
+        combinedNew = combinedNew.concat(pageItems);
+        delete STATE._pageCache[nextPage];
+        nextPage++;
+      }
+      STATE._loadedPage = nextPage - 1;
     }
-    STATE._loadedPage = nextPage - 1;
   } else {
     STATE.results = data.results;
     STATE._loadedPage = 1;
@@ -686,8 +693,9 @@ async function doSearchAPI(params, append) {
 
 function prefetchNextPage() {
   if (!apiAvailable) return;
+  if (isEmptyQuerySearch() && STATE.results.length < STATE.pageSize) return;
   var nextPage = STATE._loadedPage + 1;
-  var totalPages = Math.ceil(STATE.total / STATE.pageSize);
+  var totalPages = Math.ceil(STATE.total / 100);
   if (nextPage > totalPages) return;
   if (STATE._pageCache[nextPage]) return;
 
@@ -698,7 +706,7 @@ function prefetchNextPage() {
   var body = {};
   if (q) body.q = q;
   body.page = nextPage;
-  body.page_size = STATE.pageSize;
+  body.page_size = getRequestedPageSize(true);
   if (!isRepo && STATE.filterRepos.length > 0) body.repos = STATE.filterRepos;
   if (STATE.filterExtensions.length > 0) body.extensions = STATE.filterExtensions;
   if (STATE.filterFolders.length > 0) body.folders = STATE.filterFolders;
@@ -1000,6 +1008,19 @@ const VSCROLL = {
   heights: [],
   estimatedHeight: 60,
 };
+
+function isEmptyQuerySearch() {
+  return !String(STATE.query || "").trim();
+}
+
+function shouldFetchExpandedFirstPage(append) {
+  return append && isEmptyQuerySearch() && STATE._loadedPage === 1 && STATE.results.length === 30;
+}
+
+function getRequestedPageSize(append) {
+  if (!append && isEmptyQuerySearch()) return 30;
+  return STATE.pageSize;
+}
  
 /* ═══════════════════════════════════════════════════════════
    DOM References
@@ -1447,8 +1468,9 @@ function doSearch(append) {
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
     exact: STATE.exact,
-    page: STATE.page,
-    pageSize: STATE.pageSize,
+    page: shouldFetchExpandedFirstPage(append) ? 1 : STATE.page,
+    pageSize: shouldFetchExpandedFirstPage(append) ? STATE.pageSize : getRequestedPageSize(append),
+    fillFirstPage: shouldFetchExpandedFirstPage(append),
   };
 
   STATE.isLoading = true;
@@ -1483,6 +1505,18 @@ function doSearch(append) {
     doSearchAPI(params, append).then(function() {
       if (id !== searchId) return;
       if (append) {
+        if (params.fillFirstPage) {
+          STATE.page = 1;
+          VSCROLL.renderStart = 0;
+          VSCROLL.renderEnd = 0;
+          VSCROLL.heights = [];
+          renderResults();
+          updateStatusBar();
+          updateLoadInfo();
+          syncStateToURL();
+          prefetchNextPage();
+          return;
+        }
         // Incremental: extend heights, let next scroll render new items
         var newLen = STATE.results.length;
         if (VSCROLL.heights.length < newLen) {
@@ -1560,7 +1594,12 @@ function doSearchFallbackLocal(params, append, id) {
       STATE.didYouMean = data.didYouMean || null;
 
       if (append) {
-        STATE.results = STATE.results.concat(data.results);
+        if (params.fillFirstPage) {
+          STATE.results = data.results;
+          STATE.page = 1;
+        } else {
+          STATE.results = STATE.results.concat(data.results);
+        }
       } else {
         STATE.results = data.results;
       }
