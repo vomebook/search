@@ -1306,9 +1306,11 @@ const ROUTER = {
     }
     DOM.leftSidebar.classList.remove("expanded-wide");
     if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
-    DOM.resultsList.innerHTML = "";
-    DOM.emptyState.style.display = "none";
-    DOM.resultsLoading.style.display = "flex";
+    if (!STATE.isMobile) {
+      DOM.resultsList.innerHTML = "";
+      DOM.emptyState.style.display = "none";
+      DOM.resultsLoading.style.display = "flex";
+    }
     renderSidebar();
     renderFilters();
     doSearch();
@@ -1358,7 +1360,6 @@ let searchAbortController = null;
 let searchRequestId = 0;
 let apiAvailable = true;
 let localDataPromise = null;
-
 function ensureLocalDataLoaded(triggerSearchAfterLoad) {
   if (STATE.dataLoaded) return Promise.resolve(true);
   if (localDataPromise) return localDataPromise;
@@ -1481,7 +1482,6 @@ function doSearch(append) {
 
     doSearchAPI(params, append).then(function() {
       if (id !== searchId) return;
-      var dataReadyAt = performance.now();
       if (append) {
         // Incremental: extend heights, let next scroll render new items
         var newLen = STATE.results.length;
@@ -1493,11 +1493,7 @@ function doSearch(append) {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
         // Force a renderVisible on next animation frame to include new items
-        requestAnimationFrame(function() {
-          renderVisible();
-          var renderDoneAt = performance.now();
-          console.log("[results][main]", STATE.repo || "global", STATE.query || "<empty>", "api=", Math.round(dataReadyAt - searchStart) + "ms", "render=", Math.round(renderDoneAt - dataReadyAt) + "ms", "total=", Math.round(renderDoneAt - searchStart) + "ms", "results=", STATE.results.length);
-        });
+        requestAnimationFrame(function() { renderVisible(); });
       } else {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
@@ -1511,8 +1507,6 @@ function doSearch(append) {
         } else {
           DOM.emptyState.style.display = "none";
           renderResults();
-          var renderDoneAt = performance.now();
-          console.log("[results][main]", STATE.repo || "global", STATE.query || "<empty>", "api=", Math.round(dataReadyAt - searchStart) + "ms", "render=", Math.round(renderDoneAt - dataReadyAt) + "ms", "total=", Math.round(renderDoneAt - searchStart) + "ms", "results=", STATE.results.length);
         }
       }
       updateStatusBar();
@@ -1560,10 +1554,8 @@ function doSearch(append) {
 function doSearchFallbackLocal(params, append, id) {
   requestAnimationFrame(function() {
     if (id !== searchId) return;
-    var localStart = performance.now();
     try {
       const data = doSearchLocal(params);
-      var dataReadyAt = performance.now();
       STATE.total = data.total;
       STATE.didYouMean = data.didYouMean || null;
 
@@ -1584,11 +1576,7 @@ function doSearchFallbackLocal(params, append, id) {
         }
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
-        requestAnimationFrame(function() {
-          renderVisible();
-          var renderDoneAt = performance.now();
-          console.log("[results][main][local]", STATE.repo || "global", STATE.query || "<empty>", "data=", Math.round(dataReadyAt - localStart) + "ms", "render=", Math.round(renderDoneAt - dataReadyAt) + "ms", "total=", Math.round(renderDoneAt - localStart) + "ms", "results=", STATE.results.length);
-        });
+        requestAnimationFrame(function() { renderVisible(); });
       } else {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
@@ -1602,8 +1590,6 @@ function doSearchFallbackLocal(params, append, id) {
         } else {
           DOM.emptyState.style.display = "none";
           renderResults();
-          var renderDoneAt = performance.now();
-          console.log("[results][main][local]", STATE.repo || "global", STATE.query || "<empty>", "data=", Math.round(dataReadyAt - localStart) + "ms", "render=", Math.round(renderDoneAt - dataReadyAt) + "ms", "total=", Math.round(renderDoneAt - localStart) + "ms", "results=", STATE.results.length);
         }
       }
       updateStatusBar();
@@ -1830,7 +1816,6 @@ async function renderRepoList() {
 }
  
 async function renderBrowser(path) {
-  var browserStart = performance.now();
   STATE.browserPath = path;
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
@@ -1880,11 +1865,8 @@ async function renderBrowser(path) {
     } catch (e) {}
   }
 
-  var dataReadyAt = performance.now();
-
   if (!data || (!data.folders && !data.files)) {
     list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
-    console.log("[browser][main]", STATE.repo || "global", path || "<root>", "failed", Math.round(dataReadyAt - browserStart) + "ms");
     return;
   }
 
@@ -1925,17 +1907,6 @@ async function renderBrowser(path) {
     }(f2, path || ""));
     list.appendChild(div2);
   }
-
-  var renderDoneAt = performance.now();
-  console.log(
-    "[browser][main]",
-    STATE.repo || "global",
-    path || "<root>",
-    "data=", Math.round(dataReadyAt - browserStart) + "ms",
-    "render=", Math.round(renderDoneAt - dataReadyAt) + "ms",
-    "folders=", (data.folders || []).length,
-    "files=", (data.files || []).length,
-  );
 }
  
 /* ═══════════════════════════════════════════════════════════
