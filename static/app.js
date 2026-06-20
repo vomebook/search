@@ -1154,6 +1154,7 @@ const ROUTER = {
   },
  
   navigate: function(mode, repo, folder) {
+    if (mode === "repo") primeRepoProjection(repo);
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
@@ -1309,6 +1310,7 @@ const ROUTER = {
     DOM.resultsList.innerHTML = "";
     DOM.emptyState.style.display = "none";
     DOM.resultsLoading.style.display = "flex";
+    if (STATE.mode === "repo") consumeRepoProjection(STATE.repo);
     renderSidebar();
     renderFilters();
     doSearch();
@@ -1358,6 +1360,49 @@ let searchAbortController = null;
 let searchRequestId = 0;
 let apiAvailable = true;
 let localDataPromise = null;
+let pendingRepoProjection = null;
+
+function primeRepoProjection(repoShort) {
+  if (STATE.mode !== "global" || !STATE.query || !STATE.results || STATE.results.length === 0) {
+    pendingRepoProjection = null;
+    return;
+  }
+  var fullRepo = repoShort ? "VoiceOfML/" + repoShort : null;
+  if (!fullRepo) {
+    pendingRepoProjection = null;
+    return;
+  }
+  pendingRepoProjection = {
+    repo: repoShort,
+    query: STATE.query,
+    results: STATE.results.filter(function(rec) { return rec && rec.Repo === fullRepo; }),
+  };
+}
+
+function consumeRepoProjection(repoShort) {
+  if (!pendingRepoProjection) return;
+  if (pendingRepoProjection.repo !== repoShort) return;
+  if (pendingRepoProjection.query !== STATE.query) return;
+
+  STATE.results = pendingRepoProjection.results.slice();
+  STATE.total = STATE.results.length;
+  STATE.hasMore = false;
+  STATE.didYouMean = null;
+  VSCROLL.renderStart = 0;
+  VSCROLL.renderEnd = 0;
+  VSCROLL.heights = [];
+  if (STATE.results.length === 0) {
+    DOM.resultsList.innerHTML = "";
+    DOM.emptyState.style.display = "flex";
+    DOM.emptyDesc.textContent = "正在加载该仓库完整结果...";
+  } else {
+    DOM.emptyState.style.display = "none";
+    renderResults();
+  }
+  updateStatusBar();
+  updateLoadInfo();
+  pendingRepoProjection = null;
+}
 
 function ensureLocalDataLoaded(triggerSearchAfterLoad) {
   if (STATE.dataLoaded) return Promise.resolve(true);
