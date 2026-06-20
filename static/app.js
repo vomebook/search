@@ -1420,6 +1420,7 @@ function debouncedSearch() {
 
 function doSearch(append) {
   const id = ++searchId;
+  const searchStart = performance.now();
 
   var activeFolderFilters = [];
   var folderMatchMode = null;
@@ -1480,6 +1481,7 @@ function doSearch(append) {
 
     doSearchAPI(params, append).then(function() {
       if (id !== searchId) return;
+      var dataReadyAt = performance.now();
       if (append) {
         // Incremental: extend heights, let next scroll render new items
         var newLen = STATE.results.length;
@@ -1491,7 +1493,11 @@ function doSearch(append) {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
         // Force a renderVisible on next animation frame to include new items
-        requestAnimationFrame(function() { renderVisible(); });
+        requestAnimationFrame(function() {
+          renderVisible();
+          var renderDoneAt = performance.now();
+          console.log("[results][main]", STATE.repo || "global", STATE.query || "<empty>", "api=", Math.round(dataReadyAt - searchStart) + "ms", "render=", Math.round(renderDoneAt - dataReadyAt) + "ms", "total=", Math.round(renderDoneAt - searchStart) + "ms", "results=", STATE.results.length);
+        });
       } else {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
@@ -1505,6 +1511,8 @@ function doSearch(append) {
         } else {
           DOM.emptyState.style.display = "none";
           renderResults();
+          var renderDoneAt = performance.now();
+          console.log("[results][main]", STATE.repo || "global", STATE.query || "<empty>", "api=", Math.round(dataReadyAt - searchStart) + "ms", "render=", Math.round(renderDoneAt - dataReadyAt) + "ms", "total=", Math.round(renderDoneAt - searchStart) + "ms", "results=", STATE.results.length);
         }
       }
       updateStatusBar();
@@ -1552,8 +1560,10 @@ function doSearch(append) {
 function doSearchFallbackLocal(params, append, id) {
   requestAnimationFrame(function() {
     if (id !== searchId) return;
+    var localStart = performance.now();
     try {
       const data = doSearchLocal(params);
+      var dataReadyAt = performance.now();
       STATE.total = data.total;
       STATE.didYouMean = data.didYouMean || null;
 
@@ -1574,7 +1584,11 @@ function doSearchFallbackLocal(params, append, id) {
         }
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
-        requestAnimationFrame(function() { renderVisible(); });
+        requestAnimationFrame(function() {
+          renderVisible();
+          var renderDoneAt = performance.now();
+          console.log("[results][main][local]", STATE.repo || "global", STATE.query || "<empty>", "data=", Math.round(dataReadyAt - localStart) + "ms", "render=", Math.round(renderDoneAt - dataReadyAt) + "ms", "total=", Math.round(renderDoneAt - localStart) + "ms", "results=", STATE.results.length);
+        });
       } else {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
@@ -1588,6 +1602,8 @@ function doSearchFallbackLocal(params, append, id) {
         } else {
           DOM.emptyState.style.display = "none";
           renderResults();
+          var renderDoneAt = performance.now();
+          console.log("[results][main][local]", STATE.repo || "global", STATE.query || "<empty>", "data=", Math.round(dataReadyAt - localStart) + "ms", "render=", Math.round(renderDoneAt - dataReadyAt) + "ms", "total=", Math.round(renderDoneAt - localStart) + "ms", "results=", STATE.results.length);
         }
       }
       updateStatusBar();
