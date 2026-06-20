@@ -1814,6 +1814,7 @@ async function renderRepoList() {
 }
  
 async function renderBrowser(path) {
+  var browserStart = performance.now();
   STATE.browserPath = path;
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
@@ -1863,8 +1864,11 @@ async function renderBrowser(path) {
     } catch (e) {}
   }
 
+  var dataReadyAt = performance.now();
+
   if (!data || (!data.folders && !data.files)) {
     list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
+    console.log("[browser][main]", STATE.repo || "global", path || "<root>", "failed", Math.round(dataReadyAt - browserStart) + "ms");
     return;
   }
 
@@ -1905,6 +1909,17 @@ async function renderBrowser(path) {
     }(f2, path || ""));
     list.appendChild(div2);
   }
+
+  var renderDoneAt = performance.now();
+  console.log(
+    "[browser][main]",
+    STATE.repo || "global",
+    path || "<root>",
+    "data=", Math.round(dataReadyAt - browserStart) + "ms",
+    "render=", Math.round(renderDoneAt - dataReadyAt) + "ms",
+    "folders=", (data.folders || []).length,
+    "files=", (data.files || []).length,
+  );
 }
  
 /* ═══════════════════════════════════════════════════════════
