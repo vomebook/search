@@ -1265,15 +1265,12 @@ const ROUTER = {
     }
     DOM.leftSidebar.classList.remove("expanded-wide");
     if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
+    DOM.resultsList.innerHTML = "";
+    DOM.emptyState.style.display = "none";
+    DOM.resultsLoading.style.display = "flex";
     renderSidebar();
     renderFilters();
-    if (STATE.mode === "repo" && !STATE.query) {
-      setTimeout(function() {
-        if (STATE.mode === "repo" && !STATE.query) doSearch();
-      }, 0);
-    } else {
-      doSearch();
-    }
+    doSearch();
   },
 };
  
