@@ -106,18 +106,71 @@ function decodeRecord(rec) {
   };
 }
 
+function decodeSearchPayload(data) {
+  if (Array.isArray(data)) {
+    return data.map(decodeRecord);
+  }
+  if (!data || typeof data !== "object") return [];
+  const repos = Array.isArray(data.rp) ? data.rp : [];
+  const folders = Array.isArray(data.fd) ? data.fd : [];
+  const encodedRecords = Array.isArray(data.rc) ? data.rc : [];
+  const records = new Array(encodedRecords.length);
+  for (let i = 0; i < encodedRecords.length; i++) {
+    const item = encodedRecords[i];
+    if (!Array.isArray(item) || item.length < 6) {
+      records[i] = { Repo: "", File: "", Extension: "", Folder: [], Size: "", HasTxt: false };
+      continue;
+    }
+    const repo = Number.isInteger(item[0]) && item[0] >= 0 && item[0] < repos.length ? repos[item[0]] : "";
+    const folder = Number.isInteger(item[3]) && item[3] >= 0 && item[3] < folders.length ? folders[item[3]] : [];
+    records[i] = {
+      Repo: repo,
+      File: item[1] || "",
+      Extension: item[2] || "",
+      Folder: Array.isArray(folder) ? folder : [],
+      Size: item[4] || "",
+      HasTxt: !!item[5],
+    };
+  }
+  return records;
+}
+
 function decodeTreeNode(node) {
-  if (!node || node.name !== undefined) return node;
+  return decodeTreeNodeWithContext(node, "", false);
+}
+
+function decodeTreeNodeWithContext(node, parentPath, isRoot) {
+  if (!node) return node;
+  if (node.name !== undefined) {
+    const decoded = Object.assign({}, node);
+    if (decoded.path === undefined) {
+      decoded.path = isRoot ? "" : (parentPath ? parentPath + "/" + (decoded.name || "") : (decoded.name || ""));
+    }
+    decoded.children = Array.isArray(decoded.children)
+      ? decoded.children.map(function(child) { return decodeTreeNodeWithContext(child, decoded.path, false); })
+      : [];
+    decoded.hasChildren = decoded.hasChildren !== undefined ? !!decoded.hasChildren : decoded.children.length > 0;
+    decoded.showSelfToggle = decoded.showSelfToggle !== undefined
+      ? !!decoded.showSelfToggle
+      : !!(decoded.path && decoded.hasDirectFiles && decoded.hasChildren);
+    if (isRoot) decoded.isRoot = true;
+    return decoded;
+  }
+  const name = node.n || "";
+  const path = isRoot ? "" : (parentPath ? parentPath + "/" + name : name);
+  const children = Array.isArray(node.ch)
+    ? node.ch.map(function(child) { return decodeTreeNodeWithContext(child, path, false); })
+    : [];
   const decoded = {
-    name: node.n || "",
-    path: node.p || "",
+    name: name,
+    path: path,
     count: node.c || 0,
     hasDirectFiles: !!node.df,
-    hasChildren: !!node.hc,
-    showSelfToggle: !!node.st,
-    children: Array.isArray(node.ch) ? node.ch.map(decodeTreeNode) : [],
+    hasChildren: children.length > 0,
+    showSelfToggle: !!(path && node.df && children.length > 0),
+    children: children,
   };
-  if (node.rt) decoded.isRoot = true;
+  if (isRoot) decoded.isRoot = true;
   return decoded;
 }
 
@@ -126,21 +179,39 @@ function decodeFolderTreeData(data) {
   const decoded = {};
   for (const repo in data) {
     if (!Object.prototype.hasOwnProperty.call(data, repo)) continue;
-    decoded[repo] = Array.isArray(data[repo]) ? data[repo].map(decodeTreeNode) : [];
+    decoded[repo] = Array.isArray(data[repo]) ? data[repo].map(function(node) {
+      return decodeTreeNodeWithContext(node, "", true);
+    }) : [];
   }
   return decoded;
 }
 
-function decodeBrowserEntry(entry) {
-  if (!entry || entry.folders !== undefined) return entry;
+function decodeBrowserEntry(entry, currentPath) {
+  if (!entry) return entry;
+  if (entry.folders !== undefined) {
+    const decoded = Object.assign({}, entry);
+    decoded.current_path = decoded.current_path !== undefined ? decoded.current_path : (currentPath || "");
+    decoded.folders = Array.isArray(decoded.folders) ? decoded.folders.map(function(item) {
+      const folder = Object.assign({}, item);
+      if (folder.path === undefined) {
+        folder.path = currentPath ? currentPath + "/" + (folder.name || "") : (folder.name || "");
+      }
+      return folder;
+    }) : [];
+    return decoded;
+  }
   return {
     folders: Array.isArray(entry.d) ? entry.d.map(function(item) {
-      return { name: item.n || "", path: item.p || "", count: item.c || 0 };
+      return {
+        name: item.n || "",
+        path: currentPath ? currentPath + "/" + (item.n || "") : (item.n || ""),
+        count: item.c || 0,
+      };
     }) : [],
     files: Array.isArray(entry.f) ? entry.f.map(function(item) {
       return { name: item.n || "", ext: item.e || "", hasTxt: !!item.t, size: item.s || "" };
     }) : [],
-    current_path: entry.p || "",
+    current_path: currentPath || "",
   };
 }
 
@@ -153,7 +224,7 @@ function decodeFolderBrowserData(data) {
     const repoBrowser = data[repo] || {};
     for (const path in repoBrowser) {
       if (!Object.prototype.hasOwnProperty.call(repoBrowser, path)) continue;
-      decoded[repo][path] = decodeBrowserEntry(repoBrowser[path]);
+      decoded[repo][path] = decodeBrowserEntry(repoBrowser[path], path);
     }
   }
   return decoded;
@@ -408,7 +479,7 @@ async function loadData() {
       loadGzipJSON(FOLDER_BROWSER_URL).catch(function() { return {}; }),
     ]);
 
-    RECORDS = Array.isArray(loaded[0]) ? loaded[0].map(decodeRecord) : [];
+    RECORDS = decodeSearchPayload(loaded[0]);
     PRECOMPUTED_FOLDER_TREES = decodeFolderTreeData(loaded[1] || {});
     PRECOMPUTED_FOLDER_BROWSER = decodeFolderBrowserData(loaded[2] || {});
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
