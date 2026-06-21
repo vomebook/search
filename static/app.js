@@ -13,6 +13,7 @@ const FOLDER_BROWSER_URL = "data/folder_browser.json.gz";
 const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
+const HF_DATASET_BASE = "https://huggingface.co/datasets";
  
 const ORDERED_EXTENSIONS = [
   "pdf", "txt",
@@ -83,6 +84,80 @@ let didYouMeanSorted = [];
 let didYouMeanSortedFilesOnly = [];
 let repoList = [];
 let extensionList = [];
+
+const RECORD_KEY_MAP = {
+  r: "Repo",
+  f: "File",
+  e: "Extension",
+  d: "Folder",
+  s: "Size",
+  t: "HasTxt",
+};
+
+function decodeRecord(rec) {
+  if (!rec || rec.Repo !== undefined) return rec;
+  return {
+    Repo: rec.r || "",
+    File: rec.f || "",
+    Extension: rec.e || "",
+    Folder: Array.isArray(rec.d) ? rec.d : [],
+    Size: rec.s || "",
+    HasTxt: !!rec.t,
+  };
+}
+
+function decodeTreeNode(node) {
+  if (!node || node.name !== undefined) return node;
+  const decoded = {
+    name: node.n || "",
+    path: node.p || "",
+    count: node.c || 0,
+    hasDirectFiles: !!node.df,
+    hasChildren: !!node.hc,
+    showSelfToggle: !!node.st,
+    children: Array.isArray(node.ch) ? node.ch.map(decodeTreeNode) : [],
+  };
+  if (node.rt) decoded.isRoot = true;
+  return decoded;
+}
+
+function decodeFolderTreeData(data) {
+  if (!data || Array.isArray(data)) return data || {};
+  const decoded = {};
+  for (const repo in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, repo)) continue;
+    decoded[repo] = Array.isArray(data[repo]) ? data[repo].map(decodeTreeNode) : [];
+  }
+  return decoded;
+}
+
+function decodeBrowserEntry(entry) {
+  if (!entry || entry.folders !== undefined) return entry;
+  return {
+    folders: Array.isArray(entry.d) ? entry.d.map(function(item) {
+      return { name: item.n || "", path: item.p || "", count: item.c || 0 };
+    }) : [],
+    files: Array.isArray(entry.f) ? entry.f.map(function(item) {
+      return { name: item.n || "", ext: item.e || "", hasTxt: !!item.t, size: item.s || "" };
+    }) : [],
+    current_path: entry.p || "",
+  };
+}
+
+function decodeFolderBrowserData(data) {
+  if (!data || Array.isArray(data)) return data || {};
+  const decoded = {};
+  for (const repo in data) {
+    if (!Object.prototype.hasOwnProperty.call(data, repo)) continue;
+    decoded[repo] = {};
+    const repoBrowser = data[repo] || {};
+    for (const path in repoBrowser) {
+      if (!Object.prototype.hasOwnProperty.call(repoBrowser, path)) continue;
+      decoded[repo][path] = decodeBrowserEntry(repoBrowser[path]);
+    }
+  }
+  return decoded;
+}
  
 function tokenize(text) {
   const tokens = [];
@@ -120,6 +195,32 @@ function editDistance(s1, s2, maxDist) {
     prev = curr;
   }
   return prev[prev.length - 1];
+}
+
+function buildRecordRelativePath(rec) {
+  const filename = rec.File || "";
+  const extension = rec.Extension || "";
+  const fullName = extension ? filename + "." + extension : filename;
+  const folders = Array.isArray(rec.Folder) ? rec.Folder : [];
+  return folders.length > 0 ? folders.join("/") + "/" + fullName : fullName;
+}
+
+function buildRecordLink(rec) {
+  const repo = rec.Repo || "";
+  return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeURI(buildRecordRelativePath(rec));
+}
+
+function buildRecordPath(rec) {
+  const repo = rec.Repo || "";
+  return HF_DATASET_BASE + "/" + repo + "/blob/main/" + encodeURI(buildRecordRelativePath(rec));
+}
+
+function getRecordLink(rec) {
+  return rec.Link || buildRecordLink(rec);
+}
+
+function getRecordPath(rec) {
+  return rec.Path || buildRecordPath(rec);
 }
  
 function buildIndex() {
@@ -307,9 +408,9 @@ async function loadData() {
       loadGzipJSON(FOLDER_BROWSER_URL).catch(function() { return {}; }),
     ]);
 
-    RECORDS = loaded[0] || [];
-    PRECOMPUTED_FOLDER_TREES = loaded[1] || {};
-    PRECOMPUTED_FOLDER_BROWSER = loaded[2] || {};
+    RECORDS = Array.isArray(loaded[0]) ? loaded[0].map(decodeRecord) : [];
+    PRECOMPUTED_FOLDER_TREES = decodeFolderTreeData(loaded[1] || {});
+    PRECOMPUTED_FOLDER_BROWSER = decodeFolderBrowserData(loaded[2] || {});
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
 
     await buildIndex();
@@ -924,8 +1025,8 @@ function getFolderContents(repo, path) {
     .map(rec => ({
       name: rec.File || "",
       ext: rec.Extension || "",
-      link: rec.Link || "",
-      path: rec.Path || "",
+      link: getRecordLink(rec),
+      path: getRecordPath(rec),
       hasTxt: rec.HasTxt || false,
       size: rec.Size || "",
     }))
@@ -1670,10 +1771,10 @@ function buildResultHTML(rec, idx) {
       '</div>' +
     '</div>' +
     '<div class="result-actions">' +
-      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(rec.Link)) + '">复制链接</button>' +
-      '<a href="' + API_BASE + '/api/download?file=' + encodeURIComponent(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '&link=' + encodeURIComponent(rec.Link) + '" class="result-action-btn primary" target="_blank">下载</a>' +
-      '<a href="' + escapeHTML(getPreviewLink(rec.Path)) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
-      (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(rec.Link) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
+      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(getRecordLink(rec))) + '">复制链接</button>' +
+      '<a href="' + API_BASE + '/api/download?file=' + encodeURIComponent(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '&link=' + encodeURIComponent(getRecordLink(rec)) + '" class="result-action-btn primary" target="_blank">下载</a>' +
+      '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
+      (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(getRecordLink(rec)) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
   );
 }
@@ -2298,9 +2399,9 @@ function randomBook() {
     : API_BASE + "/api/random";
   fetch(url).then(function(resp) { return resp.json(); })
     .then(function(rec) {
-      if (rec && rec.Link) {
+      if (rec) {
         var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(rec.Link);
+        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(getRecordLink(rec));
         window.open(proxyUrl, "_blank");
       } else {
         showToast("暂无可用记录");
@@ -2308,9 +2409,9 @@ function randomBook() {
     })
     .catch(function() {
       var rec = getRandom(STATE.repoFull);
-      if (rec && rec.Link) {
+      if (rec) {
         var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(rec.Link);
+        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(getRecordLink(rec));
         window.open(proxyUrl, "_blank");
       } else {
         showToast("暂无可用记录");
@@ -2597,7 +2698,7 @@ function setupKeyboard() {
       }
       if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
         const rec = STATE.results[keyboardResultIndex];
-        if (rec && rec.Link) window.open(rec.Link, "_blank");
+        if (rec) window.open(getRecordLink(rec), "_blank");
         return;
       }
     }
@@ -2807,7 +2908,7 @@ function init() {
     var indices = Object.keys(selectedIndices).map(Number);
     for (var li = 0; li < indices.length; li++) {
       var rec = STATE.results[indices[li]];
-      if (rec && rec.Link) links.push(getCopyableLink(rec.Link));
+      if (rec) links.push(getCopyableLink(getRecordLink(rec)));
     }
     return links;
   };
