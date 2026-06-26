@@ -1001,6 +1001,7 @@ body.mobile .mobile-selected-count {
   padding: 10px 12px;
 }
 
+#mirror-links-section,
 #history-toggle-section,
 #search-folders-section,
 #exact-search-section,
@@ -1010,6 +1011,7 @@ body.mobile .mobile-selected-count {
   box-sizing: border-box;
 }
 
+#mirror-links-section .toggle-row,
 #history-toggle-section .toggle-row,
 #search-folders-section .toggle-row,
 #exact-search-section .toggle-row,
