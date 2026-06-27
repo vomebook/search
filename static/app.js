@@ -2148,6 +2148,12 @@ async function renderExtensionFilter() {
     } catch (e) {}
   }
 
+  STATE.extensionList = extData && Array.isArray(extData)
+    ? extData
+      .filter(function(item) { return item && typeof item.name === "string"; })
+      .map(function(item) { return item.name; })
+    : [];
+
   // Clean up extensions that don't exist in current repo
   if (STATE.filterExtensions.length > 0 && extData && Array.isArray(extData)) {
     var availNames = {};
@@ -3147,14 +3153,14 @@ function init() {
   DOM.filterMaxUnit.addEventListener("change", applySizeFilter);
 
   DOM.extSelectAll.addEventListener("click", function() {
-    STATE.filterExtensions = extensionList.slice();
+    STATE.filterExtensions = STATE.extensionList.slice();
     STATE.page = 1;
     STATE.results = [];
     doSearch();
     renderExtensionFilter();
   });
   DOM.extDeselectAll.addEventListener("click", function() {
-    var allExtNames = extensionList.slice();
+    var allExtNames = STATE.extensionList.slice();
     var currentSet = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
     STATE.page = 1;
