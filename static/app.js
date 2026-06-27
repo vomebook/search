@@ -1654,6 +1654,12 @@ function animateResultsReveal() {
   DOM.resultsList.classList.remove("results-reveal");
   void DOM.resultsList.offsetWidth;
   DOM.resultsList.classList.add("results-reveal");
+  requestAnimationFrame(function() {
+    var items = DOM.resultsList.querySelectorAll(".result-item");
+    for (var i = 0; i < items.length; i++) {
+      items[i].style.setProperty("--reveal-delay", Math.min(i * 28, 220) + "ms");
+    }
+  });
 }
 
 function doSearch(append) {
