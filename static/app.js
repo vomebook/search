@@ -1178,6 +1178,7 @@ const STATE = {
   useLocalMode: false,
   recordHistory: true,
   dataLoaded: false,
+  resultsSkeletonActive: false,
   _pendingPage: 0,
   _loadedPage: 0,
   _pageCache: {},
@@ -1503,7 +1504,9 @@ const ROUTER = {
     if (!STATE.isMobile) {
       DOM.resultsList.innerHTML = "";
       DOM.emptyState.style.display = "none";
-      DOM.resultsLoading.style.display = "flex";
+      STATE.resultsSkeletonActive = true;
+      DOM.resultsLoading.style.display = "none";
+      renderResultsSkeleton();
     }
     renderSidebar();
     renderFilters();
@@ -1559,11 +1562,12 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
   if (localDataPromise) return localDataPromise;
 
   STATE.isLoading = true;
-  DOM.resultsLoading.style.display = "flex";
+  STATE.resultsSkeletonActive = true;
+  DOM.resultsLoading.style.display = "none";
   DOM.emptyState.style.display = "none";
   STATE.page = 1;
   STATE.results = [];
-  DOM.resultsList.innerHTML = "";
+  renderResultsSkeleton();
   updateStatusBar();
   updateLoadInfo();
   showToast("正在加载本地数据...");
@@ -1613,6 +1617,39 @@ function debouncedSearch() {
   }, 300);
 }
 
+function shouldShowResultsSkeleton(append) {
+  if (append) return false;
+  if (STATE.results.length > 0) return false;
+  if (!STATE.isMobile && STATE.mode === "repo") return true;
+  return !STATE.dataLoaded || (STATE.mode === "global" && STATE.page === 1 && !STATE.query && STATE.filterRepos.length === 0 && STATE.filterExtensions.length === 0 && STATE.filterFolders.length === 0);
+}
+
+function renderResultsSkeleton(count) {
+  count = count || 8;
+  var html = "";
+  for (var i = 0; i < count; i++) {
+    html += '<div class="result-skeleton-item" aria-hidden="true">' +
+      '<div class="result-skeleton-icon skeleton-shimmer"></div>' +
+      '<div class="result-skeleton-info">' +
+        '<div class="result-skeleton-line title skeleton-shimmer"></div>' +
+        '<div class="result-skeleton-line path skeleton-shimmer"></div>' +
+        '<div class="result-skeleton-line meta skeleton-shimmer"></div>' +
+      '</div>' +
+      '<div class="result-skeleton-actions">' +
+        '<div class="result-skeleton-btn skeleton-shimmer"></div>' +
+        '<div class="result-skeleton-btn skeleton-shimmer"></div>' +
+        '<div class="result-skeleton-btn skeleton-shimmer short"></div>' +
+      '</div>' +
+    '</div>';
+  }
+  DOM.resultsList.innerHTML = html;
+  DOM.resultsList.classList.add("showing-skeleton");
+}
+
+function clearResultsSkeleton() {
+  DOM.resultsList.classList.remove("showing-skeleton");
+}
+
 function doSearch(append) {
   const id = ++searchId;
   const searchStart = performance.now();
@@ -1646,7 +1683,8 @@ function doSearch(append) {
   };
 
   STATE.isLoading = true;
-  DOM.resultsLoading.style.display = "flex";
+  STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
+  DOM.resultsLoading.style.display = STATE.resultsSkeletonActive ? "none" : "flex";
   if (!append) {
     DOM.emptyState.style.display = "none";
     DOM.didYouMean.style.display = "none";
@@ -1655,6 +1693,12 @@ function doSearch(append) {
     if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
     if (apiAvailable && searchAbortController) searchAbortController.abort();
     if (apiAvailable) searchAbortController = new AbortController();
+    if (STATE.resultsSkeletonActive) {
+      DOM.resultsContainer.scrollTop = 0;
+      renderResultsSkeleton();
+    } else {
+      clearResultsSkeleton();
+    }
   }
 
   if (STATE.useLocalMode || folderMatchMode === "mixed") {
@@ -1692,6 +1736,7 @@ function doSearch(append) {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
         VSCROLL.heights = [];
+        clearResultsSkeleton();
         if (STATE.results.length === 0) {
           DOM.resultsList.innerHTML = "";
           DOM.emptyState.style.display = "flex";
@@ -1729,6 +1774,7 @@ function doSearch(append) {
     }).finally(function() {
       if (id === searchId) {
         STATE.isLoading = false;
+        STATE.resultsSkeletonActive = false;
         DOM.resultsLoading.style.display = "none";
       }
     });
@@ -1775,6 +1821,7 @@ function doSearchFallbackLocal(params, append, id) {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
         VSCROLL.heights = [];
+        clearResultsSkeleton();
         if (STATE.results.length === 0) {
           DOM.resultsList.innerHTML = "";
           DOM.emptyState.style.display = "flex";
@@ -1800,16 +1847,18 @@ function doSearchFallbackLocal(params, append, id) {
       showToast("搜索失败");
     } finally {
       STATE.isLoading = false;
+      STATE.resultsSkeletonActive = false;
       DOM.resultsLoading.style.display = "none";
     }
   }, 0);
 }
- 
+
 /* ═══════════════════════════════════════════════════════════
    Results Rendering
    ═══════════════════════════════════════════════════════════ */
- 
+
 function renderResults() {
+  clearResultsSkeleton();
   if (STATE.results.length === 0) {
     DOM.resultsList.innerHTML = "";
     VSCROLL.renderStart = 0;

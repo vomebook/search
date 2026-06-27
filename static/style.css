@@ -738,6 +738,90 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   background: var(--secondary-container) !important;
 }
 
+.results-list.showing-skeleton {
+  display: block;
+}
+
+.result-skeleton-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.result-skeleton-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  margin-top: 2px;
+  background: var(--surface-variant);
+}
+
+.result-skeleton-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-skeleton-line {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--surface-variant);
+}
+
+.result-skeleton-line.title {
+  width: min(56%, 420px);
+  height: 15px;
+}
+
+.result-skeleton-line.path {
+  width: min(72%, 520px);
+  margin-top: 8px;
+}
+
+.result-skeleton-line.meta {
+  width: min(28%, 180px);
+  margin-top: 10px;
+}
+
+.result-skeleton-actions {
+  width: 188px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.result-skeleton-btn {
+  width: 56px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--surface-variant);
+}
+
+.result-skeleton-btn.short {
+  width: 44px;
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--on-surface) 10%, transparent) 50%, transparent 100%);
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  100% { transform: translateX(100%); }
+}
+
 .result-file-icon {
   width: 24px;
   height: 24px;
