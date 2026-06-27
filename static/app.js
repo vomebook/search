@@ -2350,6 +2350,12 @@ function collectVisibleDescendantPaths(node, into) {
   return into;
 }
 
+function isRectNearViewport(container, rect) {
+  const top = -120;
+  const bottom = container.clientHeight + 120;
+  return rect.bottom >= top && rect.top <= bottom;
+}
+
 function renderFilterFolderTreeWithAnimation(animation) {
   animation = animation || {};
   const container = DOM.filterFolderTree;
@@ -2357,17 +2363,18 @@ function renderFilterFolderTreeWithAnimation(animation) {
   const firstRects = new Map();
   container.querySelectorAll(".filter-folder-item[data-path]").forEach(function(row) {
     const rect = row.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) firstRects.set(row.dataset.path, rect);
+    if (rect.width > 0 && rect.height > 0 && isRectNearViewport(container, rect)) {
+      firstRects.set(row.dataset.path, rect);
+    }
   });
   const exitingGhosts = [];
   const exitingPaths = new Set(animation.exitingPaths || []);
   const containerRect = container.getBoundingClientRect();
-  const collapseDuration = Math.min(360, 210 + exitingPaths.size * 10);
-  const moveDurationBase = Math.min(380, 220 + exitingPaths.size * 8);
   exitingPaths.forEach(function(path) {
     const row = container.querySelector('.filter-folder-item[data-path="' + CSS.escape(path) + '"]');
     if (!row) return;
     const rect = row.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0 || !isRectNearViewport(container, rect)) return;
     const ghost = row.cloneNode(true);
     ghost.classList.add("folder-row-ghost");
     ghost.style.top = (rect.top - containerRect.top + container.scrollTop) + "px";
@@ -2384,7 +2391,7 @@ function renderFilterFolderTreeWithAnimation(animation) {
       { opacity: 1, transform: "translateY(0)" },
       { opacity: 0, transform: "translateY(-10px)" },
     ], {
-      duration: collapseDuration,
+      duration: 190,
       easing: "cubic-bezier(0.22, 1, 0.36, 1)",
       fill: "forwards"
     });
@@ -2392,16 +2399,16 @@ function renderFilterFolderTreeWithAnimation(animation) {
   }
   container.querySelectorAll(".filter-folder-item[data-path]").forEach(function(row) {
     const firstRect = firstRects.get(row.dataset.path);
-    const lastRect = row.getBoundingClientRect();
     if (!firstRect) return;
+    const lastRect = row.getBoundingClientRect();
+    if (lastRect.width <= 0 || lastRect.height <= 0 || !isRectNearViewport(container, lastRect)) return;
     const deltaY = firstRect.top - lastRect.top;
     if (Math.abs(deltaY) <= 0.5) return;
-    const moveDuration = Math.min(420, moveDurationBase + Math.min(80, Math.abs(deltaY) * 0.18));
     row.animate([
       { transform: 'translateY(' + deltaY + 'px)' },
       { transform: "translateY(0)" },
     ], {
-      duration: moveDuration,
+      duration: 220,
       easing: "cubic-bezier(0.22, 1, 0.36, 1)"
     });
   });
