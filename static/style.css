@@ -746,10 +746,28 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   animation: results-reveal 220ms ease;
 }
 
+.results-list.results-reveal .result-item {
+  opacity: 0;
+  transform: translateY(10px);
+  animation: result-item-reveal 320ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
 @keyframes results-reveal {
   from {
     opacity: 0;
     transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes result-item-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
   }
   to {
     opacity: 1;
