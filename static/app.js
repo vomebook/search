@@ -2350,68 +2350,73 @@ function collectVisibleDescendantPaths(node, into) {
   return into;
 }
 
-function isRectNearViewport(container, rect) {
-  const top = -120;
-  const bottom = container.clientHeight + 120;
-  return rect.bottom >= top && rect.top <= bottom;
-}
+function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
+  if (!childContainer || !toggle) return;
+  childContainer.getAnimations().forEach(function(animation) { animation.cancel(); });
+  toggle.getAnimations().forEach(function(animation) { animation.cancel(); });
+  const glyph = toggle.querySelector(".tree-toggle-glyph");
+  if (glyph) glyph.getAnimations().forEach(function(animation) { animation.cancel(); });
 
-function renderFilterFolderTreeWithAnimation(animation) {
-  animation = animation || {};
-  const container = DOM.filterFolderTree;
-  if (!container) return;
-  const firstRects = new Map();
-  container.querySelectorAll(".filter-folder-item[data-path]").forEach(function(row) {
-    const rect = row.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0 && isRectNearViewport(container, rect)) {
-      firstRects.set(row.dataset.path, rect);
+  if (expanding) {
+    childContainer.style.display = "block";
+    const targetHeight = childContainer.scrollHeight;
+    childContainer.style.overflow = "hidden";
+    const expandAnimation = childContainer.animate([
+      { height: "0px", opacity: 0, transform: "translateY(-6px)" },
+      { height: targetHeight + "px", opacity: 1, transform: "translateY(0)" },
+    ], {
+      duration: 220,
+      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      fill: "forwards",
+    });
+    expandAnimation.onfinish = function() {
+      childContainer.style.height = "";
+      childContainer.style.opacity = "";
+      childContainer.style.transform = "";
+      childContainer.style.overflow = "";
+    };
+    toggle.classList.add("expanded");
+    if (glyph) {
+      glyph.animate([
+        { transform: "rotate(-45deg)" },
+        { transform: "rotate(45deg)" },
+      ], {
+        duration: 220,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        fill: "forwards",
+      });
     }
+    return;
+  }
+
+  const startHeight = childContainer.scrollHeight;
+  childContainer.style.overflow = "hidden";
+  const collapseAnimation = childContainer.animate([
+    { height: startHeight + "px", opacity: 1, transform: "translateY(0)" },
+    { height: "0px", opacity: 0, transform: "translateY(-6px)" },
+  ], {
+    duration: 190,
+    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+    fill: "forwards",
   });
-  const exitingGhosts = [];
-  const exitingPaths = new Set(animation.exitingPaths || []);
-  const containerRect = container.getBoundingClientRect();
-  exitingPaths.forEach(function(path) {
-    const row = container.querySelector('.filter-folder-item[data-path="' + CSS.escape(path) + '"]');
-    if (!row) return;
-    const rect = row.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0 || !isRectNearViewport(container, rect)) return;
-    const ghost = row.cloneNode(true);
-    ghost.classList.add("folder-row-ghost");
-    ghost.style.top = (rect.top - containerRect.top + container.scrollTop) + "px";
-    ghost.style.left = row.offsetLeft + "px";
-    ghost.style.width = row.offsetWidth + "px";
-    ghost.style.height = row.offsetHeight + "px";
-    exitingGhosts.push(ghost);
-  });
-  renderFilterFolderTree();
-  for (let i = 0; i < exitingGhosts.length; i++) {
-    const ghost = exitingGhosts[i];
-    container.appendChild(ghost);
-    const fadeOut = ghost.animate([
-      { opacity: 1, transform: "translateY(0)" },
-      { opacity: 0, transform: "translateY(-10px)" },
+  collapseAnimation.onfinish = function() {
+    childContainer.style.display = "none";
+    childContainer.style.height = "";
+    childContainer.style.opacity = "";
+    childContainer.style.transform = "";
+    childContainer.style.overflow = "";
+  };
+  toggle.classList.remove("expanded");
+  if (glyph) {
+    glyph.animate([
+      { transform: "rotate(45deg)" },
+      { transform: "rotate(-45deg)" },
     ], {
       duration: 190,
       easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      fill: "forwards"
+      fill: "forwards",
     });
-    fadeOut.onfinish = function() { ghost.remove(); };
   }
-  container.querySelectorAll(".filter-folder-item[data-path]").forEach(function(row) {
-    const firstRect = firstRects.get(row.dataset.path);
-    if (!firstRect) return;
-    const lastRect = row.getBoundingClientRect();
-    if (lastRect.width <= 0 || lastRect.height <= 0 || !isRectNearViewport(container, lastRect)) return;
-    const deltaY = firstRect.top - lastRect.top;
-    if (Math.abs(deltaY) <= 0.5) return;
-    row.animate([
-      { transform: 'translateY(' + deltaY + 'px)' },
-      { transform: "translateY(0)" },
-    ], {
-      duration: 220,
-      easing: "cubic-bezier(0.22, 1, 0.36, 1)"
-    });
-  });
 }
 
 function getFolderSubtreeSet() {
@@ -2581,9 +2586,8 @@ function renderFilterTreeNodes(container, nodes, depth) {
         return function(e) {
           e.stopPropagation();
           const expanding = !!STATE.folderTreeCollapsed[currentNode.path];
-          const exitingPaths = expanding ? [] : collectVisibleDescendantPaths(currentNode, []);
           STATE.folderTreeCollapsed[currentNode.path] = !expanding;
-          renderFilterFolderTreeWithAnimation({ exitingPaths: exitingPaths });
+          toggleFolderChildrenAnimated(childDiv, toggle, expanding);
         };
       }(node));
  

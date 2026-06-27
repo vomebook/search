@@ -1256,14 +1256,6 @@ body.mobile .mobile-selected-count {
   flex-shrink: 0;
 }
 
-.folder-row-ghost {
-  position: absolute;
-  z-index: 1;
-  pointer-events: none;
-  background: transparent;
-  opacity: 1;
-}
-
 .filter-folder-item input[type="checkbox"] {
   accent-color: var(--primary);
   width: 14px;
