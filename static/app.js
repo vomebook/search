@@ -297,6 +297,22 @@ function getRecordPath(rec) {
 function buildDownloadUrl(filename, link) {
   return API_BASE + "/api/download?file=" + encodeURIComponent(filename || "file") + "&link=" + encodeURIComponent(link || "");
 }
+
+function getBrowserFileName(file) {
+  var name = file && file.name ? String(file.name) : "file";
+  var ext = file && file.ext ? String(file.ext) : "";
+  if (!ext) return name;
+  if (name.toLowerCase().endsWith("." + ext.toLowerCase())) return name;
+  return name + "." + ext;
+}
+
+function getBrowserFileLink(repo, folderPath, file) {
+  if (file && file.link) return file.link;
+  if (!repo) return "";
+  var fullName = getBrowserFileName(file);
+  var relativePath = folderPath ? folderPath + "/" + fullName : fullName;
+  return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeURI(relativePath);
+}
   
 function buildIndex() {
   return new Promise(function(resolve) {
@@ -1995,6 +2011,7 @@ async function renderBrowser(path) {
   STATE.browserPath = path;
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
+  var currentRepo = STATE.repoFull;
 
   const backBtn = document.createElement("div");
   backBtn.className = "back-to-global";
@@ -2078,9 +2095,10 @@ async function renderBrowser(path) {
           window.open(TXT_BASE + "/" + encodeURI(txtPath_v) + ".txt", "_blank");
           return;
         }
-        if (ff.link) {
+        var fileLink = getBrowserFileLink(currentRepo, ppath, ff);
+        if (fileLink) {
           var downloadName = ff.name + (ff.ext ? "." + ff.ext : "");
-          window.open(buildDownloadUrl(downloadName, ff.link), "_blank");
+          window.open(buildDownloadUrl(downloadName, fileLink), "_blank");
         }
       };
     }(f2, path || ""));
