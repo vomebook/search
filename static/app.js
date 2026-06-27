@@ -2362,6 +2362,8 @@ function renderFilterFolderTreeWithAnimation(animation) {
   const exitingGhosts = [];
   const exitingPaths = new Set(animation.exitingPaths || []);
   const containerRect = container.getBoundingClientRect();
+  const collapseDuration = Math.min(360, 210 + exitingPaths.size * 10);
+  const moveDurationBase = Math.min(380, 220 + exitingPaths.size * 8);
   exitingPaths.forEach(function(path) {
     const row = container.querySelector('.filter-folder-item[data-path="' + CSS.escape(path) + '"]');
     if (!row) return;
@@ -2380,8 +2382,12 @@ function renderFilterFolderTreeWithAnimation(animation) {
     container.appendChild(ghost);
     const fadeOut = ghost.animate([
       { opacity: 1, transform: "translateY(0)" },
-      { opacity: 0, transform: "translateY(-8px)" },
-    ], { duration: 190, easing: "ease", fill: "forwards" });
+      { opacity: 0, transform: "translateY(-10px)" },
+    ], {
+      duration: collapseDuration,
+      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      fill: "forwards"
+    });
     fadeOut.onfinish = function() { ghost.remove(); };
   }
   container.querySelectorAll(".filter-folder-item[data-path]").forEach(function(row) {
@@ -2390,10 +2396,14 @@ function renderFilterFolderTreeWithAnimation(animation) {
     if (!firstRect) return;
     const deltaY = firstRect.top - lastRect.top;
     if (Math.abs(deltaY) <= 0.5) return;
+    const moveDuration = Math.min(420, moveDurationBase + Math.min(80, Math.abs(deltaY) * 0.18));
     row.animate([
       { transform: 'translateY(' + deltaY + 'px)' },
       { transform: "translateY(0)" },
-    ], { duration: 220, easing: "ease" });
+    ], {
+      duration: moveDuration,
+      easing: "cubic-bezier(0.22, 1, 0.36, 1)"
+    });
   });
 }
 
