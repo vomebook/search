@@ -1189,9 +1189,10 @@ body.mobile .mobile-selected-count {
 .filter-folder-tree {
   max-height: 280px;
   overflow-y: auto;
-  overflow-x: auto;
+  overflow-x: scroll;
   white-space: nowrap;
   position: relative;
+  scrollbar-gutter: stable both-edges;
 }
 
 .filter-folder-item {
