@@ -742,6 +742,21 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   display: block;
 }
 
+.results-list.results-reveal {
+  animation: results-reveal 220ms ease;
+}
+
+@keyframes results-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .result-skeleton-item {
   display: flex;
   gap: 10px;
