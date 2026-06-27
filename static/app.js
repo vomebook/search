@@ -1717,8 +1717,12 @@ function doSearch(append) {
     if (!STATE.dataLoaded) {
       STATE.isLoading = false;
       DOM.resultsLoading.style.display = "none";
-      if (STATE.useLocalMode) ensureLocalDataLoaded(true);
-      else showToast("目录筛选数据尚未加载完成");
+      if (STATE.useLocalMode || folderMatchMode === "mixed") {
+        ensureLocalDataLoaded(true);
+        if (folderMatchMode === "mixed" && !STATE.useLocalMode) {
+          showToast("正在加载目录筛选数据...");
+        }
+      }
       return;
     }
     doSearchFallbackLocal(params, append, id);
