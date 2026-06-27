@@ -1650,6 +1650,12 @@ function clearResultsSkeleton() {
   DOM.resultsList.classList.remove("showing-skeleton");
 }
 
+function animateResultsReveal() {
+  DOM.resultsList.classList.remove("results-reveal");
+  void DOM.resultsList.offsetWidth;
+  DOM.resultsList.classList.add("results-reveal");
+}
+
 function doSearch(append) {
   const id = ++searchId;
   const searchStart = performance.now();
@@ -1884,6 +1890,7 @@ function renderResults() {
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
 
+  if (STATE.resultsSkeletonActive) animateResultsReveal();
   renderVisible();
 }
 
