@@ -1074,6 +1074,7 @@ body.mobile .mobile-selected-count {
   overflow-y: auto;
   overflow-x: auto;
   white-space: nowrap;
+  position: relative;
 }
 
 .filter-folder-item {
@@ -1088,6 +1089,8 @@ body.mobile .mobile-selected-count {
   flex-wrap: nowrap;
   width: max-content;
   min-width: 100%;
+  transform-origin: top left;
+  will-change: transform, opacity;
 }
 
 .filter-folder-item .tree-toggle {
@@ -1098,10 +1101,49 @@ body.mobile .mobile-selected-count {
   justify-content: center;
   flex-shrink: 0;
   color: var(--on-surface-variant);
-  font-size: 10px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.16s ease, background 0.16s ease;
 }
-.filter-folder-item .tree-toggle.expanded {
-  transform: rotate(90deg);
+
+.filter-folder-item .tree-toggle:hover,
+.filter-folder-item .tree-toggle:focus-visible {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.filter-folder-item .tree-toggle-glyph {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-right: 1.8px solid currentColor;
+  border-bottom: 1.8px solid currentColor;
+  box-sizing: border-box;
+  transform: rotate(-45deg);
+  transform-origin: 50% 50%;
+  transition: transform 220ms ease;
+}
+
+.filter-folder-item .tree-toggle.expanded .tree-toggle-glyph {
+  transform: rotate(45deg);
+}
+
+.filter-folder-item .tree-toggle-placeholder {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.folder-row-ghost {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: transparent;
+  opacity: 1;
 }
 
 .filter-folder-item input[type="checkbox"] {

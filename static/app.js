@@ -1172,6 +1172,7 @@ const STATE = {
   repoList: [],
   extensionList: [],
   folderTree: null,
+  folderTreeCollapsed: {},
   searchFolders: true,
   exact: false,
   useLocalMode: false,
@@ -1383,6 +1384,7 @@ const ROUTER = {
       STATE.filterFolderSubtrees = [];
       STATE.filterFolderSelfs = [];
       STATE.folderTree = null;
+      STATE.folderTreeCollapsed = {};
       folderContentsCache.clear();
       DOM.leftSidebar.classList.remove("expanded-wide");
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
@@ -2126,6 +2128,7 @@ async function renderFilters() {
         try { STATE.folderTree = await fetchFolderTree(STATE.repo); } catch (e) {}
       }
     }
+    if (STATE.folderTree && STATE.folderTree.length) initializeFolderTreeCollapsed(STATE.folderTree);
     renderFilterFolderTree();
   } else {
     DOM.filterFolderSection.style.display = "none";
@@ -2272,8 +2275,76 @@ function renderFilterFolderTree() {
   renderFilterTreeNodes(DOM.filterFolderTree, STATE.folderTree, 0);
 }
 
+function collectVisibleDescendantPaths(node, into) {
+  into = into || [];
+  for (let i = 0; i < (node.children || []).length; i++) {
+    const child = node.children[i];
+    if (!child.path) continue;
+    into.push(child.path);
+    if (child.children && child.children.length > 0 && !STATE.folderTreeCollapsed[child.path]) {
+      collectVisibleDescendantPaths(child, into);
+    }
+  }
+  return into;
+}
+
+function renderFilterFolderTreeWithAnimation(animation) {
+  animation = animation || {};
+  const container = DOM.filterFolderTree;
+  if (!container) return;
+  const firstRects = new Map();
+  container.querySelectorAll(".filter-folder-item[data-path]").forEach(function(row) {
+    const rect = row.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) firstRects.set(row.dataset.path, rect);
+  });
+  const exitingGhosts = [];
+  const exitingPaths = new Set(animation.exitingPaths || []);
+  const containerRect = container.getBoundingClientRect();
+  exitingPaths.forEach(function(path) {
+    const row = container.querySelector('.filter-folder-item[data-path="' + CSS.escape(path) + '"]');
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
+    const ghost = row.cloneNode(true);
+    ghost.classList.add("folder-row-ghost");
+    ghost.style.top = (rect.top - containerRect.top + container.scrollTop) + "px";
+    ghost.style.left = row.offsetLeft + "px";
+    ghost.style.width = row.offsetWidth + "px";
+    ghost.style.height = row.offsetHeight + "px";
+    exitingGhosts.push(ghost);
+  });
+  renderFilterFolderTree();
+  for (let i = 0; i < exitingGhosts.length; i++) {
+    const ghost = exitingGhosts[i];
+    container.appendChild(ghost);
+    const fadeOut = ghost.animate([
+      { opacity: 1, transform: "translateY(0)" },
+      { opacity: 0, transform: "translateY(-8px)" },
+    ], { duration: 190, easing: "ease", fill: "forwards" });
+    fadeOut.onfinish = function() { ghost.remove(); };
+  }
+  container.querySelectorAll(".filter-folder-item[data-path]").forEach(function(row) {
+    const firstRect = firstRects.get(row.dataset.path);
+    const lastRect = row.getBoundingClientRect();
+    if (!firstRect) return;
+    const deltaY = firstRect.top - lastRect.top;
+    if (Math.abs(deltaY) <= 0.5) return;
+    row.animate([
+      { transform: 'translateY(' + deltaY + 'px)' },
+      { transform: "translateY(0)" },
+    ], { duration: 220, easing: "ease" });
+  });
+}
+
 function getFolderSubtreeSet() {
   return new Set(STATE.filterFolderSubtrees || []);
+}
+
+function initializeFolderTreeCollapsed(nodes) {
+  for (let i = 0; i < (nodes || []).length; i++) {
+    const node = nodes[i];
+    if (node.path && !(node.path in STATE.folderTreeCollapsed)) STATE.folderTreeCollapsed[node.path] = false;
+    if (node.children && node.children.length > 0) initializeFolderTreeCollapsed(node.children);
+  }
 }
 
 function getFolderSelfSet() {
@@ -2393,7 +2464,8 @@ function renderFilterTreeNodes(container, nodes, depth) {
     row.style.setProperty("--fdepth", depth);
     row.dataset.path = node.path;
  
-    row.innerHTML = (has ? '<span class="tree-toggle expanded">▶</span>' : '<span style="width:16px;flex-shrink:0"></span>') +
+    var collapsed = !!STATE.folderTreeCollapsed[node.path];
+    row.innerHTML = (has ? ('<button type="button" class="tree-toggle' + (collapsed ? '' : ' expanded') + '" aria-label="' + (collapsed ? '展开子文件夹' : '收起子文件夹') + '" title="' + (collapsed ? '展开' : '收起') + '"><span class="tree-toggle-glyph" aria-hidden="true"></span></button>') : '<span class="tree-toggle-placeholder"></span>') +
       '<input type="checkbox" value="' + escapeHTML(node.path) + '">' +
       '<span class="folder-name" title="' + escapeHTML(node.name) + '">' + escapeHTML(node.name) + '</span>' +
       (node.showSelfToggle ? '<button type="button" class="folder-self-toggle" data-path="' + escapeHTML(node.path) + '">本层文件</button>' : '') +
@@ -2423,16 +2495,18 @@ function renderFilterTreeNodes(container, nodes, depth) {
     if (has) {
       const childDiv = document.createElement("div");
       childDiv.className = "tree-children";
+      if (collapsed) childDiv.style.display = "none";
       renderFilterTreeNodes(childDiv, node.children, depth + 1);
- 
-      toggle.addEventListener("click", function(childContainer, tgl) {
+
+      toggle.addEventListener("click", function(currentNode) {
         return function(e) {
           e.stopPropagation();
-          const hidden = childContainer.style.display === "none";
-          childContainer.style.display = hidden ? "block" : "none";
-          tgl.classList.toggle("expanded", hidden);
+          const expanding = !!STATE.folderTreeCollapsed[currentNode.path];
+          const exitingPaths = expanding ? [] : collectVisibleDescendantPaths(currentNode, []);
+          STATE.folderTreeCollapsed[currentNode.path] = !expanding;
+          renderFilterFolderTreeWithAnimation({ exitingPaths: exitingPaths });
         };
-      }(childDiv, toggle));
+      }(node));
  
       container.appendChild(childDiv);
     }
