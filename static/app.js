@@ -293,7 +293,11 @@ function getRecordLink(rec) {
 function getRecordPath(rec) {
   return rec.Path || buildRecordPath(rec);
 }
- 
+
+function buildDownloadUrl(filename, link) {
+  return API_BASE + "/api/download?file=" + encodeURIComponent(filename || "file") + "&link=" + encodeURIComponent(link || "");
+}
+  
 function buildIndex() {
   return new Promise(function(resolve) {
     wordIndex = {};
@@ -1843,7 +1847,7 @@ function buildResultHTML(rec, idx) {
     '</div>' +
     '<div class="result-actions">' +
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(getRecordLink(rec))) + '">复制链接</button>' +
-      '<a href="' + API_BASE + '/api/download?file=' + encodeURIComponent(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '&link=' + encodeURIComponent(getRecordLink(rec)) + '" class="result-action-btn primary" target="_blank">下载</a>' +
+      '<a href="' + buildDownloadUrl(rec.File + (rec.Extension ? '.' + rec.Extension : ''), getRecordLink(rec)) + '" class="result-action-btn primary" target="_blank">下载</a>' +
       '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
       (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(getRecordLink(rec)) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
@@ -2074,7 +2078,10 @@ async function renderBrowser(path) {
           window.open(TXT_BASE + "/" + encodeURI(txtPath_v) + ".txt", "_blank");
           return;
         }
-        if (ff.link) window.open(ff.link, "_blank");
+        if (ff.link) {
+          var downloadName = ff.name + (ff.ext ? "." + ff.ext : "");
+          window.open(buildDownloadUrl(downloadName, ff.link), "_blank");
+        }
       };
     }(f2, path || ""));
     list.appendChild(div2);
