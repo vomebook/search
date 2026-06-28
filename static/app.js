@@ -1185,17 +1185,6 @@ const STATE = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   Virtual Scroll State
-   ═══════════════════════════════════════════════════════════ */
-
-const VSCROLL = {
-  renderStart: 0,
-  renderEnd: 0,
-  heights: [],
-  estimatedHeight: 60,
-};
- 
-/* ═══════════════════════════════════════════════════════════
    DOM References
    ═══════════════════════════════════════════════════════════ */
  
@@ -1234,8 +1223,6 @@ function cacheDOM() {
   DOM.mobileSelectedCount = $("#mobile-selected-count");
   DOM.loadedCount = $("#loaded-count");
   DOM.totalCount = $("#total-count");
-  DOM.scrollTrack = $("#scroll-track");
-  DOM.scrollThumb = $("#scroll-thumb");
   DOM.hitokoto = $("#hitokoto");
   DOM.randomBookBtn = $("#random-book-btn");
   DOM.overlay = $("#overlay");
@@ -1739,33 +1726,16 @@ function doSearch(append) {
 
     doSearchAPI(params, append).then(function() {
       if (id !== searchId) return;
-      if (append) {
-        // Incremental: extend heights, let next scroll render new items
-        var newLen = STATE.results.length;
-        if (VSCROLL.heights.length < newLen) {
-          var oldLen = VSCROLL.heights.length;
-          VSCROLL.heights.length = newLen;
-          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
-        }
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        // Force a renderVisible on next animation frame to include new items
-        requestAnimationFrame(function() { renderVisible(); });
+      clearResultsSkeleton();
+      if (STATE.results.length === 0) {
+        DOM.resultsList.innerHTML = "";
+        DOM.emptyState.style.display = "flex";
+        DOM.emptyDesc.textContent = STATE.query
+          ? '没有找到与 "' + STATE.query + '" 相关的结果'
+          : "暂无数据";
       } else {
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        VSCROLL.heights = [];
-        clearResultsSkeleton();
-        if (STATE.results.length === 0) {
-          DOM.resultsList.innerHTML = "";
-          DOM.emptyState.style.display = "flex";
-          DOM.emptyDesc.textContent = STATE.query
-            ? '没有找到与 "' + STATE.query + '" 相关的结果'
-            : "暂无数据";
-        } else {
-          DOM.emptyState.style.display = "none";
-          renderResults();
-        }
+        DOM.emptyState.style.display = "none";
+        renderResults();
       }
       updateStatusBar();
       updateLoadInfo();
@@ -1826,31 +1796,16 @@ function doSearchFallbackLocal(params, append, id) {
 
       STATE.hasMore = STATE.results.length < STATE.total;
 
-      if (append) {
-        var newLen = STATE.results.length;
-        if (VSCROLL.heights.length < newLen) {
-          var oldLen = VSCROLL.heights.length;
-          VSCROLL.heights.length = newLen;
-          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
-        }
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        requestAnimationFrame(function() { renderVisible(); });
+      clearResultsSkeleton();
+      if (STATE.results.length === 0) {
+        DOM.resultsList.innerHTML = "";
+        DOM.emptyState.style.display = "flex";
+        DOM.emptyDesc.textContent = STATE.query
+          ? '没有找到与 "' + STATE.query + '" 相关的结果'
+          : "暂无数据";
       } else {
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        VSCROLL.heights = [];
-        clearResultsSkeleton();
-        if (STATE.results.length === 0) {
-          DOM.resultsList.innerHTML = "";
-          DOM.emptyState.style.display = "flex";
-          DOM.emptyDesc.textContent = STATE.query
-            ? '没有找到与 "' + STATE.query + '" 相关的结果'
-            : "暂无数据";
-        } else {
-          DOM.emptyState.style.display = "none";
-          renderResults();
-        }
+        DOM.emptyState.style.display = "none";
+        renderResults();
       }
       updateStatusBar();
       updateLoadInfo();
@@ -1880,9 +1835,6 @@ function renderResults() {
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
     DOM.resultsList.innerHTML = "";
-    VSCROLL.renderStart = 0;
-    VSCROLL.renderEnd = 0;
-    VSCROLL.heights = [];
     DOM.emptyState.style.display = "flex";
     DOM.emptyDesc.textContent = STATE.query
       ? '没有找到与 "' + STATE.query + '" 相关的结果'
@@ -1892,19 +1844,16 @@ function renderResults() {
 
   DOM.emptyState.style.display = "none";
 
-  const len = STATE.results.length;
-  if (VSCROLL.heights.length < len) {
-    const oldLen = VSCROLL.heights.length;
-    VSCROLL.heights.length = len;
-    for (let i = oldLen; i < len; i++) {
-      VSCROLL.heights[i] = VSCROLL.estimatedHeight;
-    }
-  }
-  VSCROLL.renderStart = 0;
-  VSCROLL.renderEnd = 0;
-
   if (STATE.resultsSkeletonActive) animateResultsReveal();
-  renderVisible();
+  let html = "";
+  for (let ri = 0; ri < STATE.results.length; ri++) {
+    const rec = STATE.results[ri];
+    html += '<div class="result-item" data-index="' + ri + '"' +
+      (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
+      '>' + buildResultHTML(rec, ri) + '</div>';
+  }
+  DOM.resultsList.innerHTML = html;
+  if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
 }
 
 function buildResultHTML(rec, idx) {
@@ -1941,88 +1890,6 @@ function buildResultHTML(rec, idx) {
   );
 }
 
-function renderVisible() {
-  const items = STATE.results;
-  const len = items.length;
-  if (len === 0) return;
-
-  const container = DOM.resultsContainer;
-  const scrollTop = container.scrollTop;
-  const viewH = container.clientHeight;
-  const est = VSCROLL.estimatedHeight;
-  const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
-
-  let cum = 0;
-  let start = 0;
-  for (let i = 0; i < len; i++) {
-    const h = VSCROLL.heights[i] || est;
-    if (cum + h > scrollTop - overscanItems * est) {
-      start = i;
-      break;
-    }
-    cum += h;
-  }
-  if (start < 0) start = 0;
-
-  let end = start;
-  let running = cum;
-  while (end < len && running - scrollTop < viewH + overscanItems * est) {
-    running += VSCROLL.heights[end] || est;
-    end++;
-  }
-  if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
-
-  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
-
-  VSCROLL.renderStart = start;
-  VSCROLL.renderEnd = end;
-
-  let topH = 0;
-  for (let i = 0; i < start; i++) topH += VSCROLL.heights[i] || est;
-
-  let html = "";
-  if (topH > 0) {
-    html += '<div style="height:' + topH + 'px;flex-shrink:0"></div>';
-  }
-  for (let ri = start; ri < end; ri++) {
-    const rec = items[ri];
-    html += '<div class="result-item" data-index="' + ri + '"' +
-      (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
-      '>' + buildResultHTML(rec, ri) + '</div>';
-  }
-  let bottomH = 0;
-  for (let bi = end; bi < len; bi++) bottomH += VSCROLL.heights[bi] || est;
-  if (bottomH > 0) {
-    html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
-  }
-  var tpl = document.createElement("template");
-  tpl.innerHTML = html;
-  DOM.resultsList.replaceChildren(tpl.content);
-
-  if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
-
-  requestAnimationFrame(function() {
-    measureHeights();
-  });
-}
-
-function measureHeights() {
-  const els = DOM.resultsList.querySelectorAll(".result-item");
-  for (let i = 0; i < els.length; i++) {
-    const idx = parseInt(els[i].dataset.index);
-    if (idx >= 0) {
-      const h = els[i].getBoundingClientRect().height;
-      if (h > 0) VSCROLL.heights[idx] = h;
-    }
-  }
-  const measured = VSCROLL.heights.filter(function(h) { return h > 0; });
-  if (measured.length > 10) {
-    let sum = 0;
-    for (let i = 0; i < measured.length; i++) sum += measured[i];
-    VSCROLL.estimatedHeight = sum / measured.length;
-  }
-}
- 
 function updateStatusBar() {
   DOM.resultCount.textContent = STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "";
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ||
@@ -2735,83 +2602,23 @@ function showToast(msg, dur) {
 }
  
 /* ═══════════════════════════════════════════════════════════
-   Infinite Scroll & Quick Scroll
+   Infinite Scroll
    ═══════════════════════════════════════════════════════════ */
  
-let scrollTicking = false;
 var selectedIndices = {};
 var lastSelectedIndex = -1;
- 
-function setupVirtualScroll() {
-  DOM.resultsContainer.addEventListener("scroll", () => {
-    if (!scrollTicking) {
-      requestAnimationFrame(() => {
-        updateScrollThumb();
-        renderVisible();
-        if (!STATE.isLoading && STATE.hasMore) {
-          const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-          const loadedHeight = DOM.resultsList.scrollHeight;
-          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
-          if (scrollTop >= triggerPoint) {
-            STATE.page++;
-            doSearch(true);
-          }
-        }
-        scrollTicking = false;
-      });
-      scrollTicking = true;
+
+function setupResultsScroll() {
+  DOM.resultsContainer.addEventListener("scroll", function() {
+    if (STATE.isLoading || !STATE.hasMore) return;
+    const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
+    const remaining = scrollHeight - clientHeight - scrollTop;
+    if (remaining <= Math.max(1200, clientHeight * 1.5)) {
+      if (STATE._pendingPage >= STATE.page + 1) return;
+      STATE.page++;
+      doSearch(true);
     }
   }, { passive: true });
-}
- 
-function updateScrollThumb() {
-  const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-  if (scrollHeight <= clientHeight) { DOM.scrollTrack.classList.remove("visible"); return; }
-  DOM.scrollTrack.classList.add("visible");
-  const th = Math.max(30, (clientHeight / scrollHeight) * DOM.scrollTrack.clientHeight);
-  const tt = (scrollTop / (scrollHeight - clientHeight)) * (DOM.scrollTrack.clientHeight - th);
-  DOM.scrollThumb.style.height = th + "px";
-  DOM.scrollThumb.style.top = tt + "px";
-}
- 
-function setupQuickScroll() {
-  let dragging = false, startY, startST;
-
-  function onMouseMove(e) {
-    const delta = e.clientY - startY;
-    const ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
-    DOM.resultsContainer.scrollTop = startST + ratio * (DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
-  }
-
-  function onMouseUp() {
-    dragging = false;
-    document.removeEventListener("mousemove", onMouseMove);
-    document.removeEventListener("mouseup", onMouseUp);
-  }
-
-  DOM.scrollThumb.addEventListener("mousedown", (e) => {
-    dragging = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault();
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  });
-
-  function onTouchMove(e) {
-    const delta = e.touches[0].clientY - startY;
-    const ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
-    DOM.resultsContainer.scrollTop = startST + ratio * (DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
-  }
-
-  function onTouchEnd() {
-    dragging = false;
-    document.removeEventListener("touchmove", onTouchMove);
-    document.removeEventListener("touchend", onTouchEnd);
-  }
-
-  DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    dragging = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop;
-    document.addEventListener("touchmove", onTouchMove, { passive: true });
-    document.addEventListener("touchend", onTouchEnd);
-  });
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -2962,8 +2769,8 @@ function setupKeyboard() {
       } else {
         keyboardResultIndex = Math.max(keyboardResultIndex - 1, 0);
       }
-      var targetY = keyboardResultIndex * VSCROLL.estimatedHeight;
-      DOM.resultsContainer.scrollTop = targetY;
+      var target = DOM.resultsList.querySelector('.result-item[data-index="' + keyboardResultIndex + '"]');
+      if (target) target.scrollIntoView({ block: "nearest" });
       requestAnimationFrame(function() {
         var all = DOM.resultsList.querySelectorAll(".result-item");
         for (var ai = 0; ai < all.length; ai++) {
@@ -3430,8 +3237,7 @@ function init() {
     }
   });
 
-  setupVirtualScroll();
-  setupQuickScroll();
+  setupResultsScroll();
   setupKeyboard();
   setupResultDelegation();
 
