@@ -1660,6 +1660,9 @@ function animateResultsReveal() {
       items[i].style.setProperty("--reveal-delay", Math.min(i * 28, 220) + "ms");
     }
   });
+  setTimeout(function() {
+    DOM.resultsList.classList.remove("results-reveal");
+  }, 560);
 }
 
 function doSearch(append) {
@@ -2361,24 +2364,50 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
   const glyph = toggle.querySelector(".tree-toggle-glyph");
   if (glyph) glyph.getAnimations().forEach(function(animation) { animation.cancel(); });
 
+  const resetChildStyles = function() {
+    childContainer.style.height = "";
+    childContainer.style.opacity = "";
+    childContainer.style.transform = "";
+    childContainer.style.overflow = "";
+    childContainer.style.transition = "";
+  };
+
+  const stopTransition = function() {
+    if (childContainer._transitionCleanup) {
+      childContainer.removeEventListener("transitionend", childContainer._transitionCleanup);
+      childContainer._transitionCleanup = null;
+    }
+    if (childContainer._transitionTimer) {
+      clearTimeout(childContainer._transitionTimer);
+      childContainer._transitionTimer = null;
+    }
+  };
+
+  stopTransition();
+  resetChildStyles();
+
   if (expanding) {
     childContainer.style.display = "block";
     const targetHeight = childContainer.scrollHeight;
+    childContainer.style.height = "0px";
+    childContainer.style.opacity = "0";
+    childContainer.style.transform = "translateY(-6px)";
     childContainer.style.overflow = "hidden";
-    const expandAnimation = childContainer.animate([
-      { height: "0px", opacity: 0, transform: "translateY(-6px)" },
-      { height: targetHeight + "px", opacity: 1, transform: "translateY(0)" },
-    ], {
-      duration: 220,
-      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      fill: "forwards",
-    });
-    expandAnimation.onfinish = function() {
-      childContainer.style.height = "";
-      childContainer.style.opacity = "";
-      childContainer.style.transform = "";
-      childContainer.style.overflow = "";
+    void childContainer.offsetHeight;
+    childContainer.style.transition = "height 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1)";
+    childContainer.style.height = targetHeight + "px";
+    childContainer.style.opacity = "1";
+    childContainer.style.transform = "translateY(0)";
+    childContainer._transitionCleanup = function(event) {
+      if (event.target !== childContainer || event.propertyName !== "height") return;
+      stopTransition();
+      resetChildStyles();
+      childContainer.style.display = "block";
     };
+    childContainer.addEventListener("transitionend", childContainer._transitionCleanup);
+    childContainer._transitionTimer = setTimeout(function() {
+      if (childContainer._transitionCleanup) childContainer._transitionCleanup({ target: childContainer, propertyName: "height" });
+    }, 260);
     toggle.classList.add("expanded");
     if (glyph) {
       glyph.animate([
@@ -2393,26 +2422,30 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
     return;
   }
 
+  childContainer.style.display = "block";
   const startHeight = childContainer.scrollHeight;
+  childContainer.style.height = startHeight + "px";
+  childContainer.style.opacity = "1";
+  childContainer.style.transform = "translateY(0)";
   childContainer.style.overflow = "hidden";
-  const collapseAnimation = childContainer.animate([
-    { height: startHeight + "px", opacity: 1, transform: "translateY(0)" },
-    { height: "0px", opacity: 0, transform: "translateY(-6px)" },
-  ], {
-    duration: 190,
-    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-    fill: "forwards",
-  });
-  collapseAnimation.onfinish = function() {
+  void childContainer.offsetHeight;
+  childContainer.style.transition = "height 190ms cubic-bezier(0.22, 1, 0.36, 1), opacity 190ms cubic-bezier(0.22, 1, 0.36, 1), transform 190ms cubic-bezier(0.22, 1, 0.36, 1)";
+  childContainer.style.height = "0px";
+  childContainer.style.opacity = "0";
+  childContainer.style.transform = "translateY(-6px)";
+  childContainer._transitionCleanup = function(event) {
+    if (event.target !== childContainer || event.propertyName !== "height") return;
+    stopTransition();
     childContainer.style.display = "none";
-    childContainer.style.height = "";
-    childContainer.style.opacity = "";
-    childContainer.style.transform = "";
-    childContainer.style.overflow = "";
+    resetChildStyles();
   };
+  childContainer.addEventListener("transitionend", childContainer._transitionCleanup);
+  childContainer._transitionTimer = setTimeout(function() {
+    if (childContainer._transitionCleanup) childContainer._transitionCleanup({ target: childContainer, propertyName: "height" });
+  }, 230);
   toggle.classList.remove("expanded");
   if (glyph) {
-    glyph.animate([
+      glyph.animate([
       { transform: "rotate(45deg)" },
       { transform: "rotate(-45deg)" },
     ], {
