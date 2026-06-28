@@ -1198,6 +1198,9 @@ const VSCROLL = {
   measuredCount: 0,
   measuredHeightSum: 0,
   overscanItems: 18,
+  topSpacer: null,
+  bottomSpacer: null,
+  itemNodes: [],
 };
 
 function resetVirtualScrollState() {
@@ -1208,6 +1211,9 @@ function resetVirtualScrollState() {
   VSCROLL.prefixHeights = [0];
   VSCROLL.measuredCount = 0;
   VSCROLL.measuredHeightSum = 0;
+  VSCROLL.topSpacer = null;
+  VSCROLL.bottomSpacer = null;
+  VSCROLL.itemNodes = [];
 }
 
 function ensureVirtualScrollCapacity(len) {
@@ -1242,7 +1248,17 @@ function updateVirtualHeight(index, nextHeight) {
   if (!(nextHeight > 0)) return false;
   const prevHeight = VSCROLL.heights[index];
   const wasMeasured = VSCROLL.measured[index] === true;
-  if (prevHeight === nextHeight) return false;
+  if (prevHeight === nextHeight) {
+    if (!wasMeasured) {
+      VSCROLL.measured[index] = true;
+      VSCROLL.measuredCount++;
+      VSCROLL.measuredHeightSum += nextHeight;
+      if (VSCROLL.measuredCount > 10) {
+        VSCROLL.estimatedHeight = VSCROLL.measuredHeightSum / VSCROLL.measuredCount;
+      }
+    }
+    return false;
+  }
   VSCROLL.heights[index] = nextHeight;
   if (!wasMeasured) {
     VSCROLL.measured[index] = true;
@@ -1268,6 +1284,48 @@ function findIndexForOffset(offset) {
     else high = mid - 1;
   }
   return Math.max(0, Math.min(low, prefix.length - 2));
+}
+
+function ensureVirtualListShell() {
+  if (VSCROLL.topSpacer && VSCROLL.bottomSpacer && VSCROLL.topSpacer.parentNode === DOM.resultsList && VSCROLL.bottomSpacer.parentNode === DOM.resultsList) {
+    return;
+  }
+  DOM.resultsList.textContent = "";
+  VSCROLL.itemNodes = [];
+  const topSpacer = document.createElement("div");
+  const bottomSpacer = document.createElement("div");
+  topSpacer.style.flexShrink = "0";
+  bottomSpacer.style.flexShrink = "0";
+  DOM.resultsList.appendChild(topSpacer);
+  DOM.resultsList.appendChild(bottomSpacer);
+  VSCROLL.topSpacer = topSpacer;
+  VSCROLL.bottomSpacer = bottomSpacer;
+}
+
+function createVirtualItemNode() {
+  const node = document.createElement("div");
+  node.className = "result-item";
+  return node;
+}
+
+function syncVirtualItemNodes(visibleCount) {
+  ensureVirtualListShell();
+  while (VSCROLL.itemNodes.length < visibleCount) {
+    const node = createVirtualItemNode();
+    DOM.resultsList.insertBefore(node, VSCROLL.bottomSpacer);
+    VSCROLL.itemNodes.push(node);
+  }
+  while (VSCROLL.itemNodes.length > visibleCount) {
+    const node = VSCROLL.itemNodes.pop();
+    if (node && node.parentNode) node.parentNode.removeChild(node);
+  }
+}
+
+function updateVirtualItemNode(node, rec, idx) {
+  node.dataset.index = String(idx);
+  if (idx % 2 === 1) node.style.background = "var(--surface-variant)";
+  else node.style.background = "";
+  node.innerHTML = buildResultHTML(rec, idx);
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -1701,6 +1759,7 @@ function shouldShowResultsSkeleton(append) {
 
 function renderResultsSkeleton(count) {
   count = count || 8;
+  resetVirtualScrollState();
   var html = "";
   for (var i = 0; i < count; i++) {
     html += '<div class="result-skeleton-item" aria-hidden="true">' +
@@ -2021,26 +2080,18 @@ function renderVisible() {
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
 
-  let topH = VSCROLL.prefixHeights[start] || 0;
+  ensureVirtualListShell();
+  syncVirtualItemNodes(end - start);
 
-  let html = "";
-  if (topH > 0) {
-    html += '<div style="height:' + topH + 'px;flex-shrink:0"></div>';
-  }
-  for (let ri = start; ri < end; ri++) {
-    const rec = items[ri];
-    html += '<div class="result-item" data-index="' + ri + '"' +
-      (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
-      '>' + buildResultHTML(rec, ri) + '</div>';
-  }
+  let topH = VSCROLL.prefixHeights[start] || 0;
   let totalHeight = VSCROLL.prefixHeights[len] || 0;
   let bottomH = Math.max(0, totalHeight - (VSCROLL.prefixHeights[end] || 0));
-  if (bottomH > 0) {
-    html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
+  VSCROLL.topSpacer.style.height = topH > 0 ? (topH + "px") : "0px";
+  VSCROLL.bottomSpacer.style.height = bottomH > 0 ? (bottomH + "px") : "0px";
+
+  for (let ri = start; ri < end; ri++) {
+    updateVirtualItemNode(VSCROLL.itemNodes[ri - start], items[ri], ri);
   }
-  var tpl = document.createElement("template");
-  tpl.innerHTML = html;
-  DOM.resultsList.replaceChildren(tpl.content);
 
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
 
@@ -2792,8 +2843,10 @@ function setupVirtualScroll() {
         renderVisible();
         if (!STATE.isLoading && STATE.hasMore) {
           const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
+          const loadedHeight = VSCROLL.prefixHeights[STATE.results.length] || DOM.resultsList.scrollHeight;
+          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
           const remaining = scrollHeight - clientHeight - scrollTop;
-          if (remaining <= Math.max(1200, clientHeight * 1.5)) {
+          if (scrollTop > 0 || scrollTop >= triggerPoint || remaining <= Math.max(1200, clientHeight * 1.5)) {
             STATE.page++;
             doSearch(true);
           }
