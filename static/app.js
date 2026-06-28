@@ -1192,141 +1192,8 @@ const VSCROLL = {
   renderStart: 0,
   renderEnd: 0,
   heights: [],
-  measured: [],
   estimatedHeight: 60,
-  prefixHeights: [0],
-  measuredCount: 0,
-  measuredHeightSum: 0,
-  overscanItems: 18,
-  topSpacer: null,
-  bottomSpacer: null,
-  itemNodes: [],
 };
-
-function resetVirtualScrollState() {
-  VSCROLL.renderStart = 0;
-  VSCROLL.renderEnd = 0;
-  VSCROLL.heights = [];
-  VSCROLL.measured = [];
-  VSCROLL.prefixHeights = [0];
-  VSCROLL.measuredCount = 0;
-  VSCROLL.measuredHeightSum = 0;
-  VSCROLL.topSpacer = null;
-  VSCROLL.bottomSpacer = null;
-  VSCROLL.itemNodes = [];
-}
-
-function ensureVirtualScrollCapacity(len) {
-  if (VSCROLL.heights.length >= len) return;
-  const oldLen = VSCROLL.heights.length;
-  VSCROLL.heights.length = len;
-  VSCROLL.measured.length = len;
-  for (let i = oldLen; i < len; i++) {
-    VSCROLL.heights[i] = VSCROLL.estimatedHeight;
-    VSCROLL.measured[i] = false;
-  }
-  rebuildPrefixHeightsFrom(Math.max(0, oldLen - 1));
-}
-
-function rebuildPrefixHeightsFrom(startIndex) {
-  const est = VSCROLL.estimatedHeight;
-  const heights = VSCROLL.heights;
-  const prefix = VSCROLL.prefixHeights;
-  const safeStart = Math.max(0, startIndex | 0);
-  if (prefix.length === 0) prefix[0] = 0;
-  if (safeStart === 0) {
-    prefix[0] = 0;
-  } else if (prefix[safeStart] === undefined) {
-    prefix[safeStart] = prefix[safeStart - 1] + (heights[safeStart - 1] || est);
-  }
-  for (let i = safeStart; i < heights.length; i++) {
-    prefix[i + 1] = prefix[i] + (heights[i] || est);
-  }
-}
-
-function updateVirtualHeight(index, nextHeight) {
-  if (!(nextHeight > 0)) return false;
-  const prevHeight = VSCROLL.heights[index];
-  const wasMeasured = VSCROLL.measured[index] === true;
-  if (prevHeight === nextHeight) {
-    if (!wasMeasured) {
-      VSCROLL.measured[index] = true;
-      VSCROLL.measuredCount++;
-      VSCROLL.measuredHeightSum += nextHeight;
-      if (VSCROLL.measuredCount > 10) {
-        VSCROLL.estimatedHeight = VSCROLL.measuredHeightSum / VSCROLL.measuredCount;
-      }
-    }
-    return false;
-  }
-  VSCROLL.heights[index] = nextHeight;
-  if (!wasMeasured) {
-    VSCROLL.measured[index] = true;
-    VSCROLL.measuredCount++;
-    VSCROLL.measuredHeightSum += nextHeight;
-  } else {
-    VSCROLL.measuredHeightSum += nextHeight - prevHeight;
-  }
-  if (VSCROLL.measuredCount > 10) {
-    VSCROLL.estimatedHeight = VSCROLL.measuredHeightSum / VSCROLL.measuredCount;
-  }
-  rebuildPrefixHeightsFrom(index);
-  return true;
-}
-
-function findIndexForOffset(offset) {
-  const prefix = VSCROLL.prefixHeights;
-  let low = 0;
-  let high = Math.max(0, prefix.length - 2);
-  while (low <= high) {
-    const mid = (low + high) >> 1;
-    if (prefix[mid + 1] <= offset) low = mid + 1;
-    else high = mid - 1;
-  }
-  return Math.max(0, Math.min(low, prefix.length - 2));
-}
-
-function ensureVirtualListShell() {
-  if (VSCROLL.topSpacer && VSCROLL.bottomSpacer && VSCROLL.topSpacer.parentNode === DOM.resultsList && VSCROLL.bottomSpacer.parentNode === DOM.resultsList) {
-    return;
-  }
-  DOM.resultsList.textContent = "";
-  VSCROLL.itemNodes = [];
-  const topSpacer = document.createElement("div");
-  const bottomSpacer = document.createElement("div");
-  topSpacer.style.flexShrink = "0";
-  bottomSpacer.style.flexShrink = "0";
-  DOM.resultsList.appendChild(topSpacer);
-  DOM.resultsList.appendChild(bottomSpacer);
-  VSCROLL.topSpacer = topSpacer;
-  VSCROLL.bottomSpacer = bottomSpacer;
-}
-
-function createVirtualItemNode() {
-  const node = document.createElement("div");
-  node.className = "result-item";
-  return node;
-}
-
-function syncVirtualItemNodes(visibleCount) {
-  ensureVirtualListShell();
-  while (VSCROLL.itemNodes.length < visibleCount) {
-    const node = createVirtualItemNode();
-    DOM.resultsList.insertBefore(node, VSCROLL.bottomSpacer);
-    VSCROLL.itemNodes.push(node);
-  }
-  while (VSCROLL.itemNodes.length > visibleCount) {
-    const node = VSCROLL.itemNodes.pop();
-    if (node && node.parentNode) node.parentNode.removeChild(node);
-  }
-}
-
-function updateVirtualItemNode(node, rec, idx) {
-  node.dataset.index = String(idx);
-  if (idx % 2 === 1) node.style.background = "var(--surface-variant)";
-  else node.style.background = "";
-  node.innerHTML = buildResultHTML(rec, idx);
-}
  
 /* ═══════════════════════════════════════════════════════════
    DOM References
@@ -1759,7 +1626,6 @@ function shouldShowResultsSkeleton(append) {
 
 function renderResultsSkeleton(count) {
   count = count || 8;
-  resetVirtualScrollState();
   var html = "";
   for (var i = 0; i < count; i++) {
     html += '<div class="result-skeleton-item" aria-hidden="true">' +
@@ -1876,13 +1742,19 @@ function doSearch(append) {
       if (append) {
         // Incremental: extend heights, let next scroll render new items
         var newLen = STATE.results.length;
-        ensureVirtualScrollCapacity(newLen);
+        if (VSCROLL.heights.length < newLen) {
+          var oldLen = VSCROLL.heights.length;
+          VSCROLL.heights.length = newLen;
+          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
+        }
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
         // Force a renderVisible on next animation frame to include new items
         requestAnimationFrame(function() { renderVisible(); });
       } else {
-        resetVirtualScrollState();
+        VSCROLL.renderStart = 0;
+        VSCROLL.renderEnd = 0;
+        VSCROLL.heights = [];
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
           DOM.resultsList.innerHTML = "";
@@ -1956,12 +1828,18 @@ function doSearchFallbackLocal(params, append, id) {
 
       if (append) {
         var newLen = STATE.results.length;
-        ensureVirtualScrollCapacity(newLen);
+        if (VSCROLL.heights.length < newLen) {
+          var oldLen = VSCROLL.heights.length;
+          VSCROLL.heights.length = newLen;
+          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
+        }
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
         requestAnimationFrame(function() { renderVisible(); });
       } else {
-        resetVirtualScrollState();
+        VSCROLL.renderStart = 0;
+        VSCROLL.renderEnd = 0;
+        VSCROLL.heights = [];
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
           DOM.resultsList.innerHTML = "";
@@ -2002,7 +1880,9 @@ function renderResults() {
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
     DOM.resultsList.innerHTML = "";
-    resetVirtualScrollState();
+    VSCROLL.renderStart = 0;
+    VSCROLL.renderEnd = 0;
+    VSCROLL.heights = [];
     DOM.emptyState.style.display = "flex";
     DOM.emptyDesc.textContent = STATE.query
       ? '没有找到与 "' + STATE.query + '" 相关的结果'
@@ -2013,7 +1893,13 @@ function renderResults() {
   DOM.emptyState.style.display = "none";
 
   const len = STATE.results.length;
-  ensureVirtualScrollCapacity(len);
+  if (VSCROLL.heights.length < len) {
+    const oldLen = VSCROLL.heights.length;
+    VSCROLL.heights.length = len;
+    for (let i = oldLen; i < len; i++) {
+      VSCROLL.heights[i] = VSCROLL.estimatedHeight;
+    }
+  }
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
 
@@ -2060,38 +1946,58 @@ function renderVisible() {
   const len = items.length;
   if (len === 0) return;
 
-  ensureVirtualScrollCapacity(len);
-
   const container = DOM.resultsContainer;
   const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
-  const overscanItems = Math.max(VSCROLL.overscanItems, Math.ceil(viewH / Math.max(est, 1)));
-  const overscanHeight = overscanItems * est;
-  const startOffset = Math.max(0, scrollTop - overscanHeight);
-  let start = findIndexForOffset(startOffset);
-  let end = findIndexForOffset(scrollTop + viewH + overscanHeight) + 1;
-  if (end <= start) end = Math.min(start + overscanItems, len);
-  if (end - start < overscanItems && len > overscanItems) end = Math.min(start + overscanItems * 2, len);
-  if (end > len) end = len;
+  const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
+
+  let cum = 0;
+  let start = 0;
+  for (let i = 0; i < len; i++) {
+    const h = VSCROLL.heights[i] || est;
+    if (cum + h > scrollTop - overscanItems * est) {
+      start = i;
+      break;
+    }
+    cum += h;
+  }
+  if (start < 0) start = 0;
+
+  let end = start;
+  let running = cum;
+  while (end < len && running - scrollTop < viewH + overscanItems * est) {
+    running += VSCROLL.heights[end] || est;
+    end++;
+  }
+  if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
 
   if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
 
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
 
-  ensureVirtualListShell();
-  syncVirtualItemNodes(end - start);
+  let topH = 0;
+  for (let i = 0; i < start; i++) topH += VSCROLL.heights[i] || est;
 
-  let topH = VSCROLL.prefixHeights[start] || 0;
-  let totalHeight = VSCROLL.prefixHeights[len] || 0;
-  let bottomH = Math.max(0, totalHeight - (VSCROLL.prefixHeights[end] || 0));
-  VSCROLL.topSpacer.style.height = topH > 0 ? (topH + "px") : "0px";
-  VSCROLL.bottomSpacer.style.height = bottomH > 0 ? (bottomH + "px") : "0px";
-
-  for (let ri = start; ri < end; ri++) {
-    updateVirtualItemNode(VSCROLL.itemNodes[ri - start], items[ri], ri);
+  let html = "";
+  if (topH > 0) {
+    html += '<div style="height:' + topH + 'px;flex-shrink:0"></div>';
   }
+  for (let ri = start; ri < end; ri++) {
+    const rec = items[ri];
+    html += '<div class="result-item" data-index="' + ri + '"' +
+      (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
+      '>' + buildResultHTML(rec, ri) + '</div>';
+  }
+  let bottomH = 0;
+  for (let bi = end; bi < len; bi++) bottomH += VSCROLL.heights[bi] || est;
+  if (bottomH > 0) {
+    html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
+  }
+  var tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  DOM.resultsList.replaceChildren(tpl.content);
 
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
 
@@ -2102,17 +2008,18 @@ function renderVisible() {
 
 function measureHeights() {
   const els = DOM.resultsList.querySelectorAll(".result-item");
-  let updated = false;
   for (let i = 0; i < els.length; i++) {
     const idx = parseInt(els[i].dataset.index);
     if (idx >= 0) {
-      if (VSCROLL.measured[idx]) continue;
       const h = els[i].getBoundingClientRect().height;
-      if (updateVirtualHeight(idx, h)) updated = true;
+      if (h > 0) VSCROLL.heights[idx] = h;
     }
   }
-  if (updated) {
-    updateScrollThumb();
+  const measured = VSCROLL.heights.filter(function(h) { return h > 0; });
+  if (measured.length > 10) {
+    let sum = 0;
+    for (let i = 0; i < measured.length; i++) sum += measured[i];
+    VSCROLL.estimatedHeight = sum / measured.length;
   }
 }
  
@@ -2843,10 +2750,9 @@ function setupVirtualScroll() {
         renderVisible();
         if (!STATE.isLoading && STATE.hasMore) {
           const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-          const loadedHeight = VSCROLL.prefixHeights[STATE.results.length] || DOM.resultsList.scrollHeight;
+          const loadedHeight = DOM.resultsList.scrollHeight;
           const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
-          const remaining = scrollHeight - clientHeight - scrollTop;
-          if (scrollTop > 0 || scrollTop >= triggerPoint || remaining <= Math.max(1200, clientHeight * 1.5)) {
+          if (scrollTop >= triggerPoint) {
             STATE.page++;
             doSearch(true);
           }
@@ -3056,8 +2962,7 @@ function setupKeyboard() {
       } else {
         keyboardResultIndex = Math.max(keyboardResultIndex - 1, 0);
       }
-      ensureVirtualScrollCapacity(STATE.results.length);
-      var targetY = VSCROLL.prefixHeights[keyboardResultIndex] || (keyboardResultIndex * VSCROLL.estimatedHeight);
+      var targetY = keyboardResultIndex * VSCROLL.estimatedHeight;
       DOM.resultsContainer.scrollTop = targetY;
       requestAnimationFrame(function() {
         var all = DOM.resultsList.querySelectorAll(".result-item");
