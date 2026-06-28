@@ -2612,9 +2612,12 @@ function setupResultsScroll() {
   DOM.resultsContainer.addEventListener("scroll", function() {
     if (STATE.isLoading || !STATE.hasMore) return;
     const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
+    const loadedHeight = DOM.resultsList.scrollHeight;
+    const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
     const remaining = scrollHeight - clientHeight - scrollTop;
-    if (remaining <= Math.max(1200, clientHeight * 1.5)) {
-      if (STATE._pendingPage >= STATE.page + 1) return;
+    if (scrollTop > 0 || scrollTop >= triggerPoint || remaining <= Math.max(1200, clientHeight * 1.5)) {
+      const nextPage = STATE.page + 1;
+      if (STATE._pendingPage >= nextPage) return;
       STATE.page++;
       doSearch(true);
     }
