@@ -1029,6 +1029,38 @@ body.mobile .mobile-selected-count {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   Quick Scroll Track
+   ═══════════════════════════════════════════════════════════ */
+
+.scroll-track {
+  position: absolute;
+  right: 2px;
+  top: 40px;
+  bottom: 50px;
+  width: 8px;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+.scroll-track.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.scroll-thumb {
+  position: absolute;
+  width: 6px;
+  left: 1px;
+  border-radius: 3px;
+  background: var(--outline);
+  cursor: pointer;
+  min-height: 30px;
+  transition: background var(--transition);
+}
+.scroll-thumb:hover, .scroll-thumb:focus-visible {
+  background: var(--on-surface-variant);
+}
+
+/* ═══════════════════════════════════════════════════════════
    Footer
    ═══════════════════════════════════════════════════════════ */
 
