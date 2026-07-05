@@ -362,15 +362,17 @@ function recordMatchesSearchPattern(rec, matcher, searchFolders) {
   return false;
 }
 
-function setSearchMode(mode) {
-  STATE.exact = mode === "exact";
-  STATE.wildcard = mode === "wildcard";
-  STATE.regex = mode === "regex";
-  if (DOM.searchModeSelect) DOM.searchModeSelect.value = mode === "wildcard" || mode === "regex" || mode === "normal" ? mode : "exact";
+function syncSearchOptionToggles() {
+  if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
+  if (DOM.wildcardSearchToggle) DOM.wildcardSearchToggle.checked = STATE.wildcard;
+  if (DOM.regexSearchToggle) DOM.regexSearchToggle.checked = STATE.regex;
 }
 
 function updateSearchModeSections() {
-  if (DOM.searchModeSection) DOM.searchModeSection.classList.remove("mode-section-hidden");
+  if (DOM.exactSearchSection) DOM.exactSearchSection.classList.toggle("mode-section-hidden", !!STATE.useLocalMode);
+  [DOM.wildcardSearchSection, DOM.regexSearchSection].forEach(function(section) {
+    if (section) section.classList.remove("mode-section-hidden");
+  });
 }
   
 function buildIndex() {
@@ -710,32 +712,33 @@ function doSearchLocal(params) {
 
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
-  } else if (wildcardMode) {
-    var wildcardMatcher = wildcardToRegExp(q);
-    for (var wi = 0; wi < RECORDS.length; wi++) {
-      if (recordMatchesSearchPattern(RECORDS[wi], wildcardMatcher, searchFolders)) matched.push(wi);
-    }
-  } else if (regexMode) {
-    try {
-      var regexMatcher = parseRegexQuery(q);
-      for (var ri = 0; ri < RECORDS.length; ri++) {
-        if (recordMatchesSearchPattern(RECORDS[ri], regexMatcher, searchFolders)) matched.push(ri);
-      }
-    } catch (e) {
-      matched = [];
-    }
-  } else if (exactMode || literalOperatorMode) {
-    // 精准搜索：跳过 token + 模糊匹配，直接子串查找
+  } else if (exactMode || wildcardMode || regexMode || literalOperatorMode) {
+    var matchedSet = new Set();
     var ql = q.toLowerCase();
-    for (var ei = 0; ei < RECORDS.length; ei++) {
-      var rec = RECORDS[ei];
-      var fn = (rec.File || "").toLowerCase();
-      var rn = (rec.Repo || "").toLowerCase();
-      var pf = (rec.Folder || []).join("/").toLowerCase();
-      if (fn.indexOf(ql) >= 0 || rn.indexOf(ql) >= 0 || (searchFolders && pf.indexOf(ql) >= 0)) {
-        matched.push(ei);
-      }
+    var wildcardMatcher = wildcardMode ? wildcardToRegExp(q) : null;
+    var regexMatcher = null;
+    if (regexMode) {
+      try { regexMatcher = parseRegexQuery(q); } catch (e) { regexMatcher = null; }
     }
+
+    for (var mi = 0; mi < RECORDS.length; mi++) {
+      var rec = RECORDS[mi];
+      if (exactMode || literalOperatorMode) {
+        var fn = (rec.File || "").toLowerCase();
+        var rn = (rec.Repo || "").toLowerCase();
+        var pf = (rec.Folder || []).join("/").toLowerCase();
+        if (fn.indexOf(ql) >= 0 || rn.indexOf(ql) >= 0 || (searchFolders && pf.indexOf(ql) >= 0)) {
+          matchedSet.add(mi);
+          continue;
+        }
+      }
+      if (wildcardMatcher && recordMatchesSearchPattern(rec, wildcardMatcher, searchFolders)) {
+        matchedSet.add(mi);
+        continue;
+      }
+      if (regexMatcher && recordMatchesSearchPattern(rec, regexMatcher, searchFolders)) matchedSet.add(mi);
+    }
+    matched = Array.from(matchedSet);
   } else {
     const tokens = tokenize(q);
 
@@ -891,10 +894,9 @@ async function doSearchAPI(params, append) {
   if (params.maxSize !== null) body.max_size = params.maxSize;
   body.sort = params.sort || "relevance";
   if (!params.searchFolders) body.search_folders = false;
-  if (params.wildcard) body.mode = "wildcard";
-  else if (params.regex) body.mode = "regex";
-  else body.mode = params.exact ? "exact" : "normal";
-  if (params.exact) body.exact = true;
+  body.exact = !!params.exact;
+  body.wildcard = !!params.wildcard;
+  body.regex = !!params.regex;
 
   const fetchOptions = {
     method: "POST",
@@ -977,10 +979,9 @@ function prefetchNextPage() {
   if (STATE.filterMaxSize !== null) body.max_size = STATE.filterMaxSize;
   body.sort = STATE.sort || "relevance";
   if (!STATE.searchFolders) body.search_folders = false;
-  if (STATE.wildcard) body.mode = "wildcard";
-  else if (STATE.regex) body.mode = "regex";
-  else body.mode = STATE.exact ? "exact" : "normal";
-  if (STATE.exact) body.exact = true;
+  body.exact = !!STATE.exact;
+  body.wildcard = !!STATE.wildcard;
+  body.regex = !!STATE.regex;
 
   fetch(base, {
     method: "POST",
@@ -1339,8 +1340,12 @@ function cacheDOM() {
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
-  DOM.searchModeSelect = $("#search-mode-select");
-  DOM.searchModeSection = $("#search-mode-section");
+  DOM.exactSearchToggle = $("#exact-search-toggle");
+  DOM.exactSearchSection = $("#exact-search-section");
+  DOM.wildcardSearchToggle = $("#wildcard-search-toggle");
+  DOM.wildcardSearchSection = $("#wildcard-search-section");
+  DOM.regexSearchToggle = $("#regex-search-toggle");
+  DOM.regexSearchSection = $("#regex-search-section");
   DOM.localModeToggle = $("#local-mode-toggle");
   DOM.localModeToggleRow = $("#local-mode-toggle-row");
   DOM.historyToggle = $("#history-toggle");
@@ -1441,9 +1446,9 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
     if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
     if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (STATE.wildcard) sp.set("mode", "wildcard");
-    else if (STATE.regex) sp.set("mode", "regex");
-    else if (!STATE.exact) sp.set("mode", "normal");
+    if (!STATE.exact) sp.set("exact", "0");
+    if (STATE.wildcard) sp.set("wildcard", "1");
+    if (STATE.regex) sp.set("regex", "1");
     if (STATE.rightSidebarOpen) sp.set("filters", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
     if (!STATE.recordHistory) sp.set("history", "0");
@@ -1533,15 +1538,15 @@ const ROUTER = {
     }
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
-    var searchMode = route.params.mode || "exact";
-    if (!route.params.mode) {
-      if (route.params.wildcard === "1") searchMode = "wildcard";
-      else if (route.params.regex === "1") searchMode = "regex";
-      else if (route.params.exact === "0") searchMode = "normal";
-    }
-    setSearchMode(searchMode === "wildcard" || searchMode === "regex" || searchMode === "normal" ? searchMode : "exact");
+    STATE.exact = route.params.exact !== "0";
+    STATE.wildcard = route.params.wildcard === "1";
+    STATE.regex = route.params.regex === "1";
+    if (route.params.mode === "wildcard") STATE.wildcard = true;
+    else if (route.params.mode === "regex") STATE.regex = true;
+    else if (route.params.mode === "normal") STATE.exact = false;
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
+    syncSearchOptionToggles();
     updateSearchModeSections();
     STATE.recordHistory = route.params.history !== "0";
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
@@ -1627,9 +1632,9 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (STATE.wildcard) sp.set("mode", "wildcard");
-  else if (STATE.regex) sp.set("mode", "regex");
-  else if (!STATE.exact) sp.set("mode", "normal");
+  if (!STATE.exact) sp.set("exact", "0");
+  if (STATE.wildcard) sp.set("wildcard", "1");
+  if (STATE.regex) sp.set("regex", "1");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
@@ -3398,8 +3403,20 @@ function init() {
     STATE.results = [];
     doSearch();
   });
-  DOM.searchModeSelect.addEventListener("change", function() {
-    setSearchMode(DOM.searchModeSelect.value);
+  DOM.exactSearchToggle.addEventListener("change", function() {
+    STATE.exact = DOM.exactSearchToggle.checked;
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+  });
+  DOM.wildcardSearchToggle.addEventListener("change", function() {
+    STATE.wildcard = DOM.wildcardSearchToggle.checked;
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+  });
+  DOM.regexSearchToggle.addEventListener("change", function() {
+    STATE.regex = DOM.regexSearchToggle.checked;
     STATE.page = 1;
     STATE.results = [];
     doSearch();
