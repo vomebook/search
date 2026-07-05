@@ -878,7 +878,7 @@ async function doSearchAPI(params, append) {
   if (!params.searchFolders) body.search_folders = false;
   if (params.wildcard) body.mode = "wildcard";
   else if (params.regex) body.mode = "regex";
-  else body.mode = "exact";
+  else body.mode = params.exact ? "exact" : "normal";
   if (params.exact) body.exact = true;
 
   const fetchOptions = {
@@ -964,7 +964,7 @@ function prefetchNextPage() {
   if (!STATE.searchFolders) body.search_folders = false;
   if (STATE.wildcard) body.mode = "wildcard";
   else if (STATE.regex) body.mode = "regex";
-  else body.mode = "exact";
+  else body.mode = STATE.exact ? "exact" : "normal";
   if (STATE.exact) body.exact = true;
 
   fetch(base, {
@@ -1432,6 +1432,7 @@ const ROUTER = {
     if (!STATE.searchFolders) sp.set("search_folders", "false");
     if (STATE.wildcard) sp.set("mode", "wildcard");
     else if (STATE.regex) sp.set("mode", "regex");
+    else if (!STATE.exact) sp.set("mode", "normal");
     if (STATE.rightSidebarOpen) sp.set("filters", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
     if (!STATE.recordHistory) sp.set("history", "0");
@@ -1525,9 +1526,9 @@ const ROUTER = {
     if (!route.params.mode) {
       if (route.params.wildcard === "1") searchMode = "wildcard";
       else if (route.params.regex === "1") searchMode = "regex";
-      else if (route.params.exact === "0") searchMode = "";
+      else if (route.params.exact === "0") searchMode = "normal";
     }
-    setSearchMode(searchMode === "wildcard" || searchMode === "regex" ? searchMode : "exact");
+    setSearchMode(searchMode === "wildcard" || searchMode === "regex" || searchMode === "normal" ? searchMode : "exact");
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
     if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = "";
@@ -1619,6 +1620,7 @@ function syncStateToURL() {
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (STATE.wildcard) sp.set("mode", "wildcard");
   else if (STATE.regex) sp.set("mode", "regex");
+  else if (!STATE.exact) sp.set("mode", "normal");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
@@ -3388,19 +3390,19 @@ function init() {
     doSearch();
   });
   DOM.exactSearchToggle.addEventListener("change", function() {
-    setSearchMode(DOM.exactSearchToggle.checked ? "exact" : "exact");
+    setSearchMode(DOM.exactSearchToggle.checked ? "exact" : "normal");
     STATE.page = 1;
     STATE.results = [];
     doSearch();
   });
   DOM.wildcardSearchToggle.addEventListener("change", function() {
-    setSearchMode(DOM.wildcardSearchToggle.checked ? "wildcard" : "exact");
+    setSearchMode(DOM.wildcardSearchToggle.checked ? "wildcard" : "normal");
     STATE.page = 1;
     STATE.results = [];
     doSearch();
   });
   DOM.regexSearchToggle.addEventListener("change", function() {
-    setSearchMode(DOM.regexSearchToggle.checked ? "regex" : "exact");
+    setSearchMode(DOM.regexSearchToggle.checked ? "regex" : "normal");
     STATE.page = 1;
     STATE.results = [];
     doSearch();
