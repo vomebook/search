@@ -1128,6 +1128,21 @@ body.mobile .mobile-selected-count {
   box-sizing: border-box;
 }
 
+#exact-search-section {
+  overflow: hidden;
+  transition: height 180ms ease, padding-top 180ms ease, padding-bottom 180ms ease, opacity 160ms ease, transform 180ms ease, border-color 180ms ease;
+}
+
+#exact-search-section.exact-section-hidden {
+  height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom-color: transparent;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+
 #mirror-links-section .toggle-row,
 #history-toggle-section .toggle-row,
 #search-folders-section .toggle-row,

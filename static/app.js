@@ -263,6 +263,16 @@ function matchesExactQuery(text, query) {
 function shouldUseLiteralLocalSearch(query) {
   return /[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\s]/i.test(String(query || ""));
 }
+
+function setExactSearchSectionVisible(visible, animate) {
+  if (!DOM.exactSearchSection) return;
+  if (!animate) DOM.exactSearchSection.style.transition = "none";
+  DOM.exactSearchSection.classList.toggle("exact-section-hidden", !visible);
+  if (!animate) {
+    void DOM.exactSearchSection.offsetHeight;
+    DOM.exactSearchSection.style.transition = "";
+  }
+}
  
 function editDistance(s1, s2, maxDist) {
   maxDist = maxDist || 2;
@@ -1465,7 +1475,7 @@ const ROUTER = {
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
-    if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
+    setExactSearchSectionVisible(!STATE.useLocalMode, false);
     STATE.recordHistory = route.params.history !== "0";
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
@@ -3326,7 +3336,7 @@ function init() {
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
-      DOM.exactSearchSection.style.display = "none";
+      setExactSearchSectionVisible(false, true);
       STATE.page = 1;
       STATE.results = [];
       DOM.resultsList.innerHTML = "";
@@ -3339,7 +3349,7 @@ function init() {
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
-    DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
+    setExactSearchSectionVisible(!STATE.useLocalMode, true);
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.page = 1;
     STATE.results = [];
