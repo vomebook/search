@@ -247,6 +247,22 @@ function tokenize(text) {
   }
   return [...new Set(tokens)];
 }
+
+function wildcardPatternToRegExp(pattern) {
+  const escaped = String(pattern || "").replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "i");
+}
+
+function matchesExactQuery(text, query) {
+  const value = String(text || "");
+  const pattern = String(query || "");
+  if (pattern.indexOf("*") >= 0 || pattern.indexOf("?") >= 0) return wildcardPatternToRegExp(pattern).test(value);
+  return value.toLowerCase().indexOf(pattern.toLowerCase()) >= 0;
+}
+
+function shouldUseLiteralLocalSearch(query) {
+  return /[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\s]/i.test(String(query || ""));
+}
  
 function editDistance(s1, s2, maxDist) {
   maxDist = maxDist || 2;
@@ -648,15 +664,14 @@ function doSearchLocal(params) {
 
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
-  } else if (exactMode) {
-    // 精准搜索：跳过 token + 模糊匹配，直接子串查找
-    var ql = q.toLowerCase();
+  } else if (exactMode || shouldUseLiteralLocalSearch(q)) {
+    // 精准搜索：跳过 token + 模糊匹配，直接查找，支持 * 和 ? 通配符。
     for (var ei = 0; ei < RECORDS.length; ei++) {
       var rec = RECORDS[ei];
-      var fn = (rec.File || "").toLowerCase();
-      var rn = (rec.Repo || "").toLowerCase();
-      var pf = (rec.Folder || []).join("/").toLowerCase();
-      if (fn.indexOf(ql) >= 0 || rn.indexOf(ql) >= 0 || (searchFolders && pf.indexOf(ql) >= 0)) {
+      var fn = rec.File || "";
+      var rn = rec.Repo || "";
+      var pf = (rec.Folder || []).join("/");
+      if (matchesExactQuery(fn, q) || matchesExactQuery(rn, q) || (searchFolders && matchesExactQuery(pf, q))) {
         matched.push(ei);
       }
     }
@@ -1174,7 +1189,7 @@ const STATE = {
   folderTree: null,
   folderTreeCollapsed: {},
   searchFolders: true,
-  exact: false,
+  exact: true,
   useLocalMode: false,
   recordHistory: true,
   dataLoaded: false,
@@ -1357,7 +1372,7 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
     if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
     if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (STATE.exact) sp.set("exact", "1");
+    if (!STATE.exact) sp.set("exact", "0");
     if (STATE.useLocalMode) sp.set("local", "1");
     if (!STATE.recordHistory) sp.set("history", "0");
     if (!STATE.useMirrorLinks) sp.set("mirror", "0");
@@ -1446,12 +1461,11 @@ const ROUTER = {
     }
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
-    STATE.exact = route.params.exact === "1";
+    STATE.exact = route.params.exact !== "0";
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
     if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
-    if (STATE.useLocalMode) STATE.exact = false;
     STATE.recordHistory = route.params.history !== "0";
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
@@ -1461,6 +1475,8 @@ const ROUTER = {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
       updateSidebarVisibility();
     }
+    STATE.rightSidebarOpen = route.params.filters === "1";
+    updateSidebarVisibility();
     if (route.params.wide !== undefined) {
       DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
@@ -1532,12 +1548,13 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (!STATE.useLocalMode && STATE.exact) sp.set("exact", "1");
+  if (!STATE.exact) sp.set("exact", "0");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
+  if (STATE.rightSidebarOpen) sp.set("filters", "1");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
@@ -2901,6 +2918,7 @@ function toggleRightSidebar() {
   STATE.rightSidebarOpen = !STATE.rightSidebarOpen;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
+  syncStateToURL();
 }
  
 function updateSidebarVisibility() {
@@ -3309,8 +3327,6 @@ function init() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
       DOM.exactSearchSection.style.display = "none";
-      STATE.exact = false;
-      if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
       STATE.page = 1;
       STATE.results = [];
       DOM.resultsList.innerHTML = "";
@@ -3324,7 +3340,6 @@ function init() {
     STATE.useLocalMode = DOM.localModeToggle.checked;
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
     DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
-    if (STATE.useLocalMode) STATE.exact = false;
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.page = 1;
     STATE.results = [];
@@ -3342,6 +3357,7 @@ function init() {
     STATE.leftSidebarOpen = false;
     STATE.rightSidebarOpen = false;
     updateSidebarVisibility();
+    syncStateToURL();
   });
   DOM.randomBookBtn.addEventListener("click", randomBook);
   DOM.emptyRandomBtn.addEventListener("click", randomBook);
