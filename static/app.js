@@ -349,6 +349,15 @@ function recordMatchesSearchPattern(rec, matcher, searchFolders) {
   matcher.lastIndex = 0;
   return false;
 }
+
+function setSearchMode(mode) {
+  STATE.exact = mode === "exact";
+  STATE.wildcard = mode === "wildcard";
+  STATE.regex = mode === "regex";
+  if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
+  if (DOM.wildcardSearchToggle) DOM.wildcardSearchToggle.checked = STATE.wildcard;
+  if (DOM.regexSearchToggle) DOM.regexSearchToggle.checked = STATE.regex;
+}
   
 function buildIndex() {
   return new Promise(function(resolve) {
@@ -686,7 +695,12 @@ function doSearchLocal(params) {
 
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
-  } else if (regexMode && hasRegexSyntax(q)) {
+  } else if (wildcardMode) {
+    var wildcardMatcher = wildcardToRegExp(q);
+    for (var wi = 0; wi < RECORDS.length; wi++) {
+      if (recordMatchesSearchPattern(RECORDS[wi], wildcardMatcher, searchFolders)) matched.push(wi);
+    }
+  } else if (regexMode) {
     try {
       var regexMatcher = parseRegexQuery(q);
       for (var ri = 0; ri < RECORDS.length; ri++) {
@@ -694,11 +708,6 @@ function doSearchLocal(params) {
       }
     } catch (e) {
       matched = [];
-    }
-  } else if (wildcardMode && hasWildcardSyntax(q)) {
-    var wildcardMatcher = wildcardToRegExp(q);
-    for (var wi = 0; wi < RECORDS.length; wi++) {
-      if (recordMatchesSearchPattern(RECORDS[wi], wildcardMatcher, searchFolders)) matched.push(wi);
     }
   } else if (exactMode) {
     // 精准搜索：跳过 token + 模糊匹配，直接子串查找
@@ -867,9 +876,10 @@ async function doSearchAPI(params, append) {
   if (params.maxSize !== null) body.max_size = params.maxSize;
   body.sort = params.sort || "relevance";
   if (!params.searchFolders) body.search_folders = false;
+  if (params.wildcard) body.mode = "wildcard";
+  else if (params.regex) body.mode = "regex";
+  else body.mode = "exact";
   if (params.exact) body.exact = true;
-  if (!params.wildcard) body.wildcard = false;
-  if (!params.regex) body.regex = false;
 
   const fetchOptions = {
     method: "POST",
@@ -952,9 +962,10 @@ function prefetchNextPage() {
   if (STATE.filterMaxSize !== null) body.max_size = STATE.filterMaxSize;
   body.sort = STATE.sort || "relevance";
   if (!STATE.searchFolders) body.search_folders = false;
+  if (STATE.wildcard) body.mode = "wildcard";
+  else if (STATE.regex) body.mode = "regex";
+  else body.mode = "exact";
   if (STATE.exact) body.exact = true;
-  if (!STATE.wildcard) body.wildcard = false;
-  if (!STATE.regex) body.regex = false;
 
   fetch(base, {
     method: "POST",
@@ -1219,7 +1230,7 @@ const STATE = {
   filterMaxSize: null,
   useMirrorLinks: true,
   leftSidebarOpen: true,
-  rightSidebarOpen: true,
+  rightSidebarOpen: false,
   isMobile: false,
   isDark: true,
   isLoading: false,
@@ -1231,8 +1242,8 @@ const STATE = {
   folderTreeCollapsed: {},
   searchFolders: true,
   exact: true,
-  wildcard: true,
-  regex: true,
+  wildcard: false,
+  regex: false,
   useLocalMode: false,
   recordHistory: true,
   dataLoaded: false,
@@ -1419,9 +1430,9 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
     if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
     if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (!STATE.exact) sp.set("exact", "0");
-    if (!STATE.wildcard) sp.set("wildcard", "0");
-    if (!STATE.regex) sp.set("regex", "0");
+    if (STATE.wildcard) sp.set("mode", "wildcard");
+    else if (STATE.regex) sp.set("mode", "regex");
+    if (STATE.rightSidebarOpen) sp.set("filters", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
     if (!STATE.recordHistory) sp.set("history", "0");
     if (!STATE.useMirrorLinks) sp.set("mirror", "0");
@@ -1510,12 +1521,13 @@ const ROUTER = {
     }
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
-    STATE.exact = route.params.exact !== "0";
-    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
-    STATE.wildcard = route.params.wildcard !== "0";
-    if (DOM.wildcardSearchToggle) DOM.wildcardSearchToggle.checked = STATE.wildcard;
-    STATE.regex = route.params.regex !== "0";
-    if (DOM.regexSearchToggle) DOM.regexSearchToggle.checked = STATE.regex;
+    var searchMode = route.params.mode || "exact";
+    if (!route.params.mode) {
+      if (route.params.wildcard === "1") searchMode = "wildcard";
+      else if (route.params.regex === "1") searchMode = "regex";
+      else if (route.params.exact === "0") searchMode = "";
+    }
+    setSearchMode(searchMode === "wildcard" || searchMode === "regex" ? searchMode : "exact");
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
     if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = "";
@@ -1529,8 +1541,10 @@ const ROUTER = {
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
     }
-    STATE.rightSidebarOpen = route.params.filters !== "0";
-    if (STATE.isMobile && STATE.rightSidebarOpen) STATE.leftSidebarOpen = false;
+    if (route.params.filters !== undefined) {
+      STATE.rightSidebarOpen = route.params.filters === "1";
+      if (STATE.isMobile && STATE.rightSidebarOpen) STATE.leftSidebarOpen = false;
+    }
     updateSidebarVisibility();
     if (route.params.wide !== undefined) {
       DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
@@ -1603,15 +1617,14 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (!STATE.exact) sp.set("exact", "0");
-  if (!STATE.wildcard) sp.set("wildcard", "0");
-  if (!STATE.regex) sp.set("regex", "0");
+  if (STATE.wildcard) sp.set("mode", "wildcard");
+  else if (STATE.regex) sp.set("mode", "regex");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-  if (!STATE.rightSidebarOpen) sp.set("filters", "0");
+  if (STATE.rightSidebarOpen) sp.set("filters", "1");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
@@ -3375,19 +3388,19 @@ function init() {
     doSearch();
   });
   DOM.exactSearchToggle.addEventListener("change", function() {
-    STATE.exact = DOM.exactSearchToggle.checked;
+    setSearchMode(DOM.exactSearchToggle.checked ? "exact" : "exact");
     STATE.page = 1;
     STATE.results = [];
     doSearch();
   });
   DOM.wildcardSearchToggle.addEventListener("change", function() {
-    STATE.wildcard = DOM.wildcardSearchToggle.checked;
+    setSearchMode(DOM.wildcardSearchToggle.checked ? "wildcard" : "exact");
     STATE.page = 1;
     STATE.results = [];
     doSearch();
   });
   DOM.regexSearchToggle.addEventListener("change", function() {
-    STATE.regex = DOM.regexSearchToggle.checked;
+    setSearchMode(DOM.regexSearchToggle.checked ? "regex" : "exact");
     STATE.page = 1;
     STATE.results = [];
     doSearch();
