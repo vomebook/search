@@ -366,9 +366,12 @@ function setSearchMode(mode) {
   STATE.exact = mode === "exact";
   STATE.wildcard = mode === "wildcard";
   STATE.regex = mode === "regex";
-  if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
-  if (DOM.wildcardSearchToggle) DOM.wildcardSearchToggle.checked = STATE.wildcard;
-  if (DOM.regexSearchToggle) DOM.regexSearchToggle.checked = STATE.regex;
+  if (DOM.searchModeSelect) DOM.searchModeSelect.value = mode === "wildcard" || mode === "regex" || mode === "normal" ? mode : "exact";
+}
+
+function updateSearchModeSections() {
+  var hideModeSections = !!STATE.useLocalMode;
+  if (DOM.searchModeSection) DOM.searchModeSection.classList.toggle("mode-section-hidden", hideModeSections);
 }
   
 function buildIndex() {
@@ -1337,12 +1340,8 @@ function cacheDOM() {
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
-  DOM.exactSearchToggle = $("#exact-search-toggle");
-  DOM.exactSearchSection = $("#exact-search-section");
-  DOM.wildcardSearchToggle = $("#wildcard-search-toggle");
-  DOM.wildcardSearchSection = $("#wildcard-search-section");
-  DOM.regexSearchToggle = $("#regex-search-toggle");
-  DOM.regexSearchSection = $("#regex-search-section");
+  DOM.searchModeSelect = $("#search-mode-select");
+  DOM.searchModeSection = $("#search-mode-section");
   DOM.localModeToggle = $("#local-mode-toggle");
   DOM.localModeToggleRow = $("#local-mode-toggle-row");
   DOM.historyToggle = $("#history-toggle");
@@ -1445,7 +1444,7 @@ const ROUTER = {
     if (!STATE.searchFolders) sp.set("search_folders", "false");
     if (STATE.wildcard) sp.set("mode", "wildcard");
     else if (STATE.regex) sp.set("mode", "regex");
-    else if (!STATE.exact) sp.set("mode", "normal");
+    else if (!STATE.exact && !STATE.useLocalMode) sp.set("mode", "normal");
     if (STATE.rightSidebarOpen) sp.set("filters", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
     if (!STATE.recordHistory) sp.set("history", "0");
@@ -1544,9 +1543,8 @@ const ROUTER = {
     setSearchMode(searchMode === "wildcard" || searchMode === "regex" || searchMode === "normal" ? searchMode : "exact");
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
-    if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = "";
-    if (DOM.wildcardSearchSection) DOM.wildcardSearchSection.style.display = "";
-    if (DOM.regexSearchSection) DOM.regexSearchSection.style.display = "";
+    if (STATE.useLocalMode && !STATE.wildcard && !STATE.regex) setSearchMode("exact");
+    updateSearchModeSections();
     STATE.recordHistory = route.params.history !== "0";
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
@@ -1633,7 +1631,7 @@ function syncStateToURL() {
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (STATE.wildcard) sp.set("mode", "wildcard");
   else if (STATE.regex) sp.set("mode", "regex");
-  else if (!STATE.exact) sp.set("mode", "normal");
+  else if (!STATE.exact && !STATE.useLocalMode) sp.set("mode", "normal");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
@@ -3402,20 +3400,8 @@ function init() {
     STATE.results = [];
     doSearch();
   });
-  DOM.exactSearchToggle.addEventListener("change", function() {
-    setSearchMode(DOM.exactSearchToggle.checked ? "exact" : "normal");
-    STATE.page = 1;
-    STATE.results = [];
-    doSearch();
-  });
-  DOM.wildcardSearchToggle.addEventListener("change", function() {
-    setSearchMode(DOM.wildcardSearchToggle.checked ? "wildcard" : "normal");
-    STATE.page = 1;
-    STATE.results = [];
-    doSearch();
-  });
-  DOM.regexSearchToggle.addEventListener("change", function() {
-    setSearchMode(DOM.regexSearchToggle.checked ? "regex" : "normal");
+  DOM.searchModeSelect.addEventListener("change", function() {
+    setSearchMode(DOM.searchModeSelect.value);
     STATE.page = 1;
     STATE.results = [];
     doSearch();
@@ -3423,6 +3409,8 @@ function init() {
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
+      if (!STATE.wildcard && !STATE.regex) setSearchMode("exact");
+      updateSearchModeSections();
       STATE.page = 1;
       STATE.results = [];
       DOM.resultsList.innerHTML = "";
@@ -3435,6 +3423,8 @@ function init() {
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
+    if (STATE.useLocalMode && !STATE.wildcard && !STATE.regex) setSearchMode("exact");
+    updateSearchModeSections();
     STATE.page = 1;
     STATE.results = [];
     doSearch();
