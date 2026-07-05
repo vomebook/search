@@ -330,11 +330,23 @@ function hasRegexSyntax(query) {
   return /^\/.+\/[a-z]*$/i.test(q) || /[\\^$+{}()|[\].]/.test(q);
 }
 
+function hasSearchOperatorSyntax(query) {
+  return hasWildcardSyntax(query) || hasRegexSyntax(query);
+}
+
 function parseRegexQuery(query) {
   var q = String(query || "");
   var slashMatch = q.match(/^\/(.+)\/([a-z]*)$/i);
   if (slashMatch) {
-    var flags = slashMatch[2].indexOf("i") >= 0 ? slashMatch[2] : slashMatch[2] + "i";
+    var seenFlags = {};
+    var flags = "";
+    for (var fi = 0; fi < slashMatch[2].length; fi++) {
+      var flag = slashMatch[2][fi];
+      if (!/[dgimsuvy]/.test(flag) || seenFlags[flag]) throw new Error("Invalid regex flags");
+      seenFlags[flag] = true;
+      flags += flag;
+    }
+    if (!seenFlags.i) flags += "i";
     return new RegExp(slashMatch[1], flags);
   }
   return new RegExp(q, "i");
@@ -681,8 +693,9 @@ function doSearchLocal(params) {
   const sort = params.sort || "relevance";
   const searchFolders = params.searchFolders !== false;
   const exactMode = params.exact || false;
-  const wildcardMode = params.wildcard !== false;
-  const regexMode = params.regex !== false;
+  const wildcardMode = !!params.wildcard;
+  const regexMode = !!params.regex;
+  const literalOperatorMode = !exactMode && !wildcardMode && !regexMode && hasSearchOperatorSyntax(q);
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
 
@@ -709,7 +722,7 @@ function doSearchLocal(params) {
     } catch (e) {
       matched = [];
     }
-  } else if (exactMode) {
+  } else if (exactMode || literalOperatorMode) {
     // 精准搜索：跳过 token + 模糊匹配，直接子串查找
     var ql = q.toLowerCase();
     for (var ei = 0; ei < RECORDS.length; ei++) {
@@ -3438,6 +3451,7 @@ function init() {
     STATE.leftSidebarOpen = false;
     STATE.rightSidebarOpen = false;
     updateSidebarVisibility();
+    syncStateToURL();
   });
   DOM.randomBookBtn.addEventListener("click", randomBook);
   DOM.emptyRandomBtn.addEventListener("click", randomBook);
