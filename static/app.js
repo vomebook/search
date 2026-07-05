@@ -1386,6 +1386,9 @@ const ROUTER = {
     if (STATE.useLocalMode) sp.set("local", "1");
     if (!STATE.recordHistory) sp.set("history", "0");
     if (!STATE.useMirrorLinks) sp.set("mirror", "0");
+    if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
+    if (STATE.rightSidebarOpen) sp.set("filters", "1");
+    if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
