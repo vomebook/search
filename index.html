@@ -201,28 +201,16 @@
           <span class="toggle-switch"></span>
         </label>
       </div>
-      <!-- 精准搜索开关 -->
-      <div class="filter-section" id="exact-search-section">
-        <label class="toggle-row">
-          <span class="toggle-label">精准搜索</span>
-          <input type="checkbox" id="exact-search-toggle" checked>
-          <span class="toggle-switch"></span>
-        </label>
-      </div>
-      <!-- 通配符搜索开关 -->
-      <div class="filter-section" id="wildcard-search-section">
-        <label class="toggle-row">
-          <span class="toggle-label">通配符(*和?)</span>
-          <input type="checkbox" id="wildcard-search-toggle">
-          <span class="toggle-switch"></span>
-        </label>
-      </div>
-      <!-- 正则表达式搜索开关 -->
-      <div class="filter-section" id="regex-search-section">
-        <label class="toggle-row">
-          <span class="toggle-label">正则表达式</span>
-          <input type="checkbox" id="regex-search-toggle">
-          <span class="toggle-switch"></span>
+      <!-- 搜索模式 -->
+      <div class="filter-section" id="search-mode-section">
+        <label class="search-mode-row">
+          <span class="toggle-label">搜索模式</span>
+          <select id="search-mode-select" class="search-mode-select">
+            <option value="normal">普通搜索</option>
+            <option value="exact" selected>精准搜索</option>
+            <option value="wildcard">通配符(*和?)</option>
+            <option value="regex">正则表达式</option>
+          </select>
         </label>
       </div>
       <!-- 本地搜索模式开关 -->
