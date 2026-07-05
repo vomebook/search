@@ -1122,6 +1122,8 @@ body.mobile .mobile-selected-count {
 #history-toggle-section,
 #search-folders-section,
 #exact-search-section,
+#wildcard-search-section,
+#regex-search-section,
 #local-mode-section {
   padding: 0 12px;
   height: 40px;
@@ -1132,6 +1134,8 @@ body.mobile .mobile-selected-count {
 #history-toggle-section .toggle-row,
 #search-folders-section .toggle-row,
 #exact-search-section .toggle-row,
+#wildcard-search-section .toggle-row,
+#regex-search-section .toggle-row,
 #local-mode-section .toggle-row {
   height: 100%;
 }
