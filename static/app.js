@@ -313,6 +313,42 @@ function getBrowserFileLink(repo, folderPath, file) {
   var relativePath = folderPath ? folderPath + "/" + fullName : fullName;
   return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeURI(relativePath);
 }
+
+function hasWildcardSyntax(query) {
+  return /[*?]/.test(query || "");
+}
+
+function wildcardToRegExp(query) {
+  var pattern = String(query || "").replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp(pattern, "i");
+}
+
+function hasRegexSyntax(query) {
+  var q = String(query || "");
+  return /^\/.+\/[a-z]*$/i.test(q) || /[\\^$+{}()|[\].]/.test(q);
+}
+
+function parseRegexQuery(query) {
+  var q = String(query || "");
+  var slashMatch = q.match(/^\/(.+)\/([a-z]*)$/i);
+  if (slashMatch) {
+    var flags = slashMatch[2].indexOf("i") >= 0 ? slashMatch[2] : slashMatch[2] + "i";
+    return new RegExp(slashMatch[1], flags);
+  }
+  return new RegExp(q, "i");
+}
+
+function recordMatchesSearchPattern(rec, matcher, searchFolders) {
+  if (matcher.test(rec.File || "")) return true;
+  matcher.lastIndex = 0;
+  if (matcher.test(rec.Repo || "")) return true;
+  matcher.lastIndex = 0;
+  if (searchFolders && matcher.test((rec.Folder || []).join("/"))) return true;
+  matcher.lastIndex = 0;
+  return false;
+}
   
 function buildIndex() {
   return new Promise(function(resolve) {
@@ -636,6 +672,8 @@ function doSearchLocal(params) {
   const sort = params.sort || "relevance";
   const searchFolders = params.searchFolders !== false;
   const exactMode = params.exact || false;
+  const wildcardMode = params.wildcard !== false;
+  const regexMode = params.regex !== false;
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
 
@@ -648,6 +686,20 @@ function doSearchLocal(params) {
 
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
+  } else if (regexMode && hasRegexSyntax(q)) {
+    try {
+      var regexMatcher = parseRegexQuery(q);
+      for (var ri = 0; ri < RECORDS.length; ri++) {
+        if (recordMatchesSearchPattern(RECORDS[ri], regexMatcher, searchFolders)) matched.push(ri);
+      }
+    } catch (e) {
+      matched = [];
+    }
+  } else if (wildcardMode && hasWildcardSyntax(q)) {
+    var wildcardMatcher = wildcardToRegExp(q);
+    for (var wi = 0; wi < RECORDS.length; wi++) {
+      if (recordMatchesSearchPattern(RECORDS[wi], wildcardMatcher, searchFolders)) matched.push(wi);
+    }
   } else if (exactMode) {
     // 精准搜索：跳过 token + 模糊匹配，直接子串查找
     var ql = q.toLowerCase();
@@ -816,6 +868,8 @@ async function doSearchAPI(params, append) {
   body.sort = params.sort || "relevance";
   if (!params.searchFolders) body.search_folders = false;
   if (params.exact) body.exact = true;
+  if (!params.wildcard) body.wildcard = false;
+  if (!params.regex) body.regex = false;
 
   const fetchOptions = {
     method: "POST",
@@ -899,6 +953,8 @@ function prefetchNextPage() {
   body.sort = STATE.sort || "relevance";
   if (!STATE.searchFolders) body.search_folders = false;
   if (STATE.exact) body.exact = true;
+  if (!STATE.wildcard) body.wildcard = false;
+  if (!STATE.regex) body.regex = false;
 
   fetch(base, {
     method: "POST",
@@ -1163,7 +1219,7 @@ const STATE = {
   filterMaxSize: null,
   useMirrorLinks: true,
   leftSidebarOpen: true,
-  rightSidebarOpen: false,
+  rightSidebarOpen: true,
   isMobile: false,
   isDark: true,
   isLoading: false,
@@ -1174,7 +1230,9 @@ const STATE = {
   folderTree: null,
   folderTreeCollapsed: {},
   searchFolders: true,
-  exact: false,
+  exact: true,
+  wildcard: true,
+  regex: true,
   useLocalMode: false,
   recordHistory: true,
   dataLoaded: false,
@@ -1257,6 +1315,10 @@ function cacheDOM() {
   DOM.searchFoldersToggle = $("#search-folders-toggle");
   DOM.exactSearchToggle = $("#exact-search-toggle");
   DOM.exactSearchSection = $("#exact-search-section");
+  DOM.wildcardSearchToggle = $("#wildcard-search-toggle");
+  DOM.wildcardSearchSection = $("#wildcard-search-section");
+  DOM.regexSearchToggle = $("#regex-search-toggle");
+  DOM.regexSearchSection = $("#regex-search-section");
   DOM.localModeToggle = $("#local-mode-toggle");
   DOM.localModeToggleRow = $("#local-mode-toggle-row");
   DOM.historyToggle = $("#history-toggle");
@@ -1357,7 +1419,9 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
     if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
     if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (STATE.exact) sp.set("exact", "1");
+    if (!STATE.exact) sp.set("exact", "0");
+    if (!STATE.wildcard) sp.set("wildcard", "0");
+    if (!STATE.regex) sp.set("regex", "0");
     if (STATE.useLocalMode) sp.set("local", "1");
     if (!STATE.recordHistory) sp.set("history", "0");
     if (!STATE.useMirrorLinks) sp.set("mirror", "0");
@@ -1446,12 +1510,17 @@ const ROUTER = {
     }
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
-    STATE.exact = route.params.exact === "1";
+    STATE.exact = route.params.exact !== "0";
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
+    STATE.wildcard = route.params.wildcard !== "0";
+    if (DOM.wildcardSearchToggle) DOM.wildcardSearchToggle.checked = STATE.wildcard;
+    STATE.regex = route.params.regex !== "0";
+    if (DOM.regexSearchToggle) DOM.regexSearchToggle.checked = STATE.regex;
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
-    if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
-    if (STATE.useLocalMode) STATE.exact = false;
+    if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = "";
+    if (DOM.wildcardSearchSection) DOM.wildcardSearchSection.style.display = "";
+    if (DOM.regexSearchSection) DOM.regexSearchSection.style.display = "";
     STATE.recordHistory = route.params.history !== "0";
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
@@ -1459,8 +1528,10 @@ const ROUTER = {
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
-      updateSidebarVisibility();
     }
+    STATE.rightSidebarOpen = route.params.filters !== "0";
+    if (STATE.isMobile && STATE.rightSidebarOpen) STATE.leftSidebarOpen = false;
+    updateSidebarVisibility();
     if (route.params.wide !== undefined) {
       DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
@@ -1532,12 +1603,15 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (!STATE.useLocalMode && STATE.exact) sp.set("exact", "1");
+  if (!STATE.exact) sp.set("exact", "0");
+  if (!STATE.wildcard) sp.set("wildcard", "0");
+  if (!STATE.regex) sp.set("regex", "0");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
+  if (!STATE.rightSidebarOpen) sp.set("filters", "0");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
@@ -1693,6 +1767,8 @@ function doSearch(append) {
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
     exact: STATE.exact,
+    wildcard: STATE.wildcard,
+    regex: STATE.regex,
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
@@ -2865,15 +2941,12 @@ function applyMobileMode() {
     document.body.classList.remove("force-desktop");
     DOM.mobileIconPhone.style.display = "";
     DOM.mobileIconDesktop.style.display = "none";
-    STATE.leftSidebarOpen = false;
-    STATE.rightSidebarOpen = false;
+    if (STATE.rightSidebarOpen) STATE.leftSidebarOpen = false;
   } else {
     document.body.classList.remove("mobile");
     document.body.classList.add("force-desktop");
     DOM.mobileIconPhone.style.display = "none";
     DOM.mobileIconDesktop.style.display = "";
-    STATE.leftSidebarOpen = true;
-    STATE.rightSidebarOpen = false;
   }
   updateSidebarVisibility();
   if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
@@ -2901,6 +2974,7 @@ function toggleRightSidebar() {
   STATE.rightSidebarOpen = !STATE.rightSidebarOpen;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
+  syncStateToURL();
 }
  
 function updateSidebarVisibility() {
@@ -3284,6 +3358,7 @@ function init() {
   DOM.closeFiltersBtn.addEventListener("click", function() {
     STATE.rightSidebarOpen = false;
     updateSidebarVisibility();
+    syncStateToURL();
   });
   DOM.sidebarExpandBtn.addEventListener("click", function() {
     DOM.leftSidebar.classList.toggle("expanded-wide");
@@ -3305,12 +3380,21 @@ function init() {
     STATE.results = [];
     doSearch();
   });
+  DOM.wildcardSearchToggle.addEventListener("change", function() {
+    STATE.wildcard = DOM.wildcardSearchToggle.checked;
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+  });
+  DOM.regexSearchToggle.addEventListener("change", function() {
+    STATE.regex = DOM.regexSearchToggle.checked;
+    STATE.page = 1;
+    STATE.results = [];
+    doSearch();
+  });
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
-      DOM.exactSearchSection.style.display = "none";
-      STATE.exact = false;
-      if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
       STATE.page = 1;
       STATE.results = [];
       DOM.resultsList.innerHTML = "";
@@ -3323,9 +3407,6 @@ function init() {
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
-    DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
-    if (STATE.useLocalMode) STATE.exact = false;
-    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.page = 1;
     STATE.results = [];
     doSearch();
