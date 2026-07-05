@@ -313,67 +313,6 @@ function getBrowserFileLink(repo, folderPath, file) {
   var relativePath = folderPath ? folderPath + "/" + fullName : fullName;
   return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeURI(relativePath);
 }
-
-function hasWildcardSyntax(query) {
-  return /[*?]/.test(query || "");
-}
-
-function wildcardToRegExp(query) {
-  var pattern = String(query || "").replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".");
-  return new RegExp(pattern, "i");
-}
-
-function hasRegexSyntax(query) {
-  var q = String(query || "");
-  return /^\/.+\/[a-z]*$/i.test(q) || /[\\^$+{}()|[\].]/.test(q);
-}
-
-function hasSearchOperatorSyntax(query) {
-  return hasWildcardSyntax(query) || hasRegexSyntax(query);
-}
-
-function parseRegexQuery(query) {
-  var q = String(query || "");
-  var slashMatch = q.match(/^\/(.+)\/([a-z]*)$/i);
-  if (slashMatch) {
-    var seenFlags = {};
-    var flags = "";
-    for (var fi = 0; fi < slashMatch[2].length; fi++) {
-      var flag = slashMatch[2][fi];
-      if (!/[dgimsuvy]/.test(flag) || seenFlags[flag]) throw new Error("Invalid regex flags");
-      seenFlags[flag] = true;
-      flags += flag;
-    }
-    if (!seenFlags.i) flags += "i";
-    return new RegExp(slashMatch[1], flags);
-  }
-  return new RegExp(q, "i");
-}
-
-function recordMatchesSearchPattern(rec, matcher, searchFolders) {
-  if (matcher.test(rec.File || "")) return true;
-  matcher.lastIndex = 0;
-  if (matcher.test(rec.Repo || "")) return true;
-  matcher.lastIndex = 0;
-  if (searchFolders && matcher.test((rec.Folder || []).join("/"))) return true;
-  matcher.lastIndex = 0;
-  return false;
-}
-
-function syncSearchOptionToggles() {
-  if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
-  if (DOM.wildcardSearchToggle) DOM.wildcardSearchToggle.checked = STATE.wildcard;
-  if (DOM.regexSearchToggle) DOM.regexSearchToggle.checked = STATE.regex;
-}
-
-function updateSearchModeSections() {
-  if (DOM.exactSearchSection) DOM.exactSearchSection.classList.toggle("mode-section-hidden", !!STATE.useLocalMode);
-  [DOM.wildcardSearchSection, DOM.regexSearchSection].forEach(function(section) {
-    if (section) section.classList.remove("mode-section-hidden");
-  });
-}
   
 function buildIndex() {
   return new Promise(function(resolve) {
@@ -697,9 +636,6 @@ function doSearchLocal(params) {
   const sort = params.sort || "relevance";
   const searchFolders = params.searchFolders !== false;
   const exactMode = params.exact || false;
-  const wildcardMode = !!params.wildcard;
-  const regexMode = !!params.regex;
-  const literalOperatorMode = !exactMode && !wildcardMode && !regexMode && hasSearchOperatorSyntax(q);
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
 
@@ -712,33 +648,18 @@ function doSearchLocal(params) {
 
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
-  } else if (exactMode || wildcardMode || regexMode || literalOperatorMode) {
-    var matchedSet = new Set();
+  } else if (exactMode) {
+    // 精准搜索：跳过 token + 模糊匹配，直接子串查找
     var ql = q.toLowerCase();
-    var wildcardMatcher = wildcardMode ? wildcardToRegExp(q) : null;
-    var regexMatcher = null;
-    if (regexMode) {
-      try { regexMatcher = parseRegexQuery(q); } catch (e) { regexMatcher = null; }
-    }
-
-    for (var mi = 0; mi < RECORDS.length; mi++) {
-      var rec = RECORDS[mi];
-      if (exactMode || literalOperatorMode) {
-        var fn = (rec.File || "").toLowerCase();
-        var rn = (rec.Repo || "").toLowerCase();
-        var pf = (rec.Folder || []).join("/").toLowerCase();
-        if (fn.indexOf(ql) >= 0 || rn.indexOf(ql) >= 0 || (searchFolders && pf.indexOf(ql) >= 0)) {
-          matchedSet.add(mi);
-          continue;
-        }
+    for (var ei = 0; ei < RECORDS.length; ei++) {
+      var rec = RECORDS[ei];
+      var fn = (rec.File || "").toLowerCase();
+      var rn = (rec.Repo || "").toLowerCase();
+      var pf = (rec.Folder || []).join("/").toLowerCase();
+      if (fn.indexOf(ql) >= 0 || rn.indexOf(ql) >= 0 || (searchFolders && pf.indexOf(ql) >= 0)) {
+        matched.push(ei);
       }
-      if (wildcardMatcher && recordMatchesSearchPattern(rec, wildcardMatcher, searchFolders)) {
-        matchedSet.add(mi);
-        continue;
-      }
-      if (regexMatcher && recordMatchesSearchPattern(rec, regexMatcher, searchFolders)) matchedSet.add(mi);
     }
-    matched = Array.from(matchedSet);
   } else {
     const tokens = tokenize(q);
 
@@ -894,9 +815,7 @@ async function doSearchAPI(params, append) {
   if (params.maxSize !== null) body.max_size = params.maxSize;
   body.sort = params.sort || "relevance";
   if (!params.searchFolders) body.search_folders = false;
-  body.exact = !!params.exact;
-  body.wildcard = !!params.wildcard;
-  body.regex = !!params.regex;
+  if (params.exact) body.exact = true;
 
   const fetchOptions = {
     method: "POST",
@@ -979,9 +898,7 @@ function prefetchNextPage() {
   if (STATE.filterMaxSize !== null) body.max_size = STATE.filterMaxSize;
   body.sort = STATE.sort || "relevance";
   if (!STATE.searchFolders) body.search_folders = false;
-  body.exact = !!STATE.exact;
-  body.wildcard = !!STATE.wildcard;
-  body.regex = !!STATE.regex;
+  if (STATE.exact) body.exact = true;
 
   fetch(base, {
     method: "POST",
@@ -1257,9 +1174,7 @@ const STATE = {
   folderTree: null,
   folderTreeCollapsed: {},
   searchFolders: true,
-  exact: true,
-  wildcard: false,
-  regex: false,
+  exact: false,
   useLocalMode: false,
   recordHistory: true,
   dataLoaded: false,
@@ -1342,10 +1257,6 @@ function cacheDOM() {
   DOM.searchFoldersToggle = $("#search-folders-toggle");
   DOM.exactSearchToggle = $("#exact-search-toggle");
   DOM.exactSearchSection = $("#exact-search-section");
-  DOM.wildcardSearchToggle = $("#wildcard-search-toggle");
-  DOM.wildcardSearchSection = $("#wildcard-search-section");
-  DOM.regexSearchToggle = $("#regex-search-toggle");
-  DOM.regexSearchSection = $("#regex-search-section");
   DOM.localModeToggle = $("#local-mode-toggle");
   DOM.localModeToggleRow = $("#local-mode-toggle-row");
   DOM.historyToggle = $("#history-toggle");
@@ -1446,10 +1357,7 @@ const ROUTER = {
     if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
     if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
     if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (!STATE.exact) sp.set("exact", "0");
-    if (STATE.wildcard) sp.set("wildcard", "1");
-    if (STATE.regex) sp.set("regex", "1");
-    if (STATE.rightSidebarOpen) sp.set("filters", "1");
+    if (STATE.exact) sp.set("exact", "1");
     if (STATE.useLocalMode) sp.set("local", "1");
     if (!STATE.recordHistory) sp.set("history", "0");
     if (!STATE.useMirrorLinks) sp.set("mirror", "0");
@@ -1538,16 +1446,12 @@ const ROUTER = {
     }
     STATE.searchFolders = route.params.search_folders !== "false";
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
-    STATE.exact = route.params.exact !== "0";
-    STATE.wildcard = route.params.wildcard === "1";
-    STATE.regex = route.params.regex === "1";
-    if (route.params.mode === "wildcard") STATE.wildcard = true;
-    else if (route.params.mode === "regex") STATE.regex = true;
-    else if (route.params.mode === "normal") STATE.exact = false;
+    STATE.exact = route.params.exact === "1";
+    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.useLocalMode = route.params.local === "1";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
-    syncSearchOptionToggles();
-    updateSearchModeSections();
+    if (DOM.exactSearchSection) DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
+    if (STATE.useLocalMode) STATE.exact = false;
     STATE.recordHistory = route.params.history !== "0";
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
@@ -1555,12 +1459,8 @@ const ROUTER = {
  
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
+      updateSidebarVisibility();
     }
-    if (route.params.filters !== undefined) {
-      STATE.rightSidebarOpen = route.params.filters === "1";
-      if (STATE.isMobile && STATE.rightSidebarOpen) STATE.leftSidebarOpen = false;
-    }
-    updateSidebarVisibility();
     if (route.params.wide !== undefined) {
       DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
@@ -1632,15 +1532,12 @@ function syncStateToURL() {
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (!STATE.exact) sp.set("exact", "0");
-  if (STATE.wildcard) sp.set("wildcard", "1");
-  if (STATE.regex) sp.set("regex", "1");
+  if (!STATE.useLocalMode && STATE.exact) sp.set("exact", "1");
   if (STATE.useLocalMode) sp.set("local", "1");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-  if (STATE.rightSidebarOpen) sp.set("filters", "1");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
@@ -1796,8 +1693,6 @@ function doSearch(append) {
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
     exact: STATE.exact,
-    wildcard: STATE.wildcard,
-    regex: STATE.regex,
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
@@ -2970,12 +2865,15 @@ function applyMobileMode() {
     document.body.classList.remove("force-desktop");
     DOM.mobileIconPhone.style.display = "";
     DOM.mobileIconDesktop.style.display = "none";
-    if (STATE.rightSidebarOpen) STATE.leftSidebarOpen = false;
+    STATE.leftSidebarOpen = false;
+    STATE.rightSidebarOpen = false;
   } else {
     document.body.classList.remove("mobile");
     document.body.classList.add("force-desktop");
     DOM.mobileIconPhone.style.display = "none";
     DOM.mobileIconDesktop.style.display = "";
+    STATE.leftSidebarOpen = true;
+    STATE.rightSidebarOpen = false;
   }
   updateSidebarVisibility();
   if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
@@ -3003,7 +2901,6 @@ function toggleRightSidebar() {
   STATE.rightSidebarOpen = !STATE.rightSidebarOpen;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
-  syncStateToURL();
 }
  
 function updateSidebarVisibility() {
@@ -3387,7 +3284,6 @@ function init() {
   DOM.closeFiltersBtn.addEventListener("click", function() {
     STATE.rightSidebarOpen = false;
     updateSidebarVisibility();
-    syncStateToURL();
   });
   DOM.sidebarExpandBtn.addEventListener("click", function() {
     DOM.leftSidebar.classList.toggle("expanded-wide");
@@ -3409,22 +3305,12 @@ function init() {
     STATE.results = [];
     doSearch();
   });
-  DOM.wildcardSearchToggle.addEventListener("change", function() {
-    STATE.wildcard = DOM.wildcardSearchToggle.checked;
-    STATE.page = 1;
-    STATE.results = [];
-    doSearch();
-  });
-  DOM.regexSearchToggle.addEventListener("change", function() {
-    STATE.regex = DOM.regexSearchToggle.checked;
-    STATE.page = 1;
-    STATE.results = [];
-    doSearch();
-  });
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
-      updateSearchModeSections();
+      DOM.exactSearchSection.style.display = "none";
+      STATE.exact = false;
+      if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
       STATE.page = 1;
       STATE.results = [];
       DOM.resultsList.innerHTML = "";
@@ -3437,7 +3323,9 @@ function init() {
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
     console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
-    updateSearchModeSections();
+    DOM.exactSearchSection.style.display = STATE.useLocalMode ? "none" : "";
+    if (STATE.useLocalMode) STATE.exact = false;
+    if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.page = 1;
     STATE.results = [];
     doSearch();
@@ -3454,7 +3342,6 @@ function init() {
     STATE.leftSidebarOpen = false;
     STATE.rightSidebarOpen = false;
     updateSidebarVisibility();
-    syncStateToURL();
   });
   DOM.randomBookBtn.addEventListener("click", randomBook);
   DOM.emptyRandomBtn.addEventListener("click", randomBook);
