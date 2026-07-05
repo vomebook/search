@@ -2920,7 +2920,7 @@ function toggleLeftSidebar() {
     DOM.sidebarExpandBtn.textContent = "↔";
   }
   syncStateToURL();
-  if (STATE.leftSidebarOpen && STATE.rightSidebarOpen) STATE.rightSidebarOpen = false;
+  if (STATE.isMobile && STATE.leftSidebarOpen && STATE.rightSidebarOpen) STATE.rightSidebarOpen = false;
   updateSidebarVisibility();
 }
  
