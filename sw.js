@@ -1,10 +1,12 @@
-const CACHE_NAME = "vomebook-search-v1";
+const CACHE_NAME = "vomebook-search-v2";
 
 const PRECACHE_URLS = [
   "/search/",
   "/search/static/style.css",
   "/search/static/app.js",
-  "/search/manifest.json"
+  "/search/manifest.json",
+  "/search/icons/logo.svg",
+  "/search/icons/icon.svg"
 ];
 
 // ── Install: precache app shell ─────────────────────
