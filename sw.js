@@ -6,6 +6,7 @@ const PRECACHE_URLS = [
   "/search/static/app.js",
   "/search/manifest.json",
   "/search/icons/logo.svg",
+  "/search/icons/logo-dark.svg",
   "/search/icons/icon.svg",
   "/search/icons/icon-192.png",
   "/search/icons/icon-512.png"
