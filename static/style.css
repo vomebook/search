@@ -217,6 +217,18 @@ ul, li {
   flex-shrink: 0;
 }
 
+.header-logo-icon-light {
+  display: none;
+}
+
+body.light .header-logo-icon-dark {
+  display: none;
+}
+
+body.light .header-logo-icon-light {
+  display: block;
+}
+
 .header-center {
   flex: 1;
   display: flex;
