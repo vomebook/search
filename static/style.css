@@ -210,6 +210,13 @@ ul, li {
   text-decoration: none;
 }
 
+.header-logo-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
 .header-center {
   flex: 1;
   display: flex;
