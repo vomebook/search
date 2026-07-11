@@ -1653,7 +1653,6 @@ function debouncedSearch() {
   searchTimer = setTimeout(function() {
     STATE.query = DOM.searchInput.value.trim();
     STATE.page = 1;
-    STATE.results = [];
     addHistoryItem(STATE.query);
     renderDropdown();
     doSearch();
