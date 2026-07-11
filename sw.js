@@ -1,4 +1,4 @@
-const CACHE_NAME = "vomebook-search-v3";
+const CACHE_NAME = "vomebook-search-v2";
 
 const PRECACHE_URLS = [
   "/search/",
@@ -44,7 +44,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   // ── Data file: stale-while-revalidate ─────────────
-  if (url.pathname.endsWith("search_data.json.gz")) {
+  if (url.pathname.endsWith(".json.gz")) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((cached) => {
