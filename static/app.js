@@ -308,12 +308,16 @@ function buildRecordRelativePath(rec) {
 
 function buildRecordLink(rec) {
   const repo = rec.Repo || "";
-  return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeURI(buildRecordRelativePath(rec));
+  return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeRecordPath(buildRecordRelativePath(rec));
 }
 
 function buildRecordPath(rec) {
   const repo = rec.Repo || "";
-  return HF_DATASET_BASE + "/" + repo + "/blob/main/" + encodeURI(buildRecordRelativePath(rec));
+  return HF_DATASET_BASE + "/" + repo + "/blob/main/" + encodeRecordPath(buildRecordRelativePath(rec));
+}
+
+function encodeRecordPath(path) {
+  return String(path || "").split("/").map(encodeURIComponent).join("/");
 }
 
 function getRecordLink(rec) {
