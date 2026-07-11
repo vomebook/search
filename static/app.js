@@ -1668,6 +1668,10 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
         doSearch();
       }
     } else {
+      STATE.isLoading = false;
+      STATE.resultsSkeletonActive = false;
+      DOM.resultsLoading.style.display = "none";
+      setSearchVisualLoading(false);
       showToast("本地数据加载失败");
       if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
       STATE.useLocalMode = false;
@@ -1679,6 +1683,10 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
     console.error("Local data load failed:", err);
     STATE.dataLoaded = false;
     localDataPromise = null;
+    STATE.isLoading = false;
+    STATE.resultsSkeletonActive = false;
+    DOM.resultsLoading.style.display = "none";
+    setSearchVisualLoading(false);
     if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
     STATE.useLocalMode = false;
     showToast("本地数据加载失败");
@@ -1836,7 +1844,11 @@ function doSearch(append) {
   }
 
   if (apiAvailable) {
-    if (append && STATE._pendingPage === STATE.page) return;
+    if (append && STATE._pendingPage === STATE.page) {
+      STATE.isLoading = false;
+      DOM.resultsLoading.style.display = "none";
+      return;
+    }
     STATE._pendingPage = STATE.page;
     params.signal = searchAbortController.signal;
     const requestId = searchRequestId;
@@ -1882,9 +1894,8 @@ function doSearch(append) {
       syncStateToURL();
     }).catch(function(err) {
       if (err.message === "API_TIMEOUT") {
-        console.warn("API timeout, falling back to local for this request");
-        doSearchFallbackLocal(params, append, id);
-        return;
+        console.warn("API timeout");
+        return handleApiSearchFailure(append, id);
       }
       if (err.name === "AbortError") {
         if (id === searchId) {
@@ -1894,10 +1905,11 @@ function doSearch(append) {
         }
         return;
       }
-      console.warn("API search failed, falling back to local:", err);
-      doSearchFallbackLocal(params, append, id);
+      console.warn("API search failed:", err);
+      return handleApiSearchFailure(append, id);
     }).finally(function() {
       if (id === searchId) {
+        STATE._pendingPage = 0;
         STATE.isLoading = false;
         STATE.resultsSkeletonActive = false;
         DOM.resultsLoading.style.display = "none";
@@ -1917,6 +1929,24 @@ function doSearch(append) {
   }
 
   doSearchFallbackLocal(params, append, id);
+}
+
+function handleApiSearchFailure(append, id) {
+  if (id !== searchId) return Promise.resolve();
+  if (append) {
+    STATE.page = Math.max(1, STATE.page - 1);
+    showToast("加载更多失败，请重试");
+    return Promise.resolve();
+  }
+
+  showToast("在线搜索失败，正在切换本地搜索...");
+  return ensureLocalDataLoaded(false).then(function(ok) {
+    if (!ok || id !== searchId) return;
+    STATE.useLocalMode = true;
+    if (DOM.localModeToggle) DOM.localModeToggle.checked = true;
+    syncStateToURL();
+    doSearch();
+  });
 }
 
 function doSearchFallbackLocal(params, append, id) {
@@ -3569,7 +3599,6 @@ function init() {
   });
 
   ROUTER.apply();
-  if (STATE.useLocalMode) ensureLocalDataLoaded(true);
   fetchHitokoto();
   setInterval(fetchHitokoto, 30000);
 }
