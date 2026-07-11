@@ -259,6 +259,14 @@ body.light .header-logo-icon-light {
   color: var(--on-surface-variant);
 }
 
+.search-box.is-searching .search-icon {
+  animation: search-icon-spin 0.8s linear infinite;
+}
+
+@keyframes search-icon-spin {
+  to { transform: rotate(360deg); }
+}
+
 .search-input {
   flex: 1;
   height: 100%;
@@ -759,6 +767,11 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .results-list.showing-skeleton {
   display: block;
+}
+
+.results-list.results-pending {
+  opacity: 0.62;
+  transition: opacity 120ms ease;
 }
 
 .results-list.results-reveal {

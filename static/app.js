@@ -1644,6 +1644,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
   if (localDataPromise) return localDataPromise;
 
   STATE.isLoading = true;
+  if (!append) setSearchVisualLoading(true);
   STATE.resultsSkeletonActive = true;
   DOM.resultsLoading.style.display = "none";
   DOM.emptyState.style.display = "none";
@@ -1781,6 +1782,7 @@ function doSearch(append) {
   };
 
   STATE.isLoading = true;
+  if (!append) setSearchVisualLoading(true);
   STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
   DOM.resultsLoading.style.display = STATE.resultsSkeletonActive ? "none" : "flex";
   if (!append) {
@@ -1803,6 +1805,7 @@ function doSearch(append) {
   if (STATE.useLocalMode || folderMatchMode === "mixed") {
     if (!STATE.dataLoaded) {
       STATE.isLoading = false;
+      setSearchVisualLoading(false);
       DOM.resultsLoading.style.display = "none";
       if (STATE.useLocalMode || folderMatchMode === "mixed") {
         ensureLocalDataLoaded(true);
@@ -1814,6 +1817,7 @@ function doSearch(append) {
     }
     if (params.q && !params.exact && !shouldUseLiteralLocalSearch(params.q) && !fullTextIndexReady) {
       STATE.isLoading = false;
+      setSearchVisualLoading(false);
       DOM.resultsLoading.style.display = "none";
       showToast("正在准备模糊搜索索引...");
       ensureFullTextIndex().then(function() {
@@ -1886,6 +1890,7 @@ function doSearch(append) {
         if (id === searchId) {
           STATE.isLoading = false;
           DOM.resultsLoading.style.display = "none";
+          if (!append) setSearchVisualLoading(false);
         }
         return;
       }
@@ -1896,6 +1901,8 @@ function doSearch(append) {
         STATE.isLoading = false;
         STATE.resultsSkeletonActive = false;
         DOM.resultsLoading.style.display = "none";
+        if (!append) setSearchVisualLoading(false);
+        else updateStatusBar();
       }
     });
     return;
@@ -1904,6 +1911,7 @@ function doSearch(append) {
   if (!STATE.dataLoaded) {
     STATE.isLoading = false;
     DOM.resultsLoading.style.display = "none";
+    setSearchVisualLoading(false);
     showToast("数据加载中，请稍后...");
     return;
   }
@@ -1969,6 +1977,8 @@ function doSearchFallbackLocal(params, append, id) {
       STATE.isLoading = false;
       STATE.resultsSkeletonActive = false;
       DOM.resultsLoading.style.display = "none";
+      if (!append) setSearchVisualLoading(false);
+      else updateStatusBar();
     }
   }, 0);
 }
@@ -2125,11 +2135,19 @@ function measureHeights() {
 }
  
 function updateStatusBar() {
-  DOM.resultCount.textContent = STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "";
+  DOM.resultCount.textContent = STATE.isLoading
+    ? "搜索中…"
+    : (STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "");
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ||
             STATE.filterMinSize !== null || STATE.filterMaxSize !== null;
   DOM.clearFiltersBtn.style.display = has ? "" : "none";
   if (DOM.multiToggleLabel) DOM.multiToggleLabel.style.display = STATE.total > 0 ? "" : "none";
+}
+
+function setSearchVisualLoading(loading) {
+  document.getElementById("search-box").classList.toggle("is-searching", loading);
+  DOM.resultsList.classList.toggle("results-pending", loading && STATE.results.length > 0);
+  updateStatusBar();
 }
  
 function updateLoadInfo() {
