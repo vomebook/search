@@ -1644,7 +1644,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
   if (localDataPromise) return localDataPromise;
 
   STATE.isLoading = true;
-  if (!append) setSearchVisualLoading(true);
+  setSearchVisualLoading(true);
   STATE.resultsSkeletonActive = true;
   DOM.resultsLoading.style.display = "none";
   DOM.emptyState.style.display = "none";
