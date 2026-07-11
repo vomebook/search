@@ -359,11 +359,16 @@ function buildIndex() {
         const rec = RECORDS[i];
         const repo = rec.Repo || "";
         const ext = (rec.Extension || "").toLowerCase();
+        const folders = rec.Folder || [];
+
+        rec._fileLower = (rec.File || "").toLowerCase();
+        rec._repoLower = repo.toLowerCase();
+        rec._folderPath = folders.join("/");
+        rec._folderPathLower = rec._folderPath.toLowerCase();
 
         repoCounts[repo] = (repoCounts[repo] || 0) + 1;
         if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
 
-        const folders = rec.Folder || [];
         const text = [rec.File || "", ...folders].join(" ");
         const tokens = tokenize(text);
         for (const tok of tokens) {
@@ -597,15 +602,12 @@ function getPreviewLink(path) {
 function scoreRecord(recIdx, tokens, searchFolders) {
   const rec = RECORDS[recIdx];
   let score = 0;
-  const fname = (rec.File || "").toLowerCase();
-  const repo = (rec.Repo || "").toLowerCase();
+  const fname = rec._fileLower || "";
+  const repo = rec._repoLower || "";
+  const folderPath = rec._folderPathLower || "";
   for (const tok of tokens) {
     if (fname.includes(tok)) score += 3;
-    if (searchFolders) {
-      for (const folder of (rec.Folder || [])) {
-        if (folder.toLowerCase().includes(tok)) score += 2;
-      }
-    }
+    if (searchFolders && folderPath.includes(tok)) score += 2;
     if (repo.includes(tok)) score += 1;
   }
   return score;
@@ -625,7 +627,7 @@ function applyFilters(indices, repos, extensions, folders, minSize, maxSize, fol
       for (const f of folders) {
         const clean = f.replace(/^\/+|\/+$/g, "");
         if (folderMatchMode === "exact") {
-          const recPath = recFolders.join("/");
+          const recPath = rec._folderPath || "";
           if (recPath === clean) {
             matched = true;
             break;
@@ -676,12 +678,18 @@ function doSearchLocal(params) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
   } else if (exactMode || shouldUseLiteralLocalSearch(q)) {
     // 精准搜索：跳过 token + 模糊匹配，直接查找，支持 * 和 ? 通配符。
+    const hasWildcard = q.indexOf("*") >= 0 || q.indexOf("?") >= 0;
+    const exactPattern = hasWildcard ? wildcardPatternToRegExp(q) : null;
+    const exactQuery = hasWildcard ? "" : q.toLowerCase();
     for (var ei = 0; ei < RECORDS.length; ei++) {
       var rec = RECORDS[ei];
-      var fn = rec.File || "";
-      var rn = rec.Repo || "";
-      var pf = (rec.Folder || []).join("/");
-      if (matchesExactQuery(fn, q) || matchesExactQuery(rn, q) || (searchFolders && matchesExactQuery(pf, q))) {
+      var fn = rec._fileLower || "";
+      var rn = rec._repoLower || "";
+      var pf = rec._folderPathLower || "";
+      var isMatch = hasWildcard
+        ? exactPattern.test(fn) || exactPattern.test(rn) || (searchFolders && exactPattern.test(pf))
+        : fn.includes(exactQuery) || rn.includes(exactQuery) || (searchFolders && pf.includes(exactQuery));
+      if (isMatch) {
         matched.push(ei);
       }
     }
@@ -791,7 +799,7 @@ function applyMixedFolderFilters(indices, selfFolders, subtreeFolders) {
   return indices.filter(function(idx) {
     const rec = RECORDS[idx];
     const recFolders = rec.Folder || [];
-    const recPath = recFolders.join("/");
+    const recPath = rec._folderPath || "";
 
     if (selfSet.has(recPath)) return true;
 
@@ -808,7 +816,9 @@ function applyMixedFolderFilters(indices, selfFolders, subtreeFolders) {
    API Search (HuggingFace Space Backend)
    ═══════════════════════════════════════════════════════════ */
 
-async function doSearchAPI(params, append) {
+async function doSearchAPI(params, append, requestId) {
+  if (requestId !== searchRequestId) return false;
+
   // Cache hit: consume prefetched page directly, skip network
   if (append && STATE._pageCache[params.page]) {
     var cp = params.page;
@@ -823,7 +833,7 @@ async function doSearchAPI(params, append) {
     }
     STATE._loadedPage = np - 1;
     STATE.hasMore = STATE.results.length < STATE.total;
-    return;
+    return true;
   }
 
   const q = params.q || "";
@@ -877,6 +887,8 @@ async function doSearchAPI(params, append) {
   }
   clearTimeout(timeoutId);
 
+  if (requestId !== searchRequestId) return false;
+
   STATE.total = data.total;
   STATE.didYouMean = data.did_you_mean || null;
 
@@ -899,6 +911,7 @@ async function doSearchAPI(params, append) {
   }
 
   STATE.hasMore = STATE.results.length < STATE.total;
+  return true;
 }
 
 function prefetchNextPage() {
@@ -1644,7 +1657,7 @@ function debouncedSearch() {
     addHistoryItem(STATE.query);
     renderDropdown();
     doSearch();
-  }, 300);
+  }, 100);
 }
 
 function shouldShowResultsSkeleton(append) {
@@ -1738,6 +1751,7 @@ function doSearch(append) {
     if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
     if (apiAvailable && searchAbortController) searchAbortController.abort();
     if (apiAvailable) searchAbortController = new AbortController();
+    searchRequestId++;
     if (STATE.resultsSkeletonActive) {
       DOM.resultsContainer.scrollTop = 0;
       renderResultsSkeleton();
@@ -1766,8 +1780,10 @@ function doSearch(append) {
     if (append && STATE._pendingPage === STATE.page) return;
     STATE._pendingPage = STATE.page;
     params.signal = searchAbortController.signal;
+    const requestId = searchRequestId;
 
-    doSearchAPI(params, append).then(function() {
+    doSearchAPI(params, append, requestId).then(function(applied) {
+      if (!applied) return;
       if (id !== searchId) return;
       if (append) {
         // Incremental: extend heights, let next scroll render new items
