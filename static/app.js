@@ -84,6 +84,10 @@ let didYouMeanSorted = [];
 let didYouMeanSortedFilesOnly = [];
 let repoList = [];
 let extensionList = [];
+let fullTextIndexReady = false;
+let fullTextIndexPromise = null;
+let folderTreeDataPromise = null;
+let folderBrowserDataPromise = null;
 
 const RECORD_KEY_MAP = {
   r: "Repo",
@@ -340,15 +344,18 @@ function getBrowserFileLink(repo, folderPath, file) {
   return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeURI(relativePath);
 }
   
-function buildIndex() {
+function buildIndex(includeFullText) {
   return new Promise(function(resolve) {
-    wordIndex = {};
-    wordIndexFilesOnly = {};
-    extensionCounts = {};
-    repoCounts = {};
-    folderIndex = {};
-    didYouMeanVocab = {};
-    didYouMeanVocabFilesOnly = {};
+    if (includeFullText) {
+      wordIndex = {};
+      wordIndexFilesOnly = {};
+      didYouMeanVocab = {};
+      didYouMeanVocabFilesOnly = {};
+    } else {
+      extensionCounts = {};
+      repoCounts = {};
+      folderIndex = {};
+    }
 
     let i = 0;
     const chunkSize = 5000;
@@ -361,45 +368,55 @@ function buildIndex() {
         const ext = (rec.Extension || "").toLowerCase();
         const folders = rec.Folder || [];
 
-        rec._fileLower = (rec.File || "").toLowerCase();
-        rec._repoLower = repo.toLowerCase();
-        rec._folderPath = folders.join("/");
-        rec._folderPathLower = rec._folderPath.toLowerCase();
+        if (!includeFullText) {
+          rec._fileLower = (rec.File || "").toLowerCase();
+          rec._repoLower = repo.toLowerCase();
+          rec._folderPath = folders.join("/");
+          rec._folderPathLower = rec._folderPath.toLowerCase();
 
-        repoCounts[repo] = (repoCounts[repo] || 0) + 1;
-        if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
-
-        const text = [rec.File || "", ...folders].join(" ");
-        const tokens = tokenize(text);
-        for (const tok of tokens) {
-          if (!wordIndex[tok]) wordIndex[tok] = [];
-          wordIndex[tok].push(i);
-          didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
+          repoCounts[repo] = (repoCounts[repo] || 0) + 1;
+          if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
         }
 
-        const fileTokens = tokenize(rec.File || "");
-        for (const tok of fileTokens) {
-          if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
-          wordIndexFilesOnly[tok].push(i);
-          didYouMeanVocabFilesOnly[tok] = (didYouMeanVocabFilesOnly[tok] || 0) + 1;
+        if (includeFullText) {
+          const text = [rec.File || "", ...folders].join(" ");
+          const tokens = tokenize(text);
+          for (const tok of tokens) {
+            if (!wordIndex[tok]) wordIndex[tok] = [];
+            wordIndex[tok].push(i);
+            didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
+          }
+
+          const fileTokens = tokenize(rec.File || "");
+          for (const tok of fileTokens) {
+            if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
+            wordIndexFilesOnly[tok].push(i);
+            didYouMeanVocabFilesOnly[tok] = (didYouMeanVocabFilesOnly[tok] || 0) + 1;
+          }
         }
 
-        if (!folderIndex[repo]) folderIndex[repo] = {};
-        for (let d = 0; d <= folders.length; d++) {
-          const fp = d === 0 ? "" : folders.slice(0, d).join("/");
-          folderIndex[repo][fp] = (folderIndex[repo][fp] || 0) + 1;
+        if (!includeFullText) {
+          if (!folderIndex[repo]) folderIndex[repo] = {};
+          for (let d = 0; d <= folders.length; d++) {
+            const fp = d === 0 ? "" : folders.slice(0, d).join("/");
+            folderIndex[repo][fp] = (folderIndex[repo][fp] || 0) + 1;
+          }
         }
       }
 
       if (i < RECORDS.length) {
         setTimeout(processChunk, 0);
       } else {
-        repoList = Object.entries(repoCounts)
-          .map(([name, count]) => ({ name, count }))
-          .sort((a, b) => a.name.localeCompare(b.name));
-        extensionList = Object.keys(extensionCounts).sort();
-        didYouMeanSorted = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
-        didYouMeanSortedFilesOnly = Object.entries(didYouMeanVocabFilesOnly).sort((a, b) => b[1] - a[1]);
+        if (includeFullText) {
+          didYouMeanSorted = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
+          didYouMeanSortedFilesOnly = Object.entries(didYouMeanVocabFilesOnly).sort((a, b) => b[1] - a[1]);
+          fullTextIndexReady = true;
+        } else {
+          repoList = Object.entries(repoCounts)
+            .map(([name, count]) => ({ name, count }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+          extensionList = Object.keys(extensionCounts).sort();
+        }
         resolve();
       }
     }
@@ -524,25 +541,58 @@ function updateSelectionUI() {
 
 async function loadData() {
   try {
-    const loaded = await Promise.all([
-      loadGzipJSON(DATA_URL),
-      loadGzipJSON(FOLDER_TREE_URL).catch(function() { return {}; }),
-      loadGzipJSON(FOLDER_BROWSER_URL).catch(function() { return {}; }),
-    ]);
-
-    RECORDS = decodeSearchPayload(loaded[0]);
-    PRECOMPUTED_FOLDER_TREES = decodeFolderTreeData(loaded[1] || {});
-    PRECOMPUTED_FOLDER_BROWSER = decodeFolderBrowserData(loaded[2] || {});
+    RECORDS = decodeSearchPayload(await loadGzipJSON(DATA_URL));
     console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
 
-    await buildIndex();
-    console.log("Index: " + Object.keys(wordIndex).length + " tokens, " + repoList.length + " repos");
+    await buildIndex(false);
+    console.log("Local data ready: " + repoList.length + " repos");
 
     return true;
   } catch (e) {
     console.error("Data load failed:", e);
     return false;
   }
+}
+
+function ensureFullTextIndex() {
+  if (fullTextIndexReady) return Promise.resolve(true);
+  if (fullTextIndexPromise) return fullTextIndexPromise;
+  fullTextIndexPromise = buildIndex(true).then(function() {
+    fullTextIndexPromise = null;
+    return true;
+  }).catch(function(err) {
+    fullTextIndexPromise = null;
+    throw err;
+  });
+  return fullTextIndexPromise;
+}
+
+function ensureFolderTreeData() {
+  if (Object.keys(PRECOMPUTED_FOLDER_TREES).length > 0) return Promise.resolve(PRECOMPUTED_FOLDER_TREES);
+  if (folderTreeDataPromise) return folderTreeDataPromise;
+  folderTreeDataPromise = loadGzipJSON(FOLDER_TREE_URL).then(function(data) {
+    PRECOMPUTED_FOLDER_TREES = decodeFolderTreeData(data || {});
+    folderTreeDataPromise = null;
+    return PRECOMPUTED_FOLDER_TREES;
+  }).catch(function(err) {
+    folderTreeDataPromise = null;
+    throw err;
+  });
+  return folderTreeDataPromise;
+}
+
+function ensureFolderBrowserData() {
+  if (Object.keys(PRECOMPUTED_FOLDER_BROWSER).length > 0) return Promise.resolve(PRECOMPUTED_FOLDER_BROWSER);
+  if (folderBrowserDataPromise) return folderBrowserDataPromise;
+  folderBrowserDataPromise = loadGzipJSON(FOLDER_BROWSER_URL).then(function(data) {
+    PRECOMPUTED_FOLDER_BROWSER = decodeFolderBrowserData(data || {});
+    folderBrowserDataPromise = null;
+    return PRECOMPUTED_FOLDER_BROWSER;
+  }).catch(function(err) {
+    folderBrowserDataPromise = null;
+    throw err;
+  });
+  return folderBrowserDataPromise;
 }
 
 async function loadGzipJSON(url) {
@@ -1028,17 +1078,6 @@ async function fetchFolderContents(repo, path) {
   } catch (e) { return null; }
 }
 
-function scheduleBrowserRootPrefetch(repos) {
-  var run = function() {
-    for (var i = 0; i < repos.length; i++) {
-      var short = repos[i] && repos[i].name ? repos[i].name.split("/").pop() : "";
-      if (short) fetchFolderContents(short, "").catch(function() {});
-    }
-  };
-  if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 1500 });
-  else setTimeout(run, 200);
-}
-
 function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
     const counts = {};
@@ -1213,7 +1252,7 @@ const STATE = {
   folderTreeCollapsed: {},
   searchFolders: true,
   exact: true,
-  useLocalMode: false,
+  useLocalMode: true,
   recordHistory: true,
   dataLoaded: false,
   resultsSkeletonActive: false,
@@ -1396,7 +1435,7 @@ const ROUTER = {
     if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
     if (!STATE.searchFolders) sp.set("search_folders", "false");
     if (!STATE.exact) sp.set("exact", "0");
-    if (STATE.useLocalMode) sp.set("local", "1");
+    if (!STATE.useLocalMode) sp.set("local", "0");
     if (!STATE.recordHistory) sp.set("history", "0");
     if (!STATE.useMirrorLinks) sp.set("mirror", "0");
     if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
@@ -1489,7 +1528,7 @@ const ROUTER = {
     if (DOM.searchFoldersToggle) DOM.searchFoldersToggle.checked = STATE.searchFolders;
     STATE.exact = route.params.exact !== "0";
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
-    STATE.useLocalMode = route.params.local === "1";
+    STATE.useLocalMode = route.params.local !== "0";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
     setExactSearchSectionVisible(!STATE.useLocalMode, false);
     STATE.recordHistory = route.params.history !== "0";
@@ -1575,7 +1614,7 @@ function syncStateToURL() {
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (!STATE.exact) sp.set("exact", "0");
-  if (STATE.useLocalMode) sp.set("local", "1");
+  if (!STATE.useLocalMode) sp.set("local", "0");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
@@ -1632,6 +1671,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
       if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
       STATE.useLocalMode = false;
       syncStateToURL();
+      if (triggerSearchAfterLoad) doSearch();
     }
     return ok;
   }).catch(function(err) {
@@ -1642,6 +1682,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
     STATE.useLocalMode = false;
     showToast("本地数据加载失败");
     syncStateToURL();
+    if (triggerSearchAfterLoad) doSearch();
     return false;
   });
 
@@ -1769,6 +1810,21 @@ function doSearch(append) {
           showToast("正在加载目录筛选数据...");
         }
       }
+      return;
+    }
+    if (params.q && !params.exact && !shouldUseLiteralLocalSearch(params.q) && !fullTextIndexReady) {
+      STATE.isLoading = false;
+      DOM.resultsLoading.style.display = "none";
+      showToast("正在准备模糊搜索索引...");
+      ensureFullTextIndex().then(function() {
+        if (id === searchId) doSearch();
+      }).catch(function(err) {
+        console.error("Full-text index build failed:", err);
+        STATE.useLocalMode = false;
+        if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
+        syncStateToURL();
+        if (id === searchId) doSearch();
+      });
       return;
     }
     doSearchFallbackLocal(params, append, id);
@@ -2120,7 +2176,6 @@ async function renderRepoList() {
     html += '</div>';
   }
   DOM.sidebarContent.innerHTML = html;
-  scheduleBrowserRootPrefetch(repos);
 }
  
 async function renderBrowser(path) {
@@ -2160,9 +2215,10 @@ async function renderBrowser(path) {
 
   var data = null;
 
-  // Local first (instant if data loaded)
+  // Local first; folder browser metadata is loaded only when browsing starts.
   if (STATE.dataLoaded) {
     try {
+      await ensureFolderBrowserData();
       data = getFolderContents(STATE.repoFull, path);
     } catch (e) {}
   }
@@ -2236,6 +2292,9 @@ async function renderFilters() {
 
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
+    if (STATE.dataLoaded && Object.keys(PRECOMPUTED_FOLDER_TREES).length === 0) {
+      try { await ensureFolderTreeData(); } catch (e) {}
+    }
     if (!STATE.folderTree) STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
     if (!STATE.folderTree || !STATE.folderTree.length) {
       if (apiAvailable) {
