@@ -521,8 +521,8 @@ function updateSelectionUI() {
     DOM.mobileSelectedCount.style.display = (STATE.isMobile && DOM.multiSelectToggle.checked && count > 0) ? "inline-block" : "none";
   }
   DOM.multiActionBar.style.display = DOM.multiSelectToggle.checked ? "" : "none";
-  if (DOM.multiCopyLinks) DOM.multiCopyLinks.textContent = STATE.isMobile ? "复制" : "复制链接";
-  if (DOM.multiDeselect) DOM.multiDeselect.textContent = STATE.isMobile ? "取消" : "取消选择";
+  if (DOM.multiCopyLinks) DOM.multiCopyLinks.textContent = "复制链接";
+  if (DOM.multiDeselect) DOM.multiDeselect.textContent = "取消选择";
   if (DOM.multiSelectToggle.checked) {
     document.body.classList.add("multiselect");
   } else {
@@ -1347,7 +1347,6 @@ function cacheDOM() {
   DOM.multiActionBar = $("#multi-action-bar");
   DOM.multiCopyLinks = $("#multi-copy-links");
   DOM.multiBatchDownload = $("#multi-batch-download");
-  DOM.multiZipDownload = $("#multi-zip-download");
   DOM.multiSelectAll = $("#multi-select-all");
   DOM.multiSelectedCount = $("#multi-selected-count");
   DOM.multiDeselect = $("#multi-deselect");
@@ -3393,35 +3392,6 @@ function init() {
       setTimeout(function(url) { window.open(url, "_blank"); }, bi * 300, proxyUrl);
     }
     showToast("正在打开 " + links.length + " 个下载");
-  });
-
-  if (DOM.multiZipDownload) DOM.multiZipDownload.addEventListener("click", function() {
-    var links = getSelectedLinks();
-    var names = getSelectedFilenames();
-    if (links.length === 0) { showToast("未选中任何文件"); return; }
-    showToast("正在打包 " + links.length + " 个文件...");
-    var files = [];
-    for (var zi = 0; zi < links.length; zi++) {
-      files.push({ name: names[zi], link: links[zi] });
-    }
-    console.log("[zip] requesting", files.length, "files");
-    fetch(API_BASE + "/api/zip", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files: files }),
-    }).then(function(resp) {
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      return resp.blob();
-    }).then(function(blob) {
-      var a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "voml_batch_" + Date.now() + ".zip";
-      a.click();
-      URL.revokeObjectURL(a.href);
-    }).catch(function(e) {
-      console.error(e);
-      showToast("合并下载失败");
-    });
   });
 
   if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
