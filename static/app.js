@@ -1642,21 +1642,23 @@ let searchAbortController = null;
 let searchRequestId = 0;
 let apiAvailable = true;
 let localDataPromise = null;
-function ensureLocalDataLoaded(triggerSearchAfterLoad) {
+function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   if (STATE.dataLoaded) return Promise.resolve(true);
   if (localDataPromise) return localDataPromise;
 
-  STATE.isLoading = true;
-  setSearchVisualLoading(true);
-  STATE.resultsSkeletonActive = true;
-  DOM.resultsLoading.style.display = "none";
-  DOM.emptyState.style.display = "none";
-  STATE.page = 1;
-  STATE.results = [];
-  renderResultsSkeleton();
-  updateStatusBar();
-  updateLoadInfo();
-  showToast("正在加载本地数据...");
+  if (!background) {
+    STATE.isLoading = true;
+    setSearchVisualLoading(true);
+    STATE.resultsSkeletonActive = true;
+    DOM.resultsLoading.style.display = "none";
+    DOM.emptyState.style.display = "none";
+    STATE.page = 1;
+    STATE.results = [];
+    renderResultsSkeleton();
+    updateStatusBar();
+    updateLoadInfo();
+    showToast("正在加载本地数据...");
+  }
 
   localDataPromise = loadData().then(function(ok) {
     STATE.dataLoaded = ok;
@@ -1671,10 +1673,12 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
         doSearch();
       }
     } else {
-      STATE.isLoading = false;
-      STATE.resultsSkeletonActive = false;
-      DOM.resultsLoading.style.display = "none";
-      setSearchVisualLoading(false);
+      if (!background) {
+        STATE.isLoading = false;
+        STATE.resultsSkeletonActive = false;
+        DOM.resultsLoading.style.display = "none";
+        setSearchVisualLoading(false);
+      }
       showToast("本地数据加载失败");
       if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
       STATE.useLocalMode = false;
@@ -1686,10 +1690,12 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad) {
     console.error("Local data load failed:", err);
     STATE.dataLoaded = false;
     localDataPromise = null;
-    STATE.isLoading = false;
-    STATE.resultsSkeletonActive = false;
-    DOM.resultsLoading.style.display = "none";
-    setSearchVisualLoading(false);
+    if (!background) {
+      STATE.isLoading = false;
+      STATE.resultsSkeletonActive = false;
+      DOM.resultsLoading.style.display = "none";
+      setSearchVisualLoading(false);
+    }
     if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
     STATE.useLocalMode = false;
     showToast("本地数据加载失败");
@@ -1815,18 +1821,19 @@ function doSearch(append) {
 
   if (STATE.useLocalMode || folderMatchMode === "mixed") {
     if (!STATE.dataLoaded) {
-      STATE.isLoading = false;
-      setSearchVisualLoading(false);
-      DOM.resultsLoading.style.display = "none";
-      if (STATE.useLocalMode || folderMatchMode === "mixed") {
-        ensureLocalDataLoaded(true);
+      if (STATE.useLocalMode && folderMatchMode !== "mixed" && apiAvailable) {
+        ensureLocalDataLoaded(false, true);
+      } else {
+        STATE.isLoading = false;
+        setSearchVisualLoading(false);
+        DOM.resultsLoading.style.display = "none";
+        ensureLocalDataLoaded(true, false);
         if (folderMatchMode === "mixed" && !STATE.useLocalMode) {
           showToast("正在加载目录筛选数据...");
         }
+        return;
       }
-      return;
-    }
-    if (params.q && !params.exact && !shouldUseLiteralLocalSearch(params.q) && !fullTextIndexReady) {
+    } else if (params.q && !params.exact && !shouldUseLiteralLocalSearch(params.q) && !fullTextIndexReady) {
       STATE.isLoading = false;
       setSearchVisualLoading(false);
       DOM.resultsLoading.style.display = "none";
@@ -1841,9 +1848,10 @@ function doSearch(append) {
         if (id === searchId) doSearch();
       });
       return;
+    } else {
+      doSearchFallbackLocal(params, append, id);
+      return;
     }
-    doSearchFallbackLocal(params, append, id);
-    return;
   }
 
   if (apiAvailable) {
@@ -1943,7 +1951,7 @@ function handleApiSearchFailure(append, id) {
   }
 
   showToast("在线搜索失败，正在切换本地搜索...");
-  return ensureLocalDataLoaded(false).then(function(ok) {
+  return ensureLocalDataLoaded(false, false).then(function(ok) {
     if (!ok || id !== searchId) return;
     STATE.useLocalMode = true;
     if (DOM.localModeToggle) DOM.localModeToggle.checked = true;
@@ -3443,7 +3451,7 @@ function init() {
       updateStatusBar();
       updateLoadInfo();
       syncStateToURL();
-      ensureLocalDataLoaded(true);
+      ensureLocalDataLoaded(true, false);
       return;
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
