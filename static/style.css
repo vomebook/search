@@ -1067,30 +1067,31 @@ body.mobile .mobile-selected-count {
    ═══════════════════════════════════════════════════════════ */
 
 .scroll-track {
-  display: none;
   position: absolute;
   right: 2px;
   top: 40px;
   bottom: 50px;
-  width: 8px;
+  width: 14px;
   opacity: 0;
   transition: opacity 0.3s;
   pointer-events: none;
+  z-index: 40;
 }
 .scroll-track.visible {
   opacity: 1;
-  pointer-events: none;
+  pointer-events: auto;
 }
 .scroll-thumb {
   position: absolute;
-  width: 6px;
-  left: 1px;
-  border-radius: 3px;
+  width: 8px;
+  left: 3px;
+  border-radius: 999px;
   background: var(--outline);
-  cursor: pointer;
-  min-height: 30px;
+  cursor: grab;
+  min-height: 40px;
   transition: background var(--transition);
 }
+.scroll-thumb:active { cursor: grabbing; }
 .scroll-thumb:hover, .scroll-thumb:focus-visible {
   background: var(--on-surface-variant);
 }
@@ -1104,15 +1105,15 @@ body.mobile .mobile-selected-count {
   overflow-y: auto;
   overflow-x: hidden;
   opacity: 0;
-  pointer-events: auto;
+  pointer-events: none;
   z-index: 30;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: var(--outline) transparent;
 }
 .scroll-proxy.active {
-  opacity: 1;
-  pointer-events: auto;
+  opacity: 0;
+  pointer-events: none;
 }
 .scroll-proxy::-webkit-scrollbar { width: 14px; }
 .scroll-proxy::-webkit-scrollbar-track { background: transparent; }

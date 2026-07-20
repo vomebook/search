@@ -1306,6 +1306,7 @@ const VSCROLL = {
   htmlCache: [],
   htmlCacheKey: "",
   estimatedHeight: 60,
+  overscanScreens: 3,
   syncingProxy: false,
   syncingContent: false,
 };
@@ -2121,7 +2122,14 @@ function getResultsHTMLCacheKey() {
     STATE.searchFolders ? "1" : "0",
     STATE.useMirrorLinks ? "1" : "0",
     STATE.mode || "",
-    STATE.results.length,
+    STATE.repoFull || "",
+    STATE.sort || "relevance",
+    STATE.filterRepos.join(","),
+    STATE.filterExtensions.join(","),
+    STATE.filterFolderSelfs.join(","),
+    STATE.filterFolderSubtrees.join(","),
+    STATE.filterMinSize == null ? "" : String(STATE.filterMinSize),
+    STATE.filterMaxSize == null ? "" : String(STATE.filterMaxSize),
   ].join("|");
 }
 
@@ -2154,8 +2162,7 @@ function renderVisible() {
   const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
-  const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
-  const overscanPx = overscanItems * est;
+  const overscanPx = Math.max(viewH * VSCROLL.overscanScreens, est * 20);
   ensurePrefixHeights();
 
   let start = findVirtualIndex(Math.max(0, scrollTop - overscanPx));
@@ -3062,6 +3069,11 @@ function updateScrollProxy() {
   if (!DOM.scrollProxy || !DOM.scrollProxySpacer) return;
   const totalHeight = Math.max(getVirtualTotalHeight(), DOM.resultsList.scrollHeight || 0);
   const visible = totalHeight > DOM.resultsContainer.clientHeight + 1;
+  if (DOM.scrollTrack) {
+    DOM.scrollTrack.style.top = DOM.resultsContainer.offsetTop + "px";
+    DOM.scrollTrack.style.height = DOM.resultsContainer.clientHeight + "px";
+    DOM.scrollTrack.style.bottom = "auto";
+  }
   DOM.scrollProxy.style.top = DOM.resultsContainer.offsetTop + "px";
   DOM.scrollProxy.style.height = DOM.resultsContainer.clientHeight + "px";
   DOM.scrollProxy.style.bottom = "auto";
@@ -3107,22 +3119,48 @@ function setupVirtualScroll() {
 }
  
 function updateScrollThumb() {
-  const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-  if (scrollHeight <= clientHeight) { DOM.scrollTrack.classList.remove("visible"); return; }
+  const scrollTop = DOM.resultsContainer.scrollTop;
+  const scrollHeight = DOM.scrollProxy ? DOM.scrollProxy.scrollHeight : DOM.resultsContainer.scrollHeight;
+  const clientHeight = DOM.scrollProxy ? DOM.scrollProxy.clientHeight : DOM.resultsContainer.clientHeight;
+  if (scrollHeight <= clientHeight || !DOM.scrollTrack.clientHeight) { DOM.scrollTrack.classList.remove("visible"); return; }
   DOM.scrollTrack.classList.add("visible");
-  const th = Math.max(30, (clientHeight / scrollHeight) * DOM.scrollTrack.clientHeight);
-  const tt = (scrollTop / (scrollHeight - clientHeight)) * (DOM.scrollTrack.clientHeight - th);
+  const trackHeight = DOM.scrollTrack.clientHeight;
+  const th = Math.max(40, Math.min(trackHeight, (clientHeight / scrollHeight) * trackHeight));
+  const tt = (scrollTop / Math.max(1, scrollHeight - clientHeight)) * (trackHeight - th);
   DOM.scrollThumb.style.height = th + "px";
   DOM.scrollThumb.style.top = tt + "px";
 }
  
 function setupQuickScroll() {
   let dragging = false, startY, startST;
+  let dragTicking = false;
+
+  function setProxyScrollTop(value) {
+    if (DOM.scrollProxy) {
+      DOM.scrollProxy.scrollTop = value;
+      VSCROLL.syncingContent = true;
+      DOM.resultsContainer.scrollTop = DOM.scrollProxy.scrollTop;
+      VSCROLL.syncingContent = false;
+    } else {
+      DOM.resultsContainer.scrollTop = value;
+    }
+    if (!dragTicking) {
+      dragTicking = true;
+      requestAnimationFrame(function() {
+        updateScrollThumb();
+        renderVisible();
+        maybeLoadNextPage();
+        dragTicking = false;
+      });
+    }
+  }
 
   function onMouseMove(e) {
     const delta = e.clientY - startY;
-    const ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
-    DOM.resultsContainer.scrollTop = startST + ratio * (DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
+    const dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
+    const ratio = delta / dragRange;
+    const scrollEl = DOM.scrollProxy || DOM.resultsContainer;
+    setProxyScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
   }
 
   function onMouseUp() {
@@ -3132,15 +3170,18 @@ function setupQuickScroll() {
   }
 
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
-    dragging = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault();
+    dragging = true; startY = e.clientY; startST = DOM.scrollProxy ? DOM.scrollProxy.scrollTop : DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   });
 
   function onTouchMove(e) {
+    e.preventDefault();
     const delta = e.touches[0].clientY - startY;
-    const ratio = delta / (DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
-    DOM.resultsContainer.scrollTop = startST + ratio * (DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
+    const dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
+    const ratio = delta / dragRange;
+    const scrollEl = DOM.scrollProxy || DOM.resultsContainer;
+    setProxyScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
   }
 
   function onTouchEnd() {
@@ -3150,8 +3191,8 @@ function setupQuickScroll() {
   }
 
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    dragging = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop;
-    document.addEventListener("touchmove", onTouchMove, { passive: true });
+    dragging = true; startY = e.touches[0].clientY; startST = DOM.scrollProxy ? DOM.scrollProxy.scrollTop : DOM.resultsContainer.scrollTop; e.stopPropagation();
+    document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
   });
 }
@@ -3752,6 +3793,7 @@ function init() {
   });
 
   setupVirtualScroll();
+  setupQuickScroll();
   setupKeyboard();
   setupResultDelegation();
 
