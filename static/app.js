@@ -1306,9 +1306,10 @@ const VSCROLL = {
   htmlCache: [],
   htmlCacheKey: "",
   estimatedHeight: 60,
-  overscanScreens: 3,
+  overscanItems: 100,
   syncingProxy: false,
   syncingContent: false,
+  isDraggingThumb: false,
 };
  
 /* ═══════════════════════════════════════════════════════════
@@ -2162,7 +2163,7 @@ function renderVisible() {
   const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
-  const overscanPx = Math.max(viewH * VSCROLL.overscanScreens, est * 20);
+  const overscanPx = Math.max((est || 60) * VSCROLL.overscanItems, viewH);
   ensurePrefixHeights();
 
   let start = findVirtualIndex(Math.max(0, scrollTop - overscanPx));
@@ -3055,6 +3056,7 @@ var selectedIndices = {};
 var lastSelectedIndex = -1;
 
 function maybeLoadNextPage() {
+  if (VSCROLL.isDraggingThumb) return;
   if (STATE.isLoading || !STATE.hasMore) return;
   const scrollTop = DOM.resultsContainer.scrollTop;
   const loadedHeight = DOM.resultsList.scrollHeight;
@@ -3149,7 +3151,6 @@ function setupQuickScroll() {
       requestAnimationFrame(function() {
         updateScrollThumb();
         renderVisible();
-        maybeLoadNextPage();
         dragTicking = false;
       });
     }
@@ -3165,12 +3166,14 @@ function setupQuickScroll() {
 
   function onMouseUp() {
     dragging = false;
+    VSCROLL.isDraggingThumb = false;
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
+    maybeLoadNextPage();
   }
 
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
-    dragging = true; startY = e.clientY; startST = DOM.scrollProxy ? DOM.scrollProxy.scrollTop : DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
+    dragging = true; VSCROLL.isDraggingThumb = true; startY = e.clientY; startST = DOM.scrollProxy ? DOM.scrollProxy.scrollTop : DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   });
@@ -3186,12 +3189,14 @@ function setupQuickScroll() {
 
   function onTouchEnd() {
     dragging = false;
+    VSCROLL.isDraggingThumb = false;
     document.removeEventListener("touchmove", onTouchMove);
     document.removeEventListener("touchend", onTouchEnd);
+    maybeLoadNextPage();
   }
 
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    dragging = true; startY = e.touches[0].clientY; startST = DOM.scrollProxy ? DOM.scrollProxy.scrollTop : DOM.resultsContainer.scrollTop; e.stopPropagation();
+    dragging = true; VSCROLL.isDraggingThumb = true; startY = e.touches[0].clientY; startST = DOM.scrollProxy ? DOM.scrollProxy.scrollTop : DOM.resultsContainer.scrollTop; e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
   });
