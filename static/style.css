@@ -1107,24 +1107,11 @@ body.mobile .mobile-selected-count {
   opacity: 0;
   pointer-events: none;
   z-index: 30;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: var(--outline) transparent;
 }
 .scroll-proxy.active {
   opacity: 0;
   pointer-events: none;
 }
-.scroll-proxy::-webkit-scrollbar { width: 14px; }
-.scroll-proxy::-webkit-scrollbar-track { background: transparent; }
-.scroll-proxy::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: var(--outline);
-  background-clip: content-box;
-}
-.scroll-proxy:hover { opacity: 1; scrollbar-color: var(--on-surface-variant) transparent; }
-.scroll-proxy:hover::-webkit-scrollbar-thumb { background: var(--on-surface-variant); background-clip: content-box; }
 .scroll-proxy > div {
   width: 100%;
 }
