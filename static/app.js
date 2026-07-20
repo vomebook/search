@@ -1306,7 +1306,6 @@ const VSCROLL = {
   htmlCache: [],
   htmlCacheKey: "",
   estimatedHeight: 60,
-  overscanItems: 100,
   syncingProxy: false,
   syncingContent: false,
   isDraggingThumb: false,
@@ -2163,7 +2162,8 @@ function renderVisible() {
   const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
-  const overscanPx = Math.max((est || 60) * VSCROLL.overscanItems, viewH);
+  const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
+  const overscanPx = overscanItems * (est || 60);
   ensurePrefixHeights();
 
   let start = findVirtualIndex(Math.max(0, scrollTop - overscanPx));
@@ -3150,7 +3150,6 @@ function setupQuickScroll() {
       dragTicking = true;
       requestAnimationFrame(function() {
         updateScrollThumb();
-        renderVisible();
         dragTicking = false;
       });
     }
