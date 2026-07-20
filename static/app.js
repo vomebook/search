@@ -1300,7 +1300,11 @@ const VSCROLL = {
   renderStart: 0,
   renderEnd: 0,
   heights: [],
+  prefixHeights: [0],
+  heightsDirty: true,
   estimatedHeight: 60,
+  syncingProxy: false,
+  syncingContent: false,
 };
  
 /* ═══════════════════════════════════════════════════════════
@@ -1344,6 +1348,8 @@ function cacheDOM() {
   DOM.totalCount = $("#total-count");
   DOM.scrollTrack = $("#scroll-track");
   DOM.scrollThumb = $("#scroll-thumb");
+  DOM.scrollProxy = $("#scroll-proxy");
+  DOM.scrollProxySpacer = $("#scroll-proxy-spacer");
   DOM.hitokoto = $("#hitokoto");
   DOM.randomBookBtn = $("#random-book-btn");
   DOM.overlay = $("#overlay");
@@ -1896,12 +1902,7 @@ function doSearch(append) {
       if (id !== searchId) return;
       if (append) {
         // Incremental: extend heights, let next scroll render new items
-        var newLen = STATE.results.length;
-        if (VSCROLL.heights.length < newLen) {
-          var oldLen = VSCROLL.heights.length;
-          VSCROLL.heights.length = newLen;
-          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
-        }
+        ensureVirtualHeights(STATE.results.length);
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
         // Force a renderVisible on next animation frame to include new items
@@ -1909,7 +1910,7 @@ function doSearch(append) {
       } else {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
-        VSCROLL.heights = [];
+        resetVirtualScrollState();
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
           DOM.resultsList.innerHTML = "";
@@ -2004,19 +2005,14 @@ function doSearchFallbackLocal(params, append, id) {
       STATE.hasMore = STATE.results.length < STATE.total;
 
       if (append) {
-        var newLen = STATE.results.length;
-        if (VSCROLL.heights.length < newLen) {
-          var oldLen = VSCROLL.heights.length;
-          VSCROLL.heights.length = newLen;
-          for (var hi = oldLen; hi < newLen; hi++) VSCROLL.heights[hi] = VSCROLL.estimatedHeight;
-        }
+        ensureVirtualHeights(STATE.results.length);
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
         requestAnimationFrame(function() { renderVisible(); });
       } else {
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
-        VSCROLL.heights = [];
+        resetVirtualScrollState();
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
           DOM.resultsList.innerHTML = "";
@@ -2059,9 +2055,7 @@ function renderResults() {
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
     DOM.resultsList.innerHTML = "";
-    VSCROLL.renderStart = 0;
-    VSCROLL.renderEnd = 0;
-    VSCROLL.heights = [];
+    resetVirtualScrollState();
     DOM.emptyState.style.display = "flex";
     DOM.emptyDesc.textContent = STATE.query
       ? '没有找到与 "' + STATE.query + '" 相关的结果'
@@ -2071,14 +2065,7 @@ function renderResults() {
 
   DOM.emptyState.style.display = "none";
 
-  const len = STATE.results.length;
-  if (VSCROLL.heights.length < len) {
-    const oldLen = VSCROLL.heights.length;
-    VSCROLL.heights.length = len;
-    for (let i = oldLen; i < len; i++) {
-      VSCROLL.heights[i] = VSCROLL.estimatedHeight;
-    }
-  }
+  ensureVirtualHeights(STATE.results.length);
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
 
@@ -2123,32 +2110,22 @@ function buildResultHTML(rec, idx) {
 function renderVisible() {
   const items = STATE.results;
   const len = items.length;
-  if (len === 0) return;
+  if (len === 0) {
+    updateScrollProxy();
+    return;
+  }
 
   const container = DOM.resultsContainer;
   const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
   const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
+  const overscanPx = overscanItems * est;
+  ensurePrefixHeights();
 
-  let cum = 0;
-  let start = 0;
-  for (let i = 0; i < len; i++) {
-    const h = VSCROLL.heights[i] || est;
-    if (cum + h > scrollTop - overscanItems * est) {
-      start = i;
-      break;
-    }
-    cum += h;
-  }
-  if (start < 0) start = 0;
+  let start = findVirtualIndex(Math.max(0, scrollTop - overscanPx));
 
-  let end = start;
-  let running = cum;
-  while (end < len && running - scrollTop < viewH + overscanItems * est) {
-    running += VSCROLL.heights[end] || est;
-    end++;
-  }
+  let end = Math.min(len, findVirtualIndex(scrollTop + viewH + overscanPx) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
 
   if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
@@ -2156,8 +2133,8 @@ function renderVisible() {
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
 
-  let topH = 0;
-  for (let i = 0; i < start; i++) topH += VSCROLL.heights[i] || est;
+  const totalH = getVirtualTotalHeight();
+  const topH = VSCROLL.prefixHeights[start] || 0;
 
   let html = "";
   if (topH > 0) {
@@ -2169,8 +2146,7 @@ function renderVisible() {
       (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
       '>' + buildResultHTML(rec, ri) + '</div>';
   }
-  let bottomH = 0;
-  for (let bi = end; bi < len; bi++) bottomH += VSCROLL.heights[bi] || est;
+  const bottomH = Math.max(0, totalH - (VSCROLL.prefixHeights[end] || 0));
   if (bottomH > 0) {
     html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
   }
@@ -2182,7 +2158,58 @@ function renderVisible() {
 
   requestAnimationFrame(function() {
     measureHeights();
+    updateScrollProxy();
   });
+}
+
+function ensurePrefixHeights() {
+  const len = VSCROLL.heights.length;
+  if (!VSCROLL.heightsDirty && VSCROLL.prefixHeights.length === len + 1) return;
+  const prefix = new Array(len + 1);
+  prefix[0] = 0;
+  const est = VSCROLL.estimatedHeight || 60;
+  for (let i = 0; i < len; i++) {
+    prefix[i + 1] = prefix[i] + (VSCROLL.heights[i] || est);
+  }
+  VSCROLL.prefixHeights = prefix;
+  VSCROLL.heightsDirty = false;
+}
+
+function getVirtualTotalHeight() {
+  ensurePrefixHeights();
+  return VSCROLL.prefixHeights[VSCROLL.prefixHeights.length - 1] || 0;
+}
+
+function findVirtualIndex(offset) {
+  ensurePrefixHeights();
+  const prefix = VSCROLL.prefixHeights;
+  let lo = 0;
+  let hi = prefix.length - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (prefix[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return Math.min(Math.max(0, lo), Math.max(0, STATE.results.length - 1));
+}
+
+function resetVirtualScrollState() {
+  VSCROLL.renderStart = 0;
+  VSCROLL.renderEnd = 0;
+  VSCROLL.heights = [];
+  VSCROLL.prefixHeights = [0];
+  VSCROLL.heightsDirty = true;
+  updateScrollProxy();
+}
+
+function ensureVirtualHeights(len) {
+  if (VSCROLL.heights.length >= len) return;
+  const oldLen = VSCROLL.heights.length;
+  VSCROLL.heights.length = len;
+  for (let i = oldLen; i < len; i++) {
+    VSCROLL.heights[i] = VSCROLL.estimatedHeight;
+  }
+  VSCROLL.heightsDirty = true;
 }
 
 function measureHeights() {
@@ -2191,14 +2218,21 @@ function measureHeights() {
     const idx = parseInt(els[i].dataset.index);
     if (idx >= 0) {
       const h = els[i].getBoundingClientRect().height;
-      if (h > 0) VSCROLL.heights[idx] = h;
+      if (h > 0 && VSCROLL.heights[idx] !== h) {
+        VSCROLL.heights[idx] = h;
+        VSCROLL.heightsDirty = true;
+      }
     }
   }
   const measured = VSCROLL.heights.filter(function(h) { return h > 0; });
   if (measured.length > 10) {
     let sum = 0;
     for (let i = 0; i < measured.length; i++) sum += measured[i];
-    VSCROLL.estimatedHeight = sum / measured.length;
+    const nextEstimate = sum / measured.length;
+    if (Math.abs(nextEstimate - VSCROLL.estimatedHeight) > 1) {
+      VSCROLL.estimatedHeight = nextEstimate;
+      VSCROLL.heightsDirty = true;
+    }
   }
 }
  
@@ -2929,27 +2963,64 @@ function showToast(msg, dur) {
 let scrollTicking = false;
 var selectedIndices = {};
 var lastSelectedIndex = -1;
- 
+
+function maybeLoadNextPage() {
+  if (STATE.isLoading || !STATE.hasMore) return;
+  const scrollTop = DOM.resultsContainer.scrollTop;
+  const loadedHeight = DOM.resultsList.scrollHeight;
+  const triggerPoint = loadedHeight * 0.05;
+  if (scrollTop >= triggerPoint) {
+    STATE.page++;
+    doSearch(true);
+  }
+}
+
+function updateScrollProxy() {
+  if (!DOM.scrollProxy || !DOM.scrollProxySpacer) return;
+  const totalHeight = Math.max(getVirtualTotalHeight(), DOM.resultsList.scrollHeight || 0);
+  const visible = totalHeight > DOM.resultsContainer.clientHeight + 1;
+  DOM.scrollProxy.style.top = DOM.resultsContainer.offsetTop + "px";
+  DOM.scrollProxy.style.height = DOM.resultsContainer.clientHeight + "px";
+  DOM.scrollProxy.style.bottom = "auto";
+  DOM.scrollProxy.classList.toggle("active", visible);
+  DOM.scrollProxySpacer.style.height = totalHeight + "px";
+  if (VSCROLL.syncingContent) return;
+  VSCROLL.syncingProxy = true;
+  DOM.scrollProxy.scrollTop = DOM.resultsContainer.scrollTop;
+  VSCROLL.syncingProxy = false;
+}
+
 function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("scroll", () => {
+    if (!VSCROLL.syncingContent) updateScrollProxy();
     if (!scrollTicking) {
       requestAnimationFrame(() => {
         updateScrollThumb();
         renderVisible();
-        if (!STATE.isLoading && STATE.hasMore) {
-          const { scrollTop, scrollHeight, clientHeight } = DOM.resultsContainer;
-          const loadedHeight = DOM.resultsList.scrollHeight;
-          const triggerPoint = scrollHeight - clientHeight - loadedHeight * 0.95;
-          if (scrollTop >= triggerPoint) {
-            STATE.page++;
-            doSearch(true);
-          }
-        }
+        maybeLoadNextPage();
         scrollTicking = false;
       });
       scrollTicking = true;
     }
   }, { passive: true });
+
+  if (DOM.scrollProxy) {
+    DOM.scrollProxy.addEventListener("scroll", () => {
+      if (VSCROLL.syncingProxy) return;
+      VSCROLL.syncingContent = true;
+      DOM.resultsContainer.scrollTop = DOM.scrollProxy.scrollTop;
+      VSCROLL.syncingContent = false;
+      if (!scrollTicking) {
+        requestAnimationFrame(() => {
+          updateScrollThumb();
+          renderVisible();
+          maybeLoadNextPage();
+          scrollTicking = false;
+        });
+        scrollTicking = true;
+      }
+    }, { passive: true });
+  }
 }
  
 function updateScrollThumb() {
@@ -3066,6 +3137,7 @@ function applyMobileMode() {
   updateSidebarVisibility();
   if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
   updateSelectionUI();
+  requestAnimationFrame(updateScrollProxy);
 }
  
 function autoDetectMobile() { return window.innerWidth <= 768; }
@@ -3595,7 +3667,6 @@ function init() {
   });
 
   setupVirtualScroll();
-  setupQuickScroll();
   setupKeyboard();
   setupResultDelegation();
 
@@ -3609,6 +3680,7 @@ function init() {
       STATE.isMobile = autoDetectMobile();
       if (wasMobile !== STATE.isMobile) applyMobileMode();
     }
+    requestAnimationFrame(updateScrollProxy);
   });
 
   ROUTER.apply();

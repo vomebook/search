@@ -751,7 +751,9 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-width: none;
 }
+.results-container::-webkit-scrollbar { width: 0; height: 0; }
 
 /* ── Result Item ─────────────────────────────────────── */
 .result-item {
@@ -1076,7 +1078,7 @@ body.mobile .mobile-selected-count {
 }
 .scroll-track.visible {
   opacity: 1;
-  pointer-events: auto;
+  pointer-events: none;
 }
 .scroll-thumb {
   position: absolute;
@@ -1090,6 +1092,36 @@ body.mobile .mobile-selected-count {
 }
 .scroll-thumb:hover, .scroll-thumb:focus-visible {
   background: var(--on-surface-variant);
+}
+
+.scroll-proxy {
+  position: absolute;
+  right: 0;
+  top: 40px;
+  bottom: 50px;
+  width: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  opacity: 0;
+  z-index: 5;
+  scrollbar-gutter: stable;
+}
+.scroll-proxy.active {
+  opacity: 0.55;
+  pointer-events: auto;
+}
+.scroll-proxy::-webkit-scrollbar { width: 12px; }
+.scroll-proxy::-webkit-scrollbar-track { background: transparent; }
+.scroll-proxy::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--outline);
+  background-clip: content-box;
+}
+.scroll-proxy:hover { opacity: 0.9; }
+.scroll-proxy:hover::-webkit-scrollbar-thumb { background: var(--on-surface-variant); background-clip: content-box; }
+.scroll-proxy > div {
+  width: 1px;
 }
 
 /* ═══════════════════════════════════════════════════════════
