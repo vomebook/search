@@ -332,6 +332,33 @@ function buildDownloadUrl(filename, link) {
   return API_BASE + "/api/download?file=" + encodeURIComponent(filename || "file") + "&link=" + encodeURIComponent(link || "");
 }
 
+async function downloadFile(filename, link) {
+  showToast("开始下载...");
+  try {
+    var resp = await fetch(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""));
+    if (!resp.ok) {
+      var message = "下载失败";
+      try {
+        var data = await resp.json();
+        if (data && data.error) message = data.error;
+      } catch (e) {}
+      showToast(message, 3500);
+      return false;
+    }
+    var a = document.createElement("a");
+    a.href = buildDownloadUrl(filename, link);
+    a.download = filename || "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return true;
+  } catch (e) {
+    console.error(e);
+    showToast("下载失败，请稍后重试", 3500);
+    return false;
+  }
+}
+
 function getBrowserFileName(file) {
   var name = file && file.name ? String(file.name) : "file";
   var ext = file && file.ext ? String(file.ext) : "";
@@ -2086,7 +2113,7 @@ function buildResultHTML(rec, idx) {
     '</div>' +
     '<div class="result-actions">' +
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(getRecordLink(rec))) + '">复制链接</button>' +
-      '<a href="' + buildDownloadUrl(rec.File + (rec.Extension ? '.' + rec.Extension : ''), getRecordLink(rec)) + '" class="result-action-btn primary" target="_blank">下载</a>' +
+      '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(getRecordLink(rec)) + '">下载</button>' +
       '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
       (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(getRecordLink(rec)) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
@@ -2329,7 +2356,7 @@ async function renderBrowser(path) {
         var fileLink = getBrowserFileLink(currentRepo, ppath, ff);
         if (fileLink) {
           var downloadName = ff.name + (ff.ext ? "." + ff.ext : "");
-          window.open(buildDownloadUrl(downloadName, fileLink), "_blank");
+          downloadFile(downloadName, fileLink);
         }
       };
     }(f2, path || ""));
@@ -2860,8 +2887,7 @@ function randomBook() {
     .then(function(rec) {
       if (rec) {
         var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(getRecordLink(rec));
-        window.open(proxyUrl, "_blank");
+        downloadFile(filename, getRecordLink(rec));
       } else {
         showToast("暂无可用记录");
       }
@@ -2870,8 +2896,7 @@ function randomBook() {
       var rec = getRandom(STATE.repoFull);
       if (rec) {
         var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(filename) + "&link=" + encodeURIComponent(getRecordLink(rec));
-        window.open(proxyUrl, "_blank");
+        downloadFile(filename, getRecordLink(rec));
       } else {
         showToast("暂无可用记录");
       }
@@ -3216,6 +3241,10 @@ function setupResultDelegation() {
           .catch(function() { showToast("复制失败"); });
         return;
       }
+      if (action === "download") {
+        downloadFile(actionBtn.dataset.filename || "file", actionBtn.dataset.link || "");
+        return;
+      }
       if (action === "read") {
         const link = actionBtn.dataset.link;
         const repoShort = actionBtn.dataset.repo || STATE.repo;
@@ -3363,12 +3392,15 @@ function init() {
     updateSelectionUI();
   });
 
-  var getSelectedLinks = function() {
+  var getSelectedLinks = function(copyable) {
     var links = [];
     var indices = Object.keys(selectedIndices).map(Number);
     for (var li = 0; li < indices.length; li++) {
       var rec = STATE.results[indices[li]];
-      if (rec) links.push(getCopyableLink(getRecordLink(rec)));
+      if (rec) {
+        var link = getRecordLink(rec);
+        links.push(copyable ? getCopyableLink(link) : link);
+      }
     }
     return links;
   };
@@ -3384,7 +3416,7 @@ function init() {
   };
 
   if (DOM.multiCopyLinks) DOM.multiCopyLinks.addEventListener("click", function() {
-    var links = getSelectedLinks();
+    var links = getSelectedLinks(true);
     if (links.length === 0) { showToast("未选中任何文件"); return; }
     navigator.clipboard.writeText(links.join("\n")).then(function() {
       showToast("已复制 " + links.length + " 条链接");
@@ -3392,14 +3424,13 @@ function init() {
   });
 
   if (DOM.multiBatchDownload) DOM.multiBatchDownload.addEventListener("click", function() {
-    var links = getSelectedLinks();
+    var links = getSelectedLinks(false);
     var names = getSelectedFilenames();
     if (links.length === 0) { showToast("未选中任何文件"); return; }
     for (var bi = 0; bi < links.length; bi++) {
-      var proxyUrl = API_BASE + "/api/download?file=" + encodeURIComponent(names[bi]) + "&link=" + encodeURIComponent(links[bi]);
-      setTimeout(function(url) { window.open(url, "_blank"); }, bi * 300, proxyUrl);
+      setTimeout(function(name, link) { downloadFile(name, link); }, bi * 300, names[bi], links[bi]);
     }
-    showToast("正在打开 " + links.length + " 个下载");
+    showToast("正在下载 " + links.length + " 个文件");
   });
 
   if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
