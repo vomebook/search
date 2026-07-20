@@ -1302,6 +1302,9 @@ const VSCROLL = {
   heights: [],
   prefixHeights: [0],
   heightsDirty: true,
+  heightTree: [],
+  htmlCache: [],
+  htmlCacheKey: "",
   estimatedHeight: 60,
   syncingProxy: false,
   syncingContent: false,
@@ -2064,6 +2067,11 @@ function renderResults() {
   }
 
   DOM.emptyState.style.display = "none";
+  const cacheKey = getResultsHTMLCacheKey();
+  if (VSCROLL.htmlCacheKey !== cacheKey) {
+    VSCROLL.htmlCache = [];
+    VSCROLL.htmlCacheKey = cacheKey;
+  }
 
   ensureVirtualHeights(STATE.results.length);
   VSCROLL.renderStart = 0;
@@ -2107,6 +2115,33 @@ function buildResultHTML(rec, idx) {
   );
 }
 
+function getResultsHTMLCacheKey() {
+  return [
+    STATE.query || "",
+    STATE.searchFolders ? "1" : "0",
+    STATE.useMirrorLinks ? "1" : "0",
+    STATE.mode || "",
+    STATE.results.length,
+  ].join("|");
+}
+
+function clearResultHTMLCache() {
+  VSCROLL.htmlCache = [];
+  VSCROLL.htmlCacheKey = getResultsHTMLCacheKey();
+}
+
+function getCachedResultHTML(rec, idx) {
+  const key = getResultsHTMLCacheKey();
+  if (VSCROLL.htmlCacheKey !== key) {
+    VSCROLL.htmlCache = [];
+    VSCROLL.htmlCacheKey = key;
+  }
+  if (VSCROLL.htmlCache[idx] === undefined) {
+    VSCROLL.htmlCache[idx] = buildResultHTML(rec, idx);
+  }
+  return VSCROLL.htmlCache[idx];
+}
+
 function renderVisible() {
   const items = STATE.results;
   const len = items.length;
@@ -2134,7 +2169,7 @@ function renderVisible() {
   VSCROLL.renderEnd = end;
 
   const totalH = getVirtualTotalHeight();
-  const topH = VSCROLL.prefixHeights[start] || 0;
+  const topH = getVirtualOffset(start);
 
   let html = "";
   if (topH > 0) {
@@ -2144,9 +2179,9 @@ function renderVisible() {
     const rec = items[ri];
     html += '<div class="result-item" data-index="' + ri + '"' +
       (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
-      '>' + buildResultHTML(rec, ri) + '</div>';
+      '>' + getCachedResultHTML(rec, ri) + '</div>';
   }
-  const bottomH = Math.max(0, totalH - (VSCROLL.prefixHeights[end] || 0));
+  const bottomH = Math.max(0, totalH - getVirtualOffset(end));
   if (bottomH > 0) {
     html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
   }
@@ -2164,24 +2199,61 @@ function renderVisible() {
 
 function ensurePrefixHeights() {
   const len = VSCROLL.heights.length;
-  if (!VSCROLL.heightsDirty && VSCROLL.prefixHeights.length === len + 1) return;
+  if (!VSCROLL.heightsDirty && VSCROLL.prefixHeights.length === len + 1 && VSCROLL.heightTree.length === len + 1) return;
   const prefix = new Array(len + 1);
+  const tree = new Array(len + 1).fill(0);
   prefix[0] = 0;
   const est = VSCROLL.estimatedHeight || 60;
   for (let i = 0; i < len; i++) {
-    prefix[i + 1] = prefix[i] + (VSCROLL.heights[i] || est);
+    const h = VSCROLL.heights[i] || est;
+    prefix[i + 1] = prefix[i] + h;
+    fenwickAdd(tree, i + 1, h);
   }
   VSCROLL.prefixHeights = prefix;
+  VSCROLL.heightTree = tree;
   VSCROLL.heightsDirty = false;
+}
+
+function fenwickAdd(tree, idx, delta) {
+  for (let i = idx; i < tree.length; i += i & -i) tree[i] += delta;
+}
+
+function fenwickSum(tree, idx) {
+  let sum = 0;
+  for (let i = idx; i > 0; i -= i & -i) sum += tree[i];
+  return sum;
 }
 
 function getVirtualTotalHeight() {
   ensurePrefixHeights();
-  return VSCROLL.prefixHeights[VSCROLL.prefixHeights.length - 1] || 0;
+  return getVirtualOffset(VSCROLL.heights.length);
+}
+
+function getVirtualOffset(index) {
+  ensurePrefixHeights();
+  if (VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
+    return fenwickSum(VSCROLL.heightTree, Math.max(0, Math.min(index, VSCROLL.heights.length)));
+  }
+  return VSCROLL.prefixHeights[index] || 0;
 }
 
 function findVirtualIndex(offset) {
   ensurePrefixHeights();
+  const len = VSCROLL.heights.length;
+  if (VSCROLL.heightTree.length === len + 1) {
+    let idx = 0;
+    let bit = 1;
+    while ((bit << 1) < VSCROLL.heightTree.length) bit <<= 1;
+    let sum = 0;
+    for (; bit > 0; bit >>= 1) {
+      const next = idx + bit;
+      if (next < VSCROLL.heightTree.length && sum + VSCROLL.heightTree[next] <= offset) {
+        idx = next;
+        sum += VSCROLL.heightTree[next];
+      }
+    }
+    return Math.min(Math.max(0, idx), Math.max(0, STATE.results.length - 1));
+  }
   const prefix = VSCROLL.prefixHeights;
   let lo = 0;
   let hi = prefix.length - 1;
@@ -2198,7 +2270,9 @@ function resetVirtualScrollState() {
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
   VSCROLL.prefixHeights = [0];
+  VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
+  clearResultHTMLCache();
   updateScrollProxy();
 }
 
@@ -2210,6 +2284,7 @@ function ensureVirtualHeights(len) {
     VSCROLL.heights[i] = VSCROLL.estimatedHeight;
   }
   VSCROLL.heightsDirty = true;
+  if (VSCROLL.htmlCache.length < len) VSCROLL.htmlCache.length = len;
 }
 
 function measureHeights() {
@@ -2219,8 +2294,15 @@ function measureHeights() {
     if (idx >= 0) {
       const h = els[i].getBoundingClientRect().height;
       if (h > 0 && VSCROLL.heights[idx] !== h) {
+        const prev = VSCROLL.heights[idx] || VSCROLL.estimatedHeight || 60;
         VSCROLL.heights[idx] = h;
-        VSCROLL.heightsDirty = true;
+        if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
+          const delta = h - prev;
+          fenwickAdd(VSCROLL.heightTree, idx + 1, delta);
+          VSCROLL.prefixHeights = [0];
+        } else {
+          VSCROLL.heightsDirty = true;
+        }
       }
     }
   }
@@ -2260,6 +2342,7 @@ function updateLoadInfo() {
   DOM.loadInfo.style.display = "";
   DOM.loadedCount.textContent = STATE.results.length.toLocaleString();
   DOM.totalCount.textContent = STATE.total.toLocaleString();
+  requestAnimationFrame(updateScrollProxy);
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -3439,6 +3522,7 @@ function init() {
   if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.addEventListener("change", function() {
     STATE.useMirrorLinks = DOM.mirrorLinksToggle.checked;
     syncStateToURL();
+    clearResultHTMLCache();
     if (STATE.results.length > 0) renderResults();
   });
 
@@ -3533,6 +3617,7 @@ function init() {
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
   DOM.searchFoldersToggle.addEventListener("change", function() {
     STATE.searchFolders = DOM.searchFoldersToggle.checked;
+    clearResultHTMLCache();
     STATE.page = 1;
     STATE.results = [];
     doSearch();
