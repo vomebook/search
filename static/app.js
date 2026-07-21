@@ -1306,8 +1306,6 @@ const VSCROLL = {
   htmlCache: [],
   htmlCacheKey: "",
   estimatedHeight: 60,
-  syncingProxy: false,
-  syncingContent: false,
   isDraggingThumb: false,
 };
  
@@ -1352,8 +1350,6 @@ function cacheDOM() {
   DOM.totalCount = $("#total-count");
   DOM.scrollTrack = $("#scroll-track");
   DOM.scrollThumb = $("#scroll-thumb");
-  DOM.scrollProxy = $("#scroll-proxy");
-  DOM.scrollProxySpacer = $("#scroll-proxy-spacer");
   DOM.hitokoto = $("#hitokoto");
   DOM.randomBookBtn = $("#random-book-btn");
   DOM.overlay = $("#overlay");
@@ -2154,7 +2150,7 @@ function renderVisible() {
   const items = STATE.results;
   const len = items.length;
   if (len === 0) {
-    updateScrollProxy();
+    updateScrollTrack();
     return;
   }
 
@@ -2201,7 +2197,7 @@ function renderVisible() {
 
   requestAnimationFrame(function() {
     measureHeights();
-    updateScrollProxy();
+    updateScrollTrack();
   });
 }
 
@@ -2281,7 +2277,7 @@ function resetVirtualScrollState() {
   VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
   clearResultHTMLCache();
-  updateScrollProxy();
+  updateScrollTrack();
 }
 
 function ensureVirtualHeights(len) {
@@ -2350,7 +2346,7 @@ function updateLoadInfo() {
   DOM.loadInfo.style.display = "";
   DOM.loadedCount.textContent = STATE.results.length.toLocaleString();
   DOM.totalCount.textContent = STATE.total.toLocaleString();
-  requestAnimationFrame(updateScrollProxy);
+  requestAnimationFrame(updateScrollTrack);
 }
  
 /* ═══════════════════════════════════════════════════════════
@@ -3067,29 +3063,17 @@ function maybeLoadNextPage() {
   }
 }
 
-function updateScrollProxy() {
-  if (!DOM.scrollProxy || !DOM.scrollProxySpacer) return;
-  const totalHeight = Math.max(getVirtualTotalHeight(), DOM.resultsList.scrollHeight || 0);
-  const visible = totalHeight > DOM.resultsContainer.clientHeight + 1;
+function updateScrollTrack() {
   if (DOM.scrollTrack) {
     DOM.scrollTrack.style.top = DOM.resultsContainer.offsetTop + "px";
     DOM.scrollTrack.style.height = DOM.resultsContainer.clientHeight + "px";
     DOM.scrollTrack.style.bottom = "auto";
   }
-  DOM.scrollProxy.style.top = DOM.resultsContainer.offsetTop + "px";
-  DOM.scrollProxy.style.height = DOM.resultsContainer.clientHeight + "px";
-  DOM.scrollProxy.style.bottom = "auto";
-  DOM.scrollProxy.classList.toggle("active", visible);
-  DOM.scrollProxySpacer.style.height = totalHeight + "px";
-  if (VSCROLL.syncingContent) return;
-  VSCROLL.syncingProxy = true;
-  DOM.scrollProxy.scrollTop = DOM.resultsContainer.scrollTop;
-  VSCROLL.syncingProxy = false;
 }
 
 function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("scroll", () => {
-    if (!VSCROLL.syncingContent) updateScrollProxy();
+    updateScrollTrack();
     if (!scrollTicking) {
       requestAnimationFrame(() => {
         updateScrollThumb();
@@ -3100,30 +3084,12 @@ function setupVirtualScroll() {
       scrollTicking = true;
     }
   }, { passive: true });
-
-  if (DOM.scrollProxy) {
-    DOM.scrollProxy.addEventListener("scroll", () => {
-      if (VSCROLL.syncingProxy) return;
-      VSCROLL.syncingContent = true;
-      DOM.resultsContainer.scrollTop = DOM.scrollProxy.scrollTop;
-      VSCROLL.syncingContent = false;
-      if (!scrollTicking) {
-        requestAnimationFrame(() => {
-          updateScrollThumb();
-          renderVisible();
-          maybeLoadNextPage();
-          scrollTicking = false;
-        });
-        scrollTicking = true;
-      }
-    }, { passive: true });
-  }
 }
  
 function updateScrollThumb() {
   const scrollTop = DOM.resultsContainer.scrollTop;
-  const scrollHeight = DOM.scrollProxy ? DOM.scrollProxy.scrollHeight : DOM.resultsContainer.scrollHeight;
-  const clientHeight = DOM.scrollProxy ? DOM.scrollProxy.clientHeight : DOM.resultsContainer.clientHeight;
+  const scrollHeight = DOM.resultsContainer.scrollHeight;
+  const clientHeight = DOM.resultsContainer.clientHeight;
   if (scrollHeight <= clientHeight || !DOM.scrollTrack.clientHeight) { DOM.scrollTrack.classList.remove("visible"); return; }
   DOM.scrollTrack.classList.add("visible");
   const trackHeight = DOM.scrollTrack.clientHeight;
@@ -3137,15 +3103,8 @@ function setupQuickScroll() {
   let dragging = false, startY, startST;
   let dragTicking = false;
 
-  function setProxyScrollTop(value) {
-    if (DOM.scrollProxy) {
-      DOM.scrollProxy.scrollTop = value;
-      VSCROLL.syncingContent = true;
-      DOM.resultsContainer.scrollTop = DOM.scrollProxy.scrollTop;
-      VSCROLL.syncingContent = false;
-    } else {
-      DOM.resultsContainer.scrollTop = value;
-    }
+  function setResultScrollTop(value) {
+    DOM.resultsContainer.scrollTop = value;
     if (!dragTicking) {
       dragTicking = true;
       requestAnimationFrame(function() {
@@ -3159,8 +3118,8 @@ function setupQuickScroll() {
     const delta = e.clientY - startY;
     const dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     const ratio = delta / dragRange;
-    const scrollEl = DOM.scrollProxy || DOM.resultsContainer;
-    setProxyScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
+    const scrollEl = DOM.resultsContainer;
+    setResultScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
   }
 
   function onMouseUp() {
@@ -3172,7 +3131,7 @@ function setupQuickScroll() {
   }
 
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
-    dragging = true; VSCROLL.isDraggingThumb = true; startY = e.clientY; startST = DOM.scrollProxy ? DOM.scrollProxy.scrollTop : DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
+    dragging = true; VSCROLL.isDraggingThumb = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   });
@@ -3182,8 +3141,8 @@ function setupQuickScroll() {
     const delta = e.touches[0].clientY - startY;
     const dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     const ratio = delta / dragRange;
-    const scrollEl = DOM.scrollProxy || DOM.resultsContainer;
-    setProxyScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
+    const scrollEl = DOM.resultsContainer;
+    setResultScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
   }
 
   function onTouchEnd() {
@@ -3195,7 +3154,7 @@ function setupQuickScroll() {
   }
 
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    dragging = true; VSCROLL.isDraggingThumb = true; startY = e.touches[0].clientY; startST = DOM.scrollProxy ? DOM.scrollProxy.scrollTop : DOM.resultsContainer.scrollTop; e.stopPropagation();
+    dragging = true; VSCROLL.isDraggingThumb = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop; e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
   });
@@ -3265,7 +3224,7 @@ function applyMobileMode() {
   updateSidebarVisibility();
   if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
   updateSelectionUI();
-  requestAnimationFrame(updateScrollProxy);
+  requestAnimationFrame(updateScrollTrack);
 }
  
 function autoDetectMobile() { return window.innerWidth <= 768; }
@@ -3811,7 +3770,7 @@ function init() {
       STATE.isMobile = autoDetectMobile();
       if (wasMobile !== STATE.isMobile) applyMobileMode();
     }
-    requestAnimationFrame(updateScrollProxy);
+    requestAnimationFrame(updateScrollTrack);
   });
 
   ROUTER.apply();
