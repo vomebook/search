@@ -573,10 +573,8 @@ function updateSelectionUI() {
 async function loadData() {
   try {
     RECORDS = decodeSearchPayload(await loadGzipJSON(DATA_URL));
-    console.log("Loaded " + RECORDS.length.toLocaleString() + " records");
 
     await buildIndex(false);
-    console.log("Local data ready: " + repoList.length + " repos");
 
     return true;
   } catch (e) {
@@ -1740,7 +1738,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (ok) {
       STATE.repoList = repoList;
       STATE.extensionList = extensionList;
-      console.log("Local data ready for offline search");
       if (triggerSearchAfterLoad) {
         STATE.page = 1;
         STATE.results = [];
@@ -3746,7 +3743,6 @@ function init() {
       return;
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
-    console.log("Local mode:", STATE.useLocalMode ? "ON" : "OFF");
     setExactSearchSectionVisible(!STATE.useLocalMode, true);
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.page = 1;
