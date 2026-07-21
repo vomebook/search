@@ -902,6 +902,12 @@ async function doSearchAPI(params, append, requestId) {
 
   // Cache hit: consume prefetched page directly, skip network
   if (append && STATE._pageCache[params.page]) {
+    if (VSCROLL.isDraggingThumb) {
+      STATE._deferredAppendWhileDragging = true;
+      STATE._pendingPage = 0;
+      STATE.isLoading = false;
+      return true;
+    }
     var cp = params.page;
     STATE.results = STATE.results.concat(STATE._pageCache[cp]);
     delete STATE._pageCache[cp];
@@ -974,6 +980,13 @@ async function doSearchAPI(params, append, requestId) {
   STATE.didYouMean = data.did_you_mean || null;
 
   if (append) {
+    if (VSCROLL.isDraggingThumb) {
+      STATE._pageCache[data.page] = data.results;
+      STATE._deferredAppendWhileDragging = true;
+      STATE._pendingPage = 0;
+      STATE.isLoading = false;
+      return true;
+    }
     STATE._pageCache[data.page] = data.results;
     var nextPage = STATE._loadedPage + 1;
     var combinedNew = [];
@@ -992,6 +1005,33 @@ async function doSearchAPI(params, append, requestId) {
   }
 
   STATE.hasMore = STATE.results.length < STATE.total;
+  return true;
+}
+
+function consumeCachedAppendPage() {
+  if (!STATE._pageCache[STATE.page]) return false;
+  var cp = STATE.page;
+  STATE.results = STATE.results.concat(STATE._pageCache[cp]);
+  delete STATE._pageCache[cp];
+  STATE._loadedPage = cp;
+  var np = cp + 1;
+  while (STATE._pageCache[np]) {
+    STATE.results = STATE.results.concat(STATE._pageCache[np]);
+    delete STATE._pageCache[np];
+    np++;
+  }
+  STATE._loadedPage = np - 1;
+  STATE.hasMore = STATE.results.length < STATE.total;
+  STATE._pendingPage = 0;
+  STATE.isLoading = false;
+  ensureVirtualHeights(STATE.results.length);
+  VSCROLL.renderStart = 0;
+  VSCROLL.renderEnd = 0;
+  requestAnimationFrame(renderVisible);
+  updateStatusBar();
+  updateLoadInfo();
+  syncStateToURL();
+  prefetchNextPage();
   return true;
 }
 
@@ -1290,6 +1330,7 @@ const STATE = {
   _pendingPage: 0,
   _loadedPage: 0,
   _pageCache: {},
+  _deferredAppendWhileDragging: false,
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -1844,6 +1885,14 @@ function doSearch(append) {
     if (apiAvailable && searchAbortController) searchAbortController.abort();
     if (apiAvailable) searchAbortController = new AbortController();
     searchRequestId++;
+    STATE._pageCache = {};
+    STATE._loadedPage = 0;
+    STATE._pendingPage = 0;
+    STATE._deferredAppendWhileDragging = false;
+    if (scrollLoadTimer) {
+      clearTimeout(scrollLoadTimer);
+      scrollLoadTimer = null;
+    }
     if (STATE.resultsSkeletonActive) {
       DOM.resultsContainer.scrollTop = 0;
       renderResultsSkeleton();
@@ -1997,6 +2046,13 @@ function doSearchFallbackLocal(params, append, id) {
       STATE.didYouMean = data.didYouMean || null;
 
       if (append) {
+        if (VSCROLL.isDraggingThumb) {
+          STATE._pageCache[params.page] = data.results;
+          STATE._deferredAppendWhileDragging = true;
+          STATE._pendingPage = 0;
+          STATE.isLoading = false;
+          return;
+        }
         STATE.results = STATE.results.concat(data.results);
       } else {
         STATE.results = data.results;
@@ -2196,7 +2252,12 @@ function renderVisible() {
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
 
   requestAnimationFrame(function() {
-    measureHeights();
+    if (measureHeights()) {
+      VSCROLL.renderStart = -1;
+      VSCROLL.renderEnd = -1;
+      renderVisible();
+      return;
+    }
     updateScrollTrack();
   });
 }
@@ -2293,10 +2354,17 @@ function ensureVirtualHeights(len) {
 
 function measureHeights() {
   const els = DOM.resultsList.querySelectorAll(".result-item");
+  let measuredSum = 0;
+  let measuredCount = 0;
+  let changed = false;
   for (let i = 0; i < els.length; i++) {
     const idx = parseInt(els[i].dataset.index);
     if (idx >= 0) {
       const h = els[i].getBoundingClientRect().height;
+      if (h > 0) {
+        measuredSum += h;
+        measuredCount++;
+      }
       if (h > 0 && VSCROLL.heights[idx] !== h) {
         const prev = VSCROLL.heights[idx] || VSCROLL.estimatedHeight || 60;
         VSCROLL.heights[idx] = h;
@@ -2307,19 +2375,19 @@ function measureHeights() {
         } else {
           VSCROLL.heightsDirty = true;
         }
+        changed = true;
       }
     }
   }
-  const measured = VSCROLL.heights.filter(function(h) { return h > 0; });
-  if (measured.length > 10) {
-    let sum = 0;
-    for (let i = 0; i < measured.length; i++) sum += measured[i];
-    const nextEstimate = sum / measured.length;
+  if (measuredCount > 10) {
+    const nextEstimate = measuredSum / measuredCount;
     if (Math.abs(nextEstimate - VSCROLL.estimatedHeight) > 1) {
       VSCROLL.estimatedHeight = nextEstimate;
       VSCROLL.heightsDirty = true;
+      changed = true;
     }
   }
+  return changed;
 }
  
 function updateStatusBar() {
@@ -3048,6 +3116,7 @@ function showToast(msg, dur) {
    ═══════════════════════════════════════════════════════════ */
  
 let scrollTicking = false;
+let scrollLoadTimer = null;
 var selectedIndices = {};
 var lastSelectedIndex = -1;
 
@@ -3061,6 +3130,20 @@ function maybeLoadNextPage() {
     STATE.page++;
     doSearch(true);
   }
+}
+
+function scheduleScrollLoad(delay) {
+  if (VSCROLL.isDraggingThumb && delay > 0) return;
+  if (scrollLoadTimer) clearTimeout(scrollLoadTimer);
+  scrollLoadTimer = setTimeout(function() {
+    scrollLoadTimer = null;
+    if (VSCROLL.isDraggingThumb) return;
+    if (STATE._deferredAppendWhileDragging) {
+      STATE._deferredAppendWhileDragging = false;
+      if (consumeCachedAppendPage()) return;
+    }
+    maybeLoadNextPage();
+  }, delay);
 }
 
 function updateScrollTrack() {
@@ -3083,6 +3166,7 @@ function setupVirtualScroll() {
       });
       scrollTicking = true;
     }
+    if (VSCROLL.isDraggingThumb) scheduleScrollLoad(120);
   }, { passive: true });
 }
  
@@ -3127,6 +3211,10 @@ function setupQuickScroll() {
     VSCROLL.isDraggingThumb = false;
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
+    if (STATE._deferredAppendWhileDragging) {
+      STATE._deferredAppendWhileDragging = false;
+      if (consumeCachedAppendPage()) return;
+    }
     maybeLoadNextPage();
   }
 
@@ -3150,6 +3238,11 @@ function setupQuickScroll() {
     VSCROLL.isDraggingThumb = false;
     document.removeEventListener("touchmove", onTouchMove);
     document.removeEventListener("touchend", onTouchEnd);
+    document.removeEventListener("touchcancel", onTouchEnd);
+    if (STATE._deferredAppendWhileDragging) {
+      STATE._deferredAppendWhileDragging = false;
+      if (consumeCachedAppendPage()) return;
+    }
     maybeLoadNextPage();
   }
 
@@ -3157,6 +3250,7 @@ function setupQuickScroll() {
     dragging = true; VSCROLL.isDraggingThumb = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop; e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
+    document.addEventListener("touchcancel", onTouchEnd);
   });
 }
  
@@ -3264,6 +3358,29 @@ function updateSidebarVisibility() {
    ═══════════════════════════════════════════════════════════ */
  
 let keyboardResultIndex = -1;
+
+function focusKeyboardResult(index) {
+  keyboardResultIndex = Math.max(0, Math.min(index, STATE.results.length - 1));
+  const top = getVirtualOffset(keyboardResultIndex);
+  const bottom = getVirtualOffset(keyboardResultIndex + 1);
+  const viewTop = DOM.resultsContainer.scrollTop;
+  const viewBottom = viewTop + DOM.resultsContainer.clientHeight;
+  if (top < viewTop || bottom > viewBottom) {
+    DOM.resultsContainer.scrollTop = top;
+  }
+  VSCROLL.renderStart = 0;
+  VSCROLL.renderEnd = 0;
+  renderVisible();
+  requestAnimationFrame(function() {
+    var all = DOM.resultsList.querySelectorAll(".result-item");
+    for (var ai = 0; ai < all.length; ai++) {
+      var aidx = parseInt(all[ai].dataset.index);
+      all[ai].style.background = (aidx % 2 === 1) ? "var(--surface-variant)" : "";
+    }
+    var el = DOM.resultsList.querySelector('.result-item[data-index="' + keyboardResultIndex + '"]');
+    if (el) el.style.background = "var(--surface-variant)";
+  });
+}
  
 function setupKeyboard() {
   document.addEventListener("keydown", function(e) {
@@ -3305,26 +3422,8 @@ function setupKeyboard() {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (STATE.results.length === 0) return;
       e.preventDefault();
-      if (e.key === "ArrowDown") {
-        keyboardResultIndex = Math.min(keyboardResultIndex + 1, STATE.results.length - 1);
-      } else {
-        keyboardResultIndex = Math.max(keyboardResultIndex - 1, 0);
-      }
-      var targetY = keyboardResultIndex * VSCROLL.estimatedHeight;
-      DOM.resultsContainer.scrollTop = targetY;
-      requestAnimationFrame(function() {
-        var all = DOM.resultsList.querySelectorAll(".result-item");
-        for (var ai = 0; ai < all.length; ai++) {
-          var aidx = parseInt(all[ai].dataset.index);
-          all[ai].style.background = (aidx % 2 === 1) ? "var(--surface-variant)" : "";
-        }
-        for (var ai = 0; ai < all.length; ai++) {
-          if (parseInt(all[ai].dataset.index) === keyboardResultIndex) {
-            all[ai].style.background = "var(--surface-variant)";
-            break;
-          }
-        }
-      });
+      if (e.key === "ArrowDown") focusKeyboardResult(keyboardResultIndex < 0 ? 0 : keyboardResultIndex + 1);
+      else focusKeyboardResult(keyboardResultIndex < 0 ? 0 : keyboardResultIndex - 1);
       return;
     }
  
