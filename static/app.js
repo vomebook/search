@@ -1,12 +1,3 @@
-/**
- * VoiceOfML Search — Static Edition
- * Hash Router | In-Memory Search Index | GitHub Pages
- */
- 
-/* ═══════════════════════════════════════════════════════════
-   Constants
-   ═══════════════════════════════════════════════════════════ */
- 
 const DATA_URL = "data/search_data.json.gz";
 const FOLDER_TREE_URL = "data/folder_tree.json.gz";
 const FOLDER_BROWSER_URL = "data/folder_browser.json.gz";
@@ -14,7 +5,7 @@ const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
 const HF_DATASET_BASE = "https://huggingface.co/datasets";
- 
+
 const ORDERED_EXTENSIONS = [
   "pdf", "txt",
   "epub", "mobi", "azw3", "fb2", "djvu", "chm", "caj",
@@ -27,7 +18,7 @@ const ORDERED_EXTENSIONS = [
   "mp3", "wav",
   "iso", "dat", "exe",
 ];
- 
+
 const FILE_ICON_MAP = {
   pdf: "pdf", txt: "text", mht: "text",
   epub: "book", mobi: "book", azw3: "book", fb2: "book", djvu: "book", chm: "book", caj: "book",
@@ -46,7 +37,7 @@ const FILE_ICON_MAP = {
   url: "text", vcf: "text", hhc: "text",
   md: "markdown", markdown: "markdown",
 };
- 
+
 const ICONS = {
   folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>',
   pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="9" y2="9"/></svg>',
@@ -65,13 +56,11 @@ const ICONS = {
   file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   database: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
 };
- 
-/* ═══════════════════════════════════════════════════════════
-   Data & Index (In-Memory)
-   ========================================================== */
- 
+
 let RECORDS = [];
+
 let PRECOMPUTED_FOLDER_TREES = {};
+
 let PRECOMPUTED_FOLDER_BROWSER = {};
 let wordIndex = {};
 let wordIndexFilesOnly = {};
@@ -233,7 +222,7 @@ function decodeFolderBrowserData(data) {
   }
   return decoded;
 }
- 
+
 function tokenize(text) {
   const tokens = [];
   const lower = text.toLowerCase();
@@ -277,7 +266,7 @@ function setExactSearchSectionVisible(visible, animate) {
     DOM.exactSearchSection.style.transition = "";
   }
 }
- 
+
 function editDistance(s1, s2, maxDist) {
   maxDist = maxDist || 2;
   if (Math.abs(s1.length - s2.length) > maxDist) return 999;
@@ -374,7 +363,7 @@ function getBrowserFileLink(repo, folderPath, file) {
   var relativePath = folderPath ? folderPath + "/" + fullName : fullName;
   return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeURI(relativePath);
 }
-  
+
 function buildIndex(includeFullText) {
   return new Promise(function(resolve) {
     if (includeFullText) {
@@ -387,10 +376,8 @@ function buildIndex(includeFullText) {
       repoCounts = {};
       folderIndex = {};
     }
-
     let i = 0;
     const chunkSize = 5000;
-
     function processChunk() {
       const end = Math.min(i + chunkSize, RECORDS.length);
       for (; i < end; i++) {
@@ -398,17 +385,14 @@ function buildIndex(includeFullText) {
         const repo = rec.Repo || "";
         const ext = (rec.Extension || "").toLowerCase();
         const folders = rec.Folder || [];
-
         if (!includeFullText) {
           rec._fileLower = (rec.File || "").toLowerCase();
           rec._repoLower = repo.toLowerCase();
           rec._folderPath = folders.join("/");
           rec._folderPathLower = rec._folderPath.toLowerCase();
-
           repoCounts[repo] = (repoCounts[repo] || 0) + 1;
           if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
         }
-
         if (includeFullText) {
           const text = [rec.File || "", ...folders].join(" ");
           const tokens = tokenize(text);
@@ -417,7 +401,6 @@ function buildIndex(includeFullText) {
             wordIndex[tok].push(i);
             didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
           }
-
           const fileTokens = tokenize(rec.File || "");
           for (const tok of fileTokens) {
             if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
@@ -425,7 +408,6 @@ function buildIndex(includeFullText) {
             didYouMeanVocabFilesOnly[tok] = (didYouMeanVocabFilesOnly[tok] || 0) + 1;
           }
         }
-
         if (!includeFullText) {
           if (!folderIndex[repo]) folderIndex[repo] = {};
           for (let d = 0; d <= folders.length; d++) {
@@ -434,7 +416,6 @@ function buildIndex(includeFullText) {
           }
         }
       }
-
       if (i < RECORDS.length) {
         setTimeout(processChunk, 0);
       } else {
@@ -451,14 +432,9 @@ function buildIndex(includeFullText) {
         resolve();
       }
     }
-
     processChunk();
   });
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Size helpers (global — used by ROUTER.apply + syncStateToURL)
-   ═══════════════════════════════════════════════════════════ */
 
 function bytesToDisplay(bytes) {
   if (bytes === null || bytes === undefined || bytes === 0) return { value: "", unit: "MB" };
@@ -485,11 +461,6 @@ function parseSizeStr(str) {
   else if (unit === "KB") val *= 1024;
   return Math.round(val);
 }
-
-/* ═══════════════════════════════════════════════════════════
-   Search History (localStorage)
-   ═══════════════════════════════════════════════════════════ */
-
 var HISTORY_KEY = "voml_search_history";
 var HISTORY_MAX = 20;
 
@@ -566,16 +537,10 @@ function updateSelectionUI() {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   Data Loading (main thread, chunked — API covers search meanwhile)
-   ═══════════════════════════════════════════════════════════ */
-
 async function loadData() {
   try {
     RECORDS = decodeSearchPayload(await loadGzipJSON(DATA_URL));
-
     await buildIndex(false);
-
     return true;
   } catch (e) {
     console.error("Data load failed:", e);
@@ -630,14 +595,12 @@ async function loadGzipJSON(url) {
   var reader = resp.body.getReader();
   var chunks = [];
   var received = 0;
-
   while (true) {
     var doneVal = await reader.read();
     if (doneVal.done) break;
     chunks.push(doneVal.value);
     received += doneVal.value.length;
   }
-
   var buf;
   if (chunks.length === 1) {
     buf = chunks[0];
@@ -649,7 +612,6 @@ async function loadGzipJSON(url) {
       pos += chunks[c].length;
     }
   }
-
   var ds = new DecompressionStream("gzip");
   var stream = new Response(buf).body.pipeThrough(ds);
   return JSON.parse(await new Response(stream).text());
@@ -673,11 +635,7 @@ function getCopyableLink(link) {
 function getPreviewLink(path) {
   return STATE.useMirrorLinks ? toMirrorURL(path) : path;
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Search Engine
-   ========================================================== */
- 
+
 function scoreRecord(recIdx, tokens, searchFolders) {
   const rec = RECORDS[recIdx];
   let score = 0;
@@ -691,7 +649,7 @@ function scoreRecord(recIdx, tokens, searchFolders) {
   }
   return score;
 }
- 
+
 function applyFilters(indices, repos, extensions, folders, minSize, maxSize, folderMatchMode) {
   return indices.filter(idx => {
     const rec = RECORDS[idx];
@@ -731,7 +689,7 @@ function applyFilters(indices, repos, extensions, folders, minSize, maxSize, fol
     return true;
   });
 }
- 
+
 function doSearchLocal(params) {
   const q = (params.q || "").trim();
   const repos = params.repos || null;
@@ -745,18 +703,14 @@ function doSearchLocal(params) {
   const exactMode = params.exact || false;
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
-
   let matched = [];
   let didYouMean = null;
-
   const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
   const activeVocabSorted = searchFolders ? didYouMeanSorted : didYouMeanSortedFilesOnly;
   const activeVocab = searchFolders ? didYouMeanVocab : didYouMeanVocabFilesOnly;
-
   if (!q) {
     matched = Array.from({ length: RECORDS.length }, (_, i) => i);
   } else if (exactMode || shouldUseLiteralLocalSearch(q)) {
-    // 精准搜索：跳过 token + 模糊匹配，直接查找，支持 * 和 ? 通配符。
     const hasWildcard = q.indexOf("*") >= 0 || q.indexOf("?") >= 0;
     const exactPattern = hasWildcard ? wildcardPatternToRegExp(q) : null;
     const exactQuery = hasWildcard ? "" : q.toLowerCase();
@@ -774,7 +728,6 @@ function doSearchLocal(params) {
     }
   } else {
     const tokens = tokenize(q);
-
     let exact = null;
     for (const tok of tokens) {
       const idxs = activeIndex[tok];
@@ -785,7 +738,6 @@ function doSearchLocal(params) {
         exact = exact.filter(i => idxsSet.has(i));
       }
     }
-
     let fuzzy = [];
     for (const tok of tokens) {
       if (activeIndex[tok]) continue;
@@ -805,7 +757,6 @@ function doSearchLocal(params) {
         }
       }
     }
-
     if (exact && exact.length > 0) {
       matched = exact;
       if (fuzzy.length > 0) {
@@ -815,7 +766,6 @@ function doSearchLocal(params) {
     } else if (fuzzy.length > 0) {
       matched = fuzzy;
     }
-
     if (matched.length < 10) {
       const suggestions = [];
       for (const tok of tokens) {
@@ -831,7 +781,6 @@ function doSearchLocal(params) {
       if (suggestions.length > 0) didYouMean = suggestions.join(" ");
     }
   }
- 
   let filtered = matched;
     if (folderMatchMode === "mixed") {
       filtered = applyMixedFolderFilters(filtered, params.folderSelfs || [], params.folderSubtrees || []);
@@ -844,7 +793,6 @@ function doSearchLocal(params) {
     idx,
     score: q ? scoreRecord(idx, tokens, searchFolders) : 0
   }));
- 
   if (sort === "name") {
     scored.sort((a, b) => (RECORDS[a.idx].File || "").localeCompare(RECORDS[b.idx].File || "", "zh"));
   } else if (sort === "size") {
@@ -856,11 +804,9 @@ function doSearchLocal(params) {
   } else {
     scored.sort((a, b) => b.score - a.score);
   }
- 
   const total = scored.length;
   const start = (page - 1) * pageSize;
   const paged = scored.slice(start, start + pageSize).map(s => RECORDS[s.idx]);
- 
   return { results: paged, total, page, pageSize, didYouMean };
 }
 
@@ -874,31 +820,21 @@ function applyMixedFolderFilters(indices, selfFolders, subtreeFolders) {
   const subtreeSet = new Set((subtreeFolders || []).map(function(path) {
     return String(path || "").replace(/^\/+|\/+$/g, "");
   }).filter(Boolean));
-
   return indices.filter(function(idx) {
     const rec = RECORDS[idx];
     const recFolders = rec.Folder || [];
     const recPath = rec._folderPath || "";
-
     if (selfSet.has(recPath)) return true;
-
     for (let d = 1; d <= recFolders.length; d++) {
       const prefix = recFolders.slice(0, d).join("/");
       if (subtreeSet.has(prefix)) return true;
     }
-
     return false;
   });
 }
 
-/* ═══════════════════════════════════════════════════════════
-   API Search (HuggingFace Space Backend)
-   ═══════════════════════════════════════════════════════════ */
-
 async function doSearchAPI(params, append, requestId) {
   if (requestId !== searchRequestId) return false;
-
-  // Cache hit: consume prefetched page directly, skip network
   if (append && STATE._pageCache[params.page]) {
     if (VSCROLL.isDraggingThumb) {
       STATE._deferredAppendWhileDragging = true;
@@ -920,7 +856,6 @@ async function doSearchAPI(params, append, requestId) {
     STATE.hasMore = STATE.results.length < STATE.total;
     return true;
   }
-
   const q = params.q || "";
   const isRepo = !!STATE.repoFull;
   const base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
@@ -936,14 +871,11 @@ async function doSearchAPI(params, append, requestId) {
   body.sort = params.sort || "relevance";
   if (!params.searchFolders) body.search_folders = false;
   if (params.exact) body.exact = true;
-
   const fetchOptions = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   };
-
-  // Timeout: 10s for non-append (initial search), 5s for append (pagination)
   var timeoutMs = append ? 5000 : 10000;
   var timeoutAbort = false;
   var timeoutController = new AbortController();
@@ -952,12 +884,9 @@ async function doSearchAPI(params, append, requestId) {
     timeoutController.abort();
   }, timeoutMs);
   fetchOptions.signal = timeoutController.signal;
-
-  // If caller also has a signal, abort on whichever fires first
   if (params.signal) {
     params.signal.addEventListener("abort", function() { timeoutController.abort(); });
   }
-
   var resp, data;
   try {
     resp = await fetch(base, fetchOptions);
@@ -971,12 +900,9 @@ async function doSearchAPI(params, append, requestId) {
     throw e;
   }
   clearTimeout(timeoutId);
-
   if (requestId !== searchRequestId) return false;
-
   STATE.total = data.total;
   STATE.didYouMean = data.did_you_mean || null;
-
   if (append) {
     if (VSCROLL.isDraggingThumb) {
       STATE._pageCache[data.page] = data.results;
@@ -1001,7 +927,6 @@ async function doSearchAPI(params, append, requestId) {
     STATE._loadedPage = 1;
     STATE._pageCache = {};
   }
-
   STATE.hasMore = STATE.results.length < STATE.total;
   return true;
 }
@@ -1039,7 +964,6 @@ function prefetchNextPage() {
   var totalPages = Math.ceil(STATE.total / STATE.pageSize);
   if (nextPage > totalPages) return;
   if (STATE._pageCache[nextPage]) return;
-
   var reqId = searchRequestId;
   var q = STATE.query || "";
   var isRepo = !!STATE.repoFull;
@@ -1056,7 +980,6 @@ function prefetchNextPage() {
   body.sort = STATE.sort || "relevance";
   if (!STATE.searchFolders) body.search_folders = false;
   if (STATE.exact) body.exact = true;
-
   fetch(base, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1071,10 +994,6 @@ function prefetchNextPage() {
     }
   }).catch(function() {});
 }
-
-/* ═══════════════════════════════════════════════════════════
-   API Helpers for Sidebar & Filters
-   ═══════════════════════════════════════════════════════════ */
 
 async function fetchRepos() {
   if (!apiAvailable) return null;
@@ -1106,7 +1025,6 @@ async function fetchFolderTree(repo) {
     return await resp.json();
   } catch (e) { return null; }
 }
-
 const browserApiCache = new Map();
 const browserApiPending = new Map();
 const BROWSER_API_CACHE_MAX = 200;
@@ -1125,7 +1043,6 @@ async function fetchFolderContents(repo, path) {
   var cacheKey = repo + "|" + (path || "");
   if (browserApiCache.has(cacheKey)) return browserApiCache.get(cacheKey);
   if (browserApiPending.has(cacheKey)) return browserApiPending.get(cacheKey);
-
   try {
     var qs = path ? "?path=" + encodeURIComponent(path) : "";
     var promise = fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo) + "/contents" + qs)
@@ -1160,11 +1077,7 @@ function getCurrentExtensionCounts() {
   }
   return extensionCounts;
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Folder Tree
-   ========================================================== */
- 
+
 function buildFilterFolderTree(repo) {
   if (PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[repo]) {
     return PRECOMPUTED_FOLDER_TREES[repo];
@@ -1173,7 +1086,6 @@ function buildFilterFolderTree(repo) {
   const paths = Object.keys(folderIndex[repo]);
   const root = { name: repo.split("/").pop(), path: "", children: [], count: 0, isRoot: true };
   const nodeMap = { "": root };
- 
   for (const p of paths.sort()) {
     if (!p) continue;
     const parts = p.split("/");
@@ -1187,11 +1099,9 @@ function buildFilterFolderTree(repo) {
       if (parent) parent.children.push(node);
     }
   }
- 
   for (const [fp, count] of Object.entries(folderIndex[repo])) {
     if (nodeMap[fp]) nodeMap[fp].count = count;
   }
-
   const dirMeta = {};
   for (let ri = 0; ri < RECORDS.length; ri++) {
     const rec = RECORDS[ri];
@@ -1201,7 +1111,6 @@ function buildFilterFolderTree(repo) {
     if (!dirMeta[dirPath]) dirMeta[dirPath] = { hasDirectFiles: false };
     dirMeta[dirPath].hasDirectFiles = true;
   }
-
   for (const pathKey in nodeMap) {
     if (!Object.prototype.hasOwnProperty.call(nodeMap, pathKey)) continue;
     const node = nodeMap[pathKey];
@@ -1209,10 +1118,8 @@ function buildFilterFolderTree(repo) {
     node.hasChildren = !!(node.children && node.children.length > 0);
     node.showSelfToggle = !!(node.hasDirectFiles && node.hasChildren);
   }
- 
   return [root];
 }
- 
 const folderContentsCache = new Map();
 const FOLDER_CACHE_MAX = 100;
 
@@ -1227,10 +1134,8 @@ function getFolderContents(repo, path) {
     folderContentsCache.set(cacheKey, val);
     return val;
   }
-
   const pathParts = (path || "").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
   const pathDepth = pathParts.length;
-
   const matching = RECORDS.filter(rec => {
     if (rec.Repo !== repo) return false;
     const folders = rec.Folder || [];
@@ -1240,7 +1145,6 @@ function getFolderContents(repo, path) {
     }
     return true;
   });
-
   const subfolders = {};
   for (const rec of matching) {
     const folders = rec.Folder || [];
@@ -1256,7 +1160,6 @@ function getFolderContents(repo, path) {
       count,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
-
   const fileList = matching
     .filter(rec => (rec.Folder || []).length === pathDepth)
     .map(rec => ({
@@ -1268,7 +1171,6 @@ function getFolderContents(repo, path) {
       size: rec.Size || "",
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
-
   const result = { folders: folderList, files: fileList, current_path: path };
   if (folderContentsCache.size >= FOLDER_CACHE_MAX) {
     const firstKey = folderContentsCache.keys().next().value;
@@ -1277,18 +1179,14 @@ function getFolderContents(repo, path) {
   folderContentsCache.set(cacheKey, result);
   return result;
 }
- 
+
 function getRandom(repo) {
   let pool = RECORDS;
   if (repo) pool = RECORDS.filter(r => r.Repo === repo);
   if (pool.length === 0) return null;
   return pool[Math.floor(Math.random() * pool.length)];
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   State
-   ═══════════════════════════════════════════════════════════ */
- 
+
 const STATE = {
   mode: "global",
   repo: null,
@@ -1331,10 +1229,6 @@ const STATE = {
   _deferredAppendWhileDragging: false,
 };
 
-/* ═══════════════════════════════════════════════════════════
-   Virtual Scroll State
-   ═══════════════════════════════════════════════════════════ */
-
 const VSCROLL = {
   renderStart: 0,
   renderEnd: 0,
@@ -1347,14 +1241,11 @@ const VSCROLL = {
   estimatedHeight: 60,
   isDraggingThumb: false,
 };
- 
-/* ═══════════════════════════════════════════════════════════
-   DOM References
-   ═══════════════════════════════════════════════════════════ */
- 
+
 const $ = (sel) => document.querySelector(sel);
+
 const DOM = {};
- 
+
 function cacheDOM() {
   DOM.headerTitle = $("#header-title");
   DOM.headerLogo = $("#header-logo");
@@ -1423,17 +1314,14 @@ function cacheDOM() {
   DOM.multiSelectedCount = $("#multi-selected-count");
   DOM.multiDeselect = $("#multi-deselect");
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Utilities
-   ═══════════════════════════════════════════════════════════ */
- 
+
 const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
 function escapeHTML(str) {
   return String(str).replace(/[&<>"']/g, (ch) => HTML_ESCAPE_MAP[ch]);
 }
- 
 const sizeCache = {};
+
 function formatSize(bytes) {
   if (!bytes && bytes !== 0) return "";
   if (sizeCache[bytes] !== undefined) return sizeCache[bytes];
@@ -1446,11 +1334,11 @@ function formatSize(bytes) {
   else result = (bytes / 1073741824).toFixed(2) + " GB";
   return (sizeCache[bytes] = result);
 }
- 
+
 function getFileIconType(ext) {
   return FILE_ICON_MAP[(ext || "").toLowerCase()] || "file";
 }
- 
+
 function highlightText(text, query) {
   if (!query || !text) return escapeHTML(text);
   const escaped = escapeHTML(text);
@@ -1467,22 +1355,16 @@ function highlightText(text, query) {
   }
   return result;
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Router (Hash-based)
-   ═══════════════════════════════════════════════════════════ */
- 
+
 const ROUTER = {
   parse: function() {
     const hash = window.location.hash.replace(/^#/, "");
     const qIdx = hash.indexOf("?");
     const path = qIdx >= 0 ? hash.substring(0, qIdx) : hash;
     const queryString = qIdx >= 0 ? hash.substring(qIdx + 1) : "";
- 
     const parts = path.split("/").filter(Boolean);
     const mode = parts.length === 0 ? "global" : "repo";
     const repo = parts.length === 0 ? null : parts[0];
- 
     const params = {};
     if (queryString) {
       const sp = new URLSearchParams(queryString);
@@ -1495,10 +1377,8 @@ const ROUTER = {
         }
       });
     }
- 
     return { mode: mode, repo: repo, params: params };
   },
- 
   navigate: function(mode, repo, folder) {
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
@@ -1521,16 +1401,13 @@ const ROUTER = {
     if (mode === "global") STATE.browserPath = "";
     window.location.hash = hash;
   },
-
   apply: function() {
     const route = this.parse();
     const prevMode = STATE.mode;
     const prevRepo = STATE.repo;
- 
     STATE.mode = route.mode;
     STATE.repo = route.repo;
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
- 
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.page = 1;
       STATE.results = [];
@@ -1545,7 +1422,6 @@ const ROUTER = {
       DOM.leftSidebar.classList.remove("expanded-wide");
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
     }
- 
     if (route.params.q !== undefined) {
       STATE.query = route.params.q;
       DOM.searchInput.value = STATE.query;
@@ -1553,26 +1429,22 @@ const ROUTER = {
       STATE.query = "";
       DOM.searchInput.value = "";
     }
- 
     if (route.params.repo) {
       STATE.filterRepos = (Array.isArray(route.params.repo) ? route.params.repo : [route.params.repo])
         .map(function(r) { return r.includes("/") ? r : "VoiceOfML/" + r; });
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.filterRepos = [];
     }
- 
     if (route.params.ext) {
       STATE.filterExtensions = route.params.ext.split(",").filter(Boolean);
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.filterExtensions = [];
     }
- 
     if (route.params.path) {
       STATE.browserPath = route.params.path;
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.browserPath = "";
     }
-
     STATE.sort = route.params.sort || "relevance";
     DOM.sortSelect.value = STATE.sort;
     var ms = route.params.min_size;
@@ -1610,7 +1482,6 @@ const ROUTER = {
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
     if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.checked = STATE.useMirrorLinks;
- 
     if (route.params.sidebar !== undefined) {
       STATE.leftSidebarOpen = route.params.sidebar !== "0";
       updateSidebarVisibility();
@@ -1622,7 +1493,6 @@ const ROUTER = {
       if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
     }
     this.updateUI();
-
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       this.onModeChanged();
       if (route.params.wide === "1") {
@@ -1636,7 +1506,6 @@ const ROUTER = {
       doSearch();
     }
   },
- 
   updateUI: function() {
     if (STATE.mode === "global") {
       DOM.headerTitle.textContent = "VoiceOfML";
@@ -1650,7 +1519,6 @@ const ROUTER = {
       DOM.sidebarTitle.textContent = STATE.repo;
     }
   },
- 
   onModeChanged: function() {
     if (DOM.sidebarExpandBtn) {
       DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
@@ -1669,11 +1537,7 @@ const ROUTER = {
     doSearch();
   },
 };
- 
-/* ═══════════════════════════════════════════════════════════
-   URL Sync
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function syncStateToURL() {
   let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
   const sp = new URLSearchParams();
@@ -1698,26 +1562,20 @@ function syncStateToURL() {
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
- 
   if (window.location.hash !== hash) {
     history.replaceState(null, "", hash);
   }
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Debounce & Search Execution
-   ═══════════════════════════════════════════════════════════ */
- 
 let searchTimer = null;
 let searchId = 0;
 let searchAbortController = null;
 let searchRequestId = 0;
 let apiAvailable = true;
 let localDataPromise = null;
+
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   if (STATE.dataLoaded) return Promise.resolve(true);
   if (localDataPromise) return localDataPromise;
-
   if (!background) {
     STATE.isLoading = true;
     setSearchVisualLoading(true);
@@ -1731,7 +1589,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     updateLoadInfo();
     showToast("正在加载本地数据...");
   }
-
   localDataPromise = loadData().then(function(ok) {
     STATE.dataLoaded = ok;
     localDataPromise = null;
@@ -1774,7 +1631,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (triggerSearchAfterLoad) doSearch();
     return false;
   });
-
   return localDataPromise;
 }
 
@@ -1840,7 +1696,6 @@ function animateResultsReveal() {
 function doSearch(append) {
   const id = ++searchId;
   const searchStart = performance.now();
-
   var activeFolderFilters = [];
   var folderMatchMode = null;
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) {
@@ -1851,7 +1706,6 @@ function doSearch(append) {
     );
     folderMatchMode = "mixed";
   }
-
   const params = {
     q: STATE.query,
     repos: STATE.mode === "repo" ? [STATE.repoFull] : (STATE.filterRepos.length > 0 ? STATE.filterRepos : null),
@@ -1868,7 +1722,6 @@ function doSearch(append) {
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
-
   STATE.isLoading = true;
   if (!append) setSearchVisualLoading(true);
   STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
@@ -1897,7 +1750,6 @@ function doSearch(append) {
       clearResultsSkeleton();
     }
   }
-
   if (STATE.useLocalMode || folderMatchMode === "mixed") {
     if (!STATE.dataLoaded) {
       if (STATE.useLocalMode && folderMatchMode !== "mixed" && apiAvailable) {
@@ -1932,7 +1784,6 @@ function doSearch(append) {
       return;
     }
   }
-
   if (apiAvailable) {
     if (append && STATE._pendingPage === STATE.page) {
       STATE.isLoading = false;
@@ -1942,16 +1793,13 @@ function doSearch(append) {
     STATE._pendingPage = STATE.page;
     params.signal = searchAbortController.signal;
     const requestId = searchRequestId;
-
     doSearchAPI(params, append, requestId).then(function(applied) {
       if (!applied) return;
       if (id !== searchId) return;
       if (append) {
-        // Incremental: extend heights, let next scroll render new items
         ensureVirtualHeights(STATE.results.length);
         VSCROLL.renderStart = 0;
         VSCROLL.renderEnd = 0;
-        // Force a renderVisible on next animation frame to include new items
         requestAnimationFrame(function() { renderVisible(); });
       } else {
         VSCROLL.renderStart = 0;
@@ -2004,7 +1852,6 @@ function doSearch(append) {
     });
     return;
   }
-
   if (!STATE.dataLoaded) {
     STATE.isLoading = false;
     DOM.resultsLoading.style.display = "none";
@@ -2012,7 +1859,6 @@ function doSearch(append) {
     showToast("数据加载中，请稍后...");
     return;
   }
-
   doSearchFallbackLocal(params, append, id);
 }
 
@@ -2023,7 +1869,6 @@ function handleApiSearchFailure(append, id) {
     showToast("加载更多失败，请重试");
     return Promise.resolve();
   }
-
   showToast("在线搜索失败，正在切换本地搜索...");
   return ensureLocalDataLoaded(false, false).then(function(ok) {
     if (!ok || id !== searchId) return;
@@ -2041,7 +1886,6 @@ function doSearchFallbackLocal(params, append, id) {
       const data = doSearchLocal(params);
       STATE.total = data.total;
       STATE.didYouMean = data.didYouMean || null;
-
       if (append) {
         if (VSCROLL.isDraggingThumb) {
           STATE._pageCache[params.page] = data.results;
@@ -2054,9 +1898,7 @@ function doSearchFallbackLocal(params, append, id) {
       } else {
         STATE.results = data.results;
       }
-
       STATE.hasMore = STATE.results.length < STATE.total;
-
       if (append) {
         ensureVirtualHeights(STATE.results.length);
         VSCROLL.renderStart = 0;
@@ -2080,12 +1922,10 @@ function doSearchFallbackLocal(params, append, id) {
       }
       updateStatusBar();
       updateLoadInfo();
-
       if (STATE.didYouMean) {
         DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
         DOM.didYouMean.style.display = "inline";
       }
-
       syncStateToURL();
     } catch (err) {
       console.error("Local fallback crashed:", err);
@@ -2100,10 +1940,6 @@ function doSearchFallbackLocal(params, append, id) {
   }, 0);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   Results Rendering
-   ═══════════════════════════════════════════════════════════ */
-
 function renderResults() {
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
@@ -2115,18 +1951,15 @@ function renderResults() {
       : "暂无数据";
     return;
   }
-
   DOM.emptyState.style.display = "none";
   const cacheKey = getResultsHTMLCacheKey();
   if (VSCROLL.htmlCacheKey !== cacheKey) {
     VSCROLL.htmlCache = [];
     VSCROLL.htmlCacheKey = cacheKey;
   }
-
   ensureVirtualHeights(STATE.results.length);
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
-
   if (STATE.resultsSkeletonActive) animateResultsReveal();
   renderVisible();
 }
@@ -2136,13 +1969,11 @@ function buildResultHTML(rec, idx) {
   const titleHTML = highlightText(rec.File, STATE.query);
   const repoShort = (rec.Repo || "").split("/").pop();
   const sizeStr = formatSize(rec.Size);
-
   const breadcrumb = (rec.Folder || []).map((f, j) => {
     const accum = (rec.Folder || []).slice(0, j + 1).join("/");
     const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
     return '<span class="path-sep">/</span><span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + '</span>';
   }).join("");
-
   return (
     '<input type="checkbox" class="result-checkbox" data-index="' + idx + '">' +
     '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
@@ -2206,7 +2037,6 @@ function renderVisible() {
     updateScrollTrack();
     return;
   }
-
   const container = DOM.resultsContainer;
   const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
@@ -2214,20 +2044,14 @@ function renderVisible() {
   const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
   const overscanPx = overscanItems * (est || 60);
   ensurePrefixHeights();
-
   let start = findVirtualIndex(Math.max(0, scrollTop - overscanPx));
-
   let end = Math.min(len, findVirtualIndex(scrollTop + viewH + overscanPx) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
-
   if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
-
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
-
   const totalH = getVirtualTotalHeight();
   const topH = getVirtualOffset(start);
-
   let html = "";
   if (topH > 0) {
     html += '<div style="height:' + topH + 'px;flex-shrink:0"></div>';
@@ -2245,9 +2069,7 @@ function renderVisible() {
   var tpl = document.createElement("template");
   tpl.innerHTML = html;
   DOM.resultsList.replaceChildren(tpl.content);
-
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
-
   requestAnimationFrame(function() {
     if (measureHeights()) {
       VSCROLL.renderStart = -1;
@@ -2386,7 +2208,7 @@ function measureHeights() {
   }
   return changed;
 }
- 
+
 function updateStatusBar() {
   DOM.resultCount.textContent = STATE.isLoading
     ? "搜索中…"
@@ -2402,7 +2224,7 @@ function setSearchVisualLoading(loading) {
   DOM.resultsList.classList.toggle("results-pending", loading && STATE.results.length > 0);
   updateStatusBar();
 }
- 
+
 function updateLoadInfo() {
   if (STATE.total === 0 && STATE.results.length === 0) {
     DOM.loadInfo.style.display = "none";
@@ -2413,11 +2235,7 @@ function updateLoadInfo() {
   DOM.totalCount.textContent = STATE.total.toLocaleString();
   requestAnimationFrame(updateScrollTrack);
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Sidebar — Browser (Enter/Exit)
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function renderSidebar() {
   if (STATE.mode === "global") {
     renderRepoList();
@@ -2449,19 +2267,17 @@ async function renderRepoList() {
   }
   DOM.sidebarContent.innerHTML = html;
 }
- 
+
 async function renderBrowser(path) {
   STATE.browserPath = path;
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
   var currentRepo = STATE.repoFull;
-
   const backBtn = document.createElement("div");
   backBtn.className = "back-to-global";
   backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
   backBtn.addEventListener("click", function() { ROUTER.navigate("global"); });
   DOM.sidebarContent.appendChild(backBtn);
-
   if (path) {
     const bc = document.createElement("div");
     bc.className = "sidebar-breadcrumb";
@@ -2479,36 +2295,27 @@ async function renderBrowser(path) {
     });
     DOM.sidebarContent.appendChild(bc);
   }
-
   const list = document.createElement("div");
   list.className = "browser-list";
   list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
   DOM.sidebarContent.appendChild(list);
-
   var data = null;
-
-  // Local first; folder browser metadata is loaded only when browsing starts.
   if (STATE.dataLoaded) {
     try {
       await ensureFolderBrowserData();
       data = getFolderContents(STATE.repoFull, path);
     } catch (e) {}
   }
-
-  // Fallback to API
   if (!data && apiAvailable) {
     try {
       data = await fetchFolderContents(STATE.repo, path);
     } catch (e) {}
   }
-
   if (!data || (!data.folders && !data.files)) {
     list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
     return;
   }
-
   list.innerHTML = "";
-
   for (var j = 0; j < (data.folders || []).length; j++) {
     var f = data.folders[j];
     var div = document.createElement("div");
@@ -2517,7 +2324,6 @@ async function renderBrowser(path) {
     div.addEventListener("click", (function(fp) { return function() { renderBrowser(fp); }; })(f.path));
     list.appendChild(div);
   }
-
   for (var k = 0; k < (data.files || []).length; k++) {
     var f2 = data.files[k];
     var div2 = document.createElement("div");
@@ -2549,11 +2355,7 @@ async function renderBrowser(path) {
     list.appendChild(div2);
   }
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Filters (Right Sidebar)
-   ═══════════════════════════════════════════════════════════ */
- 
+
 async function renderFilters() {
   if (STATE.mode === "global") {
     DOM.filterRepoSection.style.display = "";
@@ -2561,7 +2363,6 @@ async function renderFilters() {
   } else {
     DOM.filterRepoSection.style.display = "none";
   }
-
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
     if (STATE.dataLoaded && Object.keys(PRECOMPUTED_FOLDER_TREES).length === 0) {
@@ -2578,7 +2379,6 @@ async function renderFilters() {
   } else {
     DOM.filterFolderSection.style.display = "none";
   }
-
   await renderExtensionFilter();
 }
 
@@ -2607,7 +2407,6 @@ async function renderRepoFilter() {
 
 async function renderExtensionFilter() {
   var extData = null;
-  // Local first
   if (extensionList && extensionList.length > 0) {
     var currentCounts = getCurrentExtensionCounts();
     extData = [];
@@ -2620,14 +2419,11 @@ async function renderExtensionFilter() {
       extData = await fetchExtensions(STATE.repo);
     } catch (e) {}
   }
-
   STATE.extensionList = extData && Array.isArray(extData)
     ? extData
       .filter(function(item) { return item && typeof item.name === "string"; })
       .map(function(item) { return item.name; })
     : [];
-
-  // Clean up extensions that don't exist in current repo
   if (STATE.filterExtensions.length > 0 && extData && Array.isArray(extData)) {
     var availNames = {};
     for (var axe = 0; axe < extData.length; axe++) { availNames[extData[axe].name] = true; }
@@ -2639,10 +2435,8 @@ async function renderExtensionFilter() {
       doSearch();
     }
   }
-
   var ordered = [];
   var rest = [];
-
   if (extData && Array.isArray(extData) && extData.length > 0) {
     for (var n = 0; n < extData.length; n++) {
       var e = extData[n];
@@ -2655,9 +2449,7 @@ async function renderExtensionFilter() {
       }
     }
   }
-
   ordered.sort(function(a, b) { return a._idx - b._idx; });
-
   var items = [];
   for (var j = 0; j < ordered.length; j++) {
     items.push({ key: ordered[j].name, label: "." + ordered[j].name, count: ordered[j].count });
@@ -2667,7 +2459,6 @@ async function renderExtensionFilter() {
     for (var k = 0; k < rest.length; k++) { total += rest[k].count || 0; }
     items.push({ key: "__OTHER__", label: "其他 (" + rest.length + "种)", count: total });
   }
-
   renderCheckboxList(DOM.filterExtList, items, STATE.filterExtensions, function(vals) {
     STATE.filterExtensions = vals.filter(function(v) { return v !== "__OTHER__"; });
     if (vals.indexOf("__OTHER__") >= 0) {
@@ -2680,7 +2471,7 @@ async function renderExtensionFilter() {
     doSearch();
   });
 }
- 
+
 function renderCheckboxList(container, items, selected, onChange) {
   if (items.length === 0) {
     container.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6;padding:4px 0">暂无</div>';
@@ -2710,7 +2501,7 @@ function renderCheckboxList(container, items, selected, onChange) {
   }
   container._onChange = onChange;
 }
- 
+
 function renderFilterFolderTree() {
   DOM.filterFolderTree.innerHTML = "";
   if (!STATE.folderTree || STATE.folderTree.length === 0) {
@@ -2739,7 +2530,6 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
   toggle.getAnimations().forEach(function(animation) { animation.cancel(); });
   const glyph = toggle.querySelector(".tree-toggle-glyph");
   if (glyph) glyph.getAnimations().forEach(function(animation) { animation.cancel(); });
-
   const resetChildStyles = function() {
     childContainer.style.height = "";
     childContainer.style.opacity = "";
@@ -2747,7 +2537,6 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
     childContainer.style.overflow = "";
     childContainer.style.transition = "";
   };
-
   const stopTransition = function() {
     if (childContainer._transitionCleanup) {
       childContainer.removeEventListener("transitionend", childContainer._transitionCleanup);
@@ -2758,10 +2547,8 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
       childContainer._transitionTimer = null;
     }
   };
-
   stopTransition();
   resetChildStyles();
-
   if (expanding) {
     childContainer.style.display = "block";
     const targetHeight = childContainer.scrollHeight;
@@ -2797,7 +2584,6 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
     }
     return;
   }
-
   childContainer.style.display = "block";
   const startHeight = childContainer.scrollHeight;
   childContainer.style.height = startHeight + "px";
@@ -2911,12 +2697,10 @@ function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
 function persistFolderSelection(subtreeSet, selfSet) {
   STATE.filterFolderSubtrees = Array.from(subtreeSet);
   STATE.filterFolderSelfs = Array.from(selfSet);
-
   const merged = [];
   selfSet.forEach(function(path) { if (path) merged.push(path); });
   subtreeSet.forEach(function(path) { if (path && !merged.includes(path)) merged.push(path); });
   STATE.filterFolders = merged;
-
   STATE.page = 1;
   STATE.results = [];
   doSearch();
@@ -2940,7 +2724,6 @@ function applyFolderSelectionToNode(node, row, subtreeSet, selfSet) {
   const partial = isNodePartiallySelected(node, subtreeSet, selfSet);
   cb.checked = full;
   cb.indeterminate = !full && partial;
-
   const selfBtn = row.querySelector(".folder-self-toggle");
   if (selfBtn) {
     const selfOn = selfSet.has(node.path);
@@ -2955,30 +2738,24 @@ function renderFilterTreeNodes(container, nodes, depth) {
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
     const has = node.children && node.children.length > 0;
- 
     const row = document.createElement("div");
     row.className = "filter-folder-item";
     row.style.setProperty("--fdepth", depth);
     row.dataset.path = node.path;
- 
     var collapsed = !!STATE.folderTreeCollapsed[node.path];
     row.innerHTML = (has ? ('<button type="button" class="tree-toggle' + (collapsed ? '' : ' expanded') + '" aria-label="' + (collapsed ? '展开子文件夹' : '收起子文件夹') + '" title="' + (collapsed ? '展开' : '收起') + '"><span class="tree-toggle-glyph" aria-hidden="true"></span></button>') : '<span class="tree-toggle-placeholder"></span>') +
       '<input type="checkbox" value="' + escapeHTML(node.path) + '">' +
       '<span class="folder-name" title="' + escapeHTML(node.name) + '">' + escapeHTML(node.name) + '</span>' +
       (node.showSelfToggle ? '<button type="button" class="folder-self-toggle" data-path="' + escapeHTML(node.path) + '">本层文件</button>' : '') +
       '<span class="folder-count">' + (node.count || 0).toLocaleString() + '</span>';
- 
     const toggle = row.querySelector(".tree-toggle");
     const cb = row.querySelector("input[type='checkbox']");
     const selfBtn = row.querySelector(".folder-self-toggle");
-
     applyFolderSelectionToNode(node, row, subtreeSet, selfSet);
- 
     cb.addEventListener("click", function(e) {
       e.preventDefault();
       handleFolderCheckboxChange(node);
     });
-
     if (selfBtn) {
       selfBtn.addEventListener("click", function(e) {
         e.preventDefault();
@@ -2986,15 +2763,12 @@ function renderFilterTreeNodes(container, nodes, depth) {
         handleFolderSelfToggle(node);
       });
     }
- 
     container.appendChild(row);
- 
     if (has) {
       const childDiv = document.createElement("div");
       childDiv.className = "tree-children";
       if (collapsed) childDiv.style.display = "none";
       renderFilterTreeNodes(childDiv, node.children, depth + 1);
-
       toggle.addEventListener("click", function(currentNode) {
         return function(e) {
           e.stopPropagation();
@@ -3003,15 +2777,10 @@ function renderFilterTreeNodes(container, nodes, depth) {
           toggleFolderChildrenAnimated(childDiv, toggle, expanding);
         };
       }(node));
- 
       container.appendChild(childDiv);
     }
   }
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Folder Filter Selection Logic
-   ═══════════════════════════════════════════════════════════ */
 
 function handleFolderCheckboxChange(node) {
   const subtreeSet = getFolderSubtreeSet();
@@ -3030,11 +2799,7 @@ function handleFolderSelfToggle(node) {
   persistFolderSelection(subtreeSet, selfSet);
   renderFilterFolderTree();
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Hitokoto
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function fetchHitokoto() {
   fetch("https://vomebook-hitokoto.hf.space/")
     .then(function(resp) { return resp.json(); })
@@ -3044,7 +2809,7 @@ function fetchHitokoto() {
     })
     .catch(function() { DOM.hitokoto.textContent = ""; });
 }
- 
+
 function typewriter(el, text, speed) {
   speed = speed || 60;
   el.style.opacity = "0";
@@ -3060,11 +2825,7 @@ function typewriter(el, text, speed) {
     if (i >= text.length) clearInterval(t);
   }, speed);
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Random Book
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function randomBook() {
   var url = STATE.repoFull
     ? API_BASE + "/api/random?repo=" + encodeURIComponent(STATE.repoFull)
@@ -3088,13 +2849,8 @@ function randomBook() {
       }
     });
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Toast
-   ═══════════════════════════════════════════════════════════ */
- 
 let toastTimer;
- 
+
 function showToast(msg, dur) {
   dur = dur || 2000;
   DOM.toast.textContent = msg;
@@ -3107,11 +2863,6 @@ function showToast(msg, dur) {
     DOM.toast.style.display = "none";
   }, dur);
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Infinite Scroll & Quick Scroll
-   ═══════════════════════════════════════════════════════════ */
- 
 let scrollTicking = false;
 let scrollLoadTimer = null;
 var selectedIndices = {};
@@ -3166,7 +2917,7 @@ function setupVirtualScroll() {
     if (VSCROLL.isDraggingThumb) scheduleScrollLoad(120);
   }, { passive: true });
 }
- 
+
 function updateScrollThumb() {
   const scrollTop = DOM.resultsContainer.scrollTop;
   const scrollHeight = DOM.resultsContainer.scrollHeight;
@@ -3179,11 +2930,10 @@ function updateScrollThumb() {
   DOM.scrollThumb.style.height = th + "px";
   DOM.scrollThumb.style.top = tt + "px";
 }
- 
+
 function setupQuickScroll() {
   let dragging = false, startY, startST;
   let dragTicking = false;
-
   function setResultScrollTop(value) {
     DOM.resultsContainer.scrollTop = value;
     if (!dragTicking) {
@@ -3194,7 +2944,6 @@ function setupQuickScroll() {
       });
     }
   }
-
   function onMouseMove(e) {
     const delta = e.clientY - startY;
     const dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
@@ -3202,7 +2951,6 @@ function setupQuickScroll() {
     const scrollEl = DOM.resultsContainer;
     setResultScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
   }
-
   function onMouseUp() {
     dragging = false;
     VSCROLL.isDraggingThumb = false;
@@ -3214,13 +2962,11 @@ function setupQuickScroll() {
     }
     maybeLoadNextPage();
   }
-
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
     dragging = true; VSCROLL.isDraggingThumb = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   });
-
   function onTouchMove(e) {
     e.preventDefault();
     const delta = e.touches[0].clientY - startY;
@@ -3229,7 +2975,6 @@ function setupQuickScroll() {
     const scrollEl = DOM.resultsContainer;
     setResultScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
   }
-
   function onTouchEnd() {
     dragging = false;
     VSCROLL.isDraggingThumb = false;
@@ -3242,7 +2987,6 @@ function setupQuickScroll() {
     }
     maybeLoadNextPage();
   }
-
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
     dragging = true; VSCROLL.isDraggingThumb = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop; e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
@@ -3250,11 +2994,7 @@ function setupQuickScroll() {
     document.addEventListener("touchcancel", onTouchEnd);
   });
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Theme & Mobile
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function toggleTheme() {
   const btn = DOM.themeBtn;
   const rect = btn.getBoundingClientRect();
@@ -3267,17 +3007,15 @@ function toggleTheme() {
   ripple.style.marginTop = "-0px";
   document.body.appendChild(ripple);
   document.body.classList.add("theme-transitioning");
- 
   STATE.isDark = !STATE.isDark;
   applyTheme();
   localStorage.setItem("theme", STATE.isDark ? "dark" : "light");
- 
   ripple.addEventListener("animationend", () => {
     ripple.remove();
     document.body.classList.remove("theme-transitioning");
   });
 }
- 
+
 function applyTheme() {
   if (STATE.isDark) {
     document.body.classList.remove("light");
@@ -3289,13 +3027,13 @@ function applyTheme() {
     DOM.themeIconDark.style.display = "none";
   }
 }
- 
+
 function toggleMobile() {
   STATE.isMobile = !STATE.isMobile;
   applyMobileMode();
   localStorage.setItem("mobileMode", STATE.isMobile ? "mobile" : "desktop");
 }
- 
+
 function applyMobileMode() {
   if (STATE.isMobile) {
     document.body.classList.add("mobile");
@@ -3317,13 +3055,9 @@ function applyMobileMode() {
   updateSelectionUI();
   requestAnimationFrame(updateScrollTrack);
 }
- 
+
 function autoDetectMobile() { return window.innerWidth <= 768; }
- 
-/* ═══════════════════════════════════════════════════════════
-   Sidebar Visibility
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function toggleLeftSidebar() {
   STATE.leftSidebarOpen = !STATE.leftSidebarOpen;
   if (!STATE.leftSidebarOpen) {
@@ -3334,14 +3068,14 @@ function toggleLeftSidebar() {
   if (STATE.isMobile && STATE.leftSidebarOpen && STATE.rightSidebarOpen) STATE.rightSidebarOpen = false;
   updateSidebarVisibility();
 }
- 
+
 function toggleRightSidebar() {
   STATE.rightSidebarOpen = !STATE.rightSidebarOpen;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
   syncStateToURL();
 }
- 
+
 function updateSidebarVisibility() {
   DOM.leftSidebar.classList.toggle("collapsed", !STATE.leftSidebarOpen);
   DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
@@ -3349,11 +3083,6 @@ function updateSidebarVisibility() {
   DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
   DOM.overlay.style.display = (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) ? "" : "none";
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Keyboard
-   ═══════════════════════════════════════════════════════════ */
- 
 let keyboardResultIndex = -1;
 
 function focusKeyboardResult(index) {
@@ -3378,19 +3107,17 @@ function focusKeyboardResult(index) {
     if (el) el.style.background = "var(--surface-variant)";
   });
 }
- 
+
 function setupKeyboard() {
   document.addEventListener("keydown", function(e) {
     const tag = document.activeElement.tagName;
     const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
- 
     if (e.key === "/" && !isInput) {
       e.preventDefault();
       DOM.searchInput.focus();
       DOM.searchInput.select();
       return;
     }
- 
     if (e.key === "Escape") {
       if (STATE.rightSidebarOpen || STATE.leftSidebarOpen) {
         STATE.leftSidebarOpen = false;
@@ -3409,13 +3136,11 @@ function setupKeyboard() {
       DOM.searchInput.blur();
       return;
     }
- 
     if (e.key === "b" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       toggleLeftSidebar();
       return;
     }
- 
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (STATE.results.length === 0) return;
       e.preventDefault();
@@ -3423,7 +3148,6 @@ function setupKeyboard() {
       else focusKeyboardResult(keyboardResultIndex < 0 ? 0 : keyboardResultIndex - 1);
       return;
     }
- 
     if (e.key === "Enter") {
       if (isInput && document.activeElement === DOM.searchInput) {
         e.preventDefault();
@@ -3443,7 +3167,6 @@ function setupKeyboard() {
       }
     }
   });
- 
   DOM.searchInput.addEventListener("keydown", function(e) {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -3457,11 +3180,7 @@ function setupKeyboard() {
     }
   });
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Clear Filters
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function clearAllFilters() {
   STATE.filterRepos = [];
   STATE.filterExtensions = [];
@@ -3479,11 +3198,7 @@ function clearAllFilters() {
   showToast("已清空所有筛选条件");
   syncStateToURL();
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Event Delegation
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function setupResultDelegation() {
   DOM.resultsList.addEventListener("click", function(e) {
     const actionBtn = e.target.closest("[data-action]");
@@ -3518,13 +3233,11 @@ function setupResultDelegation() {
         return;
       }
     }
- 
     const repoTag = e.target.closest(".result-repo-tag");
     if (repoTag) {
       ROUTER.navigate("repo", repoTag.dataset.repo);
       return;
     }
- 
     const folderLink = e.target.closest(".path-folder");
     if (folderLink) {
       const folder = folderLink.dataset.folder;
@@ -3543,7 +3256,6 @@ function setupResultDelegation() {
       return;
     }
   });
- 
   DOM.sidebarContent.addEventListener("click", function(e) {
     const repoItem = e.target.closest(".repo-list-item");
     if (repoItem) {
@@ -3551,26 +3263,17 @@ function setupResultDelegation() {
     }
   });
 }
- 
-/* ═══════════════════════════════════════════════════════════
-   Init
-   ═══════════════════════════════════════════════════════════ */
- 
+
 function init() {
   cacheDOM();
-
   STATE.isDark = localStorage.getItem("theme") !== "light";
   applyTheme();
-
   const savedMobile = localStorage.getItem("mobileMode");
   if (savedMobile === "mobile") STATE.isMobile = true;
   else if (savedMobile === "desktop") STATE.isMobile = false;
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
-
   DOM.searchInput.addEventListener("input", debouncedSearch);
-
-  // History dropdown
   var hideDropdown = function() {
     setTimeout(function() {
       if (!dropdownActive) DOM.historyDropdown.style.display = "none";
@@ -3581,7 +3284,6 @@ function init() {
     renderDropdown();
   });
   DOM.searchInput.addEventListener("blur", hideDropdown);
-
   var longPressTimer = null;
   DOM.historyDropdown.addEventListener("mouseenter", function() { dropdownActive = true; });
   DOM.historyDropdown.addEventListener("mouseleave", function() { dropdownActive = false; });
@@ -3625,10 +3327,7 @@ function init() {
     clearResultHTMLCache();
     if (STATE.results.length > 0) renderResults();
   });
-
-  // Multi-select
   if (DOM.multiSelectToggle) DOM.multiSelectToggle.addEventListener("change", updateSelectionUI);
-
   DOM.resultsList.addEventListener("click", function(e) {
     if (!DOM.multiSelectToggle || !DOM.multiSelectToggle.checked) return;
     var cb = e.target.closest(".result-checkbox");
@@ -3647,7 +3346,6 @@ function init() {
     lastSelectedIndex = idx;
     updateSelectionUI();
   });
-
   var getSelectedLinks = function(copyable) {
     var links = [];
     var indices = Object.keys(selectedIndices).map(Number);
@@ -3660,7 +3358,6 @@ function init() {
     }
     return links;
   };
-
   var getSelectedFilenames = function() {
     var names = [];
     var indices = Object.keys(selectedIndices).map(Number);
@@ -3670,7 +3367,6 @@ function init() {
     }
     return names;
   };
-
   if (DOM.multiCopyLinks) DOM.multiCopyLinks.addEventListener("click", function() {
     var links = getSelectedLinks(true);
     if (links.length === 0) { showToast("未选中任何文件"); return; }
@@ -3678,7 +3374,6 @@ function init() {
       showToast("已复制 " + links.length + " 条链接");
     }).catch(function() { showToast("复制失败"); });
   });
-
   if (DOM.multiBatchDownload) DOM.multiBatchDownload.addEventListener("click", function() {
     var links = getSelectedLinks(false);
     var names = getSelectedFilenames();
@@ -3688,19 +3383,16 @@ function init() {
     }
     showToast("正在下载 " + links.length + " 个文件");
   });
-
   if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
     selectedIndices = {};
     lastSelectedIndex = -1;
     updateSelectionUI();
   });
-
   if (DOM.multiSelectAll) DOM.multiSelectAll.addEventListener("click", function() {
     for (var si = 0; si < STATE.results.length; si++) selectedIndices[si] = true;
     lastSelectedIndex = STATE.results.length > 0 ? STATE.results.length - 1 : -1;
     updateSelectionUI();
   });
-
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
   DOM.settingsBtn.addEventListener("click", toggleRightSidebar);
   DOM.closeFiltersBtn.addEventListener("click", function() {
@@ -3765,7 +3457,6 @@ function init() {
   });
   DOM.randomBookBtn.addEventListener("click", randomBook);
   DOM.emptyRandomBtn.addEventListener("click", randomBook);
-
   var sizeTimer_local;
   var sizeInputToBytes = function(input, unitSelect) {
     var val = parseFloat(input.value);
@@ -3790,7 +3481,6 @@ function init() {
   DOM.filterMaxSize.addEventListener("input", applySizeFilter);
   DOM.filterMinUnit.addEventListener("change", applySizeFilter);
   DOM.filterMaxUnit.addEventListener("change", applySizeFilter);
-
   DOM.extSelectAll.addEventListener("click", function() {
     STATE.filterExtensions = STATE.extensionList.slice();
     STATE.page = 1;
@@ -3824,21 +3514,17 @@ function init() {
     var allSubtreePaths = [];
     var allSelfPaths = [];
     collectFolderNodePaths(STATE.folderTree, allSubtreePaths, allSelfPaths);
-
     var nextSubtreeSet = new Set();
     var nextSelfSet = new Set();
-
     for (var i = 0; i < allSubtreePaths.length; i++) {
       if (!subtreeSet.has(allSubtreePaths[i])) nextSubtreeSet.add(allSubtreePaths[i]);
     }
     for (var j = 0; j < allSelfPaths.length; j++) {
       if (!selfSet.has(allSelfPaths[j])) nextSelfSet.add(allSelfPaths[j]);
     }
-
     persistFolderSelection(nextSubtreeSet, nextSelfSet);
     renderFilterFolderTree();
   });
-
   DOM.didYouMean.addEventListener("click", function() {
     if (STATE.didYouMean) {
       DOM.searchInput.value = STATE.didYouMean;
@@ -3849,16 +3535,13 @@ function init() {
       doSearch();
     }
   });
-
   setupVirtualScroll();
   setupQuickScroll();
   setupKeyboard();
   setupResultDelegation();
-
   window.addEventListener("hashchange", function() {
     ROUTER.apply();
   });
-
   window.addEventListener("resize", function() {
     if (!localStorage.getItem("mobileMode")) {
       var wasMobile = STATE.isMobile;
@@ -3867,10 +3550,8 @@ function init() {
     }
     requestAnimationFrame(updateScrollTrack);
   });
-
   ROUTER.apply();
   fetchHitokoto();
   setInterval(fetchHitokoto, 30000);
 }
- 
 document.addEventListener("DOMContentLoaded", init);
