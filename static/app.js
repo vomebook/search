@@ -67,12 +67,16 @@ let wordIndexFilesOnly = {};
 let extensionCounts = {};
 let repoCounts = {};
 let folderIndex = {};
-let didYouMeanVocab = {};
-let didYouMeanVocabFilesOnly = {};
-let didYouMeanSorted = [];
-let didYouMeanSortedFilesOnly = [];
+let vocabSorted = [];
+let vocabSortedFilesOnly = [];
 let repoList = [];
 let extensionList = [];
+let allRecordIndices = [];
+let sortedByNameIndices = [];
+let sortedBySizeIndices = [];
+let repoRecordIndices = {};
+let repoSortedByNameIndices = {};
+let repoSortedBySizeIndices = {};
 let fullTextIndexReady = false;
 let fullTextIndexPromise = null;
 let folderTreeDataPromise = null;
@@ -369,12 +373,13 @@ function buildIndex(includeFullText) {
     if (includeFullText) {
       wordIndex = {};
       wordIndexFilesOnly = {};
-      didYouMeanVocab = {};
-      didYouMeanVocabFilesOnly = {};
+      vocabSorted = [];
+      vocabSortedFilesOnly = [];
     } else {
       extensionCounts = {};
       repoCounts = {};
       folderIndex = {};
+      repoRecordIndices = {};
     }
     let i = 0;
     const chunkSize = 5000;
@@ -391,6 +396,8 @@ function buildIndex(includeFullText) {
           rec._folderPath = folders.join("/");
           rec._folderPathLower = rec._folderPath.toLowerCase();
           repoCounts[repo] = (repoCounts[repo] || 0) + 1;
+          if (!repoRecordIndices[repo]) repoRecordIndices[repo] = [];
+          repoRecordIndices[repo].push(i);
           if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
         }
         if (includeFullText) {
@@ -399,13 +406,11 @@ function buildIndex(includeFullText) {
           for (const tok of tokens) {
             if (!wordIndex[tok]) wordIndex[tok] = [];
             wordIndex[tok].push(i);
-            didYouMeanVocab[tok] = (didYouMeanVocab[tok] || 0) + 1;
           }
           const fileTokens = tokenize(rec.File || "");
           for (const tok of fileTokens) {
             if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
             wordIndexFilesOnly[tok].push(i);
-            didYouMeanVocabFilesOnly[tok] = (didYouMeanVocabFilesOnly[tok] || 0) + 1;
           }
         }
         if (!includeFullText) {
@@ -420,14 +425,36 @@ function buildIndex(includeFullText) {
         setTimeout(processChunk, 0);
       } else {
         if (includeFullText) {
-          didYouMeanSorted = Object.entries(didYouMeanVocab).sort((a, b) => b[1] - a[1]);
-          didYouMeanSortedFilesOnly = Object.entries(didYouMeanVocabFilesOnly).sort((a, b) => b[1] - a[1]);
+          vocabSorted = Object.keys(wordIndex).map(function(tok) { return [tok, wordIndex[tok].length]; }).sort((a, b) => b[1] - a[1]);
+          vocabSortedFilesOnly = Object.keys(wordIndexFilesOnly).map(function(tok) { return [tok, wordIndexFilesOnly[tok].length]; }).sort((a, b) => b[1] - a[1]);
           fullTextIndexReady = true;
         } else {
           repoList = Object.entries(repoCounts)
             .map(([name, count]) => ({ name, count }))
             .sort((a, b) => a.name.localeCompare(b.name));
           extensionList = Object.keys(extensionCounts).sort();
+          allRecordIndices = Array.from({ length: RECORDS.length }, function(_, idx) { return idx; });
+          sortedByNameIndices = allRecordIndices.slice().sort(function(a, b) {
+            return (RECORDS[a].File || "").localeCompare(RECORDS[b].File || "", "zh");
+          });
+          sortedBySizeIndices = allRecordIndices.slice().sort(function(a, b) {
+            const sa = typeof RECORDS[a].Size === "number" ? RECORDS[a].Size : 0;
+            const sb = typeof RECORDS[b].Size === "number" ? RECORDS[b].Size : 0;
+            return sb - sa;
+          });
+          repoSortedByNameIndices = {};
+          repoSortedBySizeIndices = {};
+          for (const repoName in repoRecordIndices) {
+            if (!Object.prototype.hasOwnProperty.call(repoRecordIndices, repoName)) continue;
+            repoSortedByNameIndices[repoName] = repoRecordIndices[repoName].slice().sort(function(a, b) {
+              return (RECORDS[a].File || "").localeCompare(RECORDS[b].File || "", "zh");
+            });
+            repoSortedBySizeIndices[repoName] = repoRecordIndices[repoName].slice().sort(function(a, b) {
+              const sa = typeof RECORDS[a].Size === "number" ? RECORDS[a].Size : 0;
+              const sb = typeof RECORDS[b].Size === "number" ? RECORDS[b].Size : 0;
+              return sb - sa;
+            });
+          }
         }
         resolve();
       }
@@ -551,6 +578,33 @@ async function loadData() {
 function ensureFullTextIndex() {
   if (fullTextIndexReady) return Promise.resolve(true);
   if (fullTextIndexPromise) return fullTextIndexPromise;
+  if (window.Worker) {
+    fullTextIndexPromise = new Promise(function(resolve, reject) {
+      var worker = new Worker("static/index-worker.js");
+      worker.onmessage = function(event) {
+        var data = event.data || {};
+        if (data.type !== "fulltext-ready") return;
+        wordIndex = data.wordIndex || {};
+        wordIndexFilesOnly = data.wordIndexFilesOnly || {};
+        vocabSorted = data.vocabSorted || [];
+        vocabSortedFilesOnly = data.vocabSortedFilesOnly || [];
+        fullTextIndexReady = true;
+        fullTextIndexPromise = null;
+        worker.terminate();
+        resolve(true);
+      };
+      worker.onerror = function(err) {
+        fullTextIndexPromise = null;
+        worker.terminate();
+        reject(err);
+      };
+      worker.postMessage({ type: "build-fulltext", records: RECORDS });
+    }).catch(function() {
+      fullTextIndexPromise = null;
+      return buildIndex(true);
+    });
+    return fullTextIndexPromise;
+  }
   fullTextIndexPromise = buildIndex(true).then(function() {
     fullTextIndexPromise = null;
     return true;
@@ -704,12 +758,16 @@ function doSearchLocal(params) {
   const page = params.page || 1;
   const pageSize = params.pageSize || 100;
   let matched = [];
-  let didYouMean = null;
   const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
-  const activeVocabSorted = searchFolders ? didYouMeanSorted : didYouMeanSortedFilesOnly;
-  const activeVocab = searchFolders ? didYouMeanVocab : didYouMeanVocabFilesOnly;
+  const activeVocabSorted = searchFolders ? vocabSorted : vocabSortedFilesOnly;
   if (!q) {
-    matched = Array.from({ length: RECORDS.length }, (_, i) => i);
+    if (repos && repos.length === 1 && !extensions && !folders && minSize === null && maxSize === null && folderMatchMode !== "mixed") {
+      matched = sort === "name"
+        ? (repoSortedByNameIndices[repos[0]] || [])
+        : (sort === "size" ? (repoSortedBySizeIndices[repos[0]] || []) : (repoRecordIndices[repos[0]] || []));
+    } else {
+      matched = sort === "name" ? sortedByNameIndices : (sort === "size" ? sortedBySizeIndices : allRecordIndices);
+    }
   } else if (exactMode || shouldUseLiteralLocalSearch(q)) {
     const hasWildcard = q.indexOf("*") >= 0 || q.indexOf("?") >= 0;
     const exactPattern = hasWildcard ? wildcardPatternToRegExp(q) : null;
@@ -766,20 +824,6 @@ function doSearchLocal(params) {
     } else if (fuzzy.length > 0) {
       matched = fuzzy;
     }
-    if (matched.length < 10) {
-      const suggestions = [];
-      for (const tok of tokens) {
-        if (activeIndex[tok]) continue;
-        let best = null, bestDist = 999;
-        for (const vocab of Object.keys(activeVocab)) {
-          if (Math.abs(vocab.length - tok.length) > 2) continue;
-          const dist = editDistance(tok, vocab);
-          if (dist < bestDist) { bestDist = dist; best = vocab; }
-        }
-        if (best && bestDist <= 2) suggestions.push(best);
-      }
-      if (suggestions.length > 0) didYouMean = suggestions.join(" ");
-    }
   }
   let filtered = matched;
     if (folderMatchMode === "mixed") {
@@ -789,25 +833,30 @@ function doSearchLocal(params) {
     filtered = applyFilters(filtered, repos, extensions, folders, minSize, maxSize, folderMatchMode);
   }
   const tokens = q ? tokenize(q) : [];
-  const scored = filtered.map(idx => ({
-    idx,
-    score: q ? scoreRecord(idx, tokens, searchFolders) : 0
-  }));
-  if (sort === "name") {
-    scored.sort((a, b) => (RECORDS[a.idx].File || "").localeCompare(RECORDS[b.idx].File || "", "zh"));
-  } else if (sort === "size") {
-    scored.sort((a, b) => {
-      const sa = typeof RECORDS[a.idx].Size === "number" ? RECORDS[a.idx].Size : 0;
-      const sb = typeof RECORDS[b.idx].Size === "number" ? RECORDS[b.idx].Size : 0;
-      return sb - sa;
-    });
+  let scored;
+  if (!q && (sort === "name" || sort === "size")) {
+    scored = filtered.map(function(idx) { return { idx: idx, score: 0 }; });
   } else {
-    scored.sort((a, b) => b.score - a.score);
+    scored = filtered.map(idx => ({
+      idx,
+      score: q ? scoreRecord(idx, tokens, searchFolders) : 0
+    }));
+    if (sort === "name") {
+      scored.sort((a, b) => (RECORDS[a.idx].File || "").localeCompare(RECORDS[b.idx].File || "", "zh"));
+    } else if (sort === "size") {
+      scored.sort((a, b) => {
+        const sa = typeof RECORDS[a.idx].Size === "number" ? RECORDS[a.idx].Size : 0;
+        const sb = typeof RECORDS[b.idx].Size === "number" ? RECORDS[b.idx].Size : 0;
+        return sb - sa;
+      });
+    } else {
+      scored.sort((a, b) => b.score - a.score);
+    }
   }
   const total = scored.length;
   const start = (page - 1) * pageSize;
   const paged = scored.slice(start, start + pageSize).map(s => RECORDS[s.idx]);
-  return { results: paged, total, page, pageSize, didYouMean };
+  return { results: paged, total, page, pageSize };
 }
 
 function applyMixedFolderFilters(indices, selfFolders, subtreeFolders) {
@@ -902,7 +951,6 @@ async function doSearchAPI(params, append, requestId) {
   clearTimeout(timeoutId);
   if (requestId !== searchRequestId) return false;
   STATE.total = data.total;
-  STATE.didYouMean = data.did_you_mean || null;
   if (append) {
     if (VSCROLL.isDraggingThumb) {
       STATE._pageCache[data.page] = data.results;
@@ -1197,7 +1245,6 @@ const STATE = {
   pageSize: 100,
   total: 0,
   results: [],
-  didYouMean: null,
   filterRepos: [],
   filterExtensions: [],
   filterFolders: [],
@@ -1270,7 +1317,6 @@ function cacheDOM() {
   DOM.emptyDesc = $("#empty-desc");
   DOM.emptyRandomBtn = $("#empty-random-btn");
   DOM.resultCount = $("#result-count");
-  DOM.didYouMean = $("#did-you-mean");
   DOM.clearFiltersBtn = $("#clear-filters-btn");
   DOM.sortSelect = $("#sort-select");
   DOM.mirrorLinksToggle = $("#mirror-links-toggle");
@@ -1728,7 +1774,6 @@ function doSearch(append) {
   DOM.resultsLoading.style.display = STATE.resultsSkeletonActive ? "none" : "flex";
   if (!append) {
     DOM.emptyState.style.display = "none";
-    DOM.didYouMean.style.display = "none";
     selectedIndices = {};
     lastSelectedIndex = -1;
     if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
@@ -1819,10 +1864,6 @@ function doSearch(append) {
       }
       updateStatusBar();
       updateLoadInfo();
-      if (STATE.didYouMean) {
-        DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
-        DOM.didYouMean.style.display = "inline";
-      }
       prefetchNextPage();
       syncStateToURL();
     }).catch(function(err) {
@@ -1885,7 +1926,6 @@ function doSearchFallbackLocal(params, append, id) {
     try {
       const data = doSearchLocal(params);
       STATE.total = data.total;
-      STATE.didYouMean = data.didYouMean || null;
       if (append) {
         if (VSCROLL.isDraggingThumb) {
           STATE._pageCache[params.page] = data.results;
@@ -1922,10 +1962,6 @@ function doSearchFallbackLocal(params, append, id) {
       }
       updateStatusBar();
       updateLoadInfo();
-      if (STATE.didYouMean) {
-        DOM.didYouMean.textContent = "你是不是想找: " + STATE.didYouMean;
-        DOM.didYouMean.style.display = "inline";
-      }
       syncStateToURL();
     } catch (err) {
       console.error("Local fallback crashed:", err);
@@ -3524,16 +3560,6 @@ function init() {
     }
     persistFolderSelection(nextSubtreeSet, nextSelfSet);
     renderFilterFolderTree();
-  });
-  DOM.didYouMean.addEventListener("click", function() {
-    if (STATE.didYouMean) {
-      DOM.searchInput.value = STATE.didYouMean;
-      STATE.query = STATE.didYouMean;
-      STATE.page = 1;
-      STATE.results = [];
-      addHistoryItem(STATE.query);
-      doSearch();
-    }
   });
   setupVirtualScroll();
   setupQuickScroll();
