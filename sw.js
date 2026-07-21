@@ -4,6 +4,7 @@ const PRECACHE_URLS = [
   "/search/",
   "/search/static/style.css",
   "/search/static/app.js",
+  "/search/static/index-worker.js",
   "/search/manifest.json",
   "/search/icons/logo.svg",
   "/search/icons/logo-dark.svg",
