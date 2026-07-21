@@ -4,8 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VoiceOfML Search</title>
-
-<!-- PWA -->
 <link rel="manifest" href="/search/manifest.json">
 <meta name="theme-color" content="#1a1c1e">
 <meta name="mobile-web-app-capable" content="yes">
@@ -16,12 +14,10 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/search/icons/icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/search/icons/icon-512.png">
 <link rel="icon" type="image/svg+xml" href="/search/icons/icon.svg">
-
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body class="dark">
 
-<!-- ═══════════ Header ═══════════ -->
 <header id="header">
   <div class="header-left">
     <button id="hamburger-btn" class="icon-btn" aria-label="菜单" title="侧边栏 (Ctrl+B)">
@@ -37,7 +33,6 @@
       <span id="header-title">VoiceOfML</span>
     </a>
   </div>
-
   <div class="header-center">
     <div class="search-box" id="search-box">
       <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -51,7 +46,6 @@
       <div id="search-history-dropdown" class="search-history-dropdown" style="display:none"></div>
     </div>
   </div>
-
   <div class="header-right">
     <button id="settings-btn" class="icon-btn" aria-label="搜索设置" title="搜索过滤">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -85,12 +79,10 @@
       </svg>
     </button>
   </div>
-</header>
 
-<!-- ═══════════ Layout Body ═══════════ -->
+</header>
 <div id="app-body" class="app-body">
 
-  <!-- Left Sidebar -->
   <aside id="left-sidebar" class="sidebar left-sidebar">
     <div class="sidebar-header">
       <span id="sidebar-title">仓库列表</span>
@@ -99,12 +91,10 @@
     <div id="sidebar-content" class="sidebar-content">
       <div class="sidebar-loading">加载中...</div>
     </div>
+
   </aside>
 
-  <!-- Main Content -->
   <main id="main-content" class="main-content">
-
-    <!-- Status Bar -->
     <div id="status-bar" class="status-bar">
       <div class="status-left">
         <span id="result-count" class="result-count"></span>
@@ -126,7 +116,6 @@
         </div>
       </div>
     </div>
-
     <div id="multi-action-bar" class="multi-action-bar" style="display:none">
       <button id="multi-select-all" class="multi-action-btn">全选</button>
       <button id="multi-deselect" class="multi-action-btn">取消</button>
@@ -134,8 +123,6 @@
       <button id="multi-batch-download" class="multi-action-btn primary">批量下载</button>
       <span id="multi-selected-count" class="multi-selected-count"></span>
     </div>
-
-    <!-- Results -->
     <div id="results-container" class="results-container">
       <div id="results-list" class="results-list" role="listbox" aria-label="搜索结果"></div>
       <div id="results-loading" class="loading-spinner" style="display:none">
@@ -157,20 +144,16 @@
         </button>
       </div>
     </div>
-
-    <!-- Load Info -->
     <div id="load-info" class="load-info" style="display:none">
       <span id="mobile-selected-count" class="mobile-selected-count" style="display:none"></span>
       已加载 <span id="loaded-count">0</span> / <span id="total-count">0</span> 条
     </div>
-
-    <!-- Quick Scroll -->
     <div id="scroll-track" class="scroll-track">
       <div id="scroll-thumb" class="scroll-thumb"></div>
     </div>
+
   </main>
 
-  <!-- Right Sidebar (Filters) -->
   <aside id="right-sidebar" class="sidebar right-sidebar">
     <div class="sidebar-header">
       <span>搜索过滤</span>
@@ -184,7 +167,6 @@
               <span class="toggle-switch"></span>
             </label>
           </div>
-          <!-- 记录搜索历史开关 -->
           <div class="filter-section" id="history-toggle-section">
             <label class="toggle-row">
               <span class="toggle-label">记录搜索历史</span>
@@ -192,7 +174,6 @@
               <span class="toggle-switch"></span>
             </label>
           </div>
-          <!-- 搜索文件夹名开关 -->
           <div class="filter-section" id="search-folders-section">
         <label class="toggle-row">
           <span class="toggle-label">搜索文件夹名</span>
@@ -200,7 +181,6 @@
           <span class="toggle-switch"></span>
         </label>
       </div>
-      <!-- 精准搜索开关 -->
       <div class="filter-section" id="exact-search-section">
         <label class="toggle-row">
           <span class="toggle-label">精准搜索(支持通配符*和?)</span>
@@ -208,7 +188,6 @@
           <span class="toggle-switch"></span>
         </label>
       </div>
-      <!-- 本地搜索模式开关 -->
       <div class="filter-section" id="local-mode-section">
         <label class="toggle-row" id="local-mode-toggle-row">
           <span class="toggle-label">本地搜索</span>
@@ -216,14 +195,10 @@
           <span class="toggle-switch"></span>
         </label>
       </div>
-      
-      <!-- Repo Filter -->
       <div id="filter-repo-section" class="filter-section">
         <div class="filter-section-title">仓库过滤</div>
         <div id="filter-repo-list" class="filter-checkbox-list"></div>
       </div>
-
-      <!-- Folder Tree Filter -->
       <div id="filter-folder-section" class="filter-section">
         <div class="filter-section-title">
           <span>路径过滤</span>
@@ -234,8 +209,6 @@
         </div>
         <div id="filter-folder-tree" class="filter-folder-tree"></div>
       </div>
-
-      <!-- Extension Filter -->
       <div class="filter-section">
         <div class="filter-section-title">
           <span>文件类型</span>
@@ -246,8 +219,6 @@
         </div>
         <div id="filter-ext-list" class="filter-checkbox-list"></div>
       </div>
-
-      <!-- Size Filter -->
       <div class="filter-section">
         <div class="filter-section-title">文件大小</div>
         <div class="filter-size-row">
@@ -269,10 +240,10 @@
         </div>
       </div>
     </div>
+
   </aside>
 </div>
 
-<!-- ═══════════ Footer ═══════════ -->
 <footer id="footer" class="footer">
   <div id="hitokoto" class="hitokoto"></div>
   <button id="random-book-btn" class="random-book-btn" title="随机来本书">
@@ -282,12 +253,9 @@
     </svg>
     随机来本书
   </button>
+
 </footer>
-
-<!-- Overlay (mobile) -->
 <div id="overlay" class="overlay" style="display:none"></div>
-
-<!-- Toast -->
 <div id="toast" class="toast" style="display:none"></div>
 
 <script>
@@ -295,6 +263,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/search/sw.js", { scope: "/search/" });
 }
 </script>
+
 <script src="static/app.js"></script>
 </body>
 </html>

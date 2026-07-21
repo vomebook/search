@@ -11,8 +11,6 @@ const PRECACHE_URLS = [
   "/search/icons/icon-192.png",
   "/search/icons/icon-512.png"
 ];
-
-// ── Install: precache app shell ─────────────────────
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
@@ -22,8 +20,6 @@ self.addEventListener("install", (event) => {
     }).then(() => self.skipWaiting())
   );
 });
-
-// ── Activate: clean old caches ──────────────────────
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
@@ -33,17 +29,11 @@ self.addEventListener("activate", (event) => {
     }).then(() => self.clients.claim())
   );
 });
-
-// ── Fetch: cache strategies ─────────────────────────
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-
-  // External domains (HuggingFace): network only
   if (url.hostname !== self.location.hostname) {
     return;
   }
-
-  // ── Data file: stale-while-revalidate ─────────────
   if (url.pathname.endsWith(".json.gz")) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) => {
@@ -60,8 +50,6 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
-
-  // ── App shell: cache first, network fallback ──────
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const fetchPromise = fetch(event.request).then((response) => {
