@@ -717,16 +717,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   cursor: pointer;
 }
 
-.did-you-mean {
-  font-size: 12px;
-  color: var(--primary);
-  cursor: pointer;
-}
-
-.did-you-mean:hover, .did-you-mean:focus-visible {
-  text-decoration: underline;
-}
-
 .results-container {
   flex: 1;
   overflow-y: auto;
