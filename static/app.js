@@ -1430,7 +1430,8 @@ const ROUTER = {
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
     if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
-    if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
+    if (mode !== "global" && folder !== undefined && folder !== null) sp.set("path", folder);
+    else if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
     if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
     if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
     if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
@@ -2094,9 +2095,7 @@ function renderVisible() {
   }
   for (let ri = start; ri < end; ri++) {
     const rec = items[ri];
-    html += '<div class="result-item" data-index="' + ri + '"' +
-      (ri % 2 === 1 ? ' style="background:var(--surface-variant)"' : "") +
-      '>' + getCachedResultHTML(rec, ri) + '</div>';
+    html += '<div class="result-item' + (ri % 2 === 1 ? ' is-alt' : '') + '" data-index="' + ri + '">' + getCachedResultHTML(rec, ri) + '</div>';
   }
   const bottomH = Math.max(0, totalH - getVirtualOffset(end));
   if (bottomH > 0) {
@@ -2864,7 +2863,7 @@ function typewriter(el, text, speed) {
 
 function randomBook() {
   var url = STATE.repoFull
-    ? API_BASE + "/api/random?repo=" + encodeURIComponent(STATE.repoFull)
+    ? API_BASE + "/api/random?repo=" + encodeURIComponent(STATE.repo)
     : API_BASE + "/api/random";
   fetch(url).then(function(resp) { return resp.json(); })
     .then(function(rec) {
@@ -2935,6 +2934,7 @@ function updateScrollTrack() {
     DOM.scrollTrack.style.top = DOM.resultsContainer.offsetTop + "px";
     DOM.scrollTrack.style.height = DOM.resultsContainer.clientHeight + "px";
     DOM.scrollTrack.style.bottom = "auto";
+    DOM.scrollTrack.style.right = "";
   }
 }
 
@@ -2964,7 +2964,7 @@ function updateScrollThumb() {
   const th = Math.max(40, Math.min(trackHeight, (clientHeight / scrollHeight) * trackHeight));
   const tt = (scrollTop / Math.max(1, scrollHeight - clientHeight)) * (trackHeight - th);
   DOM.scrollThumb.style.height = th + "px";
-  DOM.scrollThumb.style.top = tt + "px";
+  DOM.scrollThumb.style.transform = "translateY(" + tt + "px)";
 }
 
 function setupQuickScroll() {
@@ -2990,6 +2990,7 @@ function setupQuickScroll() {
   function onMouseUp() {
     dragging = false;
     VSCROLL.isDraggingThumb = false;
+    DOM.scrollThumb.classList.remove("dragging");
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
     if (STATE._deferredAppendWhileDragging) {
@@ -2999,7 +3000,7 @@ function setupQuickScroll() {
     maybeLoadNextPage();
   }
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
-    dragging = true; VSCROLL.isDraggingThumb = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
+    dragging = true; VSCROLL.isDraggingThumb = true; DOM.scrollThumb.classList.add("dragging"); startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   });
@@ -3014,6 +3015,7 @@ function setupQuickScroll() {
   function onTouchEnd() {
     dragging = false;
     VSCROLL.isDraggingThumb = false;
+    DOM.scrollThumb.classList.remove("dragging");
     document.removeEventListener("touchmove", onTouchMove);
     document.removeEventListener("touchend", onTouchEnd);
     document.removeEventListener("touchcancel", onTouchEnd);
@@ -3024,7 +3026,7 @@ function setupQuickScroll() {
     maybeLoadNextPage();
   }
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    dragging = true; VSCROLL.isDraggingThumb = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop; e.stopPropagation();
+    dragging = true; VSCROLL.isDraggingThumb = true; DOM.scrollThumb.classList.add("dragging"); startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop; e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
     document.addEventListener("touchcancel", onTouchEnd);
@@ -3134,13 +3136,9 @@ function focusKeyboardResult(index) {
   VSCROLL.renderEnd = 0;
   renderVisible();
   requestAnimationFrame(function() {
-    var all = DOM.resultsList.querySelectorAll(".result-item");
-    for (var ai = 0; ai < all.length; ai++) {
-      var aidx = parseInt(all[ai].dataset.index);
-      all[ai].style.background = (aidx % 2 === 1) ? "var(--surface-variant)" : "";
-    }
+    DOM.resultsList.querySelectorAll(".result-item.keyboard-focus").forEach(function(item) { item.classList.remove("keyboard-focus"); });
     var el = DOM.resultsList.querySelector('.result-item[data-index="' + keyboardResultIndex + '"]');
-    if (el) el.style.background = "var(--surface-variant)";
+    if (el) el.classList.add("keyboard-focus");
   });
 }
 
