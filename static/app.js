@@ -325,18 +325,21 @@ function buildDownloadUrl(filename, link) {
   return API_BASE + "/api/download?file=" + encodeURIComponent(filename || "file") + "&link=" + encodeURIComponent(link || "");
 }
 
-async function downloadFile(filename, link) {
+async function downloadFile(filename, link, options) {
+  options = options || {};
   showToast("开始下载...");
   try {
-    var resp = await fetch(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""));
-    if (!resp.ok) {
-      var message = "下载失败";
-      try {
-        var data = await resp.json();
-        if (data && data.error) message = data.error;
-      } catch (e) {}
-      showToast(message, 3500);
-      return false;
+    if (!options.skipCheck) {
+      var resp = await fetch(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""));
+      if (!resp.ok) {
+        var message = "下载失败";
+        try {
+          var data = await resp.json();
+          if (data && data.error) message = data.error;
+        } catch (e) {}
+        showToast(message, 3500);
+        return false;
+      }
     }
     var a = document.createElement("a");
     a.href = buildDownloadUrl(filename, link);
@@ -2869,7 +2872,7 @@ function randomBook() {
     .then(function(rec) {
       if (rec) {
         var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        downloadFile(filename, getRecordLink(rec));
+        downloadFile(filename, getRecordLink(rec), { skipCheck: true });
       } else {
         showToast("暂无可用记录");
       }
@@ -2878,7 +2881,7 @@ function randomBook() {
       var rec = getRandom(STATE.repoFull);
       if (rec) {
         var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        downloadFile(filename, getRecordLink(rec));
+        downloadFile(filename, getRecordLink(rec), { skipCheck: true });
       } else {
         showToast("暂无可用记录");
       }
