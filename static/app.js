@@ -3122,7 +3122,8 @@ function updateSidebarVisibility() {
   DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
   DOM.rightSidebar.classList.toggle("collapsed", !STATE.rightSidebarOpen);
   DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
-  DOM.overlay.style.display = (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) ? "" : "none";
+  DOM.overlay.style.display = "";
+  DOM.overlay.classList.toggle("open", STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen));
 }
 let keyboardResultIndex = -1;
 
