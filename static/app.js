@@ -1322,6 +1322,7 @@ const STATE = {
   _pendingPage: 0,
   _loadedPage: 0,
   _pageCache: {},
+  _initialActive: false,
   _deferredAppendWhileDragging: false,
 };
 
@@ -1762,6 +1763,7 @@ function applyInitialSearchPayload(data) {
   STATE.total = data.total || 0;
   STATE.page = 1;
   STATE.results = data.results.slice();
+  STATE._initialActive = true;
   STATE._loadedPage = 1;
   STATE._pageCache = {};
   STATE._pendingPage = 0;
@@ -1838,7 +1840,8 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (ok) {
       STATE.repoList = repoList;
       STATE.extensionList = extensionList;
-      if (triggerSearchAfterLoad) {
+      if (triggerSearchAfterLoad || STATE._initialActive) {
+        STATE._initialActive = false;
         STATE.page = 1;
         STATE.results = [];
         doSearch();
@@ -1970,6 +1973,7 @@ function doSearch(append) {
   STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
   DOM.resultsLoading.style.display = STATE.resultsSkeletonActive ? "none" : "flex";
   if (!append) {
+    if (!canUseInitialSearchPayload()) STATE._initialActive = false;
     DOM.emptyState.style.display = "none";
     selectedIndices = {};
     lastSelectedIndex = -1;
@@ -1994,7 +1998,8 @@ function doSearch(append) {
       clearResultsSkeleton();
     }
   }
-  if (STATE.useLocalMode || folderMatchMode === "mixed") {
+  const shouldUseLocalSearch = (STATE.useLocalMode && (!STATE._initialActive || STATE.dataLoaded)) || folderMatchMode === "mixed";
+  if (shouldUseLocalSearch) {
     if (!STATE.dataLoaded) {
       if (STATE.useLocalMode && folderMatchMode !== "mixed" && apiAvailable) {
         ensureLocalDataLoaded(false, true);
