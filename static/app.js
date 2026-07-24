@@ -1760,6 +1760,11 @@ function applyInitialSearchPayload(data) {
   if (!data || !Array.isArray(data.results) || !canUseInitialSearchPayload()) return false;
   if (STATE.mode === "repo" && data.repo !== STATE.repoFull) return false;
   if (STATE.mode === "global" && data.mode !== "global") return false;
+  if (searchAbortController) searchAbortController.abort();
+  if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
+  searchAbortController = new AbortController();
+  searchPrefetchAbortController = null;
+  searchRequestId++;
   STATE.total = data.total || 0;
   STATE.page = 1;
   STATE.results = data.results.slice();
@@ -2040,6 +2045,7 @@ function doSearch(append) {
       return;
     }
     STATE._pendingPage = STATE.page;
+    if (!searchAbortController) searchAbortController = new AbortController();
     params.signal = searchAbortController.signal;
     const requestId = searchRequestId;
     doSearchAPI(params, append, requestId).then(function(applied) {
