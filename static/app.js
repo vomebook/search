@@ -3172,6 +3172,7 @@ function updateScrollTrack() {
     DOM.scrollTrack.style.height = DOM.resultsContainer.clientHeight + "px";
     DOM.scrollTrack.style.bottom = "auto";
     DOM.scrollTrack.style.right = "";
+    updateScrollThumb();
   }
 }
 
@@ -3180,8 +3181,8 @@ function setupVirtualScroll() {
     updateScrollTrack();
     if (!scrollTicking) {
       requestAnimationFrame(() => {
-        updateScrollThumb();
         renderVisible();
+        updateScrollThumb();
         maybeLoadNextPage();
         scrollTicking = false;
       });
