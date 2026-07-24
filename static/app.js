@@ -1785,6 +1785,7 @@ function applyInitialSearchPayload(data) {
   updateLoadInfo();
   syncStateToURL();
   prefetchNextPage();
+  ensureLocalDataLoaded(false, true);
   return true;
 }
 
