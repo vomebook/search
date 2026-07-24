@@ -1146,17 +1146,21 @@ async function fetchFolderContents(repo, path) {
   if (browserApiPending.has(cacheKey)) return browserApiPending.get(cacheKey);
   try {
     var qs = path ? "?path=" + encodeURIComponent(path) : "";
-    var promise = fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo) + "/contents" + qs)
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function() { controller.abort(); }, 12000);
+    var promise = fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo) + "/contents" + qs, { signal: controller.signal })
       .then(function(resp) {
         if (!resp.ok) return null;
         return resp.json();
       })
       .then(function(data) {
+        clearTimeout(timeoutId);
         browserApiPending.delete(cacheKey);
         if (data) setBrowserApiCache(cacheKey, data);
         return data;
       })
       .catch(function() {
+        clearTimeout(timeoutId);
         browserApiPending.delete(cacheKey);
         return null;
       });
@@ -2611,9 +2615,22 @@ async function renderBrowser(path, routeId) {
     } catch (e) {}
   }
   if (!data || (!data.folders && !data.files)) {
-    list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
+    if ((!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.browserPath === path) {
+      var retryKey = STATE.repo + "|" + (path || "");
+      var tries = sidebarRetryCounts.get(retryKey) || 0;
+      if (tries < 2) {
+        sidebarRetryCounts.set(retryKey, tries + 1);
+        list.innerHTML = '<div class="sidebar-loading">加载失败，正在重试...</div>';
+        setTimeout(function() {
+          if ((!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.browserPath === path) renderBrowser(path, routeId || routeRenderId);
+        }, 1200);
+      } else {
+        list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
+      }
+    }
     return;
   }
+  sidebarRetryCounts.delete(STATE.repo + "|" + (path || ""));
   list.innerHTML = "";
   for (var j = 0; j < (data.folders || []).length; j++) {
     var f = data.folders[j];
@@ -3172,6 +3189,7 @@ function showToast(msg, dur) {
 let scrollTicking = false;
 let scrollLoadTimer = null;
 let scrollRecoveryTimer = null;
+const sidebarRetryCounts = new Map();
 var selectedIndices = {};
 var lastSelectedIndex = -1;
 
@@ -3206,6 +3224,17 @@ function recoverScrollState() {
   updateScrollTrack();
   prefetchNextPage();
   scheduleScrollLoad(0);
+  recoverSidebarState();
+}
+
+function recoverSidebarState() {
+  if (!DOM.sidebarContent) return;
+  var stuck = DOM.sidebarContent.querySelector(".sidebar-loading");
+  if (!stuck) return;
+  browserApiPending.clear();
+  sidebarRetryCounts.clear();
+  renderSidebar(++routeRenderId);
+  if (STATE.rightSidebarOpen) renderFilters(routeRenderId);
 }
 
 function scheduleScrollRecovery(delay) {
