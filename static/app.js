@@ -911,16 +911,6 @@ async function doSearchAPI(params, append, requestId) {
   const q = params.q || "";
   const isRepo = !!STATE.repoFull;
   const base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
-  const timing = SEARCH_TIMING_ENABLED ? {
-    source: "api",
-    append: !!append,
-    page: params.page || 1,
-    pageSize: params.pageSize || STATE.pageSize,
-    q: q,
-    searchStart: params.searchStart || performance.now(),
-    startedAt: performance.now(),
-    url: base,
-  } : null;
   const body = {};
   if (q) body.q = q;
   body.page = params.page || 1;
@@ -936,10 +926,6 @@ async function doSearchAPI(params, append, requestId) {
   const cacheKey = base + "|" + stableSearchStringify(body);
   const cached = getCachedSearchResponse(cacheKey);
   if (cached) {
-    if (timing) {
-      timing.cacheHit = true;
-      timing.applyStart = performance.now();
-    }
     STATE.total = cached.total;
     if (append) {
       if (VSCROLL.isDraggingThumb) {
@@ -963,10 +949,6 @@ async function doSearchAPI(params, append, requestId) {
       STATE._pageCache = {};
     }
     STATE.hasMore = STATE.results.length < STATE.total;
-    if (timing) {
-      timing.applyMs = performance.now() - timing.applyStart;
-      setLastSearchTiming(timing);
-    }
     return true;
   }
   const fetchOptions = {
@@ -987,22 +969,9 @@ async function doSearchAPI(params, append, requestId) {
   }
   var resp, data;
   try {
-    var fetchStart = performance.now();
     resp = await fetch(base, fetchOptions);
-    if (timing) timing.fetchMs = performance.now() - fetchStart;
     if (!resp.ok) throw new Error("HTTP " + resp.status);
-    if (timing) {
-      timing.serverTiming = resp.headers.get("Server-Timing") || "";
-      timing.serverSearchMs = resp.headers.get("X-Search-Time") || "";
-      timing.serverJsonMs = resp.headers.get("X-Search-Json-Time") || "";
-      timing.serverTotalMs = resp.headers.get("X-Search-Total-Time") || "";
-    }
-    var jsonStart = performance.now();
     data = await resp.json();
-    if (timing) {
-      timing.jsonMs = performance.now() - jsonStart;
-      timing.resource = getSearchResourceTiming(base, timing.startedAt);
-    }
     setCachedSearchResponse(cacheKey, data);
   } catch (e) {
     clearTimeout(timeoutId);
@@ -1013,7 +982,6 @@ async function doSearchAPI(params, append, requestId) {
   }
   clearTimeout(timeoutId);
   if (requestId !== searchRequestId) return false;
-  if (timing) timing.applyStart = performance.now();
   STATE.total = data.total;
   if (append) {
     if (VSCROLL.isDraggingThumb) {
@@ -1040,10 +1008,6 @@ async function doSearchAPI(params, append, requestId) {
     STATE._pageCache = {};
   }
   STATE.hasMore = STATE.results.length < STATE.total;
-  if (timing) {
-    timing.applyMs = performance.now() - timing.applyStart;
-    setLastSearchTiming(timing);
-  }
   return true;
 }
 
@@ -1708,7 +1672,6 @@ let localDataPromise = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
 const SEARCH_CACHE_MAX = 60;
 const searchResponseCache = new Map();
-const SEARCH_TIMING_ENABLED = true;
 
 function stableSearchStringify(value) {
   if (Array.isArray(value)) return "[" + value.map(stableSearchStringify).join(",") + "]";
@@ -1747,58 +1710,6 @@ function setCachedSearchResponse(key, data) {
   while (searchResponseCache.size > SEARCH_CACHE_MAX) {
     searchResponseCache.delete(searchResponseCache.keys().next().value);
   }
-}
-
-function getSearchResourceTiming(url, since) {
-  try {
-    const entries = performance.getEntriesByType("resource");
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i];
-      if (entry.name === url && entry.startTime >= since - 5) return entry;
-    }
-  } catch (e) {}
-  return null;
-}
-
-function setLastSearchTiming(timing) {
-  if (!SEARCH_TIMING_ENABLED) return;
-  STATE._lastSearchTiming = timing;
-}
-
-function logSearchTiming(timing, renderStart) {
-  if (!SEARCH_TIMING_ENABLED || !timing || timing.logged) return;
-  timing.logged = true;
-  const renderEnd = performance.now();
-  const resource = timing.resource || getSearchResourceTiming(timing.url, timing.startedAt || 0);
-  const row = {
-    source: timing.source,
-    append: !!timing.append,
-    page: timing.page,
-    pageSize: timing.pageSize,
-    q: timing.q || "",
-    total: STATE.total,
-    results: STATE.results.length,
-    cacheHit: !!timing.cacheHit,
-    localSearchMs: timing.localSearchMs == null ? "" : timing.localSearchMs.toFixed(1),
-    serverSearchMs: timing.serverSearchMs || "",
-    serverJsonMs: timing.serverJsonMs || "",
-    serverTotalMs: timing.serverTotalMs || "",
-    fetchMs: timing.fetchMs == null ? "" : timing.fetchMs.toFixed(1),
-    jsonMs: timing.jsonMs == null ? "" : timing.jsonMs.toFixed(1),
-    apiApplyMs: timing.applyMs == null ? "" : timing.applyMs.toFixed(1),
-    renderApplyMs: (renderEnd - renderStart).toFixed(1),
-    endToEndMs: (renderEnd - timing.searchStart).toFixed(1),
-    transferSize: resource ? resource.transferSize : "n/a",
-    encodedBodySize: resource ? resource.encodedBodySize : "n/a",
-    decodedBodySize: resource ? resource.decodedBodySize : "n/a",
-    ttfbMs: resource && resource.responseStart ? (resource.responseStart - resource.startTime).toFixed(1) : "n/a",
-    downloadMs: resource && resource.responseEnd && resource.responseStart ? (resource.responseEnd - resource.responseStart).toFixed(1) : "n/a",
-    resourceTotalMs: resource && resource.responseEnd ? (resource.responseEnd - resource.startTime).toFixed(1) : "n/a",
-    protocol: resource ? resource.nextHopProtocol : "n/a",
-    serverTiming: timing.serverTiming || "",
-  };
-  console.table([row]);
-  console.debug("[search timing]", timing, resource || "resource timing unavailable, check Timing-Allow-Origin/CORS");
 }
 
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
@@ -2025,7 +1936,6 @@ function doSearch(append) {
     doSearchAPI(params, append, requestId).then(function(applied) {
       if (!applied) return;
       if (id !== searchId) return;
-      var renderApplyStart = SEARCH_TIMING_ENABLED ? performance.now() : 0;
       if (append) {
         ensureVirtualHeights(STATE.results.length);
         VSCROLL.renderStart = 0;
@@ -2051,7 +1961,6 @@ function doSearch(append) {
       updateLoadInfo();
       prefetchNextPage();
       syncStateToURL();
-      if (SEARCH_TIMING_ENABLED) logSearchTiming(STATE._lastSearchTiming, renderApplyStart);
     }).catch(function(err) {
       if (err.message === "API_TIMEOUT") {
         console.warn("API timeout");
@@ -2110,22 +2019,7 @@ function doSearchFallbackLocal(params, append, id) {
   requestAnimationFrame(function() {
     if (id !== searchId) return;
     try {
-      const timing = SEARCH_TIMING_ENABLED ? {
-        source: "local",
-        append: !!append,
-        page: params.page,
-        pageSize: params.pageSize,
-        q: params.q || "",
-        searchStart: performance.now(),
-      } : null;
-      const localStart = performance.now();
       const data = doSearchLocal(params);
-      if (timing) {
-        timing.fetchMs = 0;
-        timing.jsonMs = 0;
-        timing.applyStart = performance.now();
-        timing.localSearchMs = timing.applyStart - localStart;
-      }
       STATE.total = data.total;
       if (append) {
         if (VSCROLL.isDraggingThumb) {
@@ -2164,11 +2058,6 @@ function doSearchFallbackLocal(params, append, id) {
       updateStatusBar();
       updateLoadInfo();
       syncStateToURL();
-      if (timing) {
-        timing.applyMs = performance.now() - timing.applyStart;
-        setLastSearchTiming(timing);
-        logSearchTiming(timing, timing.applyStart);
-      }
     } catch (err) {
       console.error("Local fallback crashed:", err);
       showToast("搜索失败");
