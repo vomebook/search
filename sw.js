@@ -6,6 +6,7 @@ const PRECACHE_URLS = [
   "/search/static/app.js",
   "/search/static/index-worker.js",
   "/search/data/initial/manifest.json",
+  "/search/data/sidebar/manifest.json",
   "/search/manifest.json",
   "/search/icons/logo.svg",
   "/search/icons/logo-dark.svg",
@@ -17,12 +18,20 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(PRECACHE_URLS).then(() => {
-        return fetch("/search/data/initial/manifest.json")
-          .then((resp) => resp.ok ? resp.json() : null)
-          .then((manifest) => {
-            if (manifest && Array.isArray(manifest.urls)) return cache.addAll(manifest.urls);
-          })
-          .catch(() => {});
+        return Promise.all([
+          fetch("/search/data/initial/manifest.json")
+            .then((resp) => resp.ok ? resp.json() : null)
+            .then((manifest) => {
+              if (manifest && Array.isArray(manifest.urls)) return cache.addAll(manifest.urls);
+            })
+            .catch(() => {}),
+          fetch("/search/data/sidebar/manifest.json")
+            .then((resp) => resp.ok ? resp.json() : null)
+            .then((manifest) => {
+              if (manifest && Array.isArray(manifest.urls)) return cache.addAll(manifest.urls);
+            })
+            .catch(() => {})
+        ]);
       }).catch((err) => {
         console.warn("[SW] precache partial failure:", err);
       });
@@ -59,7 +68,7 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
-  if (url.pathname.startsWith("/search/data/initial/") && url.pathname.endsWith(".json")) {
+  if ((url.pathname.startsWith("/search/data/initial/") || url.pathname.startsWith("/search/data/sidebar/")) && url.pathname.endsWith(".json")) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((cached) => {
