@@ -1129,6 +1129,7 @@ async function fetchFolderTree(repo) {
 const browserApiCache = new Map();
 const browserApiPending = new Map();
 const BROWSER_API_CACHE_MAX = 200;
+const sidebarInitialCache = new Map();
 
 function setBrowserApiCache(cacheKey, data) {
   if (browserApiCache.has(cacheKey)) browserApiCache.delete(cacheKey);
@@ -1167,6 +1168,24 @@ async function fetchFolderContents(repo, path) {
     browserApiPending.set(cacheKey, promise);
     return await promise;
   } catch (e) { return null; }
+}
+
+function sidebarInitialUrlForRepo(repo) {
+  return repo ? "/search/data/sidebar/repos/" + encodeURIComponent(repo) + ".json" : "/search/data/sidebar/global.json";
+}
+
+async function loadSidebarInitial(repo) {
+  var key = repo || "__global__";
+  if (sidebarInitialCache.has(key)) return sidebarInitialCache.get(key);
+  try {
+    var resp = await fetch(sidebarInitialUrlForRepo(repo));
+    if (!resp.ok) return null;
+    var data = await resp.json();
+    sidebarInitialCache.set(key, data);
+    return data;
+  } catch (e) {
+    return null;
+  }
 }
 
 function getCurrentExtensionCounts() {
@@ -2530,18 +2549,7 @@ function renderSidebar(routeId) {
   }
 }
 
-async function renderRepoList(routeId) {
-  var repos = null;
-  if (repoList && repoList.length > 0) {
-    repos = repoList;
-  } else if (apiAvailable) {
-    repos = await fetchRepos();
-  }
-  if (routeId && routeId !== routeRenderId) return;
-  if (!repos || !Array.isArray(repos) || repos.length === 0) {
-    DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
-    return;
-  }
+function renderRepoListItems(repos) {
   var html = "";
   for (var i = 0; i < repos.length; i++) {
     var repo = repos[i];
@@ -2553,6 +2561,28 @@ async function renderRepoList(routeId) {
     html += '</div>';
   }
   DOM.sidebarContent.innerHTML = html;
+}
+
+async function renderRepoList(routeId) {
+  var repos = null;
+  if (repoList && repoList.length > 0) {
+    repos = repoList;
+  } else if (apiAvailable) {
+    var initial = await loadSidebarInitial(null);
+    if (initial && Array.isArray(initial.repos) && initial.repos.length) {
+      if (routeId && routeId !== routeRenderId) return;
+      renderRepoListItems(initial.repos);
+      repos = initial.repos;
+    }
+    var freshRepos = await fetchRepos();
+    if (freshRepos && Array.isArray(freshRepos) && freshRepos.length) repos = freshRepos;
+  }
+  if (routeId && routeId !== routeRenderId) return;
+  if (!repos || !Array.isArray(repos) || repos.length === 0) {
+    DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
+    return;
+  }
+  renderRepoListItems(repos);
   requestAnimationFrame(function() {
     for (var pi = 0; pi < repos.length; pi++) {
       var shortName = repos[pi].name.split("/").pop();
@@ -2561,76 +2591,7 @@ async function renderRepoList(routeId) {
   });
 }
 
-async function renderBrowser(path, routeId) {
-  if (routeId && routeId !== routeRenderId) return;
-  STATE.browserPath = path;
-  syncStateToURL();
-  DOM.sidebarContent.innerHTML = "";
-  var currentRepo = STATE.repoFull;
-  const backBtn = document.createElement("div");
-  backBtn.className = "back-to-global";
-  backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
-  backBtn.addEventListener("click", function() { ROUTER.navigate("global"); });
-  DOM.sidebarContent.appendChild(backBtn);
-  if (path) {
-    const bc = document.createElement("div");
-    bc.className = "sidebar-breadcrumb";
-    const parts = path.split("/");
-    bc.innerHTML = '<span class="crumb-item" data-path="">根目录</span>';
-    for (var p = 0; p < parts.length; p++) {
-      var pp = parts.slice(0, p + 1).join("/");
-      bc.innerHTML += '<span class="crumb-sep">/</span>';
-      bc.innerHTML += '<span class="crumb-item' + (p === parts.length - 1 ? ' current' : '') + '" data-path="' + escapeHTML(pp) + '">' + escapeHTML(parts[p]) + '</span>';
-    }
-    bc.querySelectorAll(".crumb-item").forEach(function(el) {
-      el.addEventListener("click", function() {
-        if (!el.classList.contains("current")) renderBrowser(el.dataset.path, ++routeRenderId);
-      });
-    });
-    DOM.sidebarContent.appendChild(bc);
-  }
-  const list = document.createElement("div");
-  list.className = "browser-list";
-  list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
-  DOM.sidebarContent.appendChild(list);
-  var data = null;
-  if (PRECOMPUTED_FOLDER_BROWSER && PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull] && PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull][path || ""]) {
-    data = PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull][path || ""];
-  } else if (folderContentsCache.has(STATE.repoFull + "|" + (path || ""))) {
-    data = getFolderContents(STATE.repoFull, path);
-  }
-  if (!data && apiAvailable) {
-    try {
-      var repo = STATE.repo;
-      data = await fetchFolderContents(repo, path);
-      if (routeId && routeId !== routeRenderId) return;
-      if (STATE.mode !== "repo" || STATE.repo !== repo || STATE.browserPath !== path) return;
-    } catch (e) {}
-  }
-  if (!data && STATE.dataLoaded) {
-    try {
-      await ensureFolderBrowserData();
-      if (routeId && routeId !== routeRenderId) return;
-      data = getFolderContents(STATE.repoFull, path);
-    } catch (e) {}
-  }
-  if (!data || (!data.folders && !data.files)) {
-    if ((!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.browserPath === path) {
-      var retryKey = STATE.repo + "|" + (path || "");
-      var tries = sidebarRetryCounts.get(retryKey) || 0;
-      if (tries < 2) {
-        sidebarRetryCounts.set(retryKey, tries + 1);
-        list.innerHTML = '<div class="sidebar-loading">加载失败，正在重试...</div>';
-        setTimeout(function() {
-          if ((!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.browserPath === path) renderBrowser(path, routeId || routeRenderId);
-        }, 1200);
-      } else {
-        list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
-      }
-    }
-    return;
-  }
-  sidebarRetryCounts.delete(STATE.repo + "|" + (path || ""));
+function renderBrowserListItems(list, data, currentRepo, path) {
   list.innerHTML = "";
   for (var j = 0; j < (data.folders || []).length; j++) {
     var f = data.folders[j];
@@ -2670,6 +2631,90 @@ async function renderBrowser(path, routeId) {
     }(f2, path || ""));
     list.appendChild(div2);
   }
+}
+
+async function renderBrowser(path, routeId) {
+  if (routeId && routeId !== routeRenderId) return;
+  STATE.browserPath = path;
+  syncStateToURL();
+  DOM.sidebarContent.innerHTML = "";
+  var currentRepo = STATE.repoFull;
+  const backBtn = document.createElement("div");
+  backBtn.className = "back-to-global";
+  backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
+  backBtn.addEventListener("click", function() { ROUTER.navigate("global"); });
+  DOM.sidebarContent.appendChild(backBtn);
+  if (path) {
+    const bc = document.createElement("div");
+    bc.className = "sidebar-breadcrumb";
+    const parts = path.split("/");
+    bc.innerHTML = '<span class="crumb-item" data-path="">根目录</span>';
+    for (var p = 0; p < parts.length; p++) {
+      var pp = parts.slice(0, p + 1).join("/");
+      bc.innerHTML += '<span class="crumb-sep">/</span>';
+      bc.innerHTML += '<span class="crumb-item' + (p === parts.length - 1 ? ' current' : '') + '" data-path="' + escapeHTML(pp) + '">' + escapeHTML(parts[p]) + '</span>';
+    }
+    bc.querySelectorAll(".crumb-item").forEach(function(el) {
+      el.addEventListener("click", function() {
+        if (!el.classList.contains("current")) renderBrowser(el.dataset.path, ++routeRenderId);
+      });
+    });
+    DOM.sidebarContent.appendChild(bc);
+  }
+  const list = document.createElement("div");
+  list.className = "browser-list";
+  list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
+  DOM.sidebarContent.appendChild(list);
+  var data = null;
+  var initialData = null;
+  if (!path) {
+    var initial = await loadSidebarInitial(STATE.repo);
+    if (initial && (!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.repo === currentRepo.split("/").pop() && STATE.browserPath === path) {
+      renderBrowserListItems(list, initial, currentRepo, path);
+      initialData = initial;
+      data = initial;
+    }
+  }
+  if (PRECOMPUTED_FOLDER_BROWSER && PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull] && PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull][path || ""]) {
+    data = PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull][path || ""];
+  } else if (folderContentsCache.has(STATE.repoFull + "|" + (path || ""))) {
+    data = getFolderContents(STATE.repoFull, path);
+  }
+  if (!data && apiAvailable) {
+    try {
+      var repo = STATE.repo;
+      var freshData = await fetchFolderContents(repo, path);
+      if (routeId && routeId !== routeRenderId) return;
+      if (STATE.mode !== "repo" || STATE.repo !== repo || STATE.browserPath !== path) return;
+      if (freshData) data = freshData;
+    } catch (e) {}
+  }
+  if (!data && STATE.dataLoaded) {
+    try {
+      await ensureFolderBrowserData();
+      if (routeId && routeId !== routeRenderId) return;
+      data = getFolderContents(STATE.repoFull, path);
+    } catch (e) {}
+  }
+  if (!data || (!data.folders && !data.files)) {
+    if (initialData) return;
+    if ((!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.browserPath === path) {
+      var retryKey = STATE.repo + "|" + (path || "");
+      var tries = sidebarRetryCounts.get(retryKey) || 0;
+      if (tries < 2) {
+        sidebarRetryCounts.set(retryKey, tries + 1);
+        list.innerHTML = '<div class="sidebar-loading">加载失败，正在重试...</div>';
+        setTimeout(function() {
+          if ((!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.browserPath === path) renderBrowser(path, routeId || routeRenderId);
+        }, 1200);
+      } else {
+        list.innerHTML = '<div class="sidebar-loading">加载失败</div>';
+      }
+    }
+    return;
+  }
+  sidebarRetryCounts.delete(STATE.repo + "|" + (path || ""));
+  renderBrowserListItems(list, data, currentRepo, path);
 }
 
 async function renderFilters(routeId) {
