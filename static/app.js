@@ -1323,6 +1323,7 @@ const STATE = {
   _loadedPage: 0,
   _pageCache: {},
   _initialActive: false,
+  _suppressNextReveal: false,
   _deferredAppendWhileDragging: false,
 };
 
@@ -1598,7 +1599,8 @@ const ROUTER = {
         syncStateToURL();
       }
     } else {
-      searchWithInitialFallback().then(renderSidebarAndFiltersDeferred);
+      const routeId = ++routeRenderId;
+      searchWithInitialFallback().then(function() { renderSidebarAndFiltersDeferred(routeId); });
     }
   },
   updateUI: function() {
@@ -1627,7 +1629,8 @@ const ROUTER = {
       DOM.resultsLoading.style.display = "none";
       renderResultsSkeleton();
     }
-    searchWithInitialFallback().then(renderSidebarAndFiltersDeferred);
+    const routeId = ++routeRenderId;
+    searchWithInitialFallback().then(function() { renderSidebarAndFiltersDeferred(routeId); });
   },
 };
 
@@ -1660,8 +1663,9 @@ function syncStateToURL() {
   }
 }
 
-function renderSidebarAndFiltersDeferred() {
+function renderSidebarAndFiltersDeferred(routeId) {
   requestAnimationFrame(function() {
+    if (routeId && routeId !== routeRenderId) return;
     renderSidebar();
     renderFilters();
   });
@@ -1671,6 +1675,7 @@ let searchId = 0;
 let searchAbortController = null;
 let searchPrefetchAbortController = null;
 let searchRequestId = 0;
+let routeRenderId = 0;
 let apiAvailable = true;
 let localDataPromise = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
@@ -1851,6 +1856,9 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
       STATE.extensionList = extensionList;
       if (STATE._initialActive) {
         STATE._initialActive = false;
+        STATE._suppressNextReveal = true;
+        STATE.page = 1;
+        doSearch();
       } else if (triggerSearchAfterLoad) {
         STATE.page = 1;
         STATE.results = [];
@@ -2008,7 +2016,12 @@ function doSearch(append) {
       clearResultsSkeleton();
     }
   }
-  const shouldUseLocalSearch = (STATE.useLocalMode && (!STATE._initialActive || STATE.dataLoaded)) || folderMatchMode === "mixed";
+  if (append && STATE._initialActive && !STATE.dataLoaded) {
+    STATE.isLoading = false;
+    DOM.resultsLoading.style.display = "none";
+    return;
+  }
+  const shouldUseLocalSearch = STATE.useLocalMode || folderMatchMode === "mixed";
   if (shouldUseLocalSearch) {
     if (!STATE.dataLoaded) {
       if (STATE.useLocalMode && folderMatchMode !== "mixed" && apiAvailable) {
@@ -2211,7 +2224,11 @@ function renderResults() {
   ensureVirtualHeights(STATE.results.length);
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
-  if (STATE.resultsSkeletonActive) animateResultsReveal();
+  if (STATE._suppressNextReveal) {
+    STATE._suppressNextReveal = false;
+  } else if (STATE.resultsSkeletonActive) {
+    animateResultsReveal();
+  }
   renderVisible();
 }
 
@@ -2515,6 +2532,12 @@ async function renderRepoList() {
     html += '</div>';
   }
   DOM.sidebarContent.innerHTML = html;
+  requestAnimationFrame(function() {
+    for (var pi = 0; pi < repos.length; pi++) {
+      var shortName = repos[pi].name.split("/").pop();
+      if (shortName) fetchFolderContents(shortName, "").catch(function() {});
+    }
+  });
 }
 
 async function renderBrowser(path) {
