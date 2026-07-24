@@ -1599,7 +1599,7 @@ const ROUTER = {
     } else {
       renderSidebar();
       renderFilters();
-      doSearch();
+      searchWithInitialFallback();
     }
   },
   updateUI: function() {
@@ -1630,7 +1630,7 @@ const ROUTER = {
     }
     renderSidebar();
     renderFilters();
-    doSearch();
+    searchWithInitialFallback();
   },
 };
 
@@ -1672,6 +1672,8 @@ let localDataPromise = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
 const SEARCH_CACHE_MAX = 60;
 const searchResponseCache = new Map();
+const INITIAL_BASE_URL = "data/initial";
+const initialPayloadCache = new Map();
 
 function stableSearchStringify(value) {
   if (Array.isArray(value)) return "[" + value.map(stableSearchStringify).join(",") + "]";
@@ -1710,6 +1712,107 @@ function setCachedSearchResponse(key, data) {
   while (searchResponseCache.size > SEARCH_CACHE_MAX) {
     searchResponseCache.delete(searchResponseCache.keys().next().value);
   }
+}
+
+function buildCurrentSearchBodyForCache(page) {
+  var body = { page: page || STATE.page || 1, page_size: STATE.pageSize, sort: STATE.sort || "relevance" };
+  if (STATE.query) body.q = STATE.query;
+  if (STATE.mode === "global" && STATE.filterRepos.length > 0) body.repos = STATE.filterRepos;
+  if (STATE.filterExtensions.length > 0) body.extensions = STATE.filterExtensions;
+  if (STATE.filterFolders.length > 0) body.folders = STATE.filterFolders;
+  if (STATE.filterMinSize !== null) body.min_size = STATE.filterMinSize;
+  if (STATE.filterMaxSize !== null) body.max_size = STATE.filterMaxSize;
+  if (!STATE.searchFolders) body.search_folders = false;
+  if (STATE.exact) body.exact = true;
+  return body;
+}
+
+function getCurrentSearchCacheKey(page) {
+  var isRepo = !!STATE.repoFull;
+  var base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
+  return base + "|" + stableSearchStringify(buildCurrentSearchBodyForCache(page));
+}
+
+function canUseInitialSearchPayload() {
+  return (STATE.page || 1) === 1
+    && !STATE.query
+    && (STATE.sort || "relevance") === "relevance"
+    && STATE.searchFolders
+    && STATE.exact
+    && STATE.filterRepos.length === 0
+    && STATE.filterExtensions.length === 0
+    && STATE.filterFolders.length === 0
+    && STATE.filterFolderSelfs.length === 0
+    && STATE.filterFolderSubtrees.length === 0
+    && STATE.filterMinSize === null
+    && STATE.filterMaxSize === null;
+}
+
+function getInitialPayloadUrl() {
+  if (STATE.mode === "repo" && STATE.repo) {
+    return INITIAL_BASE_URL + "/repos/" + encodeURIComponent(STATE.repo) + ".json";
+  }
+  return INITIAL_BASE_URL + "/global.json";
+}
+
+function applyInitialSearchPayload(data) {
+  if (!data || !Array.isArray(data.results) || !canUseInitialSearchPayload()) return false;
+  if (STATE.mode === "repo" && data.repo !== STATE.repoFull) return false;
+  if (STATE.mode === "global" && data.mode !== "global") return false;
+  STATE.total = data.total || 0;
+  STATE.page = 1;
+  STATE.results = data.results.slice();
+  STATE._loadedPage = 1;
+  STATE._pageCache = {};
+  STATE._pendingPage = 0;
+  STATE.hasMore = STATE.results.length < STATE.total;
+  setCachedSearchResponse(getCurrentSearchCacheKey(1), {
+    results: STATE.results,
+    total: STATE.total,
+    page: 1,
+    page_size: STATE.pageSize,
+  });
+  resetVirtualScrollState();
+  clearResultsSkeleton();
+  if (STATE.results.length === 0) {
+    DOM.resultsList.innerHTML = "";
+    DOM.emptyState.style.display = "flex";
+  } else {
+    DOM.emptyState.style.display = "none";
+    renderResults();
+  }
+  updateStatusBar();
+  updateLoadInfo();
+  syncStateToURL();
+  prefetchNextPage();
+  return true;
+}
+
+async function tryInitialSearchPayload() {
+  if (!canUseInitialSearchPayload()) return false;
+  var url = getInitialPayloadUrl();
+  try {
+    var data = initialPayloadCache.get(url);
+    if (!data) {
+      var resp = await fetch(url);
+      if (!resp.ok) return false;
+      data = await resp.json();
+      initialPayloadCache.set(url, data);
+    }
+    return applyInitialSearchPayload(data);
+  } catch (e) {
+    return false;
+  }
+}
+
+function searchWithInitialFallback() {
+  if (canUseInitialSearchPayload()) {
+    tryInitialSearchPayload().then(function(applied) {
+      if (!applied) doSearch();
+    });
+    return;
+  }
+  doSearch();
 }
 
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
