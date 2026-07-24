@@ -886,8 +886,12 @@ function applyMixedFolderFilters(indices, selfFolders, subtreeFolders) {
 }
 
 async function doSearchAPI(params, append, requestId) {
-  if (requestId !== searchRequestId) return false;
+  if (requestId !== searchRequestId) {
+    traceSearch("api.stale.before", { append: !!append, requestId: requestId, activeRequestId: searchRequestId, page: params.page });
+    return false;
+  }
   if (append && STATE._pageCache[params.page]) {
+    traceSearch("api.page-cache.hit", { page: params.page });
     if (VSCROLL.isDraggingThumb) {
       STATE._deferredAppendWhileDragging = true;
       STATE._pendingPage = 0;
@@ -926,6 +930,7 @@ async function doSearchAPI(params, append, requestId) {
   const cacheKey = base + "|" + stableSearchStringify(body);
   const cached = getCachedSearchResponse(cacheKey);
   if (cached) {
+    traceSearch("api.response-cache.hit", { append: !!append, page: cached.page, cachedResults: cached.results.length, cachedTotal: cached.total });
     STATE.total = cached.total;
     if (append) {
       if (VSCROLL.isDraggingThumb) {
@@ -969,10 +974,12 @@ async function doSearchAPI(params, append, requestId) {
   }
   var resp, data;
   try {
+    traceSearch("api.fetch.start", { append: !!append, page: body.page, timeoutMs: timeoutMs });
     resp = await fetch(base, fetchOptions);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     data = await resp.json();
     setCachedSearchResponse(cacheKey, data);
+    traceSearch("api.fetch.done", { append: !!append, page: data.page, fetchedResults: data.results ? data.results.length : 0, fetchedTotal: data.total });
   } catch (e) {
     clearTimeout(timeoutId);
     if (timeoutAbort && (e.name === "AbortError" || e.name === "TimeoutError")) {
@@ -981,7 +988,10 @@ async function doSearchAPI(params, append, requestId) {
     throw e;
   }
   clearTimeout(timeoutId);
-  if (requestId !== searchRequestId) return false;
+  if (requestId !== searchRequestId) {
+    traceSearch("api.stale.after", { append: !!append, requestId: requestId, activeRequestId: searchRequestId, page: data && data.page });
+    return false;
+  }
   STATE.total = data.total;
   if (append) {
     if (VSCROLL.isDraggingThumb) {
@@ -1684,6 +1694,48 @@ const searchResponseCache = new Map();
 const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();
 
+function searchDebugEnabled() {
+  return window.__VOMEBOOK_SEARCH_DEBUG === true || localStorage.getItem("searchDebug") === "1";
+}
+
+function traceSearch(event, detail) {
+  if (!searchDebugEnabled()) return;
+  console.debug("[search-chain] " + event, Object.assign({
+    mode: STATE.mode,
+    repo: STATE.repo,
+    page: STATE.page,
+    loadedPage: STATE._loadedPage,
+    results: STATE.results.length,
+    total: STATE.total,
+    initialActive: STATE._initialActive,
+    dataLoaded: STATE.dataLoaded,
+    useLocalMode: STATE.useLocalMode,
+    searchId: searchId,
+    searchRequestId: searchRequestId,
+    pendingPage: STATE._pendingPage,
+  }, detail || {}));
+}
+
+window.__VOMEBOOK_SEARCH_STATE__ = function() {
+  return {
+    mode: STATE.mode,
+    repo: STATE.repo,
+    page: STATE.page,
+    loadedPage: STATE._loadedPage,
+    results: STATE.results.length,
+    total: STATE.total,
+    hasMore: STATE.hasMore,
+    isLoading: STATE.isLoading,
+    initialActive: STATE._initialActive,
+    dataLoaded: STATE.dataLoaded,
+    useLocalMode: STATE.useLocalMode,
+    searchId: searchId,
+    searchRequestId: searchRequestId,
+    pendingPage: STATE._pendingPage,
+    cachedPages: Object.keys(STATE._pageCache),
+  };
+};
+
 function stableSearchStringify(value) {
   if (Array.isArray(value)) return "[" + value.map(stableSearchStringify).join(",") + "]";
   if (value && typeof value === "object") {
@@ -1768,6 +1820,7 @@ function applyInitialSearchPayload(data) {
   if (!data || !Array.isArray(data.results) || !canUseInitialSearchPayload()) return false;
   if (STATE.mode === "repo" && data.repo !== STATE.repoFull) return false;
   if (STATE.mode === "global" && data.mode !== "global") return false;
+  traceSearch("initial.apply", { incomingResults: data.results.length, incomingTotal: data.total || 0 });
   if (searchAbortController) searchAbortController.abort();
   if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
   searchAbortController = new AbortController();
@@ -1801,6 +1854,7 @@ function applyInitialSearchPayload(data) {
   syncStateToURL();
   prefetchNextPage();
   ensureLocalDataLoaded(false, true);
+  traceSearch("initial.ready", { hasMore: STATE.hasMore });
   return true;
 }
 
@@ -1823,7 +1877,9 @@ async function tryInitialSearchPayload() {
 
 function searchWithInitialFallback() {
   if (canUseInitialSearchPayload()) {
+    traceSearch("initial.try");
     return tryInitialSearchPayload().then(function(applied) {
+      traceSearch("initial.result", { applied: applied });
       if (!applied) doSearch();
       return applied;
     });
@@ -1855,10 +1911,13 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
       STATE.repoList = repoList;
       STATE.extensionList = extensionList;
       if (STATE._initialActive) {
+        traceSearch("local.takeover.start", { triggerSearchAfterLoad: triggerSearchAfterLoad, background: background });
+        if (STATE._pendingPage) traceSearch("local.takeover.with-pending-api", { pendingPage: STATE._pendingPage });
         STATE._initialActive = false;
         STATE._suppressNextReveal = true;
         STATE.page = 1;
         doSearch();
+        traceSearch("local.takeover.queued");
       } else if (triggerSearchAfterLoad) {
         STATE.page = 1;
         STATE.results = [];
@@ -1986,6 +2045,7 @@ function doSearch(append) {
     page: STATE.page,
     pageSize: STATE.pageSize,
   };
+  traceSearch("search.start", { append: !!append, id: id, paramsPage: params.page, q: params.q || "", sort: params.sort });
   STATE.isLoading = true;
   if (!append) setSearchVisualLoading(true);
   STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
@@ -2016,15 +2076,15 @@ function doSearch(append) {
       clearResultsSkeleton();
     }
   }
-  if (append && STATE._initialActive && !STATE.dataLoaded) {
-    STATE.isLoading = false;
-    DOM.resultsLoading.style.display = "none";
-    return;
+  const continueInitialViaApi = !!(append && STATE._initialActive && !STATE.dataLoaded && apiAvailable && folderMatchMode !== "mixed");
+  const shouldUseLocalSearch = !continueInitialViaApi && (STATE.useLocalMode || folderMatchMode === "mixed");
+  if (continueInitialViaApi) {
+    traceSearch("initial.api-continuation", { id: id, page: params.page });
   }
-  const shouldUseLocalSearch = STATE.useLocalMode || folderMatchMode === "mixed";
   if (shouldUseLocalSearch) {
     if (!STATE.dataLoaded) {
       if (STATE.useLocalMode && folderMatchMode !== "mixed" && apiAvailable) {
+        traceSearch("local.request-background", { id: id, append: !!append });
         ensureLocalDataLoaded(false, true);
       } else {
         STATE.isLoading = false;
@@ -2058,6 +2118,7 @@ function doSearch(append) {
   }
   if (apiAvailable) {
     if (append && STATE._pendingPage === STATE.page) {
+      traceSearch("api.skip.pending", { id: id, page: STATE.page });
       STATE.isLoading = false;
       DOM.resultsLoading.style.display = "none";
       return;
@@ -2066,7 +2127,9 @@ function doSearch(append) {
     if (!searchAbortController) searchAbortController = new AbortController();
     params.signal = searchAbortController.signal;
     const requestId = searchRequestId;
+    traceSearch("api.request", { append: !!append, id: id, requestId: requestId, page: params.page });
     doSearchAPI(params, append, requestId).then(function(applied) {
+      traceSearch("api.result", { append: !!append, id: id, requestId: requestId, applied: applied, staleSearch: id !== searchId });
       if (!applied) return;
       if (id !== searchId) return;
       if (append) {
@@ -2095,6 +2158,7 @@ function doSearch(append) {
       prefetchNextPage();
       syncStateToURL();
     }).catch(function(err) {
+      traceSearch("api.error", { append: !!append, id: id, name: err && err.name, message: err && err.message });
       if (err.message === "API_TIMEOUT") {
         console.warn("API timeout");
         return handleApiSearchFailure(append, id);
@@ -2111,6 +2175,7 @@ function doSearch(append) {
       return handleApiSearchFailure(append, id);
     }).finally(function() {
       if (id === searchId) {
+        traceSearch("search.finish", { append: !!append, id: id, source: "api" });
         STATE._pendingPage = 0;
         STATE.isLoading = false;
         STATE.resultsSkeletonActive = false;
@@ -3137,6 +3202,7 @@ function showToast(msg, dur) {
 }
 let scrollTicking = false;
 let scrollLoadTimer = null;
+let scrollRecoveryTimer = null;
 var selectedIndices = {};
 var lastSelectedIndex = -1;
 
@@ -3150,6 +3216,33 @@ function maybeLoadNextPage() {
     STATE.page++;
     doSearch(true);
   }
+}
+
+function recoverScrollState() {
+  scrollRecoveryTimer = null;
+  scrollTicking = false;
+  if (scrollLoadTimer) {
+    clearTimeout(scrollLoadTimer);
+    scrollLoadTimer = null;
+  }
+  VSCROLL.isDraggingThumb = false;
+  if (DOM.scrollThumb) DOM.scrollThumb.classList.remove("dragging");
+  if (STATE._deferredAppendWhileDragging) {
+    STATE._deferredAppendWhileDragging = false;
+    if (consumeCachedAppendPage()) return;
+  }
+  VSCROLL.renderStart = -1;
+  VSCROLL.renderEnd = -1;
+  renderVisible();
+  updateScrollTrack();
+  prefetchNextPage();
+  scheduleScrollLoad(0);
+}
+
+function scheduleScrollRecovery(delay) {
+  if (delay === undefined) delay = 0;
+  if (scrollRecoveryTimer) clearTimeout(scrollRecoveryTimer);
+  scrollRecoveryTimer = setTimeout(recoverScrollState, delay);
 }
 
 function scheduleScrollLoad(delay) {
@@ -3811,8 +3904,13 @@ function init() {
       STATE.isMobile = autoDetectMobile();
       if (wasMobile !== STATE.isMobile) applyMobileMode();
     }
-    requestAnimationFrame(updateScrollTrack);
+    scheduleScrollRecovery(60);
   });
+  document.addEventListener("visibilitychange", function() {
+    if (document.visibilityState === "visible") scheduleScrollRecovery();
+  });
+  window.addEventListener("pageshow", function() { scheduleScrollRecovery(); });
+  window.addEventListener("focus", function() { scheduleScrollRecovery(); });
   ROUTER.apply();
   fetchHitokoto();
   setInterval(fetchHitokoto, 30000);
