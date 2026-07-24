@@ -1,10 +1,11 @@
-const CACHE_NAME = "vomebook-search-v1.0.0-beta";
+const CACHE_NAME = "vomebook-search-v1.0.0";
 
 const PRECACHE_URLS = [
   "/search/",
   "/search/static/style.css",
   "/search/static/app.js",
   "/search/static/index-worker.js",
+  "/search/data/initial/manifest.json",
   "/search/manifest.json",
   "/search/icons/logo.svg",
   "/search/icons/logo-dark.svg",
@@ -43,6 +44,20 @@ self.addEventListener("fetch", (event) => {
             if (response.ok) {
               cache.put(event.request, response.clone());
             }
+            return response;
+          }).catch(() => cached);
+          return cached || fetchPromise;
+        });
+      })
+    );
+    return;
+  }
+  if (url.pathname.startsWith("/search/data/initial/") && url.pathname.endsWith(".json")) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) => {
+        return cache.match(event.request).then((cached) => {
+          const fetchPromise = fetch(event.request).then((response) => {
+            if (response.ok) cache.put(event.request, response.clone());
             return response;
           }).catch(() => cached);
           return cached || fetchPromise;
