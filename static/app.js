@@ -1131,6 +1131,45 @@ const browserApiPending = new Map();
 const BROWSER_API_CACHE_MAX = 200;
 const sidebarInitialCache = new Map();
 
+async function fetchJsonWithTimeout(url, timeoutMs) {
+  var controller = new AbortController();
+  var timeoutId = setTimeout(function() { controller.abort(); }, timeoutMs);
+  try {
+    var resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function normalizeSidebarPayload(data, path) {
+  path = path || "";
+  if (!data || typeof data !== "object") return data;
+  if (Array.isArray(data.repos)) return data;
+  return {
+    repo: data.repo || "",
+    path: data.path || path,
+    folders: (data.folders || data.d || []).map(function(item) {
+      var name = item.name == null ? (item.n || "") : item.name;
+      return {
+        name: name,
+        path: item.path || (path ? path + "/" + name : name),
+        count: item.count == null ? (item.c || 0) : item.count,
+      };
+    }),
+    files: (data.files || data.f || []).map(function(item) {
+      return {
+        name: item.name == null ? (item.n || "") : item.name,
+        ext: item.ext == null ? (item.e || "") : item.ext,
+        hasTxt: item.hasTxt == null ? !!item.t : !!item.hasTxt,
+        size: item.size == null ? (item.s || "") : item.size,
+        link: item.link || "",
+      };
+    }),
+  };
+}
+
 function setBrowserApiCache(cacheKey, data) {
   if (browserApiCache.has(cacheKey)) browserApiCache.delete(cacheKey);
   browserApiCache.set(cacheKey, data);
@@ -1178,9 +1217,9 @@ async function loadSidebarInitial(repo) {
   var key = repo || "__global__";
   if (sidebarInitialCache.has(key)) return sidebarInitialCache.get(key);
   try {
-    var resp = await fetch(sidebarInitialUrlForRepo(repo));
-    if (!resp.ok) return null;
-    var data = await resp.json();
+    var raw = await fetchJsonWithTimeout(sidebarInitialUrlForRepo(repo), 4000);
+    if (!raw) return null;
+    var data = normalizeSidebarPayload(raw);
     sidebarInitialCache.set(key, data);
     return data;
   } catch (e) {
@@ -1694,9 +1733,9 @@ function syncStateToURL() {
 }
 
 function renderSidebarAndFiltersDeferred(routeId) {
+  if (!routeId || routeId === routeRenderId) renderSidebar(routeId);
   requestAnimationFrame(function() {
     if (routeId && routeId !== routeRenderId) return;
-    renderSidebar(routeId);
     renderFilters(routeId);
   });
 }
@@ -1811,6 +1850,10 @@ function applyInitialSearchPayload(data) {
   STATE._pageCache = {};
   STATE._pendingPage = 0;
   STATE.hasMore = STATE.results.length < STATE.total;
+  STATE.isLoading = false;
+  STATE.resultsSkeletonActive = false;
+  DOM.resultsLoading.style.display = "none";
+  setSearchVisualLoading(false);
   setCachedSearchResponse(getCurrentSearchCacheKey(1), {
     results: STATE.results,
     total: STATE.total,
@@ -1840,9 +1883,8 @@ async function tryInitialSearchPayload() {
   try {
     var data = initialPayloadCache.get(url);
     if (!data) {
-      var resp = await fetch(url);
-      if (!resp.ok) return false;
-      data = await resp.json();
+      data = await fetchJsonWithTimeout(url, 6000);
+      if (!data) return false;
       initialPayloadCache.set(url, data);
     }
     return applyInitialSearchPayload(data);
