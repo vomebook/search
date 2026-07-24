@@ -16,7 +16,14 @@ const PRECACHE_URLS = [
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_URLS).catch((err) => {
+      return cache.addAll(PRECACHE_URLS).then(() => {
+        return fetch("/search/data/initial/manifest.json")
+          .then((resp) => resp.ok ? resp.json() : null)
+          .then((manifest) => {
+            if (manifest && Array.isArray(manifest.urls)) return cache.addAll(manifest.urls);
+          })
+          .catch(() => {});
+      }).catch((err) => {
         console.warn("[SW] precache partial failure:", err);
       });
     }).then(() => self.skipWaiting())
