@@ -1673,8 +1673,8 @@ function syncStateToURL() {
 function renderSidebarAndFiltersDeferred(routeId) {
   requestAnimationFrame(function() {
     if (routeId && routeId !== routeRenderId) return;
-    renderSidebar();
-    renderFilters();
+    renderSidebar(routeId);
+    renderFilters(routeId);
   });
 }
 let searchTimer = null;
@@ -2518,21 +2518,22 @@ function updateLoadInfo() {
   requestAnimationFrame(updateScrollTrack);
 }
 
-function renderSidebar() {
+function renderSidebar(routeId) {
   if (STATE.mode === "global") {
-    renderRepoList();
+    renderRepoList(routeId);
   } else {
-    renderBrowser(STATE.browserPath || "");
+    renderBrowser(STATE.browserPath || "", routeId);
   }
 }
 
-async function renderRepoList() {
+async function renderRepoList(routeId) {
   var repos = null;
   if (repoList && repoList.length > 0) {
     repos = repoList;
   } else if (apiAvailable) {
     repos = await fetchRepos();
   }
+  if (routeId && routeId !== routeRenderId) return;
   if (!repos || !Array.isArray(repos) || repos.length === 0) {
     DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
     return;
@@ -2556,7 +2557,8 @@ async function renderRepoList() {
   });
 }
 
-async function renderBrowser(path) {
+async function renderBrowser(path, routeId) {
+  if (routeId && routeId !== routeRenderId) return;
   STATE.browserPath = path;
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
@@ -2578,7 +2580,7 @@ async function renderBrowser(path) {
     }
     bc.querySelectorAll(".crumb-item").forEach(function(el) {
       el.addEventListener("click", function() {
-        if (!el.classList.contains("current")) renderBrowser(el.dataset.path);
+        if (!el.classList.contains("current")) renderBrowser(el.dataset.path, ++routeRenderId);
       });
     });
     DOM.sidebarContent.appendChild(bc);
@@ -2595,12 +2597,16 @@ async function renderBrowser(path) {
   }
   if (!data && apiAvailable) {
     try {
-      data = await fetchFolderContents(STATE.repo, path);
+      var repo = STATE.repo;
+      data = await fetchFolderContents(repo, path);
+      if (routeId && routeId !== routeRenderId) return;
+      if (STATE.mode !== "repo" || STATE.repo !== repo || STATE.browserPath !== path) return;
     } catch (e) {}
   }
   if (!data && STATE.dataLoaded) {
     try {
       await ensureFolderBrowserData();
+      if (routeId && routeId !== routeRenderId) return;
       data = getFolderContents(STATE.repoFull, path);
     } catch (e) {}
   }
@@ -2614,7 +2620,7 @@ async function renderBrowser(path) {
     var div = document.createElement("div");
     div.className = "browser-item";
     div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
-    div.addEventListener("click", (function(fp) { return function() { renderBrowser(fp); }; })(f.path));
+    div.addEventListener("click", (function(fp) { return function() { renderBrowser(fp, ++routeRenderId); }; })(f.path));
     list.appendChild(div);
   }
   for (var k = 0; k < (data.files || []).length; k++) {
@@ -2649,10 +2655,10 @@ async function renderBrowser(path) {
   }
 }
 
-async function renderFilters() {
+async function renderFilters(routeId) {
   if (STATE.mode === "global") {
     DOM.filterRepoSection.style.display = "";
-    await renderRepoFilter();
+    await renderRepoFilter(routeId);
   } else {
     DOM.filterRepoSection.style.display = "none";
   }
@@ -2664,26 +2670,30 @@ async function renderFilters() {
     if (!STATE.folderTree || !STATE.folderTree.length) {
       if (apiAvailable) {
         try { STATE.folderTree = await fetchFolderTree(STATE.repo); } catch (e) {}
+        if (routeId && routeId !== routeRenderId) return;
       }
     }
     if ((!STATE.folderTree || !STATE.folderTree.length) && STATE.dataLoaded) {
       STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
     }
     if (STATE.folderTree && STATE.folderTree.length) initializeFolderTreeCollapsed(STATE.folderTree);
+    if (routeId && routeId !== routeRenderId) return;
     renderFilterFolderTree();
   } else {
     DOM.filterFolderSection.style.display = "none";
   }
-  await renderExtensionFilter();
+  await renderExtensionFilter(routeId);
 }
 
-async function renderRepoFilter() {
+async function renderRepoFilter(routeId) {
   var repos = repoList;
   if (apiAvailable && (!repos || repos.length === 0)) {
     try {
       repos = await fetchRepos();
     } catch (e) {}
   }
+  if (routeId && routeId !== routeRenderId) return;
+  repos = Array.isArray(repos) ? repos : [];
   var items = [];
   for (var i = 0; i < repos.length; i++) {
     items.push({
@@ -2700,7 +2710,7 @@ async function renderRepoFilter() {
   });
 }
 
-async function renderExtensionFilter() {
+async function renderExtensionFilter(routeId) {
   var extData = null;
   if (extensionList && extensionList.length > 0) {
     var currentCounts = getCurrentExtensionCounts();
@@ -2714,6 +2724,7 @@ async function renderExtensionFilter() {
       extData = await fetchExtensions(STATE.repo);
     } catch (e) {}
   }
+  if (routeId && routeId !== routeRenderId) return;
   STATE.extensionList = extData && Array.isArray(extData)
     ? extData
       .filter(function(item) { return item && typeof item.name === "string"; })
