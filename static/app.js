@@ -1605,7 +1605,8 @@ const ROUTER = {
       }
     } else {
       const routeId = ++routeRenderId;
-      searchWithInitialFallback().then(function() { renderSidebarAndFiltersDeferred(routeId); });
+      renderSidebarAndFiltersDeferred(routeId);
+      searchWithInitialFallback();
     }
   },
   updateUI: function() {
@@ -1635,7 +1636,8 @@ const ROUTER = {
       renderResultsSkeleton();
     }
     const routeId = ++routeRenderId;
-    searchWithInitialFallback().then(function() { renderSidebarAndFiltersDeferred(routeId); });
+    renderSidebarAndFiltersDeferred(routeId);
+    searchWithInitialFallback();
   },
 };
 
@@ -2586,15 +2588,20 @@ async function renderBrowser(path) {
   list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
   DOM.sidebarContent.appendChild(list);
   var data = null;
-  if (STATE.dataLoaded) {
-    try {
-      await ensureFolderBrowserData();
-      data = getFolderContents(STATE.repoFull, path);
-    } catch (e) {}
+  if (PRECOMPUTED_FOLDER_BROWSER && PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull] && PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull][path || ""]) {
+    data = PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull][path || ""];
+  } else if (folderContentsCache.has(STATE.repoFull + "|" + (path || ""))) {
+    data = getFolderContents(STATE.repoFull, path);
   }
   if (!data && apiAvailable) {
     try {
       data = await fetchFolderContents(STATE.repo, path);
+    } catch (e) {}
+  }
+  if (!data && STATE.dataLoaded) {
+    try {
+      await ensureFolderBrowserData();
+      data = getFolderContents(STATE.repoFull, path);
     } catch (e) {}
   }
   if (!data || (!data.folders && !data.files)) {
@@ -2651,14 +2658,16 @@ async function renderFilters() {
   }
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
-    if (STATE.dataLoaded && Object.keys(PRECOMPUTED_FOLDER_TREES).length === 0) {
-      try { await ensureFolderTreeData(); } catch (e) {}
+    if (!STATE.folderTree && PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[STATE.repoFull]) {
+      STATE.folderTree = PRECOMPUTED_FOLDER_TREES[STATE.repoFull];
     }
-    if (!STATE.folderTree) STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
     if (!STATE.folderTree || !STATE.folderTree.length) {
       if (apiAvailable) {
         try { STATE.folderTree = await fetchFolderTree(STATE.repo); } catch (e) {}
       }
+    }
+    if ((!STATE.folderTree || !STATE.folderTree.length) && STATE.dataLoaded) {
+      STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
     }
     if (STATE.folderTree && STATE.folderTree.length) initializeFolderTreeCollapsed(STATE.folderTree);
     renderFilterFolderTree();
