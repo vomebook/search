@@ -923,6 +923,34 @@ async function doSearchAPI(params, append, requestId) {
   body.sort = params.sort || "relevance";
   if (!params.searchFolders) body.search_folders = false;
   if (params.exact) body.exact = true;
+  const cacheKey = base + "|" + stableSearchStringify(body);
+  const cached = getCachedSearchResponse(cacheKey);
+  if (cached) {
+    STATE.total = cached.total;
+    if (append) {
+      if (VSCROLL.isDraggingThumb) {
+        STATE._pageCache[cached.page] = cached.results;
+        STATE._deferredAppendWhileDragging = true;
+        STATE._pendingPage = 0;
+        STATE.isLoading = false;
+        return true;
+      }
+      STATE._pageCache[cached.page] = cached.results;
+      var cachedNextPage = STATE._loadedPage + 1;
+      while (STATE._pageCache[cachedNextPage]) {
+        STATE.results = STATE.results.concat(STATE._pageCache[cachedNextPage]);
+        delete STATE._pageCache[cachedNextPage];
+        cachedNextPage++;
+      }
+      STATE._loadedPage = cachedNextPage - 1;
+    } else {
+      STATE.results = cached.results;
+      STATE._loadedPage = 1;
+      STATE._pageCache = {};
+    }
+    STATE.hasMore = STATE.results.length < STATE.total;
+    return true;
+  }
   const fetchOptions = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -944,6 +972,7 @@ async function doSearchAPI(params, append, requestId) {
     resp = await fetch(base, fetchOptions);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     data = await resp.json();
+    setCachedSearchResponse(cacheKey, data);
   } catch (e) {
     clearTimeout(timeoutId);
     if (timeoutAbort && (e.name === "AbortError" || e.name === "TimeoutError")) {
@@ -1031,19 +1060,36 @@ function prefetchNextPage() {
   body.sort = STATE.sort || "relevance";
   if (!STATE.searchFolders) body.search_folders = false;
   if (STATE.exact) body.exact = true;
+  var cacheKey = base + "|" + stableSearchStringify(body);
+  var cached = getCachedSearchResponse(cacheKey);
+  if (cached && cached.results) {
+    STATE._pageCache[nextPage] = cached.results;
+    return;
+  }
+  if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
+  var prefetchController = new AbortController();
+  searchPrefetchAbortController = prefetchController;
   fetch(base, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: prefetchController.signal,
   }).then(function(resp) {
     if (!resp.ok) return;
     return resp.json();
   }).then(function(data) {
     if (reqId !== searchRequestId) return;
     if (data && data.results) {
+      setCachedSearchResponse(cacheKey, data);
       STATE._pageCache[nextPage] = data.results;
     }
-  }).catch(function() {});
+  }).catch(function(err) {
+    if (err && err.name === "AbortError") return;
+  }).finally(function() {
+    if (searchPrefetchAbortController === prefetchController) {
+      searchPrefetchAbortController = null;
+    }
+  });
 }
 
 async function fetchRepos() {
@@ -1619,9 +1665,52 @@ function syncStateToURL() {
 let searchTimer = null;
 let searchId = 0;
 let searchAbortController = null;
+let searchPrefetchAbortController = null;
 let searchRequestId = 0;
 let apiAvailable = true;
 let localDataPromise = null;
+const SEARCH_CACHE_TTL = 8 * 60 * 1000;
+const SEARCH_CACHE_MAX = 60;
+const searchResponseCache = new Map();
+
+function stableSearchStringify(value) {
+  if (Array.isArray(value)) return "[" + value.map(stableSearchStringify).join(",") + "]";
+  if (value && typeof value === "object") {
+    return "{" + Object.keys(value).sort().map(function(k) {
+      return JSON.stringify(k) + ":" + stableSearchStringify(value[k]);
+    }).join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+
+function cloneSearchData(data) {
+  if (!data || !Array.isArray(data.results)) return data;
+  return {
+    results: data.results.slice(),
+    total: data.total,
+    page: data.page,
+    page_size: data.page_size,
+  };
+}
+
+function getCachedSearchResponse(key) {
+  var cached = searchResponseCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.time > SEARCH_CACHE_TTL) {
+    searchResponseCache.delete(key);
+    return null;
+  }
+  searchResponseCache.delete(key);
+  searchResponseCache.set(key, cached);
+  return cloneSearchData(cached.data);
+}
+
+function setCachedSearchResponse(key, data) {
+  searchResponseCache.set(key, { time: Date.now(), data: cloneSearchData(data) });
+  while (searchResponseCache.size > SEARCH_CACHE_MAX) {
+    searchResponseCache.delete(searchResponseCache.keys().next().value);
+  }
+}
 
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   if (STATE.dataLoaded) return Promise.resolve(true);
@@ -1782,7 +1871,9 @@ function doSearch(append) {
     lastSelectedIndex = -1;
     if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
     if (apiAvailable && searchAbortController) searchAbortController.abort();
+    if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
     if (apiAvailable) searchAbortController = new AbortController();
+    searchPrefetchAbortController = null;
     searchRequestId++;
     STATE._pageCache = {};
     STATE._loadedPage = 0;
