@@ -1845,8 +1845,9 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (ok) {
       STATE.repoList = repoList;
       STATE.extensionList = extensionList;
-      if (triggerSearchAfterLoad || STATE._initialActive) {
+      if (STATE._initialActive) {
         STATE._initialActive = false;
+      } else if (triggerSearchAfterLoad) {
         STATE.page = 1;
         STATE.results = [];
         doSearch();
