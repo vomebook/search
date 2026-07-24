@@ -77,6 +77,8 @@ let sortedBySizeIndices = [];
 let repoRecordIndices = {};
 let repoSortedByNameIndices = {};
 let repoSortedBySizeIndices = {};
+let txtRecordIndices = [];
+let repoTxtRecordIndices = {};
 let fullTextIndexReady = false;
 let fullTextIndexPromise = null;
 let folderTreeDataPromise = null;
@@ -383,6 +385,8 @@ function buildIndex(includeFullText) {
       repoCounts = {};
       folderIndex = {};
       repoRecordIndices = {};
+      txtRecordIndices = [];
+      repoTxtRecordIndices = {};
     }
     let i = 0;
     const chunkSize = 5000;
@@ -401,6 +405,11 @@ function buildIndex(includeFullText) {
           repoCounts[repo] = (repoCounts[repo] || 0) + 1;
           if (!repoRecordIndices[repo]) repoRecordIndices[repo] = [];
           repoRecordIndices[repo].push(i);
+          if (rec.HasTxt) {
+            txtRecordIndices.push(i);
+            if (!repoTxtRecordIndices[repo]) repoTxtRecordIndices[repo] = [];
+            repoTxtRecordIndices[repo].push(i);
+          }
           if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
         }
         if (includeFullText) {
@@ -3338,20 +3347,19 @@ function openTxtRecord(rec) {
 }
 
 function getRandomTxtLocal() {
-  var pool = [];
   var repo = STATE.repoFull;
-  for (var i = 0; i < RECORDS.length; i++) {
-    var rec = RECORDS[i];
-    if (!rec || !rec.HasTxt) continue;
-    if (repo && rec.Repo !== repo) continue;
-    pool.push(rec);
-  }
+  var pool = repo ? (repoTxtRecordIndices[repo] || []) : txtRecordIndices;
   if (pool.length === 0) return null;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return RECORDS[pool[Math.floor(Math.random() * pool.length)]];
 }
 
 function randomTxt() {
   showToast("正在随机打开文章...");
+  if (STATE.dataLoaded) {
+    var localRec = getRandomTxtLocal();
+    if (!openTxtRecord(localRec)) showToast("暂无可读文章");
+    return;
+  }
   var url = STATE.repoFull
     ? API_BASE + "/api/random-txt?repo=" + encodeURIComponent(STATE.repo)
     : API_BASE + "/api/random-txt";
