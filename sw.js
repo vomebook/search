@@ -1,4 +1,4 @@
-const CACHE_NAME = "vomebook-search-v2";
+const CACHE_NAME = "vomebook-search-v1.0.0-beta";
 
 const PRECACHE_URLS = [
   "/search/",
