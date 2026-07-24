@@ -493,6 +493,7 @@ function parseSizeStr(str) {
 }
 var HISTORY_KEY = "voml_search_history";
 var HISTORY_MAX = 20;
+var FOLDER_FILTER_STORAGE_PREFIX = "voml_folder_filter:";
 
 function getHistory() {
   try {
@@ -503,6 +504,40 @@ function getHistory() {
 function saveHistory(list) {
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
+  } catch (e) {}
+}
+
+function folderFilterStorageKey(repo) {
+  return FOLDER_FILTER_STORAGE_PREFIX + (repo || "global");
+}
+
+function mergeFolderFilters(selfs, subtrees) {
+  return (selfs || []).concat((subtrees || []).filter(function(path) {
+    return (selfs || []).indexOf(path) < 0;
+  }));
+}
+
+function loadStoredFolderFilters(repo) {
+  try {
+    var data = JSON.parse(localStorage.getItem(folderFilterStorageKey(repo)) || "{}");
+    var selfs = Array.isArray(data.selfs) ? data.selfs.filter(Boolean) : [];
+    var subtrees = Array.isArray(data.subtrees) ? data.subtrees.filter(Boolean) : [];
+    return { selfs: selfs, subtrees: subtrees, folders: mergeFolderFilters(selfs, subtrees) };
+  } catch (e) {
+    return { selfs: [], subtrees: [], folders: [] };
+  }
+}
+
+function saveStoredFolderFilters(repo) {
+  if (!repo) return;
+  var selfs = (STATE.filterFolderSelfs || []).filter(Boolean);
+  var subtrees = (STATE.filterFolderSubtrees || []).filter(Boolean);
+  try {
+    if (!selfs.length && !subtrees.length) {
+      localStorage.removeItem(folderFilterStorageKey(repo));
+    } else {
+      localStorage.setItem(folderFilterStorageKey(repo), JSON.stringify({ selfs: selfs, subtrees: subtrees }));
+    }
   } catch (e) {}
 }
 
@@ -1533,7 +1568,7 @@ const ROUTER = {
     if (queryString) {
       const sp = new URLSearchParams(queryString);
       sp.forEach(function(v, k) {
-        if (k === "repo") {
+        if (k === "repo" || k === "folder_self" || k === "folder_subtree" || k === "folder") {
           if (!params[k]) params[k] = [];
           params[k].push(v);
         } else {
@@ -1610,6 +1645,32 @@ const ROUTER = {
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.browserPath = "";
     }
+    if (STATE.mode !== "global") {
+      var urlSelfs = route.params.folder_self;
+      var urlSubtrees = route.params.folder_subtree;
+      var legacyFolders = route.params.folder;
+      urlSelfs = urlSelfs === undefined ? [] : (Array.isArray(urlSelfs) ? urlSelfs : [urlSelfs]);
+      urlSubtrees = urlSubtrees === undefined ? [] : (Array.isArray(urlSubtrees) ? urlSubtrees : [urlSubtrees]);
+      legacyFolders = legacyFolders === undefined ? [] : (Array.isArray(legacyFolders) ? legacyFolders : [legacyFolders]);
+      urlSelfs = urlSelfs.filter(Boolean);
+      urlSubtrees = urlSubtrees.filter(Boolean);
+      legacyFolders = legacyFolders.filter(Boolean);
+      if (urlSelfs.length || urlSubtrees.length || legacyFolders.length) {
+        STATE.filterFolderSelfs = (urlSelfs.length || urlSubtrees.length) ? urlSelfs : legacyFolders.slice();
+        STATE.filterFolderSubtrees = urlSubtrees;
+        STATE.filterFolders = mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees);
+        saveStoredFolderFilters(STATE.repo);
+      } else {
+        var storedFolders = loadStoredFolderFilters(STATE.repo);
+        STATE.filterFolderSelfs = storedFolders.selfs;
+        STATE.filterFolderSubtrees = storedFolders.subtrees;
+        STATE.filterFolders = storedFolders.folders;
+      }
+    } else {
+      STATE.filterFolderSelfs = [];
+      STATE.filterFolderSubtrees = [];
+      STATE.filterFolders = [];
+    }
     STATE.sort = route.params.sort || "relevance";
     DOM.sortSelect.value = STATE.sort;
     var ms = route.params.min_size;
@@ -1647,16 +1708,11 @@ const ROUTER = {
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
     if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.checked = STATE.useMirrorLinks;
-    if (route.params.sidebar !== undefined) {
-      STATE.leftSidebarOpen = route.params.sidebar !== "0";
-      updateSidebarVisibility();
-    }
+    STATE.leftSidebarOpen = route.params.sidebar !== "0";
     STATE.rightSidebarOpen = route.params.filters === "1";
     updateSidebarVisibility();
-    if (route.params.wide !== undefined) {
-      DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
-      if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
-    }
+    DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
+    if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
     this.updateUI();
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       this.onModeChanged();
@@ -1667,8 +1723,8 @@ const ROUTER = {
       }
     } else {
       const routeId = ++routeRenderId;
-      renderSidebarAndFiltersDeferred(routeId);
       searchWithInitialFallback();
+      renderSidebarAndFiltersDeferred(routeId);
     }
   },
   updateUI: function() {
@@ -1698,8 +1754,8 @@ const ROUTER = {
       renderResultsSkeleton();
     }
     const routeId = ++routeRenderId;
-    renderSidebarAndFiltersDeferred(routeId);
     searchWithInitialFallback();
+    renderSidebarAndFiltersDeferred(routeId);
   },
 };
 
@@ -1877,16 +1933,21 @@ function applyInitialSearchPayload(data) {
   return true;
 }
 
-async function tryInitialSearchPayload() {
+async function tryInitialSearchPayload(searchMode, searchRepo) {
+  function isCurrentSearchRoute() {
+    return STATE.mode === searchMode && STATE.repo === searchRepo;
+  }
   if (!canUseInitialSearchPayload()) return false;
   var url = getInitialPayloadUrl();
   try {
     var data = initialPayloadCache.get(url);
     if (!data) {
       data = await fetchJsonWithTimeout(url, 6000);
+      if (!isCurrentSearchRoute()) return false;
       if (!data) return false;
       initialPayloadCache.set(url, data);
     }
+    if (!isCurrentSearchRoute()) return false;
     return applyInitialSearchPayload(data);
   } catch (e) {
     return false;
@@ -1894,13 +1955,18 @@ async function tryInitialSearchPayload() {
 }
 
 function searchWithInitialFallback() {
+  var searchMode = STATE.mode;
+  var searchRepo = STATE.repo;
+  function isCurrentSearchRoute() {
+    return STATE.mode === searchMode && STATE.repo === searchRepo;
+  }
   if (canUseInitialSearchPayload()) {
-    return tryInitialSearchPayload().then(function(applied) {
-      if (!applied) doSearch();
+    return tryInitialSearchPayload(searchMode, searchRepo).then(function(applied) {
+      if (!applied && isCurrentSearchRoute()) doSearch();
       return applied;
     });
   }
-  doSearch();
+  if (isCurrentSearchRoute()) doSearch();
   return Promise.resolve(false);
 }
 
@@ -3111,6 +3177,7 @@ function persistFolderSelection(subtreeSet, selfSet) {
   selfSet.forEach(function(path) { if (path) merged.push(path); });
   subtreeSet.forEach(function(path) { if (path && !merged.includes(path)) merged.push(path); });
   STATE.filterFolders = merged;
+  saveStoredFolderFilters(STATE.repo);
   STATE.page = 1;
   STATE.results = [];
   doSearch();
@@ -3320,7 +3387,7 @@ function recoverSidebarState() {
   if (!stuck) return;
   browserApiPending.clear();
   sidebarRetryCounts.clear();
-  renderSidebar(++routeRenderId);
+  renderSidebar(routeRenderId);
   if (STATE.rightSidebarOpen) renderFilters(routeRenderId);
 }
 
@@ -3638,6 +3705,7 @@ function clearAllFilters() {
   STATE.filterFolders = [];
   STATE.filterFolderSubtrees = [];
   STATE.filterFolderSelfs = [];
+  saveStoredFolderFilters(STATE.repo);
   STATE.filterMinSize = null;
   STATE.filterMaxSize = null;
   STATE.page = 1;
@@ -3694,11 +3762,19 @@ function setupResultDelegation() {
       const folder = folderLink.dataset.folder;
       const frepo = folderLink.dataset.repo;
       if (frepo && STATE.mode === "global") {
-        ROUTER.navigate("repo", frepo, folder || null);
+        if (folder) {
+          try { localStorage.setItem(folderFilterStorageKey(frepo), JSON.stringify({ selfs: [folder], subtrees: [] })); }
+          catch (err) {}
+        } else {
+          try { localStorage.removeItem(folderFilterStorageKey(frepo)); }
+          catch (err) {}
+        }
+        ROUTER.navigate("repo", frepo);
       } else if (folder !== undefined) {
         STATE.filterFolders = folder ? [folder] : [];
         STATE.filterFolderSubtrees = [];
         STATE.filterFolderSelfs = folder ? [folder] : [];
+        saveStoredFolderFilters(STATE.repo);
         STATE.page = 1;
         STATE.results = [];
         renderFilters();
