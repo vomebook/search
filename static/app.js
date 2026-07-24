@@ -1,7 +1,7 @@
 const DATA_URL = "data/search_data.json.gz";
 const FOLDER_TREE_URL = "data/folder_tree.json.gz";
 const FOLDER_BROWSER_URL = "data/folder_browser.json.gz";
-const TXT_BASE = "https://huggingface.co/spaces/VoiceOfML/Search/txt";
+const TXT_BASE = "https://voiceofml-search.hf.space/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
 const HF_DATASET_BASE = "https://huggingface.co/datasets";
@@ -2717,8 +2717,8 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var sizeStr = formatSize(f2.size);
     div2.innerHTML = (ICONS[iconType] || ICONS.file) +
       '<span class="browser-name">' + escapeHTML(f2.name) + (f2.ext ? '.' + escapeHTML(f2.ext) : '') + '</span>' +
-      (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '') +
-      (f2.hasTxt ? '<span class="browser-action" data-read="1">📖 阅读</span>' : '');
+      (f2.hasTxt ? '<span class="browser-action" data-read="1">阅读</span>' : '') +
+      (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '');
     div2.addEventListener("click", function(ff, ppath) {
       return function(e) {
         if (e.target.closest(".browser-action")) {
