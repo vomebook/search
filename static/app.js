@@ -1598,9 +1598,7 @@ const ROUTER = {
         syncStateToURL();
       }
     } else {
-      renderSidebar();
-      renderFilters();
-      searchWithInitialFallback();
+      searchWithInitialFallback().then(renderSidebarAndFiltersDeferred);
     }
   },
   updateUI: function() {
@@ -1629,9 +1627,7 @@ const ROUTER = {
       DOM.resultsLoading.style.display = "none";
       renderResultsSkeleton();
     }
-    renderSidebar();
-    renderFilters();
-    searchWithInitialFallback();
+    searchWithInitialFallback().then(renderSidebarAndFiltersDeferred);
   },
 };
 
@@ -1662,6 +1658,13 @@ function syncStateToURL() {
   if (window.location.hash !== hash) {
     history.replaceState(null, "", hash);
   }
+}
+
+function renderSidebarAndFiltersDeferred() {
+  requestAnimationFrame(function() {
+    renderSidebar();
+    renderFilters();
+  });
 }
 let searchTimer = null;
 let searchId = 0;
@@ -1815,12 +1818,13 @@ async function tryInitialSearchPayload() {
 
 function searchWithInitialFallback() {
   if (canUseInitialSearchPayload()) {
-    tryInitialSearchPayload().then(function(applied) {
+    return tryInitialSearchPayload().then(function(applied) {
       if (!applied) doSearch();
+      return applied;
     });
-    return;
   }
   doSearch();
+  return Promise.resolve(false);
 }
 
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
