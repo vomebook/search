@@ -1112,9 +1112,9 @@ body.mobile .mobile-selected-count {
   min-height: 18px;
 }
 
-.random-book-btn {
+.random-book-btn,
+.random-txt-btn {
   position: absolute;
-  right: 16px;
   top: 50%;
   transform: translateY(-50%);
   display: flex;
@@ -1128,7 +1128,11 @@ body.mobile .mobile-selected-count {
   transition: all var(--transition);
 }
 
-.random-book-btn:hover, .random-book-btn:focus-visible {
+.random-book-btn { right: 16px; }
+.random-txt-btn { left: 16px; }
+
+.random-book-btn:hover, .random-book-btn:focus-visible,
+.random-txt-btn:hover, .random-txt-btn:focus-visible {
   background: var(--surface-variant);
   border-color: var(--outline);
   color: var(--primary);
@@ -1537,6 +1541,10 @@ body.mobile .random-book-btn {
   border-radius: var(--radius-full);
 }
 
+body.mobile .random-txt-btn {
+  display: none;
+}
+
 body.mobile .hitokoto {
   display: none;
 }
@@ -1610,6 +1618,10 @@ body.mobile .result-actions {
     background: var(--surface-container);
     box-shadow: var(--shadow-md);
     border-radius: var(--radius-full);
+  }
+
+  body:not(.force-desktop) .random-txt-btn {
+    display: none;
   }
 
   body:not(.force-desktop) .hitokoto {

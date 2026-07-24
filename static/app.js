@@ -1481,6 +1481,7 @@ function cacheDOM() {
   DOM.scrollThumb = $("#scroll-thumb");
   DOM.hitokoto = $("#hitokoto");
   DOM.randomBookBtn = $("#random-book-btn");
+  DOM.randomTxtBtn = $("#random-txt-btn");
   DOM.overlay = $("#overlay");
   DOM.toast = $("#toast");
   DOM.filterRepoSection = $("#filter-repo-section");
@@ -3326,6 +3327,48 @@ function randomBook() {
       }
     });
 }
+
+function openTxtRecord(rec) {
+  if (!rec) return false;
+  var relPath = buildRecordRelativePath(rec);
+  var stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
+  if (!stem) return false;
+  window.open(TXT_BASE + "/" + encodeURI(stem) + ".txt", "_blank");
+  return true;
+}
+
+function getRandomTxtLocal() {
+  var pool = [];
+  var repo = STATE.repoFull;
+  for (var i = 0; i < RECORDS.length; i++) {
+    var rec = RECORDS[i];
+    if (!rec || !rec.HasTxt) continue;
+    if (repo && rec.Repo !== repo) continue;
+    pool.push(rec);
+  }
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function randomTxt() {
+  showToast("正在随机打开文章...");
+  var url = STATE.repoFull
+    ? API_BASE + "/api/random-txt?repo=" + encodeURIComponent(STATE.repo)
+    : API_BASE + "/api/random-txt";
+  fetch(url).then(function(resp) {
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    return resp.json();
+  }).then(function(rec) {
+    if (!openTxtRecord(rec)) throw new Error("NO_TXT");
+  }).catch(function() {
+    function fallback() {
+      var rec = getRandomTxtLocal();
+      if (!openTxtRecord(rec)) showToast("暂无可读文章");
+    }
+    if (STATE.dataLoaded) fallback();
+    else ensureLocalDataLoaded(false, true).then(fallback).catch(function() { showToast("暂无可读文章"); });
+  });
+}
 let toastTimer;
 
 function showToast(msg, dur) {
@@ -3983,6 +4026,7 @@ function init() {
     syncStateToURL();
   });
   DOM.randomBookBtn.addEventListener("click", randomBook);
+  if (DOM.randomTxtBtn) DOM.randomTxtBtn.addEventListener("click", randomTxt);
   DOM.emptyRandomBtn.addEventListener("click", randomBook);
   var sizeTimer_local;
   var sizeInputToBytes = function(input, unitSelect) {
