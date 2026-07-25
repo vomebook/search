@@ -2659,7 +2659,6 @@ function updateStatusBar() {
 
 function setSearchVisualLoading(loading) {
   document.getElementById("search-box").classList.toggle("is-searching", loading);
-  DOM.resultsList.classList.toggle("results-pending", loading && STATE.results.length > 0);
   updateStatusBar();
 }
 
@@ -2932,7 +2931,6 @@ async function renderExtensionFilter(routeId) {
     if (cleaned.length !== STATE.filterExtensions.length) {
       STATE.filterExtensions = cleaned;
       STATE.page = 1;
-      STATE.results = [];
       syncStateToURL();
     }
   }
