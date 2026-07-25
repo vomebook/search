@@ -1634,8 +1634,7 @@ const ROUTER = {
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.page = 1;
-      STATE.results = [];
-      STATE.total = 0;
+      if (STATE.results.length === 0) STATE.total = 0;
       STATE.browserPath = "";
       STATE.filterFolders = [];
       STATE.filterFolderSubtrees = [];
@@ -1769,7 +1768,7 @@ const ROUTER = {
     }
     DOM.leftSidebar.classList.remove("expanded-wide");
     if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
-    if (!STATE.isMobile) {
+    if (!STATE.isMobile && STATE.results.length === 0) {
       DOM.resultsList.innerHTML = "";
       DOM.emptyState.style.display = "none";
       STATE.resultsSkeletonActive = true;
@@ -3272,8 +3271,7 @@ function renderFilterTreeNodes(container, nodes, depth) {
     const cb = row.querySelector("input[type='checkbox']");
     const selfBtn = row.querySelector(".folder-self-toggle");
     applyFolderSelectionToNode(node, row, subtreeSet, selfSet);
-    cb.addEventListener("click", function(e) {
-      e.preventDefault();
+    cb.addEventListener("change", function() {
       handleFolderCheckboxChange(node);
     });
     if (selfBtn) {
