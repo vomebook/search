@@ -1806,6 +1806,7 @@ function renderSidebarAndFiltersDeferred(routeId) {
   });
 }
 let searchTimer = null;
+let searchComposing = false;
 let searchId = 0;
 let searchAbortController = null;
 let searchPrefetchAbortController = null;
@@ -2056,6 +2057,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
 }
 
 function debouncedSearch() {
+  if (searchComposing) return;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
     STATE.query = DOM.searchInput.value.trim();
@@ -3852,6 +3854,13 @@ function init() {
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
   DOM.searchInput.addEventListener("input", debouncedSearch);
+  DOM.searchInput.addEventListener("compositionstart", function() {
+    searchComposing = true;
+  });
+  DOM.searchInput.addEventListener("compositionend", function() {
+    searchComposing = false;
+    debouncedSearch();
+  });
   var hideDropdown = function() {
     setTimeout(function() {
       if (!dropdownActive) DOM.historyDropdown.style.display = "none";
