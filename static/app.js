@@ -332,7 +332,7 @@ async function downloadFile(filename, link, options) {
   showToast("开始下载...");
   try {
     if (!options.skipCheck) {
-      var resp = await fetch(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""));
+      var resp = await fetchWithTimeout(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""), DOWNLOAD_CHECK_TIMEOUT);
       if (!resp.ok) {
         var message = "下载失败";
         try {
@@ -1187,6 +1187,16 @@ async function fetchJsonWithTimeout(url, timeoutMs) {
   }
 }
 
+async function fetchWithTimeout(url, timeoutMs) {
+  var controller = new AbortController();
+  var timeoutId = setTimeout(function() { controller.abort(); }, timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function normalizeSidebarPayload(data, path) {
   path = path || "";
   if (!data || typeof data !== "object") return data;
@@ -1388,8 +1398,12 @@ function getFolderContents(repo, path) {
 }
 
 function getRandom(repo) {
+  if (repo) {
+    const indices = repoRecordIndices[repo] || [];
+    if (indices.length === 0) return null;
+    return RECORDS[indices[Math.floor(Math.random() * indices.length)]];
+  }
   let pool = RECORDS;
-  if (repo) pool = RECORDS.filter(r => r.Repo === repo);
   if (pool.length === 0) return null;
   return pool[Math.floor(Math.random() * pool.length)];
 }
@@ -1819,6 +1833,7 @@ const SEARCH_CACHE_MAX = 60;
 const searchResponseCache = new Map();
 const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();
+const DOWNLOAD_CHECK_TIMEOUT = 8000;
 
 function stableSearchStringify(value) {
   if (Array.isArray(value)) return "[" + value.map(stableSearchStringify).join(",") + "]";
@@ -3316,10 +3331,24 @@ function typewriter(el, text, speed) {
 }
 
 function randomBook() {
+  showToast("正在随机下载...");
+  if (STATE.dataLoaded) {
+    var localRec = getRandom(STATE.repoFull);
+    if (localRec) {
+      var localFilename = (localRec.File || "file") + (localRec.Extension ? "." + localRec.Extension : "");
+      downloadFile(localFilename, getRecordLink(localRec), { skipCheck: true });
+    } else {
+      showToast("暂无可用记录");
+    }
+    return;
+  }
   var url = STATE.repoFull
     ? API_BASE + "/api/random?repo=" + encodeURIComponent(STATE.repo)
     : API_BASE + "/api/random";
-  fetch(url).then(function(resp) { return resp.json(); })
+  fetch(url).then(function(resp) {
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return resp.json();
+    })
     .then(function(rec) {
       if (rec) {
         var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
@@ -3329,13 +3358,17 @@ function randomBook() {
       }
     })
     .catch(function() {
-      var rec = getRandom(STATE.repoFull);
-      if (rec) {
-        var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
-        downloadFile(filename, getRecordLink(rec), { skipCheck: true });
-      } else {
-        showToast("暂无可用记录");
+      function fallback() {
+        var rec = getRandom(STATE.repoFull);
+        if (rec) {
+          var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
+          downloadFile(filename, getRecordLink(rec), { skipCheck: true });
+        } else {
+          showToast("暂无可用记录");
+        }
       }
+      if (STATE.dataLoaded) fallback();
+      else ensureLocalDataLoaded(false, true).then(fallback).catch(function() { showToast("暂无可用记录"); });
     });
 }
 
