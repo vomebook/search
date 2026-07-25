@@ -2162,10 +2162,10 @@ function doSearch(append) {
   STATE.isLoading = true;
   if (!append) setSearchVisualLoading(true);
   STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
-  DOM.resultsLoading.style.display = STATE.resultsSkeletonActive ? "none" : "flex";
+  DOM.resultsLoading.style.display = (!append && STATE.results.length > 0) ? "none" : (STATE.resultsSkeletonActive ? "none" : "flex");
   if (!append) {
     if (!canUseInitialSearchPayload()) STATE._initialActive = false;
-    DOM.emptyState.style.display = "none";
+    if (STATE.results.length === 0) DOM.emptyState.style.display = "none";
     selectedIndices = {};
     lastSelectedIndex = -1;
     if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
@@ -2186,7 +2186,7 @@ function doSearch(append) {
     if (STATE.resultsSkeletonActive) {
       DOM.resultsContainer.scrollTop = 0;
       renderResultsSkeleton();
-    } else {
+    } else if (STATE.results.length === 0) {
       clearResultsSkeleton();
     }
   }
@@ -2969,7 +2969,6 @@ async function renderExtensionFilter(routeId) {
       }
     }
     STATE.page = 1;
-    STATE.results = [];
     doSearch();
   });
 }
@@ -3011,6 +3010,25 @@ function renderFilterFolderTree() {
     return;
   }
   renderFilterTreeNodes(DOM.filterFolderTree, STATE.folderTree, 0);
+}
+
+function refreshFilterFolderSelectionState() {
+  if (!DOM.filterFolderTree || !STATE.folderTree || STATE.folderTree.length === 0) return;
+  const subtreeSet = getFolderSubtreeSet();
+  const selfSet = getFolderSelfSet();
+  const nodeMap = new Map();
+  const collect = function(nodes) {
+    for (let i = 0; i < (nodes || []).length; i++) {
+      const node = nodes[i];
+      if (node.path) nodeMap.set(node.path, node);
+      if (node.children && node.children.length > 0) collect(node.children);
+    }
+  };
+  collect(STATE.folderTree);
+  DOM.filterFolderTree.querySelectorAll(".filter-folder-item").forEach(function(row) {
+    const node = nodeMap.get(row.dataset.path || "");
+    if (node) applyFolderSelectionToNode(node, row, subtreeSet, selfSet);
+  });
 }
 
 function collectVisibleDescendantPaths(node, into) {
@@ -3205,7 +3223,6 @@ function persistFolderSelection(subtreeSet, selfSet) {
   STATE.filterFolders = merged;
   saveStoredFolderFilters(STATE.repo);
   STATE.page = 1;
-  STATE.results = [];
   doSearch();
 }
 
@@ -3291,7 +3308,7 @@ function handleFolderCheckboxChange(node) {
   const full = isNodeFullySelected(node, subtreeSet, selfSet);
   setNodeSubtreeSelection(node, !full, subtreeSet, selfSet);
   persistFolderSelection(subtreeSet, selfSet);
-  renderFilterFolderTree();
+  refreshFilterFolderSelectionState();
 }
 
 function handleFolderSelfToggle(node) {
@@ -3300,7 +3317,7 @@ function handleFolderSelfToggle(node) {
   if (selfSet.has(node.path)) selfSet.delete(node.path);
   else selfSet.add(node.path);
   persistFolderSelection(subtreeSet, selfSet);
-  renderFilterFolderTree();
+  refreshFilterFolderSelectionState();
 }
 
 function fetchHitokoto() {
@@ -4114,18 +4131,14 @@ function init() {
   DOM.extSelectAll.addEventListener("click", function() {
     STATE.filterExtensions = STATE.extensionList.slice();
     STATE.page = 1;
-    STATE.results = [];
     doSearch();
-    renderExtensionFilter();
   });
   DOM.extDeselectAll.addEventListener("click", function() {
     var allExtNames = STATE.extensionList.slice();
     var currentSet = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
     STATE.page = 1;
-    STATE.results = [];
     doSearch();
-    renderExtensionFilter();
   });
   DOM.folderSelectAll.addEventListener("click", function() {
     if (!STATE.folderTree || STATE.folderTree.length === 0) return;
