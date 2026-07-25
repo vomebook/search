@@ -1685,10 +1685,9 @@ const ROUTER = {
         STATE.filterFolders = mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees);
         saveStoredFolderFilters(STATE.repo);
       } else {
-        var storedFolders = loadStoredFolderFilters(STATE.repo);
-        STATE.filterFolderSelfs = storedFolders.selfs;
-        STATE.filterFolderSubtrees = storedFolders.subtrees;
-        STATE.filterFolders = storedFolders.folders;
+        STATE.filterFolderSelfs = [];
+        STATE.filterFolderSubtrees = [];
+        STATE.filterFolders = [];
       }
     } else {
       STATE.filterFolderSelfs = [];
@@ -2935,7 +2934,7 @@ async function renderExtensionFilter(routeId) {
       STATE.filterExtensions = cleaned;
       STATE.page = 1;
       STATE.results = [];
-      doSearch();
+      syncStateToURL();
     }
   }
   var ordered = [];
@@ -3848,14 +3847,24 @@ function setupResultDelegation() {
       const folder = folderLink.dataset.folder;
       const frepo = folderLink.dataset.repo;
       if (frepo && STATE.mode === "global") {
-        if (folder) {
-          try { localStorage.setItem(folderFilterStorageKey(frepo), JSON.stringify({ selfs: [folder], subtrees: [] })); }
-          catch (err) {}
-        } else {
-          try { localStorage.removeItem(folderFilterStorageKey(frepo)); }
-          catch (err) {}
-        }
-        ROUTER.navigate("repo", frepo);
+        let hash = "#/" + frepo;
+        const sp = new URLSearchParams();
+        if (STATE.query) sp.set("q", STATE.query);
+        if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
+        if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
+        if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
+        if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
+        if (!STATE.searchFolders) sp.set("search_folders", "false");
+        if (!STATE.exact) sp.set("exact", "0");
+        if (!STATE.useLocalMode) sp.set("local", "0");
+        if (!STATE.recordHistory) sp.set("history", "0");
+        if (!STATE.useMirrorLinks) sp.set("mirror", "0");
+        if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
+        if (STATE.rightSidebarOpen) sp.set("filters", "1");
+        if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
+        if (folder) sp.append("folder_self", folder);
+        const qs = sp.toString();
+        window.location.hash = qs ? hash + "?" + qs : hash;
       } else if (folder !== undefined) {
         STATE.filterFolders = folder ? [folder] : [];
         STATE.filterFolderSubtrees = [];
