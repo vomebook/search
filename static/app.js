@@ -1635,6 +1635,7 @@ const ROUTER = {
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.page = 1;
       if (STATE.results.length === 0) STATE.total = 0;
+      prepareRouteTransitionResults();
       STATE.browserPath = "";
       STATE.filterFolders = [];
       STATE.filterFolderSubtrees = [];
@@ -2596,6 +2597,20 @@ function resetVirtualScrollState() {
   VSCROLL.heightsDirty = true;
   clearResultHTMLCache();
   updateScrollTrack();
+}
+
+function prepareRouteTransitionResults() {
+  if (!DOM.resultsContainer || STATE.results.length === 0) return;
+  DOM.resultsContainer.scrollTop = 0;
+  VSCROLL.renderStart = -1;
+  VSCROLL.renderEnd = -1;
+  VSCROLL.heights = [];
+  VSCROLL.prefixHeights = [0];
+  VSCROLL.heightTree = [];
+  VSCROLL.heightsDirty = true;
+  clearResultHTMLCache();
+  ensureVirtualHeights(Math.min(STATE.results.length, STATE.pageSize));
+  renderVisible();
 }
 
 function ensureVirtualHeights(len) {
