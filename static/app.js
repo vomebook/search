@@ -2686,6 +2686,19 @@ function prepareRouteTransitionResults() {
   renderVisible();
 }
 
+function prepareFilterResultsRefresh() {
+  if (!DOM.resultsContainer || STATE.results.length === 0) return;
+  DOM.resultsContainer.scrollTop = 0;
+  VSCROLL.renderStart = -1;
+  VSCROLL.renderEnd = -1;
+  VSCROLL.heights = [];
+  VSCROLL.prefixHeights = [0];
+  VSCROLL.heightTree = [];
+  VSCROLL.heightsDirty = true;
+  clearResultHTMLCache();
+  updateScrollTrack();
+}
+
 function ensureVirtualHeights(len) {
   if (VSCROLL.heights.length >= len) return;
   const oldLen = VSCROLL.heights.length;
@@ -3052,6 +3065,7 @@ async function renderExtensionFilter(routeId) {
   renderExtensionTree(DOM.filterExtList, items, rest, STATE.filterExtensions, function(vals) {
     STATE.filterExtensions = vals;
     STATE.page = 1;
+    prepareFilterResultsRefresh();
     saveStoredExtensionFilters(STATE.repo);
     doSearch();
   });
@@ -3090,6 +3104,18 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
   container.innerHTML = html.join("");
   var parentCb = container.querySelector('input[value="__OTHER__"]');
   if (parentCb) parentCb.indeterminate = parentCb.dataset.partial === "1";
+  var refreshExtOtherParentState = function() {
+    var parent = container.querySelector('input[value="__OTHER__"]');
+    if (!parent || rest.length === 0) return;
+    var selectedRestCount = 0;
+    var childInputs = Array.from(container.querySelectorAll('input[type="checkbox"]'));
+    for (var ri = 0; ri < rest.length; ri++) {
+      var child = childInputs.find(function(input) { return input.value === rest[ri].name; });
+      if (child && child.checked) selectedRestCount++;
+    }
+    parent.checked = selectedRestCount === rest.length;
+    parent.indeterminate = selectedRestCount > 0 && selectedRestCount < rest.length;
+  };
   var emit = function(nextSet) { onChange(Array.from(nextSet)); };
   container.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
     cb.addEventListener("change", function() {
@@ -3101,6 +3127,7 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
         }
       } else if (cb.checked) nextSet.add(cb.value);
       else nextSet.delete(cb.value);
+      refreshExtOtherParentState();
       emit(nextSet);
     });
   });
@@ -4264,6 +4291,7 @@ function init() {
   DOM.extSelectAll.addEventListener("click", function() {
     STATE.filterExtensions = STATE.extensionList.slice();
     STATE.page = 1;
+    prepareFilterResultsRefresh();
     saveStoredExtensionFilters(STATE.repo);
     renderExtensionFilter();
     doSearch();
@@ -4273,6 +4301,7 @@ function init() {
     var currentSet = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
     STATE.page = 1;
+    prepareFilterResultsRefresh();
     saveStoredExtensionFilters(STATE.repo);
     renderExtensionFilter();
     doSearch();
