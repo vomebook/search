@@ -1313,8 +1313,25 @@ body.mobile .mobile-selected-count {
 }
 
 .ext-other-spacer {
-  width: 4px;
+  width: 3px;
   flex-shrink: 0;
+}
+
+.ext-other-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+}
+
+.ext-other-toggle .folder-count {
+  margin-left: auto;
 }
 
 .filter-folder-item .folder-name {

@@ -3077,7 +3077,7 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
     var parentChecked = restSelectedCount === rest.length;
     var parentPartial = restSelectedCount > 0 && restSelectedCount < rest.length;
     var collapsed = STATE.extensionOtherCollapsed !== false;
-    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1" role="button" tabindex="0"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="ext-other-spacer" aria-hidden="true"></span><span class="folder-name">其他 (' + rest.length + '种)</span><span class="folder-count">' + total.toLocaleString() + '</span></div>');
+    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="ext-other-spacer" aria-hidden="true"></span><button type="button" class="ext-other-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '">其他 (' + rest.length + '种)<span class="folder-count">' + total.toLocaleString() + '</span></button></div>');
     html.push('<div class="tree-children" data-ext-other-children="1" ' + (collapsed ? 'hidden' : '') + '>');
     var restSorted = rest.slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
     for (var s = 0; s < restSorted.length; s++) {
@@ -3106,22 +3106,25 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
   var parentRow = container.querySelector('.ext-other-row');
   var childContainer = parentRow ? parentRow.nextElementSibling : null;
   if (parentRow && childContainer) {
+    var toggleBtn = parentRow.querySelector(".ext-other-toggle");
     var toggleOtherChildren = function() {
       STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
       childContainer.hidden = STATE.extensionOtherCollapsed !== false;
+      if (toggleBtn) toggleBtn.setAttribute("aria-expanded", STATE.extensionOtherCollapsed === false ? "true" : "false");
     };
-    parentRow.addEventListener("pointerdown", function(e) {
-      if (e.target && e.target.closest && e.target.closest("input[type='checkbox']")) return;
-      e.preventDefault();
-      e.stopPropagation();
-      toggleOtherChildren();
-    });
-    parentRow.addEventListener("keydown", function(e) {
-      if (e.key !== "Enter" && e.key !== " ") return;
-      e.preventDefault();
-      e.stopPropagation();
-      toggleOtherChildren();
-    });
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleOtherChildren();
+      });
+      toggleBtn.addEventListener("keydown", function(e) {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        e.stopPropagation();
+        toggleOtherChildren();
+      });
+    }
   }
 }
 
