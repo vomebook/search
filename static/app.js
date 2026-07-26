@@ -3103,30 +3103,6 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
       emit(nextSet);
     });
   });
-  if (!container._extOtherClickBound) {
-    container.addEventListener("click", function(e) {
-      var row = e.target && e.target.closest ? e.target.closest(".ext-other-row") : null;
-      if (!row || !container.contains(row)) return;
-      if (e.target.closest("input[type='checkbox']")) return;
-      var childContainer = row.nextElementSibling;
-      if (!childContainer || !childContainer.matches("[data-ext-other-children]")) return;
-      e.preventDefault();
-      e.stopPropagation();
-      STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
-      childContainer.hidden = STATE.extensionOtherCollapsed !== false;
-    });
-    container.addEventListener("keydown", function(e) {
-      if (e.key !== "Enter" && e.key !== " ") return;
-      var row = e.target && e.target.closest ? e.target.closest(".ext-other-row") : null;
-      if (!row || !container.contains(row)) return;
-      var childContainer = row.nextElementSibling;
-      if (!childContainer || !childContainer.matches("[data-ext-other-children]")) return;
-      e.preventDefault();
-      STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
-      childContainer.hidden = STATE.extensionOtherCollapsed !== false;
-    });
-    container._extOtherClickBound = true;
-  }
   var parentRow = container.querySelector('.ext-other-row');
   var childContainer = parentRow ? parentRow.nextElementSibling : null;
   if (parentRow && childContainer) {
@@ -3134,7 +3110,18 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
       STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
       childContainer.hidden = STATE.extensionOtherCollapsed !== false;
     };
-    parentRow._toggleOtherChildren = toggleOtherChildren;
+    parentRow.addEventListener("pointerdown", function(e) {
+      if (e.target && e.target.closest && e.target.closest("input[type='checkbox']")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleOtherChildren();
+    });
+    parentRow.addEventListener("keydown", function(e) {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleOtherChildren();
+    });
   }
 }
 
