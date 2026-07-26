@@ -1312,6 +1312,11 @@ body.mobile .mobile-selected-count {
   flex-shrink: 0;
 }
 
+.ext-other-spacer {
+  width: 8px;
+  flex-shrink: 0;
+}
+
 .filter-folder-item .folder-name {
   flex: 0 0 auto;
 }
