@@ -2232,7 +2232,7 @@ function doSearch(append) {
     pageSize: STATE.pageSize,
   };
   STATE.isLoading = true;
-  if (!append) setSearchVisualLoading(true);
+  if (!append && STATE.results.length === 0) setSearchVisualLoading(true);
   STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
   DOM.resultsLoading.style.display = (!append && STATE.results.length > 0) ? "none" : (STATE.resultsSkeletonActive ? "none" : "flex");
   if (!append) {
@@ -3077,8 +3077,8 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
     var parentChecked = restSelectedCount === rest.length;
     var parentPartial = restSelectedCount > 0 && restSelectedCount < rest.length;
     var collapsed = STATE.extensionOtherCollapsed !== false;
-    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="ext-other-spacer" aria-hidden="true"></span><button type="button" class="ext-other-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '">其他 (' + rest.length + '种)<span class="folder-count">' + total.toLocaleString() + '</span></button></div>');
-    html.push('<div class="tree-children" data-ext-other-children="1" ' + (collapsed ? 'hidden' : '') + '>');
+    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="ext-other-spacer" aria-hidden="true"></span><button type="button" class="ext-other-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '" onclick="return window.toggleExtOtherFromButton(this)">其他 (' + rest.length + '种)<span class="folder-count">' + total.toLocaleString() + '</span></button></div>');
+    html.push('<div class="tree-children ext-other-children" data-ext-other-children="1" style="display:' + (collapsed ? 'none' : 'block') + '">');
     var restSorted = rest.slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
     for (var s = 0; s < restSorted.length; s++) {
       var child = restSorted[s];
@@ -3103,30 +3103,17 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
       emit(nextSet);
     });
   });
-  var parentRow = container.querySelector('.ext-other-row');
-  var childContainer = parentRow ? parentRow.nextElementSibling : null;
-  if (parentRow && childContainer) {
-    var toggleBtn = parentRow.querySelector(".ext-other-toggle");
-    var toggleOtherChildren = function() {
-      STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
-      childContainer.hidden = STATE.extensionOtherCollapsed !== false;
-      if (toggleBtn) toggleBtn.setAttribute("aria-expanded", STATE.extensionOtherCollapsed === false ? "true" : "false");
-    };
-    if (toggleBtn) {
-      toggleBtn.addEventListener("click", function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleOtherChildren();
-      });
-      toggleBtn.addEventListener("keydown", function(e) {
-        if (e.key !== "Enter" && e.key !== " ") return;
-        e.preventDefault();
-        e.stopPropagation();
-        toggleOtherChildren();
-      });
-    }
-  }
 }
+
+window.toggleExtOtherFromButton = function(btn) {
+  var row = btn && btn.closest ? btn.closest('.ext-other-row') : null;
+  var childContainer = row ? row.nextElementSibling : null;
+  if (!childContainer || !childContainer.matches('[data-ext-other-children]')) return false;
+  STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
+  childContainer.style.display = STATE.extensionOtherCollapsed === false ? 'block' : 'none';
+  btn.setAttribute('aria-expanded', STATE.extensionOtherCollapsed === false ? 'true' : 'false');
+  return false;
+};
 
 function renderCheckboxList(container, items, selected, onChange) {
   if (items.length === 0) {
