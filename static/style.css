@@ -1312,6 +1312,11 @@ body.mobile .mobile-selected-count {
   flex-shrink: 0;
 }
 
+.ext-other-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
 .ext-other-spacer {
   width: 3px;
   flex-shrink: 0;
