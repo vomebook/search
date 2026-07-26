@@ -1300,6 +1300,10 @@ body.mobile .mobile-selected-count {
   transform-origin: top left;
 }
 
+.tree-children[hidden] {
+  display: none !important;
+}
+
 .filter-folder-item input[type="checkbox"] {
   accent-color: var(--primary);
   width: 14px;
