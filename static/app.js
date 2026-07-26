@@ -585,7 +585,6 @@ function saveStoredFolderFilters(repo) {
 }
 
 function saveStoredExtensionFilters(repo) {
-  if (!repo) return;
   var values = (STATE.filterExtensions || []).filter(Boolean);
   try {
     if (!values.length) {
@@ -1657,6 +1656,7 @@ const ROUTER = {
     if (STATE.query) sp.set("q", STATE.query);
     if (mode !== "global" && folder !== undefined && folder !== null) sp.set("path", folder);
     else if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
+    if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
     if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
     if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
     if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
@@ -1840,6 +1840,7 @@ function syncStateToURL() {
       sp.append("repo", r.split("/").pop());
     });
   }
+  if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
    if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
@@ -3888,6 +3889,7 @@ function clearAllFilters() {
   STATE.filterFolderSubtrees = [];
   STATE.filterFolderSelfs = [];
   saveStoredFolderFilters(STATE.repo);
+  saveStoredExtensionFilters(STATE.repo);
   STATE.filterMinSize = null;
   STATE.filterMaxSize = null;
   STATE.page = 1;
