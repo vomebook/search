@@ -1483,6 +1483,7 @@ const STATE = {
   browserPath: "",
   repoList: [],
   extensionList: [],
+  extensionOtherCollapsed: true,
   folderTree: null,
   folderTreeCollapsed: {},
   searchFolders: true,
@@ -3048,22 +3049,71 @@ async function renderExtensionFilter(routeId) {
   for (var j = 0; j < ordered.length; j++) {
     items.push({ key: ordered[j].name, label: "." + ordered[j].name, count: ordered[j].count });
   }
-  if (rest.length > 0) {
-    var total = 0;
-    for (var k = 0; k < rest.length; k++) { total += rest[k].count || 0; }
-    items.push({ key: "__OTHER__", label: "其他 (" + rest.length + "种)", count: total });
-  }
-  renderCheckboxList(DOM.filterExtList, items, STATE.filterExtensions, function(vals) {
-    STATE.filterExtensions = vals.filter(function(v) { return v !== "__OTHER__"; });
-    if (vals.indexOf("__OTHER__") >= 0) {
-      for (var m = 0; m < rest.length; m++) {
-        STATE.filterExtensions.push(rest[m].name);
-      }
-    }
+  renderExtensionTree(DOM.filterExtList, items, rest, STATE.filterExtensions, function(vals) {
+    STATE.filterExtensions = vals;
     STATE.page = 1;
     saveStoredExtensionFilters(STATE.repo);
     doSearch();
   });
+}
+
+function renderExtensionTree(container, items, rest, selected, onChange) {
+  if (items.length === 0 && rest.length === 0) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6;padding:4px 0">暂无</div>';
+    return;
+  }
+  var selectedSet = new Set(selected || []);
+  var html = [];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    html.push('<label class="filter-checkbox-item"><input type="checkbox" value="' + escapeHTML(item.key) + '" ' + (selectedSet.has(item.key) ? 'checked' : '') + '><span>' + escapeHTML(item.label) + '</span><span class="checkbox-count">' + (item.count || 0).toLocaleString() + '</span></label>');
+  }
+  if (rest.length > 0) {
+    var total = 0;
+    var restSelectedCount = 0;
+    for (var r = 0; r < rest.length; r++) {
+      total += rest[r].count || 0;
+      if (selectedSet.has(rest[r].name)) restSelectedCount++;
+    }
+    var parentChecked = restSelectedCount === rest.length;
+    var parentPartial = restSelectedCount > 0 && restSelectedCount < rest.length;
+    var collapsed = STATE.extensionOtherCollapsed !== false;
+    html.push('<div class="filter-folder-item" style="--fdepth:0" data-ext-other="1"><button type="button" class="tree-toggle ' + (collapsed ? '' : 'expanded') + '" aria-label="' + (collapsed ? '展开其他文件类型' : '收起其他文件类型') + '" title="' + (collapsed ? '展开' : '收起') + '"><span class="tree-toggle-glyph" aria-hidden="true"></span></button><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="folder-name">其他 (' + rest.length + '种)</span><span class="folder-count">' + total.toLocaleString() + '</span></div>');
+    html.push('<div class="tree-children" data-ext-other-children="1" style="' + (collapsed ? 'display:none' : '') + '">');
+    var restSorted = rest.slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
+    for (var s = 0; s < restSorted.length; s++) {
+      var child = restSorted[s];
+      html.push('<label class="filter-folder-item" style="--fdepth:1"><span class="tree-toggle-placeholder"></span><input type="checkbox" value="' + escapeHTML(child.name) + '" ' + (selectedSet.has(child.name) ? 'checked' : '') + '><span class="folder-name">.' + escapeHTML(child.name) + '</span><span class="folder-count">' + (child.count || 0).toLocaleString() + '</span></label>');
+    }
+    html.push('</div>');
+  }
+  container.innerHTML = html.join("");
+  var parentCb = container.querySelector('input[value="__OTHER__"]');
+  if (parentCb) parentCb.indeterminate = parentCb.dataset.partial === "1";
+  var emit = function(nextSet) { onChange(Array.from(nextSet)); };
+  container.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+    cb.addEventListener("change", function() {
+      var nextSet = new Set(STATE.filterExtensions || []);
+      if (cb.value === "__OTHER__") {
+        for (var o = 0; o < rest.length; o++) {
+          if (cb.checked) nextSet.add(rest[o].name);
+          else nextSet.delete(rest[o].name);
+        }
+      } else if (cb.checked) nextSet.add(cb.value);
+      else nextSet.delete(cb.value);
+      emit(nextSet);
+    });
+  });
+  var toggle = container.querySelector('[data-ext-other="1"] .tree-toggle');
+  var childContainer = container.querySelector('[data-ext-other-children="1"]');
+  if (toggle && childContainer) {
+    toggle.addEventListener("click", function(e) {
+      e.stopPropagation();
+      var expanding = STATE.extensionOtherCollapsed !== false;
+      STATE.extensionOtherCollapsed = !expanding;
+      toggleFolderChildrenAnimated(childContainer, toggle, expanding);
+    });
+  }
 }
 
 function renderCheckboxList(container, items, selected, onChange) {
