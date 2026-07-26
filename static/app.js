@@ -552,14 +552,19 @@ function saveStoredFolderFilters(repo) {
 }
 
 function extensionFilterStorageKey(repo) {
-  return EXT_FILTER_STORAGE_PREFIX + (repo || "global");
+  return EXT_FILTER_STORAGE_PREFIX + "global";
 }
 
 function loadStoredExtensionFilters(repo) {
   try {
     var data = JSON.parse(localStorage.getItem(extensionFilterStorageKey(repo)) || "{}");
     var values = Array.isArray(data.values) ? data.values.filter(Boolean) : [];
-    return values;
+    if (values.length) return values;
+    if (repo) {
+      var legacy = JSON.parse(localStorage.getItem(EXT_FILTER_STORAGE_PREFIX + repo) || "{}");
+      return Array.isArray(legacy.values) ? legacy.values.filter(Boolean) : [];
+    }
+    return [];
   } catch (e) {
     return [];
   }
@@ -2935,6 +2940,7 @@ async function renderFilters(routeId) {
   }
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
+    DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">加载中...</div>';
     if (!STATE.folderTree && PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[STATE.repoFull]) {
       STATE.folderTree = PRECOMPUTED_FOLDER_TREES[STATE.repoFull];
     }
