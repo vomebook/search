@@ -2157,6 +2157,7 @@ function debouncedSearch() {
 function shouldShowResultsSkeleton(append) {
   if (append) return false;
   if (STATE.results.length > 0) return false;
+  if (STATE.filterExtensions.length > 0) return false;
   if (!STATE.isMobile && STATE.mode === "repo") return true;
   return !STATE.dataLoaded || (STATE.mode === "global" && STATE.page === 1 && !STATE.query && STATE.filterRepos.length === 0 && STATE.filterExtensions.length === 0 && STATE.filterFolders.length === 0);
 }
@@ -3077,7 +3078,7 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
     var parentChecked = restSelectedCount === rest.length;
     var parentPartial = restSelectedCount > 0 && restSelectedCount < rest.length;
     var collapsed = STATE.extensionOtherCollapsed !== false;
-    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="ext-other-spacer" aria-hidden="true"></span><button type="button" class="ext-other-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '" onclick="return window.toggleExtOtherFromButton(this)">其他 (' + rest.length + '种)<span class="folder-count">' + total.toLocaleString() + '</span></button></div>');
+    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="ext-other-spacer" aria-hidden="true"></span><button type="button" class="ext-other-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '" onclick="var box=this.parentElement&&this.parentElement.nextElementSibling;if(box){var closed=box.style.display===\'none\';box.style.display=closed?\'block\':\'none\';this.setAttribute(\'aria-expanded\',closed?\'true\':\'false\');}return false;">其他 (' + rest.length + '种)<span class="folder-count">' + total.toLocaleString() + '</span></button></div>');
     html.push('<div class="tree-children ext-other-children" data-ext-other-children="1" style="display:' + (collapsed ? 'none' : 'block') + '">');
     var restSorted = rest.slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
     for (var s = 0; s < restSorted.length; s++) {
@@ -3105,15 +3106,6 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
   });
 }
 
-window.toggleExtOtherFromButton = function(btn) {
-  var row = btn && btn.closest ? btn.closest('.ext-other-row') : null;
-  var childContainer = row ? row.nextElementSibling : null;
-  if (!childContainer || !childContainer.matches('[data-ext-other-children]')) return false;
-  STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
-  childContainer.style.display = STATE.extensionOtherCollapsed === false ? 'block' : 'none';
-  btn.setAttribute('aria-expanded', STATE.extensionOtherCollapsed === false ? 'true' : 'false');
-  return false;
-};
 
 function renderCheckboxList(container, items, selected, onChange) {
   if (items.length === 0) {
