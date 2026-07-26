@@ -3077,7 +3077,7 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
     var parentChecked = restSelectedCount === rest.length;
     var parentPartial = restSelectedCount > 0 && restSelectedCount < rest.length;
     var collapsed = STATE.extensionOtherCollapsed !== false;
-    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1" role="button" tabindex="0"><span class="tree-toggle-placeholder"></span><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="folder-name">其他 (' + rest.length + '种)</span><span class="folder-count">' + total.toLocaleString() + '</span></div>');
+    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1" role="button" tabindex="0"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="ext-other-spacer" aria-hidden="true"></span><span class="folder-name">其他 (' + rest.length + '种)</span><span class="folder-count">' + total.toLocaleString() + '</span></div>');
     html.push('<div class="tree-children" data-ext-other-children="1" ' + (collapsed ? 'hidden' : '') + '>');
     var restSorted = rest.slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
     for (var s = 0; s < restSorted.length; s++) {
@@ -3103,6 +3103,30 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
       emit(nextSet);
     });
   });
+  if (!container._extOtherClickBound) {
+    container.addEventListener("click", function(e) {
+      var row = e.target && e.target.closest ? e.target.closest(".ext-other-row") : null;
+      if (!row || !container.contains(row)) return;
+      if (e.target.closest("input[type='checkbox']")) return;
+      var childContainer = row.nextElementSibling;
+      if (!childContainer || !childContainer.matches("[data-ext-other-children]")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
+      childContainer.hidden = STATE.extensionOtherCollapsed !== false;
+    });
+    container.addEventListener("keydown", function(e) {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      var row = e.target && e.target.closest ? e.target.closest(".ext-other-row") : null;
+      if (!row || !container.contains(row)) return;
+      var childContainer = row.nextElementSibling;
+      if (!childContainer || !childContainer.matches("[data-ext-other-children]")) return;
+      e.preventDefault();
+      STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
+      childContainer.hidden = STATE.extensionOtherCollapsed !== false;
+    });
+    container._extOtherClickBound = true;
+  }
   var parentRow = container.querySelector('.ext-other-row');
   var childContainer = parentRow ? parentRow.nextElementSibling : null;
   if (parentRow && childContainer) {
@@ -3110,17 +3134,7 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
       STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
       childContainer.hidden = STATE.extensionOtherCollapsed !== false;
     };
-    parentRow.addEventListener("click", function(e) {
-      if (e.target && e.target.closest && e.target.closest("input[type='checkbox']")) return;
-      e.preventDefault();
-      e.stopPropagation();
-      toggleOtherChildren();
-    });
-    parentRow.addEventListener("keydown", function(e) {
-      if (e.key !== "Enter" && e.key !== " ") return;
-      e.preventDefault();
-      toggleOtherChildren();
-    });
+    parentRow._toggleOtherChildren = toggleOtherChildren;
   }
 }
 
