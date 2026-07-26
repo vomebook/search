@@ -1737,6 +1737,7 @@ const ROUTER = {
     DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
     if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
     this.updateUI();
+    updateRandomTxtVisibility();
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       this.onModeChanged();
       if (route.params.wide === "1") {
@@ -1833,6 +1834,27 @@ const searchResponseCache = new Map();
 const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();
 const DOWNLOAD_CHECK_TIMEOUT = 8000;
+let randomTxtStatusId = 0;
+
+async function updateRandomTxtVisibility() {
+  if (!DOM.randomTxtBtn) return;
+  const id = ++randomTxtStatusId;
+  DOM.randomTxtBtn.style.display = "none";
+  if (STATE.dataLoaded) {
+    const pool = STATE.repoFull ? (repoTxtRecordIndices[STATE.repoFull] || []) : txtRecordIndices;
+    DOM.randomTxtBtn.style.display = pool.length > 0 ? "" : "none";
+    return;
+  }
+  const repo = STATE.mode === "repo" && STATE.repo ? STATE.repo : "";
+  const url = repo ? API_BASE + "/api/random-txt/status?repo=" + encodeURIComponent(repo) : API_BASE + "/api/random-txt/status";
+  try {
+    const data = await fetchJsonWithTimeout(url, 4000);
+    if (id !== randomTxtStatusId) return;
+    DOM.randomTxtBtn.style.display = data && data.available ? "" : "none";
+  } catch (e) {
+    if (id === randomTxtStatusId) DOM.randomTxtBtn.style.display = "none";
+  }
+}
 
 function stableSearchStringify(value) {
   if (Array.isArray(value)) return "[" + value.map(stableSearchStringify).join(",") + "]";
@@ -2025,6 +2047,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (ok) {
       STATE.repoList = repoList;
       STATE.extensionList = extensionList;
+      updateRandomTxtVisibility();
       if (STATE._initialActive) {
         if (STATE._pendingPage) {
           STATE._localTakeoverPending = true;
