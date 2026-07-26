@@ -503,6 +503,7 @@ function parseSizeStr(str) {
 var HISTORY_KEY = "voml_search_history";
 var HISTORY_MAX = 20;
 var FOLDER_FILTER_STORAGE_PREFIX = "voml_folder_filter:";
+var EXT_FILTER_STORAGE_PREFIX = "voml_ext_filter:";
 
 function getHistory() {
   try {
@@ -546,6 +547,45 @@ function saveStoredFolderFilters(repo) {
       localStorage.removeItem(folderFilterStorageKey(repo));
     } else {
       localStorage.setItem(folderFilterStorageKey(repo), JSON.stringify({ selfs: selfs, subtrees: subtrees }));
+    }
+  } catch (e) {}
+}
+
+function extensionFilterStorageKey(repo) {
+  return EXT_FILTER_STORAGE_PREFIX + (repo || "global");
+}
+
+function loadStoredExtensionFilters(repo) {
+  try {
+    var data = JSON.parse(localStorage.getItem(extensionFilterStorageKey(repo)) || "{}");
+    var values = Array.isArray(data.values) ? data.values.filter(Boolean) : [];
+    return values;
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveStoredFolderFilters(repo) {
+  if (!repo) return;
+  var selfs = (STATE.filterFolderSelfs || []).filter(Boolean);
+  var subtrees = (STATE.filterFolderSubtrees || []).filter(Boolean);
+  try {
+    if (!selfs.length && !subtrees.length) {
+      localStorage.removeItem(folderFilterStorageKey(repo));
+    } else {
+      localStorage.setItem(folderFilterStorageKey(repo), JSON.stringify({ selfs: selfs, subtrees: subtrees }));
+    }
+  } catch (e) {}
+}
+
+function saveStoredExtensionFilters(repo) {
+  if (!repo) return;
+  var values = (STATE.filterExtensions || []).filter(Boolean);
+  try {
+    if (!values.length) {
+      localStorage.removeItem(extensionFilterStorageKey(repo));
+    } else {
+      localStorage.setItem(extensionFilterStorageKey(repo), JSON.stringify({ values: values }));
     }
   } catch (e) {}
 }
@@ -1606,7 +1646,6 @@ const ROUTER = {
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
-    if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
     if (mode !== "global" && folder !== undefined && folder !== null) sp.set("path", folder);
     else if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
     if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
@@ -1661,8 +1700,9 @@ const ROUTER = {
     }
     if (route.params.ext) {
       STATE.filterExtensions = route.params.ext.split(",").filter(Boolean);
+      saveStoredExtensionFilters(STATE.repo);
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
-      STATE.filterExtensions = [];
+      STATE.filterExtensions = loadStoredExtensionFilters(STATE.repo);
     }
     if (route.params.path) {
       STATE.browserPath = route.params.path;
@@ -1792,8 +1832,7 @@ function syncStateToURL() {
       sp.append("repo", r.split("/").pop());
     });
   }
-  if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
-  if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
+   if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
   if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
   if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
   if (!STATE.searchFolders) sp.set("search_folders", "false");
@@ -2969,6 +3008,7 @@ async function renderExtensionFilter(routeId) {
     if (cleaned.length !== STATE.filterExtensions.length) {
       STATE.filterExtensions = cleaned;
       STATE.page = 1;
+      saveStoredExtensionFilters(STATE.repo);
       syncStateToURL();
     }
   }
@@ -3004,6 +3044,7 @@ async function renderExtensionFilter(routeId) {
       }
     }
     STATE.page = 1;
+    saveStoredExtensionFilters(STATE.repo);
     doSearch();
   });
 }
@@ -3901,7 +3942,6 @@ function setupResultDelegation() {
         let hash = "#/" + frepo;
         const sp = new URLSearchParams();
         if (STATE.query) sp.set("q", STATE.query);
-        if (STATE.filterExtensions.length) sp.set("ext", STATE.filterExtensions.join(","));
         if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
         if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
         if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
@@ -4165,6 +4205,8 @@ function init() {
   DOM.extSelectAll.addEventListener("click", function() {
     STATE.filterExtensions = STATE.extensionList.slice();
     STATE.page = 1;
+    saveStoredExtensionFilters(STATE.repo);
+    renderExtensionFilter();
     doSearch();
   });
   DOM.extDeselectAll.addEventListener("click", function() {
@@ -4172,6 +4214,8 @@ function init() {
     var currentSet = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
     STATE.page = 1;
+    saveStoredExtensionFilters(STATE.repo);
+    renderExtensionFilter();
     doSearch();
   });
   DOM.folderSelectAll.addEventListener("click", function() {
