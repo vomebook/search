@@ -3078,7 +3078,7 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
     var parentChecked = restSelectedCount === rest.length;
     var parentPartial = restSelectedCount > 0 && restSelectedCount < rest.length;
     var collapsed = STATE.extensionOtherCollapsed !== false;
-    html.push('<div class="filter-folder-item" style="--fdepth:0" data-ext-other="1"><button type="button" class="tree-toggle ' + (collapsed ? '' : 'expanded') + '" aria-label="' + (collapsed ? '展开其他文件类型' : '收起其他文件类型') + '" title="' + (collapsed ? '展开' : '收起') + '"><span class="tree-toggle-glyph" aria-hidden="true"></span></button><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="folder-name">其他 (' + rest.length + '种)</span><span class="folder-count">' + total.toLocaleString() + '</span></div>');
+    html.push('<div class="filter-folder-item" style="--fdepth:0" data-ext-other="1" role="button" tabindex="0"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="folder-name">其他 (' + rest.length + '种)</span><span class="folder-count">' + total.toLocaleString() + '</span></div>');
     html.push('<div class="tree-children" data-ext-other-children="1" style="' + (collapsed ? 'display:none' : '') + '">');
     var restSorted = rest.slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
     for (var s = 0; s < restSorted.length; s++) {
@@ -3104,14 +3104,21 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
       emit(nextSet);
     });
   });
-  var toggle = container.querySelector('[data-ext-other="1"] .tree-toggle');
+  var parentRow = container.querySelector('[data-ext-other="1"]');
   var childContainer = container.querySelector('[data-ext-other-children="1"]');
-  if (toggle && childContainer) {
-    toggle.addEventListener("click", function(e) {
-      e.stopPropagation();
-      var expanding = STATE.extensionOtherCollapsed !== false;
-      STATE.extensionOtherCollapsed = !expanding;
-      toggleFolderChildrenAnimated(childContainer, toggle, expanding);
+  if (parentRow && childContainer) {
+    var toggleOtherChildren = function() {
+      STATE.extensionOtherCollapsed = !(STATE.extensionOtherCollapsed === false);
+      childContainer.style.display = STATE.extensionOtherCollapsed === false ? "block" : "none";
+    };
+    parentRow.addEventListener("click", function(e) {
+      if (e.target && e.target.closest && e.target.closest("input[type='checkbox']")) return;
+      toggleOtherChildren();
+    });
+    parentRow.addEventListener("keydown", function(e) {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      toggleOtherChildren();
     });
   }
 }
