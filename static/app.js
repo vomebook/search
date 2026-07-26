@@ -83,6 +83,7 @@ let fullTextIndexReady = false;
 let fullTextIndexPromise = null;
 let folderTreeDataPromise = null;
 let folderBrowserDataPromise = null;
+const folderTreeCache = new Map();
 
 const RECORD_KEY_MAP = {
   r: "Repo",
@@ -1208,11 +1209,14 @@ async function fetchExtensions(repo) {
 }
 
 async function fetchFolderTree(repo) {
+  if (repo && folderTreeCache.has(repo)) return folderTreeCache.get(repo);
   if (!apiAvailable) return null;
   try {
     var resp = await fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo));
     if (!resp.ok) return null;
-    return await resp.json();
+    var data = await resp.json();
+    if (repo && data) folderTreeCache.set(repo, data);
+    return data;
   } catch (e) { return null; }
 }
 const browserApiCache = new Map();
@@ -1684,7 +1688,6 @@ const ROUTER = {
       STATE.filterFolders = [];
       STATE.filterFolderSubtrees = [];
       STATE.filterFolderSelfs = [];
-      STATE.folderTree = null;
       STATE.folderTreeCollapsed = {};
       folderContentsCache.clear();
       DOM.leftSidebar.classList.remove("expanded-wide");
