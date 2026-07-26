@@ -3000,8 +3000,9 @@ async function renderExtensionFilter(routeId) {
   if (extensionList && extensionList.length > 0) {
     var currentCounts = getCurrentExtensionCounts();
     extData = [];
-    for (var li = 0; li < extensionList.length; li++) {
-      var lext = extensionList[li];
+    var currentExtNames = Object.keys(currentCounts).sort();
+    for (var li = 0; li < currentExtNames.length; li++) {
+      var lext = currentExtNames[li];
       extData.push({ name: lext, count: currentCounts[lext] || 0 });
     }
   } else if (apiAvailable) {
@@ -3015,24 +3016,34 @@ async function renderExtensionFilter(routeId) {
       .filter(function(item) { return item && typeof item.name === "string"; })
       .map(function(item) { return item.name; })
     : [];
-  if (STATE.filterExtensions.length > 0 && extData && Array.isArray(extData)) {
-    // Keep extension selections across repos even if the current repo does not contain them.
+  extData = extData && Array.isArray(extData) ? extData : [];
+  var extMap = {};
+  for (var extIdx = 0; extIdx < extData.length; extIdx++) {
+    if (extData[extIdx] && extData[extIdx].name) extMap[extData[extIdx].name] = true;
   }
+  for (var selIdx = 0; selIdx < STATE.filterExtensions.length; selIdx++) {
+    var selectedExt = STATE.filterExtensions[selIdx];
+    if (selectedExt && !extMap[selectedExt]) {
+      extData.push({ name: selectedExt, count: 0 });
+      extMap[selectedExt] = true;
+    }
+  }
+  var selectedExtSet = new Set(STATE.filterExtensions);
   var ordered = [];
   var rest = [];
-  if (extData && Array.isArray(extData) && extData.length > 0) {
+  if (extData.length > 0) {
     for (var n = 0; n < extData.length; n++) {
       var e = extData[n];
       if (!e || typeof e.name !== "string") continue;
       var idx_e = ORDERED_EXTENSIONS.indexOf(e.name);
-      if (idx_e >= 0) {
-        ordered.push({ name: e.name, _idx: idx_e, count: e.count || 0 });
+      if (idx_e >= 0 || selectedExtSet.has(e.name)) {
+        ordered.push({ name: e.name, _idx: idx_e >= 0 ? idx_e : ORDERED_EXTENSIONS.length, count: e.count || 0 });
       } else {
         rest.push(e);
       }
     }
   }
-  ordered.sort(function(a, b) { return a._idx - b._idx; });
+  ordered.sort(function(a, b) { return a._idx - b._idx || a.name.localeCompare(b.name); });
   var items = [];
   for (var j = 0; j < ordered.length; j++) {
     items.push({ key: ordered[j].name, label: "." + ordered[j].name, count: ordered[j].count });
