@@ -1296,6 +1296,10 @@ body.mobile .mobile-selected-count {
   flex-shrink: 0;
 }
 
+.tree-children {
+  transform-origin: top left;
+}
+
 .filter-folder-item input[type="checkbox"] {
   accent-color: var(--primary);
   width: 14px;
