@@ -2944,12 +2944,16 @@ async function renderFilters(routeId) {
   if (STATE.mode === "repo") {
     DOM.filterFolderSection.style.display = "";
     DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">加载中...</div>';
-    if (!STATE.folderTree && PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[STATE.repoFull]) {
-      STATE.folderTree = PRECOMPUTED_FOLDER_TREES[STATE.repoFull];
-    }
+    STATE.folderTree = (folderTreeCache.get(STATE.repoFull) || (PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[STATE.repoFull])) || null;
     if (!STATE.folderTree || !STATE.folderTree.length) {
       if (apiAvailable) {
-        try { STATE.folderTree = await fetchFolderTree(STATE.repo); } catch (e) {}
+        try {
+          const tree = await fetchFolderTree(STATE.repo);
+          if (tree) {
+            folderTreeCache.set(STATE.repoFull, tree);
+            STATE.folderTree = tree;
+          }
+        } catch (e) {}
         if (routeId && routeId !== routeRenderId) return;
       }
     }
@@ -3011,15 +3015,7 @@ async function renderExtensionFilter(routeId) {
       .map(function(item) { return item.name; })
     : [];
   if (STATE.filterExtensions.length > 0 && extData && Array.isArray(extData)) {
-    var availNames = {};
-    for (var axe = 0; axe < extData.length; axe++) { availNames[extData[axe].name] = true; }
-    var cleaned = STATE.filterExtensions.filter(function(ext) { return availNames[ext]; });
-    if (cleaned.length !== STATE.filterExtensions.length) {
-      STATE.filterExtensions = cleaned;
-      STATE.page = 1;
-      saveStoredExtensionFilters(STATE.repo);
-      syncStateToURL();
-    }
+    // Keep extension selections across repos even if the current repo does not contain them.
   }
   var ordered = [];
   var rest = [];
