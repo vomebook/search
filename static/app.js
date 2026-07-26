@@ -3121,12 +3121,16 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
     cb.addEventListener("change", function() {
       var nextSet = new Set(STATE.filterExtensions || []);
       if (cb.value === "__OTHER__") {
+        var shouldSelectAll = rest.some(function(item) { return !nextSet.has(item.name); });
         for (var o = 0; o < rest.length; o++) {
-          if (cb.checked) nextSet.add(rest[o].name);
+          if (shouldSelectAll) nextSet.add(rest[o].name);
           else nextSet.delete(rest[o].name);
         }
       } else if (cb.checked) nextSet.add(cb.value);
       else nextSet.delete(cb.value);
+      container.querySelectorAll('input[type="checkbox"]').forEach(function(input) {
+        if (input.value !== "__OTHER__") input.checked = nextSet.has(input.value);
+      });
       refreshExtOtherParentState();
       emit(nextSet);
     });
