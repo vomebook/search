@@ -81,6 +81,9 @@ let txtRecordIndices = [];
 let repoTxtRecordIndices = {};
 let fullTextIndexReady = false;
 let fullTextIndexPromise = null;
+let fullTextWorker = null;
+let localSearchWorkerPromise = null;
+let localSearchRequestId = 0;
 let folderTreeDataPromise = null;
 let folderBrowserDataPromise = null;
 const folderTreeCache = new Map();
@@ -661,27 +664,30 @@ function ensureFullTextIndex() {
   if (fullTextIndexPromise) return fullTextIndexPromise;
   if (window.Worker) {
     fullTextIndexPromise = new Promise(function(resolve, reject) {
-      var worker = new Worker("static/index-worker.js");
-      worker.onmessage = function(event) {
+      var worker = fullTextWorker || new Worker("static/index-worker.js");
+      function onMessage(event) {
         var data = event.data || {};
         if (data.type !== "fulltext-ready") return;
-        wordIndex = data.wordIndex || {};
-        wordIndexFilesOnly = data.wordIndexFilesOnly || {};
-        vocabSorted = data.vocabSorted || [];
-        vocabSortedFilesOnly = data.vocabSortedFilesOnly || [];
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
         fullTextIndexReady = true;
         fullTextIndexPromise = null;
-        worker.terminate();
+        fullTextWorker = worker;
         resolve(true);
-      };
-      worker.onerror = function(err) {
+      }
+      function onError(err) {
+        worker.removeEventListener("message", onMessage);
         fullTextIndexPromise = null;
         worker.terminate();
+        fullTextWorker = null;
         reject(err);
-      };
-      worker.postMessage({ type: "build-fulltext", records: RECORDS });
+      }
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError, { once: true });
+      worker.postMessage(fullTextWorker ? { type: "build-fulltext" } : { type: "build-fulltext", records: RECORDS });
     }).catch(function() {
       fullTextIndexPromise = null;
+      fullTextWorker = null;
       return buildIndex(true);
     });
     return fullTextIndexPromise;
@@ -694,6 +700,30 @@ function ensureFullTextIndex() {
     throw err;
   });
   return fullTextIndexPromise;
+}
+
+function ensureLocalSearchWorker() {
+  if (fullTextWorker) return Promise.resolve(fullTextWorker);
+  if (localSearchWorkerPromise) return localSearchWorkerPromise;
+  if (!window.Worker) return Promise.resolve(null);
+  localSearchWorkerPromise = new Promise(function(resolve, reject) {
+    const worker = new Worker("static/index-worker.js");
+    function onMessage(event) {
+      if (!event.data || event.data.type !== "records-ready") return;
+      worker.removeEventListener("message", onMessage);
+      fullTextWorker = worker;
+      localSearchWorkerPromise = null;
+      resolve(worker);
+    }
+    worker.addEventListener("message", onMessage);
+    worker.onerror = function(error) {
+      localSearchWorkerPromise = null;
+      worker.terminate();
+      reject(error);
+    };
+    worker.postMessage({ type: "init-records", records: RECORDS });
+  });
+  return localSearchWorkerPromise;
 }
 
 function ensureFolderTreeData() {
@@ -825,7 +855,7 @@ function applyFilters(indices, repos, extensions, folders, minSize, maxSize, fol
   });
 }
 
-function doSearchLocal(params) {
+function doSearchLocalMain(params) {
   const q = (params.q || "").trim();
   const repos = params.repos || null;
   const extensions = params.extensions || null;
@@ -926,6 +956,36 @@ function doSearchLocal(params) {
   const start = (page - 1) * pageSize;
   const paged = scored.slice(start, start + pageSize).map(s => RECORDS[s.idx]);
   return { results: paged, total, page, pageSize };
+}
+
+async function doSearchLocal(params) {
+  const needsFullText = !!(params.q && !params.exact && !shouldUseLiteralLocalSearch(params.q));
+  try {
+    if (needsFullText) await ensureFullTextIndex();
+    else await ensureLocalSearchWorker();
+  } catch (e) {
+    return doSearchLocalMain(params);
+  }
+  if (!fullTextWorker) return doSearchLocalMain(params);
+  const requestId = ++localSearchRequestId;
+  const workerParams = Object.assign({}, params);
+  delete workerParams.signal;
+  const data = await new Promise(function(resolve, reject) {
+    function onMessage(event) {
+      const message = event.data || {};
+      if (message.type !== "local-search-result" || message.id !== requestId) return;
+      fullTextWorker.removeEventListener("message", onMessage);
+      resolve(message.result || { indices: [], total: 0, page: params.page || 1, pageSize: params.pageSize || 100 });
+    }
+    fullTextWorker.addEventListener("message", onMessage);
+    fullTextWorker.postMessage({ type: "local-search", id: requestId, params: workerParams });
+  });
+  return {
+    results: (data.indices || []).map(function(idx) { return RECORDS[idx]; }),
+    total: data.total || 0,
+    page: data.page || params.page || 1,
+    pageSize: data.pageSize || params.pageSize || 100,
+  };
 }
 
 function applyMixedFolderFilters(indices, selfFolders, subtreeFolders) {
@@ -1040,9 +1100,11 @@ async function doSearchAPI(params, append, requestId) {
     resp = await fetch(base, fetchOptions);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     data = await resp.json();
+    noteApiSuccess();
     setCachedSearchResponse(cacheKey, data);
   } catch (e) {
     clearTimeout(timeoutId);
+    if (!params.signal || !params.signal.aborted || timeoutAbort) noteApiFailure();
     if (timeoutAbort && (e.name === "AbortError" || e.name === "TimeoutError")) {
       throw new Error("API_TIMEOUT");
     }
@@ -1146,16 +1208,18 @@ function prefetchNextPage() {
     body: JSON.stringify(body),
     signal: prefetchController.signal,
   }).then(function(resp) {
-    if (!resp.ok) return;
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
     return resp.json();
   }).then(function(data) {
     if (reqId !== searchRequestId) return;
     if (data && data.results) {
+      noteApiSuccess();
       setCachedSearchResponse(cacheKey, data);
       STATE._pageCache[nextPage] = data.results;
     }
   }).catch(function(err) {
     if (err && err.name === "AbortError") return;
+    noteApiFailure();
   }).finally(function() {
     if (searchPrefetchAbortController === prefetchController) {
       searchPrefetchAbortController = null;
@@ -1166,10 +1230,12 @@ function prefetchNextPage() {
 async function fetchRepos() {
   if (!apiAvailable) return null;
   try {
-    var resp = await fetch(API_BASE + "/api/repos");
-    if (!resp.ok) return null;
-    return await resp.json();
-  } catch (e) { return null; }
+    var resp = await fetchWithTimeout(API_BASE + "/api/repos", 5000);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var data = await resp.json();
+    noteApiSuccess();
+    return data;
+  } catch (e) { noteApiFailure(); return null; }
 }
 
 async function fetchExtensions(repo) {
@@ -1178,23 +1244,26 @@ async function fetchExtensions(repo) {
     var url = repo
       ? API_BASE + "/api/extensions?repo=" + encodeURIComponent(repo)
       : API_BASE + "/api/extensions";
-    var resp = await fetch(url);
-    if (!resp.ok) return null;
+    var resp = await fetchWithTimeout(url, 5000);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
     var data = await resp.json();
+    noteApiSuccess();
     return data;
-  } catch (e) { return null; }
+  } catch (e) { noteApiFailure(); return null; }
 }
 
-async function fetchFolderTree(repo) {
-  if (repo && folderTreeCache.has(repo)) return folderTreeCache.get(repo);
+async function fetchFolderTree(repo, cacheKey) {
+  cacheKey = cacheKey || repo;
+  if (cacheKey && folderTreeCache.has(cacheKey)) return folderTreeCache.get(cacheKey);
   if (!apiAvailable) return null;
   try {
-    var resp = await fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo));
-    if (!resp.ok) return null;
+    var resp = await fetchWithTimeout(API_BASE + "/api/folders/" + encodeURIComponent(repo), 5000);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
     var data = await resp.json();
-    if (repo && data) folderTreeCache.set(repo, data);
+    noteApiSuccess();
+    if (cacheKey && data) folderTreeCache.set(cacheKey, data);
     return data;
-  } catch (e) { return null; }
+  } catch (e) { noteApiFailure(); return null; }
 }
 const browserApiCache = new Map();
 const browserApiPending = new Map();
@@ -1270,18 +1339,22 @@ async function fetchFolderContents(repo, path) {
     var timeoutId = setTimeout(function() { controller.abort(); }, 12000);
     var promise = fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo) + "/contents" + qs, { signal: controller.signal })
       .then(function(resp) {
-        if (!resp.ok) return null;
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
         return resp.json();
       })
       .then(function(data) {
         clearTimeout(timeoutId);
         browserApiPending.delete(cacheKey);
-        if (data) setBrowserApiCache(cacheKey, data);
+        if (data) {
+          noteApiSuccess();
+          setBrowserApiCache(cacheKey, data);
+        }
         return data;
       })
-      .catch(function() {
+      .catch(function(error) {
         clearTimeout(timeoutId);
         browserApiPending.delete(cacheKey);
+        if (!error || error.name !== "AbortError") noteApiFailure();
         return null;
       });
     browserApiPending.set(cacheKey, promise);
@@ -1859,6 +1932,11 @@ let searchPrefetchAbortController = null;
 let searchRequestId = 0;
 let routeRenderId = 0;
 let apiAvailable = true;
+let apiFailureCount = 0;
+let apiProbeTimer = null;
+let apiProbeInFlight = false;
+const API_FAILURE_THRESHOLD = 3;
+const API_RECOVERY_DELAY = 30000;
 let localDataPromise = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
 const SEARCH_CACHE_MAX = 60;
@@ -1867,6 +1945,43 @@ const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();
 const DOWNLOAD_CHECK_TIMEOUT = 8000;
 let randomTxtStatusId = 0;
+
+function noteApiSuccess() {
+  apiFailureCount = 0;
+  apiAvailable = true;
+  if (apiProbeTimer) {
+    clearTimeout(apiProbeTimer);
+    apiProbeTimer = null;
+  }
+}
+
+function scheduleApiProbe() {
+  if (apiProbeTimer || apiProbeInFlight) return;
+  apiProbeTimer = setTimeout(async function() {
+    apiProbeTimer = null;
+    apiProbeInFlight = true;
+    let recovered = false;
+    try {
+      const response = await fetchWithTimeout(API_BASE + "/api/repos", 4000);
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      noteApiSuccess();
+      recovered = true;
+    } catch (e) {
+      apiAvailable = false;
+    } finally {
+      apiProbeInFlight = false;
+      if (!recovered) scheduleApiProbe();
+    }
+  }, API_RECOVERY_DELAY);
+}
+
+function noteApiFailure() {
+  apiFailureCount++;
+  if (apiFailureCount >= API_FAILURE_THRESHOLD) {
+    apiAvailable = false;
+    scheduleApiProbe();
+  }
+}
 
 async function updateRandomTxtVisibility() {
   if (!DOM.randomTxtBtn) return;
@@ -2390,10 +2505,11 @@ function handleApiSearchFailure(append, id) {
 }
 
 function doSearchFallbackLocal(params, append, id) {
-  (function() {
+  (async function() {
     if (id !== searchId) return;
     try {
-      const data = doSearchLocal(params);
+      const data = await doSearchLocal(params);
+      if (id !== searchId) return;
       STATE.total = data.total;
       if (append) {
         if (VSCROLL.isDraggingThumb) {
@@ -2941,26 +3057,31 @@ async function renderFilters(routeId) {
     DOM.filterRepoSection.style.display = "none";
   }
   if (STATE.mode === "repo") {
+    var folderRepo = STATE.repo;
+    var folderRepoFull = STATE.repoFull;
     DOM.filterFolderSection.style.display = "";
     DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">加载中...</div>';
-    STATE.folderTree = (folderTreeCache.get(STATE.repoFull) || (PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[STATE.repoFull])) || null;
-    if (!STATE.folderTree || !STATE.folderTree.length) {
+    var folderTree = (folderTreeCache.get(folderRepoFull) || (PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[folderRepoFull])) || null;
+    if (!folderTree || !folderTree.length) {
       if (apiAvailable) {
         try {
-          const tree = await fetchFolderTree(STATE.repo);
+          const tree = await fetchFolderTree(folderRepo, folderRepoFull);
+          if (routeId && routeId !== routeRenderId) return;
+          if (STATE.mode !== "repo" || STATE.repo !== folderRepo || STATE.repoFull !== folderRepoFull) return;
           if (tree) {
-            folderTreeCache.set(STATE.repoFull, tree);
-            STATE.folderTree = tree;
+            folderTreeCache.set(folderRepoFull, tree);
+            folderTree = tree;
           }
         } catch (e) {}
-        if (routeId && routeId !== routeRenderId) return;
       }
     }
-    if ((!STATE.folderTree || !STATE.folderTree.length) && STATE.dataLoaded) {
-      STATE.folderTree = buildFilterFolderTree(STATE.repoFull);
+    if ((!folderTree || !folderTree.length) && STATE.dataLoaded) {
+      folderTree = buildFilterFolderTree(folderRepoFull);
     }
-    if (STATE.folderTree && STATE.folderTree.length) initializeFolderTreeCollapsed(STATE.folderTree);
     if (routeId && routeId !== routeRenderId) return;
+    if (STATE.mode !== "repo" || STATE.repo !== folderRepo || STATE.repoFull !== folderRepoFull) return;
+    STATE.folderTree = folderTree;
+    if (STATE.folderTree && STATE.folderTree.length) initializeFolderTreeCollapsed(STATE.folderTree);
     renderFilterFolderTree();
   } else {
     DOM.filterFolderSection.style.display = "none";
