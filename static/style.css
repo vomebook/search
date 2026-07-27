@@ -752,6 +752,7 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .results-list.results-pending {
   opacity: 0.62;
+  pointer-events: none;
   transition: opacity 120ms ease;
 }
 

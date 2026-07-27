@@ -371,7 +371,19 @@ function getBrowserFileLink(repo, folderPath, file) {
   if (!repo) return "";
   var fullName = getBrowserFileName(file);
   var relativePath = folderPath ? folderPath + "/" + fullName : fullName;
-  return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeURI(relativePath);
+  return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + relativePath.split("/").map(encodeURIComponent).join("/");
+}
+
+function openExternalWindow(url) {
+  const popup = window.open(url, "_blank", "noopener,noreferrer");
+  if (popup) popup.opener = null;
+  return popup;
+}
+
+function openPendingWindow() {
+  const popup = window.open("about:blank", "_blank");
+  if (popup) popup.opener = null;
+  return popup;
 }
 
 function buildIndex(includeFullText) {
@@ -855,44 +867,32 @@ function doSearchLocal(params) {
     }
   } else {
     const tokens = tokenize(q);
-    let exact = null;
+    let tokenMatches = null;
     for (const tok of tokens) {
-      const idxs = activeIndex[tok];
-      if (!idxs) { exact = []; break; }
-      if (exact === null) exact = [...idxs];
+      let candidates = activeIndex[tok] || null;
+      if (!candidates) {
+        const fuzzyCandidates = [];
+        for (const [vocab] of activeVocabSorted) {
+          if (Math.abs(vocab.length - tok.length) > 2) continue;
+          if (editDistance(tok, vocab) <= 2) {
+            fuzzyCandidates.push(...(activeIndex[vocab] || []));
+            if (fuzzyCandidates.length >= 200) break;
+          }
+        }
+        candidates = fuzzyCandidates.length > 0 ? [...new Set(fuzzyCandidates)] : [];
+      }
+      if (candidates.length === 0) {
+        tokenMatches = [];
+        break;
+      }
+      if (tokenMatches === null) tokenMatches = [...candidates];
       else {
-        const idxsSet = new Set(idxs);
-        exact = exact.filter(i => idxsSet.has(i));
+        const candidateSet = new Set(candidates);
+        tokenMatches = tokenMatches.filter(i => candidateSet.has(i));
       }
+      if (tokenMatches.length === 0) break;
     }
-    let fuzzy = [];
-    for (const tok of tokens) {
-      if (activeIndex[tok]) continue;
-      const candidates = [];
-      for (const [vocab] of activeVocabSorted) {
-        if (Math.abs(vocab.length - tok.length) > 2) continue;
-        if (editDistance(tok, vocab) <= 2) {
-          candidates.push(...(activeIndex[vocab] || []));
-          if (candidates.length >= 200) break;
-        }
-      }
-      if (candidates.length > 0) {
-        if (fuzzy.length === 0) fuzzy = [...new Set(candidates)];
-        else {
-          const candidateSet = new Set(candidates);
-          fuzzy = fuzzy.filter(i => candidateSet.has(i));
-        }
-      }
-    }
-    if (exact && exact.length > 0) {
-      matched = exact;
-      if (fuzzy.length > 0) {
-        const exactSet = new Set(exact);
-        matched = [...matched, ...fuzzy.filter(i => !exactSet.has(i))];
-      }
-    } else if (fuzzy.length > 0) {
-      matched = fuzzy;
-    }
+    matched = tokenMatches || [];
   }
   let filtered = matched;
     if (folderMatchMode === "mixed") {
@@ -1988,6 +1988,7 @@ function applyInitialSearchPayload(data) {
   STATE.isLoading = false;
   STATE.resultsSkeletonActive = false;
   DOM.resultsLoading.style.display = "none";
+  DOM.resultsList.classList.remove("results-pending");
   setSearchVisualLoading(false);
   setCachedSearchResponse(getCurrentSearchCacheKey(1), {
     results: STATE.results,
@@ -2222,6 +2223,7 @@ function doSearch(append) {
     pageSize: STATE.pageSize,
   };
   STATE.isLoading = true;
+  if (!append && STATE.results.length > 0) DOM.resultsList.classList.add("results-pending");
   const preserveFilteredRefresh = !append && STATE.results.length === 0 && STATE.filterExtensions.length > 0;
   if (!append && STATE.results.length === 0 && !preserveFilteredRefresh) setSearchVisualLoading(true);
   else if (preserveFilteredRefresh) setSearchVisualLoading(false);
@@ -2353,6 +2355,7 @@ function doSearch(append) {
         DOM.resultsLoading.style.display = "none";
         if (!append) setSearchVisualLoading(false);
         else updateStatusBar();
+        if (!append) DOM.resultsList.classList.remove("results-pending");
         if (append && STATE._localTakeoverPending && STATE.dataLoaded) {
           runLocalTakeover();
         }
@@ -2388,7 +2391,7 @@ function handleApiSearchFailure(append, id) {
 }
 
 function doSearchFallbackLocal(params, append, id) {
-  requestAnimationFrame(function() {
+  (function() {
     if (id !== searchId) return;
     try {
       const data = doSearchLocal(params);
@@ -2439,8 +2442,9 @@ function doSearchFallbackLocal(params, append, id) {
       DOM.resultsLoading.style.display = "none";
       if (!append) setSearchVisualLoading(false);
       else updateStatusBar();
+      if (!append) DOM.resultsList.classList.remove("results-pending");
     }
-  }, 0);
+  })();
 }
 
 function renderResults() {
@@ -2497,7 +2501,7 @@ function buildResultHTML(rec, idx) {
     '<div class="result-actions">' +
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(getRecordLink(rec))) + '">复制链接</button>' +
       '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(getRecordLink(rec)) + '">下载</button>' +
-      '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank">仓库查看</a>' +
+      '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
       (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(getRecordLink(rec)) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
     '</div>'
   );
@@ -2820,8 +2824,9 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     div2.className = "browser-item";
     var iconType = getFileIconType(f2.ext);
     var sizeStr = formatSize(f2.size);
+    var browserFileName = getBrowserFileName(f2);
     div2.innerHTML = (ICONS[iconType] || ICONS.file) +
-      '<span class="browser-name">' + escapeHTML(f2.name) + (f2.ext ? '.' + escapeHTML(f2.ext) : '') + '</span>' +
+      '<span class="browser-name">' + escapeHTML(browserFileName) + '</span>' +
       (f2.hasTxt ? '<span class="browser-action" data-read="1">阅读</span>' : '') +
       (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '');
     div2.addEventListener("click", function(ff, ppath) {
@@ -2832,12 +2837,12 @@ function renderBrowserListItems(list, data, currentRepo, path) {
             ? ff.name.slice(0, ff.name.lastIndexOf("."))
             : (ff.name || "");
           var txtPath_v = (ppath ? ppath + "/" : "") + stem;
-          window.open(TXT_BASE + "/" + encodeURI(txtPath_v) + ".txt", "_blank");
+          openExternalWindow(TXT_BASE + "/" + encodeURI(txtPath_v) + ".txt");
           return;
         }
         var fileLink = getBrowserFileLink(currentRepo, ppath, ff);
         if (fileLink) {
-          var downloadName = ff.name + (ff.ext ? "." + ff.ext : "");
+          var downloadName = getBrowserFileName(ff);
           downloadFile(downloadName, fileLink);
         }
       };
@@ -3560,12 +3565,14 @@ function randomBook() {
     });
 }
 
-function openTxtRecord(rec) {
+function openTxtRecord(rec, popup) {
   if (!rec) return false;
   var relPath = buildRecordRelativePath(rec);
   var stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
   if (!stem) return false;
-  window.open(TXT_BASE + "/" + encodeURI(stem) + ".txt", "_blank");
+  const url = TXT_BASE + "/" + encodeURI(stem) + ".txt";
+  if (popup) popup.location.replace(url);
+  else openExternalWindow(url);
   return true;
 }
 
@@ -3578,9 +3585,13 @@ function getRandomTxtLocal() {
 
 function randomTxt() {
   showToast("正在随机打开文章...");
+  var popup = openPendingWindow();
   if (STATE.dataLoaded) {
     var localRec = getRandomTxtLocal();
-    if (!openTxtRecord(localRec)) showToast("暂无可读文章");
+    if (!openTxtRecord(localRec, popup)) {
+      if (popup) popup.close();
+      showToast("暂无可读文章");
+    }
     return;
   }
   var url = STATE.repoFull
@@ -3590,14 +3601,20 @@ function randomTxt() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     return resp.json();
   }).then(function(rec) {
-    if (!openTxtRecord(rec)) throw new Error("NO_TXT");
+    if (!openTxtRecord(rec, popup)) throw new Error("NO_TXT");
   }).catch(function() {
     function fallback() {
       var rec = getRandomTxtLocal();
-      if (!openTxtRecord(rec)) showToast("暂无可读文章");
+      if (!openTxtRecord(rec, popup)) {
+        if (popup) popup.close();
+        showToast("暂无可读文章");
+      }
     }
     if (STATE.dataLoaded) fallback();
-    else ensureLocalDataLoaded(false, true).then(fallback).catch(function() { showToast("暂无可读文章"); });
+    else ensureLocalDataLoaded(false, true).then(fallback).catch(function() {
+      if (popup) popup.close();
+      showToast("暂无可读文章");
+    });
   });
 }
 let toastTimer;
@@ -3954,7 +3971,7 @@ function setupKeyboard() {
       }
       if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
         const rec = STATE.results[keyboardResultIndex];
-        if (rec) window.open(getRecordLink(rec), "_blank");
+        if (rec) openExternalWindow(getRecordLink(rec));
         return;
       }
     }
@@ -4023,7 +4040,7 @@ function setupResultDelegation() {
           const slashAfterDot = stem.indexOf("/", lastDot);
           if (slashAfterDot === -1) stem = stem.substring(0, lastDot);
         }
-        window.open(TXT_BASE + "/" + encodeURI(stem) + ".txt", "_blank");
+        openExternalWindow(TXT_BASE + "/" + encodeURI(stem) + ".txt");
         return;
       }
     }
