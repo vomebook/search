@@ -504,7 +504,7 @@ function parseSizeStr(str) {
 var HISTORY_KEY = "voml_search_history";
 var HISTORY_MAX = 20;
 var FOLDER_FILTER_STORAGE_PREFIX = "voml_folder_filter:";
-var EXT_FILTER_STORAGE_PREFIX = "voml_ext_filter:";
+var EXT_FILTER_STORAGE_KEY = "voml_ext_filter:global";
 
 function getHistory() {
   try {
@@ -539,33 +539,10 @@ function loadStoredFolderFilters(repo) {
   }
 }
 
-function saveStoredFolderFilters(repo) {
-  if (!repo) return;
-  var selfs = (STATE.filterFolderSelfs || []).filter(Boolean);
-  var subtrees = (STATE.filterFolderSubtrees || []).filter(Boolean);
+function loadStoredExtensionFilters() {
   try {
-    if (!selfs.length && !subtrees.length) {
-      localStorage.removeItem(folderFilterStorageKey(repo));
-    } else {
-      localStorage.setItem(folderFilterStorageKey(repo), JSON.stringify({ selfs: selfs, subtrees: subtrees }));
-    }
-  } catch (e) {}
-}
-
-function extensionFilterStorageKey(repo) {
-  return EXT_FILTER_STORAGE_PREFIX + "global";
-}
-
-function loadStoredExtensionFilters(repo) {
-  try {
-    var data = JSON.parse(localStorage.getItem(extensionFilterStorageKey(repo)) || "{}");
-    var values = Array.isArray(data.values) ? data.values.filter(Boolean) : [];
-    if (values.length) return values;
-    if (repo) {
-      var legacy = JSON.parse(localStorage.getItem(EXT_FILTER_STORAGE_PREFIX + repo) || "{}");
-      return Array.isArray(legacy.values) ? legacy.values.filter(Boolean) : [];
-    }
-    return [];
+    var data = JSON.parse(localStorage.getItem(EXT_FILTER_STORAGE_KEY) || "{}");
+    return Array.isArray(data.values) ? data.values.filter(Boolean) : [];
   } catch (e) {
     return [];
   }
@@ -584,13 +561,13 @@ function saveStoredFolderFilters(repo) {
   } catch (e) {}
 }
 
-function saveStoredExtensionFilters(repo) {
+function saveStoredExtensionFilters() {
   var values = (STATE.filterExtensions || []).filter(Boolean);
   try {
     if (!values.length) {
-      localStorage.removeItem(extensionFilterStorageKey(repo));
+      localStorage.removeItem(EXT_FILTER_STORAGE_KEY);
     } else {
-      localStorage.setItem(extensionFilterStorageKey(repo), JSON.stringify({ values: values }));
+      localStorage.setItem(EXT_FILTER_STORAGE_KEY, JSON.stringify({ values: values }));
     }
   } catch (e) {}
 }
@@ -1133,6 +1110,7 @@ function consumeCachedAppendPage() {
 
 function prefetchNextPage() {
   if (!apiAvailable) return;
+  if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return;
   var nextPage = STATE._loadedPage + 1;
   var totalPages = Math.ceil(STATE.total / STATE.pageSize);
   if (nextPage > totalPages) return;
@@ -1628,6 +1606,7 @@ function highlightText(text, query) {
   return result;
 }
 
+let routeInitialized = false;
 const ROUTER = {
   parse: function() {
     const hash = window.location.hash.replace(/^#/, "");
@@ -1707,11 +1686,14 @@ const ROUTER = {
     } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       STATE.filterRepos = [];
     }
-    if (route.params.ext) {
-      STATE.filterExtensions = route.params.ext.split(",").filter(Boolean);
-      saveStoredExtensionFilters(STATE.repo);
-    } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
-      STATE.filterExtensions = loadStoredExtensionFilters(STATE.repo);
+    if (route.params.ext !== undefined) {
+      STATE.filterExtensions = route.params.ext ? route.params.ext.split(",").filter(Boolean) : [];
+      saveStoredExtensionFilters();
+    } else if (!routeInitialized) {
+      STATE.filterExtensions = loadStoredExtensionFilters();
+    } else {
+      STATE.filterExtensions = [];
+      saveStoredExtensionFilters();
     }
     if (route.params.path) {
       STATE.browserPath = route.params.path;
@@ -1799,6 +1781,7 @@ const ROUTER = {
       searchWithInitialFallback();
       renderSidebarAndFiltersDeferred(routeId);
     }
+    routeInitialized = true;
   },
   updateUI: function() {
     if (STATE.mode === "global") {
@@ -1819,7 +1802,7 @@ const ROUTER = {
     }
     DOM.leftSidebar.classList.remove("expanded-wide");
     if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
-    if (!STATE.isMobile && STATE.results.length === 0) {
+    if (!STATE.isMobile && STATE.results.length === 0 && STATE.filterExtensions.length === 0) {
       DOM.resultsList.innerHTML = "";
       DOM.emptyState.style.display = "none";
       STATE.resultsSkeletonActive = true;
@@ -2077,7 +2060,7 @@ function runLocalTakeover() {
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   if (STATE.dataLoaded) return Promise.resolve(true);
   if (localDataPromise) return localDataPromise;
-  if (!background) {
+  if (!background && STATE.filterExtensions.length === 0) {
     STATE.isLoading = true;
     setSearchVisualLoading(true);
     STATE.resultsSkeletonActive = true;
@@ -2089,6 +2072,12 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     updateStatusBar();
     updateLoadInfo();
     showToast("正在加载本地数据...");
+  } else if (!background) {
+    STATE.isLoading = true;
+    STATE.resultsSkeletonActive = false;
+    DOM.resultsLoading.style.display = "none";
+    DOM.emptyState.style.display = "none";
+    setSearchVisualLoading(false);
   }
   localDataPromise = loadData().then(function(ok) {
     STATE.dataLoaded = ok;
@@ -2233,9 +2222,13 @@ function doSearch(append) {
     pageSize: STATE.pageSize,
   };
   STATE.isLoading = true;
-  if (!append && STATE.results.length === 0) setSearchVisualLoading(true);
+  const preserveFilteredRefresh = !append && STATE.results.length === 0 && STATE.filterExtensions.length > 0;
+  if (!append && STATE.results.length === 0 && !preserveFilteredRefresh) setSearchVisualLoading(true);
+  else if (preserveFilteredRefresh) setSearchVisualLoading(false);
   STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
-  DOM.resultsLoading.style.display = (!append && STATE.results.length > 0) ? "none" : (STATE.resultsSkeletonActive ? "none" : "flex");
+  DOM.resultsLoading.style.display = preserveFilteredRefresh || (!append && STATE.results.length > 0)
+    ? "none"
+    : (STATE.resultsSkeletonActive ? "none" : "flex");
   if (!append) {
     if (!canUseInitialSearchPayload()) STATE._initialActive = false;
     if (STATE.results.length === 0) DOM.emptyState.style.display = "none";
@@ -2686,19 +2679,6 @@ function prepareRouteTransitionResults() {
   renderVisible();
 }
 
-function prepareFilterResultsRefresh() {
-  if (!DOM.resultsContainer || STATE.results.length === 0) return;
-  DOM.resultsContainer.scrollTop = 0;
-  VSCROLL.renderStart = -1;
-  VSCROLL.renderEnd = -1;
-  VSCROLL.heights = [];
-  VSCROLL.prefixHeights = [0];
-  VSCROLL.heightTree = [];
-  VSCROLL.heightsDirty = true;
-  clearResultHTMLCache();
-  updateScrollTrack();
-}
-
 function ensureVirtualHeights(len) {
   if (VSCROLL.heights.length >= len) return;
   const oldLen = VSCROLL.heights.length;
@@ -3065,8 +3045,7 @@ async function renderExtensionFilter(routeId) {
   renderExtensionTree(DOM.filterExtList, items, rest, STATE.filterExtensions, function(vals) {
     STATE.filterExtensions = vals;
     STATE.page = 1;
-    prepareFilterResultsRefresh();
-    saveStoredExtensionFilters(STATE.repo);
+    saveStoredExtensionFilters();
     doSearch();
   });
 }
@@ -3090,10 +3069,9 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
       if (selectedSet.has(rest[r].name)) restSelectedCount++;
     }
     var parentChecked = restSelectedCount === rest.length;
-    var parentPartial = restSelectedCount > 0 && restSelectedCount < rest.length;
     var collapsed = STATE.extensionOtherCollapsed !== false;
-    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0" data-ext-other="1"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + ' data-partial="' + (parentPartial ? '1' : '0') + '"><span class="ext-other-spacer" aria-hidden="true"></span><button type="button" class="ext-other-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '" onclick="var box=this.parentElement&&this.parentElement.nextElementSibling;if(box){var closed=box.style.display===\'none\';box.style.display=closed?\'block\':\'none\';this.setAttribute(\'aria-expanded\',closed?\'true\':\'false\');}return false;">其他 (' + rest.length + '种)<span class="folder-count">' + total.toLocaleString() + '</span></button></div>');
-    html.push('<div class="tree-children ext-other-children" data-ext-other-children="1" style="display:' + (collapsed ? 'none' : 'block') + '">');
+    html.push('<div class="filter-folder-item ext-other-row" style="--fdepth:0"><input type="checkbox" value="__OTHER__" ' + (parentChecked ? 'checked' : '') + '><span class="ext-other-spacer" aria-hidden="true"></span><button type="button" class="ext-other-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '">其他 (' + rest.length + '种)<span class="folder-count">' + total.toLocaleString() + '</span></button></div>');
+    html.push('<div class="tree-children ext-other-children" style="display:' + (collapsed ? 'none' : 'block') + '">');
     var restSorted = rest.slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
     for (var s = 0; s < restSorted.length; s++) {
       var child = restSorted[s];
@@ -3103,15 +3081,19 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
   }
   container.innerHTML = html.join("");
   var parentCb = container.querySelector('input[value="__OTHER__"]');
-  if (parentCb) parentCb.indeterminate = parentCb.dataset.partial === "1";
-  var refreshExtOtherParentState = function() {
+  if (parentCb) {
+    var initiallySelectedRestCount = 0;
+    for (var initialIndex = 0; initialIndex < rest.length; initialIndex++) {
+      if (selectedSet.has(rest[initialIndex].name)) initiallySelectedRestCount++;
+    }
+    parentCb.indeterminate = initiallySelectedRestCount > 0 && initiallySelectedRestCount < rest.length;
+  }
+  var refreshExtOtherParentState = function(nextSet) {
     var parent = container.querySelector('input[value="__OTHER__"]');
     if (!parent || rest.length === 0) return;
     var selectedRestCount = 0;
-    var childInputs = Array.from(container.querySelectorAll('input[type="checkbox"]'));
     for (var ri = 0; ri < rest.length; ri++) {
-      var child = childInputs.find(function(input) { return input.value === rest[ri].name; });
-      if (child && child.checked) selectedRestCount++;
+      if (nextSet.has(rest[ri].name)) selectedRestCount++;
     }
     parent.checked = selectedRestCount === rest.length;
     parent.indeterminate = selectedRestCount > 0 && selectedRestCount < rest.length;
@@ -3121,9 +3103,8 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
     cb.addEventListener("change", function() {
       var nextSet = new Set(STATE.filterExtensions || []);
       if (cb.value === "__OTHER__") {
-        var shouldSelectAll = rest.some(function(item) { return !nextSet.has(item.name); });
         for (var o = 0; o < rest.length; o++) {
-          if (shouldSelectAll) nextSet.add(rest[o].name);
+          if (cb.checked) nextSet.add(rest[o].name);
           else nextSet.delete(rest[o].name);
         }
       } else if (cb.checked) nextSet.add(cb.value);
@@ -3131,10 +3112,37 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
       container.querySelectorAll('input[type="checkbox"]').forEach(function(input) {
         if (input.value !== "__OTHER__") input.checked = nextSet.has(input.value);
       });
-      refreshExtOtherParentState();
+      refreshExtOtherParentState(nextSet);
       emit(nextSet);
     });
   });
+  var toggleButton = container.querySelector(".ext-other-toggle");
+  if (toggleButton) toggleButton.addEventListener("click", function() { toggleExtensionOther(toggleButton); });
+}
+
+function toggleExtensionOther(button) {
+  var children = button.parentElement && button.parentElement.nextElementSibling;
+  if (!children || !children.classList.contains("ext-other-children")) return false;
+  var expanding = STATE.extensionOtherCollapsed !== false;
+  STATE.extensionOtherCollapsed = !expanding;
+  button.setAttribute("aria-expanded", expanding ? "true" : "false");
+  children.getAnimations().forEach(function(animation) { animation.cancel(); });
+  if (expanding) {
+    children.style.display = "block";
+    children.animate([
+      { height: "0px", opacity: 0, transform: "translateY(-4px)", overflow: "hidden" },
+      { height: children.scrollHeight + "px", opacity: 1, transform: "translateY(0)", overflow: "hidden" },
+    ], { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+  } else {
+    var animation = children.animate([
+      { height: children.scrollHeight + "px", opacity: 1, transform: "translateY(0)", overflow: "hidden" },
+      { height: "0px", opacity: 0, transform: "translateY(-4px)", overflow: "hidden" },
+    ], { duration: 150, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+    animation.addEventListener("finish", function() {
+      if (STATE.extensionOtherCollapsed) children.style.display = "none";
+    }, { once: true });
+  }
+  return false;
 }
 
 
@@ -3972,7 +3980,7 @@ function clearAllFilters() {
   STATE.filterFolderSubtrees = [];
   STATE.filterFolderSelfs = [];
   saveStoredFolderFilters(STATE.repo);
-  saveStoredExtensionFilters(STATE.repo);
+  saveStoredExtensionFilters();
   STATE.filterMinSize = null;
   STATE.filterMaxSize = null;
   STATE.page = 1;
@@ -4035,6 +4043,7 @@ function setupResultDelegation() {
         if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
         if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
         if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
+        if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
         if (!STATE.searchFolders) sp.set("search_folders", "false");
         if (!STATE.exact) sp.set("exact", "0");
         if (!STATE.useLocalMode) sp.set("local", "0");
@@ -4295,8 +4304,7 @@ function init() {
   DOM.extSelectAll.addEventListener("click", function() {
     STATE.filterExtensions = STATE.extensionList.slice();
     STATE.page = 1;
-    prepareFilterResultsRefresh();
-    saveStoredExtensionFilters(STATE.repo);
+    saveStoredExtensionFilters();
     renderExtensionFilter();
     doSearch();
   });
@@ -4305,8 +4313,7 @@ function init() {
     var currentSet = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
     STATE.page = 1;
-    prepareFilterResultsRefresh();
-    saveStoredExtensionFilters(STATE.repo);
+    saveStoredExtensionFilters();
     renderExtensionFilter();
     doSearch();
   });
