@@ -1547,8 +1547,6 @@ const STATE = {
   _loadedPage: 0,
   _pageCache: {},
   _initialActive: false,
-  _suppressNextReveal: false,
-  _localTakeoverPending: false,
   _deferredAppendWhileDragging: false,
 };
 
@@ -2103,7 +2101,6 @@ function applyInitialSearchPayload(data) {
   STATE.isLoading = false;
   STATE.resultsSkeletonActive = false;
   DOM.resultsLoading.style.display = "none";
-  DOM.resultsList.classList.remove("results-pending");
   setSearchVisualLoading(false);
   setCachedSearchResponse(getCurrentSearchCacheKey(1), {
     results: STATE.results,
@@ -2165,14 +2162,6 @@ function searchWithInitialFallback() {
   return Promise.resolve(false);
 }
 
-function runLocalTakeover() {
-  STATE._localTakeoverPending = false;
-  STATE._initialActive = false;
-  STATE._suppressNextReveal = true;
-  STATE.page = 1;
-  doSearch();
-}
-
 function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   if (STATE.dataLoaded) return Promise.resolve(true);
   if (localDataPromise) return localDataPromise;
@@ -2203,11 +2192,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
       STATE.extensionList = extensionList;
       updateRandomTxtVisibility();
       if (STATE._initialActive) {
-        if (STATE._pendingPage) {
-          STATE._localTakeoverPending = true;
-        } else {
-          runLocalTakeover();
-        }
+        STATE._initialActive = false;
       } else if (triggerSearchAfterLoad) {
         STATE.page = 1;
         STATE.results = [];
@@ -2259,14 +2244,6 @@ function debouncedSearch() {
   }, 100);
 }
 
-function shouldShowResultsSkeleton(append) {
-  if (append) return false;
-  if (STATE.results.length > 0) return false;
-  if (STATE.filterExtensions.length > 0) return false;
-  if (!STATE.isMobile && STATE.mode === "repo") return true;
-  return !STATE.dataLoaded || (STATE.mode === "global" && STATE.page === 1 && !STATE.query && STATE.filterRepos.length === 0 && STATE.filterExtensions.length === 0 && STATE.filterFolders.length === 0);
-}
-
 function renderResultsSkeleton(count) {
   count = count || 8;
   var html = "";
@@ -2291,21 +2268,6 @@ function renderResultsSkeleton(count) {
 
 function clearResultsSkeleton() {
   DOM.resultsList.classList.remove("showing-skeleton");
-}
-
-function animateResultsReveal() {
-  DOM.resultsList.classList.remove("results-reveal");
-  void DOM.resultsList.offsetWidth;
-  DOM.resultsList.classList.add("results-reveal");
-  requestAnimationFrame(function() {
-    var items = DOM.resultsList.querySelectorAll(".result-item");
-    for (var i = 0; i < items.length; i++) {
-      items[i].style.setProperty("--reveal-delay", Math.min(i * 28, 220) + "ms");
-    }
-  });
-  setTimeout(function() {
-    DOM.resultsList.classList.remove("results-reveal");
-  }, 560);
 }
 
 function doSearch(append) {
@@ -2338,14 +2300,8 @@ function doSearch(append) {
     pageSize: STATE.pageSize,
   };
   STATE.isLoading = true;
-  if (!append && STATE.results.length > 0) DOM.resultsList.classList.add("results-pending");
-  const preserveFilteredRefresh = !append && STATE.results.length === 0 && STATE.filterExtensions.length > 0;
-  if (!append && STATE.results.length === 0 && !preserveFilteredRefresh) setSearchVisualLoading(true);
-  else if (preserveFilteredRefresh) setSearchVisualLoading(false);
-  STATE.resultsSkeletonActive = shouldShowResultsSkeleton(append);
-  DOM.resultsLoading.style.display = preserveFilteredRefresh || (!append && STATE.results.length > 0)
-    ? "none"
-    : (STATE.resultsSkeletonActive ? "none" : "flex");
+  DOM.resultsLoading.style.display = "none";
+  setSearchVisualLoading(false);
   if (!append) {
     if (!canUseInitialSearchPayload()) STATE._initialActive = false;
     if (STATE.results.length === 0) DOM.emptyState.style.display = "none";
@@ -2360,16 +2316,12 @@ function doSearch(append) {
     STATE._pageCache = {};
     STATE._loadedPage = 0;
     STATE._pendingPage = 0;
-    STATE._localTakeoverPending = false;
     STATE._deferredAppendWhileDragging = false;
     if (scrollLoadTimer) {
       clearTimeout(scrollLoadTimer);
       scrollLoadTimer = null;
     }
-    if (STATE.resultsSkeletonActive) {
-      DOM.resultsContainer.scrollTop = 0;
-      renderResultsSkeleton();
-    } else if (STATE.results.length === 0) {
+    if (STATE.results.length === 0 && !STATE.resultsSkeletonActive) {
       clearResultsSkeleton();
     }
   }
@@ -2469,10 +2421,6 @@ function doSearch(append) {
         DOM.resultsLoading.style.display = "none";
         if (!append) setSearchVisualLoading(false);
         else updateStatusBar();
-        if (!append) DOM.resultsList.classList.remove("results-pending");
-        if (append && STATE._localTakeoverPending && STATE.dataLoaded) {
-          runLocalTakeover();
-        }
       }
     });
     return;
@@ -2556,7 +2504,6 @@ function doSearchFallbackLocal(params, append, id) {
       DOM.resultsLoading.style.display = "none";
       if (!append) setSearchVisualLoading(false);
       else updateStatusBar();
-      if (!append) DOM.resultsList.classList.remove("results-pending");
     }
   })();
 }
@@ -2581,11 +2528,6 @@ function renderResults() {
   ensureVirtualHeights(STATE.results.length);
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
-  if (STATE._suppressNextReveal) {
-    STATE._suppressNextReveal = false;
-  } else if (STATE.resultsSkeletonActive) {
-    animateResultsReveal();
-  }
   renderVisible();
 }
 
@@ -2847,9 +2789,7 @@ function measureHeights() {
 }
 
 function updateStatusBar() {
-  DOM.resultCount.textContent = STATE.isLoading
-    ? "搜索中…"
-    : (STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "");
+  DOM.resultCount.textContent = STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "";
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ||
             STATE.filterMinSize !== null || STATE.filterMaxSize !== null;
   DOM.clearFiltersBtn.style.display = has ? "" : "none";
