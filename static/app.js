@@ -2313,8 +2313,7 @@ function doSearch(append) {
         VSCROLL.renderEnd = 0;
         requestAnimationFrame(function() { renderVisible(); });
       } else {
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
+        DOM.resultsContainer.scrollTop = 0;
         resetVirtualScrollState();
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
@@ -2415,8 +2414,7 @@ function doSearchFallbackLocal(params, append, id) {
         VSCROLL.renderEnd = 0;
         requestAnimationFrame(function() { renderVisible(); });
       } else {
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
+        DOM.resultsContainer.scrollTop = 0;
         resetVirtualScrollState();
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
