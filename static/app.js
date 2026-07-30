@@ -88,6 +88,11 @@ let folderTreeDataPromise = null;
 let folderBrowserDataPromise = null;
 const folderTreeCache = new Map();
 
+let keepalivePending = null;
+let lastKeepaliveAt = 0;
+const KEEPALIVE_INTERVAL_MS = 45 * 1000;
+const KEEPALIVE_MIN_GAP_MS = 30 * 1000;
+
 const RECORD_KEY_MAP = {
   r: "Repo",
   f: "File",
@@ -1320,6 +1325,19 @@ async function fetchWithTimeout(url, timeoutMs) {
   }
 }
 
+function warmConnection(force) {
+  if (force === undefined) force = false;
+  if (document.hidden || !navigator.onLine || keepalivePending) return keepalivePending;
+  var now = Date.now();
+  if (!force && now - lastKeepaliveAt < KEEPALIVE_MIN_GAP_MS) return null;
+  lastKeepaliveAt = now;
+  if (!apiAvailable) return null;
+  keepalivePending = fetchWithTimeout(API_BASE + "/api/ping", 12000).catch(function() { return null; }).finally(function() {
+    keepalivePending = null;
+  });
+  return keepalivePending;
+}
+
 function normalizeSidebarPayload(data, path) {
   path = path || "";
   if (!data || typeof data !== "object") return data;
@@ -2426,6 +2444,7 @@ function doSearch(append) {
       updateStatusBar();
       updateLoadInfo();
       prefetchNextPage();
+      warmConnection();
       syncStateToURL();
     }).catch(function(err) {
       if (err.message === "API_TIMEOUT") {
@@ -4500,10 +4519,16 @@ function init() {
     scheduleScrollRecovery(60);
   });
   document.addEventListener("visibilitychange", function() {
-    if (document.visibilityState === "visible") scheduleScrollRecovery();
+    if (document.visibilityState === "visible") {
+      scheduleScrollRecovery();
+      warmConnection(true);
+    }
   });
   window.addEventListener("pageshow", function() { scheduleScrollRecovery(); });
-  window.addEventListener("focus", function() { scheduleScrollRecovery(); });
+  window.addEventListener("focus", function() { scheduleScrollRecovery(); warmConnection(); });
+  window.addEventListener("online", function() { warmConnection(true); });
+  lastKeepaliveAt = Date.now();
+  window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   ROUTER.apply();
   fetchHitokoto();
   setInterval(fetchHitokoto, 30000);
