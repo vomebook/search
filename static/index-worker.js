@@ -147,7 +147,11 @@ self.addEventListener("message", function(event) {
     return;
   }
   if (data.type === "local-search") {
-    self.postMessage({ type: "local-search-result", id: data.id, result: searchLocal(data.params || {}) });
+    try {
+      self.postMessage({ type: "local-search-result", id: data.id, result: searchLocal(data.params || {}) });
+    } catch (err) {
+      self.postMessage({ type: "local-search-result", id: data.id, error: String(err && err.message || err) });
+    }
     return;
   }
   if (data.type !== "build-fulltext") return;
