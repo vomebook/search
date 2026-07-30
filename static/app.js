@@ -523,13 +523,13 @@ var EXT_FILTER_STORAGE_KEY = "voml_ext_filter:global";
 
 function getHistory() {
   try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+    return JSON.parse(sessionStorage.getItem(HISTORY_KEY)) || [];
   } catch (e) { return []; }
 }
 
 function saveHistory(list) {
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
+    sessionStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
   } catch (e) {}
 }
 
@@ -545,7 +545,7 @@ function mergeFolderFilters(selfs, subtrees) {
 
 function loadStoredFolderFilters(repo) {
   try {
-    var data = JSON.parse(localStorage.getItem(folderFilterStorageKey(repo)) || "{}");
+    var data = JSON.parse(sessionStorage.getItem(folderFilterStorageKey(repo)) || "{}");
     var selfs = Array.isArray(data.selfs) ? data.selfs.filter(Boolean) : [];
     var subtrees = Array.isArray(data.subtrees) ? data.subtrees.filter(Boolean) : [];
     return { selfs: selfs, subtrees: subtrees, folders: mergeFolderFilters(selfs, subtrees) };
@@ -556,7 +556,7 @@ function loadStoredFolderFilters(repo) {
 
 function loadStoredExtensionFilters() {
   try {
-    var data = JSON.parse(localStorage.getItem(EXT_FILTER_STORAGE_KEY) || "{}");
+    var data = JSON.parse(sessionStorage.getItem(EXT_FILTER_STORAGE_KEY) || "{}");
     return Array.isArray(data.values) ? data.values.filter(Boolean) : [];
   } catch (e) {
     return [];
@@ -569,9 +569,9 @@ function saveStoredFolderFilters(repo) {
   var subtrees = (STATE.filterFolderSubtrees || []).filter(Boolean);
   try {
     if (!selfs.length && !subtrees.length) {
-      localStorage.removeItem(folderFilterStorageKey(repo));
+      sessionStorage.removeItem(folderFilterStorageKey(repo));
     } else {
-      localStorage.setItem(folderFilterStorageKey(repo), JSON.stringify({ selfs: selfs, subtrees: subtrees }));
+      sessionStorage.setItem(folderFilterStorageKey(repo), JSON.stringify({ selfs: selfs, subtrees: subtrees }));
     }
   } catch (e) {}
 }
@@ -580,9 +580,9 @@ function saveStoredExtensionFilters() {
   var values = (STATE.filterExtensions || []).filter(Boolean);
   try {
     if (!values.length) {
-      localStorage.removeItem(EXT_FILTER_STORAGE_KEY);
+      sessionStorage.removeItem(EXT_FILTER_STORAGE_KEY);
     } else {
-      localStorage.setItem(EXT_FILTER_STORAGE_KEY, JSON.stringify({ values: values }));
+      sessionStorage.setItem(EXT_FILTER_STORAGE_KEY, JSON.stringify({ values: values }));
     }
   } catch (e) {}
 }
