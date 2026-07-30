@@ -664,27 +664,33 @@ function ensureFullTextIndex() {
   if (fullTextIndexPromise) return fullTextIndexPromise;
   if (window.Worker) {
     fullTextIndexPromise = new Promise(function(resolve, reject) {
-      var worker = fullTextWorker || new Worker("static/index-worker.js");
-      function onMessage(event) {
-        var data = event.data || {};
-        if (data.type !== "fulltext-ready") return;
-        worker.removeEventListener("message", onMessage);
-        worker.removeEventListener("error", onError);
-        fullTextIndexReady = true;
-        fullTextIndexPromise = null;
-        fullTextWorker = worker;
-        resolve(true);
-      }
-      function onError(err) {
-        worker.removeEventListener("message", onMessage);
-        fullTextIndexPromise = null;
-        worker.terminate();
-        fullTextWorker = null;
-        reject(err);
-      }
-      worker.addEventListener("message", onMessage);
-      worker.addEventListener("error", onError, { once: true });
-      worker.postMessage(fullTextWorker ? { type: "build-fulltext" } : { type: "build-fulltext", records: RECORDS });
+      var workerPromise = localSearchWorkerPromise
+        ? localSearchWorkerPromise
+        : Promise.resolve(fullTextWorker || null);
+      workerPromise.then(function(existingWorker) {
+        if (fullTextIndexReady) { resolve(true); return; }
+        var worker = existingWorker || fullTextWorker || new Worker("static/index-worker.js");
+        function onMessage(event) {
+          var data = event.data || {};
+          if (data.type !== "fulltext-ready") return;
+          worker.removeEventListener("message", onMessage);
+          worker.removeEventListener("error", onError);
+          fullTextIndexReady = true;
+          fullTextIndexPromise = null;
+          fullTextWorker = worker;
+          resolve(true);
+        }
+        function onError(err) {
+          worker.removeEventListener("message", onMessage);
+          fullTextIndexPromise = null;
+          worker.terminate();
+          fullTextWorker = null;
+          reject(err);
+        }
+        worker.addEventListener("message", onMessage);
+        worker.addEventListener("error", onError, { once: true });
+        worker.postMessage(existingWorker || fullTextWorker ? { type: "build-fulltext" } : { type: "build-fulltext", records: RECORDS });
+      }).catch(function(err) { reject(err); });
     }).catch(function() {
       fullTextIndexPromise = null;
       fullTextWorker = null;
@@ -971,13 +977,34 @@ async function doSearchLocal(params) {
   const workerParams = Object.assign({}, params);
   delete workerParams.signal;
   const data = await new Promise(function(resolve, reject) {
-    function onMessage(event) {
-      const message = event.data || {};
-      if (message.type !== "local-search-result" || message.id !== requestId) return;
+    var settled = false;
+    function cleanup() {
       fullTextWorker.removeEventListener("message", onMessage);
-      resolve(message.result || { indices: [], total: 0, page: params.page || 1, pageSize: params.pageSize || 100 });
+      fullTextWorker.removeEventListener("error", onError);
+      clearTimeout(timer);
     }
+    function onMessage(event) {
+      var message = event.data || {};
+      if (message.type !== "local-search-result" || message.id !== requestId) return;
+      cleanup();
+      settled = true;
+      if (message.error) reject(new Error(message.error));
+      else resolve(message.result || { indices: [], total: 0, page: params.page || 1, pageSize: params.pageSize || 100 });
+    }
+    function onError() {
+      if (settled) return;
+      cleanup();
+      settled = true;
+      reject(new Error("worker_error"));
+    }
+    var timer = setTimeout(function() {
+      if (settled) return;
+      cleanup();
+      settled = true;
+      reject(new Error("worker_timeout"));
+    }, 10000);
     fullTextWorker.addEventListener("message", onMessage);
+    fullTextWorker.addEventListener("error", onError);
     fullTextWorker.postMessage({ type: "local-search", id: requestId, params: workerParams });
   });
   return {
@@ -1104,7 +1131,8 @@ async function doSearchAPI(params, append, requestId) {
     setCachedSearchResponse(cacheKey, data);
   } catch (e) {
     clearTimeout(timeoutId);
-    if (!params.signal || !params.signal.aborted || timeoutAbort) noteApiFailure();
+    var cancelledByUser = params.signal && params.signal.aborted && !timeoutAbort;
+    if (!cancelledByUser) noteApiFailure();
     if (timeoutAbort && (e.name === "AbortError" || e.name === "TimeoutError")) {
       throw new Error("API_TIMEOUT");
     }
@@ -1924,6 +1952,7 @@ function renderSidebarAndFiltersDeferred(routeId) {
 }
 let searchTimer = null;
 let searchComposing = false;
+let composeSafetyTimer = null;
 let searchId = 0;
 let searchAbortController = null;
 let searchPrefetchAbortController = null;
@@ -2497,7 +2526,38 @@ function doSearchFallbackLocal(params, append, id) {
       syncStateToURL();
     } catch (err) {
       console.error("Local fallback crashed:", err);
-      showToast("搜索失败");
+      if (id !== searchId) return;
+      try {
+        var fallbackData = doSearchLocalMain(params);
+        if (id !== searchId) return;
+        STATE.total = fallbackData.total;
+        if (append) {
+          STATE.results = STATE.results.concat(fallbackData.results);
+        } else {
+          STATE.results = fallbackData.results;
+        }
+        STATE.hasMore = STATE.results.length < STATE.total;
+        if (!append) {
+          DOM.resultsContainer.scrollTop = 0;
+          resetVirtualScrollState();
+          clearResultsSkeleton();
+          if (STATE.results.length === 0) {
+            DOM.resultsList.innerHTML = "";
+            DOM.emptyState.style.display = "flex";
+            DOM.emptyDesc.textContent = STATE.query
+              ? '没有找到与 "' + STATE.query + '" 相关的结果'
+              : "暂无数据";
+          } else {
+            DOM.emptyState.style.display = "none";
+            renderResults();
+          }
+        }
+        updateStatusBar();
+        updateLoadInfo();
+        syncStateToURL();
+      } catch (err2) {
+        showToast("搜索失败");
+      }
     } finally {
       STATE.isLoading = false;
       STATE.resultsSkeletonActive = false;
@@ -4164,9 +4224,12 @@ function init() {
   DOM.searchInput.addEventListener("input", debouncedSearch);
   DOM.searchInput.addEventListener("compositionstart", function() {
     searchComposing = true;
+    clearTimeout(composeSafetyTimer);
+    composeSafetyTimer = setTimeout(function() { searchComposing = false; debouncedSearch(); }, 5000);
   });
   DOM.searchInput.addEventListener("compositionend", function() {
     searchComposing = false;
+    clearTimeout(composeSafetyTimer);
     debouncedSearch();
   });
   var hideDropdown = function() {
