@@ -1608,6 +1608,7 @@ const VSCROLL = {
   estimatedHeight: 60,
   isDraggingThumb: false,
 };
+let pendingResultEntrance = false;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -2438,7 +2439,7 @@ function doSearch(append) {
             : "暂无数据";
         } else {
           DOM.emptyState.style.display = "none";
-          renderResults();
+          renderResults(true);
         }
       }
       updateStatusBar();
@@ -2537,7 +2538,7 @@ function doSearchFallbackLocal(params, append, id) {
             : "暂无数据";
         } else {
           DOM.emptyState.style.display = "none";
-          renderResults();
+          renderResults(true);
         }
       }
       updateStatusBar();
@@ -2568,7 +2569,7 @@ function doSearchFallbackLocal(params, append, id) {
               : "暂无数据";
           } else {
             DOM.emptyState.style.display = "none";
-            renderResults();
+            renderResults(true);
           }
         }
         updateStatusBar();
@@ -2587,7 +2588,8 @@ function doSearchFallbackLocal(params, append, id) {
   })();
 }
 
-function renderResults() {
+function renderResults(animate = false) {
+  pendingResultEntrance = false;
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
     DOM.resultsList.innerHTML = "";
@@ -2607,7 +2609,22 @@ function renderResults() {
   ensureVirtualHeights(STATE.results.length);
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
+  pendingResultEntrance = animate;
   renderVisible();
+}
+
+function animateVisibleResultRows() {
+  let order = 0;
+  DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach(function(row) {
+    if (Number(row.dataset.index) >= 30) return;
+    row.style.setProperty("--result-enter-delay", (order * 3) + "ms");
+    row.classList.add("result-enter");
+    row.addEventListener("animationend", function() {
+      row.classList.remove("result-enter");
+      row.style.removeProperty("--result-enter-delay");
+    }, { once: true });
+    order += 1;
+  });
 }
 
 function buildResultHTML(rec, idx) {
@@ -2693,6 +2710,7 @@ function renderVisible() {
   let start = findVirtualIndex(Math.max(0, scrollTop - overscanPx));
   let end = Math.min(len, findVirtualIndex(scrollTop + viewH + overscanPx) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
+  if (pendingResultEntrance && start === 0) end = Math.min(len, Math.max(end, 30));
   if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
@@ -2722,6 +2740,10 @@ function renderVisible() {
       return;
     }
     updateScrollTrack();
+    if (pendingResultEntrance) {
+      pendingResultEntrance = false;
+      animateVisibleResultRows();
+    }
   });
 }
 
