@@ -27,6 +27,11 @@ test("main thread has warm-connection keepalive", () => {
   assert.match(html, /fetch\("https:\/\/voiceofml-search\.hf\.space\/api\/ping", \{ cache: "no-store" \}\)\.catch/);
   assert.ok(html.indexOf("/api/ping") < html.indexOf('href="static/style.css"'));
 });
+test("HTML preloads the default first-page payload before styles and application startup", () => {
+  assert.match(html, /<link rel="preload" href="\/search\/data\/initial\/global\.json" as="fetch" crossorigin="anonymous">/);
+  assert.ok(html.indexOf("/api/ping") < html.indexOf('rel="preload"'));
+  assert.ok(html.indexOf('rel="preload"') < html.indexOf('href="static/style.css"'));
+});
 test("fresh first-page results use bounded entrance motion", () => {
   assert.match(app, /function animateVisibleResultRows/);
   assert.match(app, /Number\(row\.dataset\.index\) >= 30/);
