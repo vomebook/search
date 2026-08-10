@@ -14,6 +14,12 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/search/icons/icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/search/icons/icon-512.png">
 <link rel="icon" type="image/svg+xml" href="/search/icons/icon.svg">
+<link rel="preconnect" href="https://voiceofml-search.hf.space" crossorigin>
+<script>
+if (!document.hidden && navigator.onLine) {
+  fetch("https://voiceofml-search.hf.space/api/ping", { cache: "no-store" }).catch(() => {});
+}
+</script>
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body class="dark">
