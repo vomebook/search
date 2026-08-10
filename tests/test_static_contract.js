@@ -27,6 +27,11 @@ test("main thread has warm-connection keepalive", () => {
   assert.match(html, /fetch\("https:\/\/voiceofml-search\.hf\.space\/api\/ping", \{ cache: "no-store" \}\)\.catch/);
   assert.ok(html.indexOf("/api/ping") < html.indexOf('href="static/style.css"'));
 });
+test("startup metadata requests are deduplicated without repository-wide folder prefetch", () => {
+  assert.match(app, /if \(repoApiPending\) return repoApiPending/);
+  assert.match(app, /if \(sidebarInitialPending\.has\(key\)\) return sidebarInitialPending\.get\(key\)/);
+  assert.strictEqual(/fetchFolderContents\(shortName, ""\)/.test(app), false);
+});
 test("HTML preloads the default first-page payload before styles and application startup", () => {
   assert.match(html, /<link rel="preload" href="\/search\/data\/initial\/global\.json" as="fetch" crossorigin="anonymous">/);
   assert.ok(html.indexOf("/api/ping") < html.indexOf('rel="preload"'));
