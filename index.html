@@ -20,6 +20,7 @@ if (!document.hidden && navigator.onLine) {
   fetch("https://voiceofml-search.hf.space/api/ping", { cache: "no-store" }).catch(() => {});
 }
 </script>
+<link rel="preload" href="/search/data/initial/global.json" as="fetch" crossorigin="anonymous">
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body class="dark">
