@@ -31,13 +31,36 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test frontend
+        run: |
+          node tests/test_worker_contract.js
+          node tests/test_service_worker.js
+          node tests/test_static_contract.js
+          node --check static/app.js
+          node --check static/index-worker.js
+          node --check sw.js
+      - name: Build static site
+        run: |
+          mkdir -p _site/static
+          cp index.html manifest.json sw.js _site/
+          cp -a icons data _site/
+          npx --yes esbuild@0.25.8 static/app.js --minify-syntax --minify-whitespace --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
+          npx --yes esbuild@0.25.8 static/index-worker.js --minify-syntax --minify-whitespace --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/index-worker.js
+          npx --yes esbuild@0.25.8 static/style.css --minify --outfile=_site/static/style.css
+          npx --yes esbuild@0.25.8 sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
+          node --check _site/static/app.js
+          node --check _site/static/index-worker.js
+          node --check _site/sw.js
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload entire repository
-          path: '.'
+          path: '_site'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
