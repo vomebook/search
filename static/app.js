@@ -1260,15 +1260,29 @@ function prefetchNextPage() {
   });
 }
 
+let repoApiCache = null;
+let repoApiPending = null;
+
 async function fetchRepos() {
+  if (repoApiCache) return repoApiCache;
+  if (repoApiPending) return repoApiPending;
   if (!apiAvailable) return null;
-  try {
-    var resp = await fetchWithTimeout(API_BASE + "/api/repos", 5000);
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    var data = await resp.json();
-    noteApiSuccess();
-    return data;
-  } catch (e) { noteApiFailure(); return null; }
+  repoApiPending = fetchWithTimeout(API_BASE + "/api/repos", 5000)
+    .then(function(resp) {
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return resp.json();
+    })
+    .then(function(data) {
+      noteApiSuccess();
+      repoApiCache = data;
+      return data;
+    })
+    .catch(function() {
+      noteApiFailure();
+      return null;
+    })
+    .finally(function() { repoApiPending = null; });
+  return repoApiPending;
 }
 
 async function fetchExtensions(repo) {
@@ -1302,6 +1316,7 @@ const browserApiCache = new Map();
 const browserApiPending = new Map();
 const BROWSER_API_CACHE_MAX = 200;
 const sidebarInitialCache = new Map();
+const sidebarInitialPending = new Map();
 
 async function fetchJsonWithTimeout(url, timeoutMs) {
   var controller = new AbortController();
@@ -1415,15 +1430,18 @@ function sidebarInitialUrlForRepo(repo) {
 async function loadSidebarInitial(repo) {
   var key = repo || "__global__";
   if (sidebarInitialCache.has(key)) return sidebarInitialCache.get(key);
-  try {
-    var raw = await fetchJsonWithTimeout(sidebarInitialUrlForRepo(repo), 4000);
-    if (!raw) return null;
-    var data = normalizeSidebarPayload(raw);
-    sidebarInitialCache.set(key, data);
-    return data;
-  } catch (e) {
-    return null;
-  }
+  if (sidebarInitialPending.has(key)) return sidebarInitialPending.get(key);
+  var pending = fetchJsonWithTimeout(sidebarInitialUrlForRepo(repo), 4000)
+    .then(function(raw) {
+      if (!raw) return null;
+      var data = normalizeSidebarPayload(raw);
+      sidebarInitialCache.set(key, data);
+      return data;
+    })
+    .catch(function() { return null; })
+    .finally(function() { sidebarInitialPending.delete(key); });
+  sidebarInitialPending.set(key, pending);
+  return pending;
 }
 
 function getCurrentExtensionCounts() {
@@ -2955,12 +2973,6 @@ async function renderRepoList(routeId) {
     return;
   }
   renderRepoListItems(repos);
-  requestAnimationFrame(function() {
-    for (var pi = 0; pi < repos.length; pi++) {
-      var shortName = repos[pi].name.split("/").pop();
-      if (shortName) fetchFolderContents(shortName, "").catch(function() {});
-    }
-  });
 }
 
 function renderBrowserListItems(list, data, currentRepo, path) {
