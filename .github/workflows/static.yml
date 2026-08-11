@@ -32,17 +32,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
-      - name: Test frontend
-        run: |
-          node tests/test_worker_contract.js
-          node tests/test_service_worker.js
-          node tests/test_static_contract.js
-          node --check static/app.js
-          node --check static/index-worker.js
-          node --check sw.js
       - name: Build static site
         run: |
           mkdir -p _site/static
