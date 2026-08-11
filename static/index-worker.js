@@ -1,3 +1,19 @@
+const WORKER_PROTOCOL_VERSION = 1;
+const MAX_PAGE_SIZE = 500;
+
+let records = [];
+let recordIds = [];
+let metadata = emptyMetadata();
+let generation = 0;
+let wordIndex = null;
+let wordIndexFilesOnly = null;
+let vocabSorted = [];
+let vocabSortedFilesOnly = [];
+
+function emptyMetadata() {
+  return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, txt: { available: false, count: 0, byRepo: {} } };
+}
+
 function tokenize(text) {
   const tokens = [];
   const lower = String(text || "").toLowerCase();
@@ -10,9 +26,7 @@ function tokenize(text) {
       tokens.push(ch);
     }
   }
-  for (let i = 0; i < chineseChars.length - 1; i++) {
-    tokens.push(chineseChars[i] + chineseChars[i + 1]);
-  }
+  for (let i = 0; i < chineseChars.length - 1; i++) tokens.push(chineseChars[i] + chineseChars[i + 1]);
   return Array.from(new Set(tokens));
 }
 
@@ -42,52 +56,162 @@ function literalSearch(query) {
   return /[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\s]/i.test(String(query || ""));
 }
 
-let records = [];
-let wordIndex = {};
-let wordIndexFilesOnly = {};
-let vocabSorted = [];
-let vocabSortedFilesOnly = [];
+function decodeRecord(rec) {
+  if (rec && rec.Repo !== undefined) {
+    return {
+      Repo: rec.Repo || "", File: rec.File || "", Extension: rec.Extension || "",
+      Folder: Array.isArray(rec.Folder) ? rec.Folder : [], Size: rec.Size === undefined ? "" : rec.Size, HasTxt: !!rec.HasTxt,
+    };
+  }
+  rec = rec || {};
+  return {
+    Repo: rec.r || "", File: rec.f || "", Extension: rec.e || "",
+    Folder: Array.isArray(rec.d) ? rec.d : [], Size: rec.s === undefined ? "" : rec.s, HasTxt: !!rec.t,
+  };
+}
+
+function decodeSearchPayload(data) {
+  if (Array.isArray(data)) return data.map(decodeRecord);
+  if (!data || typeof data !== "object") throw protocolError("INVALID_CORPUS", "Search corpus must be an object");
+  if (data.v !== 2 || !Array.isArray(data.rp) || !Array.isArray(data.fd) || !Array.isArray(data.rc)) {
+    throw protocolError("UNSUPPORTED_CORPUS", "Expected compact-v2 search corpus");
+  }
+  return data.rc.map((item) => {
+    if (!Array.isArray(item) || item.length < 6) return decodeRecord(null);
+    return {
+      Repo: Number.isInteger(item[0]) && data.rp[item[0]] !== undefined ? data.rp[item[0]] : "",
+      File: item[1] || "",
+      Extension: item[2] || "",
+      Folder: Number.isInteger(item[3]) && Array.isArray(data.fd[item[3]]) ? data.fd[item[3]] : [],
+      Size: item[4] === undefined ? "" : item[4],
+      HasTxt: !!item[5],
+    };
+  });
+}
+
+async function fetchGzipJSON(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw protocolError("CORPUS_FETCH_FAILED", "HTTP " + response.status);
+  if (!response.body || typeof DecompressionStream === "undefined") {
+    throw protocolError("GZIP_UNAVAILABLE", "Streaming gzip decompression is unavailable");
+  }
+  const stream = response.body.pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(stream).text());
+}
+
+function stableRecordId(record, occurrence) {
+  const path = (record.Folder || []).concat([record.File || "", record.Extension || ""]).join("/");
+  return [record.Repo || "", path, String(occurrence)].join("\u001f");
+}
+
+function replaceCorpus(nextRecords) {
+  records = nextRecords;
+  const repoCounts = {};
+  const extensionCounts = {};
+  const extensionsByRepo = {};
+  const txtByRepo = {};
+  const idOccurrences = {};
+  let txtCount = 0;
+  recordIds = new Array(records.length);
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    const repo = record.Repo || "";
+    const extension = String(record.Extension || "").toLowerCase();
+    repoCounts[repo] = (repoCounts[repo] || 0) + 1;
+    if (extension) {
+      extensionCounts[extension] = (extensionCounts[extension] || 0) + 1;
+      if (!extensionsByRepo[repo]) extensionsByRepo[repo] = {};
+      extensionsByRepo[repo][extension] = (extensionsByRepo[repo][extension] || 0) + 1;
+    }
+    if (record.HasTxt) {
+      txtCount++;
+      txtByRepo[repo] = (txtByRepo[repo] || 0) + 1;
+    }
+    const base = [repo, (record.Folder || []).join("/"), record.File || "", record.Extension || ""].join("\u001f");
+    const occurrence = idOccurrences[base] || 0;
+    idOccurrences[base] = occurrence + 1;
+    recordIds[i] = stableRecordId(record, occurrence);
+  }
+  metadata = {
+    count: records.length,
+    repos: Object.keys(repoCounts).map((name) => ({ name, count: repoCounts[name] })).sort((a, b) => a.name.localeCompare(b.name)),
+    extensions: Object.keys(extensionCounts).sort().map((name) => ({ name, count: extensionCounts[name] })),
+    extensionsByRepo: {},
+    txt: { available: txtCount > 0, count: txtCount, byRepo: txtByRepo },
+  };
+  for (const repo of Object.keys(extensionsByRepo)) {
+    metadata.extensionsByRepo[repo] = Object.keys(extensionsByRepo[repo]).sort().map((name) => ({ name, count: extensionsByRepo[repo][name] }));
+  }
+  wordIndex = null;
+  wordIndexFilesOnly = null;
+  vocabSorted = [];
+  vocabSortedFilesOnly = [];
+  generation++;
+  return Object.assign({ state: "corpus-ready", generation }, metadata);
+}
+
+function buildFulltext() {
+  if (wordIndex) return;
+  wordIndex = {};
+  wordIndexFilesOnly = {};
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    const folders = Array.isArray(record.Folder) ? record.Folder : [];
+    for (const token of tokenize([record.File || ""].concat(folders).join(" "))) {
+      if (!wordIndex[token]) wordIndex[token] = [];
+      wordIndex[token].push(i);
+    }
+    for (const token of tokenize(record.File || "")) {
+      if (!wordIndexFilesOnly[token]) wordIndexFilesOnly[token] = [];
+      wordIndexFilesOnly[token].push(i);
+    }
+  }
+  vocabSorted = Object.keys(wordIndex).map((token) => [token, wordIndex[token].length]).sort((a, b) => b[1] - a[1]);
+  vocabSortedFilesOnly = Object.keys(wordIndexFilesOnly).map((token) => [token, wordIndexFilesOnly[token].length]).sort((a, b) => b[1] - a[1]);
+}
 
 function applyFilters(indices, params) {
   const repos = params.repos || null;
   const extensions = params.extensions || null;
   const folders = params.folders || null;
-  const selfFolders = new Set((params.folderSelfs || []).map((p) => String(p || "").replace(/^\/+|\/+$/g, "")).filter(Boolean));
-  const subtreeFolders = new Set((params.folderSubtrees || []).map((p) => String(p || "").replace(/^\/+|\/+$/g, "")).filter(Boolean));
-  return indices.filter((idx) => {
-    const rec = records[idx] || {};
-    if (repos && repos.length && !repos.includes(rec.Repo)) return false;
-    if (extensions && extensions.length && !extensions.includes(String(rec.Extension || "").toLowerCase())) return false;
-    const foldersOfRecord = Array.isArray(rec.Folder) ? rec.Folder : [];
-    const folderPath = foldersOfRecord.join("/");
+  const selfFolders = new Set((params.folderSelfs || []).map(cleanPath).filter(Boolean));
+  const subtreeFolders = new Set((params.folderSubtrees || []).map(cleanPath).filter(Boolean));
+  return indices.filter((index) => {
+    const record = records[index] || {};
+    if (repos && repos.length && !repos.includes(record.Repo)) return false;
+    if (extensions && extensions.length && !extensions.includes(String(record.Extension || "").toLowerCase())) return false;
+    const recordFolders = Array.isArray(record.Folder) ? record.Folder : [];
+    const folderPath = recordFolders.join("/");
     if (params.folderMatchMode === "mixed") {
       let matched = selfFolders.has(folderPath);
-      for (let d = 1; !matched && d <= foldersOfRecord.length; d++) matched = subtreeFolders.has(foldersOfRecord.slice(0, d).join("/"));
+      for (let depth = 1; !matched && depth <= recordFolders.length; depth++) matched = subtreeFolders.has(recordFolders.slice(0, depth).join("/"));
       if ((selfFolders.size || subtreeFolders.size) && !matched) return false;
     } else if (folders && folders.length) {
       let matched = false;
       for (const folder of folders) {
-        const clean = String(folder || "").replace(/^\/+|\/+$/g, "");
+        const clean = cleanPath(folder);
         if (params.folderMatchMode === "exact") matched = folderPath === clean;
-        else if (!clean) matched = foldersOfRecord.length === 0;
-        else for (let d = 0; d <= foldersOfRecord.length; d++) if ((d ? foldersOfRecord.slice(0, d).join("/") : "") === clean) matched = true;
+        else if (!clean) matched = recordFolders.length === 0;
+        else matched = folderPath === clean || folderPath.indexOf(clean + "/") === 0;
         if (matched) break;
       }
       if (!matched) return false;
     }
-    if (typeof rec.Size === "number" && rec.Size > 0) {
-      if (params.minSize !== null && rec.Size < params.minSize) return false;
-      if (params.maxSize !== null && rec.Size > params.maxSize) return false;
+    if (typeof record.Size === "number" && record.Size > 0) {
+      if (params.minSize !== null && record.Size < params.minSize) return false;
+      if (params.maxSize !== null && record.Size > params.maxSize) return false;
     }
     return true;
   });
 }
 
+function cleanPath(path) {
+  return String(path || "").replace(/^\/+|\/+$/g, "");
+}
+
 function searchLocal(params) {
   const query = String(params.q || "").trim();
   const searchFolders = params.searchFolders !== false;
-  const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
-  const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
   let matched = [];
   if (!query) {
     matched = Array.from({ length: records.length }, (_, i) => i);
@@ -96,85 +220,169 @@ function searchLocal(params) {
     const pattern = wildcard ? wildcardPatternToRegExp(query) : null;
     const lower = query.toLowerCase();
     for (let i = 0; i < records.length; i++) {
-      const rec = records[i] || {};
-      const file = String(rec.File || "").toLowerCase();
-      const repo = String(rec.Repo || "").toLowerCase();
-      const folder = (Array.isArray(rec.Folder) ? rec.Folder : []).join("/").toLowerCase();
-      if ((pattern ? pattern.test(file) || pattern.test(repo) || (searchFolders && pattern.test(folder)) : file.includes(lower) || repo.includes(lower) || (searchFolders && folder.includes(lower)))) matched.push(i);
+      const record = records[i] || {};
+      const file = String(record.File || "").toLowerCase();
+      const repo = String(record.Repo || "").toLowerCase();
+      const folder = (record.Folder || []).join("/").toLowerCase();
+      if (pattern ? pattern.test(file) || pattern.test(repo) || (searchFolders && pattern.test(folder)) : file.includes(lower) || repo.includes(lower) || (searchFolders && folder.includes(lower))) matched.push(i);
     }
   } else {
+    buildFulltext();
+    const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
+    const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
     let tokenMatches = null;
     for (const token of tokenize(query)) {
       let candidates = activeIndex[token] || [];
       if (!candidates.length) {
         const fuzzy = [];
-        for (const [vocab] of activeVocab) {
-          if (Math.abs(vocab.length - token.length) <= 2 && editDistance(token, vocab, 2) <= 2) fuzzy.push(...(activeIndex[vocab] || []));
+        for (const entry of activeVocab) {
+          const vocab = entry[0];
+          if (Math.abs(vocab.length - token.length) <= 2 && editDistance(token, vocab, 2) <= 2) fuzzy.push.apply(fuzzy, activeIndex[vocab] || []);
           if (fuzzy.length >= 200) break;
         }
-        candidates = [...new Set(fuzzy)];
+        candidates = Array.from(new Set(fuzzy));
       }
       const candidateSet = new Set(candidates);
-      tokenMatches = tokenMatches === null ? candidates.slice() : tokenMatches.filter((idx) => candidateSet.has(idx));
+      tokenMatches = tokenMatches === null ? candidates.slice() : tokenMatches.filter((index) => candidateSet.has(index));
       if (!tokenMatches.length) break;
     }
     matched = tokenMatches || [];
   }
-  let filtered = applyFilters(matched, params);
   const tokens = tokenize(query);
-  const scored = filtered.map((idx) => {
-    const rec = records[idx] || {};
+  const scored = applyFilters(matched, params).map((index) => {
+    const record = records[index] || {};
+    const file = String(record.File || "").toLowerCase();
+    const repo = String(record.Repo || "").toLowerCase();
+    const folder = (record.Folder || []).join("/").toLowerCase();
     let score = 0;
-    const file = String(rec.File || "").toLowerCase();
-    const repo = String(rec.Repo || "").toLowerCase();
-    const folder = (Array.isArray(rec.Folder) ? rec.Folder : []).join("/").toLowerCase();
-    for (const token of tokens) { if (file.includes(token)) score += 3; if (searchFolders && folder.includes(token)) score += 2; if (repo.includes(token)) score += 1; }
-    return { idx, score };
+    for (const token of tokens) {
+      if (file.includes(token)) score += 3;
+      if (searchFolders && folder.includes(token)) score += 2;
+      if (repo.includes(token)) score += 1;
+    }
+    return { index, score };
   });
-  if (params.sort === "name") scored.sort((a, b) => String(records[a.idx].File || "").localeCompare(String(records[b.idx].File || ""), "zh"));
-  else if (params.sort === "size") scored.sort((a, b) => (Number(records[b.idx].Size) || 0) - (Number(records[a.idx].Size) || 0));
+  if (params.sort === "name") scored.sort((a, b) => String(records[a.index].File || "").localeCompare(String(records[b.index].File || ""), "zh"));
+  else if (params.sort === "size") scored.sort((a, b) => (Number(records[b.index].Size) || 0) - (Number(records[a.index].Size) || 0));
   else if (query) scored.sort((a, b) => b.score - a.score);
-  const page = params.page || 1;
-  const pageSize = params.pageSize || 100;
-  return { indices: scored.slice((page - 1) * pageSize, page * pageSize).map((item) => item.idx), total: scored.length, page, pageSize };
+  const page = Math.max(1, Number(params.page) || 1);
+  const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, Number(params.pageSize) || 100));
+  const pageItems = scored.slice((page - 1) * pageSize, page * pageSize);
+  return {
+    records: pageItems.map((item) => records[item.index]),
+    ids: pageItems.map((item) => recordIds[item.index]),
+    total: scored.length,
+    page,
+    pageSize,
+    generation,
+  };
 }
 
-self.addEventListener("message", function(event) {
-  const data = event.data || {};
-  if (data.type === "init-records") {
-    records = Array.isArray(data.records) ? data.records : [];
-    self.postMessage({ type: "records-ready" });
-    return;
-  }
-  if (data.type === "local-search") {
-    try {
-      self.postMessage({ type: "local-search-result", id: data.id, result: searchLocal(data.params || {}) });
-    } catch (err) {
-      self.postMessage({ type: "local-search-result", id: data.id, error: String(err && err.message || err) });
-    }
-    return;
-  }
-  if (data.type !== "build-fulltext") return;
-  if (Array.isArray(data.records)) records = data.records;
-  wordIndex = {};
-  wordIndexFilesOnly = {};
+function randomRecord(params) {
+  const repo = params.repo || "";
+  const txtOnly = !!params.txtOnly;
+  const candidates = [];
   for (let i = 0; i < records.length; i++) {
-    const rec = records[i] || {};
-    const folders = Array.isArray(rec.Folder) ? rec.Folder : [];
-    const tokens = tokenize([rec.File || ""].concat(folders).join(" "));
-    for (const tok of tokens) {
-      if (!wordIndex[tok]) wordIndex[tok] = [];
-      wordIndex[tok].push(i);
-    }
-    const fileTokens = tokenize(rec.File || "");
-    for (const tok of fileTokens) {
-      if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
-      wordIndexFilesOnly[tok].push(i);
+    if (repo && records[i].Repo !== repo) continue;
+    if (txtOnly && !records[i].HasTxt) continue;
+    candidates.push(i);
+  }
+  if (!candidates.length) return { record: null, id: null, generation };
+  const randomValue = typeof params.randomValue === "number" ? params.randomValue : Math.random();
+  const index = candidates[Math.min(candidates.length - 1, Math.floor(Math.max(0, randomValue) * candidates.length))];
+  return { record: records[index], id: recordIds[index], generation };
+}
+
+function folderContents(params) {
+  const repo = params.repo || "";
+  const path = cleanPath(params.path);
+  const parts = path ? path.split("/") : [];
+  const folders = {};
+  const files = [];
+  for (const record of records) {
+    if (record.Repo !== repo) continue;
+    const recordFolders = record.Folder || [];
+    if (recordFolders.length < parts.length || parts.some((part, index) => recordFolders[index] !== part)) continue;
+    if (recordFolders.length > parts.length) {
+      const name = recordFolders[parts.length];
+      folders[name] = (folders[name] || 0) + 1;
+    } else {
+      files.push({ name: record.File || "", ext: record.Extension || "", hasTxt: !!record.HasTxt, size: record.Size || "" });
     }
   }
-  vocabSorted = Object.keys(wordIndex).map((tok) => [tok, wordIndex[tok].length]).sort((a, b) => b[1] - a[1]);
-  vocabSortedFilesOnly = Object.keys(wordIndexFilesOnly).map((tok) => [tok, wordIndexFilesOnly[tok].length]).sort((a, b) => b[1] - a[1]);
-  self.postMessage({
-    type: "fulltext-ready",
-  });
+  return {
+    folders: Object.keys(folders).sort().map((name) => ({ name, path: parts.concat([name]).join("/"), count: folders[name] })),
+    files: files.sort((a, b) => a.name.localeCompare(b.name)),
+    current_path: path,
+    generation,
+  };
+}
+
+function folderTree(params) {
+  const repo = params.repo || "";
+  const root = { name: repo.split("/").pop(), path: "", children: [], count: 0, isRoot: true, hasDirectFiles: false };
+  const nodes = { "": root };
+  for (const record of records) {
+    if (record.Repo !== repo) continue;
+    root.count++;
+    const folders = record.Folder || [];
+    let path = "";
+    for (const name of folders) {
+      const parent = nodes[path];
+      path = path ? path + "/" + name : name;
+      if (!nodes[path]) {
+        nodes[path] = { name, path, children: [], count: 0, hasDirectFiles: false };
+        parent.children.push(nodes[path]);
+      }
+      nodes[path].count++;
+    }
+    nodes[path].hasDirectFiles = true;
+  }
+  for (const path of Object.keys(nodes)) {
+    const node = nodes[path];
+    node.children.sort((a, b) => a.name.localeCompare(b.name));
+    node.hasChildren = node.children.length > 0;
+    node.showSelfToggle = !!(node.path && node.hasDirectFiles && node.hasChildren);
+  }
+  return { tree: root.count ? [root] : [], generation };
+}
+
+function protocolError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+async function dispatch(type, payload) {
+  if (type === "handshake") return { protocol: WORKER_PROTOCOL_VERSION };
+  if (type === "load-corpus") return replaceCorpus(decodeSearchPayload(await fetchGzipJSON(payload.url)));
+  if (type === "replace-corpus") return replaceCorpus(decodeSearchPayload(payload.data));
+  if (!records.length) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
+  if (type === "metadata") return Object.assign({ generation }, metadata);
+  if (type === "local-search") return searchLocal(payload || {});
+  if (type === "random-record") return randomRecord(payload || {});
+  if (type === "folder-contents") return folderContents(payload || {});
+  if (type === "folder-tree") return folderTree(payload || {});
+  throw protocolError("UNKNOWN_REQUEST", "Unknown Worker request: " + type);
+}
+
+self.addEventListener("message", async function(event) {
+  const message = event.data || {};
+  const id = message.id;
+  if (message.protocol !== WORKER_PROTOCOL_VERSION) {
+    self.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: "response", id, ok: false, error: { code: "PROTOCOL_MISMATCH", message: "Refresh required: app/Worker protocol mismatch" } });
+    return;
+  }
+  try {
+    const result = await dispatch(message.type, message.payload || {});
+    self.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: "response", id, ok: true, result });
+  } catch (error) {
+    self.postMessage({
+      protocol: WORKER_PROTOCOL_VERSION,
+      type: "response",
+      id,
+      ok: false,
+      error: { code: error && error.code || "WORKER_ERROR", message: String(error && error.message || error) },
+    });
+  }
 });

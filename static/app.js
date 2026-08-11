@@ -5,6 +5,9 @@ const TXT_BASE = "https://voiceofml-search.hf.space/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
 const HF_DATASET_BASE = "https://huggingface.co/datasets";
+const WORKER_PROTOCOL_VERSION = 1;
+const WORKER_REQUEST_TIMEOUT = 10000;
+const WORKER_LOAD_TIMEOUT = 60000;
 
 const ORDERED_EXTENSIONS = [
   "pdf", "txt",
@@ -57,91 +60,23 @@ const ICONS = {
   database: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
 };
 
-let RECORDS = [];
-
-let PRECOMPUTED_FOLDER_TREES = {};
-
-let PRECOMPUTED_FOLDER_BROWSER = {};
-let wordIndex = {};
-let wordIndexFilesOnly = {};
 let extensionCounts = {};
-let repoCounts = {};
-let folderIndex = {};
-let vocabSorted = [];
-let vocabSortedFilesOnly = [];
+let repoExtensionCounts = {};
 let repoList = [];
 let extensionList = [];
-let allRecordIndices = [];
-let sortedByNameIndices = [];
-let sortedBySizeIndices = [];
-let repoRecordIndices = {};
-let repoSortedByNameIndices = {};
-let repoSortedBySizeIndices = {};
-let txtRecordIndices = [];
-let repoTxtRecordIndices = {};
-let fullTextIndexReady = false;
-let fullTextIndexPromise = null;
-let fullTextWorker = null;
-let localSearchWorkerPromise = null;
-let localSearchRequestId = 0;
-let folderTreeDataPromise = null;
-let folderBrowserDataPromise = null;
+let txtMetadata = { available: false, count: 0, byRepo: {} };
+let corpusWorker = null;
+let corpusWorkerStartPromise = null;
+let corpusWorkerRequestId = 0;
+let corpusWorkerRestartCount = 0;
+let corpusWorkerReady = false;
+const corpusWorkerPending = new Map();
 const folderTreeCache = new Map();
 
 let keepalivePending = null;
 let lastKeepaliveAt = 0;
 const KEEPALIVE_INTERVAL_MS = 45 * 1000;
 const KEEPALIVE_MIN_GAP_MS = 30 * 1000;
-
-const RECORD_KEY_MAP = {
-  r: "Repo",
-  f: "File",
-  e: "Extension",
-  d: "Folder",
-  s: "Size",
-  t: "HasTxt",
-};
-
-function decodeRecord(rec) {
-  if (!rec || rec.Repo !== undefined) return rec;
-  return {
-    Repo: rec.r || "",
-    File: rec.f || "",
-    Extension: rec.e || "",
-    Folder: Array.isArray(rec.d) ? rec.d : [],
-    Size: rec.s || "",
-    HasTxt: !!rec.t,
-  };
-}
-
-function decodeSearchPayload(data) {
-  if (Array.isArray(data)) {
-    return data.map(decodeRecord);
-  }
-  if (!data || typeof data !== "object") return [];
-  const repos = Array.isArray(data.rp) ? data.rp : [];
-  const folders = Array.isArray(data.fd) ? data.fd : [];
-  const encodedRecords = Array.isArray(data.rc) ? data.rc : [];
-  const records = new Array(encodedRecords.length);
-  for (let i = 0; i < encodedRecords.length; i++) {
-    const item = encodedRecords[i];
-    if (!Array.isArray(item) || item.length < 6) {
-      records[i] = { Repo: "", File: "", Extension: "", Folder: [], Size: "", HasTxt: false };
-      continue;
-    }
-    const repo = Number.isInteger(item[0]) && item[0] >= 0 && item[0] < repos.length ? repos[item[0]] : "";
-    const folder = Number.isInteger(item[3]) && item[3] >= 0 && item[3] < folders.length ? folders[item[3]] : [];
-    records[i] = {
-      Repo: repo,
-      File: item[1] || "",
-      Extension: item[2] || "",
-      Folder: Array.isArray(folder) ? folder : [],
-      Size: item[4] || "",
-      HasTxt: !!item[5],
-    };
-  }
-  return records;
-}
 
 function decodeTreeNode(node) {
   return decodeTreeNodeWithContext(node, "", false);
@@ -238,36 +173,6 @@ function decodeFolderBrowserData(data) {
   return decoded;
 }
 
-function tokenize(text) {
-  const tokens = [];
-  const lower = text.toLowerCase();
-  const alpha = lower.match(/[a-z0-9]+/g);
-  if (alpha) tokens.push(...alpha);
-  const chineseChars = [];
-  for (const ch of lower) {
-    if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
-      chineseChars.push(ch);
-      tokens.push(ch);
-    }
-  }
-  for (let i = 0; i < chineseChars.length - 1; i++) {
-    tokens.push(chineseChars[i] + chineseChars[i + 1]);
-  }
-  return [...new Set(tokens)];
-}
-
-function wildcardPatternToRegExp(pattern) {
-  const escaped = String(pattern || "").replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "i");
-}
-
-function matchesExactQuery(text, query) {
-  const value = String(text || "");
-  const pattern = String(query || "");
-  if (pattern.indexOf("*") >= 0 || pattern.indexOf("?") >= 0) return wildcardPatternToRegExp(pattern).test(value);
-  return value.toLowerCase().indexOf(pattern.toLowerCase()) >= 0;
-}
-
 function shouldUseLiteralLocalSearch(query) {
   return /[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\s]/i.test(String(query || ""));
 }
@@ -280,26 +185,6 @@ function setExactSearchSectionVisible(visible, animate) {
     void DOM.exactSearchSection.offsetHeight;
     DOM.exactSearchSection.style.transition = "";
   }
-}
-
-function editDistance(s1, s2, maxDist) {
-  maxDist = maxDist || 2;
-  if (Math.abs(s1.length - s2.length) > maxDist) return 999;
-  let prev = [];
-  for (let j = 0; j <= s2.length; j++) prev.push(j);
-  for (let i = 0; i < s1.length; i++) {
-    const curr = [i + 1];
-    let minInRow = i + 1;
-    for (let j = 0; j < s2.length; j++) {
-      const cost = s1[i] === s2[j] ? 0 : 1;
-      const val = Math.min(prev[j + 1] + 1, curr[j] + 1, prev[j] + cost);
-      curr.push(val);
-      if (val < minInRow) minInRow = val;
-    }
-    if (minInRow > maxDist) return 999;
-    prev = curr;
-  }
-  return prev[prev.length - 1];
 }
 
 function buildRecordRelativePath(rec) {
@@ -392,108 +277,6 @@ function openPendingWindow() {
   const popup = window.open("about:blank", "_blank");
   if (popup) popup.opener = null;
   return popup;
-}
-
-function buildIndex(includeFullText) {
-  return new Promise(function(resolve) {
-    if (includeFullText) {
-      wordIndex = {};
-      wordIndexFilesOnly = {};
-      vocabSorted = [];
-      vocabSortedFilesOnly = [];
-    } else {
-      extensionCounts = {};
-      repoCounts = {};
-      folderIndex = {};
-      repoRecordIndices = {};
-      txtRecordIndices = [];
-      repoTxtRecordIndices = {};
-    }
-    let i = 0;
-    const chunkSize = 5000;
-    function processChunk() {
-      const end = Math.min(i + chunkSize, RECORDS.length);
-      for (; i < end; i++) {
-        const rec = RECORDS[i];
-        const repo = rec.Repo || "";
-        const ext = (rec.Extension || "").toLowerCase();
-        const folders = rec.Folder || [];
-        if (!includeFullText) {
-          rec._fileLower = (rec.File || "").toLowerCase();
-          rec._repoLower = repo.toLowerCase();
-          rec._folderPath = folders.join("/");
-          rec._folderPathLower = rec._folderPath.toLowerCase();
-          repoCounts[repo] = (repoCounts[repo] || 0) + 1;
-          if (!repoRecordIndices[repo]) repoRecordIndices[repo] = [];
-          repoRecordIndices[repo].push(i);
-          if (rec.HasTxt) {
-            txtRecordIndices.push(i);
-            if (!repoTxtRecordIndices[repo]) repoTxtRecordIndices[repo] = [];
-            repoTxtRecordIndices[repo].push(i);
-          }
-          if (ext) extensionCounts[ext] = (extensionCounts[ext] || 0) + 1;
-        }
-        if (includeFullText) {
-          const text = [rec.File || "", ...folders].join(" ");
-          const tokens = tokenize(text);
-          for (const tok of tokens) {
-            if (!wordIndex[tok]) wordIndex[tok] = [];
-            wordIndex[tok].push(i);
-          }
-          const fileTokens = tokenize(rec.File || "");
-          for (const tok of fileTokens) {
-            if (!wordIndexFilesOnly[tok]) wordIndexFilesOnly[tok] = [];
-            wordIndexFilesOnly[tok].push(i);
-          }
-        }
-        if (!includeFullText) {
-          if (!folderIndex[repo]) folderIndex[repo] = {};
-          for (let d = 0; d <= folders.length; d++) {
-            const fp = d === 0 ? "" : folders.slice(0, d).join("/");
-            folderIndex[repo][fp] = (folderIndex[repo][fp] || 0) + 1;
-          }
-        }
-      }
-      if (i < RECORDS.length) {
-        setTimeout(processChunk, 0);
-      } else {
-        if (includeFullText) {
-          vocabSorted = Object.keys(wordIndex).map(function(tok) { return [tok, wordIndex[tok].length]; }).sort((a, b) => b[1] - a[1]);
-          vocabSortedFilesOnly = Object.keys(wordIndexFilesOnly).map(function(tok) { return [tok, wordIndexFilesOnly[tok].length]; }).sort((a, b) => b[1] - a[1]);
-          fullTextIndexReady = true;
-        } else {
-          repoList = Object.entries(repoCounts)
-            .map(([name, count]) => ({ name, count }))
-            .sort((a, b) => a.name.localeCompare(b.name));
-          extensionList = Object.keys(extensionCounts).sort();
-          allRecordIndices = Array.from({ length: RECORDS.length }, function(_, idx) { return idx; });
-          sortedByNameIndices = allRecordIndices.slice().sort(function(a, b) {
-            return (RECORDS[a].File || "").localeCompare(RECORDS[b].File || "", "zh");
-          });
-          sortedBySizeIndices = allRecordIndices.slice().sort(function(a, b) {
-            const sa = typeof RECORDS[a].Size === "number" ? RECORDS[a].Size : 0;
-            const sb = typeof RECORDS[b].Size === "number" ? RECORDS[b].Size : 0;
-            return sb - sa;
-          });
-          repoSortedByNameIndices = {};
-          repoSortedBySizeIndices = {};
-          for (const repoName in repoRecordIndices) {
-            if (!Object.prototype.hasOwnProperty.call(repoRecordIndices, repoName)) continue;
-            repoSortedByNameIndices[repoName] = repoRecordIndices[repoName].slice().sort(function(a, b) {
-              return (RECORDS[a].File || "").localeCompare(RECORDS[b].File || "", "zh");
-            });
-            repoSortedBySizeIndices[repoName] = repoRecordIndices[repoName].slice().sort(function(a, b) {
-              const sa = typeof RECORDS[a].Size === "number" ? RECORDS[a].Size : 0;
-              const sb = typeof RECORDS[b].Size === "number" ? RECORDS[b].Size : 0;
-              return sb - sa;
-            });
-          }
-        }
-        resolve();
-      }
-    }
-    processChunk();
-  });
 }
 
 function bytesToDisplay(bytes) {
@@ -655,114 +438,116 @@ function updateSelectionUI() {
 
 async function loadData() {
   try {
-    RECORDS = decodeSearchPayload(await loadGzipJSON(DATA_URL));
-    await buildIndex(false);
+    const metadata = await corpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
+    corpusWorkerReady = true;
+    repoList = Array.isArray(metadata.repos) ? metadata.repos : [];
+    extensionCounts = {};
+    for (const item of metadata.extensions || []) extensionCounts[item.name] = item.count || 0;
+    repoExtensionCounts = metadata.extensionsByRepo || {};
+    extensionList = (metadata.extensions || []).map(function(item) { return item.name; });
+    txtMetadata = metadata.txt || { available: false, count: 0, byRepo: {} };
     return true;
   } catch (e) {
     console.error("Data load failed:", e);
+    if (e && e.code === "PROTOCOL_MISMATCH") showToast("本地搜索版本不匹配，请刷新页面");
     return false;
   }
 }
 
-function ensureFullTextIndex() {
-  if (fullTextIndexReady) return Promise.resolve(true);
-  if (fullTextIndexPromise) return fullTextIndexPromise;
-  if (window.Worker) {
-    fullTextIndexPromise = new Promise(function(resolve, reject) {
-      var workerPromise = localSearchWorkerPromise
-        ? localSearchWorkerPromise
-        : Promise.resolve(fullTextWorker || null);
-      workerPromise.then(function(existingWorker) {
-        if (fullTextIndexReady) { resolve(true); return; }
-        var worker = existingWorker || fullTextWorker || new Worker("static/index-worker.js");
-        function onMessage(event) {
-          var data = event.data || {};
-          if (data.type !== "fulltext-ready") return;
-          worker.removeEventListener("message", onMessage);
-          worker.removeEventListener("error", onError);
-          fullTextIndexReady = true;
-          fullTextIndexPromise = null;
-          fullTextWorker = worker;
-          resolve(true);
-        }
-        function onError(err) {
-          worker.removeEventListener("message", onMessage);
-          fullTextIndexPromise = null;
-          worker.terminate();
-          fullTextWorker = null;
-          reject(err);
-        }
-        worker.addEventListener("message", onMessage);
-        worker.addEventListener("error", onError, { once: true });
-        worker.postMessage(existingWorker || fullTextWorker ? { type: "build-fulltext" } : { type: "build-fulltext", records: RECORDS });
-      }).catch(function(err) { reject(err); });
-    }).catch(function() {
-      fullTextIndexPromise = null;
-      fullTextWorker = null;
-      return buildIndex(true);
-    });
-    return fullTextIndexPromise;
-  }
-  fullTextIndexPromise = buildIndex(true).then(function() {
-    fullTextIndexPromise = null;
-    return true;
-  }).catch(function(err) {
-    fullTextIndexPromise = null;
-    throw err;
-  });
-  return fullTextIndexPromise;
+function makeWorkerError(code, message) {
+  var error = new Error(message || code);
+  error.code = code;
+  return error;
 }
 
-function ensureLocalSearchWorker() {
-  if (fullTextWorker) return Promise.resolve(fullTextWorker);
-  if (localSearchWorkerPromise) return localSearchWorkerPromise;
-  if (!window.Worker) return Promise.resolve(null);
-  localSearchWorkerPromise = new Promise(function(resolve, reject) {
-    const worker = new Worker("static/index-worker.js");
-    function onMessage(event) {
-      if (!event.data || event.data.type !== "records-ready") return;
-      worker.removeEventListener("message", onMessage);
-      fullTextWorker = worker;
-      localSearchWorkerPromise = null;
-      resolve(worker);
-    }
-    worker.addEventListener("message", onMessage);
-    worker.onerror = function(error) {
-      localSearchWorkerPromise = null;
-      worker.terminate();
+function rejectCorpusWorkerPending(error) {
+  corpusWorkerPending.forEach(function(entry) {
+    clearTimeout(entry.timer);
+    entry.reject(error);
+  });
+  corpusWorkerPending.clear();
+}
+
+function terminateCorpusWorker(error) {
+  var worker = corpusWorker;
+  corpusWorker = null;
+  corpusWorkerStartPromise = null;
+  corpusWorkerReady = false;
+  if (worker) worker.terminate();
+  rejectCorpusWorkerPending(error || makeWorkerError("WORKER_TERMINATED", "Search Worker terminated"));
+}
+
+function postCorpusWorkerRequest(type, payload, timeoutMs) {
+  if (!corpusWorker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Search Worker is unavailable"));
+  const id = ++corpusWorkerRequestId;
+  return new Promise(function(resolve, reject) {
+    const timer = setTimeout(function() {
+      corpusWorkerPending.delete(id);
+      const error = makeWorkerError("WORKER_TIMEOUT", "Search Worker request timed out");
+      terminateCorpusWorker(error);
       reject(error);
-    };
-    worker.postMessage({ type: "init-records", records: RECORDS });
+    }, timeoutMs || WORKER_REQUEST_TIMEOUT);
+    corpusWorkerPending.set(id, { resolve: resolve, reject: reject, timer: timer });
+    corpusWorker.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: type, id: id, payload: payload || {} });
   });
-  return localSearchWorkerPromise;
 }
 
-function ensureFolderTreeData() {
-  if (Object.keys(PRECOMPUTED_FOLDER_TREES).length > 0) return Promise.resolve(PRECOMPUTED_FOLDER_TREES);
-  if (folderTreeDataPromise) return folderTreeDataPromise;
-  folderTreeDataPromise = loadGzipJSON(FOLDER_TREE_URL).then(function(data) {
-    PRECOMPUTED_FOLDER_TREES = decodeFolderTreeData(data || {});
-    folderTreeDataPromise = null;
-    return PRECOMPUTED_FOLDER_TREES;
-  }).catch(function(err) {
-    folderTreeDataPromise = null;
-    throw err;
+function ensureCorpusWorker() {
+  if (corpusWorker) return Promise.resolve(corpusWorker);
+  if (corpusWorkerStartPromise) return corpusWorkerStartPromise;
+  if (!window.Worker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Web Workers are unavailable"));
+  corpusWorkerStartPromise = new Promise(function(resolve, reject) {
+    const worker = new Worker("static/index-worker.js");
+    corpusWorker = worker;
+    worker.addEventListener("message", function(event) {
+      const message = event.data || {};
+      if (message.type !== "response") return;
+      const pending = corpusWorkerPending.get(message.id);
+      if (!pending) return;
+      corpusWorkerPending.delete(message.id);
+      clearTimeout(pending.timer);
+      if (message.protocol !== WORKER_PROTOCOL_VERSION) {
+        pending.reject(makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch"));
+        return;
+      }
+      if (!message.ok) pending.reject(makeWorkerError(message.error && message.error.code || "WORKER_ERROR", message.error && message.error.message));
+      else pending.resolve(message.result);
+    });
+    function fail(event) {
+      const error = makeWorkerError("WORKER_ERROR", event && event.message || "Search Worker failed");
+      terminateCorpusWorker(error);
+      reject(error);
+    }
+    worker.addEventListener("error", fail, { once: true });
+    worker.addEventListener("messageerror", fail, { once: true });
+    postCorpusWorkerRequest("handshake", {}, WORKER_REQUEST_TIMEOUT).then(function(result) {
+      if (!result || result.protocol !== WORKER_PROTOCOL_VERSION) throw makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch");
+      corpusWorkerStartPromise = null;
+      resolve(worker);
+    }).catch(function(error) {
+      terminateCorpusWorker(error);
+      reject(error);
+    });
   });
-  return folderTreeDataPromise;
+  return corpusWorkerStartPromise;
 }
 
-function ensureFolderBrowserData() {
-  if (Object.keys(PRECOMPUTED_FOLDER_BROWSER).length > 0) return Promise.resolve(PRECOMPUTED_FOLDER_BROWSER);
-  if (folderBrowserDataPromise) return folderBrowserDataPromise;
-  folderBrowserDataPromise = loadGzipJSON(FOLDER_BROWSER_URL).then(function(data) {
-    PRECOMPUTED_FOLDER_BROWSER = decodeFolderBrowserData(data || {});
-    folderBrowserDataPromise = null;
-    return PRECOMPUTED_FOLDER_BROWSER;
-  }).catch(function(err) {
-    folderBrowserDataPromise = null;
-    throw err;
-  });
-  return folderBrowserDataPromise;
+async function corpusWorkerRequest(type, payload, timeoutMs) {
+  try {
+    await ensureCorpusWorker();
+    return await postCorpusWorkerRequest(type, payload, timeoutMs);
+  } catch (error) {
+    if (error && error.code === "PROTOCOL_MISMATCH") throw error;
+    if (corpusWorkerRestartCount >= 1) throw error;
+    corpusWorkerRestartCount++;
+    terminateCorpusWorker(error);
+    await ensureCorpusWorker();
+    if (type !== "load-corpus") {
+      await postCorpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
+      corpusWorkerReady = true;
+    }
+    return postCorpusWorkerRequest(type, payload, timeoutMs);
+  }
 }
 
 async function loadGzipJSON(url) {
@@ -791,235 +576,17 @@ function getPreviewLink(path) {
   return STATE.useMirrorLinks ? toMirrorURL(path) : path;
 }
 
-function scoreRecord(recIdx, tokens, searchFolders) {
-  const rec = RECORDS[recIdx];
-  let score = 0;
-  const fname = rec._fileLower || "";
-  const repo = rec._repoLower || "";
-  const folderPath = rec._folderPathLower || "";
-  for (const tok of tokens) {
-    if (fname.includes(tok)) score += 3;
-    if (searchFolders && folderPath.includes(tok)) score += 2;
-    if (repo.includes(tok)) score += 1;
-  }
-  return score;
-}
-
-function applyFilters(indices, repos, extensions, folders, minSize, maxSize, folderMatchMode) {
-  return indices.filter(idx => {
-    const rec = RECORDS[idx];
-    if (repos && repos.length > 0 && !repos.includes(rec.Repo)) return false;
-    if (extensions && extensions.length > 0) {
-      const ext = (rec.Extension || "").toLowerCase();
-      if (!extensions.includes(ext)) return false;
-    }
-    if (folders && folders.length > 0) {
-      const recFolders = rec.Folder || [];
-      let matched = false;
-      for (const f of folders) {
-        const clean = f.replace(/^\/+|\/+$/g, "");
-        if (folderMatchMode === "exact") {
-          const recPath = rec._folderPath || "";
-          if (recPath === clean) {
-            matched = true;
-            break;
-          }
-        } else if (clean === "") {
-          if (recFolders.length === 0) { matched = true; break; }
-        } else {
-          for (let d = 0; d <= recFolders.length; d++) {
-            const prefix = d === 0 ? "" : recFolders.slice(0, d).join("/");
-            if (prefix === clean) { matched = true; break; }
-          }
-          if (matched) break;
-        }
-      }
-      if (!matched) return false;
-    }
-    const size = rec.Size;
-    if (size && typeof size === "number" && size > 0) {
-      if (minSize !== null && size < minSize) return false;
-      if (maxSize !== null && size > maxSize) return false;
-    }
-    return true;
-  });
-}
-
-function doSearchLocalMain(params) {
-  const q = (params.q || "").trim();
-  const repos = params.repos || null;
-  const extensions = params.extensions || null;
-  const folders = params.folders || null;
-  const minSize = params.minSize !== null ? params.minSize : null;
-  const maxSize = params.maxSize !== null ? params.maxSize : null;
-  const folderMatchMode = params.folderMatchMode || "prefix";
-  const sort = params.sort || "relevance";
-  const searchFolders = params.searchFolders !== false;
-  const exactMode = params.exact || false;
-  const page = params.page || 1;
-  const pageSize = params.pageSize || 100;
-  let matched = [];
-  const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
-  const activeVocabSorted = searchFolders ? vocabSorted : vocabSortedFilesOnly;
-  if (!q) {
-    if (repos && repos.length === 1 && !extensions && !folders && minSize === null && maxSize === null && folderMatchMode !== "mixed") {
-      matched = sort === "name"
-        ? (repoSortedByNameIndices[repos[0]] || [])
-        : (sort === "size" ? (repoSortedBySizeIndices[repos[0]] || []) : (repoRecordIndices[repos[0]] || []));
-    } else {
-      matched = sort === "name" ? sortedByNameIndices : (sort === "size" ? sortedBySizeIndices : allRecordIndices);
-    }
-  } else if (exactMode || shouldUseLiteralLocalSearch(q)) {
-    const hasWildcard = q.indexOf("*") >= 0 || q.indexOf("?") >= 0;
-    const exactPattern = hasWildcard ? wildcardPatternToRegExp(q) : null;
-    const exactQuery = hasWildcard ? "" : q.toLowerCase();
-    for (var ei = 0; ei < RECORDS.length; ei++) {
-      var rec = RECORDS[ei];
-      var fn = rec._fileLower || "";
-      var rn = rec._repoLower || "";
-      var pf = rec._folderPathLower || "";
-      var isMatch = hasWildcard
-        ? exactPattern.test(fn) || exactPattern.test(rn) || (searchFolders && exactPattern.test(pf))
-        : fn.includes(exactQuery) || rn.includes(exactQuery) || (searchFolders && pf.includes(exactQuery));
-      if (isMatch) {
-        matched.push(ei);
-      }
-    }
-  } else {
-    const tokens = tokenize(q);
-    let tokenMatches = null;
-    for (const tok of tokens) {
-      let candidates = activeIndex[tok] || null;
-      if (!candidates) {
-        const fuzzyCandidates = [];
-        for (const [vocab] of activeVocabSorted) {
-          if (Math.abs(vocab.length - tok.length) > 2) continue;
-          if (editDistance(tok, vocab) <= 2) {
-            fuzzyCandidates.push(...(activeIndex[vocab] || []));
-            if (fuzzyCandidates.length >= 200) break;
-          }
-        }
-        candidates = fuzzyCandidates.length > 0 ? [...new Set(fuzzyCandidates)] : [];
-      }
-      if (candidates.length === 0) {
-        tokenMatches = [];
-        break;
-      }
-      if (tokenMatches === null) tokenMatches = [...candidates];
-      else {
-        const candidateSet = new Set(candidates);
-        tokenMatches = tokenMatches.filter(i => candidateSet.has(i));
-      }
-      if (tokenMatches.length === 0) break;
-    }
-    matched = tokenMatches || [];
-  }
-  let filtered = matched;
-    if (folderMatchMode === "mixed") {
-      filtered = applyMixedFolderFilters(filtered, params.folderSelfs || [], params.folderSubtrees || []);
-      filtered = applyFilters(filtered, repos, extensions, null, minSize, maxSize, "prefix");
-    } else {
-    filtered = applyFilters(filtered, repos, extensions, folders, minSize, maxSize, folderMatchMode);
-  }
-  const tokens = q ? tokenize(q) : [];
-  let scored;
-  if (!q && (sort === "name" || sort === "size")) {
-    scored = filtered.map(function(idx) { return { idx: idx, score: 0 }; });
-  } else {
-    scored = filtered.map(idx => ({
-      idx,
-      score: q ? scoreRecord(idx, tokens, searchFolders) : 0
-    }));
-    if (sort === "name") {
-      scored.sort((a, b) => (RECORDS[a.idx].File || "").localeCompare(RECORDS[b.idx].File || "", "zh"));
-    } else if (sort === "size") {
-      scored.sort((a, b) => {
-        const sa = typeof RECORDS[a.idx].Size === "number" ? RECORDS[a.idx].Size : 0;
-        const sb = typeof RECORDS[b.idx].Size === "number" ? RECORDS[b.idx].Size : 0;
-        return sb - sa;
-      });
-    } else {
-      scored.sort((a, b) => b.score - a.score);
-    }
-  }
-  const total = scored.length;
-  const start = (page - 1) * pageSize;
-  const paged = scored.slice(start, start + pageSize).map(s => RECORDS[s.idx]);
-  return { results: paged, total, page, pageSize };
-}
-
 async function doSearchLocal(params) {
-  const needsFullText = !!(params.q && !params.exact && !shouldUseLiteralLocalSearch(params.q));
-  try {
-    if (needsFullText) await ensureFullTextIndex();
-    else await ensureLocalSearchWorker();
-  } catch (e) {
-    return doSearchLocalMain(params);
-  }
-  if (!fullTextWorker) return doSearchLocalMain(params);
-  const requestId = ++localSearchRequestId;
   const workerParams = Object.assign({}, params);
   delete workerParams.signal;
-  const data = await new Promise(function(resolve, reject) {
-    var settled = false;
-    function cleanup() {
-      fullTextWorker.removeEventListener("message", onMessage);
-      fullTextWorker.removeEventListener("error", onError);
-      clearTimeout(timer);
-    }
-    function onMessage(event) {
-      var message = event.data || {};
-      if (message.type !== "local-search-result" || message.id !== requestId) return;
-      cleanup();
-      settled = true;
-      if (message.error) reject(new Error(message.error));
-      else resolve(message.result || { indices: [], total: 0, page: params.page || 1, pageSize: params.pageSize || 100 });
-    }
-    function onError() {
-      if (settled) return;
-      cleanup();
-      settled = true;
-      reject(new Error("worker_error"));
-    }
-    var timer = setTimeout(function() {
-      if (settled) return;
-      cleanup();
-      settled = true;
-      reject(new Error("worker_timeout"));
-    }, 10000);
-    fullTextWorker.addEventListener("message", onMessage);
-    fullTextWorker.addEventListener("error", onError);
-    fullTextWorker.postMessage({ type: "local-search", id: requestId, params: workerParams });
-  });
+  const data = await corpusWorkerRequest("local-search", workerParams, WORKER_REQUEST_TIMEOUT);
   return {
-    results: (data.indices || []).map(function(idx) { return RECORDS[idx]; }),
+    results: data.records || [],
+    ids: data.ids || [],
     total: data.total || 0,
     page: data.page || params.page || 1,
     pageSize: data.pageSize || params.pageSize || 100,
   };
-}
-
-function applyMixedFolderFilters(indices, selfFolders, subtreeFolders) {
-  if ((!selfFolders || selfFolders.length === 0) && (!subtreeFolders || subtreeFolders.length === 0)) {
-    return indices;
-  }
-  const selfSet = new Set((selfFolders || []).map(function(path) {
-    return String(path || "").replace(/^\/+|\/+$/g, "");
-  }).filter(Boolean));
-  const subtreeSet = new Set((subtreeFolders || []).map(function(path) {
-    return String(path || "").replace(/^\/+|\/+$/g, "");
-  }).filter(Boolean));
-  return indices.filter(function(idx) {
-    const rec = RECORDS[idx];
-    const recFolders = rec.Folder || [];
-    const recPath = rec._folderPath || "";
-    if (selfSet.has(recPath)) return true;
-    for (let d = 1; d <= recFolders.length; d++) {
-      const prefix = recFolders.slice(0, d).join("/");
-      if (subtreeSet.has(prefix)) return true;
-    }
-    return false;
-  });
 }
 
 async function doSearchAPI(params, append, requestId) {
@@ -1447,66 +1014,16 @@ async function loadSidebarInitial(repo) {
 function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
     const counts = {};
-    for (let i = 0; i < RECORDS.length; i++) {
-      if (RECORDS[i].Repo === STATE.repoFull) {
-        const ext = (RECORDS[i].Extension || "").toLowerCase();
-        if (ext) counts[ext] = (counts[ext] || 0) + 1;
-      }
-    }
+    for (const item of repoExtensionCounts[STATE.repoFull] || []) counts[item.name] = item.count || 0;
     return counts;
   }
   return extensionCounts;
 }
 
-function buildFilterFolderTree(repo) {
-  if (PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[repo]) {
-    return PRECOMPUTED_FOLDER_TREES[repo];
-  }
-  if (!folderIndex[repo]) return [];
-  const paths = Object.keys(folderIndex[repo]);
-  const root = { name: repo.split("/").pop(), path: "", children: [], count: 0, isRoot: true };
-  const nodeMap = { "": root };
-  for (const p of paths.sort()) {
-    if (!p) continue;
-    const parts = p.split("/");
-    for (let d = 1; d <= parts.length; d++) {
-      const partial = parts.slice(0, d).join("/");
-      if (nodeMap[partial]) continue;
-      const parentPath = d > 1 ? parts.slice(0, d - 1).join("/") : "";
-      const parent = nodeMap[parentPath];
-      const node = { name: parts[d - 1], path: partial, children: [], count: 0 };
-      nodeMap[partial] = node;
-      if (parent) parent.children.push(node);
-    }
-  }
-  for (const [fp, count] of Object.entries(folderIndex[repo])) {
-    if (nodeMap[fp]) nodeMap[fp].count = count;
-  }
-  const dirMeta = {};
-  for (let ri = 0; ri < RECORDS.length; ri++) {
-    const rec = RECORDS[ri];
-    if (rec.Repo !== repo) continue;
-    const folders = Array.isArray(rec.Folder) ? rec.Folder : [];
-    const dirPath = folders.join("/");
-    if (!dirMeta[dirPath]) dirMeta[dirPath] = { hasDirectFiles: false };
-    dirMeta[dirPath].hasDirectFiles = true;
-  }
-  for (const pathKey in nodeMap) {
-    if (!Object.prototype.hasOwnProperty.call(nodeMap, pathKey)) continue;
-    const node = nodeMap[pathKey];
-    node.hasDirectFiles = !!(dirMeta[pathKey] && dirMeta[pathKey].hasDirectFiles);
-    node.hasChildren = !!(node.children && node.children.length > 0);
-    node.showSelfToggle = !!(node.hasDirectFiles && node.hasChildren);
-  }
-  return [root];
-}
 const folderContentsCache = new Map();
 const FOLDER_CACHE_MAX = 100;
 
-function getFolderContents(repo, path) {
-  if (PRECOMPUTED_FOLDER_BROWSER && PRECOMPUTED_FOLDER_BROWSER[repo] && PRECOMPUTED_FOLDER_BROWSER[repo][path || ""]) {
-    return PRECOMPUTED_FOLDER_BROWSER[repo][path || ""];
-  }
+async function getFolderContents(repo, path) {
   const cacheKey = repo + "|" + (path || "");
   if (folderContentsCache.has(cacheKey)) {
     const val = folderContentsCache.get(cacheKey);
@@ -1514,61 +1031,13 @@ function getFolderContents(repo, path) {
     folderContentsCache.set(cacheKey, val);
     return val;
   }
-  const pathParts = (path || "").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
-  const pathDepth = pathParts.length;
-  const matching = RECORDS.filter(rec => {
-    if (rec.Repo !== repo) return false;
-    const folders = rec.Folder || [];
-    if (folders.length < pathDepth) return false;
-    for (let i = 0; i < pathDepth; i++) {
-      if (folders[i] !== pathParts[i]) return false;
-    }
-    return true;
-  });
-  const subfolders = {};
-  for (const rec of matching) {
-    const folders = rec.Folder || [];
-    if (folders.length > pathDepth) {
-      const name = folders[pathDepth];
-      subfolders[name] = (subfolders[name] || 0) + 1;
-    }
-  }
-  const folderList = Object.entries(subfolders)
-    .map(([name, count]) => ({
-      name,
-      path: pathParts.concat([name]).join("/"),
-      count,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const fileList = matching
-    .filter(rec => (rec.Folder || []).length === pathDepth)
-    .map(rec => ({
-      name: rec.File || "",
-      ext: rec.Extension || "",
-      link: getRecordLink(rec),
-      path: getRecordPath(rec),
-      hasTxt: rec.HasTxt || false,
-      size: rec.Size || "",
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const result = { folders: folderList, files: fileList, current_path: path };
+  const result = await corpusWorkerRequest("folder-contents", { repo: repo, path: path || "" }, WORKER_REQUEST_TIMEOUT);
   if (folderContentsCache.size >= FOLDER_CACHE_MAX) {
     const firstKey = folderContentsCache.keys().next().value;
     folderContentsCache.delete(firstKey);
   }
   folderContentsCache.set(cacheKey, result);
   return result;
-}
-
-function getRandom(repo) {
-  if (repo) {
-    const indices = repoRecordIndices[repo] || [];
-    if (indices.length === 0) return null;
-    return RECORDS[indices[Math.floor(Math.random() * indices.length)]];
-  }
-  let pool = RECORDS;
-  if (pool.length === 0) return null;
-  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 const STATE = {
@@ -2052,8 +1521,8 @@ async function updateRandomTxtVisibility() {
   const id = ++randomTxtStatusId;
   DOM.randomTxtBtn.style.display = "none";
   if (STATE.dataLoaded) {
-    const pool = STATE.repoFull ? (repoTxtRecordIndices[STATE.repoFull] || []) : txtRecordIndices;
-    DOM.randomTxtBtn.style.display = pool.length > 0 ? "" : "none";
+    const count = STATE.repoFull ? (txtMetadata.byRepo[STATE.repoFull] || 0) : (txtMetadata.count || 0);
+    DOM.randomTxtBtn.style.display = count > 0 ? "" : "none";
     return;
   }
   const repo = STATE.mode === "repo" && STATE.repo ? STATE.repo : "";
@@ -2407,21 +1876,6 @@ function doSearch(append) {
         }
         return;
       }
-    } else if (params.q && !params.exact && !shouldUseLiteralLocalSearch(params.q) && !fullTextIndexReady) {
-      STATE.isLoading = false;
-      setSearchVisualLoading(false);
-      DOM.resultsLoading.style.display = "none";
-      showToast("正在准备模糊搜索索引...");
-      ensureFullTextIndex().then(function() {
-        if (id === searchId) doSearch();
-      }).catch(function(err) {
-        console.error("Full-text index build failed:", err);
-        STATE.useLocalMode = false;
-        if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
-        syncStateToURL();
-        if (id === searchId) doSearch();
-      });
-      return;
     } else {
       doSearchFallbackLocal(params, append, id);
       return;
@@ -2563,45 +2017,29 @@ function doSearchFallbackLocal(params, append, id) {
       updateLoadInfo();
       syncStateToURL();
     } catch (err) {
-      console.error("Local fallback crashed:", err);
+      console.error("Local Worker search failed:", err);
       if (id !== searchId) return;
-      try {
-        var fallbackData = doSearchLocalMain(params);
-        if (id !== searchId) return;
-        STATE.total = fallbackData.total;
-        if (append) {
-          STATE.results = STATE.results.concat(fallbackData.results);
-        } else {
-          STATE.results = fallbackData.results;
-        }
-        STATE.hasMore = STATE.results.length < STATE.total;
-        if (!append) {
-          DOM.resultsContainer.scrollTop = 0;
-          resetVirtualScrollState();
-          clearResultsSkeleton();
-          if (STATE.results.length === 0) {
-            DOM.resultsList.innerHTML = "";
-            DOM.emptyState.style.display = "flex";
-            DOM.emptyDesc.textContent = STATE.query
-              ? '没有找到与 "' + STATE.query + '" 相关的结果'
-              : "暂无数据";
-          } else {
-            DOM.emptyState.style.display = "none";
-            renderResults(true);
-          }
-        }
-        updateStatusBar();
-        updateLoadInfo();
+      STATE.dataLoaded = false;
+      corpusWorkerReady = false;
+      if (params.folderMatchMode === "mixed") {
+        showToast("本地目录筛选不可用，请刷新后重试");
+      } else if (apiAvailable) {
+        STATE.useLocalMode = false;
+        if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
         syncStateToURL();
-      } catch (err2) {
-        showToast("搜索失败");
+        showToast("本地搜索不可用，正在切换在线搜索...");
+        doSearch(append);
+      } else {
+        showToast("本地搜索不可用");
       }
     } finally {
-      STATE.isLoading = false;
-      STATE.resultsSkeletonActive = false;
-      DOM.resultsLoading.style.display = "none";
-      if (!append) setSearchVisualLoading(false);
-      else updateStatusBar();
+      if (id === searchId) {
+        STATE.isLoading = false;
+        STATE.resultsSkeletonActive = false;
+        DOM.resultsLoading.style.display = "none";
+        if (!append) setSearchVisualLoading(false);
+        else updateStatusBar();
+      }
     }
   })();
 }
@@ -3060,10 +2498,8 @@ async function renderBrowser(path, routeId) {
       data = initial;
     }
   }
-  if (PRECOMPUTED_FOLDER_BROWSER && PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull] && PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull][path || ""]) {
-    data = PRECOMPUTED_FOLDER_BROWSER[STATE.repoFull][path || ""];
-  } else if (folderContentsCache.has(STATE.repoFull + "|" + (path || ""))) {
-    data = getFolderContents(STATE.repoFull, path);
+  if (folderContentsCache.has(STATE.repoFull + "|" + (path || ""))) {
+    data = folderContentsCache.get(STATE.repoFull + "|" + (path || ""));
   }
   if (!data && apiAvailable) {
     try {
@@ -3076,9 +2512,9 @@ async function renderBrowser(path, routeId) {
   }
   if (!data && STATE.dataLoaded) {
     try {
-      await ensureFolderBrowserData();
+      data = await getFolderContents(STATE.repoFull, path);
       if (routeId && routeId !== routeRenderId) return;
-      data = getFolderContents(STATE.repoFull, path);
+      if (STATE.mode !== "repo" || STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
     } catch (e) {}
   }
   if (!data || (!data.folders && !data.files)) {
@@ -3114,7 +2550,7 @@ async function renderFilters(routeId) {
     var folderRepoFull = STATE.repoFull;
     DOM.filterFolderSection.style.display = "";
     DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">加载中...</div>';
-    var folderTree = (folderTreeCache.get(folderRepoFull) || (PRECOMPUTED_FOLDER_TREES && PRECOMPUTED_FOLDER_TREES[folderRepoFull])) || null;
+    var folderTree = folderTreeCache.get(folderRepoFull) || null;
     if (!folderTree || !folderTree.length) {
       if (apiAvailable) {
         try {
@@ -3129,7 +2565,11 @@ async function renderFilters(routeId) {
       }
     }
     if ((!folderTree || !folderTree.length) && STATE.dataLoaded) {
-      folderTree = buildFilterFolderTree(folderRepoFull);
+      try {
+        const localTree = await corpusWorkerRequest("folder-tree", { repo: folderRepoFull }, WORKER_REQUEST_TIMEOUT);
+        folderTree = localTree && localTree.tree || [];
+        if (folderTree.length) folderTreeCache.set(folderRepoFull, folderTree);
+      } catch (e) {}
     }
     if (routeId && routeId !== routeRenderId) return;
     if (STATE.mode !== "repo" || STATE.repo !== folderRepo || STATE.repoFull !== folderRepoFull) return;
@@ -3695,14 +3135,20 @@ function typewriter(el, text, speed) {
   }, speed);
 }
 
-function randomBook() {
+async function getRandomLocal(txtOnly) {
+  const data = await corpusWorkerRequest("random-record", { repo: STATE.repoFull || "", txtOnly: !!txtOnly }, WORKER_REQUEST_TIMEOUT);
+  return data && data.record || null;
+}
+
+async function randomBook() {
   showToast("正在随机下载...");
   if (STATE.dataLoaded) {
-    var localRec = getRandom(STATE.repoFull);
-    if (localRec) {
+    try {
+      var localRec = await getRandomLocal(false);
+      if (!localRec) throw new Error("NO_RECORD");
       var localFilename = (localRec.File || "file") + (localRec.Extension ? "." + localRec.Extension : "");
-      downloadFile(localFilename, getRecordLink(localRec), { skipCheck: true });
-    } else {
+      await downloadFile(localFilename, getRecordLink(localRec), { skipCheck: true });
+    } catch (e) {
       showToast("暂无可用记录");
     }
     return;
@@ -3723,8 +3169,8 @@ function randomBook() {
       }
     })
     .catch(function() {
-      function fallback() {
-        var rec = getRandom(STATE.repoFull);
+      async function fallback() {
+        var rec = await getRandomLocal(false);
         if (rec) {
           var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
           downloadFile(filename, getRecordLink(rec), { skipCheck: true });
@@ -3732,8 +3178,8 @@ function randomBook() {
           showToast("暂无可用记录");
         }
       }
-      if (STATE.dataLoaded) fallback();
-      else ensureLocalDataLoaded(false, true).then(fallback).catch(function() { showToast("暂无可用记录"); });
+      if (STATE.dataLoaded) fallback().catch(function() { showToast("暂无可用记录"); });
+      else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() { showToast("暂无可用记录"); });
     });
 }
 
@@ -3748,19 +3194,14 @@ function openTxtRecord(rec, popup) {
   return true;
 }
 
-function getRandomTxtLocal() {
-  var repo = STATE.repoFull;
-  var pool = repo ? (repoTxtRecordIndices[repo] || []) : txtRecordIndices;
-  if (pool.length === 0) return null;
-  return RECORDS[pool[Math.floor(Math.random() * pool.length)]];
-}
-
-function randomTxt() {
+async function randomTxt() {
   showToast("正在随机打开文章...");
   var popup = openPendingWindow();
   if (STATE.dataLoaded) {
-    var localRec = getRandomTxtLocal();
-    if (!openTxtRecord(localRec, popup)) {
+    try {
+      var localRec = await getRandomLocal(true);
+      if (!openTxtRecord(localRec, popup)) throw new Error("NO_TXT");
+    } catch (e) {
       if (popup) popup.close();
       showToast("暂无可读文章");
     }
@@ -3775,15 +3216,18 @@ function randomTxt() {
   }).then(function(rec) {
     if (!openTxtRecord(rec, popup)) throw new Error("NO_TXT");
   }).catch(function() {
-    function fallback() {
-      var rec = getRandomTxtLocal();
+    async function fallback() {
+      var rec = await getRandomLocal(true);
       if (!openTxtRecord(rec, popup)) {
         if (popup) popup.close();
         showToast("暂无可读文章");
       }
     }
-    if (STATE.dataLoaded) fallback();
-    else ensureLocalDataLoaded(false, true).then(fallback).catch(function() {
+    if (STATE.dataLoaded) fallback().catch(function() {
+      if (popup) popup.close();
+      showToast("暂无可读文章");
+    });
+    else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() {
       if (popup) popup.close();
       showToast("暂无可读文章");
     });
