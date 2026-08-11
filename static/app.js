@@ -768,28 +768,7 @@ function ensureFolderBrowserData() {
 async function loadGzipJSON(url) {
   var resp = await fetch(url);
   if (!resp.ok) throw new Error("HTTP " + resp.status);
-  var reader = resp.body.getReader();
-  var chunks = [];
-  var received = 0;
-  while (true) {
-    var doneVal = await reader.read();
-    if (doneVal.done) break;
-    chunks.push(doneVal.value);
-    received += doneVal.value.length;
-  }
-  var buf;
-  if (chunks.length === 1) {
-    buf = chunks[0];
-  } else {
-    buf = new Uint8Array(received);
-    var pos = 0;
-    for (var c = 0; c < chunks.length; c++) {
-      buf.set(chunks[c], pos);
-      pos += chunks[c].length;
-    }
-  }
-  var ds = new DecompressionStream("gzip");
-  var stream = new Response(buf).body.pipeThrough(ds);
+  var stream = resp.body.pipeThrough(new DecompressionStream("gzip"));
   return JSON.parse(await new Response(stream).text());
 }
 
@@ -1204,12 +1183,12 @@ function consumeCachedAppendPage() {
 }
 
 function prefetchNextPage() {
-  if (!apiAvailable) return;
-  if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return;
+  if (!apiAvailable) return Promise.resolve();
+  if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
   var nextPage = STATE._loadedPage + 1;
   var totalPages = Math.ceil(STATE.total / STATE.pageSize);
-  if (nextPage > totalPages) return;
-  if (STATE._pageCache[nextPage]) return;
+  if (nextPage > totalPages) return Promise.resolve();
+  if (STATE._pageCache[nextPage]) return Promise.resolve();
   var reqId = searchRequestId;
   var q = STATE.query || "";
   var isRepo = !!STATE.repoFull;
@@ -1230,12 +1209,12 @@ function prefetchNextPage() {
   var cached = getCachedSearchResponse(cacheKey);
   if (cached && cached.results) {
     STATE._pageCache[nextPage] = cached.results;
-    return;
+    return Promise.resolve();
   }
   if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
   var prefetchController = new AbortController();
   searchPrefetchAbortController = prefetchController;
-  fetch(base, {
+  searchPrefetchPromise = fetch(base, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1256,7 +1235,28 @@ function prefetchNextPage() {
   }).finally(function() {
     if (searchPrefetchAbortController === prefetchController) {
       searchPrefetchAbortController = null;
+      searchPrefetchPromise = null;
     }
+  });
+  return searchPrefetchPromise;
+}
+
+function scheduleBackgroundLocalDataLoad() {
+  clearTimeout(localDataLoadTimer);
+  var waitForPrefetch = searchPrefetchPromise || Promise.resolve();
+  waitForPrefetch.catch(function() {}).finally(function() {
+    var connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    var delay = connection && (connection.saveData || /^(slow-)?2g$/.test(connection.effectiveType || "")) ? 2500 : 100;
+    localDataLoadTimer = setTimeout(function() {
+      var start = function() {
+        if (!STATE.dataLoaded) ensureLocalDataLoaded(false, true);
+      };
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(start, { timeout: 2500 });
+      } else {
+        setTimeout(start, 1000);
+      }
+    }, delay);
   });
 }
 
@@ -2187,7 +2187,7 @@ function applyInitialSearchPayload(data) {
   updateLoadInfo();
   syncStateToURL();
   prefetchNextPage();
-  ensureLocalDataLoaded(false, true);
+  scheduleBackgroundLocalDataLoad();
   return true;
 }
 
