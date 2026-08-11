@@ -1,5 +1,6 @@
 const WORKER_PROTOCOL_VERSION = 1;
 const MAX_PAGE_SIZE = 500;
+const SORT_PRECOMPUTE_DELAY_MS = 1000;
 
 let records = [];
 let recordIds = [];
@@ -9,6 +10,15 @@ let wordIndex = null;
 let wordIndexFilesOnly = null;
 let vocabSorted = [];
 let vocabSortedFilesOnly = [];
+let recordIndices = [];
+let repoRecordIndices = {};
+let sortedByName = [];
+let sortedBySize = [];
+let repoSortedByName = {};
+let repoSortedBySize = {};
+let nameOrderReady = false;
+let sizeOrderReady = false;
+let sortBuildTimer = null;
 
 function emptyMetadata() {
   return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, txt: { available: false, count: 0, byRepo: {} } };
@@ -104,7 +114,45 @@ function stableRecordId(record, occurrence) {
   return [record.Repo || "", path, String(occurrence)].join("\u001f");
 }
 
+function compareRecordName(a, b) {
+  return String(records[a].File || "").localeCompare(String(records[b].File || ""), "zh");
+}
+
+function compareRecordSize(a, b) {
+  return (Number(records[b].Size) || 0) - (Number(records[a].Size) || 0);
+}
+
+function buildNameOrders() {
+  if (nameOrderReady) return;
+  sortedByName = recordIndices.slice().sort(compareRecordName);
+  repoSortedByName = {};
+  for (const repo of Object.keys(repoRecordIndices)) repoSortedByName[repo] = [];
+  for (const index of sortedByName) repoSortedByName[records[index].Repo].push(index);
+  nameOrderReady = true;
+}
+
+function buildSizeOrders() {
+  if (sizeOrderReady) return;
+  sortedBySize = recordIndices.slice().sort(compareRecordSize);
+  repoSortedBySize = {};
+  for (const repo of Object.keys(repoRecordIndices)) repoSortedBySize[repo] = [];
+  for (const index of sortedBySize) repoSortedBySize[records[index].Repo].push(index);
+  sizeOrderReady = true;
+}
+
+function scheduleSortOrders(expectedGeneration) {
+  if (typeof setTimeout !== "function") return;
+  sortBuildTimer = setTimeout(() => {
+    if (generation === expectedGeneration) {
+      buildNameOrders();
+      buildSizeOrders();
+    }
+    sortBuildTimer = null;
+  }, SORT_PRECOMPUTE_DELAY_MS);
+}
+
 function replaceCorpus(nextRecords) {
+  if (sortBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(sortBuildTimer);
   records = nextRecords;
   const repoCounts = {};
   const extensionCounts = {};
@@ -113,9 +161,14 @@ function replaceCorpus(nextRecords) {
   const idOccurrences = {};
   let txtCount = 0;
   recordIds = new Array(records.length);
+  recordIndices = new Array(records.length);
+  repoRecordIndices = {};
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
     const repo = record.Repo || "";
+    recordIndices[i] = i;
+    if (!repoRecordIndices[repo]) repoRecordIndices[repo] = [];
+    repoRecordIndices[repo].push(i);
     const extension = String(record.Extension || "").toLowerCase();
     repoCounts[repo] = (repoCounts[repo] || 0) + 1;
     if (extension) {
@@ -146,7 +199,15 @@ function replaceCorpus(nextRecords) {
   wordIndexFilesOnly = null;
   vocabSorted = [];
   vocabSortedFilesOnly = [];
+  sortedByName = [];
+  sortedBySize = [];
+  repoSortedByName = {};
+  repoSortedBySize = {};
+  nameOrderReady = false;
+  sizeOrderReady = false;
+  sortBuildTimer = null;
   generation++;
+  scheduleSortOrders(generation);
   return Object.assign({ state: "corpus-ready", generation }, metadata);
 }
 
@@ -209,12 +270,50 @@ function cleanPath(path) {
   return String(path || "").replace(/^\/+|\/+$/g, "");
 }
 
+function emptySearchOrder(params) {
+  const repos = params.repos || [];
+  if (repos.length > 1) return null;
+  if ((params.extensions && params.extensions.length)
+      || (params.folders && params.folders.length)
+      || (params.folderSelfs && params.folderSelfs.length)
+      || (params.folderSubtrees && params.folderSubtrees.length)
+      || params.minSize != null
+      || params.maxSize != null) return null;
+  const repo = repos.length === 1 ? repos[0] : null;
+  if (params.sort === "name") buildNameOrders();
+  else if (params.sort === "size") buildSizeOrders();
+  if (repo) {
+    if (params.sort === "name") return repoSortedByName[repo] || [];
+    if (params.sort === "size") return repoSortedBySize[repo] || [];
+    return repoRecordIndices[repo] || [];
+  }
+  if (params.sort === "name") return sortedByName;
+  if (params.sort === "size") return sortedBySize;
+  return recordIndices;
+}
+
+function pageResult(indices, params) {
+  const page = Math.max(1, Number(params.page) || 1);
+  const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, Number(params.pageSize) || 100));
+  const pageIndices = indices.slice((page - 1) * pageSize, page * pageSize);
+  return {
+    records: pageIndices.map((index) => records[index]),
+    ids: pageIndices.map((index) => recordIds[index]),
+    total: indices.length,
+    page,
+    pageSize,
+    generation,
+  };
+}
+
 function searchLocal(params) {
   const query = String(params.q || "").trim();
   const searchFolders = params.searchFolders !== false;
   let matched = [];
   if (!query) {
-    matched = Array.from({ length: records.length }, (_, i) => i);
+    const order = emptySearchOrder(params);
+    if (order !== null) return pageResult(order, params);
+    matched = recordIndices.slice();
   } else if (params.exact || literalSearch(query)) {
     const wildcard = query.includes("*") || query.includes("?");
     const pattern = wildcard ? wildcardPatternToRegExp(query) : null;
