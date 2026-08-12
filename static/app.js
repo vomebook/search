@@ -810,21 +810,18 @@ function prefetchNextPage() {
 
 function scheduleBackgroundLocalDataLoad() {
   clearTimeout(localDataLoadTimer);
-  var waitForPrefetch = searchPrefetchPromise || Promise.resolve();
-  waitForPrefetch.catch(function() {}).finally(function() {
-    var connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-    var delay = connection && (connection.saveData || /^(slow-)?2g$/.test(connection.effectiveType || "")) ? 2500 : 100;
-    localDataLoadTimer = setTimeout(function() {
-      var start = function() {
-        if (!STATE.dataLoaded) ensureLocalDataLoaded(false, true);
-      };
-      if (typeof window.requestIdleCallback === "function") {
-        window.requestIdleCallback(start, { timeout: 2500 });
-      } else {
-        setTimeout(start, 1000);
-      }
-    }, delay);
-  });
+  var connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  var delay = connection && (connection.saveData || /^(slow-)?2g$/.test(connection.effectiveType || "")) ? 2500 : 100;
+  localDataLoadTimer = setTimeout(function() {
+    var start = function() {
+      if (!STATE.dataLoaded) ensureLocalDataLoaded(false, true);
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(start, { timeout: 2500 });
+    } else {
+      setTimeout(start, 1000);
+    }
+  }, delay);
 }
 
 let repoApiCache = null;
@@ -1462,6 +1459,7 @@ let composeSafetyTimer = null;
 let searchId = 0;
 let searchAbortController = null;
 let searchPrefetchAbortController = null;
+let searchPrefetchPromise = null;
 let searchRequestId = 0;
 let routeRenderId = 0;
 let apiAvailable = true;
@@ -1471,6 +1469,7 @@ let apiProbeInFlight = false;
 const API_FAILURE_THRESHOLD = 3;
 const API_RECOVERY_DELAY = 30000;
 let localDataPromise = null;
+let localDataLoadTimer = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
 const SEARCH_CACHE_MAX = 60;
 const searchResponseCache = new Map();
