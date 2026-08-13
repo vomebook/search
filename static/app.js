@@ -736,10 +736,7 @@ function consumeCachedAppendPage() {
   STATE.hasMore = STATE.results.length < STATE.total;
   STATE._pendingPage = 0;
   STATE.isLoading = false;
-  ensureVirtualHeights(STATE.results.length);
-  VSCROLL.renderStart = 0;
-  VSCROLL.renderEnd = 0;
-  requestAnimationFrame(renderVisible);
+  extendVirtualResults();
   updateStatusBar();
   updateLoadInfo();
   syncStateToURL();
@@ -1910,10 +1907,7 @@ function doSearch(append) {
       if (!applied) return;
       if (id !== searchId) return;
       if (append) {
-        ensureVirtualHeights(STATE.results.length);
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        requestAnimationFrame(function() { renderVisible(); });
+        extendVirtualResults();
       } else {
         DOM.resultsContainer.scrollTop = 0;
         resetVirtualScrollState();
@@ -2009,10 +2003,7 @@ function doSearchFallbackLocal(params, append, id) {
       }
       STATE.hasMore = STATE.results.length < STATE.total;
       if (append) {
-        ensureVirtualHeights(STATE.results.length);
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        requestAnimationFrame(function() { renderVisible(); });
+        extendVirtualResults();
       } else {
         DOM.resultsContainer.scrollTop = 0;
         resetVirtualScrollState();
@@ -2201,7 +2192,7 @@ function renderVisible() {
   const topH = getVirtualOffset(start);
   let html = "";
   if (topH > 0) {
-    html += '<div style="height:' + topH + 'px;flex-shrink:0"></div>';
+    html += '<div class="virtual-spacer virtual-spacer-top" style="height:' + topH + 'px;flex-shrink:0"></div>';
   }
   for (let ri = start; ri < end; ri++) {
     const rec = items[ri];
@@ -2209,7 +2200,7 @@ function renderVisible() {
   }
   const bottomH = Math.max(0, totalH - getVirtualOffset(end));
   if (bottomH > 0) {
-    html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
+    html += '<div class="virtual-spacer virtual-spacer-bottom" style="height:' + bottomH + 'px;flex-shrink:0"></div>';
   }
   var tpl = document.createElement("template");
   tpl.innerHTML = html;
@@ -2228,6 +2219,28 @@ function renderVisible() {
       animateVisibleResultRows();
     }
   });
+}
+
+function extendVirtualResults() {
+  ensureVirtualHeights(STATE.results.length);
+  if (VSCROLL.renderEnd <= VSCROLL.renderStart) {
+    renderVisible();
+    return;
+  }
+  const bottomH = Math.max(0, getVirtualTotalHeight() - getVirtualOffset(VSCROLL.renderEnd));
+  let spacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
+  if (bottomH > 0) {
+    if (!spacer) {
+      spacer = document.createElement("div");
+      spacer.className = "virtual-spacer virtual-spacer-bottom";
+      spacer.style.flexShrink = "0";
+      DOM.resultsList.appendChild(spacer);
+    }
+    spacer.style.height = bottomH + "px";
+  } else if (spacer) {
+    spacer.remove();
+  }
+  updateScrollThumb();
 }
 
 function ensurePrefixHeights() {
