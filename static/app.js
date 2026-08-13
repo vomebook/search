@@ -2355,6 +2355,36 @@ function measureHeights() {
   return changed;
 }
 
+function preserveResultsViewportDuringSidebarTransition(sidebar) {
+  if (!sidebar || STATE.isMobile || !DOM.resultsContainer || STATE.results.length === 0) return;
+  const containerRect = DOM.resultsContainer.getBoundingClientRect();
+  const anchorHit = document.elementFromPoint(
+    containerRect.left + containerRect.width / 2,
+    containerRect.top + containerRect.height / 2
+  );
+  const anchor = anchorHit && anchorHit.closest(".result-item");
+  if (!anchor) return;
+  const anchorIndex = Number(anchor.dataset.index);
+  const anchorOffset = anchor.getBoundingClientRect().top - containerRect.top;
+  const finish = (event) => {
+    if (event && (event.target !== sidebar || event.propertyName !== "width")) return;
+    sidebar.removeEventListener("transitionend", finish);
+    measureHeights();
+    let remainingCorrections = 8;
+    const restoreAnchor = () => {
+      DOM.resultsContainer.scrollTop = getVirtualOffset(anchorIndex) - anchorOffset;
+      VSCROLL.renderStart = -1;
+      VSCROLL.renderEnd = -1;
+      renderVisible();
+      remainingCorrections--;
+      if (remainingCorrections > 0) requestAnimationFrame(restoreAnchor);
+      else updateScrollTrack();
+    };
+    requestAnimationFrame(restoreAnchor);
+  };
+  sidebar.addEventListener("transitionend", finish);
+}
+
 function updateStatusBar() {
   DOM.resultCount.textContent = STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "";
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ||
@@ -3503,6 +3533,7 @@ function applyMobileMode() {
 function autoDetectMobile() { return window.innerWidth <= 768; }
 
 function toggleLeftSidebar() {
+  preserveResultsViewportDuringSidebarTransition(DOM.leftSidebar);
   STATE.leftSidebarOpen = !STATE.leftSidebarOpen;
   if (!STATE.leftSidebarOpen) {
     DOM.leftSidebar.classList.remove("expanded-wide");
@@ -3514,6 +3545,7 @@ function toggleLeftSidebar() {
 }
 
 function toggleRightSidebar() {
+  preserveResultsViewportDuringSidebarTransition(DOM.rightSidebar);
   STATE.rightSidebarOpen = !STATE.rightSidebarOpen;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
