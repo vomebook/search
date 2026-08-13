@@ -2181,6 +2181,14 @@ function renderVisible() {
   const beforeOverscan = baseOverscan * (scrollDelta < 0 ? 1 + extraScreens : 1);
   const afterOverscan = baseOverscan * (scrollDelta > 0 ? 1 + extraScreens : 1);
   ensurePrefixHeights();
+  if (VSCROLL.renderStart >= 0 && VSCROLL.renderEnd > VSCROLL.renderStart && VSCROLL.renderEnd <= len) {
+    const renderedTop = getVirtualOffset(VSCROLL.renderStart);
+    const renderedBottom = getVirtualOffset(VSCROLL.renderEnd);
+    const edgeBuffer = Math.min(baseOverscan * 0.4, viewH * 0.5);
+    const hasBeforeBuffer = VSCROLL.renderStart === 0 || scrollTop >= renderedTop + edgeBuffer;
+    const hasAfterBuffer = VSCROLL.renderEnd === len || scrollTop + viewH <= renderedBottom - edgeBuffer;
+    if (hasBeforeBuffer && hasAfterBuffer) return;
+  }
   let start = findVirtualIndex(Math.max(0, scrollTop - beforeOverscan));
   let end = Math.min(len, findVirtualIndex(scrollTop + viewH + afterOverscan) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
