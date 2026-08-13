@@ -736,10 +736,7 @@ function consumeCachedAppendPage() {
   STATE.hasMore = STATE.results.length < STATE.total;
   STATE._pendingPage = 0;
   STATE.isLoading = false;
-  ensureVirtualHeights(STATE.results.length);
-  VSCROLL.renderStart = 0;
-  VSCROLL.renderEnd = 0;
-  requestAnimationFrame(renderVisible);
+  refreshVirtualAfterAppend();
   updateStatusBar();
   updateLoadInfo();
   syncStateToURL();
@@ -1092,6 +1089,9 @@ const VSCROLL = {
   htmlCacheKey: "",
   estimatedHeight: 60,
   isDraggingThumb: false,
+  lastScrollTop: 0,
+  lastScrollTime: 0,
+  scrollVelocity: 0,
 };
 let pendingResultEntrance = false;
 
@@ -1905,10 +1905,7 @@ function doSearch(append) {
       if (!applied) return;
       if (id !== searchId) return;
       if (append) {
-        ensureVirtualHeights(STATE.results.length);
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        requestAnimationFrame(function() { renderVisible(); });
+        refreshVirtualAfterAppend();
       } else {
         DOM.resultsContainer.scrollTop = 0;
         resetVirtualScrollState();
@@ -2004,10 +2001,7 @@ function doSearchFallbackLocal(params, append, id) {
       }
       STATE.hasMore = STATE.results.length < STATE.total;
       if (append) {
-        ensureVirtualHeights(STATE.results.length);
-        VSCROLL.renderStart = 0;
-        VSCROLL.renderEnd = 0;
-        requestAnimationFrame(function() { renderVisible(); });
+        refreshVirtualAfterAppend();
       } else {
         DOM.resultsContainer.scrollTop = 0;
         resetVirtualScrollState();
@@ -2171,10 +2165,23 @@ function renderVisible() {
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
   const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
-  const overscanPx = overscanItems * (est || 60);
+  const now = performance.now();
+  const elapsed = VSCROLL.lastScrollTime ? Math.max(1, now - VSCROLL.lastScrollTime) : 16;
+  const instantVelocity = Math.abs(scrollTop - VSCROLL.lastScrollTop) / elapsed;
+  VSCROLL.scrollVelocity = VSCROLL.scrollVelocity * 0.7 + instantVelocity * 0.3;
+  VSCROLL.lastScrollTime = now;
+  const extraScreens = Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
+  const overscanPx = overscanItems * (est || 60) + extraScreens * viewH;
   ensurePrefixHeights();
-  let start = findVirtualIndex(Math.max(0, scrollTop - overscanPx));
-  let end = Math.min(len, findVirtualIndex(scrollTop + viewH + overscanPx) + 1);
+  const scrollingDown = scrollTop >= VSCROLL.lastScrollTop;
+  VSCROLL.lastScrollTop = scrollTop;
+  const safeStart = findVirtualIndex(Math.max(0, scrollTop - overscanPx * 0.35));
+  const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + overscanPx * 0.35) + 1);
+  if (!pendingResultEntrance && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
+  const beforePx = overscanPx * (scrollingDown ? 1 : 2);
+  const afterPx = overscanPx * (scrollingDown ? 2 : 1);
+  let start = findVirtualIndex(Math.max(0, scrollTop - beforePx));
+  let end = Math.min(len, findVirtualIndex(scrollTop + viewH + afterPx) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
   if (pendingResultEntrance && start === 0) end = Math.min(len, Math.max(end, 30));
   if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
@@ -2183,17 +2190,13 @@ function renderVisible() {
   const totalH = getVirtualTotalHeight();
   const topH = getVirtualOffset(start);
   let html = "";
-  if (topH > 0) {
-    html += '<div style="height:' + topH + 'px;flex-shrink:0"></div>';
-  }
+  html += '<div class="virtual-spacer virtual-spacer-top" style="height:' + topH + 'px;flex-shrink:0"></div>';
   for (let ri = start; ri < end; ri++) {
     const rec = items[ri];
     html += '<div class="result-item' + (ri % 2 === 1 ? ' is-alt' : '') + '" data-index="' + ri + '">' + getCachedResultHTML(rec, ri) + '</div>';
   }
   const bottomH = Math.max(0, totalH - getVirtualOffset(end));
-  if (bottomH > 0) {
-    html += '<div style="height:' + bottomH + 'px;flex-shrink:0"></div>';
-  }
+  html += '<div class="virtual-spacer virtual-spacer-bottom" style="height:' + bottomH + 'px;flex-shrink:0"></div>';
   var tpl = document.createElement("template");
   tpl.innerHTML = html;
   DOM.resultsList.replaceChildren(tpl.content);
@@ -2288,6 +2291,9 @@ function resetVirtualScrollState() {
   VSCROLL.prefixHeights = [0];
   VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
+  VSCROLL.lastScrollTop = 0;
+  VSCROLL.lastScrollTime = 0;
+  VSCROLL.scrollVelocity = 0;
   clearResultHTMLCache();
   updateScrollTrack();
 }
@@ -2301,6 +2307,9 @@ function prepareRouteTransitionResults() {
   VSCROLL.prefixHeights = [0];
   VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
+  VSCROLL.lastScrollTop = 0;
+  VSCROLL.lastScrollTime = 0;
+  VSCROLL.scrollVelocity = 0;
   clearResultHTMLCache();
   ensureVirtualHeights(Math.min(STATE.results.length, STATE.pageSize));
   renderVisible();
@@ -2315,6 +2324,28 @@ function ensureVirtualHeights(len) {
   }
   VSCROLL.heightsDirty = true;
   if (VSCROLL.htmlCache.length < len) VSCROLL.htmlCache.length = len;
+}
+
+function refreshVirtualAfterAppend() {
+  ensureVirtualHeights(STATE.results.length);
+  const topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
+  const bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
+  if (!topSpacer || !bottomSpacer) {
+    VSCROLL.renderStart = -1;
+    VSCROLL.renderEnd = -1;
+    renderVisible();
+    return;
+  }
+  topSpacer.style.height = getVirtualOffset(VSCROLL.renderStart) + "px";
+  bottomSpacer.style.height = Math.max(0, getVirtualTotalHeight() - getVirtualOffset(VSCROLL.renderEnd)) + "px";
+  requestAnimationFrame(updateScrollTrack);
+}
+
+function ensureVirtualViewportCovered() {
+  if (VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) return;
+  const viewTop = DOM.resultsContainer.scrollTop;
+  const viewBottom = viewTop + DOM.resultsContainer.clientHeight;
+  if (viewTop < getVirtualOffset(VSCROLL.renderStart) || viewBottom > getVirtualOffset(VSCROLL.renderEnd)) renderVisible();
 }
 
 function measureHeights() {
@@ -2353,43 +2384,6 @@ function measureHeights() {
     }
   }
   return changed;
-}
-
-function preserveResultsViewportDuringSidebarTransition(sidebar) {
-  if (!sidebar || STATE.isMobile || !DOM.resultsContainer || STATE.results.length === 0) return;
-  const containerRect = DOM.resultsContainer.getBoundingClientRect();
-  const anchorHit = document.elementFromPoint(
-    containerRect.left + containerRect.width / 2,
-    containerRect.top + containerRect.height / 2
-  );
-  const anchor = anchorHit && anchorHit.closest(".result-item");
-  if (!anchor) return;
-  const anchorIndex = Number(anchor.dataset.index);
-  const anchorOffset = anchor.getBoundingClientRect().top - containerRect.top;
-  let transitionFinished = false;
-  let remainingCorrections = 0;
-  const restoreAnchor = () => {
-    const renderedAnchor = DOM.resultsList.querySelector(`.result-item[data-index="${anchorIndex}"]`);
-    if (renderedAnchor) {
-      DOM.resultsContainer.scrollTop += renderedAnchor.getBoundingClientRect().top - containerRect.top - anchorOffset;
-      measureHeights();
-    } else {
-      DOM.resultsContainer.scrollTop = getVirtualOffset(anchorIndex) - anchorOffset;
-      VSCROLL.renderStart = -1;
-      VSCROLL.renderEnd = -1;
-      renderVisible();
-    }
-    if (!transitionFinished || remainingCorrections-- > 0) requestAnimationFrame(restoreAnchor);
-    else updateScrollTrack();
-  };
-  const finish = (event) => {
-    if (event && (event.target !== sidebar || event.propertyName !== "width")) return;
-    sidebar.removeEventListener("transitionend", finish);
-    transitionFinished = true;
-    remainingCorrections = 8;
-  };
-  sidebar.addEventListener("transitionend", finish);
-  requestAnimationFrame(restoreAnchor);
 }
 
 function updateStatusBar() {
@@ -3377,11 +3371,11 @@ function updateScrollTrack() {
 
 function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("scroll", () => {
-    updateScrollTrack();
+    ensureVirtualViewportCovered();
     if (!scrollTicking) {
       requestAnimationFrame(() => {
         renderVisible();
-        updateScrollThumb();
+        updateScrollTrack();
         maybeLoadNextPage();
         scrollTicking = false;
       });
@@ -3540,7 +3534,6 @@ function applyMobileMode() {
 function autoDetectMobile() { return window.innerWidth <= 768; }
 
 function toggleLeftSidebar() {
-  preserveResultsViewportDuringSidebarTransition(DOM.leftSidebar);
   STATE.leftSidebarOpen = !STATE.leftSidebarOpen;
   if (!STATE.leftSidebarOpen) {
     DOM.leftSidebar.classList.remove("expanded-wide");
@@ -3552,7 +3545,6 @@ function toggleLeftSidebar() {
 }
 
 function toggleRightSidebar() {
-  preserveResultsViewportDuringSidebarTransition(DOM.rightSidebar);
   STATE.rightSidebarOpen = !STATE.rightSidebarOpen;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
