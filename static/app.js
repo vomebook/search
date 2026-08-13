@@ -1093,6 +1093,8 @@ const VSCROLL = {
   lastRenderScrollTop: 0,
   observedWidth: 0,
   resizeTimer: null,
+  resizeAnchor: null,
+  resizeAnchorActive: false,
   isDraggingThumb: false,
 };
 let pendingResultEntrance = false;
@@ -2355,7 +2357,8 @@ function ensureVirtualHeights(len) {
 
 function measureHeights() {
   const els = DOM.resultsList.querySelectorAll(".result-item");
-  const anchorIndex = findVirtualIndex(DOM.resultsContainer.scrollTop);
+  const resizeAnchor = VSCROLL.resizeAnchorActive ? VSCROLL.resizeAnchor : null;
+  const anchorIndex = resizeAnchor ? resizeAnchor.index : findVirtualIndex(DOM.resultsContainer.scrollTop);
   const anchorOffset = DOM.resultsContainer.scrollTop - getVirtualOffset(anchorIndex);
   let changed = false;
   for (let i = 0; i < els.length; i++) {
@@ -2391,29 +2394,68 @@ function measureHeights() {
     }
   }
   if (changed) {
-    const anchoredScrollTop = getVirtualOffset(anchorIndex) + anchorOffset;
+    const anchoredScrollTop = resizeAnchor
+      ? getVirtualOffset(anchorIndex) - resizeAnchor.viewportTop
+      : getVirtualOffset(anchorIndex) + anchorOffset;
     if (Math.abs(DOM.resultsContainer.scrollTop - anchoredScrollTop) > 0.5) {
       DOM.resultsContainer.scrollTop = anchoredScrollTop;
     }
+  } else if (resizeAnchor) {
+    VSCROLL.resizeAnchor = null;
+    VSCROLL.resizeAnchorActive = false;
   }
   return changed;
 }
 
 function invalidateVirtualHeightsForResize() {
   if (!STATE.results.length) return;
-  const anchorIndex = findVirtualIndex(DOM.resultsContainer.scrollTop);
-  const anchorOffset = DOM.resultsContainer.scrollTop - getVirtualOffset(anchorIndex);
+  const containerRect = DOM.resultsContainer.getBoundingClientRect();
+  const renderedRows = DOM.resultsList.querySelectorAll(".result-item[data-index]");
+  let anchorRow = null;
+  for (let i = 0; i < renderedRows.length; i++) {
+    if (renderedRows[i].getBoundingClientRect().bottom > containerRect.top) {
+      anchorRow = renderedRows[i];
+      break;
+    }
+  }
+  const capturedAnchor = VSCROLL.resizeAnchor;
+  const anchorIndex = capturedAnchor ? capturedAnchor.index : (anchorRow ? Number(anchorRow.dataset.index) : findVirtualIndex(DOM.resultsContainer.scrollTop));
+  const anchorViewportTop = capturedAnchor ? capturedAnchor.viewportTop : (anchorRow ? anchorRow.getBoundingClientRect().top - containerRect.top : 0);
+  VSCROLL.resizeAnchor = { index: anchorIndex, viewportTop: anchorViewportTop };
+  VSCROLL.resizeAnchorActive = true;
   VSCROLL.heights.fill(null);
   VSCROLL.heightTree = [];
   VSCROLL.prefixHeights = [0];
   VSCROLL.heightsDirty = true;
   VSCROLL.measuredHeightTotal = 0;
   VSCROLL.measuredHeightCount = 0;
-  DOM.resultsContainer.scrollTop = getVirtualOffset(anchorIndex) + anchorOffset;
+  DOM.resultsContainer.scrollTop = Math.max(0, getVirtualOffset(anchorIndex) - anchorViewportTop);
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
   VSCROLL.lastRenderScrollTop = DOM.resultsContainer.scrollTop;
   renderVisible();
+  const restoredAnchor = DOM.resultsList.querySelector('.result-item[data-index="' + anchorIndex + '"]');
+  if (restoredAnchor) {
+    const correction = restoredAnchor.getBoundingClientRect().top - containerRect.top - anchorViewportTop;
+    if (Math.abs(correction) > 0.5) DOM.resultsContainer.scrollTop += correction;
+  }
+}
+
+function captureVirtualResizeAnchor() {
+  if (!STATE.results.length || !DOM.resultsContainer) return;
+  const containerRect = DOM.resultsContainer.getBoundingClientRect();
+  const rows = DOM.resultsList.querySelectorAll(".result-item[data-index]");
+  for (let i = 0; i < rows.length; i++) {
+    const rowRect = rows[i].getBoundingClientRect();
+    if (rowRect.bottom > containerRect.top) {
+      VSCROLL.resizeAnchor = {
+        index: Number(rows[i].dataset.index),
+        viewportTop: rowRect.top - containerRect.top,
+      };
+      VSCROLL.resizeAnchorActive = false;
+      return;
+    }
+  }
 }
 
 function updateStatusBar() {
@@ -3606,6 +3648,7 @@ function toggleRightSidebar() {
 }
 
 function updateSidebarVisibility() {
+  captureVirtualResizeAnchor();
   DOM.leftSidebar.classList.toggle("collapsed", !STATE.leftSidebarOpen);
   DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
   DOM.rightSidebar.classList.toggle("collapsed", !STATE.rightSidebarOpen);
