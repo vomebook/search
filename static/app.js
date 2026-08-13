@@ -1095,6 +1095,8 @@ const VSCROLL = {
   resizeTimer: null,
   resizeAnchor: null,
   resizeAnchorActive: false,
+  resizeAnchorFrame: 0,
+  resizeAnchorDeadline: 0,
   isDraggingThumb: false,
 };
 let pendingResultEntrance = false;
@@ -2458,6 +2460,27 @@ function captureVirtualResizeAnchor() {
   }
 }
 
+function maintainVirtualResizeAnchor() {
+  if (!VSCROLL.resizeAnchor) return;
+  VSCROLL.resizeAnchorDeadline = performance.now() + 320;
+  if (VSCROLL.resizeAnchorFrame) return;
+  const maintain = (now) => {
+    VSCROLL.resizeAnchorFrame = 0;
+    const anchor = VSCROLL.resizeAnchor;
+    if (!anchor) return;
+    const row = DOM.resultsList.querySelector('.result-item[data-index="' + anchor.index + '"]');
+    if (row) {
+      const containerTop = DOM.resultsContainer.getBoundingClientRect().top;
+      const correction = row.getBoundingClientRect().top - containerTop - anchor.viewportTop;
+      if (Math.abs(correction) > 0.5) DOM.resultsContainer.scrollTop += correction;
+    }
+    if (now < VSCROLL.resizeAnchorDeadline) {
+      VSCROLL.resizeAnchorFrame = requestAnimationFrame(maintain);
+    }
+  };
+  VSCROLL.resizeAnchorFrame = requestAnimationFrame(maintain);
+}
+
 function updateStatusBar() {
   DOM.resultCount.textContent = STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "";
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ||
@@ -3655,6 +3678,7 @@ function updateSidebarVisibility() {
   DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
   DOM.overlay.style.display = "";
   DOM.overlay.classList.toggle("open", STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen));
+  maintainVirtualResizeAnchor();
 }
 let keyboardResultIndex = -1;
 
