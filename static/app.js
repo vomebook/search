@@ -1091,12 +1091,6 @@ const VSCROLL = {
   measuredHeightTotal: 0,
   measuredHeightCount: 0,
   lastRenderScrollTop: 0,
-  observedWidth: 0,
-  resizeTimer: null,
-  resizeAnchor: null,
-  resizeAnchorActive: false,
-  resizeAnchorFrame: 0,
-  resizeAnchorDeadline: 0,
   isDraggingThumb: false,
 };
 let pendingResultEntrance = false;
@@ -2359,8 +2353,7 @@ function ensureVirtualHeights(len) {
 
 function measureHeights() {
   const els = DOM.resultsList.querySelectorAll(".result-item");
-  const resizeAnchor = VSCROLL.resizeAnchorActive ? VSCROLL.resizeAnchor : null;
-  const anchorIndex = resizeAnchor ? resizeAnchor.index : findVirtualIndex(DOM.resultsContainer.scrollTop);
+  const anchorIndex = findVirtualIndex(DOM.resultsContainer.scrollTop);
   const anchorOffset = DOM.resultsContainer.scrollTop - getVirtualOffset(anchorIndex);
   let changed = false;
   for (let i = 0; i < els.length; i++) {
@@ -2396,89 +2389,12 @@ function measureHeights() {
     }
   }
   if (changed) {
-    const anchoredScrollTop = resizeAnchor
-      ? getVirtualOffset(anchorIndex) - resizeAnchor.viewportTop
-      : getVirtualOffset(anchorIndex) + anchorOffset;
+    const anchoredScrollTop = getVirtualOffset(anchorIndex) + anchorOffset;
     if (Math.abs(DOM.resultsContainer.scrollTop - anchoredScrollTop) > 0.5) {
       DOM.resultsContainer.scrollTop = anchoredScrollTop;
     }
-  } else if (resizeAnchor) {
-    VSCROLL.resizeAnchor = null;
-    VSCROLL.resizeAnchorActive = false;
   }
   return changed;
-}
-
-function invalidateVirtualHeightsForResize() {
-  if (!STATE.results.length) return;
-  const containerRect = DOM.resultsContainer.getBoundingClientRect();
-  const renderedRows = DOM.resultsList.querySelectorAll(".result-item[data-index]");
-  let anchorRow = null;
-  for (let i = 0; i < renderedRows.length; i++) {
-    if (renderedRows[i].getBoundingClientRect().bottom > containerRect.top) {
-      anchorRow = renderedRows[i];
-      break;
-    }
-  }
-  const capturedAnchor = VSCROLL.resizeAnchor;
-  const anchorIndex = capturedAnchor ? capturedAnchor.index : (anchorRow ? Number(anchorRow.dataset.index) : findVirtualIndex(DOM.resultsContainer.scrollTop));
-  const anchorViewportTop = capturedAnchor ? capturedAnchor.viewportTop : (anchorRow ? anchorRow.getBoundingClientRect().top - containerRect.top : 0);
-  VSCROLL.resizeAnchor = { index: anchorIndex, viewportTop: anchorViewportTop };
-  VSCROLL.resizeAnchorActive = true;
-  VSCROLL.heights.fill(null);
-  VSCROLL.heightTree = [];
-  VSCROLL.prefixHeights = [0];
-  VSCROLL.heightsDirty = true;
-  VSCROLL.measuredHeightTotal = 0;
-  VSCROLL.measuredHeightCount = 0;
-  DOM.resultsContainer.scrollTop = Math.max(0, getVirtualOffset(anchorIndex) - anchorViewportTop);
-  VSCROLL.renderStart = -1;
-  VSCROLL.renderEnd = -1;
-  VSCROLL.lastRenderScrollTop = DOM.resultsContainer.scrollTop;
-  renderVisible();
-  const restoredAnchor = DOM.resultsList.querySelector('.result-item[data-index="' + anchorIndex + '"]');
-  if (restoredAnchor) {
-    const correction = restoredAnchor.getBoundingClientRect().top - containerRect.top - anchorViewportTop;
-    if (Math.abs(correction) > 0.5) DOM.resultsContainer.scrollTop += correction;
-  }
-}
-
-function captureVirtualResizeAnchor() {
-  if (!STATE.results.length || !DOM.resultsContainer) return;
-  const containerRect = DOM.resultsContainer.getBoundingClientRect();
-  const rows = DOM.resultsList.querySelectorAll(".result-item[data-index]");
-  for (let i = 0; i < rows.length; i++) {
-    const rowRect = rows[i].getBoundingClientRect();
-    if (rowRect.bottom > containerRect.top) {
-      VSCROLL.resizeAnchor = {
-        index: Number(rows[i].dataset.index),
-        viewportTop: rowRect.top - containerRect.top,
-      };
-      VSCROLL.resizeAnchorActive = false;
-      return;
-    }
-  }
-}
-
-function maintainVirtualResizeAnchor() {
-  if (!VSCROLL.resizeAnchor) return;
-  VSCROLL.resizeAnchorDeadline = performance.now() + 320;
-  if (VSCROLL.resizeAnchorFrame) return;
-  const maintain = (now) => {
-    VSCROLL.resizeAnchorFrame = 0;
-    const anchor = VSCROLL.resizeAnchor;
-    if (!anchor) return;
-    const row = DOM.resultsList.querySelector('.result-item[data-index="' + anchor.index + '"]');
-    if (row) {
-      const containerTop = DOM.resultsContainer.getBoundingClientRect().top;
-      const correction = row.getBoundingClientRect().top - containerTop - anchor.viewportTop;
-      if (Math.abs(correction) > 0.5) DOM.resultsContainer.scrollTop += correction;
-    }
-    if (now < VSCROLL.resizeAnchorDeadline) {
-      VSCROLL.resizeAnchorFrame = requestAnimationFrame(maintain);
-    }
-  };
-  VSCROLL.resizeAnchorFrame = requestAnimationFrame(maintain);
 }
 
 function updateStatusBar() {
@@ -3484,26 +3400,6 @@ function setupVirtualScroll() {
   }, { passive: true });
 }
 
-function setupResultResizeObserver() {
-  if (!("ResizeObserver" in window)) return;
-  const observer = new ResizeObserver(function(entries) {
-    const width = entries[0] ? entries[0].contentRect.width : DOM.resultsContainer.clientWidth;
-    if (!VSCROLL.observedWidth) {
-      VSCROLL.observedWidth = width;
-      return;
-    }
-    if (Math.abs(width - VSCROLL.observedWidth) < 1) return;
-    VSCROLL.observedWidth = width;
-    if (VSCROLL.resizeTimer) clearTimeout(VSCROLL.resizeTimer);
-    VSCROLL.resizeTimer = setTimeout(function() {
-      VSCROLL.resizeTimer = null;
-      invalidateVirtualHeightsForResize();
-      updateScrollTrack();
-    }, 80);
-  });
-  observer.observe(DOM.resultsContainer);
-}
-
 function updateScrollThumb() {
   const scrollTop = DOM.resultsContainer.scrollTop;
   const scrollHeight = DOM.resultsContainer.scrollHeight;
@@ -3671,14 +3567,12 @@ function toggleRightSidebar() {
 }
 
 function updateSidebarVisibility() {
-  captureVirtualResizeAnchor();
   DOM.leftSidebar.classList.toggle("collapsed", !STATE.leftSidebarOpen);
   DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
   DOM.rightSidebar.classList.toggle("collapsed", !STATE.rightSidebarOpen);
   DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
   DOM.overlay.style.display = "";
   DOM.overlay.classList.toggle("open", STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen));
-  maintainVirtualResizeAnchor();
 }
 let keyboardResultIndex = -1;
 
@@ -4150,7 +4044,6 @@ function init() {
     renderFilterFolderTree();
   });
   setupVirtualScroll();
-  setupResultResizeObserver();
   setupQuickScroll();
   setupKeyboard();
   setupResultDelegation();
