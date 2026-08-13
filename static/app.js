@@ -1,6 +1,4 @@
 const DATA_URL = "data/search_data.json.gz";
-const FOLDER_TREE_URL = "data/folder_tree.json.gz";
-const FOLDER_BROWSER_URL = "data/folder_browser.json.gz";
 const TXT_BASE = "https://voiceofml-search.hf.space/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
@@ -1194,18 +1192,30 @@ function getFileIconType(ext) {
   return FILE_ICON_MAP[(ext || "").toLowerCase()] || "file";
 }
 
-function highlightText(text, query) {
-  if (!query || !text) return escapeHTML(text);
-  const escaped = escapeHTML(text);
-  const tokens = query.split(/\s+/).filter((t) => t.length > 0);
-  if (tokens.length === 0) return escaped;
-  let result = escaped;
-  for (const tok of tokens) {
+const highlightRegexCache = new Map();
+
+function getHighlightRegexes(query) {
+  const cached = highlightRegexCache.get(query);
+  if (cached) return cached;
+  const regexes = query.split(/\s+/).filter((t) => t.length > 0).map(function(tok) {
     const escapedTok = escapeHTML(tok);
-    const regex = new RegExp(
+    return new RegExp(
       `(${escapedTok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
       "gi"
     );
+  });
+  if (highlightRegexCache.size >= 20) highlightRegexCache.delete(highlightRegexCache.keys().next().value);
+  highlightRegexCache.set(query, regexes);
+  return regexes;
+}
+
+function highlightText(text, query) {
+  if (!query || !text) return escapeHTML(text);
+  const escaped = escapeHTML(text);
+  const regexes = getHighlightRegexes(query);
+  if (regexes.length === 0) return escaped;
+  let result = escaped;
+  for (const regex of regexes) {
     result = result.replace(regex, "<mark>$1</mark>");
   }
   return result;

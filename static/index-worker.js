@@ -12,6 +12,8 @@ let vocabSorted = [];
 let vocabSortedFilesOnly = [];
 let recordIndices = [];
 let repoRecordIndices = {};
+let txtRecordIndices = [];
+let repoTxtRecordIndices = {};
 let sortedByName = [];
 let sortedBySize = [];
 let repoSortedByName = {};
@@ -55,6 +57,26 @@ function editDistance(s1, s2, maxDist) {
     prev = curr;
   }
   return prev[prev.length - 1];
+}
+
+function couldBeFuzzy(token, word, maxDist) {
+  if (Math.abs(token.length - word.length) > maxDist) return false;
+  if (token.length < 4) return true;
+  const counts = {};
+  for (const ch of token) counts[ch] = (counts[ch] || 0) + 1;
+  let diff = 0;
+  for (const ch of word) {
+    if (counts[ch] > 0) counts[ch] -= 1;
+    else {
+      diff += 1;
+      if (diff > 2 * maxDist) return false;
+    }
+  }
+  for (const ch of Object.keys(counts)) {
+    diff += counts[ch];
+    if (diff > 2 * maxDist) return false;
+  }
+  return true;
 }
 
 function wildcardPatternToRegExp(pattern) {
@@ -163,6 +185,8 @@ function replaceCorpus(nextRecords) {
   recordIds = new Array(records.length);
   recordIndices = new Array(records.length);
   repoRecordIndices = {};
+  txtRecordIndices = [];
+  repoTxtRecordIndices = {};
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
     const repo = record.Repo || "";
@@ -179,6 +203,9 @@ function replaceCorpus(nextRecords) {
     if (record.HasTxt) {
       txtCount++;
       txtByRepo[repo] = (txtByRepo[repo] || 0) + 1;
+      txtRecordIndices.push(i);
+      if (!repoTxtRecordIndices[repo]) repoTxtRecordIndices[repo] = [];
+      repoTxtRecordIndices[repo].push(i);
     }
     const base = [repo, (record.Folder || []).join("/"), record.File || "", record.Extension || ""].join("\u001f");
     const occurrence = idOccurrences[base] || 0;
@@ -336,7 +363,7 @@ function searchLocal(params) {
         const fuzzy = [];
         for (const entry of activeVocab) {
           const vocab = entry[0];
-          if (Math.abs(vocab.length - token.length) <= 2 && editDistance(token, vocab, 2) <= 2) fuzzy.push.apply(fuzzy, activeIndex[vocab] || []);
+          if (couldBeFuzzy(token, vocab, 2) && editDistance(token, vocab, 2) <= 2) fuzzy.push.apply(fuzzy, activeIndex[vocab] || []);
           if (fuzzy.length >= 200) break;
         }
         candidates = Array.from(new Set(fuzzy));
@@ -380,12 +407,10 @@ function searchLocal(params) {
 function randomRecord(params) {
   const repo = params.repo || "";
   const txtOnly = !!params.txtOnly;
-  const candidates = [];
-  for (let i = 0; i < records.length; i++) {
-    if (repo && records[i].Repo !== repo) continue;
-    if (txtOnly && !records[i].HasTxt) continue;
-    candidates.push(i);
-  }
+  let candidates;
+  if (txtOnly) candidates = repo ? (repoTxtRecordIndices[repo] || []) : txtRecordIndices;
+  else if (repo) candidates = repoRecordIndices[repo] || [];
+  else candidates = recordIndices;
   if (!candidates.length) return { record: null, id: null, generation };
   const randomValue = typeof params.randomValue === "number" ? params.randomValue : Math.random();
   const index = candidates[Math.min(candidates.length - 1, Math.floor(Math.max(0, randomValue) * candidates.length))];
