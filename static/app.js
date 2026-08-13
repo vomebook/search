@@ -2366,23 +2366,30 @@ function preserveResultsViewportDuringSidebarTransition(sidebar) {
   if (!anchor) return;
   const anchorIndex = Number(anchor.dataset.index);
   const anchorOffset = anchor.getBoundingClientRect().top - containerRect.top;
-  const finish = (event) => {
-    if (event && (event.target !== sidebar || event.propertyName !== "width")) return;
-    sidebar.removeEventListener("transitionend", finish);
-    measureHeights();
-    let remainingCorrections = 8;
-    const restoreAnchor = () => {
+  let transitionFinished = false;
+  let remainingCorrections = 0;
+  const restoreAnchor = () => {
+    const renderedAnchor = DOM.resultsList.querySelector(`.result-item[data-index="${anchorIndex}"]`);
+    if (renderedAnchor) {
+      DOM.resultsContainer.scrollTop += renderedAnchor.getBoundingClientRect().top - containerRect.top - anchorOffset;
+      measureHeights();
+    } else {
       DOM.resultsContainer.scrollTop = getVirtualOffset(anchorIndex) - anchorOffset;
       VSCROLL.renderStart = -1;
       VSCROLL.renderEnd = -1;
       renderVisible();
-      remainingCorrections--;
-      if (remainingCorrections > 0) requestAnimationFrame(restoreAnchor);
-      else updateScrollTrack();
-    };
-    requestAnimationFrame(restoreAnchor);
+    }
+    if (!transitionFinished || remainingCorrections-- > 0) requestAnimationFrame(restoreAnchor);
+    else updateScrollTrack();
+  };
+  const finish = (event) => {
+    if (event && (event.target !== sidebar || event.propertyName !== "width")) return;
+    sidebar.removeEventListener("transitionend", finish);
+    transitionFinished = true;
+    remainingCorrections = 8;
   };
   sidebar.addEventListener("transitionend", finish);
+  requestAnimationFrame(restoreAnchor);
 }
 
 function updateStatusBar() {
