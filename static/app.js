@@ -67,7 +67,6 @@ let corpusWorker = null;
 let corpusWorkerStartPromise = null;
 let corpusWorkerRequestId = 0;
 let corpusWorkerRestartCount = 0;
-let corpusWorkerReady = false;
 const corpusWorkerPending = new Map();
 const folderTreeCache = new Map();
 
@@ -75,105 +74,6 @@ let keepalivePending = null;
 let lastKeepaliveAt = 0;
 const KEEPALIVE_INTERVAL_MS = 45 * 1000;
 const KEEPALIVE_MIN_GAP_MS = 30 * 1000;
-
-function decodeTreeNode(node) {
-  return decodeTreeNodeWithContext(node, "", false);
-}
-
-function decodeTreeNodeWithContext(node, parentPath, isRoot) {
-  if (!node) return node;
-  if (node.name !== undefined) {
-    const decoded = Object.assign({}, node);
-    if (decoded.path === undefined) {
-      decoded.path = isRoot ? "" : (parentPath ? parentPath + "/" + (decoded.name || "") : (decoded.name || ""));
-    }
-    decoded.children = Array.isArray(decoded.children)
-      ? decoded.children.map(function(child) { return decodeTreeNodeWithContext(child, decoded.path, false); })
-      : [];
-    decoded.hasChildren = decoded.hasChildren !== undefined ? !!decoded.hasChildren : decoded.children.length > 0;
-    decoded.showSelfToggle = decoded.showSelfToggle !== undefined
-      ? !!decoded.showSelfToggle
-      : !!(decoded.path && decoded.hasDirectFiles && decoded.hasChildren);
-    if (isRoot) decoded.isRoot = true;
-    return decoded;
-  }
-  const name = node.n || "";
-  const path = isRoot ? "" : (parentPath ? parentPath + "/" + name : name);
-  const children = Array.isArray(node.ch)
-    ? node.ch.map(function(child) { return decodeTreeNodeWithContext(child, path, false); })
-    : [];
-  const decoded = {
-    name: name,
-    path: path,
-    count: node.c || 0,
-    hasDirectFiles: !!node.df,
-    hasChildren: children.length > 0,
-    showSelfToggle: !!(path && node.df && children.length > 0),
-    children: children,
-  };
-  if (isRoot) decoded.isRoot = true;
-  return decoded;
-}
-
-function decodeFolderTreeData(data) {
-  if (!data || Array.isArray(data)) return data || {};
-  const decoded = {};
-  for (const repo in data) {
-    if (!Object.prototype.hasOwnProperty.call(data, repo)) continue;
-    decoded[repo] = Array.isArray(data[repo]) ? data[repo].map(function(node) {
-      return decodeTreeNodeWithContext(node, "", true);
-    }) : [];
-  }
-  return decoded;
-}
-
-function decodeBrowserEntry(entry, currentPath) {
-  if (!entry) return entry;
-  if (entry.folders !== undefined) {
-    const decoded = Object.assign({}, entry);
-    decoded.current_path = decoded.current_path !== undefined ? decoded.current_path : (currentPath || "");
-    decoded.folders = Array.isArray(decoded.folders) ? decoded.folders.map(function(item) {
-      const folder = Object.assign({}, item);
-      if (folder.path === undefined) {
-        folder.path = currentPath ? currentPath + "/" + (folder.name || "") : (folder.name || "");
-      }
-      return folder;
-    }) : [];
-    return decoded;
-  }
-  return {
-    folders: Array.isArray(entry.d) ? entry.d.map(function(item) {
-      return {
-        name: item.n || "",
-        path: currentPath ? currentPath + "/" + (item.n || "") : (item.n || ""),
-        count: item.c || 0,
-      };
-    }) : [],
-    files: Array.isArray(entry.f) ? entry.f.map(function(item) {
-      return { name: item.n || "", ext: item.e || "", hasTxt: !!item.t, size: item.s || "" };
-    }) : [],
-    current_path: currentPath || "",
-  };
-}
-
-function decodeFolderBrowserData(data) {
-  if (!data || Array.isArray(data)) return data || {};
-  const decoded = {};
-  for (const repo in data) {
-    if (!Object.prototype.hasOwnProperty.call(data, repo)) continue;
-    decoded[repo] = {};
-    const repoBrowser = data[repo] || {};
-    for (const path in repoBrowser) {
-      if (!Object.prototype.hasOwnProperty.call(repoBrowser, path)) continue;
-      decoded[repo][path] = decodeBrowserEntry(repoBrowser[path], path);
-    }
-  }
-  return decoded;
-}
-
-function shouldUseLiteralLocalSearch(query) {
-  return /[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\s]/i.test(String(query || ""));
-}
 
 function setExactSearchSectionVisible(visible, animate) {
   if (!DOM.exactSearchSection) return;
@@ -437,7 +337,6 @@ function updateSelectionUI() {
 async function loadData() {
   try {
     const metadata = await corpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
-    corpusWorkerReady = true;
     repoList = Array.isArray(metadata.repos) ? metadata.repos : [];
     extensionCounts = {};
     for (const item of metadata.extensions || []) extensionCounts[item.name] = item.count || 0;
@@ -470,7 +369,6 @@ function terminateCorpusWorker(error) {
   var worker = corpusWorker;
   corpusWorker = null;
   corpusWorkerStartPromise = null;
-  corpusWorkerReady = false;
   if (worker) worker.terminate();
   rejectCorpusWorkerPending(error || makeWorkerError("WORKER_TERMINATED", "Search Worker terminated"));
 }
@@ -542,17 +440,9 @@ async function corpusWorkerRequest(type, payload, timeoutMs) {
     await ensureCorpusWorker();
     if (type !== "load-corpus") {
       await postCorpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
-      corpusWorkerReady = true;
     }
     return postCorpusWorkerRequest(type, payload, timeoutMs);
   }
-}
-
-async function loadGzipJSON(url) {
-  var resp = await fetch(url);
-  if (!resp.ok) throw new Error("HTTP " + resp.status);
-  var stream = resp.body.pipeThrough(new DecompressionStream("gzip"));
-  return JSON.parse(await new Response(stream).text());
 }
 
 function toMirrorURL(url) {
@@ -580,10 +470,7 @@ async function doSearchLocal(params) {
   const data = await corpusWorkerRequest("local-search", workerParams, WORKER_REQUEST_TIMEOUT);
   return {
     results: data.records || [],
-    ids: data.ids || [],
     total: data.total || 0,
-    page: data.page || params.page || 1,
-    pageSize: data.pageSize || params.pageSize || 100,
   };
 }
 
@@ -702,11 +589,9 @@ async function doSearchAPI(params, append, requestId) {
     }
     STATE._pageCache[data.page] = data.results;
     var nextPage = STATE._loadedPage + 1;
-    var combinedNew = [];
     while (STATE._pageCache[nextPage]) {
       var pageItems = STATE._pageCache[nextPage];
       STATE.results = STATE.results.concat(pageItems);
-      combinedNew = combinedNew.concat(pageItems);
       delete STATE._pageCache[nextPage];
       nextPage++;
     }
@@ -1060,7 +945,6 @@ const STATE = {
   isLoading: false,
   hasMore: false,
   browserPath: "",
-  repoList: [],
   extensionList: [],
   extensionOtherCollapsed: true,
   folderTree: null,
@@ -1082,13 +966,13 @@ const VSCROLL = {
   renderStart: 0,
   renderEnd: 0,
   heights: [],
-  prefixHeights: [0],
   heightsDirty: true,
   heightTree: [],
   templateCache: new Map(),
   templateCacheKey: "",
   contentVersion: 0,
   measuredWindowKey: "",
+  measuredRowKeys: [],
   renderFrame: 0,
   estimatedHeight: 60,
   isDraggingThumb: false,
@@ -1121,7 +1005,6 @@ function cacheDOM() {
   DOM.sidebarExpandBtn = $("#sidebar-expand-btn");
   DOM.resultsList = $("#results-list");
   DOM.resultsContainer = $("#results-container");
-  DOM.resultsLoading = $("#results-loading");
   DOM.emptyState = $("#empty-state");
   DOM.emptyDesc = $("#empty-desc");
   DOM.emptyRandomBtn = $("#empty-random-btn");
@@ -1158,7 +1041,6 @@ function cacheDOM() {
   DOM.exactSearchToggle = $("#exact-search-toggle");
   DOM.exactSearchSection = $("#exact-search-section");
   DOM.localModeToggle = $("#local-mode-toggle");
-  DOM.localModeToggleRow = $("#local-mode-toggle-row");
   DOM.historyToggle = $("#history-toggle");
   DOM.historyDropdown = $("#search-history-dropdown");
   DOM.multiToggleLabel = $("#multi-toggle-label");
@@ -1424,7 +1306,6 @@ const ROUTER = {
       DOM.resultsList.innerHTML = "";
       DOM.emptyState.style.display = "none";
       STATE.resultsSkeletonActive = true;
-      DOM.resultsLoading.style.display = "none";
       renderResultsSkeleton();
     }
     const routeId = ++routeRenderId;
@@ -1648,7 +1529,6 @@ function applyInitialSearchPayload(data) {
   STATE.hasMore = STATE.results.length < STATE.total;
   STATE.isLoading = false;
   STATE.resultsSkeletonActive = false;
-  DOM.resultsLoading.style.display = "none";
   setSearchVisualLoading(false);
   setCachedSearchResponse(getCurrentSearchCacheKey(1), {
     results: STATE.results,
@@ -1717,7 +1597,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     STATE.isLoading = true;
     setSearchVisualLoading(true);
     STATE.resultsSkeletonActive = true;
-    DOM.resultsLoading.style.display = "none";
     DOM.emptyState.style.display = "none";
     STATE.page = 1;
     STATE.results = [];
@@ -1728,7 +1607,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   } else if (!background) {
     STATE.isLoading = true;
     STATE.resultsSkeletonActive = false;
-    DOM.resultsLoading.style.display = "none";
     DOM.emptyState.style.display = "none";
     setSearchVisualLoading(false);
   }
@@ -1736,7 +1614,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     STATE.dataLoaded = ok;
     localDataPromise = null;
     if (ok) {
-      STATE.repoList = repoList;
       STATE.extensionList = extensionList;
       updateRandomTxtVisibility();
       if (STATE._initialActive) {
@@ -1750,7 +1627,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
       if (!background) {
         STATE.isLoading = false;
         STATE.resultsSkeletonActive = false;
-        DOM.resultsLoading.style.display = "none";
         setSearchVisualLoading(false);
       }
       showToast("本地数据加载失败");
@@ -1767,7 +1643,6 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (!background) {
       STATE.isLoading = false;
       STATE.resultsSkeletonActive = false;
-      DOM.resultsLoading.style.display = "none";
       setSearchVisualLoading(false);
     }
     if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
@@ -1811,16 +1686,14 @@ function renderResultsSkeleton(count) {
     '</div>';
   }
   DOM.resultsList.innerHTML = html;
-  DOM.resultsList.classList.add("showing-skeleton");
 }
 
 function clearResultsSkeleton() {
-  DOM.resultsList.classList.remove("showing-skeleton");
+  DOM.resultsList.querySelectorAll(".result-skeleton-item").forEach((row) => row.remove());
 }
 
 function doSearch(append) {
   const id = ++searchId;
-  const searchStart = performance.now();
   var activeFolderFilters = [];
   var folderMatchMode = null;
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) {
@@ -1848,7 +1721,6 @@ function doSearch(append) {
     pageSize: STATE.pageSize,
   };
   STATE.isLoading = true;
-  DOM.resultsLoading.style.display = "none";
   setSearchVisualLoading(false);
   if (!append) {
     if (!canUseInitialSearchPayload()) STATE._initialActive = false;
@@ -1882,7 +1754,6 @@ function doSearch(append) {
       } else {
         STATE.isLoading = false;
         setSearchVisualLoading(false);
-        DOM.resultsLoading.style.display = "none";
         ensureLocalDataLoaded(true, false);
         if (folderMatchMode === "mixed" && !STATE.useLocalMode) {
           showToast("正在加载目录筛选数据...");
@@ -1897,7 +1768,6 @@ function doSearch(append) {
   if (apiAvailable) {
     if (append && STATE._pendingPage === STATE.page) {
       STATE.isLoading = false;
-      DOM.resultsLoading.style.display = "none";
       return;
     }
     STATE._pendingPage = STATE.page;
@@ -1937,7 +1807,6 @@ function doSearch(append) {
       if (err.name === "AbortError") {
         if (id === searchId) {
           STATE.isLoading = false;
-          DOM.resultsLoading.style.display = "none";
           if (!append) setSearchVisualLoading(false);
         }
         return;
@@ -1949,7 +1818,6 @@ function doSearch(append) {
         STATE._pendingPage = 0;
         STATE.isLoading = false;
         STATE.resultsSkeletonActive = false;
-        DOM.resultsLoading.style.display = "none";
         if (!append) setSearchVisualLoading(false);
         else updateStatusBar();
       }
@@ -1958,7 +1826,6 @@ function doSearch(append) {
   }
   if (!STATE.dataLoaded) {
     STATE.isLoading = false;
-    DOM.resultsLoading.style.display = "none";
     setSearchVisualLoading(false);
     showToast("数据加载中，请稍后...");
     return;
@@ -2027,7 +1894,6 @@ function doSearchFallbackLocal(params, append, id) {
       console.error("Local Worker search failed:", err);
       if (id !== searchId) return;
       STATE.dataLoaded = false;
-      corpusWorkerReady = false;
       if (params.folderMatchMode === "mixed") {
         showToast("本地目录筛选不可用，请刷新后重试");
       } else if (apiAvailable) {
@@ -2043,7 +1909,6 @@ function doSearchFallbackLocal(params, append, id) {
       if (id === searchId) {
         STATE.isLoading = false;
         STATE.resultsSkeletonActive = false;
-        DOM.resultsLoading.style.display = "none";
         if (!append) setSearchVisualLoading(false);
         else updateStatusBar();
       }
@@ -2140,6 +2005,7 @@ function clearResultTemplateCache() {
   VSCROLL.templateCacheKey = getResultsHTMLCacheKey();
   VSCROLL.contentVersion++;
   VSCROLL.measuredWindowKey = "";
+  VSCROLL.measuredRowKeys = [];
 }
 
 function ensureResultTemplateCache() {
@@ -2173,13 +2039,11 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   if (!topSpacer) {
     topSpacer = document.createElement("div");
     topSpacer.className = "virtual-spacer virtual-spacer-top";
-    topSpacer.style.flexShrink = "0";
     DOM.resultsList.prepend(topSpacer);
   }
   if (!bottomSpacer) {
     bottomSpacer = document.createElement("div");
     bottomSpacer.className = "virtual-spacer virtual-spacer-bottom";
-    bottomSpacer.style.flexShrink = "0";
     DOM.resultsList.append(bottomSpacer);
   }
   topSpacer.style.height = topH + "px";
@@ -2227,7 +2091,7 @@ function renderVisible() {
   VSCROLL.lastScrollTime = now;
   const extraScreens = Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
   const overscanPx = overscanItems * (est || 60) + extraScreens * viewH;
-  ensurePrefixHeights();
+  ensureHeightTree();
   const scrollingDown = scrollTop >= VSCROLL.lastScrollTop;
   VSCROLL.lastScrollTop = scrollTop;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - overscanPx * 0.35));
@@ -2262,19 +2126,15 @@ function renderVisible() {
   });
 }
 
-function ensurePrefixHeights() {
+function ensureHeightTree() {
   const len = VSCROLL.heights.length;
-  if (!VSCROLL.heightsDirty && VSCROLL.prefixHeights.length === len + 1 && VSCROLL.heightTree.length === len + 1) return;
-  const prefix = new Array(len + 1);
+  if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === len + 1) return;
   const tree = new Array(len + 1).fill(0);
-  prefix[0] = 0;
   const est = VSCROLL.estimatedHeight || 60;
   for (let i = 0; i < len; i++) {
     const h = VSCROLL.heights[i] || est;
-    prefix[i + 1] = prefix[i] + h;
     fenwickAdd(tree, i + 1, h);
   }
-  VSCROLL.prefixHeights = prefix;
   VSCROLL.heightTree = tree;
   VSCROLL.heightsDirty = false;
 }
@@ -2290,44 +2150,30 @@ function fenwickSum(tree, idx) {
 }
 
 function getVirtualTotalHeight() {
-  ensurePrefixHeights();
+  ensureHeightTree();
   return getVirtualOffset(VSCROLL.heights.length);
 }
 
 function getVirtualOffset(index) {
-  ensurePrefixHeights();
-  if (VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
-    return fenwickSum(VSCROLL.heightTree, Math.max(0, Math.min(index, VSCROLL.heights.length)));
-  }
-  return VSCROLL.prefixHeights[index] || 0;
+  ensureHeightTree();
+  return fenwickSum(VSCROLL.heightTree, Math.max(0, Math.min(index, VSCROLL.heights.length)));
 }
 
 function findVirtualIndex(offset) {
-  ensurePrefixHeights();
+  ensureHeightTree();
   const len = VSCROLL.heights.length;
-  if (VSCROLL.heightTree.length === len + 1) {
-    let idx = 0;
-    let bit = 1;
-    while ((bit << 1) < VSCROLL.heightTree.length) bit <<= 1;
-    let sum = 0;
-    for (; bit > 0; bit >>= 1) {
-      const next = idx + bit;
-      if (next < VSCROLL.heightTree.length && sum + VSCROLL.heightTree[next] <= offset) {
-        idx = next;
-        sum += VSCROLL.heightTree[next];
-      }
+  let idx = 0;
+  let bit = 1;
+  while ((bit << 1) < VSCROLL.heightTree.length) bit <<= 1;
+  let sum = 0;
+  for (; bit > 0; bit >>= 1) {
+    const next = idx + bit;
+    if (next < VSCROLL.heightTree.length && sum + VSCROLL.heightTree[next] <= offset) {
+      idx = next;
+      sum += VSCROLL.heightTree[next];
     }
-    return Math.min(Math.max(0, idx), Math.max(0, STATE.results.length - 1));
   }
-  const prefix = VSCROLL.prefixHeights;
-  let lo = 0;
-  let hi = prefix.length - 1;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (prefix[mid] <= offset) lo = mid;
-    else hi = mid - 1;
-  }
-  return Math.min(Math.max(0, lo), Math.max(0, STATE.results.length - 1));
+  return Math.min(Math.max(0, idx), Math.max(0, STATE.results.length - 1));
 }
 
 function resetVirtualScrollState() {
@@ -2336,7 +2182,6 @@ function resetVirtualScrollState() {
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
-  VSCROLL.prefixHeights = [0];
   VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
   VSCROLL.lastScrollTop = 0;
@@ -2354,7 +2199,6 @@ function prepareRouteTransitionResults() {
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
   VSCROLL.heights = [];
-  VSCROLL.prefixHeights = [0];
   VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
   VSCROLL.lastScrollTop = 0;
@@ -2369,6 +2213,7 @@ function ensureVirtualHeights(len) {
   if (VSCROLL.heights.length >= len) return;
   const oldLen = VSCROLL.heights.length;
   VSCROLL.heights.length = len;
+  VSCROLL.measuredRowKeys.length = len;
   for (let i = oldLen; i < len; i++) {
     VSCROLL.heights[i] = VSCROLL.estimatedHeight;
   }
@@ -2387,7 +2232,6 @@ function refreshVirtualAfterAppend() {
   }
   topSpacer.style.height = getVirtualOffset(VSCROLL.renderStart) + "px";
   bottomSpacer.style.height = Math.max(0, getVirtualTotalHeight() - getVirtualOffset(VSCROLL.renderEnd)) + "px";
-  requestAnimationFrame(updateScrollTrack);
 }
 
 function ensureVirtualViewportCovered() {
@@ -2398,19 +2242,29 @@ function ensureVirtualViewportCovered() {
 }
 
 function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
-  const measureKey = [VSCROLL.contentVersion, start, end, DOM.resultsContainer.clientWidth].join(":");
+  const containerWidth = DOM.resultsContainer.clientWidth;
+  const rowMeasureKey = VSCROLL.contentVersion + ":" + containerWidth;
+  const measureKey = [rowMeasureKey, start, end].join(":");
   if (VSCROLL.measuredWindowKey === measureKey) return false;
   const els = DOM.resultsList.querySelectorAll(".result-item");
   const measurements = [];
   let measuredSum = 0;
+  let measuredCount = 0;
   let changed = false;
   for (let i = 0; i < els.length; i++) {
     const idx = parseInt(els[i].dataset.index);
-    const height = els[i].getBoundingClientRect().height;
-    if (idx >= 0 && height > 0) {
-      measurements.push([idx, height]);
-      measuredSum += height;
+    if (idx < 0) continue;
+    if (VSCROLL.measuredRowKeys[idx] === rowMeasureKey && VSCROLL.heights[idx] > 0) {
+      measuredSum += VSCROLL.heights[idx];
+      measuredCount++;
+      continue;
     }
+    const height = els[i].getBoundingClientRect().height;
+    if (height <= 0) continue;
+    measurements.push([idx, height]);
+    measuredSum += height;
+    measuredCount++;
+    VSCROLL.measuredRowKeys[idx] = rowMeasureKey;
   }
   for (let i = 0; i < measurements.length; i++) {
     const idx = measurements[i][0];
@@ -2420,15 +2274,14 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
       VSCROLL.heights[idx] = height;
       if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
         fenwickAdd(VSCROLL.heightTree, idx + 1, height - prev);
-        VSCROLL.prefixHeights = [0];
       } else {
         VSCROLL.heightsDirty = true;
       }
       changed = true;
     }
   }
-  if (measurements.length > 10) {
-    const nextEstimate = measuredSum / measurements.length;
+  if (measuredCount > 10) {
+    const nextEstimate = measuredSum / measuredCount;
     if (Math.abs(nextEstimate - VSCROLL.estimatedHeight) > 1) {
       VSCROLL.estimatedHeight = nextEstimate;
       VSCROLL.heightsDirty = true;
@@ -2915,19 +2768,6 @@ function refreshFilterFolderSelectionState() {
   });
 }
 
-function collectVisibleDescendantPaths(node, into) {
-  into = into || [];
-  for (let i = 0; i < (node.children || []).length; i++) {
-    const child = node.children[i];
-    if (!child.path) continue;
-    into.push(child.path);
-    if (child.children && child.children.length > 0 && !STATE.folderTreeCollapsed[child.path]) {
-      collectVisibleDescendantPaths(child, into);
-    }
-  }
-  return into;
-}
-
 function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
   if (!childContainer || !toggle) return;
   childContainer.getAnimations().forEach(function(animation) { animation.cancel(); });
@@ -3368,7 +3208,6 @@ function recoverScrollState() {
     scrollLoadTimer = null;
   }
   VSCROLL.isDraggingThumb = false;
-  if (DOM.scrollThumb) DOM.scrollThumb.classList.remove("dragging");
   if (STATE._deferredAppendWhileDragging) {
     STATE._deferredAppendWhileDragging = false;
     if (consumeCachedAppendPage()) return;
@@ -3434,7 +3273,6 @@ function setupVirtualScroll() {
       });
       scrollTicking = true;
     }
-    if (VSCROLL.isDraggingThumb) scheduleScrollLoad(120);
   }, { passive: true });
 }
 
@@ -3452,17 +3290,9 @@ function updateScrollThumb() {
 }
 
 function setupQuickScroll() {
-  let dragging = false, startY, startST;
-  let dragTicking = false;
+  let startY, startST;
   function setResultScrollTop(value) {
     DOM.resultsContainer.scrollTop = value;
-    if (!dragTicking) {
-      dragTicking = true;
-      requestAnimationFrame(function() {
-        updateScrollThumb();
-        dragTicking = false;
-      });
-    }
   }
   function onMouseMove(e) {
     const delta = e.clientY - startY;
@@ -3472,9 +3302,7 @@ function setupQuickScroll() {
     setResultScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
   }
   function onMouseUp() {
-    dragging = false;
     VSCROLL.isDraggingThumb = false;
-    DOM.scrollThumb.classList.remove("dragging");
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
     VSCROLL.renderStart = -1;
@@ -3487,7 +3315,7 @@ function setupQuickScroll() {
     maybeLoadNextPage();
   }
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
-    dragging = true; VSCROLL.isDraggingThumb = true; DOM.scrollThumb.classList.add("dragging"); startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
+    VSCROLL.isDraggingThumb = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   });
@@ -3500,9 +3328,7 @@ function setupQuickScroll() {
     setResultScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
   }
   function onTouchEnd() {
-    dragging = false;
     VSCROLL.isDraggingThumb = false;
-    DOM.scrollThumb.classList.remove("dragging");
     document.removeEventListener("touchmove", onTouchMove);
     document.removeEventListener("touchend", onTouchEnd);
     document.removeEventListener("touchcancel", onTouchEnd);
@@ -3516,7 +3342,7 @@ function setupQuickScroll() {
     maybeLoadNextPage();
   }
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    dragging = true; VSCROLL.isDraggingThumb = true; DOM.scrollThumb.classList.add("dragging"); startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop; e.stopPropagation();
+    VSCROLL.isDraggingThumb = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop; e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
     document.addEventListener("touchcancel", onTouchEnd);

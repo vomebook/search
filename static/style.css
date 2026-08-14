@@ -12,18 +12,14 @@
   --primary-container: #004a7c;
   --on-primary-container: #d1e4ff;
   --secondary: #bcc7db;
-  --on-secondary: #263141;
   --secondary-container: #3c4758;
   --on-secondary-container: #d8e3f8;
   --outline: #8d9099;
   --outline-variant: #43474e;
   --error: #f2b8b5;
-  --on-error: #601410;
   --radius-sm: 6px;
   --radius-md: 12px;
-  --radius-lg: 16px;
   --radius-full: 999px;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
   --shadow-md: 0 2px 8px rgba(0,0,0,0.4);
   --shadow-lg: 0 4px 16px rgba(0,0,0,0.5);
   --transition: 150ms ease;
@@ -43,14 +39,11 @@ body.light {
   --primary-container: #d1e4ff;
   --on-primary-container: #001d36;
   --secondary: #525f70;
-  --on-secondary: #ffffff;
   --secondary-container: #d8e3f8;
   --on-secondary-container: #121c29;
   --outline: #74777f;
   --outline-variant: #c4c6cf;
   --error: #ba1a1a;
-  --on-error: #ffffff;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
   --shadow-md: 0 2px 8px rgba(0,0,0,0.12);
   --shadow-lg: 0 4px 16px rgba(0,0,0,0.16);
   color-scheme: light;
@@ -579,13 +572,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   background: var(--surface-variant);
 }
 
-.browser-item .browser-icon {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  color: var(--on-surface-variant);
-}
-
 .browser-item .browser-name {
   flex: 1;
   min-width: 0;
@@ -644,10 +630,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .repo-list-item:hover, .repo-list-item:focus-visible {
   background: var(--surface-variant);
-}
-
-.repo-list-item.active {
-  background: var(--secondary-container);
 }
 
 .repo-list-item .repo-icon {
@@ -760,10 +742,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   to {
     opacity: 1;
   }
-}
-
-.results-list.showing-skeleton {
-  display: block;
 }
 
 .result-skeleton-item {
@@ -913,23 +891,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   text-decoration: underline;
 }
 
-.result-preview {
-  font-size: 12px;
-  color: var(--on-surface-variant);
-  margin-top: 4px;
-  line-height: 1.5;
-  max-height: 3em;
-  overflow: hidden;
-  font-family: var(--font-mono);
-}
-
-.result-preview mark {
-  background: var(--primary-container);
-  color: var(--on-primary-container);
-  border-radius: 2px;
-  padding: 0 1px;
-}
-
 .result-meta {
   display: flex;
   align-items: center;
@@ -1055,10 +1016,6 @@ body.mobile .mobile-selected-count {
 }
 
 .scroll-thumb:active { cursor: grabbing; }
-
-.scroll-thumb.dragging {
-  transition: background var(--transition);
-}
 
 .scroll-thumb:hover, .scroll-thumb:focus-visible {
   background: var(--on-surface-variant);
@@ -1432,26 +1389,6 @@ body.mobile .mobile-selected-count {
   opacity: 0.85;
 }
 
-.loading-spinner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.spinner {
-  width: 28px;
-  height: 28px;
-  border: 3px solid var(--outline-variant);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
 .overlay {
   position: fixed;
   inset: 0;
@@ -1537,25 +1474,6 @@ body.mobile .header-logo {
   display: none;
 }
 
-body.mobile .random-book-btn {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  z-index: 50;
-  transform: none;
-  background: var(--surface-container);
-  box-shadow: var(--shadow-md);
-  border-radius: var(--radius-full);
-}
-
-body.mobile .random-txt-btn {
-  display: none;
-}
-
-body.mobile .hitokoto {
-  display: none;
-}
-
 body.mobile .search-kbd {
   display: none;
 }
@@ -1616,38 +1534,9 @@ body.mobile .result-actions {
     display: none;
   }
 
-  body:not(.force-desktop) .random-book-btn {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: 50;
-    transform: none;
-    background: var(--surface-container);
-    box-shadow: var(--shadow-md);
-    border-radius: var(--radius-full);
-  }
-
-  body:not(.force-desktop) .random-txt-btn {
-    display: none;
-  }
-
-  body:not(.force-desktop) .hitokoto {
-    display: none;
-  }
-
   body:not(.force-desktop) .search-kbd {
     display: none;
   }
-}
-
-.hidden {
-  display: none !important;
-}
-
-.truncate {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .toggle-row {
@@ -1694,10 +1583,6 @@ body.mobile .result-actions {
 
 .toggle-row input:checked + .toggle-switch::after {
   transform: translateX(18px);
-}
-
-.toggle-disabled {
-  opacity: 0.4;
 }
 
 input[type="checkbox"]:indeterminate {
