@@ -974,6 +974,7 @@ const VSCROLL = {
   measuredWindowKey: "",
   measuredRowKeys: [],
   renderFrame: 0,
+  renderVersion: 0,
   estimatedHeight: 60,
   isDraggingThumb: false,
   lastScrollTop: 0,
@@ -2036,6 +2037,25 @@ function createResultRow(rec, idx) {
 function reconcileVirtualRows(items, start, end, topH, bottomH) {
   let topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
   let bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
+  const currentRows = Array.from(DOM.resultsList.querySelectorAll(".result-item[data-index]"));
+  const overlaps = currentRows.some((row) => {
+    const idx = Number(row.dataset.index);
+    return idx >= start && idx < end && Number(row.dataset.contentVersion) === VSCROLL.contentVersion;
+  });
+  if (currentRows.length > 0 && !overlaps) {
+    const fragment = document.createDocumentFragment();
+    const nextTopSpacer = document.createElement("div");
+    nextTopSpacer.className = "virtual-spacer virtual-spacer-top";
+    nextTopSpacer.style.height = topH + "px";
+    fragment.append(nextTopSpacer);
+    for (let idx = start; idx < end; idx++) fragment.append(createResultRow(items[idx], idx));
+    const nextBottomSpacer = document.createElement("div");
+    nextBottomSpacer.className = "virtual-spacer virtual-spacer-bottom";
+    nextBottomSpacer.style.height = bottomH + "px";
+    fragment.append(nextBottomSpacer);
+    DOM.resultsList.replaceChildren(fragment);
+    return;
+  }
   if (!topSpacer) {
     topSpacer = document.createElement("div");
     topSpacer.className = "virtual-spacer virtual-spacer-top";
@@ -2050,7 +2070,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   bottomSpacer.style.height = bottomH + "px";
 
   const existing = new Map();
-  DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
+  currentRows.forEach((row) => {
     const idx = Number(row.dataset.index);
     if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion) row.remove();
     else existing.set(idx, row);
@@ -2072,7 +2092,7 @@ function scheduleVirtualRender() {
   });
 }
 
-function renderVisible() {
+function renderVisible(targetScrollTop = DOM.resultsContainer.scrollTop) {
   const items = STATE.results;
   const len = items.length;
   if (len === 0) {
@@ -2080,7 +2100,8 @@ function renderVisible() {
     return;
   }
   const container = DOM.resultsContainer;
-  const scrollTop = container.scrollTop;
+  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+  const scrollTop = Math.max(0, Math.min(targetScrollTop, maxScrollTop));
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
   const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
@@ -2111,14 +2132,13 @@ function renderVisible() {
   const topH = fenwickSum(VSCROLL.heightTree, start);
   const endH = fenwickSum(VSCROLL.heightTree, end);
   const bottomH = Math.max(0, totalH - endH);
+  const renderVersion = ++VSCROLL.renderVersion;
   reconcileVirtualRows(items, start, end, topH, bottomH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
   requestAnimationFrame(function() {
+    if (renderVersion !== VSCROLL.renderVersion) return;
     if (measureHeights(start, end)) {
-      VSCROLL.renderStart = -1;
-      VSCROLL.renderEnd = -1;
-      scheduleVirtualRender();
-      return;
+      refreshVirtualAfterAppend();
     }
     updateScrollTrack();
     if (pendingResultEntrance) {
@@ -2182,6 +2202,7 @@ function findVirtualIndex(offset) {
 function resetVirtualScrollState() {
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
+  VSCROLL.renderVersion++;
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
@@ -2198,6 +2219,7 @@ function prepareRouteTransitionResults() {
   if (!DOM.resultsContainer || STATE.results.length === 0) return;
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
+  VSCROLL.renderVersion++;
   DOM.resultsContainer.scrollTop = 0;
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
@@ -3317,7 +3339,11 @@ function updateScrollThumb() {
 function setupQuickScroll() {
   let startY, startST;
   function setResultScrollTop(value) {
-    DOM.resultsContainer.scrollTop = value;
+    const scrollEl = DOM.resultsContainer;
+    const target = Math.max(0, Math.min(value, scrollEl.scrollHeight - scrollEl.clientHeight));
+    renderVisible(target);
+    scrollEl.scrollTop = target;
+    updateScrollThumb();
   }
   function onMouseMove(e) {
     const delta = e.clientY - startY;
