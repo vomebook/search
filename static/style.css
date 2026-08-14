@@ -703,7 +703,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  overflow-anchor: none;
   scrollbar-width: none;
 }
 
