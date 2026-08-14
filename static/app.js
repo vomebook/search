@@ -2090,15 +2090,16 @@ function renderVisible() {
   VSCROLL.scrollVelocity = VSCROLL.scrollVelocity * 0.7 + instantVelocity * 0.3;
   VSCROLL.lastScrollTime = now;
   const extraScreens = Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
-  const overscanPx = overscanItems * (est || 60) + extraScreens * viewH;
+  const baseOverscanPx = overscanItems * (est || 60);
+  const velocityOverscanPx = extraScreens * viewH;
   ensureHeightTree();
   const scrollingDown = scrollTop >= VSCROLL.lastScrollTop;
   VSCROLL.lastScrollTop = scrollTop;
-  const safeStart = findVirtualIndex(Math.max(0, scrollTop - overscanPx * 0.35));
-  const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + overscanPx * 0.35) + 1);
+  const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
+  const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
   if (!pendingResultEntrance && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
-  const beforePx = overscanPx * (scrollingDown ? 1 : 2);
-  const afterPx = overscanPx * (scrollingDown ? 2 : 1);
+  const beforePx = baseOverscanPx * (scrollingDown ? 1 : 2) + (scrollingDown ? 0 : velocityOverscanPx);
+  const afterPx = baseOverscanPx * (scrollingDown ? 2 : 1) + (scrollingDown ? velocityOverscanPx : 0);
   let start = findVirtualIndex(Math.max(0, scrollTop - beforePx));
   let end = Math.min(len, findVirtualIndex(scrollTop + viewH + afterPx) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
@@ -2106,9 +2107,10 @@ function renderVisible() {
   if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
-  const totalH = getVirtualTotalHeight();
-  const topH = getVirtualOffset(start);
-  const bottomH = Math.max(0, totalH - getVirtualOffset(end));
+  const totalH = fenwickSum(VSCROLL.heightTree, len);
+  const topH = fenwickSum(VSCROLL.heightTree, start);
+  const endH = fenwickSum(VSCROLL.heightTree, end);
+  const bottomH = Math.max(0, totalH - endH);
   reconcileVirtualRows(items, start, end, topH, bottomH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
   requestAnimationFrame(function() {
@@ -2131,9 +2133,10 @@ function ensureHeightTree() {
   if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === len + 1) return;
   const tree = new Array(len + 1).fill(0);
   const est = VSCROLL.estimatedHeight || 60;
-  for (let i = 0; i < len; i++) {
-    const h = VSCROLL.heights[i] || est;
-    fenwickAdd(tree, i + 1, h);
+  for (let i = 1; i <= len; i++) {
+    tree[i] += VSCROLL.heights[i - 1] || est;
+    const parent = i + (i & -i);
+    if (parent <= len) tree[parent] += tree[i];
   }
   VSCROLL.heightTree = tree;
   VSCROLL.heightsDirty = false;
@@ -2151,7 +2154,7 @@ function fenwickSum(tree, idx) {
 
 function getVirtualTotalHeight() {
   ensureHeightTree();
-  return getVirtualOffset(VSCROLL.heights.length);
+  return fenwickSum(VSCROLL.heightTree, VSCROLL.heights.length);
 }
 
 function getVirtualOffset(index) {
@@ -2212,12 +2215,30 @@ function prepareRouteTransitionResults() {
 function ensureVirtualHeights(len) {
   if (VSCROLL.heights.length >= len) return;
   const oldLen = VSCROLL.heights.length;
+  const canExtendTree = !VSCROLL.heightsDirty && VSCROLL.heightTree.length === oldLen + 1;
   VSCROLL.heights.length = len;
   VSCROLL.measuredRowKeys.length = len;
   for (let i = oldLen; i < len; i++) {
     VSCROLL.heights[i] = VSCROLL.estimatedHeight;
   }
-  VSCROLL.heightsDirty = true;
+  if (canExtendTree) {
+    const newPrefix = new Array(len - oldLen + 1).fill(0);
+    for (let i = oldLen; i < len; i++) newPrefix[i - oldLen + 1] = newPrefix[i - oldLen] + VSCROLL.heights[i];
+    VSCROLL.heightTree.length = len + 1;
+    for (let i = oldLen + 1; i <= len; i++) {
+      const rangeStart = i - (i & -i) + 1;
+      const oldStart = Math.max(1, rangeStart);
+      const oldEnd = Math.min(oldLen, i);
+      const oldSum = oldEnd >= oldStart
+        ? fenwickSum(VSCROLL.heightTree, oldEnd) - fenwickSum(VSCROLL.heightTree, oldStart - 1)
+        : 0;
+      const newStart = Math.max(oldLen + 1, rangeStart);
+      const newSum = newPrefix[i - oldLen] - newPrefix[newStart - oldLen - 1];
+      VSCROLL.heightTree[i] = oldSum + newSum;
+    }
+  } else {
+    VSCROLL.heightsDirty = true;
+  }
 }
 
 function refreshVirtualAfterAppend() {
@@ -2230,8 +2251,12 @@ function refreshVirtualAfterAppend() {
     renderVisible();
     return;
   }
-  topSpacer.style.height = getVirtualOffset(VSCROLL.renderStart) + "px";
-  bottomSpacer.style.height = Math.max(0, getVirtualTotalHeight() - getVirtualOffset(VSCROLL.renderEnd)) + "px";
+  ensureHeightTree();
+  const topH = fenwickSum(VSCROLL.heightTree, VSCROLL.renderStart);
+  const endH = fenwickSum(VSCROLL.heightTree, VSCROLL.renderEnd);
+  const totalH = fenwickSum(VSCROLL.heightTree, VSCROLL.heights.length);
+  topSpacer.style.height = topH + "px";
+  bottomSpacer.style.height = Math.max(0, totalH - endH) + "px";
 }
 
 function ensureVirtualViewportCovered() {
