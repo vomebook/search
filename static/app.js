@@ -979,7 +979,6 @@ const VSCROLL = {
   lastScrollTop: 0,
   lastScrollTime: 0,
   scrollVelocity: 0,
-  scrollDirection: 1,
 };
 let pendingResultEntrance = false;
 
@@ -2065,19 +2064,15 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   if (DOM.resultsList.lastElementChild !== bottomSpacer) DOM.resultsList.append(bottomSpacer);
 }
 
-function scheduleVirtualRender(force = false) {
+function scheduleVirtualRender() {
   if (VSCROLL.renderFrame) return;
   VSCROLL.renderFrame = requestAnimationFrame(() => {
     VSCROLL.renderFrame = 0;
-    if (force) {
-      VSCROLL.renderStart = -1;
-      VSCROLL.renderEnd = -1;
-    }
     renderVisible();
   });
 }
 
-function renderVisible(measurePass = 0) {
+function renderVisible() {
   const items = STATE.results;
   const len = items.length;
   if (len === 0) {
@@ -2098,10 +2093,7 @@ function renderVisible(measurePass = 0) {
   const baseOverscanPx = overscanItems * (est || 60);
   const velocityOverscanPx = extraScreens * viewH;
   ensureHeightTree();
-  const scrollDelta = scrollTop - VSCROLL.lastScrollTop;
-  if (scrollDelta > 0) VSCROLL.scrollDirection = 1;
-  else if (scrollDelta < 0) VSCROLL.scrollDirection = -1;
-  const scrollingDown = VSCROLL.scrollDirection > 0;
+  const scrollingDown = scrollTop >= VSCROLL.lastScrollTop;
   VSCROLL.lastScrollTop = scrollTop;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
@@ -2121,17 +2113,13 @@ function renderVisible(measurePass = 0) {
   const bottomH = Math.max(0, totalH - endH);
   reconcileVirtualRows(items, start, end, topH, bottomH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
-  if (measureHeights(start, end)) {
-    if (measurePass < 1) {
+  requestAnimationFrame(function() {
+    if (measureHeights(start, end)) {
       VSCROLL.renderStart = -1;
       VSCROLL.renderEnd = -1;
-      renderVisible(measurePass + 1);
-    } else {
-      scheduleVirtualRender(true);
+      scheduleVirtualRender();
+      return;
     }
-    return;
-  }
-  requestAnimationFrame(function() {
     updateScrollTrack();
     if (pendingResultEntrance) {
       pendingResultEntrance = false;
@@ -2202,7 +2190,6 @@ function resetVirtualScrollState() {
   VSCROLL.lastScrollTop = 0;
   VSCROLL.lastScrollTime = 0;
   VSCROLL.scrollVelocity = 0;
-  VSCROLL.scrollDirection = 1;
   clearResultTemplateCache();
   updateScrollTrack();
 }
@@ -2220,7 +2207,6 @@ function prepareRouteTransitionResults() {
   VSCROLL.lastScrollTop = 0;
   VSCROLL.lastScrollTime = 0;
   VSCROLL.scrollVelocity = 0;
-  VSCROLL.scrollDirection = 1;
   clearResultTemplateCache();
   ensureVirtualHeights(Math.min(STATE.results.length, STATE.pageSize));
   renderVisible();
@@ -2274,10 +2260,7 @@ function refreshVirtualAfterAppend() {
 }
 
 function ensureVirtualViewportCovered() {
-  if (VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) {
-    renderVisible();
-    return;
-  }
+  if (VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) return;
   const viewTop = DOM.resultsContainer.scrollTop;
   const viewBottom = viewTop + DOM.resultsContainer.clientHeight;
   if (viewTop < getVirtualOffset(VSCROLL.renderStart) || viewBottom > getVirtualOffset(VSCROLL.renderEnd)) renderVisible();
@@ -3335,7 +3318,6 @@ function setupQuickScroll() {
   let startY, startST;
   function setResultScrollTop(value) {
     DOM.resultsContainer.scrollTop = value;
-    ensureVirtualViewportCovered();
   }
   function onMouseMove(e) {
     const delta = e.clientY - startY;
