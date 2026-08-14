@@ -974,7 +974,6 @@ const VSCROLL = {
   measuredWindowKey: "",
   measuredRowKeys: [],
   renderFrame: 0,
-  renderVersion: 0,
   estimatedHeight: 60,
   isDraggingThumb: false,
   lastScrollTop: 0,
@@ -2037,25 +2036,6 @@ function createResultRow(rec, idx) {
 function reconcileVirtualRows(items, start, end, topH, bottomH) {
   let topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
   let bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
-  const currentRows = Array.from(DOM.resultsList.querySelectorAll(".result-item[data-index]"));
-  const overlaps = currentRows.some((row) => {
-    const idx = Number(row.dataset.index);
-    return idx >= start && idx < end && Number(row.dataset.contentVersion) === VSCROLL.contentVersion;
-  });
-  if (currentRows.length > 0 && !overlaps) {
-    const fragment = document.createDocumentFragment();
-    const nextTopSpacer = document.createElement("div");
-    nextTopSpacer.className = "virtual-spacer virtual-spacer-top";
-    nextTopSpacer.style.height = topH + "px";
-    fragment.append(nextTopSpacer);
-    for (let idx = start; idx < end; idx++) fragment.append(createResultRow(items[idx], idx));
-    const nextBottomSpacer = document.createElement("div");
-    nextBottomSpacer.className = "virtual-spacer virtual-spacer-bottom";
-    nextBottomSpacer.style.height = bottomH + "px";
-    fragment.append(nextBottomSpacer);
-    DOM.resultsList.replaceChildren(fragment);
-    return;
-  }
   if (!topSpacer) {
     topSpacer = document.createElement("div");
     topSpacer.className = "virtual-spacer virtual-spacer-top";
@@ -2070,7 +2050,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   bottomSpacer.style.height = bottomH + "px";
 
   const existing = new Map();
-  currentRows.forEach((row) => {
+  DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
     const idx = Number(row.dataset.index);
     if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion) row.remove();
     else existing.set(idx, row);
@@ -2092,7 +2072,7 @@ function scheduleVirtualRender() {
   });
 }
 
-function renderVisible(targetScrollTop = DOM.resultsContainer.scrollTop) {
+function renderVisible() {
   const items = STATE.results;
   const len = items.length;
   if (len === 0) {
@@ -2100,8 +2080,7 @@ function renderVisible(targetScrollTop = DOM.resultsContainer.scrollTop) {
     return;
   }
   const container = DOM.resultsContainer;
-  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-  const scrollTop = Math.max(0, Math.min(targetScrollTop, maxScrollTop));
+  const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
   const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
@@ -2132,13 +2111,14 @@ function renderVisible(targetScrollTop = DOM.resultsContainer.scrollTop) {
   const topH = fenwickSum(VSCROLL.heightTree, start);
   const endH = fenwickSum(VSCROLL.heightTree, end);
   const bottomH = Math.max(0, totalH - endH);
-  const renderVersion = ++VSCROLL.renderVersion;
   reconcileVirtualRows(items, start, end, topH, bottomH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
   requestAnimationFrame(function() {
-    if (renderVersion !== VSCROLL.renderVersion) return;
     if (measureHeights(start, end)) {
-      refreshVirtualAfterAppend();
+      VSCROLL.renderStart = -1;
+      VSCROLL.renderEnd = -1;
+      scheduleVirtualRender();
+      return;
     }
     updateScrollTrack();
     if (pendingResultEntrance) {
@@ -2202,7 +2182,6 @@ function findVirtualIndex(offset) {
 function resetVirtualScrollState() {
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
-  VSCROLL.renderVersion++;
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
@@ -2219,7 +2198,6 @@ function prepareRouteTransitionResults() {
   if (!DOM.resultsContainer || STATE.results.length === 0) return;
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
-  VSCROLL.renderVersion++;
   DOM.resultsContainer.scrollTop = 0;
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
@@ -3337,28 +3315,43 @@ function updateScrollThumb() {
 }
 
 function setupQuickScroll() {
-  let startY, startST;
+  let startY, startST, dragRange, maxScrollTop;
+  let dragFrame = 0;
+  let pendingScrollTop = null;
+  function applyPendingScrollTop() {
+    dragFrame = 0;
+    if (pendingScrollTop === null) return;
+    DOM.resultsContainer.scrollTop = pendingScrollTop;
+    pendingScrollTop = null;
+  }
   function setResultScrollTop(value) {
+    pendingScrollTop = Math.max(0, Math.min(value, maxScrollTop));
+    if (!dragFrame) dragFrame = requestAnimationFrame(applyPendingScrollTop);
+  }
+  function beginDrag(clientY) {
     const scrollEl = DOM.resultsContainer;
-    const target = Math.max(0, Math.min(value, scrollEl.scrollHeight - scrollEl.clientHeight));
-    renderVisible(target);
-    scrollEl.scrollTop = target;
-    updateScrollThumb();
+    startY = clientY;
+    startST = scrollEl.scrollTop;
+    dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
+    maxScrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    VSCROLL.isDraggingThumb = true;
+  }
+  function finishDrag() {
+    if (dragFrame) cancelAnimationFrame(dragFrame);
+    applyPendingScrollTop();
+    VSCROLL.isDraggingThumb = false;
+    if (VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) renderVisible();
+    else ensureVirtualViewportCovered();
   }
   function onMouseMove(e) {
     const delta = e.clientY - startY;
-    const dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     const ratio = delta / dragRange;
-    const scrollEl = DOM.resultsContainer;
-    setResultScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
+    setResultScrollTop(startST + ratio * maxScrollTop);
   }
   function onMouseUp() {
-    VSCROLL.isDraggingThumb = false;
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
-    VSCROLL.renderStart = -1;
-    VSCROLL.renderEnd = -1;
-    renderVisible();
+    finishDrag();
     if (STATE._deferredAppendWhileDragging) {
       STATE._deferredAppendWhileDragging = false;
       if (consumeCachedAppendPage()) return;
@@ -3366,26 +3359,21 @@ function setupQuickScroll() {
     maybeLoadNextPage();
   }
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
-    VSCROLL.isDraggingThumb = true; startY = e.clientY; startST = DOM.resultsContainer.scrollTop; e.preventDefault(); e.stopPropagation();
+    beginDrag(e.clientY); e.preventDefault(); e.stopPropagation();
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   });
   function onTouchMove(e) {
     e.preventDefault();
     const delta = e.touches[0].clientY - startY;
-    const dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     const ratio = delta / dragRange;
-    const scrollEl = DOM.resultsContainer;
-    setResultScrollTop(startST + ratio * Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight));
+    setResultScrollTop(startST + ratio * maxScrollTop);
   }
   function onTouchEnd() {
-    VSCROLL.isDraggingThumb = false;
     document.removeEventListener("touchmove", onTouchMove);
     document.removeEventListener("touchend", onTouchEnd);
     document.removeEventListener("touchcancel", onTouchEnd);
-    VSCROLL.renderStart = -1;
-    VSCROLL.renderEnd = -1;
-    renderVisible();
+    finishDrag();
     if (STATE._deferredAppendWhileDragging) {
       STATE._deferredAppendWhileDragging = false;
       if (consumeCachedAppendPage()) return;
@@ -3393,7 +3381,7 @@ function setupQuickScroll() {
     maybeLoadNextPage();
   }
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
-    VSCROLL.isDraggingThumb = true; startY = e.touches[0].clientY; startST = DOM.resultsContainer.scrollTop; e.stopPropagation();
+    beginDrag(e.touches[0].clientY); e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
     document.addEventListener("touchcancel", onTouchEnd);
