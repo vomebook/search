@@ -729,24 +729,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   background: var(--secondary-container) !important;
 }
 
-.virtual-spacer {
-  pointer-events: none;
-  background-color: var(--surface);
-  background-image:
-    radial-gradient(circle at 20px 24px, var(--outline-variant) 0 11px, transparent 12px),
-    linear-gradient(to bottom, transparent 0 10px, var(--outline-variant) 10px 24px, transparent 24px 64px),
-    linear-gradient(to bottom, transparent 0 32px, var(--outline-variant) 32px 43px, transparent 43px 64px),
-    linear-gradient(to bottom, transparent 0 49px, var(--outline-variant) 49px 56px, transparent 56px 64px),
-    repeating-linear-gradient(to bottom,
-      var(--surface) 0 63px,
-      var(--outline-variant) 63px 64px,
-      var(--surface-variant) 64px 127px,
-      var(--outline-variant) 127px 128px);
-  background-position: 8px 0, 52px 0, 52px 0, 52px 0, 0 0;
-  background-size: 40px 64px, 42% 64px, 62% 64px, 22% 64px, 100% 128px;
-  background-repeat: repeat-y;
-}
-
 .result-item.result-enter {
   animation: result-item-enter 180ms cubic-bezier(0.2, 0, 0, 1) both;
   animation-delay: var(--result-enter-delay, 0ms);
