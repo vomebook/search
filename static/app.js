@@ -1085,8 +1085,11 @@ const VSCROLL = {
   prefixHeights: [0],
   heightsDirty: true,
   heightTree: [],
-  htmlCache: [],
-  htmlCacheKey: "",
+  templateCache: new Map(),
+  templateCacheKey: "",
+  contentVersion: 0,
+  measuredWindowKey: "",
+  renderFrame: 0,
   estimatedHeight: 60,
   isDraggingThumb: false,
   lastScrollTop: 0,
@@ -2061,11 +2064,7 @@ function renderResults(animate = false) {
     return;
   }
   DOM.emptyState.style.display = "none";
-  const cacheKey = getResultsHTMLCacheKey();
-  if (VSCROLL.htmlCacheKey !== cacheKey) {
-    VSCROLL.htmlCache = [];
-    VSCROLL.htmlCacheKey = cacheKey;
-  }
+  ensureResultTemplateCache();
   ensureVirtualHeights(STATE.results.length);
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
@@ -2136,21 +2135,77 @@ function getResultsHTMLCacheKey() {
   ].join("|");
 }
 
-function clearResultHTMLCache() {
-  VSCROLL.htmlCache = [];
-  VSCROLL.htmlCacheKey = getResultsHTMLCacheKey();
+function clearResultTemplateCache() {
+  VSCROLL.templateCache.clear();
+  VSCROLL.templateCacheKey = getResultsHTMLCacheKey();
+  VSCROLL.contentVersion++;
+  VSCROLL.measuredWindowKey = "";
 }
 
-function getCachedResultHTML(rec, idx) {
+function ensureResultTemplateCache() {
   const key = getResultsHTMLCacheKey();
-  if (VSCROLL.htmlCacheKey !== key) {
-    VSCROLL.htmlCache = [];
-    VSCROLL.htmlCacheKey = key;
+  if (VSCROLL.templateCacheKey !== key) clearResultTemplateCache();
+}
+
+function createResultRow(rec, idx) {
+  ensureResultTemplateCache();
+  let template = VSCROLL.templateCache.get(idx);
+  if (!template) {
+    template = document.createElement("div");
+    template.className = "result-item" + (idx % 2 === 1 ? " is-alt" : "");
+    template.dataset.index = String(idx);
+    template.dataset.contentVersion = String(VSCROLL.contentVersion);
+    template.innerHTML = buildResultHTML(rec, idx);
+    VSCROLL.templateCache.set(idx, template);
+    if (VSCROLL.templateCache.size > 240) {
+      VSCROLL.templateCache.delete(VSCROLL.templateCache.keys().next().value);
+    }
+  } else {
+    VSCROLL.templateCache.delete(idx);
+    VSCROLL.templateCache.set(idx, template);
   }
-  if (VSCROLL.htmlCache[idx] === undefined) {
-    VSCROLL.htmlCache[idx] = buildResultHTML(rec, idx);
+  return template.cloneNode(true);
+}
+
+function reconcileVirtualRows(items, start, end, topH, bottomH) {
+  let topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
+  let bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
+  if (!topSpacer) {
+    topSpacer = document.createElement("div");
+    topSpacer.className = "virtual-spacer virtual-spacer-top";
+    topSpacer.style.flexShrink = "0";
+    DOM.resultsList.prepend(topSpacer);
   }
-  return VSCROLL.htmlCache[idx];
+  if (!bottomSpacer) {
+    bottomSpacer = document.createElement("div");
+    bottomSpacer.className = "virtual-spacer virtual-spacer-bottom";
+    bottomSpacer.style.flexShrink = "0";
+    DOM.resultsList.append(bottomSpacer);
+  }
+  topSpacer.style.height = topH + "px";
+  bottomSpacer.style.height = bottomH + "px";
+
+  const existing = new Map();
+  DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
+    const idx = Number(row.dataset.index);
+    if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion) row.remove();
+    else existing.set(idx, row);
+  });
+  let cursor = topSpacer.nextSibling;
+  for (let idx = start; idx < end; idx++) {
+    const row = existing.get(idx) || createResultRow(items[idx], idx);
+    if (row !== cursor) DOM.resultsList.insertBefore(row, cursor || bottomSpacer);
+    cursor = row.nextSibling;
+  }
+  if (DOM.resultsList.lastElementChild !== bottomSpacer) DOM.resultsList.append(bottomSpacer);
+}
+
+function scheduleVirtualRender() {
+  if (VSCROLL.renderFrame) return;
+  VSCROLL.renderFrame = requestAnimationFrame(() => {
+    VSCROLL.renderFrame = 0;
+    renderVisible();
+  });
 }
 
 function renderVisible() {
@@ -2189,23 +2244,14 @@ function renderVisible() {
   VSCROLL.renderEnd = end;
   const totalH = getVirtualTotalHeight();
   const topH = getVirtualOffset(start);
-  let html = "";
-  html += '<div class="virtual-spacer virtual-spacer-top" style="height:' + topH + 'px;flex-shrink:0"></div>';
-  for (let ri = start; ri < end; ri++) {
-    const rec = items[ri];
-    html += '<div class="result-item' + (ri % 2 === 1 ? ' is-alt' : '') + '" data-index="' + ri + '">' + getCachedResultHTML(rec, ri) + '</div>';
-  }
   const bottomH = Math.max(0, totalH - getVirtualOffset(end));
-  html += '<div class="virtual-spacer virtual-spacer-bottom" style="height:' + bottomH + 'px;flex-shrink:0"></div>';
-  var tpl = document.createElement("template");
-  tpl.innerHTML = html;
-  DOM.resultsList.replaceChildren(tpl.content);
+  reconcileVirtualRows(items, start, end, topH, bottomH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
   requestAnimationFrame(function() {
-    if (measureHeights()) {
+    if (measureHeights(start, end)) {
       VSCROLL.renderStart = -1;
       VSCROLL.renderEnd = -1;
-      renderVisible();
+      scheduleVirtualRender();
       return;
     }
     updateScrollTrack();
@@ -2285,6 +2331,8 @@ function findVirtualIndex(offset) {
 }
 
 function resetVirtualScrollState() {
+  if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
+  VSCROLL.renderFrame = 0;
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
@@ -2294,12 +2342,14 @@ function resetVirtualScrollState() {
   VSCROLL.lastScrollTop = 0;
   VSCROLL.lastScrollTime = 0;
   VSCROLL.scrollVelocity = 0;
-  clearResultHTMLCache();
+  clearResultTemplateCache();
   updateScrollTrack();
 }
 
 function prepareRouteTransitionResults() {
   if (!DOM.resultsContainer || STATE.results.length === 0) return;
+  if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
+  VSCROLL.renderFrame = 0;
   DOM.resultsContainer.scrollTop = 0;
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
@@ -2310,7 +2360,7 @@ function prepareRouteTransitionResults() {
   VSCROLL.lastScrollTop = 0;
   VSCROLL.lastScrollTime = 0;
   VSCROLL.scrollVelocity = 0;
-  clearResultHTMLCache();
+  clearResultTemplateCache();
   ensureVirtualHeights(Math.min(STATE.results.length, STATE.pageSize));
   renderVisible();
 }
@@ -2323,7 +2373,6 @@ function ensureVirtualHeights(len) {
     VSCROLL.heights[i] = VSCROLL.estimatedHeight;
   }
   VSCROLL.heightsDirty = true;
-  if (VSCROLL.htmlCache.length < len) VSCROLL.htmlCache.length = len;
 }
 
 function refreshVirtualAfterAppend() {
@@ -2348,41 +2397,45 @@ function ensureVirtualViewportCovered() {
   if (viewTop < getVirtualOffset(VSCROLL.renderStart) || viewBottom > getVirtualOffset(VSCROLL.renderEnd)) renderVisible();
 }
 
-function measureHeights() {
+function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
+  const measureKey = [VSCROLL.contentVersion, start, end, DOM.resultsContainer.clientWidth].join(":");
+  if (VSCROLL.measuredWindowKey === measureKey) return false;
   const els = DOM.resultsList.querySelectorAll(".result-item");
+  const measurements = [];
   let measuredSum = 0;
-  let measuredCount = 0;
   let changed = false;
   for (let i = 0; i < els.length; i++) {
     const idx = parseInt(els[i].dataset.index);
-    if (idx >= 0) {
-      const h = els[i].getBoundingClientRect().height;
-      if (h > 0) {
-        measuredSum += h;
-        measuredCount++;
-      }
-      if (h > 0 && VSCROLL.heights[idx] !== h) {
-        const prev = VSCROLL.heights[idx] || VSCROLL.estimatedHeight || 60;
-        VSCROLL.heights[idx] = h;
-        if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
-          const delta = h - prev;
-          fenwickAdd(VSCROLL.heightTree, idx + 1, delta);
-          VSCROLL.prefixHeights = [0];
-        } else {
-          VSCROLL.heightsDirty = true;
-        }
-        changed = true;
-      }
+    const height = els[i].getBoundingClientRect().height;
+    if (idx >= 0 && height > 0) {
+      measurements.push([idx, height]);
+      measuredSum += height;
     }
   }
-  if (measuredCount > 10) {
-    const nextEstimate = measuredSum / measuredCount;
+  for (let i = 0; i < measurements.length; i++) {
+    const idx = measurements[i][0];
+    const height = measurements[i][1];
+    if (VSCROLL.heights[idx] !== height) {
+      const prev = VSCROLL.heights[idx] || VSCROLL.estimatedHeight || 60;
+      VSCROLL.heights[idx] = height;
+      if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
+        fenwickAdd(VSCROLL.heightTree, idx + 1, height - prev);
+        VSCROLL.prefixHeights = [0];
+      } else {
+        VSCROLL.heightsDirty = true;
+      }
+      changed = true;
+    }
+  }
+  if (measurements.length > 10) {
+    const nextEstimate = measuredSum / measurements.length;
     if (Math.abs(nextEstimate - VSCROLL.estimatedHeight) > 1) {
       VSCROLL.estimatedHeight = nextEstimate;
       VSCROLL.heightsDirty = true;
       changed = true;
     }
   }
+  VSCROLL.measuredWindowKey = measureKey;
   return changed;
 }
 
@@ -3826,7 +3879,7 @@ function init() {
   if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.addEventListener("change", function() {
     STATE.useMirrorLinks = DOM.mirrorLinksToggle.checked;
     syncStateToURL();
-    clearResultHTMLCache();
+    clearResultTemplateCache();
     if (STATE.results.length > 0) renderResults();
   });
   if (DOM.multiSelectToggle) DOM.multiSelectToggle.addEventListener("change", updateSelectionUI);
@@ -3911,7 +3964,7 @@ function init() {
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
   DOM.searchFoldersToggle.addEventListener("change", function() {
     STATE.searchFolders = DOM.searchFoldersToggle.checked;
-    clearResultHTMLCache();
+    clearResultTemplateCache();
     STATE.page = 1;
     STATE.results = [];
     doSearch();
