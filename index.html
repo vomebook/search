@@ -131,9 +131,6 @@ if (!document.hidden && navigator.onLine) {
     </div>
     <div id="results-container" class="results-container">
       <div id="results-list" class="results-list" role="listbox" aria-label="搜索结果"></div>
-      <div id="results-loading" class="loading-spinner" style="display:none">
-        <div class="spinner"></div>
-      </div>
       <div id="empty-state" class="empty-state" style="display:none">
         <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -195,7 +192,7 @@ if (!document.hidden && navigator.onLine) {
         </label>
       </div>
       <div class="filter-section" id="local-mode-section">
-        <label class="toggle-row" id="local-mode-toggle-row">
+        <label class="toggle-row">
           <span class="toggle-label">本地搜索</span>
           <input type="checkbox" id="local-mode-toggle" checked>
           <span class="toggle-switch"></span>
