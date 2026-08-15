@@ -1669,6 +1669,7 @@ function debouncedSearch() {
 
 function renderResultsSkeleton(count) {
   count = count || 8;
+  DOM.resultsList.style.height = "";
   var html = "";
   for (var i = 0; i < count; i++) {
     html += '<div class="result-skeleton-item" aria-hidden="true">' +
@@ -1921,6 +1922,7 @@ function renderResults(animate = false) {
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
     DOM.resultsList.innerHTML = "";
+    DOM.resultsList.style.height = "";
     resetVirtualScrollState();
     DOM.emptyState.style.display = "flex";
     DOM.emptyDesc.textContent = STATE.query
@@ -2033,35 +2035,28 @@ function createResultRow(rec, idx) {
   return template.cloneNode(true);
 }
 
-function reconcileVirtualRows(items, start, end, topH, bottomH) {
-  let topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
-  let bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
-  if (!topSpacer) {
-    topSpacer = document.createElement("div");
-    topSpacer.className = "virtual-spacer virtual-spacer-top";
-    DOM.resultsList.prepend(topSpacer);
+function reconcileVirtualRows(items, start, end, topH, totalH) {
+  let windowEl = DOM.resultsList.querySelector(".virtual-window");
+  if (!windowEl) {
+    windowEl = document.createElement("div");
+    windowEl.className = "virtual-window";
+    DOM.resultsList.replaceChildren(windowEl);
   }
-  if (!bottomSpacer) {
-    bottomSpacer = document.createElement("div");
-    bottomSpacer.className = "virtual-spacer virtual-spacer-bottom";
-    DOM.resultsList.append(bottomSpacer);
-  }
-  topSpacer.style.height = topH + "px";
-  bottomSpacer.style.height = bottomH + "px";
+  DOM.resultsList.style.height = totalH + "px";
+  windowEl.style.transform = "translateY(" + topH + "px)";
 
   const existing = new Map();
-  DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
+  windowEl.querySelectorAll(".result-item[data-index]").forEach((row) => {
     const idx = Number(row.dataset.index);
     if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion) row.remove();
     else existing.set(idx, row);
   });
-  let cursor = topSpacer.nextSibling;
+  let cursor = windowEl.firstChild;
   for (let idx = start; idx < end; idx++) {
     const row = existing.get(idx) || createResultRow(items[idx], idx);
-    if (row !== cursor) DOM.resultsList.insertBefore(row, cursor || bottomSpacer);
+    if (row !== cursor) windowEl.insertBefore(row, cursor);
     cursor = row.nextSibling;
   }
-  if (DOM.resultsList.lastElementChild !== bottomSpacer) DOM.resultsList.append(bottomSpacer);
 }
 
 function scheduleVirtualRender() {
@@ -2113,9 +2108,7 @@ function renderVisible() {
   VSCROLL.renderEnd = end;
   const totalH = fenwickSum(VSCROLL.heightTree, len);
   const topH = fenwickSum(VSCROLL.heightTree, start);
-  const endH = fenwickSum(VSCROLL.heightTree, end);
-  const bottomH = Math.max(0, totalH - endH);
-  reconcileVirtualRows(items, start, end, topH, bottomH);
+  reconcileVirtualRows(items, start, end, topH, totalH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
   requestAnimationFrame(function() {
     if (VSCROLL.isDraggingThumb) return;
@@ -2187,6 +2180,7 @@ function findVirtualIndex(offset) {
 function resetVirtualScrollState() {
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
+  if (DOM.resultsList) DOM.resultsList.style.height = "";
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
@@ -2248,9 +2242,8 @@ function ensureVirtualHeights(len) {
 
 function refreshVirtualAfterAppend() {
   ensureVirtualHeights(STATE.results.length);
-  const topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
-  const bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
-  if (!topSpacer || !bottomSpacer) {
+  const windowEl = DOM.resultsList.querySelector(".virtual-window");
+  if (!windowEl) {
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
     renderVisible();
@@ -2258,10 +2251,9 @@ function refreshVirtualAfterAppend() {
   }
   ensureHeightTree();
   const topH = fenwickSum(VSCROLL.heightTree, VSCROLL.renderStart);
-  const endH = fenwickSum(VSCROLL.heightTree, VSCROLL.renderEnd);
   const totalH = fenwickSum(VSCROLL.heightTree, VSCROLL.heights.length);
-  topSpacer.style.height = topH + "px";
-  bottomSpacer.style.height = Math.max(0, totalH - endH) + "px";
+  DOM.resultsList.style.height = totalH + "px";
+  windowEl.style.transform = "translateY(" + topH + "px)";
 }
 
 function ensureVirtualViewportCovered() {
