@@ -88,28 +88,15 @@ function literalSearch(query) {
   return /[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\s]/i.test(String(query || ""));
 }
 
-function decodeRecord(rec) {
-  if (rec && rec.Repo !== undefined) {
-    return {
-      Repo: rec.Repo || "", File: rec.File || "", Extension: rec.Extension || "",
-      Folder: Array.isArray(rec.Folder) ? rec.Folder : [], Size: rec.Size === undefined ? "" : rec.Size, HasTxt: !!rec.HasTxt,
-    };
-  }
-  rec = rec || {};
-  return {
-    Repo: rec.r || "", File: rec.f || "", Extension: rec.e || "",
-    Folder: Array.isArray(rec.d) ? rec.d : [], Size: rec.s === undefined ? "" : rec.s, HasTxt: !!rec.t,
-  };
-}
-
 function decodeSearchPayload(data) {
-  if (Array.isArray(data)) return data.map(decodeRecord);
   if (!data || typeof data !== "object") throw protocolError("INVALID_CORPUS", "Search corpus must be an object");
   if (data.v !== 2 || !Array.isArray(data.rp) || !Array.isArray(data.fd) || !Array.isArray(data.rc)) {
     throw protocolError("UNSUPPORTED_CORPUS", "Expected compact-v2 search corpus");
   }
   return data.rc.map((item) => {
-    if (!Array.isArray(item) || item.length < 6) return decodeRecord(null);
+    if (!Array.isArray(item) || item.length < 6) {
+      return { Repo: "", File: "", Extension: "", Folder: [], Size: "", HasTxt: false };
+    }
     return {
       Repo: Number.isInteger(item[0]) && data.rp[item[0]] !== undefined ? data.rp[item[0]] : "",
       File: item[1] || "",

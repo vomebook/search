@@ -692,7 +692,7 @@ function scheduleBackgroundLocalDataLoad() {
   clearTimeout(localDataLoadTimer);
   var waitForPrefetch = searchPrefetchPromise || Promise.resolve();
   waitForPrefetch.catch(function() {}).finally(function() {
-    var connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    var connection = navigator.connection;
     var delay = connection && (connection.saveData || /^(slow-)?2g$/.test(connection.effectiveType || "")) ? 2500 : 100;
     localDataLoadTimer = setTimeout(function() {
       var start = function() {
@@ -807,21 +807,21 @@ function normalizeSidebarPayload(data, path) {
   return {
     repo: data.repo || "",
     path: data.path || path,
-    folders: (data.folders || data.d || []).map(function(item) {
-      var name = item.name == null ? (item.n || "") : item.name;
+    folders: (data.folders || []).map(function(item) {
+      var name = item.n || "";
       return {
         name: name,
-        path: item.path || (path ? path + "/" + name : name),
-        count: item.count == null ? (item.c || 0) : item.count,
+        path: path ? path + "/" + name : name,
+        count: item.c || 0,
       };
     }),
-    files: (data.files || data.f || []).map(function(item) {
+    files: (data.files || []).map(function(item) {
       return {
-        name: item.name == null ? (item.n || "") : item.name,
-        ext: item.ext == null ? (item.e || "") : item.ext,
-        hasTxt: item.hasTxt == null ? !!item.t : !!item.hasTxt,
-        size: item.size == null ? (item.s || "") : item.size,
-        link: item.link || "",
+        name: item.n || "",
+        ext: item.e || "",
+        hasTxt: !!item.t,
+        size: item.s === undefined ? "" : item.s,
+        link: "",
       };
     }),
   };
@@ -1203,15 +1203,12 @@ const ROUTER = {
     if (STATE.mode !== "global") {
       var urlSelfs = route.params.folder_self;
       var urlSubtrees = route.params.folder_subtree;
-      var legacyFolders = route.params.folder;
       urlSelfs = urlSelfs === undefined ? [] : (Array.isArray(urlSelfs) ? urlSelfs : [urlSelfs]);
       urlSubtrees = urlSubtrees === undefined ? [] : (Array.isArray(urlSubtrees) ? urlSubtrees : [urlSubtrees]);
-      legacyFolders = legacyFolders === undefined ? [] : (Array.isArray(legacyFolders) ? legacyFolders : [legacyFolders]);
       urlSelfs = urlSelfs.filter(Boolean);
       urlSubtrees = urlSubtrees.filter(Boolean);
-      legacyFolders = legacyFolders.filter(Boolean);
-      if (urlSelfs.length || urlSubtrees.length || legacyFolders.length) {
-        STATE.filterFolderSelfs = (urlSelfs.length || urlSubtrees.length) ? urlSelfs : legacyFolders.slice();
+      if (urlSelfs.length || urlSubtrees.length) {
+        STATE.filterFolderSelfs = urlSelfs;
         STATE.filterFolderSubtrees = urlSubtrees;
         STATE.filterFolders = mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees);
         saveStoredFolderFilters(STATE.repo);
