@@ -708,22 +708,9 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .results-container::-webkit-scrollbar { width: 0; height: 0; }
 
-.results-list {
-  position: relative;
-}
-
-.virtual-window {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-}
-
 .result-item {
   display: flex;
   contain: paint;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 64px;
   gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--outline-variant);
@@ -1024,7 +1011,7 @@ body.mobile .mobile-selected-count {
   background: var(--outline);
   cursor: grab;
   min-height: 40px;
-  will-change: transform;
+  will-change: transform, height;
   transition: background var(--transition);
 }
 
