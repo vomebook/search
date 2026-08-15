@@ -708,22 +708,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .results-container::-webkit-scrollbar { width: 0; height: 0; }
 
-.results-list {
-  position: relative;
-}
-
-.virtual-prefetch-chunk {
-  position: absolute;
-  inset-inline: 0;
-  top: 0;
-  contain: layout paint;
-  pointer-events: none;
-}
-
-.virtual-prefetch-chunk.is-composited {
-  will-change: transform;
-}
-
 .result-item {
   display: flex;
   contain: paint;
