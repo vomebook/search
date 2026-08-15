@@ -717,7 +717,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   top: 0;
   left: 0;
   right: 0;
-  will-change: transform;
 }
 
 .result-item {
@@ -1025,7 +1024,7 @@ body.mobile .mobile-selected-count {
   background: var(--outline);
   cursor: grab;
   min-height: 40px;
-  will-change: transform, height;
+  will-change: transform;
   transition: background var(--transition);
 }
 
