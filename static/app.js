@@ -3286,11 +3286,8 @@ function setupVirtualScroll() {
     if (!scrollTicking) {
       requestAnimationFrame(() => {
         renderVisible();
-        if (VSCROLL.isDraggingThumb) updateScrollThumb();
-        else {
-          updateScrollTrack();
-          maybeLoadNextPage();
-        }
+        updateScrollThumb();
+        if (!VSCROLL.isDraggingThumb) maybeLoadNextPage();
         scrollTicking = false;
       });
       scrollTicking = true;
@@ -3307,7 +3304,8 @@ function updateScrollThumb() {
   const trackHeight = DOM.scrollTrack.clientHeight;
   const th = Math.max(40, Math.min(trackHeight, (clientHeight / scrollHeight) * trackHeight));
   const tt = (scrollTop / Math.max(1, scrollHeight - clientHeight)) * (trackHeight - th);
-  DOM.scrollThumb.style.height = th + "px";
+  const thumbHeight = th + "px";
+  if (DOM.scrollThumb.style.height !== thumbHeight) DOM.scrollThumb.style.height = thumbHeight;
   DOM.scrollThumb.style.transform = "translateY(" + tt + "px)";
 }
 
