@@ -708,18 +708,6 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .results-container::-webkit-scrollbar { width: 0; height: 0; }
 
-.scroll-preview {
-  position: absolute;
-  display: none;
-  z-index: 30;
-  pointer-events: none;
-  contain: strict;
-}
-
-.scroll-preview.active {
-  display: block;
-}
-
 .result-item {
   display: flex;
   contain: paint;
