@@ -974,13 +974,11 @@ const VSCROLL = {
   measuredWindowKey: "",
   measuredRowKeys: [],
   renderFrame: 0,
-  prefetchFrame: 0,
   estimatedHeight: 60,
   isDraggingThumb: false,
   lastScrollTop: 0,
   lastScrollTime: 0,
   scrollVelocity: 0,
-  scrollDirection: 1,
 };
 let pendingResultEntrance = false;
 
@@ -2052,19 +2050,11 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   bottomSpacer.style.height = bottomH + "px";
 
   const existing = new Map();
-  DOM.resultsList.querySelectorAll(":scope > .result-item[data-index]").forEach((row) => {
+  DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
     const idx = Number(row.dataset.index);
     if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion) row.remove();
     else existing.set(idx, row);
   });
-  DOM.resultsList.querySelectorAll(".virtual-prefetch-chunk .result-item[data-index]").forEach((row) => {
-    const idx = Number(row.dataset.index);
-    if (!existing.has(idx) && idx >= start && idx < end && Number(row.dataset.contentVersion) === VSCROLL.contentVersion) {
-      existing.set(idx, row);
-    }
-  });
-  DOM.resultsList.querySelectorAll(".virtual-prefetch-chunk").forEach((chunk) => chunk.remove());
-  delete DOM.resultsList.dataset.prefetchKey;
   let cursor = topSpacer.nextSibling;
   for (let idx = start; idx < end; idx++) {
     const row = existing.get(idx) || createResultRow(items[idx], idx);
@@ -2072,59 +2062,6 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
     cursor = row.nextSibling;
   }
   if (DOM.resultsList.lastElementChild !== bottomSpacer) DOM.resultsList.append(bottomSpacer);
-}
-
-function createVirtualPrefetchChunk(role, start, end) {
-  if (end <= start) return null;
-  const chunk = document.createElement("div");
-  chunk.className = "virtual-prefetch-chunk virtual-prefetch-" + role;
-  chunk.dataset.start = String(start);
-  chunk.dataset.end = String(end);
-  chunk.setAttribute("aria-hidden", "true");
-  chunk.inert = true;
-  chunk.style.transform = "translateY(" + getVirtualOffset(start) + "px)";
-  const fragment = document.createDocumentFragment();
-  for (let idx = start; idx < end; idx++) fragment.append(createResultRow(STATE.results[idx], idx));
-  chunk.append(fragment);
-  return chunk;
-}
-
-function updateVirtualPrefetchChunks() {
-  VSCROLL.prefetchFrame = 0;
-  if (VSCROLL.isDraggingThumb || VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) return;
-  const len = STATE.results.length;
-  const viewH = DOM.resultsContainer.clientHeight;
-  const scrollingDown = VSCROLL.scrollDirection > 0;
-  const beforePx = scrollingDown ? viewH * 2 : viewH * 4;
-  const afterPx = scrollingDown ? viewH * 4 : viewH * 2;
-  const beforeStart = findVirtualIndex(Math.max(0, getVirtualOffset(VSCROLL.renderStart) - beforePx));
-  const afterEnd = Math.min(len, findVirtualIndex(getVirtualOffset(VSCROLL.renderEnd) + afterPx) + 1);
-  const ranges = [
-    ["before", beforeStart, VSCROLL.renderStart],
-    ["after", VSCROLL.renderEnd, afterEnd],
-  ];
-  const currentKey = ranges.map((range) => range.join(":" )).join("|");
-  if (DOM.resultsList.dataset.prefetchKey === currentKey) return;
-  DOM.resultsList.querySelectorAll(".virtual-prefetch-chunk").forEach((chunk) => chunk.remove());
-  const fragment = document.createDocumentFragment();
-  for (let i = 0; i < ranges.length; i++) {
-    const chunk = createVirtualPrefetchChunk(ranges[i][0], ranges[i][1], ranges[i][2]);
-    if (chunk) fragment.append(chunk);
-  }
-  DOM.resultsList.append(fragment);
-  DOM.resultsList.dataset.prefetchKey = currentKey;
-  const chunks = Array.from(DOM.resultsList.querySelectorAll(".virtual-prefetch-chunk"));
-  for (let i = 0; i < chunks.length; i++) void chunks[i].offsetHeight;
-  requestAnimationFrame(function() {
-    for (let i = 0; i < chunks.length; i++) {
-      if (chunks[i].isConnected) chunks[i].classList.add("is-composited");
-    }
-  });
-}
-
-function scheduleVirtualPrefetch() {
-  if (VSCROLL.isDraggingThumb || VSCROLL.prefetchFrame) return;
-  VSCROLL.prefetchFrame = requestAnimationFrame(updateVirtualPrefetchChunks);
 }
 
 function scheduleVirtualRender() {
@@ -2157,14 +2094,10 @@ function renderVisible() {
   const velocityOverscanPx = extraScreens * viewH;
   ensureHeightTree();
   const scrollingDown = scrollTop >= VSCROLL.lastScrollTop;
-  if (scrollTop !== VSCROLL.lastScrollTop) VSCROLL.scrollDirection = scrollTop > VSCROLL.lastScrollTop ? 1 : -1;
   VSCROLL.lastScrollTop = scrollTop;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
-  if (!pendingResultEntrance && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) {
-    scheduleVirtualPrefetch();
-    return;
-  }
+  if (!pendingResultEntrance && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
     : baseOverscanPx * (scrollingDown ? 1 : 2) + (scrollingDown ? 0 : velocityOverscanPx);
@@ -2193,7 +2126,6 @@ function renderVisible() {
       return;
     }
     updateScrollTrack();
-    scheduleVirtualPrefetch();
     if (pendingResultEntrance) {
       pendingResultEntrance = false;
       animateVisibleResultRows();
@@ -2254,9 +2186,7 @@ function findVirtualIndex(offset) {
 
 function resetVirtualScrollState() {
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
-  if (VSCROLL.prefetchFrame) cancelAnimationFrame(VSCROLL.prefetchFrame);
   VSCROLL.renderFrame = 0;
-  VSCROLL.prefetchFrame = 0;
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
@@ -2265,8 +2195,6 @@ function resetVirtualScrollState() {
   VSCROLL.lastScrollTop = 0;
   VSCROLL.lastScrollTime = 0;
   VSCROLL.scrollVelocity = 0;
-  VSCROLL.scrollDirection = 1;
-  if (DOM.resultsList) delete DOM.resultsList.dataset.prefetchKey;
   clearResultTemplateCache();
   updateScrollTrack();
 }
@@ -2348,7 +2276,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
   const rowMeasureKey = VSCROLL.contentVersion + ":" + containerWidth;
   const measureKey = [rowMeasureKey, start, end].join(":");
   if (VSCROLL.measuredWindowKey === measureKey) return false;
-  const els = DOM.resultsList.querySelectorAll(":scope > .result-item");
+  const els = DOM.resultsList.querySelectorAll(".result-item");
   const measurements = [];
   let measuredSum = 0;
   let measuredCount = 0;
