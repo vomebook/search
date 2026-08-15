@@ -2078,27 +2078,24 @@ function renderVisible() {
   const scrollTop = container.scrollTop;
   const viewH = container.clientHeight;
   const est = VSCROLL.estimatedHeight;
-  const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
   const now = performance.now();
   const elapsed = VSCROLL.lastScrollTime ? Math.max(1, now - VSCROLL.lastScrollTime) : 16;
   const instantVelocity = Math.abs(scrollTop - VSCROLL.lastScrollTop) / elapsed;
   VSCROLL.scrollVelocity = VSCROLL.scrollVelocity * 0.7 + instantVelocity * 0.3;
   VSCROLL.lastScrollTime = now;
-  const extraScreens = VSCROLL.isDraggingThumb ? 0 : Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
-  const baseOverscanPx = overscanItems * (est || 60);
-  const velocityOverscanPx = extraScreens * viewH;
   ensureHeightTree();
   const scrollingDown = scrollTop >= VSCROLL.lastScrollTop;
   VSCROLL.lastScrollTop = scrollTop;
-  const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
-  const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
+  const triggerPx = VSCROLL.isDraggingThumb ? viewH * 0.1 : viewH * 3;
+  const safeStart = findVirtualIndex(Math.max(0, scrollTop - triggerPx));
+  const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + triggerPx) + 1);
   if (!pendingResultEntrance && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
-    : baseOverscanPx * (scrollingDown ? 1 : 2) + (scrollingDown ? 0 : velocityOverscanPx);
+    : viewH * (scrollingDown ? 4 : 12);
   const afterPx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
-    : baseOverscanPx * (scrollingDown ? 2 : 1) + (scrollingDown ? velocityOverscanPx : 0);
+    : viewH * (scrollingDown ? 12 : 4);
   let start = findVirtualIndex(Math.max(0, scrollTop - beforePx));
   let end = Math.min(len, findVirtualIndex(scrollTop + viewH + afterPx) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
