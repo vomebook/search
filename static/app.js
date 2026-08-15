@@ -985,6 +985,11 @@ const SCROLL_PREVIEW = {
   frame: 0,
   hideTimer: 0,
   dpr: 1,
+  wheelDistance: 0,
+  wheelStartedAt: 0,
+  touchLastY: null,
+  touchDistance: 0,
+  touchStartedAt: 0,
 };
 let pendingResultEntrance = false;
 
@@ -2369,6 +2374,10 @@ function scheduleScrollPreviewHide() {
     requestAnimationFrame(function() {
       requestAnimationFrame(function() {
         SCROLL_PREVIEW.active = false;
+        SCROLL_PREVIEW.wheelDistance = 0;
+        SCROLL_PREVIEW.wheelStartedAt = 0;
+        SCROLL_PREVIEW.touchLastY = null;
+        SCROLL_PREVIEW.touchDistance = 0;
         DOM.scrollPreview.classList.remove("active");
       });
     });
@@ -2381,7 +2390,44 @@ function hideScrollPreviewNow() {
   SCROLL_PREVIEW.hideTimer = 0;
   SCROLL_PREVIEW.frame = 0;
   SCROLL_PREVIEW.active = false;
+  SCROLL_PREVIEW.wheelDistance = 0;
+  SCROLL_PREVIEW.touchLastY = null;
+  SCROLL_PREVIEW.touchDistance = 0;
   if (DOM.scrollPreview) DOM.scrollPreview.classList.remove("active");
+}
+
+function handlePreviewWheel(event) {
+  const now = performance.now();
+  if (!SCROLL_PREVIEW.wheelStartedAt || now - SCROLL_PREVIEW.wheelStartedAt > 120) {
+    SCROLL_PREVIEW.wheelStartedAt = now;
+    SCROLL_PREVIEW.wheelDistance = 0;
+  }
+  SCROLL_PREVIEW.wheelDistance += Math.abs(event.deltaY);
+  if (SCROLL_PREVIEW.wheelDistance >= 1800 && now - SCROLL_PREVIEW.wheelStartedAt <= 120) {
+    showScrollPreview();
+  }
+}
+
+function handlePreviewTouchStart(event) {
+  const touch = event.touches[0];
+  SCROLL_PREVIEW.touchLastY = touch ? touch.clientY : null;
+  SCROLL_PREVIEW.touchDistance = 0;
+  SCROLL_PREVIEW.touchStartedAt = performance.now();
+}
+
+function handlePreviewTouchMove(event) {
+  const touch = event.touches[0];
+  if (!touch || SCROLL_PREVIEW.touchLastY === null) return;
+  const now = performance.now();
+  if (now - SCROLL_PREVIEW.touchStartedAt > 120) {
+    SCROLL_PREVIEW.touchStartedAt = now;
+    SCROLL_PREVIEW.touchDistance = 0;
+  }
+  SCROLL_PREVIEW.touchDistance += Math.abs(touch.clientY - SCROLL_PREVIEW.touchLastY);
+  SCROLL_PREVIEW.touchLastY = touch.clientY;
+  if (SCROLL_PREVIEW.touchDistance >= 360 && now - SCROLL_PREVIEW.touchStartedAt <= 120) {
+    showScrollPreview();
+  }
 }
 
 function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
@@ -3405,8 +3451,9 @@ function updateScrollTrack() {
 }
 
 function setupVirtualScroll() {
-  DOM.resultsContainer.addEventListener("wheel", showScrollPreview, { passive: true });
-  DOM.resultsContainer.addEventListener("touchstart", showScrollPreview, { passive: true });
+  DOM.resultsContainer.addEventListener("wheel", handlePreviewWheel, { passive: true });
+  DOM.resultsContainer.addEventListener("touchstart", handlePreviewTouchStart, { passive: true });
+  DOM.resultsContainer.addEventListener("touchmove", handlePreviewTouchMove, { passive: true });
   DOM.resultsContainer.addEventListener("scroll", () => {
     if (SCROLL_PREVIEW.active) {
       scheduleScrollPreviewDraw();
@@ -3633,7 +3680,7 @@ function setupKeyboard() {
   document.addEventListener("keydown", function(e) {
     const tag = document.activeElement.tagName;
     const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-    if (!isInput && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(e.key)) showScrollPreview();
+    if (!isInput && ["PageUp", "PageDown", "Home", "End"].includes(e.key)) showScrollPreview();
     if (e.key === "/" && !isInput) {
       e.preventDefault();
       DOM.searchInput.focus();
