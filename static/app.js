@@ -980,6 +980,12 @@ const VSCROLL = {
   lastScrollTime: 0,
   scrollVelocity: 0,
 };
+const SCROLL_PREVIEW = {
+  active: false,
+  frame: 0,
+  hideTimer: 0,
+  dpr: 1,
+};
 let pendingResultEntrance = false;
 
 const $ = (sel) => document.querySelector(sel);
@@ -1005,6 +1011,7 @@ function cacheDOM() {
   DOM.sidebarExpandBtn = $("#sidebar-expand-btn");
   DOM.resultsList = $("#results-list");
   DOM.resultsContainer = $("#results-container");
+  DOM.scrollPreview = $("#scroll-preview");
   DOM.emptyState = $("#empty-state");
   DOM.emptyDesc = $("#empty-desc");
   DOM.emptyRandomBtn = $("#empty-random-btn");
@@ -2185,6 +2192,7 @@ function findVirtualIndex(offset) {
 }
 
 function resetVirtualScrollState() {
+  hideScrollPreviewNow();
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
   VSCROLL.renderStart = 0;
@@ -2269,6 +2277,111 @@ function ensureVirtualViewportCovered() {
   const viewTop = DOM.resultsContainer.scrollTop;
   const viewBottom = viewTop + DOM.resultsContainer.clientHeight;
   if (viewTop < getVirtualOffset(VSCROLL.renderStart) || viewBottom > getVirtualOffset(VSCROLL.renderEnd)) renderVisible();
+}
+
+function getCssColor(name, fallback) {
+  return getComputedStyle(document.body).getPropertyValue(name).trim() || fallback;
+}
+
+function resizeScrollPreview() {
+  const canvas = DOM.scrollPreview;
+  if (!canvas) return;
+  const container = DOM.resultsContainer;
+  const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  canvas.style.left = container.offsetLeft + "px";
+  canvas.style.top = container.offsetTop + "px";
+  canvas.style.width = width + "px";
+  canvas.style.height = height + "px";
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  SCROLL_PREVIEW.dpr = dpr;
+}
+
+function drawScrollPreview() {
+  SCROLL_PREVIEW.frame = 0;
+  if (!SCROLL_PREVIEW.active || STATE.results.length === 0) return;
+  resizeScrollPreview();
+  const canvas = DOM.scrollPreview;
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const dpr = SCROLL_PREVIEW.dpr;
+  const width = canvas.width / dpr;
+  const height = canvas.height / dpr;
+  const surface = getCssColor("--surface", "#1a1c1e");
+  const variant = getCssColor("--surface-variant", "#25282b");
+  const outline = getCssColor("--outline-variant", "#44474a");
+  const primaryText = getCssColor("--on-surface", "#e2e2e6");
+  const secondaryText = getCssColor("--on-surface-variant", "#c4c7c5");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = surface;
+  ctx.fillRect(0, 0, width, height);
+  const scrollTop = DOM.resultsContainer.scrollTop;
+  let index = findVirtualIndex(scrollTop);
+  let y = getVirtualOffset(index) - scrollTop;
+  ctx.textBaseline = "top";
+  while (index < STATE.results.length && y < height) {
+    const rec = STATE.results[index];
+    const rowHeight = Math.max(48, VSCROLL.heights[index] || VSCROLL.estimatedHeight || 60);
+    ctx.fillStyle = index % 2 ? variant : surface;
+    ctx.fillRect(0, y, width, rowHeight);
+    ctx.fillStyle = outline;
+    ctx.fillRect(0, y + rowHeight - 1, width, 1);
+    ctx.fillRect(16, y + 15, 20, 20);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(48, y, Math.max(0, width - 64), rowHeight);
+    ctx.clip();
+    ctx.fillStyle = primaryText;
+    ctx.font = "500 14px sans-serif";
+    ctx.fillText((rec.File || "") + (rec.Extension ? "." + rec.Extension : ""), 48, y + 9);
+    const repo = (rec.Repo || "").split("/").pop();
+    const path = (rec.Folder || []).join(" / ");
+    ctx.fillStyle = secondaryText;
+    ctx.font = "12px sans-serif";
+    ctx.fillText(path ? repo + " / " + path : repo, 48, y + 32);
+    ctx.restore();
+    y += rowHeight;
+    index++;
+  }
+}
+
+function scheduleScrollPreviewDraw() {
+  if (!SCROLL_PREVIEW.frame) SCROLL_PREVIEW.frame = requestAnimationFrame(drawScrollPreview);
+}
+
+function showScrollPreview() {
+  if (!DOM.scrollPreview || STATE.results.length === 0 || VSCROLL.isDraggingThumb) return;
+  if (SCROLL_PREVIEW.hideTimer) clearTimeout(SCROLL_PREVIEW.hideTimer);
+  SCROLL_PREVIEW.active = true;
+  DOM.scrollPreview.classList.add("active");
+  scheduleScrollPreviewDraw();
+}
+
+function scheduleScrollPreviewHide() {
+  if (!SCROLL_PREVIEW.active) return;
+  if (SCROLL_PREVIEW.hideTimer) clearTimeout(SCROLL_PREVIEW.hideTimer);
+  SCROLL_PREVIEW.hideTimer = setTimeout(function() {
+    SCROLL_PREVIEW.hideTimer = 0;
+    renderVisible();
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        SCROLL_PREVIEW.active = false;
+        DOM.scrollPreview.classList.remove("active");
+      });
+    });
+  }, 100);
+}
+
+function hideScrollPreviewNow() {
+  if (SCROLL_PREVIEW.hideTimer) clearTimeout(SCROLL_PREVIEW.hideTimer);
+  if (SCROLL_PREVIEW.frame) cancelAnimationFrame(SCROLL_PREVIEW.frame);
+  SCROLL_PREVIEW.hideTimer = 0;
+  SCROLL_PREVIEW.frame = 0;
+  SCROLL_PREVIEW.active = false;
+  if (DOM.scrollPreview) DOM.scrollPreview.classList.remove("active");
 }
 
 function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
@@ -3292,7 +3405,13 @@ function updateScrollTrack() {
 }
 
 function setupVirtualScroll() {
+  DOM.resultsContainer.addEventListener("wheel", showScrollPreview, { passive: true });
+  DOM.resultsContainer.addEventListener("touchstart", showScrollPreview, { passive: true });
   DOM.resultsContainer.addEventListener("scroll", () => {
+    if (SCROLL_PREVIEW.active) {
+      scheduleScrollPreviewDraw();
+      scheduleScrollPreviewHide();
+    }
     if (!VSCROLL.isDraggingThumb) ensureVirtualViewportCovered();
     if (!scrollTicking) {
       requestAnimationFrame(() => {
@@ -3338,7 +3457,8 @@ function setupQuickScroll() {
     pendingScrollTop = Math.max(0, Math.min(value, maxScrollTop));
     if (!dragFrame) dragFrame = requestAnimationFrame(applyPendingScrollTop);
   }
-  function beginDrag(clientY) {
+function beginDrag(clientY) {
+    hideScrollPreviewNow();
     const scrollEl = DOM.resultsContainer;
     startY = clientY;
     startST = scrollEl.scrollTop;
@@ -3429,6 +3549,7 @@ function applyTheme() {
     DOM.themeIconLight.style.display = "";
     DOM.themeIconDark.style.display = "none";
   }
+  if (SCROLL_PREVIEW.active) scheduleScrollPreviewDraw();
 }
 
 function toggleMobile() {
@@ -3512,6 +3633,7 @@ function setupKeyboard() {
   document.addEventListener("keydown", function(e) {
     const tag = document.activeElement.tagName;
     const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (!isInput && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(e.key)) showScrollPreview();
     if (e.key === "/" && !isInput) {
       e.preventDefault();
       DOM.searchInput.focus();
@@ -3970,6 +4092,7 @@ function init() {
       if (wasMobile !== STATE.isMobile) applyMobileMode();
     }
     scheduleScrollRecovery(60);
+    if (SCROLL_PREVIEW.active) scheduleScrollPreviewDraw();
   });
   document.addEventListener("visibilitychange", function() {
     if (document.visibilityState === "visible") {
