@@ -3,6 +3,11 @@ const CACHE_NAME = "vomebook-search-v1.0.0";
 const PRECACHE_URLS = [
   "/search/",
   "/search/static/style.css",
+  "/search/static/reader-contract.js",
+  "/search/static/reader-store.js",
+  "/search/static/reader.html",
+  "/search/static/reader.css",
+  "/search/static/reader.js",
   "/search/static/app.js",
   "/search/static/index-worker.js",
   "/search/data/initial/manifest.json",
@@ -50,6 +55,18 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.hostname !== self.location.hostname) {
+    return;
+  }
+  if (event.request.mode === "navigate" && url.pathname === "/search/static/reader.html") {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) => cache.match("/search/static/reader.html").then((cached) => {
+        const fetchPromise = fetch(event.request).then((response) => {
+          if (response.ok) cache.put("/search/static/reader.html", response.clone());
+          return response;
+        }).catch(() => cached);
+        return cached || fetchPromise;
+      }))
+    );
     return;
   }
   if (url.pathname.endsWith(".json.gz")) {

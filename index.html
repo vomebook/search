@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>if (matchMedia("(max-width: 768px)").matches && localStorage.getItem("mobileMode") !== "desktop") document.documentElement.classList.add("mobile-boot");</script>
 <title>VoiceOfML Search</title>
 <link rel="manifest" href="/search/manifest.json">
 <meta name="theme-color" content="#1a1c1e">
@@ -276,6 +277,7 @@ if ("serviceWorker" in navigator) {
 }
 </script>
 
+<script src="static/reader-contract.js"></script>
 <script src="static/app.js"></script>
 </body>
 </html>

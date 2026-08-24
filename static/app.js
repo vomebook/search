@@ -1,5 +1,4 @@
 const DATA_URL = "data/search_data.json.gz";
-const TXT_BASE = "https://voiceofml-search.hf.space/txt";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
 const HF_DATASET_BASE = "https://huggingface.co/datasets";
@@ -63,6 +62,7 @@ let repoExtensionCounts = {};
 let repoList = [];
 let extensionList = [];
 let txtMetadata = { available: false, count: 0, byRepo: {} };
+let readerMetadata = { available: false, count: 0, byRepo: {} };
 let corpusWorker = null;
 let corpusWorkerStartPromise = null;
 let corpusWorkerRequestId = 0;
@@ -107,8 +107,51 @@ function encodeRecordPath(path) {
   return String(path || "").split("/").map(encodeURIComponent).join("/");
 }
 
+var readerAssets = null;
+var readerAssetsPending = null;
+
+function loadReaderAssets() {
+  if (readerAssets) return Promise.resolve(readerAssets);
+  if (readerAssetsPending) return readerAssetsPending;
+  readerAssetsPending = fetch("/search/data/reader_assets.json.gz").then(function(response) {
+    if (!response.ok || !response.body || typeof DecompressionStream === "undefined") throw new Error("READER_ASSETS_UNAVAILABLE");
+    return new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json();
+  }).then(function(data) {
+    readerAssets = data && data.v === 1 && data.f && typeof data.f === "object" ? data.f : {};
+    return readerAssets;
+  }).catch(function() {
+    readerAssets = {};
+    return readerAssets;
+  }).finally(function() { readerAssetsPending = null; });
+  return readerAssetsPending;
+}
+
+function applyReaderAsset(record, repo, relativePath, originalLink) {
+  var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
+  if (!asset || asset.s !== 2 || ["p", "e"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(document\.pdf|book\.epub)$/.test(asset.p || "")) return record;
+  return Object.assign({}, record, {
+    ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
+    ReaderExtension: asset.m === "p" ? "pdf" : "epub",
+    DownloadLink: originalLink,
+  });
+}
+
 function getRecordLink(rec) {
   return rec.Link || buildRecordLink(rec);
+}
+
+function getReaderLink(rec) {
+  const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: location.href });
+  if (rec.HasTxt) {
+    const relPath = buildRecordRelativePath(rec);
+    const stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
+    readerRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt";
+  }
+  return VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
+}
+
+function isReadableRecord(rec) {
+  return VoiceOfMLReader.capability(rec && rec.Extension).article;
 }
 
 function getRecordPath(rec) {
@@ -343,6 +386,7 @@ async function loadData() {
     repoExtensionCounts = metadata.extensionsByRepo || {};
     extensionList = (metadata.extensions || []).map(function(item) { return item.name; });
     txtMetadata = metadata.txt || { available: false, count: 0, byRepo: {} };
+    readerMetadata = metadata.reader || { available: false, count: 0, byRepo: {} };
     return true;
   } catch (e) {
     console.error("Data load failed:", e);
@@ -1412,12 +1456,12 @@ async function updateRandomTxtVisibility() {
   const id = ++randomTxtStatusId;
   DOM.randomTxtBtn.style.display = "none";
   if (STATE.dataLoaded) {
-    const count = STATE.repoFull ? (txtMetadata.byRepo[STATE.repoFull] || 0) : (txtMetadata.count || 0);
+    const count = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
     DOM.randomTxtBtn.style.display = count > 0 ? "" : "none";
     return;
   }
   const repo = STATE.mode === "repo" && STATE.repo ? STATE.repo : "";
-  const url = repo ? API_BASE + "/api/random-txt/status?repo=" + encodeURIComponent(repo) : API_BASE + "/api/random-txt/status";
+  const url = repo ? API_BASE + "/api/random-reader/status?repo=" + encodeURIComponent(repo) : API_BASE + "/api/random-reader/status";
   try {
     const data = await fetchJsonWithTimeout(url, 4000);
     if (id !== randomTxtStatusId) return;
@@ -1975,7 +2019,7 @@ function buildResultHTML(rec, idx) {
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(getRecordLink(rec))) + '">复制链接</button>' +
       '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(getRecordLink(rec)) + '">下载</button>' +
       '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
-      (rec.HasTxt ? '<button class="result-action-btn" data-action="read" data-link="' + escapeHTML(getRecordLink(rec)) + '" data-repo="' + repoShort + '">在线阅读</button>' : '') +
+      (isReadableRecord(rec) ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(getReaderLink(rec)) + '">在线阅读</button>' : '') +
     '</div>'
   );
 }
@@ -2406,23 +2450,28 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var browserFileName = getBrowserFileName(f2);
     div2.innerHTML = (ICONS[iconType] || ICONS.file) +
       '<span class="browser-name">' + escapeHTML(browserFileName) + '</span>' +
-      (f2.hasTxt ? '<span class="browser-action" data-read="1">阅读</span>' : '') +
+      '<span class="browser-action" data-download="1">下载</span>' +
       (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '');
     div2.addEventListener("click", function(ff, ppath) {
       return function(e) {
+        var fileLink = getBrowserFileLink(currentRepo, ppath, ff);
         if (e.target.closest(".browser-action")) {
           e.stopPropagation();
-          var stem = ff.ext && ff.name && ff.name.toLowerCase().endsWith("." + ff.ext.toLowerCase())
-            ? ff.name.slice(0, ff.name.lastIndexOf("."))
-            : (ff.name || "");
-          var txtPath_v = (ppath ? ppath + "/" : "") + stem;
-          openExternalWindow(TXT_BASE + "/" + encodeURI(txtPath_v) + ".txt");
+          if (fileLink) downloadFile(getBrowserFileName(ff), fileLink);
           return;
         }
-        var fileLink = getBrowserFileLink(currentRepo, ppath, ff);
+        var assetPath = ppath ? ppath + "/" + getBrowserFileName(ff) : getBrowserFileName(ff);
+        var browserRecord = { File: ff.name, Extension: ff.ext, Link: fileLink, ReturnUrl: location.href };
+        if (ff.hasTxt) { var relPath = (ppath ? ppath + "/" : "") + ff.name; var stem = ff.ext ? relPath.replace(new RegExp("\\." + ff.ext + "$", "i"), "") : relPath; browserRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt"; }
+        browserRecord = applyReaderAsset(browserRecord, currentRepo, assetPath, fileLink);
+        var readerLink = VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html");
+        if (readerLink) {
+          if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
+          openExternalWindow(readerLink);
+          return;
+        }
         if (fileLink) {
-          var downloadName = getBrowserFileName(ff);
-          downloadFile(downloadName, fileLink);
+          downloadFile(getBrowserFileName(ff), fileLink);
         }
       };
     }(f2, path || ""));
@@ -2436,6 +2485,8 @@ async function renderBrowser(path, routeId) {
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
   var currentRepo = STATE.repoFull;
+  await loadReaderAssets();
+  if (routeId && routeId !== routeRenderId) return;
   const backBtn = document.createElement("div");
   backBtn.className = "back-to-global";
   backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
@@ -3097,7 +3148,7 @@ function typewriter(el, text, speed) {
 }
 
 async function getRandomLocal(txtOnly) {
-  const data = await corpusWorkerRequest("random-record", { repo: STATE.repoFull || "", txtOnly: !!txtOnly }, WORKER_REQUEST_TIMEOUT);
+  const data = await corpusWorkerRequest("random-record", { repo: STATE.repoFull || "", txtOnly: false, readerOnly: !!txtOnly }, WORKER_REQUEST_TIMEOUT);
   return data && data.record || null;
 }
 
@@ -3144,12 +3195,11 @@ async function randomBook() {
     });
 }
 
-function openTxtRecord(rec, popup) {
+function openReaderRecord(rec, popup) {
   if (!rec) return false;
-  var relPath = buildRecordRelativePath(rec);
-  var stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
-  if (!stem) return false;
-  const url = TXT_BASE + "/" + encodeURI(stem) + ".txt";
+  const url = getReaderLink(rec);
+  if (!url) return false;
+  if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
   if (popup) popup.location.replace(url);
   else openExternalWindow(url);
   return true;
@@ -3161,7 +3211,7 @@ async function randomTxt() {
   if (STATE.dataLoaded) {
     try {
       var localRec = await getRandomLocal(true);
-      if (!openTxtRecord(localRec, popup)) throw new Error("NO_TXT");
+      if (!openReaderRecord(localRec, popup)) throw new Error("NO_READER");
     } catch (e) {
       if (popup) popup.close();
       showToast("暂无可读文章");
@@ -3169,17 +3219,17 @@ async function randomTxt() {
     return;
   }
   var url = STATE.repoFull
-    ? API_BASE + "/api/random-txt?repo=" + encodeURIComponent(STATE.repo)
-    : API_BASE + "/api/random-txt";
+    ? API_BASE + "/api/random-reader?repo=" + encodeURIComponent(STATE.repo)
+    : API_BASE + "/api/random-reader";
   fetch(url).then(function(resp) {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     return resp.json();
   }).then(function(rec) {
-    if (!openTxtRecord(rec, popup)) throw new Error("NO_TXT");
+    if (!openReaderRecord(rec, popup)) throw new Error("NO_READER");
   }).catch(function() {
     async function fallback() {
       var rec = await getRandomLocal(true);
-      if (!openTxtRecord(rec, popup)) {
+      if (!openReaderRecord(rec, popup)) {
         if (popup) popup.close();
         showToast("暂无可读文章");
       }
@@ -3451,6 +3501,7 @@ function applyMobileMode() {
     STATE.rightSidebarOpen = false;
   }
   updateSidebarVisibility();
+  document.documentElement.classList.remove("mobile-boot");
   if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
   updateSelectionUI();
   requestAnimationFrame(updateScrollTrack);
@@ -3615,20 +3666,8 @@ function setupResultDelegation() {
         return;
       }
       if (action === "read") {
-        const link = actionBtn.dataset.link;
-        const repoShort = actionBtn.dataset.repo || STATE.repo;
-        const prefix = "https://huggingface.co/datasets/VoiceOfML/" + repoShort + "/resolve/main/";
-        let relPath = "";
-        if (link.indexOf(prefix) === 0) {
-          relPath = decodeURIComponent(link.substring(prefix.length));
-        }
-        let stem = relPath;
-        if (stem.indexOf(".") >= 0) {
-          const lastDot = stem.lastIndexOf(".");
-          const slashAfterDot = stem.indexOf("/", lastDot);
-          if (slashAfterDot === -1) stem = stem.substring(0, lastDot);
-        }
-        openExternalWindow(TXT_BASE + "/" + encodeURI(stem) + ".txt");
+        if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
+        openExternalWindow(actionBtn.dataset.readerUrl);
         return;
       }
     }
