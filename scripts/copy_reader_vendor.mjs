@@ -45,6 +45,8 @@ for (const [url, target, expected] of [
   ["https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js", "epub.min.js", "06eae15745107b4aa508c95538275251f69bfb9f1175621fc458d9f42ed082d4"],
   ["https://cdn.jsdelivr.net/npm/marked@18.0.10/lib/marked.umd.js", "marked.min.js", "eaccee2fb9fb3b2c09e873a5504da82507850d9e677bd720122ac49e2a03982a"],
   ["https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.min.js", "purify.min.js", "c2f26ea4fc0d88141c9aa430eb515ac86fce59418ceebd85fa475b87a8d6c3e6"],
+  ["https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js", "jszip.min.js", "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"],
+  ["https://cdn.jsdelivr.net/npm/docx-preview@0.3.6/dist/docx-preview.min.js", "docx-preview.min.js", "3573b8d993442316042e95c782338b503b2a7cd573d336db894b87799c9d3097"],
 ]) {
   const bytes = await downloadWithRetry(url);
   const actual = createHash("sha256").update(bytes).digest("hex");

@@ -128,10 +128,10 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-  if (!asset || asset.s !== 2 || ["p", "e"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub)$/.test(asset.p || "")) return record;
+  if (!asset || asset.s !== 2 || ["p", "e", "d"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub|document\.docx)$/.test(asset.p || "")) return record;
   return Object.assign({}, record, {
     ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
-    ReaderExtension: asset.m === "p" ? "pdf" : "epub",
+    ReaderExtension: asset.m === "p" ? "pdf" : asset.m === "e" ? "epub" : "docx",
     DownloadLink: originalLink,
   });
 }
@@ -194,6 +194,7 @@ function warmReaderIntent(rawUrl) {
   var assets = extension === "pdf"
     ? ["/search/static/vendor/pdf.min.e0be3863c23c.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.0613f41490dd.mjs"]
     : extension === "epub" ? ["/search/static/vendor/epub.min.06eae1574510.js"]
+    : extension === "docx" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/docx-preview.min.3573b8d99344.js"]
     : ["md", "markdown"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.eaccee2fb9fb.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
   assets.forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
