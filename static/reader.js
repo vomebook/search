@@ -7,7 +7,9 @@ if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = fu
 if (!Math.sumPrecise) { Math.sumPrecise = function(values) { let sum = 0, correction = 0; for (const value of values) { const next = sum + value; correction += Math.abs(sum) >= Math.abs(value) ? (sum - next) + value : (value - next) + sum; sum = next; } return sum + correction; }; }
 const params = new URLSearchParams(location.search), sourceUrl = params.get("url") || "", downloadUrl = params.get("download") || sourceUrl, extension = (params.get("ext") || "").toLowerCase();
 const capability = VoiceOfMLReader.capability(extension);
-const content = document.querySelector("#content"), status = document.querySelector("#status"), title = params.get("title") || "在线阅读", ocrUrl = params.get("ocr") || "", returnUrl = params.get("return") || "";
+const content = document.querySelector("#content"), status = document.querySelector("#status"), title = params.get("title") || "在线阅读", ocrUrl = params.get("ocr") || "", returnUrl = params.get("return") || "", returnNavigationToken = params.get("nav") || "";
+let canReturnWithHistory = false;
+if (returnNavigationToken) { try { const key = "reader-return:" + returnNavigationToken, storedReturnUrl = sessionStorage.getItem(key); sessionStorage.removeItem(key); canReturnWithHistory = storedReturnUrl === new URL(returnUrl, location.origin).href; } catch (_) {} }
 let zoom = 1;
 let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
 let pdfDocument = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, epubRendition = null, epubLocation = "";
@@ -16,7 +18,7 @@ let lastSavedProgress = "", progressSaveChain = Promise.resolve();
 const viewport = document.querySelector("#viewport"), zoomInput = document.querySelector("#zoom"), pageInput = document.querySelector("#page-number"), loadingStatus = document.querySelector("#loading-status");
 document.querySelector(".page-controls").hidden = !["pdf", "epub"].includes(capability.mode);
 document.querySelector("#title").textContent = title; document.title = title + " - VoiceOfML Reader";
-document.querySelector("#back").addEventListener("click", () => { try { const target = new URL(returnUrl); if (target.origin === location.origin) { if (history.length > 1) history.back(); else location.assign(target.href); return; } } catch (_) {} location.assign("/search/"); });
+document.querySelector("#back").addEventListener("click", () => { try { const target = new URL(returnUrl, location.origin); if (target.origin === location.origin) { if (canReturnWithHistory && history.length > 1) history.back(); else location.assign(target.href); return; } } catch (_) {} location.assign("/search/"); });
 function setZoom(percent, persist = true) { const normalized = VoiceOfMLReader.clampNumber(percent, 50, 250, 100); zoom = normalized / 100; content.style.setProperty("--reader-zoom", String(zoom)); zoomInput.value = String(normalized); if (pdfDocument) rerenderVisiblePdfPages(); if (persist) scheduleSave(); }
 for (const [id, delta] of [["#zoom-out", -10], ["#zoom-in", 10]]) document.querySelector(id).addEventListener("click", () => setZoom(Number(zoomInput.value) + delta));
 zoomInput.addEventListener("change", () => setZoom(zoomInput.value)); zoomInput.addEventListener("keydown", (event) => { if (event.key === "Enter") { setZoom(zoomInput.value); zoomInput.blur(); } });
