@@ -114,16 +114,15 @@ var convertedReaderRecords = null;
 function loadReaderAssets() {
   if (readerAssets) return Promise.resolve(readerAssets);
   if (readerAssetsPending) return readerAssetsPending;
-  readerAssetsPending = fetch("/search/data/reader_assets.json.gz").then(function(response) {
+  readerAssetsPending = fetchWithTimeout("/search/data/reader_assets.json.gz", 10000).then(function(response) {
     if (!response.ok || !response.body || typeof DecompressionStream === "undefined") throw new Error("READER_ASSETS_UNAVAILABLE");
     return new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json();
   }).then(function(data) {
-    readerAssets = data && data.v === 1 && data.f && typeof data.f === "object" ? data.f : {};
+    if (!data || data.v !== 1 || !data.f || typeof data.f !== "object") throw new Error("READER_ASSETS_UNAVAILABLE");
+    readerAssets = data.f;
+    convertedReaderRecords = null;
     return readerAssets;
-  }).catch(function() {
-    readerAssets = {};
-    return readerAssets;
-  }).finally(function() { readerAssetsPending = null; });
+  }).catch(function() { return {}; }).finally(function() { readerAssetsPending = null; });
   return readerAssetsPending;
 }
 
@@ -162,14 +161,29 @@ function getRecordLink(rec) {
   return rec.Link || buildRecordLink(rec);
 }
 
-function getReaderLink(rec) {
-  const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: location.href });
+function getReaderLink(rec, returnUrl) {
+  returnUrl = returnUrl || location.href;
+  const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl });
   if (rec.HasTxt) {
     const relPath = buildRecordRelativePath(rec);
     const stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
     readerRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt";
   }
   return VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
+}
+
+function navigateToReader(rawUrl, returnUrl) {
+  returnUrl = returnUrl || location.href;
+  var url = new URL(rawUrl, location.origin);
+  if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return false;
+  url.searchParams.set("return", returnUrl);
+  try {
+    var token = crypto.randomUUID();
+    sessionStorage.setItem("reader-return:" + token, new URL(returnUrl, location.origin).href);
+    url.searchParams.set("nav", token);
+  } catch (_) {}
+  location.assign(url.href);
+  return true;
 }
 
 function isReadableRecord(rec) {
@@ -2488,7 +2502,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         var readerLink = VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html");
         if (readerLink) {
           if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
-          location.assign(readerLink);
+          navigateToReader(readerLink);
           return;
         }
         if (fileLink) {
@@ -3216,16 +3230,20 @@ async function randomBook() {
     });
 }
 
-function openReaderRecord(rec) {
-  if (!rec) return false;
-  const url = getReaderLink(rec);
+var randomReaderRequestId = 0;
+
+function openReaderRecord(rec, returnUrl) {
+  returnUrl = returnUrl || location.href;
+  if (!rec || location.href !== returnUrl) return false;
+  const url = getReaderLink(rec, returnUrl);
   if (!url) return false;
   if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
-  location.assign(url);
-  return true;
+  return navigateToReader(url, returnUrl);
 }
 
 async function randomTxt() {
+  var requestId = ++randomReaderRequestId;
+  var returnUrl = location.href;
   showToast("正在随机打开文章...");
   if (STATE.dataLoaded) {
     try {
@@ -3234,7 +3252,8 @@ async function randomTxt() {
       var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
       var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
       var localRec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
-      if (!openReaderRecord(localRec)) throw new Error("NO_READER");
+      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
+      if (!openReaderRecord(localRec, returnUrl)) throw new Error("NO_READER");
     } catch (e) {
       showToast("暂无可读文章");
     }
@@ -3247,11 +3266,18 @@ async function randomTxt() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     return resp.json();
   }).then(function(rec) {
-    if (!openReaderRecord(rec)) throw new Error("NO_READER");
+    if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
+    if (!openReaderRecord(rec, returnUrl)) throw new Error("NO_READER");
   }).catch(function() {
     async function fallback() {
-      var rec = await getRandomLocal(true);
-      if (!openReaderRecord(rec)) {
+      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
+      await loadReaderAssets();
+      var converted = getConvertedReaderRecords(STATE.repoFull || "");
+      var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
+      var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
+      var rec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
+      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
+      if (!openReaderRecord(rec, returnUrl)) {
         showToast("暂无可读文章");
       }
     }
@@ -3686,7 +3712,7 @@ function setupResultDelegation() {
       }
       if (action === "read") {
         if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
-        location.assign(actionBtn.dataset.readerUrl);
+        navigateToReader(actionBtn.dataset.readerUrl);
         return;
       }
     }
