@@ -151,7 +151,7 @@ function getReaderLink(rec) {
 }
 
 function isReadableRecord(rec) {
-  return VoiceOfMLReader.capability(rec && rec.Extension).article;
+  return VoiceOfMLReader.capability(rec && (rec.ReaderExtension || rec.Extension)).article;
 }
 
 function getRecordPath(rec) {
@@ -1997,6 +1997,8 @@ function buildResultHTML(rec, idx) {
   const titleHTML = highlightText(rec.File, STATE.query);
   const repoShort = (rec.Repo || "").split("/").pop();
   const sizeStr = formatSize(rec.Size);
+  const recordLink = getRecordLink(rec);
+  const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
   const breadcrumb = (rec.Folder || []).map((f, j) => {
     const accum = (rec.Folder || []).slice(0, j + 1).join("/");
     const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
@@ -2016,10 +2018,10 @@ function buildResultHTML(rec, idx) {
       '</div>' +
     '</div>' +
     '<div class="result-actions">' +
-      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(getRecordLink(rec))) + '">复制链接</button>' +
-      '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(getRecordLink(rec)) + '">下载</button>' +
+      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(recordLink)) + '">复制链接</button>' +
+      '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(recordLink) + '">下载</button>' +
       '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
-      (isReadableRecord(rec) ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(getReaderLink(rec)) + '">在线阅读</button>' : '') +
+      (isReadableRecord(readerRecord) ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(getReaderLink(readerRecord)) + '">在线阅读</button>' : '') +
     '</div>'
   );
 }
@@ -4019,6 +4021,10 @@ function init() {
   lastKeepaliveAt = Date.now();
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   ROUTER.apply();
+  loadReaderAssets().then(function() {
+    clearResultTemplateCache();
+    if (STATE.results.length > 0) renderResults();
+  });
   fetchHitokoto();
   setInterval(fetchHitokoto, 30000);
 }
