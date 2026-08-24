@@ -50,6 +50,9 @@ for (const [url, target, expected] of [
   const actual = createHash("sha256").update(bytes).digest("hex");
   if (actual !== expected) throw new Error(`${url}: SHA-256 ${actual} does not match ${expected}`);
   writeFileSync(join(output, target), bytes);
+  const dot = target.lastIndexOf(".");
+  const versioned = `${target.slice(0, dot)}.${actual.slice(0, 12)}${target.slice(dot)}`;
+  writeFileSync(join(output, versioned), bytes);
 }
 }
 

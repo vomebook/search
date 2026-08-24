@@ -23,7 +23,7 @@ const pendingMessages = [];
 const bufferMessage = event => pendingMessages.push(event);
 self.addEventListener("message", bufferMessage);
 
-import("./vendor/pdf.worker.min.mjs").then(() => {
+import("./vendor/pdf.worker.min.0613f41490dd.mjs").then(() => {
   self.removeEventListener("message", bufferMessage);
   for (const event of pendingMessages) self.dispatchEvent(new MessageEvent("message", { data: event.data }));
 });
