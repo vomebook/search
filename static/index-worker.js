@@ -14,6 +14,8 @@ let recordIndices = [];
 let repoRecordIndices = {};
 let txtRecordIndices = [];
 let repoTxtRecordIndices = {};
+let readerRecordIndices = [];
+let repoReaderRecordIndices = {};
 let sortedByName = [];
 let sortedBySize = [];
 let repoSortedByName = {};
@@ -23,7 +25,7 @@ let sizeOrderReady = false;
 let sortBuildTimer = null;
 
 function emptyMetadata() {
-  return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, txt: { available: false, count: 0, byRepo: {} } };
+  return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, txt: { available: false, count: 0, byRepo: {} }, reader: { available: false, count: 0, byRepo: {} } };
 }
 
 function tokenize(text) {
@@ -167,6 +169,7 @@ function replaceCorpus(nextRecords) {
   const extensionCounts = {};
   const extensionsByRepo = {};
   const txtByRepo = {};
+  const readerByRepo = {};
   const idOccurrences = {};
   let txtCount = 0;
   recordIds = new Array(records.length);
@@ -174,6 +177,8 @@ function replaceCorpus(nextRecords) {
   repoRecordIndices = {};
   txtRecordIndices = [];
   repoTxtRecordIndices = {};
+  readerRecordIndices = [];
+  repoReaderRecordIndices = {};
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
     const repo = record.Repo || "";
@@ -194,6 +199,12 @@ function replaceCorpus(nextRecords) {
       if (!repoTxtRecordIndices[repo]) repoTxtRecordIndices[repo] = [];
       repoTxtRecordIndices[repo].push(i);
     }
+    if (["pdf", "epub", "txt", "md", "markdown", "jpg", "jpeg", "png", "gif", "bmp", "webp"].indexOf(extension) >= 0) {
+      readerRecordIndices.push(i);
+      readerByRepo[repo] = (readerByRepo[repo] || 0) + 1;
+      if (!repoReaderRecordIndices[repo]) repoReaderRecordIndices[repo] = [];
+      repoReaderRecordIndices[repo].push(i);
+    }
     const base = [repo, (record.Folder || []).join("/"), record.File || "", record.Extension || ""].join("\u001f");
     const occurrence = idOccurrences[base] || 0;
     idOccurrences[base] = occurrence + 1;
@@ -205,6 +216,7 @@ function replaceCorpus(nextRecords) {
     extensions: Object.keys(extensionCounts).sort().map((name) => ({ name, count: extensionCounts[name] })),
     extensionsByRepo: {},
     txt: { available: txtCount > 0, count: txtCount, byRepo: txtByRepo },
+    reader: { available: readerRecordIndices.length > 0, count: readerRecordIndices.length, byRepo: readerByRepo },
   };
   for (const repo of Object.keys(extensionsByRepo)) {
     metadata.extensionsByRepo[repo] = Object.keys(extensionsByRepo[repo]).sort().map((name) => ({ name, count: extensionsByRepo[repo][name] }));
@@ -394,8 +406,10 @@ function searchLocal(params) {
 function randomRecord(params) {
   const repo = params.repo || "";
   const txtOnly = !!params.txtOnly;
+  const readerOnly = !!params.readerOnly;
   let candidates;
-  if (txtOnly) candidates = repo ? (repoTxtRecordIndices[repo] || []) : txtRecordIndices;
+  if (readerOnly) candidates = repo ? (repoReaderRecordIndices[repo] || []) : readerRecordIndices;
+  else if (txtOnly) candidates = repo ? (repoTxtRecordIndices[repo] || []) : txtRecordIndices;
   else if (repo) candidates = repoRecordIndices[repo] || [];
   else candidates = recordIndices;
   if (!candidates.length) return { record: null, id: null, generation };

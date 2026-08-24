@@ -1495,6 +1495,8 @@ body.mobile .result-actions {
 }
 
 @media (max-width: 768px) {
+  html.mobile-boot .left-sidebar { transform: translateX(-100%); transition: none !important; }
+  html.mobile-boot .right-sidebar { transform: translateX(100%); transition: none !important; }
   body:not(.force-desktop) .sidebar {
     position: fixed;
     top: var(--header-h);
