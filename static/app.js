@@ -186,6 +186,31 @@ function navigateToReader(rawUrl, returnUrl) {
   return true;
 }
 
+var warmedReaderAssets = new Set();
+function warmReaderIntent(rawUrl) {
+  if (!rawUrl) return;
+  var extension = "";
+  try { extension = (new URL(rawUrl, location.origin).searchParams.get("ext") || "").toLowerCase(); } catch (_) { return; }
+  var assets = extension === "pdf"
+    ? ["/search/static/vendor/pdf.min.e0be3863c23c.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.0613f41490dd.mjs"]
+    : extension === "epub" ? ["/search/static/vendor/epub.min.06eae1574510.js"]
+    : ["md", "markdown"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.eaccee2fb9fb.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
+  assets.forEach(function(href) {
+    if (warmedReaderAssets.has(href)) return;
+    warmedReaderAssets.add(href);
+    var link = document.createElement("link"); link.rel = "prefetch"; link.href = href; document.head.appendChild(link);
+  });
+  try { fetch(API_BASE + "/api/ping", { cache: "no-store", mode: "cors" }).catch(function() {}); } catch (_) {}
+}
+
+function setupReaderIntentWarming() {
+  var warm = function(event) {
+    var target = event.target.closest("[data-reader-url], [data-read-url]");
+    if (target) warmReaderIntent(target.dataset.readerUrl || target.dataset.readUrl);
+  };
+  ["pointerover", "pointerdown", "focusin"].forEach(function(type) { document.addEventListener(type, warm, { passive: true }); });
+}
+
 function isReadableRecord(rec) {
   return VoiceOfMLReader.capability(rec && (rec.ReaderExtension || rec.Extension)).article;
 }
@@ -2483,6 +2508,11 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var iconType = getFileIconType(f2.ext);
     var sizeStr = formatSize(f2.size);
     var browserFileName = getBrowserFileName(f2);
+    var browserFileLink = getBrowserFileLink(currentRepo, path || "", f2);
+    var browserAssetPath = path ? path + "/" + browserFileName : browserFileName;
+    var warmBrowserRecord = applyReaderAsset({ File: f2.name, Extension: f2.ext, Link: browserFileLink }, currentRepo, browserAssetPath, browserFileLink);
+    var warmReaderLink = VoiceOfMLReader.readerUrl(warmBrowserRecord, "/search/static/reader.html");
+    if (warmReaderLink) div2.dataset.readerUrl = warmReaderLink;
     div2.innerHTML = (ICONS[iconType] || ICONS.file) +
       '<span class="browser-name">' + escapeHTML(browserFileName) + '</span>' +
       '<span class="browser-action" data-download="1">下载</span>' +
@@ -3767,6 +3797,7 @@ function setupResultDelegation() {
 
 function init() {
   cacheDOM();
+  setupReaderIntentWarming();
   STATE.isDark = localStorage.getItem("theme") !== "light";
   applyTheme();
   const savedMobile = localStorage.getItem("mobileMode");
