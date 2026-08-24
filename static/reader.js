@@ -16,7 +16,7 @@ let lastSavedProgress = "", progressSaveChain = Promise.resolve();
 const viewport = document.querySelector("#viewport"), zoomInput = document.querySelector("#zoom"), pageInput = document.querySelector("#page-number"), loadingStatus = document.querySelector("#loading-status");
 document.querySelector(".page-controls").hidden = !["pdf", "epub"].includes(capability.mode);
 document.querySelector("#title").textContent = title; document.title = title + " - VoiceOfML Reader";
-document.querySelector("#back").addEventListener("click", () => { if (history.length > 1) history.back(); else { try { const target = new URL(returnUrl); location.assign(target.origin === location.origin ? target.href : "/search/"); } catch (_) { location.assign("/search/"); } } });
+document.querySelector("#back").addEventListener("click", () => { try { const target = new URL(returnUrl); if (target.origin === location.origin) { if (history.length > 1) history.back(); else location.assign(target.href); return; } } catch (_) {} location.assign("/search/"); });
 function setZoom(percent, persist = true) { const normalized = VoiceOfMLReader.clampNumber(percent, 50, 250, 100); zoom = normalized / 100; content.style.setProperty("--reader-zoom", String(zoom)); zoomInput.value = String(normalized); if (pdfDocument) rerenderVisiblePdfPages(); if (persist) scheduleSave(); }
 for (const [id, delta] of [["#zoom-out", -10], ["#zoom-in", 10]]) document.querySelector(id).addEventListener("click", () => setZoom(Number(zoomInput.value) + delta));
 zoomInput.addEventListener("change", () => setZoom(zoomInput.value)); zoomInput.addEventListener("keydown", (event) => { if (event.key === "Enter") { setZoom(zoomInput.value); zoomInput.blur(); } });
