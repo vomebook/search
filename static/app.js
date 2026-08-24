@@ -236,12 +236,6 @@ function openExternalWindow(url) {
   return popup;
 }
 
-function openPendingWindow() {
-  const popup = window.open("about:blank", "_blank");
-  if (popup) popup.opener = null;
-  return popup;
-}
-
 function bytesToDisplay(bytes) {
   if (bytes === null || bytes === undefined || bytes === 0) return { value: "", unit: "MB" };
   if (bytes >= 1073741824) return { value: (bytes / 1073741824).toFixed(2).replace(/\.?0+$/, ""), unit: "GB" };
@@ -2494,7 +2488,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         var readerLink = VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html");
         if (readerLink) {
           if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
-          openExternalWindow(readerLink);
+          location.assign(readerLink);
           return;
         }
         if (fileLink) {
@@ -3222,19 +3216,17 @@ async function randomBook() {
     });
 }
 
-function openReaderRecord(rec, popup) {
+function openReaderRecord(rec) {
   if (!rec) return false;
   const url = getReaderLink(rec);
   if (!url) return false;
   if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
-  if (popup) popup.location.replace(url);
-  else openExternalWindow(url);
+  location.assign(url);
   return true;
 }
 
 async function randomTxt() {
   showToast("正在随机打开文章...");
-  var popup = openPendingWindow();
   if (STATE.dataLoaded) {
     try {
       await loadReaderAssets();
@@ -3242,9 +3234,8 @@ async function randomTxt() {
       var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
       var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
       var localRec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
-      if (!openReaderRecord(localRec, popup)) throw new Error("NO_READER");
+      if (!openReaderRecord(localRec)) throw new Error("NO_READER");
     } catch (e) {
-      if (popup) popup.close();
       showToast("暂无可读文章");
     }
     return;
@@ -3256,21 +3247,18 @@ async function randomTxt() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     return resp.json();
   }).then(function(rec) {
-    if (!openReaderRecord(rec, popup)) throw new Error("NO_READER");
+    if (!openReaderRecord(rec)) throw new Error("NO_READER");
   }).catch(function() {
     async function fallback() {
       var rec = await getRandomLocal(true);
-      if (!openReaderRecord(rec, popup)) {
-        if (popup) popup.close();
+      if (!openReaderRecord(rec)) {
         showToast("暂无可读文章");
       }
     }
     if (STATE.dataLoaded) fallback().catch(function() {
-      if (popup) popup.close();
       showToast("暂无可读文章");
     });
     else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() {
-      if (popup) popup.close();
       showToast("暂无可读文章");
     });
   });
@@ -3698,7 +3686,7 @@ function setupResultDelegation() {
       }
       if (action === "read") {
         if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
-        openExternalWindow(actionBtn.dataset.readerUrl);
+        location.assign(actionBtn.dataset.readerUrl);
         return;
       }
     }
