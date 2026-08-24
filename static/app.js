@@ -213,6 +213,7 @@ function setupReaderIntentWarming() {
 }
 
 function isReadableRecord(rec) {
+  if (String(rec && (rec.ReaderExtension || rec.Extension) || "").toLowerCase() === "docx" && !rec.ReaderLink) return false;
   return VoiceOfMLReader.capability(rec && (rec.ReaderExtension || rec.Extension)).article;
 }
 
@@ -2530,7 +2531,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         var browserRecord = { File: ff.name, Extension: ff.ext, Link: fileLink, ReturnUrl: location.href };
         if (ff.hasTxt) { var relPath = (ppath ? ppath + "/" : "") + ff.name; var stem = ff.ext ? relPath.replace(new RegExp("\\." + ff.ext + "$", "i"), "") : relPath; browserRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt"; }
         browserRecord = applyReaderAsset(browserRecord, currentRepo, assetPath, fileLink);
-        var readerLink = VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html");
+        var readerLink = isReadableRecord(browserRecord) ? VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html") : "";
         if (readerLink) {
           if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
           navigateToReader(readerLink);
