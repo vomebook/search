@@ -109,6 +109,7 @@ function encodeRecordPath(path) {
 
 var readerAssets = null;
 var readerAssetsPending = null;
+var convertedReaderRecords = null;
 
 function loadReaderAssets() {
   if (readerAssets) return Promise.resolve(readerAssets);
@@ -134,6 +135,27 @@ function applyReaderAsset(record, repo, relativePath, originalLink) {
     ReaderExtension: asset.m === "p" ? "pdf" : "epub",
     DownloadLink: originalLink,
   });
+}
+
+function getConvertedReaderRecords(repo) {
+  if (!convertedReaderRecords) {
+    convertedReaderRecords = [];
+    Object.keys(readerAssets || {}).forEach(function(key) {
+      var separator = key.indexOf("\0");
+      if (separator <= 0) return;
+      var sourceRepo = key.substring(0, separator);
+      var relativePath = key.substring(separator + 1);
+      var parts = relativePath.split("/");
+      var filename = parts.pop() || "";
+      var dot = filename.lastIndexOf(".");
+      if (!sourceRepo.startsWith("VoiceOfML/") || dot <= 0 || parts.some(function(part) { return !part || part === "." || part === ".."; })) return;
+      var record = { Repo: sourceRepo, File: filename.substring(0, dot), Extension: filename.substring(dot + 1), Folder: parts, HasTxt: false };
+      var originalLink = buildRecordLink(record);
+      var converted = applyReaderAsset(record, sourceRepo, relativePath, originalLink);
+      if (converted !== record) convertedReaderRecords.push(converted);
+    });
+  }
+  return repo ? convertedReaderRecords.filter(function(record) { return record.Repo === repo; }) : convertedReaderRecords;
 }
 
 function getRecordLink(rec) {
@@ -1456,7 +1478,10 @@ async function updateRandomTxtVisibility() {
   const id = ++randomTxtStatusId;
   DOM.randomTxtBtn.style.display = "none";
   if (STATE.dataLoaded) {
-    const count = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
+    await loadReaderAssets();
+    if (id !== randomTxtStatusId) return;
+    const originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
+    const count = originalCount + getConvertedReaderRecords(STATE.repoFull || "").length;
     DOM.randomTxtBtn.style.display = count > 0 ? "" : "none";
     return;
   }
@@ -3212,7 +3237,11 @@ async function randomTxt() {
   var popup = openPendingWindow();
   if (STATE.dataLoaded) {
     try {
-      var localRec = await getRandomLocal(true);
+      await loadReaderAssets();
+      var converted = getConvertedReaderRecords(STATE.repoFull || "");
+      var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
+      var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
+      var localRec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
       if (!openReaderRecord(localRec, popup)) throw new Error("NO_READER");
     } catch (e) {
       if (popup) popup.close();
