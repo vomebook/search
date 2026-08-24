@@ -129,7 +129,7 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-  if (!asset || asset.s !== 2 || ["p", "e"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(document\.pdf|book\.epub)$/.test(asset.p || "")) return record;
+  if (!asset || asset.s !== 2 || ["p", "e"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub)$/.test(asset.p || "")) return record;
   return Object.assign({}, record, {
     ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
     ReaderExtension: asset.m === "p" ? "pdf" : "epub",
