@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { get } from "node:https";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const output = process.argv[2] || "static/vendor";
 mkdirSync(output, { recursive: true });
@@ -42,6 +42,11 @@ async function main() {
 for (const [url, target, expected] of [
   ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.min.mjs", "pdf.min.mjs", "e0be3863c23c8af2305b16548febd58e7f8874a460253317d7771cddbc1c0f6d"],
   ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs", "pdf.worker.min.mjs", "0613f41490dd6aaceed7a93fbbd38c85e6d6aa60474b6588c6e7709cfbe18cb3"],
+  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/wasm/jbig2.wasm", "wasm/jbig2.wasm", "e6bee67724a7b5436fe8162638e3708cfc8d52b6342db69a49715e30ff27cfdc"],
+  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/wasm/jbig2_nowasm_fallback.js", "wasm/jbig2_nowasm_fallback.js", "04c795a6657a4553a64b781ea3e85256203d913c3b71b72b85fa3ce00622f458"],
+  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/wasm/openjpeg.wasm", "wasm/openjpeg.wasm", "004a0e62db930ba9ff2a22212f4554d0bb57a0635a8287caf70f98117cee14ba"],
+  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/wasm/openjpeg_nowasm_fallback.js", "wasm/openjpeg_nowasm_fallback.js", "0f998419819da4491d8302222aa9e2ff2494685641aa2a6c21c3760c29f3e319"],
+  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/wasm/qcms_bg.wasm", "wasm/qcms_bg.wasm", "663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e"],
   ["https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js", "epub.min.js", "06eae15745107b4aa508c95538275251f69bfb9f1175621fc458d9f42ed082d4"],
   ["https://cdn.jsdelivr.net/npm/marked@18.0.10/lib/marked.umd.js", "marked.min.js", "eaccee2fb9fb3b2c09e873a5504da82507850d9e677bd720122ac49e2a03982a"],
   ["https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.min.js", "purify.min.js", "c2f26ea4fc0d88141c9aa430eb515ac86fce59418ceebd85fa475b87a8d6c3e6"],
@@ -51,9 +56,11 @@ for (const [url, target, expected] of [
   const bytes = await downloadWithRetry(url);
   const actual = createHash("sha256").update(bytes).digest("hex");
   if (actual !== expected) throw new Error(`${url}: SHA-256 ${actual} does not match ${expected}`);
+  mkdirSync(dirname(join(output, target)), { recursive: true });
   writeFileSync(join(output, target), bytes);
   const dot = target.lastIndexOf(".");
   const versioned = `${target.slice(0, dot)}.${actual.slice(0, 12)}${target.slice(dot)}`;
+  mkdirSync(dirname(join(output, versioned)), { recursive: true });
   writeFileSync(join(output, versioned), bytes);
 }
 }
