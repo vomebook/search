@@ -209,7 +209,8 @@ function warmReaderIntent(rawUrl) {
     warmedReaderAssets.add(href);
     var link = document.createElement("link"); link.rel = "prefetch"; link.href = href; document.head.appendChild(link);
   });
-  if (sourceUrl && warmedReaderSources.size < 8 && !warmedReaderSources.has(sourceUrl)) {
+  var imageSource = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].indexOf(extension) >= 0;
+  if (sourceUrl && !imageSource && warmedReaderSources.size < 8 && !warmedReaderSources.has(sourceUrl)) {
     warmedReaderSources.add(sourceUrl);
     fetch(API_BASE + "/api/reader-content?url=" + encodeURIComponent(sourceUrl), {
       method: "HEAD", cache: "no-store", keepalive: true, mode: "cors"
