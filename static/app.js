@@ -190,13 +190,17 @@ var warmedReaderAssets = new Set();
 function warmReaderIntent(rawUrl) {
   if (!rawUrl) return;
   var extension = "";
-  try { extension = (new URL(rawUrl, location.origin).searchParams.get("ext") || "").toLowerCase(); } catch (_) { return; }
-  var assets = extension === "pdf"
+  try {
+    var readerUrl = new URL(rawUrl, location.origin);
+    extension = (readerUrl.searchParams.get("ext") || "").toLowerCase();
+  } catch (_) { return; }
+  var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader.js"];
+  var engineAssets = extension === "pdf"
     ? ["/search/static/vendor/pdf.min.e0be3863c23c.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.0613f41490dd.mjs"]
-    : extension === "epub" ? ["/search/static/vendor/epub.min.06eae1574510.js"]
+    : extension === "epub" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/epub.min.06eae1574510.js"]
     : extension === "docx" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/docx-preview.min.3573b8d99344.js"]
     : ["md", "markdown"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.eaccee2fb9fb.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
-  assets.forEach(function(href) {
+  shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
     var link = document.createElement("link"); link.rel = "prefetch"; link.href = href; document.head.appendChild(link);
