@@ -189,12 +189,14 @@ function navigateToReader(rawUrl, returnUrl) {
 }
 
 var warmedReaderAssets = new Set();
+var warmedReaderSources = new Set();
 function warmReaderIntent(rawUrl) {
   if (!rawUrl) return;
-  var extension = "";
+  var extension = "", sourceUrl = "";
   try {
     var readerUrl = new URL(rawUrl, location.origin);
     extension = (readerUrl.searchParams.get("ext") || "").toLowerCase();
+    sourceUrl = readerUrl.searchParams.get("url") || "";
   } catch (_) { return; }
   var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader.js"];
   var engineAssets = extension === "pdf"
@@ -207,6 +209,12 @@ function warmReaderIntent(rawUrl) {
     warmedReaderAssets.add(href);
     var link = document.createElement("link"); link.rel = "prefetch"; link.href = href; document.head.appendChild(link);
   });
+  if (sourceUrl && warmedReaderSources.size < 8 && !warmedReaderSources.has(sourceUrl)) {
+    warmedReaderSources.add(sourceUrl);
+    fetch(API_BASE + "/api/reader-content?url=" + encodeURIComponent(sourceUrl), {
+      method: "HEAD", cache: "no-store", keepalive: true, mode: "cors"
+    }).catch(function() {});
+  }
   try { fetch(API_BASE + "/api/ping", { cache: "no-store", mode: "cors" }).catch(function() {}); } catch (_) {}
 }
 
