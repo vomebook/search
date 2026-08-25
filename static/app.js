@@ -122,7 +122,11 @@ function loadReaderAssets() {
     readerAssets = data.f;
     convertedReaderRecords = null;
     return readerAssets;
-  }).catch(function() { return {}; }).finally(function() { readerAssetsPending = null; });
+  }).catch(function() {
+    readerAssets = {};
+    convertedReaderRecords = [];
+    return readerAssets;
+  }).finally(function() { readerAssetsPending = null; });
   return readerAssetsPending;
 }
 
@@ -2566,8 +2570,6 @@ async function renderBrowser(path, routeId) {
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
   var currentRepo = STATE.repoFull;
-  await loadReaderAssets();
-  if (routeId && routeId !== routeRenderId) return;
   const backBtn = document.createElement("div");
   backBtn.className = "back-to-global";
   backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
@@ -4114,6 +4116,7 @@ function init() {
   loadReaderAssets().then(function() {
     clearResultTemplateCache();
     if (STATE.results.length > 0) renderResults();
+    if (STATE.mode === "repo") renderBrowser(STATE.browserPath || "", ++routeRenderId);
   });
   fetchHitokoto();
   setInterval(fetchHitokoto, 30000);
