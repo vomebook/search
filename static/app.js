@@ -3295,9 +3295,10 @@ async function randomTxt() {
   showToast("正在随机打开文章...");
   if (STATE.dataLoaded) {
     try {
-      await loadReaderAssets();
-      var converted = getConvertedReaderRecords(STATE.repoFull || "");
       var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
+      if (!originalCount && !readerAssets) await loadReaderAssets();
+      else loadReaderAssets();
+      var converted = getConvertedReaderRecords(STATE.repoFull || "");
       var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
       var localRec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
@@ -3319,9 +3320,10 @@ async function randomTxt() {
   }).catch(function() {
     async function fallback() {
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
-      await loadReaderAssets();
-      var converted = getConvertedReaderRecords(STATE.repoFull || "");
       var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
+      if (!originalCount && !readerAssets) await loadReaderAssets();
+      else loadReaderAssets();
+      var converted = getConvertedReaderRecords(STATE.repoFull || "");
       var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
       var rec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
