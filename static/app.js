@@ -178,7 +178,9 @@ function navigateToReader(rawUrl, returnUrl) {
   if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return false;
   url.searchParams.set("return", returnUrl);
   try {
-    var token = crypto.randomUUID();
+    var token = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint32Array(4)), function(value) { return value.toString(16).padStart(8, "0"); }).join("");
     sessionStorage.setItem("reader-return:" + token, new URL(returnUrl, location.origin).href);
     url.searchParams.set("nav", token);
   } catch (_) {}
