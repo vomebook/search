@@ -2086,14 +2086,16 @@ function buildResultHTML(rec, idx) {
     '<input type="checkbox" class="result-checkbox" data-index="' + idx + '">' +
     '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
     '<div class="result-info">' +
-      '<div class="result-title">' + titleHTML +
-        (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
+      '<div class="result-summary">' +
+        '<div class="result-title">' + titleHTML +
+          (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
+        '</div>' +
+        '<div class="result-meta">' +
+          (STATE.mode === "global" ? '<span class="result-repo-tag" data-repo="' + repoShort + '">' + repoShort + '</span>' : '') +
+          (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
+        '</div>' +
       '</div>' +
       '<div class="result-path"><span class="path-folder" data-folder="" data-repo="' + repoShort + '">' + repoShort + '</span>' + breadcrumb + '</div>' +
-      '<div class="result-meta">' +
-        (STATE.mode === "global" ? '<span class="result-repo-tag" data-repo="' + repoShort + '">' + repoShort + '</span>' : '') +
-        (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
-      '</div>' +
     '</div>' +
     '<div class="result-actions">' +
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(recordLink)) + '">复制链接</button>' +
