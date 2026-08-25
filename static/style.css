@@ -930,17 +930,18 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 body:not(.mobile) .result-item {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
   column-gap: 10px;
   row-gap: 3px;
 }
 
-body:not(.mobile) .result-checkbox { grid-column: 1; grid-row: 1 / 3; align-self: start; margin-top: 4px; }
-body:not(.mobile) .result-file-icon { grid-column: 2; grid-row: 1 / 3; }
+body:not(.mobile) .result-checkbox { grid-column: 1; grid-row: 1 / 4; align-self: start; margin-top: 4px; }
+body:not(.mobile) .result-file-icon { grid-column: 2; grid-row: 1 / 4; }
 body:not(.mobile) .result-info { display: contents; }
-body:not(.mobile) .result-summary { grid-column: 3; grid-row: 1; min-width: 0; }
+body:not(.mobile) .result-title { grid-column: 3; grid-row: 1; min-width: 0; }
 body:not(.mobile) .result-actions { grid-column: 4; grid-row: 1; justify-content: flex-end; }
 body:not(.mobile) .result-path { grid-column: 3 / 5; grid-row: 2; margin-top: 0; min-width: 0; }
+body:not(.mobile) .result-meta { grid-column: 3 / 5; grid-row: 3; margin-top: 0; min-width: 0; }
 
 .result-action-btn {
   font-size: 11px;
