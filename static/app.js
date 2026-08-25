@@ -164,7 +164,7 @@ function getRecordLink(rec) {
 function getReaderLink(rec, returnUrl) {
   returnUrl = returnUrl || location.href;
   const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl });
-  if (rec.HasTxt) {
+  if (rec.HasTxt && String(rec.Extension || "").toLowerCase() !== "txt") {
     const relPath = buildRecordRelativePath(rec);
     const stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
     readerRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt";
@@ -2535,7 +2535,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         }
         var assetPath = ppath ? ppath + "/" + getBrowserFileName(ff) : getBrowserFileName(ff);
         var browserRecord = { File: ff.name, Extension: ff.ext, Link: fileLink, ReturnUrl: location.href };
-        if (ff.hasTxt) { var relPath = (ppath ? ppath + "/" : "") + ff.name; var stem = ff.ext ? relPath.replace(new RegExp("\\." + ff.ext + "$", "i"), "") : relPath; browserRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt"; }
+        if (ff.hasTxt && String(ff.ext || "").toLowerCase() !== "txt") { var relPath = (ppath ? ppath + "/" : "") + ff.name; var stem = ff.ext ? relPath.replace(new RegExp("\\." + ff.ext + "$", "i"), "") : relPath; browserRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt"; }
         browserRecord = applyReaderAsset(browserRecord, currentRepo, assetPath, fileLink);
         var readerLink = isReadableRecord(browserRecord) ? VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html") : "";
         if (readerLink) {
