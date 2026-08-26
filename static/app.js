@@ -1750,6 +1750,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (ok) {
       STATE.extensionList = extensionList;
       updateRandomTxtVisibility();
+      if (STATE.mode === "repo") renderExtensionFilter(routeRenderId);
       if (STATE._initialActive) {
         STATE._initialActive = false;
       } else if (triggerSearchAfterLoad) {
