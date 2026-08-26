@@ -1449,6 +1449,10 @@ function syncStateToURL() {
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
+  if (STATE.mode !== "global") {
+    STATE.filterFolderSelfs.forEach(function(folder) { sp.append("folder_self", folder); });
+    STATE.filterFolderSubtrees.forEach(function(folder) { sp.append("folder_subtree", folder); });
+  }
   if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
   if (STATE.rightSidebarOpen) sp.set("filters", "1");
   if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
