@@ -3238,7 +3238,7 @@ async function getRandomLocal(txtOnly) {
 }
 
 async function randomBook() {
-  showToast("正在随机下载...");
+  showToast("正在随机下载书籍...");
   if (STATE.dataLoaded) {
     try {
       var localRec = await getRandomLocal(false);
@@ -3246,7 +3246,7 @@ async function randomBook() {
       var localFilename = (localRec.File || "file") + (localRec.Extension ? "." + localRec.Extension : "");
       await downloadFile(localFilename, getRecordLink(localRec), { skipCheck: true });
     } catch (e) {
-      showToast("暂无可用记录");
+      showToast("暂无可下载书籍");
     }
     return;
   }
@@ -3262,7 +3262,7 @@ async function randomBook() {
         var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
         downloadFile(filename, getRecordLink(rec), { skipCheck: true });
       } else {
-        showToast("暂无可用记录");
+        showToast("暂无可下载书籍");
       }
     })
     .catch(function() {
@@ -3272,11 +3272,11 @@ async function randomBook() {
           var filename = (rec.File || "file") + (rec.Extension ? "." + rec.Extension : "");
           downloadFile(filename, getRecordLink(rec), { skipCheck: true });
         } else {
-          showToast("暂无可用记录");
+          showToast("暂无可下载书籍");
         }
       }
-      if (STATE.dataLoaded) fallback().catch(function() { showToast("暂无可用记录"); });
-      else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() { showToast("暂无可用记录"); });
+      if (STATE.dataLoaded) fallback().catch(function() { showToast("暂无可下载书籍"); });
+      else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() { showToast("暂无可下载书籍"); });
     });
 }
 
@@ -3294,7 +3294,7 @@ function openReaderRecord(rec, returnUrl) {
 async function randomTxt() {
   var requestId = ++randomReaderRequestId;
   var returnUrl = location.href;
-  showToast("正在随机打开文章...");
+  showToast("正在随机打开书籍...");
   if (STATE.dataLoaded) {
     try {
       var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
@@ -3306,7 +3306,7 @@ async function randomTxt() {
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       if (!openReaderRecord(localRec, returnUrl)) throw new Error("NO_READER");
     } catch (e) {
-      showToast("暂无可读文章");
+      showToast("暂无可读书籍");
     }
     return;
   }
@@ -3330,14 +3330,14 @@ async function randomTxt() {
       var rec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       if (!openReaderRecord(rec, returnUrl)) {
-        showToast("暂无可读文章");
+        showToast("暂无可读书籍");
       }
     }
     if (STATE.dataLoaded) fallback().catch(function() {
-      showToast("暂无可读文章");
+      showToast("暂无可读书籍");
     });
     else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() {
-      showToast("暂无可读文章");
+      showToast("暂无可读书籍");
     });
   });
 }
@@ -4021,7 +4021,7 @@ function init() {
   });
   DOM.randomBookBtn.addEventListener("click", randomBook);
   if (DOM.randomTxtBtn) DOM.randomTxtBtn.addEventListener("click", randomTxt);
-  DOM.emptyRandomBtn.addEventListener("click", randomBook);
+  DOM.emptyRandomBtn.addEventListener("click", randomTxt);
   var sizeTimer_local;
   var sizeInputToBytes = function(input, unitSelect) {
     var val = parseFloat(input.value);
