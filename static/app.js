@@ -852,6 +852,8 @@ function scheduleBackgroundLocalDataLoad() {
 
 let repoApiCache = null;
 let repoApiPending = null;
+const extensionApiCache = new Map();
+const extensionApiPending = new Map();
 
 async function fetchRepos() {
   if (repoApiCache) return repoApiCache;
@@ -876,17 +878,18 @@ async function fetchRepos() {
 }
 
 async function fetchExtensions(repo) {
+  var key = repo || "__global__";
+  if (extensionApiCache.has(key)) return extensionApiCache.get(key);
+  if (extensionApiPending.has(key)) return extensionApiPending.get(key);
   if (!apiAvailable) return null;
-  try {
-    var url = repo
-      ? API_BASE + "/api/extensions?repo=" + encodeURIComponent(repo)
-      : API_BASE + "/api/extensions";
-    var resp = await fetchWithTimeout(url, 5000);
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    var data = await resp.json();
-    noteApiSuccess();
-    return data;
-  } catch (e) { noteApiFailure(); return null; }
+  var url = repo ? API_BASE + "/api/extensions?repo=" + encodeURIComponent(repo) : API_BASE + "/api/extensions";
+  var pending = fetchWithTimeout(url, 5000)
+    .then(function(resp) { if (!resp.ok) throw new Error("HTTP " + resp.status); return resp.json(); })
+    .then(function(data) { if (!Array.isArray(data)) throw new Error("Invalid extensions response"); noteApiSuccess(); extensionApiCache.set(key, data); return data; })
+    .catch(function() { noteApiFailure(); return null; })
+    .finally(function() { extensionApiPending.delete(key); });
+  extensionApiPending.set(key, pending);
+  return pending;
 }
 
 async function fetchFolderTree(repo, cacheKey) {
@@ -2535,15 +2538,17 @@ async function renderRepoList(routeId) {
   var repos = null;
   if (repoList && repoList.length > 0) {
     repos = repoList;
-  } else if (apiAvailable) {
+  } else {
     var initial = await loadSidebarInitial(null);
     if (initial && Array.isArray(initial.repos) && initial.repos.length) {
       if (routeId && routeId !== routeRenderId) return;
       renderRepoListItems(initial.repos);
       repos = initial.repos;
     }
-    var freshRepos = await fetchRepos();
-    if (freshRepos && Array.isArray(freshRepos) && freshRepos.length) repos = freshRepos;
+    if (apiAvailable) {
+      var freshRepos = await fetchRepos();
+      if (freshRepos && Array.isArray(freshRepos) && freshRepos.length) repos = freshRepos;
+    }
   }
   if (routeId && routeId !== routeRenderId) return;
   if (!repos || !Array.isArray(repos) || repos.length === 0) {
@@ -2775,23 +2780,35 @@ async function renderRepoFilter(routeId) {
   });
 }
 
+let extensionFilterRenderId = 0;
+
 async function renderExtensionFilter(routeId) {
+  var renderId = ++extensionFilterRenderId;
+  var renderMode = STATE.mode;
+  var renderRepo = STATE.repo;
+  var renderRepoFull = STATE.repoFull;
   var extData = null;
   if (extensionList && extensionList.length > 0) {
-    var currentCounts = getCurrentExtensionCounts();
-    extData = [];
+    var currentCounts = renderMode === "repo" && renderRepoFull
+      ? Object.fromEntries((repoExtensionCounts[renderRepoFull] || []).map(function(item) { return [item.name, item.count || 0]; }))
+      : extensionCounts;
     var currentExtNames = Object.keys(currentCounts).sort();
-    if (!currentExtNames.length && STATE.mode === "repo") currentExtNames = extensionList.slice().sort();
-    for (var li = 0; li < currentExtNames.length; li++) {
-      var lext = currentExtNames[li];
-      extData.push({ name: lext, count: currentCounts[lext] || 0 });
+    if (currentExtNames.length) {
+      extData = [];
+      for (var li = 0; li < currentExtNames.length; li++) {
+        var lext = currentExtNames[li];
+        extData.push({ name: lext, count: currentCounts[lext] || 0 });
+      }
     }
-  } else if (apiAvailable) {
+  }
+  if (extData === null && apiAvailable) {
     try {
-      extData = await fetchExtensions(STATE.repo);
+      extData = await fetchExtensions(renderRepo);
     } catch (e) {}
   }
+  if (renderId !== extensionFilterRenderId) return;
   if (routeId && routeId !== routeRenderId) return;
+  if (STATE.mode !== renderMode || STATE.repo !== renderRepo || STATE.repoFull !== renderRepoFull) return;
   STATE.extensionList = extData && Array.isArray(extData)
     ? extData
       .filter(function(item) { return item && typeof item.name === "string"; })
@@ -3801,7 +3818,7 @@ function clearAllFilters() {
   STATE.results = [];
   DOM.filterMinSize.value = "";
   DOM.filterMaxSize.value = "";
-  renderFilters();
+  renderFilters(routeRenderId);
   doSearch();
   showToast("已清空所有筛选条件");
   syncStateToURL();
@@ -3864,7 +3881,7 @@ function setupResultDelegation() {
         saveStoredFolderFilters(STATE.repo);
         STATE.page = 1;
         STATE.results = [];
-        renderFilters();
+        renderFilters(routeRenderId);
         doSearch();
       }
       return;
@@ -4132,7 +4149,7 @@ function init() {
     STATE.filterExtensions = STATE.extensionList.slice();
     STATE.page = 1;
     saveStoredExtensionFilters();
-    renderExtensionFilter();
+    renderExtensionFilter(routeRenderId);
     doSearch();
   });
   DOM.extDeselectAll.addEventListener("click", function() {
@@ -4141,7 +4158,7 @@ function init() {
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
     STATE.page = 1;
     saveStoredExtensionFilters();
-    renderExtensionFilter();
+    renderExtensionFilter(routeRenderId);
     doSearch();
   });
   DOM.folderSelectAll.addEventListener("click", function() {
