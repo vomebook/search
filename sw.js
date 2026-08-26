@@ -19,6 +19,12 @@ const PRECACHE_URLS = [
   "/search/icons/icon-192.png",
   "/search/icons/icon-512.png"
 ];
+const READER_RUNTIME_PATHS = new Set([
+  "/search/static/reader-contract.js",
+  "/search/static/reader-store.js",
+  "/search/static/reader.css",
+  "/search/static/reader.js"
+]);
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
@@ -57,15 +63,15 @@ self.addEventListener("fetch", (event) => {
   if (url.hostname !== self.location.hostname) {
     return;
   }
-  if (event.request.mode === "navigate" && url.pathname === "/search/static/reader.html") {
+  if ((event.request.mode === "navigate" && url.pathname === "/search/static/reader.html") || READER_RUNTIME_PATHS.has(url.pathname)) {
+    const cacheKey = event.request.mode === "navigate" ? "/search/static/reader.html" : event.request;
     event.respondWith(
-      caches.open(CACHE_NAME).then((cache) => cache.match("/search/static/reader.html").then((cached) => {
-        const fetchPromise = fetch(event.request).then((response) => {
-          if (response.ok) cache.put("/search/static/reader.html", response.clone());
-          return response;
-        }).catch(() => cached);
-        return cached || fetchPromise;
-      }))
+      caches.open(CACHE_NAME).then((cache) => cache.match(cacheKey).then((cached) =>
+        fetch(event.request).then((response) => {
+          if (response.ok) cache.put(cacheKey, response.clone());
+          return response.ok || !cached ? response : cached;
+        }).catch(() => cached)
+      ))
     );
     return;
   }
