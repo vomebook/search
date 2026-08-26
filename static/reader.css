@@ -40,7 +40,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-markdown img { max-width: 100%; } .reader-markdown a { color: #72a7df; }
 .reader-error { margin: 20vh auto; max-width: 560px; color: #d7dadd; text-align: center; line-height: 1.6; }
 .epub-frame { width: 100%; height: calc(100vh - 96px); background: white; }
-.html-frame { display: block; width: 100%; height: calc(100vh - 96px); border: 0; background: white; }
+.html-frame { display: block; width: 100%; height: calc(100vh - 96px); border: 0; background: white; color-scheme: only light; }
 .docx-body { overflow-x: auto; color: #111; }
 .docx-body .reader-docx-wrapper { background: transparent; padding: 0; zoom: var(--reader-zoom); }
 .docx-body .reader-docx-wrapper > section.reader-docx { margin: 0 auto 18px; box-shadow: 0 2px 14px #0008; }
