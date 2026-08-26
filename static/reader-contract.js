@@ -19,6 +19,10 @@
     if (record.DownloadLink || record.downloadLink) params.set("download", record.DownloadLink || record.downloadLink);
     if (record.OcrUrl || record.ocrUrl) params.set("ocr", record.OcrUrl || record.ocrUrl);
     if (record.ReturnUrl || record.returnUrl) params.set("return", record.ReturnUrl || record.returnUrl);
+    const repo = String(record.Repo || record.repo || "").split("/").pop();
+    const folder = Array.isArray(record.Folder || record.folder) ? (record.Folder || record.folder).join("/") : "";
+    if (repo) params.set("path", repo + (folder ? "/" + folder : ""));
+    if (record.FolderUrl || record.folderUrl) params.set("folder_url", record.FolderUrl || record.folderUrl);
     return (basePath || "/search/static/reader.html") + "?" + params.toString();
   }
   root.VoiceOfMLReader = Object.freeze({ ReaderMode, articleExtensions, capability, clampNumber, readerUrl });

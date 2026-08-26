@@ -4,7 +4,8 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-toolbar { min-height: 44px; flex: none; display: flex; align-items: center; gap: 7px; padding: 3px 10px; background: #1b1e21; border-bottom: 1px solid #34383d; }
 .reader-heading { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .reader-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 18px; }
-.reader-heading span { color: #9ba3aa; font-size: 12px; line-height: 16px; }
+.reader-heading span, .reader-path { color: #9ba3aa; font-size: 12px; line-height: 16px; }
+.reader-path { min-width: 0; max-width: 100%; padding: 0; border: 0; background: transparent; font-family: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .reader-actions { display: flex; align-items: center; gap: 4px; }
 .control-group { display: inline-flex; align-items: center; gap: 2px; }
 .control-group[hidden] { display: none; }
