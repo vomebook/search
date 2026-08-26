@@ -9,6 +9,7 @@ const PURIFY_URL = "/search/static/vendor/purify.min.c2f26ea4fc0d.js";
 const JSZIP_URL = "/search/static/vendor/jszip.min.acc7e41455a8.js";
 const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.3573b8d99344.js";
 const READER_PROXY_TIMEOUT_MS = 12000;
+const PDF_PROXY_TIMEOUT_MS = 60000;
 if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = function(key, callback) { if (this.has(key)) return this.get(key); const value = callback(key); this.set(key, value); return value; }; }
 if (!Math.sumPrecise) { Math.sumPrecise = function(values) { let sum = 0, correction = 0; for (const value of values) { const next = sum + value; correction += Math.abs(sum) >= Math.abs(value) ? (sum - next) + value : (value - next) + sum; sum = next; } return sum + correction; }; }
 const params = new URLSearchParams(location.search), sourceUrl = params.get("url") || "", contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`, downloadUrl = params.get("download") || sourceUrl, extension = (params.get("ext") || "").toLowerCase();
@@ -46,7 +47,7 @@ function validOcr(raw) { try { const url = new URL(raw); return url.protocol ===
 function loadScript(url) { return new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = url; script.onload = resolve; script.onerror = reject; document.head.appendChild(script); }); }
 function fail(message) { loadingStatus.hidden = true; loadingIndicator.remove(); content.innerHTML = `<div class="reader-error">${message}</div>`; status.textContent = "无法打开"; }
 function fetchReaderResponse() { const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), READER_PROXY_TIMEOUT_MS); return fetch(contentUrl, { signal: controller.signal }).then((response) => { clearTimeout(timeout); return response.ok ? response : fetch(sourceUrl); }, () => { clearTimeout(timeout); return fetch(sourceUrl); }); }
-function loadPdfWithTimeout(pdfjs, options) { const task = pdfjs.getDocument(options(contentUrl)); return new Promise((resolve, reject) => { const timeout = setTimeout(() => { task.destroy().catch(() => {}); reject(new Error("reader proxy timeout")); }, READER_PROXY_TIMEOUT_MS); task.promise.then((document) => { clearTimeout(timeout); resolve(document); }, (error) => { clearTimeout(timeout); reject(error); }); }).catch(() => pdfjs.getDocument(options(sourceUrl)).promise); }
+function loadPdfWithTimeout(pdfjs, options) { const task = pdfjs.getDocument(options(contentUrl)); return new Promise((resolve, reject) => { const timeout = setTimeout(() => { task.destroy().catch(() => {}); reject(new Error("reader proxy timeout")); }, PDF_PROXY_TIMEOUT_MS); task.promise.then((document) => { clearTimeout(timeout); resolve(document); }, (error) => { clearTimeout(timeout); reject(error); }); }).catch(() => pdfjs.getDocument(options(sourceUrl)).promise); }
 async function renderPdf(prepared) {
   const pdf = await prepared; pdfDocument = pdf; pageCount = pdf.numPages; pageInput.max = String(pageCount); document.querySelector("#page-total").textContent = `/ ${pageCount}`; status.textContent = `${pdf.numPages} 页`;
   const firstPage = await pdf.getPage(1), firstViewport = firstPage.getViewport({ scale: 1 });
