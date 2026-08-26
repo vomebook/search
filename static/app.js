@@ -200,6 +200,43 @@ function getReaderLink(rec, returnUrl) {
   return VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
 }
 
+var readerOverlay = null;
+function closeReaderOverlay() {
+  if (!readerOverlay) return false;
+  readerOverlay.remove();
+  readerOverlay = null;
+  document.body.classList.remove("reader-overlay-open");
+  return true;
+}
+
+function openReaderOverlay(url) {
+  var frame = document.createElement("iframe");
+  frame.className = "reader-overlay";
+  frame.title = "在线阅读";
+  frame.src = url.href;
+  readerOverlay = frame;
+  document.body.classList.add("reader-overlay-open");
+  document.body.appendChild(frame);
+  history.pushState(Object.assign({}, history.state || {}, { voiceReaderOverlay: true }), "", location.href);
+}
+
+function handleReaderMessage(event) {
+  if (!readerOverlay || event.origin !== location.origin || event.source !== readerOverlay.contentWindow) return;
+  var message = event.data || {};
+  if (message.type === "voice-reader-close") {
+    history.back();
+    return;
+  }
+  if (message.type !== "voice-reader-navigate") return;
+  try {
+    var target = new URL(message.url, location.origin);
+    if (target.origin !== location.origin || target.pathname !== "/search/") return;
+    closeReaderOverlay();
+    history.replaceState(null, "", target.href);
+    ROUTER.apply();
+  } catch (_) {}
+}
+
 function navigateToReader(rawUrl, returnUrl) {
   returnUrl = returnUrl || location.href;
   var url = new URL(rawUrl, location.origin);
@@ -212,7 +249,7 @@ function navigateToReader(rawUrl, returnUrl) {
     sessionStorage.setItem("reader-return:" + token, new URL(returnUrl, location.origin).href);
     url.searchParams.set("nav", token);
   } catch (_) {}
-  location.assign(url.href);
+  openReaderOverlay(url);
   return true;
 }
 
@@ -4193,6 +4230,8 @@ function init() {
   setupQuickScroll();
   setupKeyboard();
   setupResultDelegation();
+  window.addEventListener("message", handleReaderMessage);
+  window.addEventListener("popstate", function() { closeReaderOverlay(); });
   window.addEventListener("hashchange", function() {
     ROUTER.apply();
   });
