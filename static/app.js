@@ -2664,6 +2664,7 @@ async function renderBrowser(path, routeId) {
 }
 
 async function renderFilters(routeId) {
+  var extensionPromise = renderExtensionFilter(routeId);
   if (STATE.mode === "global") {
     DOM.filterRepoSection.style.display = "";
     await renderRepoFilter(routeId);
@@ -2676,6 +2677,16 @@ async function renderFilters(routeId) {
     DOM.filterFolderSection.style.display = "";
     DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">加载中...</div>';
     var folderTree = folderTreeCache.get(folderRepoFull) || null;
+    if (!folderTree || !folderTree.length) {
+      try {
+        var initialSidebar = await loadSidebarInitial(folderRepoFull);
+        if (initialSidebar && Array.isArray(initialSidebar.folders)) {
+          folderTree = initialSidebar.folders.map(function(folder) {
+            return { name: folder.name, path: folder.path || folder.name, count: folder.count || 0, children: [] };
+          });
+        }
+      } catch (e) {}
+    }
     if (!folderTree || !folderTree.length) {
       if (apiAvailable) {
         try {
@@ -2704,7 +2715,7 @@ async function renderFilters(routeId) {
   } else {
     DOM.filterFolderSection.style.display = "none";
   }
-  await renderExtensionFilter(routeId);
+  await extensionPromise;
 }
 
 async function renderRepoFilter(routeId) {
