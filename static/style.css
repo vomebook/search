@@ -1147,6 +1147,13 @@ body.mobile .mobile-selected-count {
 .filter-actions {
   display: flex;
   gap: 4px;
+  margin-left: auto;
+}
+
+.filter-title-leading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .filter-checkbox-list {

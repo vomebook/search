@@ -200,12 +200,14 @@ if (!document.hidden && navigator.onLine) {
         </label>
       </div>
       <div id="filter-repo-section" class="filter-section">
-        <div class="filter-section-title">仓库过滤</div>
+        <div class="filter-section-title">
+          <span class="filter-title-leading"><span>仓库过滤</span><button id="repo-filter-cancel" class="text-btn-sm" hidden>取消</button></span>
+        </div>
         <div id="filter-repo-list" class="filter-checkbox-list"></div>
       </div>
       <div id="filter-folder-section" class="filter-section">
         <div class="filter-section-title">
-          <span>路径过滤</span>
+          <span class="filter-title-leading"><span>路径过滤</span><button id="folder-filter-cancel" class="text-btn-sm" hidden>取消</button></span>
           <span class="filter-actions">
             <button id="folder-select-all" class="text-btn-sm">全选</button>
             <button id="folder-deselect-all" class="text-btn-sm">反选</button>
@@ -213,9 +215,9 @@ if (!document.hidden && navigator.onLine) {
         </div>
         <div id="filter-folder-tree" class="filter-folder-tree"></div>
       </div>
-      <div class="filter-section">
+      <div id="filter-ext-section" class="filter-section">
         <div class="filter-section-title">
-          <span>文件类型</span>
+          <span class="filter-title-leading"><span>文件类型</span><button id="ext-filter-cancel" class="text-btn-sm" hidden>取消</button></span>
           <span class="filter-actions">
             <button id="ext-select-all" class="text-btn-sm">全选</button>
             <button id="ext-deselect-all" class="text-btn-sm">反选</button>
