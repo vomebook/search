@@ -1168,9 +1168,12 @@ function cacheDOM() {
   DOM.toast = $("#toast");
   DOM.filterRepoSection = $("#filter-repo-section");
   DOM.filterRepoList = $("#filter-repo-list");
+  DOM.repoFilterCancel = $("#repo-filter-cancel");
   DOM.filterFolderSection = $("#filter-folder-section");
   DOM.filterFolderTree = $("#filter-folder-tree");
+  DOM.folderFilterCancel = $("#folder-filter-cancel");
   DOM.filterExtList = $("#filter-ext-list");
+  DOM.extFilterCancel = $("#ext-filter-cancel");
   DOM.filterMinSize = $("#filter-min-size");
   DOM.filterMaxSize = $("#filter-max-size");
   DOM.filterMinUnit = $("#filter-min-unit");
@@ -2479,7 +2482,14 @@ function updateStatusBar() {
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ||
             STATE.filterMinSize !== null || STATE.filterMaxSize !== null;
   DOM.clearFiltersBtn.style.display = has ? "" : "none";
+  updateFilterCancelButtons();
   if (DOM.multiToggleLabel) DOM.multiToggleLabel.style.display = STATE.total > 0 ? "" : "none";
+}
+
+function updateFilterCancelButtons() {
+  DOM.repoFilterCancel.hidden = STATE.filterRepos.length === 0;
+  DOM.folderFilterCancel.hidden = STATE.filterFolderSelfs.length === 0 && STATE.filterFolderSubtrees.length === 0;
+  DOM.extFilterCancel.hidden = STATE.filterExtensions.length === 0;
 }
 
 function setSearchVisualLoading(loading) {
@@ -2753,6 +2763,7 @@ async function renderRepoFilter(routeId) {
     STATE.filterRepos = vals;
     STATE.page = 1;
     STATE.results = [];
+    updateFilterCancelButtons();
     doSearch();
   });
 }
@@ -2814,6 +2825,7 @@ async function renderExtensionFilter(routeId) {
     STATE.filterExtensions = vals;
     STATE.page = 1;
     saveStoredExtensionFilters();
+    updateFilterCancelButtons();
     doSearch();
   });
 }
@@ -3151,6 +3163,7 @@ function persistFolderSelection(subtreeSet, selfSet) {
   STATE.filterFolders = merged;
   saveStoredFolderFilters(STATE.repo);
   STATE.page = 1;
+  updateFilterCancelButtons();
   doSearch();
 }
 
@@ -4012,6 +4025,27 @@ function init() {
   DOM.themeBtn.addEventListener("click", toggleTheme);
   DOM.mobileToggleBtn.addEventListener("click", toggleMobile);
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
+  DOM.repoFilterCancel.addEventListener("click", function() {
+    STATE.filterRepos = [];
+    STATE.page = 1;
+    STATE.results = [];
+    updateFilterCancelButtons();
+    renderRepoFilter(routeRenderId);
+    doSearch();
+  });
+  DOM.folderFilterCancel.addEventListener("click", function() {
+    persistFolderSelection(new Set(), new Set());
+    renderFilterFolderTree();
+  });
+  DOM.extFilterCancel.addEventListener("click", function() {
+    STATE.filterExtensions = [];
+    STATE.page = 1;
+    STATE.results = [];
+    saveStoredExtensionFilters();
+    updateFilterCancelButtons();
+    renderExtensionFilter(routeRenderId);
+    doSearch();
+  });
   DOM.searchFoldersToggle.addEventListener("change", function() {
     STATE.searchFolders = DOM.searchFoldersToggle.checked;
     clearResultTemplateCache();
