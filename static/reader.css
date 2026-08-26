@@ -6,6 +6,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 18px; }
 .reader-heading span, .reader-path { color: #9ba3aa; font-size: 12px; line-height: 16px; }
 .reader-path { min-width: 0; max-width: 100%; padding: 0; border: 0; background: transparent; font-family: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.reader-path:hover, .reader-path:focus-visible { color: #d5d9dc; text-decoration: underline; outline: none; }
 .reader-actions { display: flex; align-items: center; gap: 4px; }
 .control-group { display: inline-flex; align-items: center; gap: 2px; }
 .control-group[hidden] { display: none; }
@@ -36,6 +37,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-markdown img { max-width: 100%; } .reader-markdown a { color: #72a7df; }
 .reader-error { margin: 20vh auto; max-width: 560px; color: #d7dadd; text-align: center; line-height: 1.6; }
 .epub-frame { width: 100%; height: calc(100vh - 96px); background: white; }
+.html-frame { display: block; width: 100%; height: calc(100vh - 96px); border: 0; background: white; }
 .docx-body { overflow-x: auto; color: #111; }
 .docx-body .reader-docx-wrapper { background: transparent; padding: 0; zoom: var(--reader-zoom); }
 .docx-body .reader-docx-wrapper > section.reader-docx { margin: 0 auto 18px; box-shadow: 0 2px 14px #0008; }

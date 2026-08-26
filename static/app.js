@@ -132,10 +132,10 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-  if (!asset || asset.s !== 2 || ["p", "e", "d"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub|document\.docx)$/.test(asset.p || "")) return record;
+  if (!asset || asset.s !== 2 || ["p", "e", "d", "h"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub|document\.docx|document\.html)$/.test(asset.p || "")) return record;
   return Object.assign({}, record, {
     ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
-    ReaderExtension: asset.m === "p" ? "pdf" : asset.m === "e" ? "epub" : "docx",
+    ReaderExtension: asset.m === "p" ? "pdf" : asset.m === "e" ? "epub" : asset.m === "d" ? "docx" : "html",
     DownloadLink: originalLink,
   });
 }
@@ -170,6 +170,19 @@ function getReaderFolderUrl(rec) {
   if (!repo) return "";
   var folder = Array.isArray(rec.Folder) ? rec.Folder.join("/") : "";
   var sp = new URLSearchParams();
+  if (STATE.query) sp.set("q", STATE.query);
+  if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
+  if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
+  if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
+  if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
+  if (!STATE.searchFolders) sp.set("search_folders", "false");
+  if (!STATE.exact) sp.set("exact", "0");
+  if (!STATE.useLocalMode) sp.set("local", "0");
+  if (!STATE.recordHistory) sp.set("history", "0");
+  if (!STATE.useMirrorLinks) sp.set("mirror", "0");
+  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
+  if (STATE.rightSidebarOpen) sp.set("filters", "1");
+  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   if (folder) sp.append("folder_self", folder);
   var target = new URL("/search/", location.origin);
   target.hash = "#/" + repo + (sp.toString() ? "?" + sp.toString() : "");
@@ -218,7 +231,7 @@ function warmReaderIntent(rawUrl) {
     ? ["/search/static/vendor/pdf.min.e0be3863c23c.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.0613f41490dd.mjs"]
     : extension === "epub" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/epub.min.06eae1574510.js"]
     : extension === "docx" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/docx-preview.min.3573b8d99344.js"]
-    : ["md", "markdown"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.eaccee2fb9fb.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
+     : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.eaccee2fb9fb.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);

@@ -2,7 +2,7 @@
   "use strict";
   const ReaderMode = Object.freeze({ UNSUPPORTED: 0, ORIGINAL: 1, CONVERTED: 2, PENDING: 3, FAILED: 4 });
   const modes = Object.freeze({
-    pdf: "pdf", epub: "epub", docx: "docx", txt: "text", md: "markdown", markdown: "markdown",
+    pdf: "pdf", epub: "epub", docx: "docx", html: "html", htm: "html", txt: "text", md: "markdown", markdown: "markdown",
     jpg: "image", jpeg: "image", png: "image", gif: "image", bmp: "image", webp: "image",
   });
   const articleExtensions = Object.freeze(Object.keys(modes));
