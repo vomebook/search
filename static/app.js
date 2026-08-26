@@ -2679,7 +2679,7 @@ async function renderFilters(routeId) {
     var folderTree = folderTreeCache.get(folderRepoFull) || null;
     if (!folderTree || !folderTree.length) {
       try {
-        var initialSidebar = await loadSidebarInitial(folderRepoFull);
+        var initialSidebar = await loadSidebarInitial(folderRepo);
         if (initialSidebar && Array.isArray(initialSidebar.folders)) {
           folderTree = initialSidebar.folders.map(function(folder) {
             return { name: folder.name, path: folder.path || folder.name, count: folder.count || 0, children: [] };
