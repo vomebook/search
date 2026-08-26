@@ -2749,6 +2749,7 @@ async function renderExtensionFilter(routeId) {
     var currentCounts = getCurrentExtensionCounts();
     extData = [];
     var currentExtNames = Object.keys(currentCounts).sort();
+    if (!currentExtNames.length && STATE.mode === "repo") currentExtNames = extensionList.slice().sort();
     for (var li = 0; li < currentExtNames.length; li++) {
       var lext = currentExtNames[li];
       extData.push({ name: lext, count: currentCounts[lext] || 0 });
