@@ -1520,6 +1520,13 @@ body.mobile .result-actions {
 
 body.mobile .result-action-btn { height: 20px; padding: 1px 6px; font-size: 10px; }
 
+body.mobile .result-path {
+  display: block;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 768px) {
   html.mobile-boot .left-sidebar { transform: translateX(-100%); transition: none !important; }
   html.mobile-boot .right-sidebar { transform: translateX(100%); transition: none !important; }
