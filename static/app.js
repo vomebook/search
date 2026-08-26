@@ -1766,7 +1766,8 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (ok) {
       STATE.extensionList = extensionList;
       updateRandomTxtVisibility();
-      if (STATE.mode === "repo") renderExtensionFilter(routeRenderId);
+      renderExtensionFilter(routeRenderId);
+      if (STATE.mode === "global") renderRepoFilter(routeRenderId);
       if (STATE._initialActive) {
         STATE._initialActive = false;
       } else if (triggerSearchAfterLoad) {
@@ -2744,6 +2745,12 @@ async function renderFilters(routeId) {
 
 async function renderRepoFilter(routeId) {
   var repos = repoList;
+  if (!repos || repos.length === 0) {
+    try {
+      var initial = await loadSidebarInitial(null);
+      if (initial && Array.isArray(initial.repos)) repos = initial.repos;
+    } catch (e) {}
+  }
   if (apiAvailable && (!repos || repos.length === 0)) {
     try {
       repos = await fetchRepos();
