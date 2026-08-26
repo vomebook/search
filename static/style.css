@@ -1523,8 +1523,8 @@ body.mobile .result-action-btn { height: 20px; padding: 1px 6px; font-size: 10px
 body.mobile .result-path {
   display: block;
   white-space: normal;
-  word-break: keep-all;
-  overflow-wrap: anywhere;
+  word-break: break-all;
+  overflow-wrap: normal;
 }
 
 @media (max-width: 768px) {

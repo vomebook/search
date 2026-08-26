@@ -2080,8 +2080,10 @@ function buildResultHTML(rec, idx) {
   const breadcrumb = (rec.Folder || []).map((f, j) => {
     const accum = (rec.Folder || []).slice(0, j + 1).join("/");
     const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
-    return '<span class="path-sep">/</span><span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + '</span>';
+    const separator = j < (rec.Folder || []).length - 1 ? '<span class="path-sep">/</span>' : '';
+    return '<span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + separator + '</span>';
   }).join("");
+  const repoSeparator = (rec.Folder || []).length ? '<span class="path-sep">/</span>' : '';
   return (
     '<input type="checkbox" class="result-checkbox" data-index="' + idx + '">' +
     '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
@@ -2089,7 +2091,7 @@ function buildResultHTML(rec, idx) {
       '<div class="result-title">' + titleHTML +
         (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
       '</div>' +
-      '<div class="result-path"><span class="path-folder" data-folder="" data-repo="' + repoShort + '">' + repoShort + '</span>' + breadcrumb + '</div>' +
+      '<div class="result-path"><span class="path-folder" data-folder="" data-repo="' + repoShort + '">' + repoShort + repoSeparator + '</span>' + breadcrumb + '</div>' +
       '<div class="result-meta">' +
         (STATE.mode === "global" ? '<span class="result-repo-tag" data-repo="' + repoShort + '">' + repoShort + '</span>' : '') +
         (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
