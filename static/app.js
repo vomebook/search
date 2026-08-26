@@ -165,9 +165,20 @@ function getRecordLink(rec) {
   return rec.Link || buildRecordLink(rec);
 }
 
+function getReaderFolderUrl(rec) {
+  var repo = String(rec.Repo || "").split("/").pop();
+  if (!repo) return "";
+  var folder = Array.isArray(rec.Folder) ? rec.Folder.join("/") : "";
+  var sp = new URLSearchParams();
+  if (folder) sp.append("folder_self", folder);
+  var target = new URL("/search/", location.origin);
+  target.hash = "#/" + repo + (sp.toString() ? "?" + sp.toString() : "");
+  return target.href;
+}
+
 function getReaderLink(rec, returnUrl) {
   returnUrl = returnUrl || location.href;
-  const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl });
+  const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl, FolderUrl: getReaderFolderUrl(rec) });
   if (rec.HasTxt && String(rec.Extension || "").toLowerCase() !== "txt") {
     const relPath = buildRecordRelativePath(rec);
     const stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
