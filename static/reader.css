@@ -26,6 +26,9 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .loading-status { display: none; color: #aeb5ba; font-size: 13px; text-align: center; padding: 12px; }
 .loading-status[hidden] { display: none; }
 .reader-content { --reader-zoom: 1; width: min(100%, 1100px); margin: 0 auto; padding: 20px; }
+.reader-loading-indicator { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #9ba3aa; font-size: 13px; }
+.reader-loading-spinner { width: 24px; height: 24px; border: 2px solid #3b4147; border-top-color: #8ab4f8; border-radius: 50%; animation: reader-loading-spin 800ms linear infinite; }
+@keyframes reader-loading-spin { to { transform: rotate(360deg); } }
 .reader-page { position: relative; margin: 0 auto 18px; background: white; box-shadow: 0 2px 14px #0008; min-height: 160px; }
 .reader-content[data-mode="pdf"] .reader-page { width: calc(100% * var(--reader-zoom)); }
 .reader-page canvas { display: block; width: 100%; height: auto; }
