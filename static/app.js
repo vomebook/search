@@ -222,6 +222,7 @@ function openReaderOverlay(url, addHistory) {
     var shareUrl = new URL(url.href);
     shareUrl.searchParams.delete("return");
     shareUrl.searchParams.delete("nav");
+    try { sessionStorage.setItem("reader-navigation-current", JSON.stringify({ shareUrl: shareUrl.href, readerUrl: url.href })); } catch (_) {}
     history.pushState({ voiceReaderOverlay: true, readerUrl: url.href }, "", shareUrl.href);
   }
 }
