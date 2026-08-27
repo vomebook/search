@@ -210,7 +210,7 @@ function closeReaderOverlay() {
   return true;
 }
 
-function openReaderOverlay(url) {
+function openReaderOverlay(url, addHistory) {
   var frame = document.createElement("iframe");
   frame.className = "reader-overlay";
   frame.title = "在线阅读";
@@ -218,7 +218,25 @@ function openReaderOverlay(url) {
   readerOverlay = frame;
   document.body.classList.add("reader-overlay-open");
   document.body.appendChild(frame);
-  history.pushState(Object.assign({}, history.state || {}, { voiceReaderOverlay: true }), "", location.href);
+  if (addHistory !== false) {
+    var shareUrl = new URL(url.href);
+    shareUrl.searchParams.delete("return");
+    shareUrl.searchParams.delete("nav");
+    history.pushState({ voiceReaderOverlay: true, readerUrl: url.href }, "", shareUrl.href);
+  }
+}
+
+function restoreReaderOverlay(state) {
+  if (!state || !state.voiceReaderOverlay || !state.readerUrl) {
+    closeReaderOverlay();
+    return;
+  }
+  try {
+    var url = new URL(state.readerUrl, location.origin);
+    if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return;
+    closeReaderOverlay();
+    openReaderOverlay(url, false);
+  } catch (_) {}
 }
 
 function handleReaderMessage(event) {
@@ -4232,8 +4250,9 @@ function init() {
   setupKeyboard();
   setupResultDelegation();
   window.addEventListener("message", handleReaderMessage);
-  window.addEventListener("popstate", function() { closeReaderOverlay(); });
+  window.addEventListener("popstate", function(event) { restoreReaderOverlay(event.state); });
   window.addEventListener("hashchange", function() {
+    if (readerOverlay) return;
     ROUTER.apply();
   });
   window.addEventListener("resize", function() {
