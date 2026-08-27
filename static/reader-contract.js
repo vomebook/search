@@ -4,6 +4,8 @@
   const modes = Object.freeze({
     pdf: "pdf", epub: "epub", docx: "docx", html: "html", htm: "html", txt: "text", md: "markdown", markdown: "markdown",
     jpg: "image", jpeg: "image", png: "image", gif: "image", bmp: "image", webp: "image",
+    mp3: "audio", wav: "audio", m4a: "audio", flac: "audio", mpga: "audio", audio: "audio",
+    mp4: "video", mov: "video", video: "video",
   });
   const articleExtensions = Object.freeze(Object.keys(modes));
   function capability(extension) {
