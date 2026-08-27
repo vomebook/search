@@ -132,10 +132,11 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-  if (!asset || asset.s !== 2 || ["p", "e", "d", "h"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub|document\.docx|document\.html)$/.test(asset.p || "")) return record;
+  if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)$/.test(asset.p || "")) return record;
+  var readerExtensions = { p: "pdf", e: "epub", d: "docx", h: "html", a: "audio", v: "video" };
   return Object.assign({}, record, {
     ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
-    ReaderExtension: asset.m === "p" ? "pdf" : asset.m === "e" ? "epub" : asset.m === "d" ? "docx" : "html",
+    ReaderExtension: readerExtensions[asset.m],
     DownloadLink: originalLink,
   });
 }
@@ -2174,7 +2175,7 @@ function buildResultHTML(rec, idx) {
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(recordLink)) + '">复制链接</button>' +
       '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(recordLink) + '">下载</button>' +
       '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
-      (isReadableRecord(readerRecord) ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(getReaderLink(readerRecord)) + '">在线阅读</button>' : '') +
+      (isReadableRecord(readerRecord) ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(getReaderLink(readerRecord)) + '">' + (["audio", "video"].indexOf(VoiceOfMLReader.capability(readerRecord.ReaderExtension || readerRecord.Extension).mode) >= 0 ? "在线播放" : "在线阅读") + '</button>' : '') +
     '</div>'
   );
 }
