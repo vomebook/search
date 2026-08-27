@@ -1165,6 +1165,53 @@ const STATE = {
   _deferredAppendWhileDragging: false,
 };
 
+const SEARCH_SESSION_DB = "voiceofml-search-state";
+function openSearchSessionDB() {
+  return new Promise(function(resolve, reject) {
+    if (!window.indexedDB) return reject(new Error("IndexedDB unavailable"));
+    var request = indexedDB.open(SEARCH_SESSION_DB, 1);
+    request.onupgradeneeded = function() {
+      if (!request.result.objectStoreNames.contains("session")) request.result.createObjectStore("session");
+    };
+    request.onsuccess = function() { resolve(request.result); };
+    request.onerror = function() { reject(request.error); };
+  });
+}
+
+async function persistSearchSession() {
+  if (location.pathname !== "/search/" || location.hash.indexOf("#/" ) !== 0) return;
+  try {
+    var db = await openSearchSessionDB();
+    var transaction = db.transaction("session", "readwrite");
+    transaction.objectStore("session").put({ version: 1, url: location.href, updatedAt: Date.now() }, "last-search");
+    await new Promise(function(resolve, reject) {
+      transaction.oncomplete = resolve;
+      transaction.onerror = function() { reject(transaction.error); };
+      transaction.onabort = function() { reject(transaction.error); };
+    });
+    db.close();
+  } catch (_) {}
+}
+
+async function restoreSearchSession() {
+  if (location.pathname !== "/search/" || location.search || location.hash) return false;
+  try {
+    var db = await openSearchSessionDB();
+    var transaction = db.transaction("session", "readonly");
+    var request = transaction.objectStore("session").get("last-search");
+    var saved = await new Promise(function(resolve, reject) {
+      request.onsuccess = function() { resolve(request.result); };
+      request.onerror = function() { reject(request.error); };
+    });
+    db.close();
+    if (!saved || saved.version !== 1 || typeof saved.url !== "string") return false;
+    var target = new URL(saved.url);
+    if (target.origin !== location.origin || target.pathname !== "/search/" || target.hash.indexOf("#/") !== 0) return false;
+    history.replaceState(null, "", target.href);
+    return true;
+  } catch (_) { return false; }
+}
+
 const VSCROLL = {
   renderStart: 0,
   renderEnd: 0,
@@ -1485,6 +1532,7 @@ const ROUTER = {
       renderSidebarAndFiltersDeferred(routeId);
     }
     routeInitialized = true;
+    persistSearchSession();
   },
   updateUI: function() {
     if (STATE.mode === "global") {
@@ -1548,6 +1596,7 @@ function syncStateToURL() {
   if (window.location.hash !== hash) {
     history.replaceState(null, "", hash);
   }
+  persistSearchSession();
 }
 
 function renderSidebarAndFiltersDeferred(routeId) {
@@ -3952,8 +4001,9 @@ function setupResultDelegation() {
   });
 }
 
-function init() {
+async function init() {
   cacheDOM();
+  await restoreSearchSession();
   setupReaderIntentWarming();
   STATE.isDark = localStorage.getItem("theme") !== "light";
   applyTheme();
