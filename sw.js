@@ -23,7 +23,8 @@ const READER_RUNTIME_PATHS = new Set([
   "/search/static/reader-contract.js",
   "/search/static/reader-store.js",
   "/search/static/reader.css",
-  "/search/static/reader.js"
+  "/search/static/reader.js",
+  "/search/static/pdf-worker-wrapper.mjs"
 ]);
 self.addEventListener("install", (event) => {
   event.waitUntil(
