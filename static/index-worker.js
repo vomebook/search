@@ -199,7 +199,7 @@ function replaceCorpus(nextRecords) {
       if (!repoTxtRecordIndices[repo]) repoTxtRecordIndices[repo] = [];
       repoTxtRecordIndices[repo].push(i);
     }
-    if (["pdf", "epub", "txt", "md", "markdown", "jpg", "jpeg", "png", "gif", "bmp", "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga"].indexOf(extension) >= 0) {
+    if (["pdf", "epub", "html", "htm", "txt", "md", "markdown", "jpg", "jpeg", "png", "gif", "bmp", "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga"].indexOf(extension) >= 0) {
       readerRecordIndices.push(i);
       readerByRepo[repo] = (readerByRepo[repo] || 0) + 1;
       if (!repoReaderRecordIndices[repo]) repoReaderRecordIndices[repo] = [];
