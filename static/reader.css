@@ -39,9 +39,13 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-markdown { margin: 0 auto; max-width: 76ch; font-size: calc(17px * var(--reader-zoom)); line-height: 1.75; }
 .reader-markdown img { max-width: 100%; } .reader-markdown a { color: #72a7df; }
 .reader-error { margin: 20vh auto; max-width: 560px; color: #d7dadd; text-align: center; line-height: 1.6; }
-.epub-frame { width: 100%; height: calc(100vh - 96px); background: white; }
+.epub-frame { width: 100%; height: calc(100vh - 96px); background: #181b1e; }
 .html-frame { display: block; width: 100%; height: calc(100vh - 96px); border: 0; background: white; color-scheme: only light; }
-.docx-body { overflow-x: auto; color: #111; }
+.docx-body { overflow-x: auto; color: #e7e9eb; }
 .docx-body .reader-docx-wrapper { background: transparent; padding: 0; zoom: var(--reader-zoom); }
 .docx-body .reader-docx-wrapper > section.reader-docx { margin: 0 auto 18px; box-shadow: 0 2px 14px #0008; }
+.docx-body.reader-document-dark .reader-docx { background: #181b1e !important; color: #e7e9eb !important; }
+.docx-body.reader-document-dark .reader-docx :is(p, div, span, li, td, th, blockquote, pre, code, h1, h2, h3, h4, h5, h6) { color: inherit !important; border-color: #4a5056 !important; }
+.docx-body.reader-document-dark .reader-docx :is(table, pre, code, blockquote) { background-color: #202428 !important; }
+.docx-body.reader-document-dark .reader-docx a { color: #8ab4e8 !important; }
 @media (max-width: 600px) { .reader-toolbar { min-height: 36px; gap: 1px; padding: 2px 5px; } .reader-content { padding: 10px; } .reader-heading { display: none; } .reader-actions { flex: 1; justify-content: flex-end; gap: 1px; min-width: 0; } .reader-actions .control-group { gap: 0; } .reader-actions .icon-button { width: 26px; } .reader-actions .text-button { height: 30px; padding: 0 3px; } .loading-status { display: block; padding: 10px 6px 0; } .icon-button { width: 26px; height: 30px; flex: none; } .compact-input { height: 30px; padding-right: 3px; font-size: 11px; } .compact-input input { width: 24px; height: 28px; } .zoom-controls .compact-input input { width: 32px; } .history-panel { top: 36px; } }
