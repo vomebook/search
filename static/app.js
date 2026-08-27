@@ -109,10 +109,12 @@ function encodeRecordPath(path) {
 
 var readerAssets = null;
 var readerAssetsPending = null;
+var readerAssetsRetryAt = 0;
 var convertedReaderRecords = null;
 
 function loadReaderAssets() {
   if (readerAssets) return Promise.resolve(readerAssets);
+  if (Date.now() < readerAssetsRetryAt) return Promise.resolve({});
   if (readerAssetsPending) return readerAssetsPending;
   readerAssetsPending = fetchWithTimeout("/search/data/reader_assets.json.gz", 10000).then(function(response) {
     if (!response.ok || !response.body || typeof DecompressionStream === "undefined") throw new Error("READER_ASSETS_UNAVAILABLE");
@@ -120,12 +122,12 @@ function loadReaderAssets() {
   }).then(function(data) {
     if (!data || data.v !== 1 || !data.f || typeof data.f !== "object") throw new Error("READER_ASSETS_UNAVAILABLE");
     readerAssets = data.f;
+    readerAssetsRetryAt = 0;
     convertedReaderRecords = null;
     return readerAssets;
   }).catch(function() {
-    readerAssets = {};
-    convertedReaderRecords = [];
-    return readerAssets;
+    readerAssetsRetryAt = Date.now() + 5000;
+    return {};
   }).finally(function() { readerAssetsPending = null; });
   return readerAssetsPending;
 }
