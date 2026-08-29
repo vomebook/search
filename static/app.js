@@ -204,6 +204,22 @@ function getReaderLink(rec, returnUrl) {
   return VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
 }
 
+function syncReaderFolderFilter(rawUrl) {
+  try {
+    var readerUrl = new URL(rawUrl, location.origin);
+    var folderRaw = readerUrl.searchParams.get("folder_url");
+    if (!folderRaw) return readerUrl.href;
+    var folderUrl = new URL(folderRaw, location.origin);
+    var hashParts = folderUrl.hash.split("?", 2);
+    var folderParams = new URLSearchParams(hashParts[1] || "");
+    folderParams.delete("ext");
+    if (STATE.filterExtensions.length > 0) folderParams.set("ext", STATE.filterExtensions.join(","));
+    folderUrl.hash = hashParts[0] + (folderParams.toString() ? "?" + folderParams.toString() : "");
+    readerUrl.searchParams.set("folder_url", folderUrl.href);
+    return readerUrl.href;
+  } catch (_) { return rawUrl; }
+}
+
 var readerOverlay = null;
 var readerReturnFocus = null;
 var readerBackgroundState = [];
@@ -330,7 +346,7 @@ function handleReaderMessage(event) {
 
 function navigateToReader(rawUrl, returnUrl) {
   returnUrl = returnUrl || location.href;
-  var url = new URL(rawUrl, location.origin);
+  var url = new URL(syncReaderFolderFilter(rawUrl), location.origin);
   if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return false;
   url.searchParams.set("return", returnUrl);
   try {
@@ -1250,6 +1266,26 @@ const STATE = {
   _deferredAppendWhileDragging: false,
 };
 
+const SEARCH_SCROLL_STORAGE = "vomebook-search-scroll-v1";
+function searchScrollKey() { return location.pathname + location.search; }
+function saveSearchScrollPosition() {
+  if (!DOM.resultsContainer) return;
+  try {
+    var values = JSON.parse(sessionStorage.getItem(SEARCH_SCROLL_STORAGE) || "{}");
+    values[searchScrollKey()] = Math.max(0, DOM.resultsContainer.scrollTop);
+    var keys = Object.keys(values);
+    for (var i = 0; i < Math.max(0, keys.length - 40); i++) delete values[keys[i]];
+    sessionStorage.setItem(SEARCH_SCROLL_STORAGE, JSON.stringify(values));
+  } catch (_) {}
+}
+function restoreSearchScrollPosition() {
+  try {
+    var value = JSON.parse(sessionStorage.getItem(SEARCH_SCROLL_STORAGE) || "{}")[searchScrollKey()];
+    if (!Number.isFinite(value)) return;
+    requestAnimationFrame(function() { DOM.resultsContainer.scrollTop = value; DOM.resultsContainer.dispatchEvent(new Event("scroll")); });
+  } catch (_) {}
+}
+
 const SEARCH_SESSION_DB = "voiceofml-search-state";
 function openSearchSessionDB() {
   return new Promise(function(resolve, reject) {
@@ -2005,8 +2041,10 @@ function debouncedSearch() {
   if (searchComposing) return;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
+    saveSearchScrollPosition();
     STATE.query = DOM.searchInput.value.trim();
     STATE.page = 1;
+    syncStateToURL(false);
     addHistoryItem(STATE.query);
     renderDropdown();
     doSearch();
@@ -2281,6 +2319,7 @@ function renderResults(animate = false) {
   VSCROLL.renderEnd = 0;
   pendingResultEntrance = animate;
   renderVisible();
+  restoreSearchScrollPosition();
 }
 
 function animateVisibleResultRows() {
@@ -3706,6 +3745,7 @@ function updateScrollTrack() {
 
 function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("scroll", () => {
+    saveSearchScrollPosition();
     if (!VSCROLL.isDraggingThumb) ensureVirtualViewportCovered();
     if (!scrollTicking) {
       requestAnimationFrame(() => {
@@ -4142,9 +4182,11 @@ async function init() {
     if (delBtn) { removeHistoryItem(delBtn.dataset.del); return; }
     var item = e.target.closest(".history-item");
     if (item) {
+      saveSearchScrollPosition();
       DOM.searchInput.value = item.dataset.query;
       STATE.query = item.dataset.query;
       STATE.page = 1;
+      syncStateToURL(false);
       STATE.results = [];
       doSearch();
       hideDropdown();
