@@ -211,10 +211,12 @@ function syncReaderFolderFilter(rawUrl) {
     if (!folderRaw) return readerUrl.href;
     var folderUrl = new URL(folderRaw, location.origin);
     var hashParts = folderUrl.hash.split("?", 2);
-    var folderParams = new URLSearchParams(hashParts[1] || "");
+    var inHash = hashParts.length > 1;
+    var folderParams = inHash ? new URLSearchParams(hashParts[1]) : folderUrl.searchParams;
     folderParams.delete("ext");
     if (STATE.filterExtensions.length > 0) folderParams.set("ext", STATE.filterExtensions.join(","));
-    folderUrl.hash = hashParts[0] + (folderParams.toString() ? "?" + folderParams.toString() : "");
+    if (inHash) folderUrl.hash = hashParts[0] + (folderParams.toString() ? "?" + folderParams.toString() : "");
+    else folderUrl.search = folderParams.toString();
     readerUrl.searchParams.set("folder_url", folderUrl.href);
     return readerUrl.href;
   } catch (_) { return rawUrl; }
@@ -1267,7 +1269,7 @@ const STATE = {
 };
 
 const SEARCH_SCROLL_STORAGE = "vomebook-search-scroll-v1";
-function searchScrollKey() { return location.pathname + location.search; }
+function searchScrollKey() { return location.pathname + location.search + location.hash; }
 function saveSearchScrollPosition() {
   if (!DOM.resultsContainer) return;
   try {
