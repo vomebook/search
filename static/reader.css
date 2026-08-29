@@ -26,6 +26,10 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-panel-tabs button[aria-selected="true"] { color: #e7e9eb; border-bottom-color: #8ab4f8; }
 .reader-panel-view { min-height: 0; flex: 1; overflow: auto; }
 .reader-progress-tools { flex: none; padding: 10px 12px 12px; border-top: 1px solid #34383d; background: inherit; }
+.reader-progress-summary { display: grid; justify-items: center; gap: 4px; padding: 2px 0 10px; text-align: center; }
+.reader-progress-summary strong { font-size: 14px; }
+.reader-progress-summary-value { color: #8ab4f8; font-size: 20px; font-variant-numeric: tabular-nums; }
+.reader-progress-bookmark { padding: 2px 0; font-size: 12px; }
 .reader-progress-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 7px; min-width: 0; }
 .reader-progress-row input[type="range"] { min-width: 0; flex: 1; accent-color: #8ab4f8; }
 .reader-progress-percent { min-width: 42px; color: #aeb5ba; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
