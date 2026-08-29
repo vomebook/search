@@ -2,7 +2,7 @@
   "use strict";
   const ReaderMode = Object.freeze({ UNSUPPORTED: 0, ORIGINAL: 1, CONVERTED: 2, PENDING: 3, FAILED: 4 });
   const modes = Object.freeze({
-    pdf: "pdf", epub: "epub", docx: "docx", html: "html", htm: "html", txt: "text", md: "markdown", markdown: "markdown",
+    pdf: "pdf", epub: "epub", "epub-chapters": "epub-chapters", docx: "docx", html: "html", htm: "html", txt: "text", md: "markdown", markdown: "markdown",
     jpg: "image", jpeg: "image", png: "image", gif: "image", bmp: "image", webp: "image",
     mp3: "audio", wav: "audio", m4a: "audio", flac: "audio", mpga: "audio", audio: "audio",
     mp4: "video", mov: "video", video: "video",
@@ -20,6 +20,8 @@
     const params = new URLSearchParams({ url: source, title: (record.File || record.name || "") + ((record.Extension || record.extension) ? "." + (record.Extension || record.extension) : ""), ext: readerExtension || "" });
     if (record.DownloadLink || record.downloadLink) params.set("download", record.DownloadLink || record.downloadLink);
     if (record.OcrUrl || record.ocrUrl) params.set("ocr", record.OcrUrl || record.ocrUrl);
+     if (record.ReaderFallback || record.readerFallback) params.set("fallback", record.ReaderFallback || record.readerFallback);
+     if (record.ReaderChapterManifest || record.readerChapterManifest || record.ChapterManifest || record.chapterManifest) params.set("chapter_manifest", record.ReaderChapterManifest || record.readerChapterManifest || record.ChapterManifest || record.chapterManifest);
     if (record.ReturnUrl || record.returnUrl) params.set("return", record.ReturnUrl || record.returnUrl);
     const repo = String(record.Repo || record.repo || "").split("/").pop();
     const folder = Array.isArray(record.Folder || record.folder) ? (record.Folder || record.folder).join("/") : "";
