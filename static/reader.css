@@ -31,6 +31,8 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-progress-summary-value { color: #8ab4f8; font-size: 20px; font-variant-numeric: tabular-nums; }
 .reader-progress-bookmark { padding: 2px 0; font-size: 12px; }
 .reader-progress-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 7px; min-width: 0; }
+.reader-no-toc .reader-progress-row { grid-template-columns: minmax(0, 420px) auto; justify-content: center; }
+.reader-no-toc .reader-progress-percent { display: none; }
 .reader-progress-row input[type="range"] { min-width: 0; flex: 1; accent-color: #8ab4f8; }
 .reader-progress-percent { min-width: 42px; color: #aeb5ba; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
 .reader-progress-undo, .reader-chapter-prev, .reader-chapter-next { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #aeb5ba; cursor: pointer; }
