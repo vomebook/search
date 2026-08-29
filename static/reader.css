@@ -81,21 +81,12 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-theme-toggle.is-changing svg { animation: reader-theme-icon 260ms cubic-bezier(.2, .8, .2, 1); }
 @keyframes reader-theme-icon { from { opacity: 0; transform: rotate(-35deg) scale(.72); } to { opacity: 1; transform: rotate(0) scale(1); } }
 #history-close { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; font-family: Arial, sans-serif; font-size: 22px; line-height: 1; transform: translateY(-2px); }
-.history-item { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 12px; border-bottom: 1px solid #2d3237; }
-.history-item a { color: #e5e9ec; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.history-item small { color: #929aa1; }
-.history-item button { grid-row: 1 / 3; grid-column: 2; border: 0; background: transparent; color: #b5bbc0; cursor: pointer; }
 .reader-viewport { min-height: 0; flex: 1; overflow: auto; background: #121416; }
 :root.bookmark-dialog-open .reader-viewport { overflow: hidden; }
 .bookmark-ribbon { position: fixed; z-index: 12; top: 44px; left: max(10px, calc((100vw - min(100vw, 1100px)) / 2 + 2px)); width: 28px; height: 42px; padding: 0; border: 0; background: #b64b50; box-shadow: 0 2px 8px #0006; cursor: pointer; clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 76%, 0 100%); }
 .bookmark-ribbon:hover, .bookmark-ribbon:focus-visible { background: #d35b61; outline: 2px solid #8ab4f8; outline-offset: 2px; }
 .bookmark-popover { position: fixed; z-index: 22; top: 92px; left: 10px; width: min(300px, calc(100vw - 20px)); padding: 12px; border: 1px solid #464c52; border-radius: 6px; background: #25292d; box-shadow: 0 6px 20px #0009; }
 .bookmark-popover #bookmark-prompt { display: block; line-height: 1.5; }
-.bookmark-edit-fields { display: grid; gap: 7px; max-width: 100%; margin-top: 8px; }
-.bookmark-edit-fields label { display: grid; gap: 4px; min-width: 0; color: #b8bec3; font-size: 12px; }
-.bookmark-edit-fields input, .bookmark-edit-fields textarea { display: block; width: 100%; max-width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #464c52; border-radius: 4px; background: #1b1e21; color: inherit; font: inherit; resize: vertical; }
-.bookmark-edit-fields input { height: 30px; }
-.bookmark-edit-fields textarea { min-height: 58px; }
 .bookmark-edit-fields { display: grid; gap: 7px; max-width: 100%; margin-top: 8px; }
 .bookmark-edit-fields label { display: grid; gap: 4px; min-width: 0; color: #b8bec3; font-size: 12px; }
 .bookmark-edit-fields input { height: 30px; }
