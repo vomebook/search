@@ -76,6 +76,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .panel-item-edit { border: 0; background: transparent; color: #aeb5ba; cursor: pointer; }
 .toc-item { padding-left: calc(12px + var(--toc-depth, 0) * 16px); }
 .toc-item .panel-item-main { user-select: text; }
+.toc-current-mark { color: #8ab4f8; font-weight: 700; }
 .reader-panel > footer { flex: none; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-top: 1px solid #34383d; }
 .theme-toggle { min-height: 34px; padding: 0 10px; border: 1px solid #464c52; border-radius: 4px; background: #25292d; color: inherit; cursor: pointer; }
 .reader-theme-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
