@@ -25,12 +25,14 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-panel-tabs button { flex: 1; min-height: 38px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #aeb5ba; cursor: pointer; }
 .reader-panel-tabs button[aria-selected="true"] { color: #e7e9eb; border-bottom-color: #8ab4f8; }
 .reader-panel-view { min-height: 0; flex: 1; overflow: auto; }
-.reader-progress-tools { flex: none; display: grid; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid #34383d; background: inherit; }
-.reader-progress-row { display: flex; align-items: center; gap: 8px; }
+.reader-progress-tools { flex: none; padding: 10px 12px 12px; border-top: 1px solid #34383d; background: inherit; }
+.reader-progress-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 7px; min-width: 0; }
 .reader-progress-row input[type="range"] { min-width: 0; flex: 1; accent-color: #8ab4f8; }
 .reader-progress-percent { min-width: 42px; color: #aeb5ba; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
-.reader-progress-undo, .reader-chapter-prev, .reader-chapter-next { min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
-.reader-chapter-nav { display: flex; justify-content: space-between; gap: 8px; }
+.reader-progress-undo, .reader-chapter-prev, .reader-chapter-next { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #aeb5ba; cursor: pointer; }
+.reader-progress-undo:hover, .reader-chapter-prev:hover, .reader-chapter-next:hover { border-color: #464c52; background: #25292d; color: #e7e9eb; }
+.reader-progress-undo svg, .reader-chapter-prev svg, .reader-chapter-next svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.reader-progress-undo[hidden], .reader-chapter-prev[hidden], .reader-chapter-next[hidden] { display: none; }
 .full-search-input { width: 110px; min-width: 0; height: 28px; padding: 0 7px; border: 1px solid #464c52; border-radius: 4px; background: #25292d; color: inherit; font: inherit; font-size: 12px; }
 .full-search-view { display: flex; flex-direction: column; min-height: 0; }
 .full-search-bar { display: flex; gap: 6px; padding: 10px 12px 6px; }
