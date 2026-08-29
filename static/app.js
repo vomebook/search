@@ -278,6 +278,19 @@ function handleReaderMessage(event) {
   }
   var message = event.data || {};
   if (message.type === "voice-reader-close") {
+    try {
+      var readerUrl = new URL(readerOverlay.src, location.origin);
+      var returnUrl = readerUrl.searchParams.get("return");
+      var target = returnUrl && new URL(returnUrl, location.origin);
+      if ((!history.state || !history.state.voiceReaderOverlay) && target && target.origin === location.origin && target.pathname === "/search/") {
+        var returnFocus = readerReturnFocus;
+        closeReaderOverlay(false);
+        history.replaceState(null, "", target.href);
+        ROUTER.apply();
+        if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+        return;
+      }
+    } catch (_) {}
     history.back();
     return;
   }
@@ -331,6 +344,18 @@ function navigateToReader(rawUrl, returnUrl) {
   } catch (_) {}
   openReaderOverlay(url);
   return true;
+}
+
+function restoreReaderFromSession() {
+  if (readerOverlay) return;
+  try {
+    var saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+    if (!saved || saved.shareUrl !== location.href || !saved.readerUrl) return;
+    var readerUrl = new URL(saved.readerUrl, location.origin);
+    if (readerUrl.origin !== location.origin || readerUrl.pathname !== "/search/static/reader.html") return;
+    history.replaceState({ voiceReaderOverlay: true, readerUrl: readerUrl.href }, "", saved.shareUrl);
+    openReaderOverlay(readerUrl, false);
+  } catch (_) {}
 }
 
 var warmedReaderAssets = new Set();
@@ -4387,6 +4412,7 @@ async function init() {
   lastKeepaliveAt = Date.now();
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   ROUTER.apply();
+  restoreReaderFromSession();
   loadReaderAssets().then(function() {
     clearResultTemplateCache();
     if (STATE.results.length > 0) renderResults();
