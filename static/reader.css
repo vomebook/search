@@ -34,6 +34,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-progress-undo svg, .reader-chapter-prev svg, .reader-chapter-next svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .reader-progress-undo[hidden], .reader-chapter-prev[hidden], .reader-chapter-next[hidden] { display: none; }
 .full-search-input { width: 110px; min-width: 0; height: 28px; padding: 0 7px; border: 1px solid #464c52; border-radius: 4px; background: #25292d; color: inherit; font: inherit; font-size: 12px; }
+.full-search-input::-webkit-search-cancel-button { display: none; }
 .full-search-view { display: flex; flex-direction: column; min-height: 0; }
 .full-search-bar { display: flex; gap: 6px; padding: 10px 12px 6px; }
 .full-search-bar .full-search-input { width: auto; flex: 1; height: 34px; }
