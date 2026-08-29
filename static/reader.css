@@ -67,6 +67,11 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .bookmark-popover #bookmark-prompt { display: block; line-height: 1.5; }
 .bookmark-edit-fields { display: grid; gap: 7px; max-width: 100%; margin-top: 8px; }
 .bookmark-edit-fields label { display: grid; gap: 4px; min-width: 0; color: #b8bec3; font-size: 12px; }
+.bookmark-edit-fields input, .bookmark-edit-fields textarea { display: block; width: 100%; max-width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #464c52; border-radius: 4px; background: #1b1e21; color: inherit; font: inherit; resize: vertical; }
+.bookmark-edit-fields input { height: 30px; }
+.bookmark-edit-fields textarea { min-height: 58px; }
+.bookmark-edit-fields { display: grid; gap: 7px; max-width: 100%; margin-top: 8px; }
+.bookmark-edit-fields label { display: grid; gap: 4px; min-width: 0; color: #b8bec3; font-size: 12px; }
 .bookmark-edit-fields input { height: 30px; }
 .bookmark-edit-fields input, .bookmark-edit-fields textarea { display: block; width: 100%; max-width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #464c52; border-radius: 4px; background: #1b1e21; color: inherit; font: inherit; resize: vertical; }
 .bookmark-edit-fields textarea { min-height: 58px; }
