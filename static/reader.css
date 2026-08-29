@@ -39,6 +39,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-no-toc .reader-progress-summary-value { order: 1; padding: 4px 0 8px; text-align: center; }
 .reader-no-toc .reader-progress-row { order: 2; }
 .reader-no-toc .reader-progress-bookmark { order: 3; align-self: center; }
+.reader-progress-summary[hidden] { display: none !important; }
 .reader-progress-row input[type="range"] { min-width: 0; flex: 1; accent-color: #8ab4f8; }
 .reader-progress-percent { min-width: 42px; color: #aeb5ba; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
 .reader-progress-undo, .reader-chapter-prev, .reader-chapter-next { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #aeb5ba; cursor: pointer; }
