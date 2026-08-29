@@ -222,6 +222,14 @@ function syncReaderFolderFilter(rawUrl) {
   } catch (_) { return rawUrl; }
 }
 
+function normalizeReaderReturnUrl(rawUrl) {
+  try {
+    const target = new URL(rawUrl || "/search/", location.origin);
+    if (target.origin === location.origin && target.pathname === "/") return new URL("/search/", location.origin).href;
+    return target.href;
+  } catch (_) { return new URL("/search/", location.origin).href; }
+}
+
 var readerOverlay = null;
 var readerReturnFocus = null;
 var readerBackgroundState = [];
@@ -347,7 +355,7 @@ function handleReaderMessage(event) {
 }
 
 function navigateToReader(rawUrl, returnUrl) {
-  returnUrl = returnUrl || location.href;
+  returnUrl = normalizeReaderReturnUrl(returnUrl || location.href);
   var url = new URL(syncReaderFolderFilter(rawUrl), location.origin);
   if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return false;
   url.searchParams.set("return", returnUrl);
@@ -1280,10 +1288,13 @@ function saveSearchScrollPosition() {
     sessionStorage.setItem(SEARCH_SCROLL_STORAGE, JSON.stringify(values));
   } catch (_) {}
 }
-function restoreSearchScrollPosition() {
+function restoreSearchScrollPosition(resetIfMissing) {
   try {
     var value = JSON.parse(sessionStorage.getItem(SEARCH_SCROLL_STORAGE) || "{}")[searchScrollKey()];
-    if (!Number.isFinite(value)) return;
+    if (!Number.isFinite(value)) {
+      if (resetIfMissing) requestAnimationFrame(function() { DOM.resultsContainer.scrollTop = 0; });
+      return;
+    }
     requestAnimationFrame(function() { DOM.resultsContainer.scrollTop = value; DOM.resultsContainer.dispatchEvent(new Event("scroll")); });
   } catch (_) {}
 }
@@ -1483,6 +1494,7 @@ function highlightText(text, query) {
 }
 
 let routeInitialized = false;
+let routeScrollRestorePending = false;
 const ROUTER = {
   parse: function() {
     const hash = window.location.hash.replace(/^#/, "");
@@ -1507,6 +1519,7 @@ const ROUTER = {
     return { mode: mode, repo: repo, params: params };
   },
   navigate: function(mode, repo, folder) {
+    saveSearchScrollPosition();
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
@@ -1537,6 +1550,7 @@ const ROUTER = {
     STATE.repo = route.repo;
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
+      routeScrollRestorePending = true;
       STATE.page = 1;
       if (STATE.results.length === 0) STATE.total = 0;
       prepareRouteTransitionResults();
@@ -2166,7 +2180,6 @@ function doSearch(append) {
       if (append) {
         refreshVirtualAfterAppend();
       } else {
-        DOM.resultsContainer.scrollTop = 0;
         resetVirtualScrollState();
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
@@ -2259,8 +2272,7 @@ function doSearchFallbackLocal(params, append, id) {
       if (append) {
         refreshVirtualAfterAppend();
       } else {
-        DOM.resultsContainer.scrollTop = 0;
-        resetVirtualScrollState();
+      resetVirtualScrollState();
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
           DOM.resultsList.innerHTML = "";
@@ -2321,7 +2333,9 @@ function renderResults(animate = false) {
   VSCROLL.renderEnd = 0;
   pendingResultEntrance = animate;
   renderVisible();
-  restoreSearchScrollPosition();
+  var restoreRouteScroll = routeScrollRestorePending;
+  routeScrollRestorePending = false;
+  restoreSearchScrollPosition(restoreRouteScroll);
 }
 
 function animateVisibleResultRows() {
@@ -2594,7 +2608,6 @@ function prepareRouteTransitionResults() {
   if (!DOM.resultsContainer || STATE.results.length === 0) return;
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
-  DOM.resultsContainer.scrollTop = 0;
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
   VSCROLL.heights = [];
