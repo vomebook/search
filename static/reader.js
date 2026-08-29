@@ -11,6 +11,8 @@ const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.3573b8d99344.js
 function cleanTocLabel(value) { return String(value || "未命名章节").replace(/[\uFFFD\u2610-\u2612\u25a1\u0000-\u001F\u007F]/gu, "").replace(/\s{2,}/gu, " ").trim() || "未命名章节"; }
 function updateTocCurrentMark() { const rows = [...document.querySelectorAll("#toc-list .toc-item")]; if (pageCount > 1 && currentPage > 0) { let pageIndex = -1; for (const [index, row] of rows.entries()) { const match = row.textContent.match(/第\s*(\d+)\s*页/u); if (match && Number(match[1]) <= currentPage) pageIndex = index; } if (pageIndex >= 0) currentChapterIndex = pageIndex; } for (const [index, row] of rows.entries()) { let mark = row.querySelector(".toc-current-mark"); if (!mark) { mark = document.createElement("span"); mark.className = "toc-current-mark"; mark.textContent = "✓"; row.appendChild(mark); } mark.hidden = index !== currentChapterIndex; row.classList.toggle("is-current", index === currentChapterIndex); } }
 setInterval(updateTocCurrentMark, 250);
+function placeReadingProgress() { const panel = document.querySelector("#history-panel"), tabs = document.querySelector(".reader-panel-tabs"), noToc = !tocEntries.length && !mediaElement; if (noToc && progressTools.nextElementSibling !== tabs) panel.insertBefore(progressTools, tabs); else if (!noToc && panel.lastElementChild !== progressTools) panel.appendChild(progressTools); }
+setInterval(placeReadingProgress, 250);
 const READER_PROXY_TIMEOUT_MS = 12000;
 const PDF_PROXY_TIMEOUT_MS = 60000;
 if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = function(key, callback) { if (this.has(key)) return this.get(key); const value = callback(key); this.set(key, value); return value; }; }
