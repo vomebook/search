@@ -77,6 +77,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .bookmark-edit-fields textarea { min-height: 58px; }
 .bookmark-popover #bookmark-prompt small { display: -webkit-box; margin-top: 8px; overflow: hidden; color: #b8bec3; font-size: 12px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .bookmark-popover > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.bookmark-popover > .bookmark-edit-fields { display: grid; grid-template-columns: minmax(0, 1fr); justify-content: stretch; gap: 7px; margin: 8px 0 0; }
 .bookmark-popover button { min-height: 32px; padding: 0 10px; border: 1px solid #555c63; border-radius: 4px; background: #30353a; color: inherit; cursor: pointer; }
 .loading-status { display: none; color: #aeb5ba; font-size: 13px; text-align: center; padding: 12px; }
 .loading-status[hidden] { display: none; }
