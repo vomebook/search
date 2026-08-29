@@ -86,9 +86,6 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .history-item small { color: #929aa1; }
 .history-item button { grid-row: 1 / 3; grid-column: 2; border: 0; background: transparent; color: #b5bbc0; cursor: pointer; }
 .reader-viewport { min-height: 0; flex: 1; overflow: auto; background: #121416; }
-.reader-viewport.is-paginated { overflow-x: hidden; overflow-y: hidden; }
-.reader-content.is-paginated { width: max-content; max-width: none; height: 100%; column-width: calc(100vw - 40px); column-gap: 40px; column-fill: auto; padding: 20px; }
-.reader-content.is-paginated .reader-text, .reader-content.is-paginated .reader-markdown { width: max-content; max-width: none; height: calc(100% - 40px); column-width: calc(100vw - 40px); column-gap: 40px; column-fill: auto; overflow: hidden; }
 :root.bookmark-dialog-open .reader-viewport { overflow: hidden; }
 .bookmark-ribbon { position: fixed; z-index: 12; top: 44px; left: max(10px, calc((100vw - min(100vw, 1100px)) / 2 + 2px)); width: 28px; height: 42px; padding: 0; border: 0; background: #b64b50; box-shadow: 0 2px 8px #0006; cursor: pointer; clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 76%, 0 100%); }
 .bookmark-ribbon:hover, .bookmark-ribbon:focus-visible { background: #d35b61; outline: 2px solid #8ab4f8; outline-offset: 2px; }
