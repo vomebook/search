@@ -137,8 +137,9 @@ function applyReaderAsset(record, repo, relativePath, originalLink) {
   if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)$/.test(asset.p || "")) return record;
   var readerExtensions = { p: "pdf", e: "epub", d: "docx", h: "html", a: "audio", v: "video" };
   return Object.assign({}, record, {
-    ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
-    ReaderExtension: readerExtensions[asset.m],
+    ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (asset.c || asset.p),
+    ReaderExtension: asset.c ? "epub-chapters" : readerExtensions[asset.m],
+    ReaderFallback: asset.f || "",
     DownloadLink: originalLink,
   });
 }
@@ -204,11 +205,30 @@ function getReaderLink(rec, returnUrl) {
 }
 
 var readerOverlay = null;
-function closeReaderOverlay() {
+var readerReturnFocus = null;
+var readerBackgroundState = [];
+function clearReaderNavigation(url) {
+  try {
+    var token = url.searchParams.get("nav");
+    if (token) sessionStorage.removeItem("reader-return:" + token);
+    var saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+    if (saved && saved.readerUrl === url.href) sessionStorage.removeItem("reader-navigation-current");
+  } catch (_) {}
+}
+function closeReaderOverlay(restoreFocus) {
   if (!readerOverlay) return false;
   readerOverlay.remove();
   readerOverlay = null;
+  for (var i = 0; i < readerBackgroundState.length; i++) {
+    var state = readerBackgroundState[i];
+    if (!state.inert) state.element.removeAttribute("inert");
+    if (state.ariaHidden === null) state.element.removeAttribute("aria-hidden");
+    else state.element.setAttribute("aria-hidden", state.ariaHidden);
+  }
+  readerBackgroundState = [];
   document.body.classList.remove("reader-overlay-open");
+  if (restoreFocus !== false && readerReturnFocus && readerReturnFocus.isConnected) readerReturnFocus.focus();
+  readerReturnFocus = null;
   return true;
 }
 
@@ -217,9 +237,18 @@ function openReaderOverlay(url, addHistory) {
   frame.className = "reader-overlay";
   frame.title = "在线阅读";
   frame.src = url.href;
+  readerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   readerOverlay = frame;
   document.body.classList.add("reader-overlay-open");
   document.body.appendChild(frame);
+  frame.focus();
+  readerBackgroundState = Array.from(document.body.children).filter(function(element) { return element !== frame; }).map(function(element) {
+    var state = { element: element, inert: element.hasAttribute("inert"), ariaHidden: element.getAttribute("aria-hidden") };
+    element.setAttribute("inert", "");
+    element.setAttribute("aria-hidden", "true");
+    return state;
+  });
+  frame.addEventListener("load", function() { if (readerOverlay === frame) frame.focus(); }, { once: true });
   if (addHistory !== false) {
     var shareUrl = new URL(url.href);
     shareUrl.searchParams.delete("return");
@@ -237,16 +266,43 @@ function restoreReaderOverlay(state) {
   try {
     var url = new URL(state.readerUrl, location.origin);
     if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return;
-    closeReaderOverlay();
+    closeReaderOverlay(false);
     openReaderOverlay(url, false);
   } catch (_) {}
 }
 
 function handleReaderMessage(event) {
-  if (!readerOverlay || event.origin !== location.origin || event.source !== readerOverlay.contentWindow) return;
+  if (!readerOverlay || event.origin !== location.origin) return;
+  if (event.source !== readerOverlay.contentWindow) {
+    try { if (!event.source || event.source.frameElement !== readerOverlay) return; } catch (_) { return; }
+  }
   var message = event.data || {};
   if (message.type === "voice-reader-close") {
     history.back();
+    return;
+  }
+  if (message.type === "voice-reader-theme") {
+    if (message.theme !== "dark" && message.theme !== "light") return;
+    STATE.isDark = message.theme === "dark";
+    applyTheme();
+    localStorage.setItem("theme", message.theme);
+    return;
+  }
+  if (message.type === "voice-reader-open") {
+    try {
+      var nextReader = new URL(message.url, location.origin);
+      if (nextReader.origin !== location.origin || nextReader.pathname !== "/search/static/reader.html") return;
+      var currentReader = new URL(readerOverlay.src);
+      if (!nextReader.searchParams.get("return") && currentReader.searchParams.get("return")) nextReader.searchParams.set("return", currentReader.searchParams.get("return"));
+      if (!nextReader.searchParams.get("nav") && currentReader.searchParams.get("nav")) nextReader.searchParams.set("nav", currentReader.searchParams.get("nav"));
+      var shareReader = new URL(nextReader.href); shareReader.searchParams.delete("return"); shareReader.searchParams.delete("nav");
+      sessionStorage.setItem("reader-navigation-current", JSON.stringify({ shareUrl: shareReader.href, readerUrl: nextReader.href }));
+      history.replaceState({ voiceReaderOverlay: true, readerUrl: nextReader.href }, "", shareReader.href);
+      var returnFocus = readerReturnFocus;
+      closeReaderOverlay(false);
+      openReaderOverlay(nextReader, false);
+      readerReturnFocus = returnFocus;
+    } catch (_) {}
     return;
   }
   if (message.type !== "voice-reader-navigate") return;
@@ -265,6 +321,8 @@ function navigateToReader(rawUrl, returnUrl) {
   if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return false;
   url.searchParams.set("return", returnUrl);
   try {
+    var previous = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+    if (previous && previous.readerUrl) clearReaderNavigation(new URL(previous.readerUrl, location.origin));
     var token = typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
       : Array.from(crypto.getRandomValues(new Uint32Array(4)), function(value) { return value.toString(16).padStart(8, "0"); }).join("");
@@ -3759,6 +3817,7 @@ function applyTheme() {
     DOM.themeIconLight.style.display = "";
     DOM.themeIconDark.style.display = "none";
   }
+  if (readerOverlay && readerOverlay.contentWindow) readerOverlay.contentWindow.postMessage({ type: "voice-reader-theme-state", theme: STATE.isDark ? "dark" : "light" }, location.origin);
 }
 
 function toggleMobile() {
