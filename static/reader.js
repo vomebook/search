@@ -175,9 +175,11 @@ async function activateIndexedEpubResult(result) {
   const item = (epubRendition.getContents && epubRendition.getContents()[0]);
   if (!item || !item.document || !item.document.body) return;
   const pattern = new RegExp(fullSearchEscape(result.query), "iu"), walker = item.document.createTreeWalker(item.document.body, NodeFilter.SHOW_TEXT);
+  let occurrence = 0;
   while (walker.nextNode()) {
     const node = walker.currentNode, match = pattern.exec(node.data);
     if (!match) continue;
+    if (occurrence++ < result.occurrence) continue;
     const range = item.document.createRange(); range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
     const selection = item.window && item.window.getSelection ? item.window.getSelection() : item.document.defaultView && item.document.defaultView.getSelection();
     if (selection) { selection.removeAllRanges(); selection.addRange(range); }
@@ -190,7 +192,7 @@ function runIndexedEpubSearch() {
   const query = fullSearchInput.value.trim(), pattern = query && new RegExp(fullSearchEscape(query), "giu"); fullSearchResults = []; fullSearchIndex = -1; fullSearchResultsNode.textContent = "";
   if (!query) { fullSearchStatus.textContent = "输入关键词搜索正文"; return; }
   if (!epubSearchIndexReady) { fullSearchStatus.textContent = "EPUB 全文索引仍在建立，请稍后重试"; return; }
-  for (const segment of epubSearchIndex) for (const match of segment.text.matchAll(pattern)) { if (fullSearchResults.length >= 100) break; fullSearchResults.push({ location: segment.label, offset: match.index, length: match[0].length, snippet: fullSearchSnippet(segment.text, match.index, match[0].length), activate: () => activateIndexedEpubResult({ href: segment.href, query, offset: match.index, length: match[0].length }) }); }
+  for (const segment of epubSearchIndex) { let occurrence = 0; for (const match of segment.text.matchAll(pattern)) { if (fullSearchResults.length >= 100) break; fullSearchResults.push({ location: segment.label, offset: match.index, length: match[0].length, snippet: fullSearchSnippet(segment.text, match.index, match[0].length), activate: () => activateIndexedEpubResult({ href: segment.href, query, occurrence }) }); occurrence++; } }
   for (const result of fullSearchResults) { const row = document.createElement("button"); row.type = "button"; row.className = "full-search-result"; const location = document.createElement("small"); location.className = "full-search-location"; location.textContent = result.location; row.append(location, fullSearchSnippetDom(result.snippet)); row.addEventListener("click", async () => { await result.activate(); setReaderPanelOpen(false, true); }); fullSearchResultsNode.appendChild(row); }
   fullSearchStatus.textContent = fullSearchResults.length ? `${fullSearchResults.length}${fullSearchResults.length === 100 ? "+" : ""} 条结果` : "没有找到匹配内容";
   fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => { button.disabled = !fullSearchResults.length; });
