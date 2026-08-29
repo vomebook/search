@@ -30,7 +30,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 #history-view .panel-view-header > span .text-action, #bookmarks-panel .panel-view-header > span .text-action { min-height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 2px; line-height: 1; transform: none; }
 .panel-search-toggle { width: auto; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 2px; font-size: 12px; line-height: 1; transform: translateY(-1px); }
 .panel-search-toggle::after { content: none; }
-.panel-search { width: calc(100% - 24px); height: 34px; max-height: 0; margin: 0 12px; padding: 0 9px; border: 1px solid #464c52; border-radius: 4px; background: #25292d; color: #e7e9eb; opacity: 0; transform: translateY(-6px); transition: max-height 180ms ease, margin-bottom 180ms ease, opacity 140ms ease, transform 180ms ease; }
+.panel-search { width: calc(100% - 24px); height: 34px; max-height: 0; margin: 0 12px; padding: 0 9px; overflow: hidden; border: 1px solid #464c52; border-radius: 4px; background: #25292d; color: #e7e9eb; opacity: 0; transform: translateY(-6px); will-change: max-height, margin-bottom, opacity, transform; transition: max-height 180ms ease, margin-bottom 180ms ease, opacity 140ms ease, transform 180ms ease; }
 .panel-search.is-open { max-height: 34px; margin-bottom: 8px; opacity: 1; transform: translateY(0); }
 .panel-list { padding-bottom: 12px; }
 .panel-empty { padding: 28px 12px; color: #929aa1; text-align: center; }
@@ -54,7 +54,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-theme-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .reader-theme-toggle.is-changing svg { animation: reader-theme-icon 260ms cubic-bezier(.2, .8, .2, 1); }
 @keyframes reader-theme-icon { from { opacity: 0; transform: rotate(-35deg) scale(.72); } to { opacity: 1; transform: rotate(0) scale(1); } }
-#history-close { font-family: Arial, sans-serif; font-size: 22px; line-height: 1; transform: translateY(-1px); }
+#history-close { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; font-family: Arial, sans-serif; font-size: 22px; line-height: 1; transform: none; }
 .history-item { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 12px; border-bottom: 1px solid #2d3237; }
 .history-item a { color: #e5e9ec; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-item small { color: #929aa1; }
@@ -65,9 +65,11 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .bookmark-ribbon:hover, .bookmark-ribbon:focus-visible { background: #d35b61; outline: 2px solid #8ab4f8; outline-offset: 2px; }
 .bookmark-popover { position: fixed; z-index: 22; top: 92px; left: 10px; width: min(300px, calc(100vw - 20px)); padding: 12px; border: 1px solid #464c52; border-radius: 6px; background: #25292d; box-shadow: 0 6px 20px #0009; }
 .bookmark-popover #bookmark-prompt { display: block; line-height: 1.5; }
-.bookmark-edit-fields { display: grid; gap: 8px; max-width: 100%; margin-top: 10px; }
+.bookmark-edit-fields { display: grid; gap: 7px; max-width: 100%; margin-top: 8px; }
 .bookmark-edit-fields label { display: grid; gap: 4px; min-width: 0; color: #b8bec3; font-size: 12px; }
-.bookmark-edit-fields input, .bookmark-edit-fields textarea { display: block; width: 100%; max-width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid #464c52; border-radius: 4px; background: #1b1e21; color: inherit; font: inherit; resize: vertical; }
+.bookmark-edit-fields input { height: 30px; }
+.bookmark-edit-fields input, .bookmark-edit-fields textarea { display: block; width: 100%; max-width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #464c52; border-radius: 4px; background: #1b1e21; color: inherit; font: inherit; resize: vertical; }
+.bookmark-edit-fields textarea { min-height: 58px; }
 .bookmark-popover #bookmark-prompt small { display: -webkit-box; margin-top: 8px; overflow: hidden; color: #b8bec3; font-size: 12px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .bookmark-popover > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .bookmark-popover button { min-height: 32px; padding: 0 10px; border: 1px solid #555c63; border-radius: 4px; background: #30353a; color: inherit; cursor: pointer; }
