@@ -1276,29 +1276,6 @@ const STATE = {
   _deferredAppendWhileDragging: false,
 };
 
-const SEARCH_SCROLL_STORAGE = "vomebook-search-scroll-v1";
-function searchScrollKey() { return location.pathname + location.search + location.hash; }
-function saveSearchScrollPosition() {
-  if (!DOM.resultsContainer) return;
-  try {
-    var values = JSON.parse(sessionStorage.getItem(SEARCH_SCROLL_STORAGE) || "{}");
-    values[searchScrollKey()] = Math.max(0, DOM.resultsContainer.scrollTop);
-    var keys = Object.keys(values);
-    for (var i = 0; i < Math.max(0, keys.length - 40); i++) delete values[keys[i]];
-    sessionStorage.setItem(SEARCH_SCROLL_STORAGE, JSON.stringify(values));
-  } catch (_) {}
-}
-function restoreSearchScrollPosition(resetIfMissing) {
-  try {
-    var value = JSON.parse(sessionStorage.getItem(SEARCH_SCROLL_STORAGE) || "{}")[searchScrollKey()];
-    if (!Number.isFinite(value)) {
-      if (resetIfMissing) requestAnimationFrame(function() { DOM.resultsContainer.scrollTop = 0; });
-      return;
-    }
-    requestAnimationFrame(function() { DOM.resultsContainer.scrollTop = value; DOM.resultsContainer.dispatchEvent(new Event("scroll")); });
-  } catch (_) {}
-}
-
 const SEARCH_SESSION_DB = "voiceofml-search-state";
 function openSearchSessionDB() {
   return new Promise(function(resolve, reject) {
@@ -1494,7 +1471,6 @@ function highlightText(text, query) {
 }
 
 let routeInitialized = false;
-let routeScrollRestorePending = false;
 const ROUTER = {
   parse: function() {
     const hash = window.location.hash.replace(/^#/, "");
@@ -1519,7 +1495,6 @@ const ROUTER = {
     return { mode: mode, repo: repo, params: params };
   },
   navigate: function(mode, repo, folder) {
-    saveSearchScrollPosition();
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
     if (STATE.query) sp.set("q", STATE.query);
@@ -1550,7 +1525,6 @@ const ROUTER = {
     STATE.repo = route.repo;
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
-      routeScrollRestorePending = true;
       STATE.page = 1;
       if (STATE.results.length === 0) STATE.total = 0;
       prepareRouteTransitionResults();
@@ -2057,10 +2031,8 @@ function debouncedSearch() {
   if (searchComposing) return;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
-    saveSearchScrollPosition();
     STATE.query = DOM.searchInput.value.trim();
     STATE.page = 1;
-    syncStateToURL(false);
     addHistoryItem(STATE.query);
     renderDropdown();
     doSearch();
@@ -2180,6 +2152,7 @@ function doSearch(append) {
       if (append) {
         refreshVirtualAfterAppend();
       } else {
+        DOM.resultsContainer.scrollTop = 0;
         resetVirtualScrollState();
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
@@ -2272,7 +2245,8 @@ function doSearchFallbackLocal(params, append, id) {
       if (append) {
         refreshVirtualAfterAppend();
       } else {
-      resetVirtualScrollState();
+        DOM.resultsContainer.scrollTop = 0;
+        resetVirtualScrollState();
         clearResultsSkeleton();
         if (STATE.results.length === 0) {
           DOM.resultsList.innerHTML = "";
@@ -2333,9 +2307,6 @@ function renderResults(animate = false) {
   VSCROLL.renderEnd = 0;
   pendingResultEntrance = animate;
   renderVisible();
-  var restoreRouteScroll = routeScrollRestorePending;
-  routeScrollRestorePending = false;
-  restoreSearchScrollPosition(restoreRouteScroll);
 }
 
 function animateVisibleResultRows() {
@@ -2608,6 +2579,7 @@ function prepareRouteTransitionResults() {
   if (!DOM.resultsContainer || STATE.results.length === 0) return;
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
+  DOM.resultsContainer.scrollTop = 0;
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
   VSCROLL.heights = [];
@@ -3760,7 +3732,6 @@ function updateScrollTrack() {
 
 function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("scroll", () => {
-    saveSearchScrollPosition();
     if (!VSCROLL.isDraggingThumb) ensureVirtualViewportCovered();
     if (!scrollTicking) {
       requestAnimationFrame(() => {
@@ -4197,11 +4168,9 @@ async function init() {
     if (delBtn) { removeHistoryItem(delBtn.dataset.del); return; }
     var item = e.target.closest(".history-item");
     if (item) {
-      saveSearchScrollPosition();
       DOM.searchInput.value = item.dataset.query;
       STATE.query = item.dataset.query;
       STATE.page = 1;
-      syncStateToURL(false);
       STATE.results = [];
       doSearch();
       hideDropdown();
