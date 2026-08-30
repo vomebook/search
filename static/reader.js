@@ -7,7 +7,7 @@ const MARKED_URL = "/search/static/vendor/marked.min.69451c8541c9.js";
 const PURIFY_URL = "/search/static/vendor/purify.min.c2f26ea4fc0d.js";
 const JSZIP_URL = "/search/static/vendor/jszip.min.acc7e41455a8.js";
 const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.051ef503f267.js";
-const READER_PROXY_TIMEOUT_MS = 12000;
+const READER_PROXY_TIMEOUT_MS = 120000;
 const PDF_PROXY_TIMEOUT_MS = 60000;
 const readerNativeAddEventListener = EventTarget.prototype.addEventListener;
 EventTarget.prototype.addEventListener = function (type, listener, options) { if (this.id === "viewport" && type === "scroll" && typeof listener === "function" && listener.toString().includes("epubContainer.scrollTop")) return; return readerNativeAddEventListener.call(this, type, listener, options); };
