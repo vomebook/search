@@ -256,8 +256,8 @@ async function scrollToEpubTocEntry(index) {
   const contents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
   const target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref) || contents[contents.length - 1];
   const frame = target && target.document && target.document.defaultView && target.document.defaultView.frameElement;
-  if (frame) viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
   setReaderPanelOpen(false, true);
+  if (frame) viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
 }
 document.addEventListener("click", (event) => {
   if (capability.mode !== "epub") return;
