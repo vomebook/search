@@ -396,10 +396,10 @@ function warmReaderIntent(rawUrl) {
   } catch (_) { return; }
   var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader.js"];
   var engineAssets = extension === "pdf"
-    ? ["/search/static/vendor/pdf.min.e0be3863c23c.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.0613f41490dd.mjs"]
+    ? ["/search/static/vendor/pdf.min.f80490490320.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.8ab0e5e30031.mjs"]
     : extension === "epub" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/epub.min.06eae1574510.js"]
-    : extension === "docx" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/docx-preview.min.3573b8d99344.js"]
-     : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.eaccee2fb9fb.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
+    : extension === "docx" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/docx-preview.min.051ef503f267.js"]
+     : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.69451c8541c9.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);

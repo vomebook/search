@@ -40,9 +40,9 @@ async function downloadWithRetry(url) {
 }
 
 async function main() {
-const pdfArchive = await downloadWithRetry("https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.2.108.tgz");
+  const pdfArchive = await downloadWithRetry("https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.3.289.tgz");
 const pdfArchiveHash = createHash("sha256").update(pdfArchive).digest("hex");
-if (pdfArchiveHash !== "b3e68d5cda70551a90b3f771419d379e20fc788ce056fa32de73608e01df47f4") throw new Error(`pdfjs-dist archive SHA-256 ${pdfArchiveHash} does not match`);
+  if (pdfArchiveHash !== "06f25e887adc6489f04c9fcb14198c77e4e5623a59a0bba5c4cea5838a4f1241") throw new Error(`pdfjs-dist archive SHA-256 ${pdfArchiveHash} does not match`);
 const tar = gunzipSync(pdfArchive);
 for (let offset = 0; offset + 512 <= tar.length;) {
   const header = tar.subarray(offset, offset + 512), name = header.subarray(0, 100).toString().replace(/\0.*$/, "");
@@ -57,13 +57,13 @@ for (let offset = 0; offset + 512 <= tar.length;) {
   offset += 512 + Math.ceil(size / 512) * 512;
 }
 for (const [url, target, expected] of [
-  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.min.mjs", "pdf.min.mjs", "e0be3863c23c8af2305b16548febd58e7f8874a460253317d7771cddbc1c0f6d"],
-  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs", "pdf.worker.min.mjs", "0613f41490dd6aaceed7a93fbbd38c85e6d6aa60474b6588c6e7709cfbe18cb3"],
+  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs", "pdf.min.mjs", "f80490490320511e5df18c580b9edd6b5db8058dceebaf6f161992e0a964b9e2"],
+  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs", "pdf.worker.min.mjs", "8ab0e5e30031b4a06ecfddd5ae9562f0227f830ee7ec9ed1a968b134243d2386"],
   ["https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js", "epub.min.js", "06eae15745107b4aa508c95538275251f69bfb9f1175621fc458d9f42ed082d4"],
-  ["https://cdn.jsdelivr.net/npm/marked@18.0.10/lib/marked.umd.js", "marked.min.js", "eaccee2fb9fb3b2c09e873a5504da82507850d9e677bd720122ac49e2a03982a"],
+  ["https://cdn.jsdelivr.net/npm/marked@18.0.11/lib/marked.umd.js", "marked.min.js", "69451c8541c9c1e7a4bf3ffc6f73c4d89633de92bfbe3e484dfe182ef8091f88"],
   ["https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.min.js", "purify.min.js", "c2f26ea4fc0d88141c9aa430eb515ac86fce59418ceebd85fa475b87a8d6c3e6"],
   ["https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js", "jszip.min.js", "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"],
-  ["https://cdn.jsdelivr.net/npm/docx-preview@0.3.6/dist/docx-preview.min.js", "docx-preview.min.js", "3573b8d993442316042e95c782338b503b2a7cd573d336db894b87799c9d3097"],
+  ["https://cdn.jsdelivr.net/npm/docx-preview@0.4.0/dist/docx-preview.min.js", "docx-preview.min.js", "051ef503f2677d53159a388b7384e950eda41ea4e47a103e5e36f124d7faea40"],
 ]) {
   const bytes = await downloadWithRetry(url);
   const actual = createHash("sha256").update(bytes).digest("hex");
