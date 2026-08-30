@@ -43,6 +43,7 @@ jobs:
           node scripts/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
            node scripts/copy_reader_vendor.mjs _site/static/vendor
            cp -a static/vendor/foliate _site/static/vendor/foliate
+           cp -a static/foliate-reader _site/static/foliate-reader
           npx --yes esbuild@0.28.2 static/app.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
           npx --yes esbuild@0.28.2 static/reader-contract.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-contract.js
           npx --yes esbuild@0.28.2 static/reader-store.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-store.js
