@@ -20,7 +20,7 @@ window.fetchFile = async (url) => {
   const requestUrl = String(url) === sourceUrl ? contentUrl : url;
   const response = await fetch(requestUrl);
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  const fileName = new URL(url).pathname.split("/").pop() || "book";
+  const fileName = new URL(sourceUrl).pathname.split("/").pop() || "book";
   return new File([await response.blob()], fileName, { type: response.headers.get("content-type") || "application/octet-stream" });
 };
 let returnUrl = params.get("return") || "", returnNavigationToken = params.get("nav") || "", returnNeedsReload = false;
@@ -254,6 +254,7 @@ function prepareDocument() {
 }
 
 async function renderFoliate(prepared) {
-  const frame = document.createElement("iframe"); frame.className = "foliate-reader-frame"; frame.title = title; frame.setAttribute("sandbox", "allow-same-origin allow-scripts"); frame.src = `./foliate-reader/reader.html?url=${encodeURIComponent(sourceUrl)}`; content.replaceChildren(frame); loadingIndicator.remove(); loadingStatus.hidden = true; status.textContent = "正在打开电子书...";
+  const response = await fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS); if (!response.ok) throw new Error(`HTTP ${response.status}`); const blobUrl = URL.createObjectURL(await response.blob());
+  const frame = document.createElement("iframe"); frame.className = "foliate-reader-frame"; frame.title = title; frame.setAttribute("sandbox", "allow-same-origin allow-scripts"); frame.src = `./foliate-reader/reader.html?url=${encodeURIComponent(blobUrl)}&file_name=${encodeURIComponent(new URL(sourceUrl).pathname.split("/").pop() || "book.epub")}`; content.replaceChildren(frame); loadingIndicator.remove(); loadingStatus.hidden = true; status.textContent = "正在打开电子书...";
   await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("FOLIATE_LOAD_TIMEOUT")), READER_PROXY_TIMEOUT_MS); const onMessage = (event) => { if (event.source !== frame.contentWindow) return; const message = event.data || {}; if (message.type === "voice-foliate-ready") { clearTimeout(timer); window.removeEventListener("message", onMessage); status.textContent = "EPUB"; loadingObserver.disconnect(); resolve(); } else if (message.type === "voice-foliate-error") { clearTimeout(timer); window.removeEventListener("message", onMessage); reject(new Error(message.message || "FOLIATE_LOAD_FAILED")); } }; window.addEventListener("message", onMessage); });
 }
