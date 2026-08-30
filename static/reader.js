@@ -1,3 +1,4 @@
+import "/search/static/foliate-reader/view.js?outer3";
 const PDFJS_URL = "/search/static/vendor/pdf.min.f80490490320.mjs";
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
 const PDFJS_WASM_URL = "/search/static/vendor/wasm/";
@@ -254,5 +255,5 @@ function prepareDocument() {
 }
 
 async function renderFoliate(prepared) {
-  const response = await fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS); if (!response.ok) throw new Error(`HTTP ${response.status}`); const bytes = await response.arrayBuffer(); const adapter = await import("/search/static/foliate-adapter.mjs?v=outer2"); epubRendition = await adapter.openFoliate(bytes, new URL(sourceUrl).pathname.split("/").pop() || "book.epub", response.headers.get("content-type") || "application/epub+zip"); epubBook = epubRendition.book; loadingIndicator.remove(); loadingStatus.hidden = true; loadingObserver.disconnect(); status.textContent = "EPUB";
+  const response = await fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS); if (!response.ok) throw new Error(`HTTP ${response.status}`); const bytes = await response.arrayBuffer(); const view = document.createElement("foliate-view"); view.className = "foliate-reader-view"; content.replaceChildren(view); epubRendition = view; epubBook = await view.open(new File([bytes], new URL(sourceUrl).pathname.split("/").pop() || "book.epub", { type: response.headers.get("content-type") || "application/epub+zip" })); view.renderer.setAttribute("flow", "scrolled"); view.prev = () => view.goLeft(); view.next = () => view.goRight(); view.on = (type, listener) => view.addEventListener(type, (event) => listener(event.detail)); view.currentLocation = () => view.lastLocation; view.themes = { fontSize: () => {} }; await Promise.race([view.goToTextStart(), new Promise((resolve) => setTimeout(resolve, 3000))]); loadingIndicator.remove(); loadingStatus.hidden = true; loadingObserver.disconnect(); status.textContent = "EPUB";
 }
