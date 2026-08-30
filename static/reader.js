@@ -8,6 +8,8 @@ const MARKED_URL = "/search/static/vendor/marked.min.69451c8541c9.js";
 const PURIFY_URL = "/search/static/vendor/purify.min.c2f26ea4fc0d.js";
 const JSZIP_URL = "/search/static/vendor/jszip.min.acc7e41455a8.js";
 const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.051ef503f267.js";
+const readerNativeAddEventListener = EventTarget.prototype.addEventListener;
+EventTarget.prototype.addEventListener = function (type, listener, options) { if (this.id === "viewport" && type === "scroll" && typeof listener === "function" && listener.toString().includes("epubContainer.scrollTop")) return; return readerNativeAddEventListener.call(this, type, listener, options); };
 function cleanTocLabel(value) { return String(value || "未命名章节").replace(/[\uFFFD\u2610-\u2612\u25a1\u0000-\u001F\u007F]/gu, "").replace(/\s{2,}/gu, " ").trim() || "未命名章节"; }
 function updateTocCurrentMark() { const rows = [...document.querySelectorAll("#toc-list .toc-item")]; if (pageCount > 1 && currentPage > 0) { let pageIndex = -1; for (const [index, row] of rows.entries()) { const match = row.textContent.match(/第\s*(\d+)\s*页/u); if (match && Number(match[1]) <= currentPage) pageIndex = index; } if (pageIndex >= 0) currentChapterIndex = pageIndex; } for (const [index, row] of rows.entries()) { let mark = row.querySelector(".toc-current-mark"); if (!mark) { mark = document.createElement("span"); mark.className = "toc-current-mark"; mark.textContent = "✓"; row.appendChild(mark); } mark.hidden = index !== currentChapterIndex; row.classList.toggle("is-current", index === currentChapterIndex); } }
 setInterval(updateTocCurrentMark, 250);
