@@ -248,9 +248,8 @@ function prepareDocument() {
 
 async function renderFoliate(prepared) {
   const [response] = await prepared; if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const bytes = await response.arrayBuffer(); loadingIndicator.remove(); loadingStatus.hidden = true; status.textContent = "正在解析电子书..."; const { openFoliate } = await import("./foliate-adapter.mjs"); const view = await openFoliate(bytes, title, "application/octet-stream", () => { status.textContent = "正在排版电子书..."; }); view.setReaderTheme(readerTheme);
-  view.themes = { select() {}, fontSize() {} }; view.display = (target) => view.goTo(target); view.prev = () => view.renderer.prev(); view.next = () => view.renderer.next(); epubRendition = view; epubBook = view.book;
-  const entries = []; const append = (items, depth = 0) => { for (const item of items || []) { entries.push({ label: item.label || "未命名章节", href: item.href, depth, activate: () => view.goTo(item.href) }); append(item.subitems, depth + 1); } }; append(view.book.toc); setToc(entries);
-  view.addEventListener("relocate", (event) => { const item = event.detail && event.detail.tocItem; if (item && item.href) { const index = entries.findIndex((entry) => entry.href === item.href); if (index >= 0) { currentChapterIndex = index; updateTocCurrentMark(); } } });
-  loadingIndicator.remove(); loadingObserver.disconnect(); status.textContent = "EPUB";
+  const frame = document.createElement("iframe"); frame.className = "foliate-reader-frame"; frame.title = title; frame.setAttribute("sandbox", "allow-same-origin allow-scripts"); frame.src = `./foliate-reader/reader.html?url=${encodeURIComponent(sourceUrl)}`; content.replaceChildren(frame); loadingIndicator.remove(); loadingStatus.hidden = true; status.textContent = "正在打开电子书...";
+  await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("FOLIATE_LOAD_TIMEOUT")), READER_PROXY_TIMEOUT_MS); frame.addEventListener("load", () => { clearTimeout(timer); resolve(); }, { once: true }); });
+  frame.contentWindow.postMessage({ type: "reader-file-url", url: sourceUrl }, location.origin);
+  frame.addEventListener("load", () => { status.textContent = "EPUB"; loadingObserver.disconnect(); }, { once: true });
 }
