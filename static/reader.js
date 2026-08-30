@@ -34,7 +34,7 @@ let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
 let pdfDocument = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), restorationApplied = false, epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
-let historySuppressed = false, restorationReady = false, restorationFailed = false, tocEntries = [], currentChapterIndex = -1, pendingBookmarkSnapshot = null, editingBookmark = null, showingAllBookmarks = false, bookmarkRenderGeneration = 0, mediaElement = null;
+ let historySuppressed = false, restorationReady = false, restorationFailed = false, markerFrame = 0, tocEntries = [], currentChapterIndex = -1, pendingBookmarkSnapshot = null, editingBookmark = null, showingAllBookmarks = false, bookmarkRenderGeneration = 0, mediaElement = null;
 const viewport = document.querySelector("#viewport"), zoomInput = document.querySelector("#zoom"), pageInput = document.querySelector("#page-number"), loadingStatus = document.querySelector("#loading-status"), readerPath = document.querySelector("#reader-path"), bookmarkRibbon = document.querySelector("#bookmark-ribbon"), bookmarkPopover = document.querySelector("#bookmark-popover");
 const bookmarksAllButton = document.createElement("button"), bookmarksHeader = document.querySelector("#bookmarks-panel .panel-view-header"), bookmarksSearchButton = bookmarksHeader.querySelector(".panel-search-toggle"), bookmarksHeaderActions = document.createElement("span"); bookmarksAllButton.id = "bookmarks-all"; bookmarksAllButton.className = "text-action"; bookmarksAllButton.type = "button"; bookmarksAllButton.textContent = "全部书签"; bookmarksAllButton.setAttribute("aria-pressed", "false"); bookmarksHeaderActions.append(bookmarksAllButton, bookmarksSearchButton); bookmarksHeader.appendChild(bookmarksHeaderActions);
 const bookmarkLabelInput = document.createElement("input"), bookmarkExcerptInput = document.createElement("textarea"), bookmarkEditFields = document.createElement("div"); bookmarkLabelInput.id = "bookmark-label"; bookmarkLabelInput.maxLength = 120; bookmarkExcerptInput.id = "bookmark-excerpt-input"; bookmarkExcerptInput.maxLength = 500; bookmarkExcerptInput.rows = 3; bookmarkEditFields.className = "bookmark-edit-fields"; bookmarkEditFields.innerHTML = "<label>标题</label><label>摘要</label>"; bookmarkEditFields.children[0].appendChild(bookmarkLabelInput); bookmarkEditFields.children[1].appendChild(bookmarkExcerptInput); bookmarkPopover.insertBefore(bookmarkEditFields, bookmarkPopover.querySelector("div"));
@@ -259,12 +259,12 @@ async function scrollToEpubTocEntry(index) {
   const targetHref = String(requestedHref || tocEntries[index].href || "").split("#")[0];
   const contents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
   let target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref);
-  let frame = [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item));
+  let frame = target && target.document && target.document.defaultView && target.document.defaultView.frameElement;
   for (let pass = 0; !frame && pass < 60; pass++) {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const currentContents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
     target = currentContents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref) || target;
-    frame = [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item)) || (target && target.document && target.document.defaultView && target.document.defaultView.frameElement);
+    frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item));
   }
   setReaderPanelOpen(false, true);
   if (!frame) return;
