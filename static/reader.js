@@ -245,13 +245,9 @@ function prepareDocument() {
   if (capability.mode === "markdown") return Promise.all([fetchReaderResponse(), Promise.all([loadScript(MARKED_URL), loadScript(PURIFY_URL)])]).then(([response, engines]) => ({ response, engines }));
   if (capability.mode === "html") return Promise.all([fetchReaderResponse(), loadScript(PURIFY_URL)]).then(([response, engine]) => ({ response, engine }));
   if (capability.mode === "text") return fetchReaderResponse().then((response) => ({ response }));
-  if (capability.mode === "foliate") return Promise.resolve(null);
+  if (capability.mode === "foliate") return import("/search/static/foliate-reader/view.js");
   if (capability.mode === "docx") return Promise.all([fetchReaderResponse(), loadScript(JSZIP_URL).then(() => loadScript(DOCX_PREVIEW_URL))]);
   if (capability.mode === "audio" || capability.mode === "video") return Promise.resolve(null);
   if (capability.mode === "image") return new Promise((resolve, reject) => { const image = new Image(); image.className = "reader-image"; image.alt = title; image.decoding = "async"; let fallback = false; image.onload = () => resolve(image); image.onerror = () => { if (!fallback) { fallback = true; image.src = sourceUrl; } else reject(new Error("image load failed")); }; image.src = contentUrl; });
   return Promise.resolve(null);
-}
-
-async function renderFoliate(prepared) {
-  throw new Error("FOLIATE_DISABLED");
 }
