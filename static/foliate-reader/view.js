@@ -75,7 +75,7 @@ const fetchFile = async url => {
     const res = await fetch(url)
     if (!res.ok) throw new ResponseError(
         `${res.status} ${res.statusText}`, { cause: res })
-    return new File([await res.blob()], new URL(res.url).pathname)
+    return new File([await res.blob()], globalThis.foliateFileNameHint || new URL(res.url).pathname)
 }
 
 export const makeBook = async file => {
