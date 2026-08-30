@@ -136,9 +136,11 @@ function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
   if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)$/.test(asset.p || "")) return record;
   var readerExtensions = { p: "pdf", e: "epub", d: "docx", h: "html", a: "audio", v: "video" };
+  var chapterBundle = asset.m === "p" && !!asset.c;
   return Object.assign({}, record, {
-    ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (asset.c || asset.p),
-    ReaderExtension: asset.c ? "epub-chapters" : readerExtensions[asset.m],
+    ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (chapterBundle ? asset.c : asset.p),
+    ReaderExtension: chapterBundle ? "epub-chapters" : readerExtensions[asset.m],
+    ReaderChapterManifest: chapterBundle ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.c : "",
     ReaderFallback: asset.f || "",
     DownloadLink: originalLink,
   });
