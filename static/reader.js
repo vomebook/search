@@ -269,7 +269,7 @@ async function scrollToEpubTocEntry(index) {
     targetIndex = currentContents.findIndex((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref));
     target = targetIndex >= 0 ? currentContents[targetIndex] : target;
     frames = [...document.querySelectorAll(".epub-frame iframe")];
-    frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || frames[targetIndex] || frames.find((item) => !framesBefore.has(item));
+    frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || frames[targetIndex] || frames.filter((item) => !framesBefore.has(item)).pop();
   }
   setReaderPanelOpen(false, true);
   if (!frame) return;
