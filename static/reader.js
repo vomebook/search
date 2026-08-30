@@ -259,8 +259,7 @@ async function scrollToEpubTocEntry(index) {
   const targetHref = String(requestedHref || tocEntries[index].href || (location && location.start && location.start.href) || "").split("#")[0];
   const contents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
   const target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref);
-  const targetItem = target || contents[contents.length - 1];
-  const frame = [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item)) || (targetItem && targetItem.document && targetItem.document.defaultView && targetItem.document.defaultView.frameElement);
+  const frame = [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item)) || (target && target.document && target.document.defaultView && target.document.defaultView.frameElement);
   setReaderPanelOpen(false, true);
   if (frame) {
     viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
