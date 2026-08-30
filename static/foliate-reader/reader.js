@@ -118,7 +118,7 @@ class Reader {
             })
         })
         this.view.renderer.setStyles?.(getCSS(this.style))
-        this.view.renderer.next()
+        await this.view.goToTextStart()
 
         $('#header-bar').style.visibility = 'visible'
         $('#nav-bar').style.visibility = 'visible'
