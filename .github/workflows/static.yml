@@ -50,6 +50,7 @@ jobs:
           npx --yes esbuild@0.28.2 static/style.css --minify --outfile=_site/static/style.css
           npx --yes esbuild@0.28.2 static/reader.css --minify --outfile=_site/static/reader.css
            cp static/reader.html _site/static/reader.html
+           cp static/reader-v2.html _site/static/reader-v2.html
            cp static/pdf-worker-wrapper.mjs _site/static/pdf-worker-wrapper.mjs
            cp static/foliate-adapter.mjs _site/static/foliate-adapter.mjs
            cp -a static/foliate-reader _site/static/foliate-reader
