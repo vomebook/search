@@ -311,9 +311,11 @@ export class View extends HTMLElement {
     }
     goToTextStart() {
         const landmark = this.book.landmarks
-            ?.find(m => m.type.includes('bodymatter') || m.type.includes('text'))
+            ?.find(m => m.type.includes('bodymatter'))
+        const tocStart = this.book.toc
+            ?.find(m => /^(?:第\s*[一二三四五六七八九十百千万\d]+章|chapter\s*\d+)/iu.test(String(m.label || '').trim()))
         const firstSection = this.book.sections.findIndex(s => s.linear !== 'no')
-        return this.goTo(landmark?.href ?? (firstSection >= 0 ? firstSection : 0))
+        return this.goTo(landmark?.href ?? tocStart?.href ?? (firstSection >= 0 ? firstSection : 0))
     }
     async init({ lastLocation, showTextStart }) {
         const resolved = lastLocation ? this.resolveNavigation(lastLocation) : null
