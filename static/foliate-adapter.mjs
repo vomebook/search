@@ -7,6 +7,11 @@ export async function openFoliate(bytes, name, type = "application/octet-stream"
   document.querySelector("#content").appendChild(view);
   await view.open(new File([bytes], name, { type }));
   view.renderer.setAttribute("flow", "scrolled");
+  const loaded = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("FOLIATE_LOAD_TIMEOUT")), 30000);
+    view.renderer.addEventListener("load", () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
   await view.renderer.next();
+  await loaded;
   return view;
 }
