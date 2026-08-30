@@ -259,13 +259,17 @@ async function scrollToEpubTocEntry(index) {
   const targetHref = String(requestedHref || tocEntries[index].href || "").split("#")[0];
   const contents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
   const sameEpubPath = (left, right) => { try { left = decodeURIComponent(left); right = decodeURIComponent(right); } catch (_) {} return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`); };
-  let target = contents.find((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref));
-  let frame = target && target.document && target.document.defaultView && target.document.defaultView.frameElement;
+  let targetIndex = contents.findIndex((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref));
+  let target = targetIndex >= 0 ? contents[targetIndex] : null;
+  let frames = [...document.querySelectorAll(".epub-frame iframe")];
+  let frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || frames[targetIndex];
   for (let pass = 0; !frame && pass < 60; pass++) {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const currentContents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
-    target = currentContents.find((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref)) || target;
-    frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item));
+    targetIndex = currentContents.findIndex((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref));
+    target = targetIndex >= 0 ? currentContents[targetIndex] : target;
+    frames = [...document.querySelectorAll(".epub-frame iframe")];
+    frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || frames[targetIndex] || frames.find((item) => !framesBefore.has(item));
   }
   setReaderPanelOpen(false, true);
   if (!frame) return;
