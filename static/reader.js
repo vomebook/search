@@ -250,20 +250,3 @@ function prepareDocument() {
   if (capability.mode === "image") return new Promise((resolve, reject) => { const image = new Image(); image.className = "reader-image"; image.alt = title; image.decoding = "async"; let fallback = false; image.onload = () => resolve(image); image.onerror = () => { if (!fallback) { fallback = true; image.src = sourceUrl; } else reject(new Error("image load failed")); }; image.src = contentUrl; });
   return Promise.resolve(null);
 }
-async function scrollToEpubTocEntry(index) {
-  if (capability.mode !== "epub" || !epubRendition || !tocEntries[index]) return;
-  currentChapterIndex = index; updateTocCurrentMark();
-  try { await tocEntries[index].activate(); }
-  finally { currentChapterIndex = index; updateTocCurrentMark(); }
-  setReaderPanelOpen(false, true);
-}
-document.addEventListener("click", (event) => {
-  if (capability.mode !== "epub") return;
-  const link = event.target.closest("#toc-list .toc-item .panel-item-main");
-  if (!link) return;
-  const row = link.closest(".toc-item"), index = row ? [...row.parentElement.children].indexOf(row) : -1;
-  if (index < 0 || !tocEntries[index]) return;
-  currentChapterIndex = index; updateTocCurrentMark();
-  event.preventDefault(); event.stopImmediatePropagation();
-  scrollToEpubTocEntry(index).catch((error) => console.warn("EPUB TOC navigation failed", error));
-}, true);
