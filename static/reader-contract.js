@@ -27,7 +27,7 @@
     const folder = Array.isArray(record.Folder || record.folder) ? (record.Folder || record.folder).join("/") : "";
     if (repo) params.set("path", repo + (folder ? "/" + folder : ""));
     if (record.FolderUrl || record.folderUrl) params.set("folder_url", record.FolderUrl || record.folderUrl);
-    return (basePath || "/search/static/reader.html") + "?" + params.toString();
+   return (basePath || "/search/static/reader-v2.html") + "?" + params.toString();
   }
   root.VoiceOfMLReader = Object.freeze({ ReaderMode, articleExtensions, capability, clampNumber, readerUrl });
 })(typeof self !== "undefined" ? self : window);
