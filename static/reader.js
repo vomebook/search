@@ -257,7 +257,11 @@ async function scrollToEpubTocEntry(index) {
   const target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref) || contents[contents.length - 1];
   const frame = target && target.document && target.document.defaultView && target.document.defaultView.frameElement;
   setReaderPanelOpen(false, true);
-  if (frame) viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+  if (frame) {
+    const align = () => { viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top; };
+    align();
+    setTimeout(align, 120);
+  }
 }
 document.addEventListener("click", (event) => {
   if (capability.mode !== "epub") return;
