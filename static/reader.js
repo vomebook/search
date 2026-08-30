@@ -258,12 +258,13 @@ async function scrollToEpubTocEntry(index) {
   await new Promise((resolve) => requestAnimationFrame(resolve));
   const targetHref = String(requestedHref || tocEntries[index].href || "").split("#")[0];
   const contents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
-  let target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref);
+  const sameEpubPath = (left, right) => { try { left = decodeURIComponent(left); right = decodeURIComponent(right); } catch (_) {} return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`); };
+  let target = contents.find((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref));
   let frame = target && target.document && target.document.defaultView && target.document.defaultView.frameElement;
   for (let pass = 0; !frame && pass < 60; pass++) {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const currentContents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
-    target = currentContents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref) || target;
+    target = currentContents.find((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref)) || target;
     frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item));
   }
   setReaderPanelOpen(false, true);
