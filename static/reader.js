@@ -252,15 +252,13 @@ async function scrollToEpubTocEntry(index) {
   await tocEntries[index].activate();
   await new Promise((resolve) => requestAnimationFrame(resolve));
   const location = epubRendition.currentLocation && epubRendition.currentLocation();
-  const targetHref = location && location.start && String(location.start.href || "").split("#")[0];
+  const targetHref = String(tocEntries[index].href || (location && location.start && location.start.href) || "").split("#")[0];
   const contents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
-  const target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref) || contents[contents.length - 1];
+  const target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref);
   const frame = target && target.document && target.document.defaultView && target.document.defaultView.frameElement;
   setReaderPanelOpen(false, true);
   if (frame) {
-    const align = () => { viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top; };
-    align();
-    setTimeout(align, 120);
+    viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
   }
 }
 document.addEventListener("click", (event) => {
