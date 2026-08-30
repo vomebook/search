@@ -1,10 +1,8 @@
-import "/search/static/foliate-reader/view.js?outer3";
 const PDFJS_URL = "/search/static/vendor/pdf.min.f80490490320.mjs";
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
 const PDFJS_WASM_URL = "/search/static/vendor/wasm/";
 const PDFJS_CMAP_URL = "/search/static/vendor/cmaps/";
 const PDFJS_STANDARD_FONT_URL = "/search/static/vendor/standard_fonts/";
-const EPUB_URL = "/search/static/vendor/epub.min.06eae1574510.js";
 const MARKED_URL = "/search/static/vendor/marked.min.69451c8541c9.js";
 const PURIFY_URL = "/search/static/vendor/purify.min.c2f26ea4fc0d.js";
 const JSZIP_URL = "/search/static/vendor/jszip.min.acc7e41455a8.js";
@@ -255,5 +253,5 @@ function prepareDocument() {
 }
 
 async function renderFoliate(prepared) {
-  const response = await fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS); if (!response.ok) throw new Error(`HTTP ${response.status}`); const bytes = await response.arrayBuffer(); const view = document.createElement("foliate-view"); view.className = "foliate-reader-view"; content.replaceChildren(view); epubRendition = view; epubBook = await view.open(new File([bytes], new URL(sourceUrl).pathname.split("/").pop() || "book.epub", { type: response.headers.get("content-type") || "application/epub+zip" })); view.renderer.setAttribute("flow", "scrolled"); const forceFrameVisible = () => { const frame = view.renderer.getContents?.()[0]?.doc?.defaultView?.frameElement; if (!frame) return; frame.style.setProperty("display", "block", "important"); frame.style.setProperty("visibility", "visible", "important"); frame.style.setProperty("opacity", "1", "important"); frame.style.setProperty("width", "100%", "important"); frame.style.setProperty("height", "100%", "important"); }; view.addEventListener("load", forceFrameVisible); view.renderer.setStyles(`html, body { background: ${readerTheme === "light" ? "#ffffff" : "#181b1e"} !important; color: ${readerTheme === "light" ? "#202124" : "#e7e9eb"} !important; } body, body * { color: inherit !important; } a, a * { color: ${readerTheme === "light" ? "#165ea8" : "#8ab4e8"} !important; } img, svg, video { max-width: 100%; }`); forceFrameVisible(); view.prev = () => view.goLeft(); view.next = () => view.goRight(); view.on = (type, listener) => view.addEventListener(type, (event) => listener(event.detail)); view.currentLocation = () => view.lastLocation; view.themes = { fontSize: () => {} }; await Promise.race([view.goToTextStart(), new Promise((resolve) => setTimeout(resolve, 3000))]); forceFrameVisible(); loadingIndicator.remove(); loadingStatus.hidden = true; loadingObserver.disconnect(); status.textContent = "EPUB";
+  throw new Error("FOLIATE_DISABLED");
 }
