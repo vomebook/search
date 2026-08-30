@@ -8,6 +8,7 @@ const PRECACHE_URLS = [
   "/search/static/reader.html",
   "/search/static/reader.css",
   "/search/static/reader.js",
+  "/search/static/foliate-adapter.mjs",
   "/search/static/app.js",
   "/search/static/index-worker.js",
   "/search/data/initial/manifest.json",
@@ -25,6 +26,7 @@ const READER_RUNTIME_PATHS = new Set([
   "/search/static/reader.css",
   "/search/static/reader.js",
   "/search/static/pdf-worker-wrapper.mjs"
+  ,"/search/static/foliate-adapter.mjs"
 ]);
 self.addEventListener("install", (event) => {
   event.waitUntil(
