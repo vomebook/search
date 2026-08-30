@@ -164,7 +164,7 @@ fullSearchView.id = "full-search-view"; fullSearchView.className = "reader-panel
 fullSearchView.innerHTML = '<div class="full-search-bar"><input id="full-search-input" class="full-search-input" type="search" placeholder="搜索正文" aria-label="搜索正文"><button id="full-search-clear" class="icon-button" type="button" aria-label="清除全文搜索" title="清除">×</button></div><div id="full-search-status" class="full-search-status" role="status">输入关键词搜索正文</div><div class="full-search-nav"><button id="full-search-prev" type="button" disabled>上一个</button><button id="full-search-next" type="button" disabled>下一个</button></div><div id="full-search-results" class="full-search-results"></div>';
 document.querySelector("#history-panel").insertBefore(fullSearchView, document.querySelector(".reader-panel-tabs"));
 const fullSearchButton = document.createElement("button"); fullSearchButton.id = "full-search-toggle"; fullSearchButton.className = "text-action"; fullSearchButton.type = "button"; fullSearchButton.textContent = "全文搜索"; fullSearchButton.setAttribute("aria-label", "全文搜索"); document.querySelector("#history-panel > header").insertBefore(fullSearchButton, readerThemeToggle);
-fullSearchButton.hidden = !["pdf", "text", "markdown", "docx", "html", "epub"].includes(capability.mode);
+fullSearchButton.hidden = !["pdf", "text", "markdown", "docx", "html", "epub", "foliate"].includes(capability.mode);
 let fullSearchResults = [], fullSearchIndex = -1, fullSearchGeneration = 0;
 const fullSearchInput = fullSearchView.querySelector("#full-search-input"), fullSearchStatus = fullSearchView.querySelector("#full-search-status"), fullSearchResultsNode = fullSearchView.querySelector("#full-search-results");
 function fullSearchEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
@@ -251,4 +251,38 @@ function prepareDocument() {
   if (capability.mode === "audio" || capability.mode === "video") return Promise.resolve(null);
   if (capability.mode === "image") return new Promise((resolve, reject) => { const image = new Image(); image.className = "reader-image"; image.alt = title; image.decoding = "async"; let fallback = false; image.onload = () => resolve(image); image.onerror = () => { if (!fallback) { fallback = true; image.src = sourceUrl; } else reject(new Error("image load failed")); }; image.src = contentUrl; });
   return Promise.resolve(null);
+}
+
+// Foliate owns the complete ebook search index, including MOBI/AZW3/FB2.
+if (capability.mode === "foliate") {
+  fullSearchButton.hidden = false;
+  fullSearchInput.addEventListener("input", async () => {
+    const query = fullSearchInput.value.trim();
+    if (!query || !epubRendition || typeof epubRendition.search !== "function") return;
+    fullSearchResultsNode.textContent = "";
+    fullSearchStatus.textContent = "正在搜索正文…";
+    const results = [];
+    for await (const group of epubRendition.search({ query })) {
+      if (!group.subitems) continue;
+      for (const item of group.subitems) {
+        if (results.length >= 100) break;
+        const excerpt = item.excerpt || { pre: "", match: "", post: "" };
+        results.push({ location: group.label || "电子书位置", snippet: {
+          text: `${excerpt.pre}${excerpt.match}${excerpt.post}`,
+          matchStart: excerpt.pre.length, matchLength: excerpt.match.length,
+          prefix: "", suffix: "",
+        }, activate: () => epubRendition.goTo(item.cfi) });
+      }
+      if (results.length >= 100) break;
+    }
+    fullSearchResults = results;
+    for (const result of results) {
+      const row = document.createElement("button"); row.type = "button"; row.className = "full-search-result";
+      const location = document.createElement("small"); location.className = "full-search-location"; location.textContent = result.location;
+      row.append(location, fullSearchSnippetDom(result.snippet));
+      row.addEventListener("click", async () => { await result.activate(); setReaderPanelOpen(false, true); });
+      fullSearchResultsNode.appendChild(row);
+    }
+    fullSearchStatus.textContent = results.length ? `${results.length}${results.length >= 100 ? "+" : ""} 个结果` : "没有找到匹配正文";
+  });
 }
