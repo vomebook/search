@@ -1,13 +1,19 @@
-const PDFJS_URL = "/search/static/vendor/pdf.min.e0be3863c23c.mjs";
+const PDFJS_URL = "/search/static/vendor/pdf.min.f80490490320.mjs";
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
 const PDFJS_WASM_URL = "/search/static/vendor/wasm/";
 const PDFJS_CMAP_URL = "/search/static/vendor/cmaps/";
 const PDFJS_STANDARD_FONT_URL = "/search/static/vendor/standard_fonts/";
 const EPUB_URL = "/search/static/vendor/epub.min.06eae1574510.js";
-const MARKED_URL = "/search/static/vendor/marked.min.eaccee2fb9fb.js";
+const MARKED_URL = "/search/static/vendor/marked.min.69451c8541c9.js";
 const PURIFY_URL = "/search/static/vendor/purify.min.c2f26ea4fc0d.js";
 const JSZIP_URL = "/search/static/vendor/jszip.min.acc7e41455a8.js";
-const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.3573b8d99344.js";
+const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.051ef503f267.js";
+function cleanTocLabel(value) { return String(value || "未命名章节").replace(/[\uFFFD\u2610-\u2612\u25a1\u0000-\u001F\u007F]/gu, "").replace(/\s{2,}/gu, " ").trim() || "未命名章节"; }
+function updateTocCurrentMark() { const rows = [...document.querySelectorAll("#toc-list .toc-item")]; if (pageCount > 1 && currentPage > 0) { let pageIndex = -1; for (const [index, row] of rows.entries()) { const match = row.textContent.match(/第\s*(\d+)\s*页/u); if (match && Number(match[1]) <= currentPage) pageIndex = index; } if (pageIndex >= 0) currentChapterIndex = pageIndex; } for (const [index, row] of rows.entries()) { let mark = row.querySelector(".toc-current-mark"); if (!mark) { mark = document.createElement("span"); mark.className = "toc-current-mark"; mark.textContent = "✓"; row.appendChild(mark); } mark.hidden = index !== currentChapterIndex; row.classList.toggle("is-current", index === currentChapterIndex); } }
+setInterval(updateTocCurrentMark, 250);
+let readingLayoutReady = false;
+function placeReadingProgress() { const panel = document.querySelector("#history-panel"), tocPanel = document.querySelector("#toc-panel"), tocList = tocPanel.querySelector(".panel-list"), noToc = loadingStatus.hidden && !tocEntries.length && !mediaElement; progressTools.classList.toggle("reader-no-toc", noToc); tocPanel.querySelector(".panel-view-header strong").textContent = noToc ? "阅读状态" : "目录"; if (noToc && (progressTools.parentElement !== tocPanel || progressTools.nextElementSibling !== tocList)) tocPanel.insertBefore(progressTools, tocList); else if (!noToc && panel.lastElementChild !== progressTools) panel.appendChild(progressTools); }
+setInterval(placeReadingProgress, 250);
 const READER_PROXY_TIMEOUT_MS = 12000;
 const PDF_PROXY_TIMEOUT_MS = 60000;
 if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = function(key, callback) { if (this.has(key)) return this.get(key); const value = callback(key); this.set(key, value); return value; }; }
