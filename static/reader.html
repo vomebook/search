@@ -1,38 +1,15 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#181a1d">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' blob: https://huggingface.co https://hf-mirror.com https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co; img-src 'self' data: blob: https://voiceofml-search.hf.space https://huggingface.co https://hf-mirror.com https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co; media-src https://voiceofml-search.hf.space; connect-src 'self' blob: https://voiceofml-search.hf.space https://huggingface.co https://hf-mirror.com https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co; worker-src 'self' blob:; frame-src 'self' blob:; font-src 'self' data: https://huggingface.co https://hf-mirror.com https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co; base-uri 'self' blob:; form-action 'none'; object-src 'none'">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VoiceOfML Reader</title>
-<link rel="preconnect" href="https://voiceofml-search.hf.space" crossorigin>
 <link rel="stylesheet" href="/search/static/reader.css">
 <script defer src="/search/static/reader-contract.js"></script>
 <script defer src="/search/static/reader-store.js"></script>
 </head>
 <body>
-<header class="reader-toolbar">
-  <button id="back" class="icon-button" type="button" title="返回" aria-label="返回">&#8592;</button>
-  <div class="reader-heading"><strong id="title">在线阅读</strong><button id="reader-path" class="reader-path" type="button" title="在搜索中筛选此文件夹" hidden></button><span id="status">正在准备...</span></div>
-  <div class="reader-actions">
-    <span class="control-group page-controls">
-      <button id="page-prev" class="icon-button" type="button" title="上一页" aria-label="上一页">&#8249;</button>
-      <label class="compact-input"><input id="page-number" type="number" min="1" value="1" inputmode="numeric" aria-label="页码"><span id="page-total">/ -</span></label>
-      <button id="page-next" class="icon-button" type="button" title="下一页" aria-label="下一页">&#8250;</button>
-    </span>
-    <span class="control-group zoom-controls">
-      <button id="zoom-out" class="icon-button" type="button" title="缩小" aria-label="缩小">&#8722;</button>
-      <label class="compact-input"><input id="zoom" type="number" min="25" max="400" step="10" value="100" inputmode="numeric" aria-label="缩放比例"><span>%</span></label>
-      <button id="zoom-in" class="icon-button" type="button" title="放大" aria-label="放大">+</button>
-    </span>
-    <a id="ocr" class="text-button" title="阅读 OCR 文本" target="_blank" rel="noopener noreferrer" hidden>OCR</a>
-    <a id="download" class="icon-button" title="代理下载原文件" aria-label="代理下载原文件" target="_blank" rel="noopener noreferrer">&#8681;</a>
-  </div>
-  <button id="history" class="icon-button" type="button" title="阅读选项" aria-label="阅读选项" aria-expanded="false">&#9776;</button>
-</header>
-<main id="viewport" class="reader-viewport"><button id="bookmark-ribbon" class="bookmark-ribbon" type="button" aria-label="在当前位置添加书签" aria-controls="bookmark-popover" aria-expanded="false" title="添加书签"></button><div id="bookmark-popover" class="bookmark-popover" role="dialog" aria-modal="true" aria-labelledby="bookmark-prompt" hidden><span id="bookmark-prompt"></span><div><button id="bookmark-add" type="button">添加书签</button><button id="bookmark-cancel" type="button">取消</button></div></div><div id="loading-status" class="loading-status" role="status">正在加载原文件...</div><div id="content" class="reader-content"></div></main>
-<aside id="history-panel" class="reader-panel" hidden><header><strong>阅读选项</strong><button id="history-close" class="icon-button" type="button" aria-label="关闭">&times;</button></header><nav class="reader-panel-tabs" role="tablist" aria-label="阅读选项"><button id="toc-tab" type="button" role="tab" aria-controls="toc-panel" data-panel="toc" hidden>目录</button><button id="bookmarks-tab" type="button" role="tab" aria-controls="bookmarks-panel" data-panel="bookmarks">书签</button><button id="history-tab" type="button" role="tab" aria-controls="history-view" data-panel="history">历史</button></nav><section id="toc-panel" class="reader-panel-view" role="tabpanel" aria-labelledby="toc-tab" data-panel-view="toc" hidden><div class="panel-view-header"><strong>目录</strong><button class="panel-search-toggle icon-button" type="button" aria-label="搜索目录" title="搜索目录">&#128269;</button></div><input class="panel-search" type="search" placeholder="搜索目录" aria-label="搜索目录" hidden><div id="toc-list" class="panel-list"></div></section><section id="bookmarks-panel" class="reader-panel-view" role="tabpanel" aria-labelledby="bookmarks-tab" data-panel-view="bookmarks" hidden><div class="panel-view-header"><strong>书签</strong><button class="panel-search-toggle icon-button" type="button" aria-label="搜索书签" title="搜索书签">&#128269;</button></div><input class="panel-search" type="search" placeholder="搜索书签" aria-label="搜索书签" hidden><div id="bookmarks-list" class="panel-list"></div></section><section id="history-view" class="reader-panel-view" role="tabpanel" aria-labelledby="history-tab" data-panel-view="history" hidden><div class="panel-view-header"><strong>阅读历史</strong><span><button id="history-clear" class="text-action" type="button">清空历史</button><button class="panel-search-toggle icon-button" type="button" aria-label="搜索历史" title="搜索历史">&#128269;</button></span></div><input class="panel-search" type="search" placeholder="搜索历史" aria-label="搜索历史" hidden><div id="history-list" class="panel-list"></div></section><footer><span>显示模式</span><button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">切换到白天模式</button></footer></aside>
- <script type="module" src="/search/static/reader.js?v=foliate-ready-v2"></script>
-</body>
-</html>
+<header class="reader-toolbar"><button id="back" class="icon-button" type="button">&#8592;</button><div class="reader-heading"><strong id="title">在线阅读</strong><button id="reader-path" class="reader-path" type="button" hidden></button><span id="status">正在准备...</span></div><div class="reader-actions"><span class="control-group page-controls"><button id="page-prev" class="icon-button" type="button">&#8249;</button><label class="compact-input"><input id="page-number" type="number" min="1" value="1"><span id="page-total">/ -</span></label><button id="page-next" class="icon-button" type="button">&#8250;</button></span><span class="control-group zoom-controls"><button id="zoom-out" class="icon-button" type="button">&#8722;</button><label class="compact-input"><input id="zoom" type="number" min="25" max="400" step="10" value="100"><span>%</span></label><button id="zoom-in" class="icon-button" type="button">+</button></span><a id="ocr" class="text-button" target="_blank" hidden>OCR</a><a id="download" class="icon-button" target="_blank">&#8681;</a></div><button id="history" class="icon-button" type="button">&#9776;</button></header>
+<main id="viewport" class="reader-viewport"><button id="bookmark-ribbon" class="bookmark-ribbon" type="button"></button><div id="bookmark-popover" hidden><span id="bookmark-prompt"></span><div><button id="bookmark-add" type="button">添加书签</button><button id="bookmark-cancel" type="button">取消</button></div></div><div id="loading-status" role="status">正在加载原文件...</div><div id="content" class="reader-content"></div></main>
+<aside id="history-panel" class="reader-panel" hidden><header><strong>阅读选项</strong><button id="history-close" class="icon-button" type="button">&times;</button></header><nav class="reader-panel-tabs"><button id="toc-tab" data-panel="toc" hidden>目录</button><button id="bookmarks-tab" data-panel="bookmarks">书签</button><button id="history-tab" data-panel="history">历史</button></nav><section id="toc-panel" class="reader-panel-view" data-panel-view="toc" hidden><div class="panel-view-header"><strong>目录</strong></div><div id="toc-list" class="panel-list"></div></section><section id="bookmarks-panel" class="reader-panel-view" data-panel-view="bookmarks" hidden><div class="panel-view-header"><strong>书签</strong></div><div id="bookmarks-list" class="panel-list"></div></section><section id="history-view" class="reader-panel-view" data-panel-view="history" hidden><div class="panel-view-header"><strong>阅读历史</strong></div><div id="history-list" class="panel-list"></div></section><footer><button id="theme-toggle" type="button">切换主题</button></footer></aside>
+<script type="module" src="/search/static/reader.js?v=foliate-only-v1"></script>
+</body></html>
