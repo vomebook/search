@@ -228,6 +228,7 @@ async function start() {
   if ((!validSource(sourceUrl) && !validSource(chapterManifestUrl)) || capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED) return fail("此文件暂不支持在线阅读，请下载原文件。");
   document.querySelector("#download").href = `https://voiceofml-search.hf.space/api/download?file=${encodeURIComponent(title)}&link=${encodeURIComponent(downloadUrl)}`;
   try {
+    readerStage = "prepare";
     let prepared; [restoredEntry, prepared] = await Promise.all([VoiceOfMLReaderStore.get(sourceUrl).catch(() => { restorationFailed = true; return null; }), prepareDocument()]);
     if (restoredEntry && restoredEntry.zoom) setZoom(restoredEntry.zoom, false);
     if (capability.mode === "epub-chapters") await renderChapterManifest(prepared);
