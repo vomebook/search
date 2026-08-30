@@ -309,9 +309,10 @@ export class View extends HTMLElement {
         this.mediaOverlay = null
     }
     goToTextStart() {
-        return this.goTo(this.book.landmarks
+        const landmark = this.book.landmarks
             ?.find(m => m.type.includes('bodymatter') || m.type.includes('text'))
-            ?.href ?? this.book.sections.findIndex(s => s.linear !== 'no'))
+        const firstSection = this.book.sections.findIndex(s => s.linear !== 'no')
+        return this.goTo(landmark?.href ?? (firstSection >= 0 ? firstSection : 0))
     }
     async init({ lastLocation, showTextStart }) {
         const resolved = lastLocation ? this.resolveNavigation(lastLocation) : null
