@@ -252,33 +252,10 @@ function prepareDocument() {
 }
 async function scrollToEpubTocEntry(index) {
   if (capability.mode !== "epub" || !epubRendition || !tocEntries[index]) return;
-  const framesBefore = new Set([...document.querySelectorAll(".epub-frame iframe")]);
-  let requestedHref = "";
-  const display = epubRendition.display.bind(epubRendition);
-  epubRendition.display = (href, ...args) => { requestedHref = String(href || ""); return display(href, ...args); };
-  epubRendition.on("relocated", syncEpubTocLocation);
-  try { await tocEntries[index].activate(); } finally { epubRendition.display = display; }
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-  const targetHref = String(requestedHref || tocEntries[index].href || "").split("#")[0];
-  const contents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
-  const sameEpubPath = (left, right) => { try { left = decodeURIComponent(left); right = decodeURIComponent(right); } catch (_) {} return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`); };
-  let targetIndex = contents.findIndex((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref));
-  let target = targetIndex >= 0 ? contents[targetIndex] : null;
-  let frames = [...document.querySelectorAll(".epub-frame iframe")];
-  let frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || frames[targetIndex];
-  for (let pass = 0; !frame && pass < 60; pass++) {
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    const currentContents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
-    targetIndex = currentContents.findIndex((item) => targetHref && sameEpubPath(String(item.href || "").split("#")[0], targetHref));
-    target = targetIndex >= 0 ? currentContents[targetIndex] : target;
-    frames = [...document.querySelectorAll(".epub-frame iframe")];
-    frame = (target && target.document && target.document.defaultView && target.document.defaultView.frameElement) || frames[targetIndex] || frames.filter((item) => !framesBefore.has(item)).pop();
-  }
-  setReaderPanelOpen(false, true);
-  if (!frame) return;
-  const align = () => { viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top; };
-  for (let pass = 0; pass < 8; pass++) await new Promise((resolve) => requestAnimationFrame(resolve)), align();
   currentChapterIndex = index; updateTocCurrentMark();
+  try { await tocEntries[index].activate(); }
+  finally { currentChapterIndex = index; updateTocCurrentMark(); }
+  setReaderPanelOpen(false, true);
 }
 document.addEventListener("click", (event) => {
   if (capability.mode !== "epub") return;
