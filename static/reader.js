@@ -247,7 +247,7 @@ function prepareDocument() {
 
 async function renderFoliate(prepared) {
   const [response] = await prepared; if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const bytes = await response.arrayBuffer(); const { openFoliate } = await import("./foliate-adapter.mjs"); const view = await openFoliate(bytes, title);
+  const bytes = await response.arrayBuffer(); const { openFoliate } = await import("./foliate-adapter.mjs?v=5eb3249"); const view = await openFoliate(bytes, title);
   view.themes = { select() {}, fontSize() {} }; view.display = (target) => view.goTo(target); view.prev = () => view.renderer.prev(); view.next = () => view.renderer.next(); epubRendition = view; epubBook = view.book;
   const entries = []; const append = (items, depth = 0) => { for (const item of items || []) { entries.push({ label: item.label || "未命名章节", href: item.href, depth, activate: () => view.goTo(item.href) }); append(item.subitems, depth + 1); } }; append(view.book.toc); setToc(entries);
   view.addEventListener("relocate", (event) => { const item = event.detail && event.detail.tocItem; if (item && item.href) { const index = entries.findIndex((entry) => entry.href === item.href); if (index >= 0) { currentChapterIndex = index; updateTocCurrentMark(); } } });
