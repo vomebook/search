@@ -17,9 +17,11 @@ if (!Math.sumPrecise) { Math.sumPrecise = function(values) { let sum = 0, correc
 const params = new URLSearchParams(location.search), sourceUrl = params.get("url") || "", contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`, downloadUrl = params.get("download") || sourceUrl, extension = (params.get("ext") || "").toLowerCase(), chapterManifestUrl = params.get("chapter_manifest") || "", fallbackUrl = params.get("fallback") || "";
 const capability = VoiceOfMLReader.capability(extension);
 window.fetchFile = async (url) => {
-  const response = await fetch(url);
+  const requestUrl = String(url) === sourceUrl ? contentUrl : url;
+  const response = await fetch(requestUrl);
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  return new File([await response.blob()], new URL(response.url).pathname, { type: response.headers.get("content-type") || "application/octet-stream" });
+  const fileName = new URL(url).pathname.split("/").pop() || "book";
+  return new File([await response.blob()], fileName, { type: response.headers.get("content-type") || "application/octet-stream" });
 };
 let returnUrl = params.get("return") || "", returnNavigationToken = params.get("nav") || "", returnNeedsReload = false;
 function normalizeReaderReturnUrl(rawUrl) { try { const target = new URL(rawUrl || "/search/", location.origin); if (target.origin === location.origin && target.pathname === "/") return new URL("/search/", location.origin).href; return target.href; } catch (_) { return new URL("/search/", location.origin).href; } }
