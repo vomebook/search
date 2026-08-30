@@ -98,6 +98,8 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 @keyframes reader-theme-icon { from { opacity: 0; transform: rotate(-35deg) scale(.72); } to { opacity: 1; transform: rotate(0) scale(1); } }
 #history-close { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; font-family: Arial, sans-serif; font-size: 22px; line-height: 1; transform: translateY(-2px); }
 .reader-viewport { min-height: 0; flex: 1; overflow: auto; background: #121416; }
+#viewport:has(.reader-content[data-mode="epub"]) { overflow: hidden; }
+#viewport:has(.reader-content[data-mode="epub"]) .epub-frame { height: auto !important; }
 .bookmark-ribbon { position: fixed; z-index: 12; top: 44px; left: max(10px, calc((100vw - min(100vw, 1100px)) / 2 + 2px)); width: 28px; height: 42px; padding: 0; border: 0; background: #b64b50; box-shadow: 0 2px 8px #0006; cursor: pointer; clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 76%, 0 100%); }
 .bookmark-ribbon:hover, .bookmark-ribbon:focus-visible { background: #d35b61; outline: 2px solid #8ab4f8; outline-offset: 2px; }
 .bookmark-popover { position: fixed; z-index: 22; top: 92px; left: 10px; width: min(300px, calc(100vw - 20px)); padding: 12px; border: 1px solid #464c52; border-radius: 6px; background: #25292d; box-shadow: 0 6px 20px #0009; }
