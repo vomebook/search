@@ -238,5 +238,7 @@ $('#file-button').addEventListener('click', () => $('#file-input').click())
 
 const params = new URLSearchParams(location.search)
 const url = params.get('url')
+const fileNameHint = params.get('file_name') || ''
+globalThis.foliateFileNameHint = fileNameHint
 if (url) open(url).then(() => window.parent !== window && window.parent.postMessage({ type: 'voice-foliate-ready' }, location.origin)).catch(e => { console.error(e); if (window.parent !== window) window.parent.postMessage({ type: 'voice-foliate-error', message: e?.message || 'FOLIATE_LOAD_FAILED' }, location.origin) })
 else dropTarget.style.visibility = 'visible'
