@@ -278,6 +278,7 @@ async function scrollToEpubTocEntry(index) {
   if (!frame) return;
   const align = () => { viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top; };
   for (let pass = 0; pass < 8; pass++) await new Promise((resolve) => requestAnimationFrame(resolve)), align();
+  currentChapterIndex = index; updateTocCurrentMark();
 }
 document.addEventListener("click", (event) => {
   if (capability.mode !== "epub") return;
