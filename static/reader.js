@@ -15,6 +15,7 @@ if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = fu
 if (!Math.sumPrecise) { Math.sumPrecise = function(values) { let sum = 0, correction = 0; for (const value of values) { const next = sum + value; correction += Math.abs(sum) >= Math.abs(value) ? (sum - next) + value : (value - next) + sum; sum = next; } return sum + correction; }; }
 const params = new URLSearchParams(location.search), sourceUrl = params.get("url") || "", contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`, downloadUrl = params.get("download") || sourceUrl, extension = (params.get("ext") || "").toLowerCase(), chapterManifestUrl = params.get("chapter_manifest") || "", fallbackUrl = params.get("fallback") || "";
 const capability = VoiceOfMLReader.capability(extension);
+let readerStage = "startup";
 window.fetchFile = async (url) => {
   const requestUrl = String(url) === sourceUrl ? contentUrl : url;
   const response = await fetch(requestUrl);
@@ -109,7 +110,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
  function validFallback(raw) { try { const url = new URL(raw); return url.protocol === "https:" && ["huggingface.co", "hf-mirror.com"].includes(url.hostname) && /\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?document\.pdf$/.test(url.pathname); } catch (_) { return false; } }
 function validOcr(raw) { try { const url = new URL(raw); return url.protocol === "https:" && url.hostname === "voiceofml-search.hf.space" && url.pathname.startsWith("/txt/"); } catch (_) { return false; } }
 function loadScript(url) { return new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = url; script.onload = resolve; script.onerror = reject; document.head.appendChild(script); }); }
-function fail(message) { loadingStatus.hidden = true; loadingIndicator.remove(); content.innerHTML = `<div class="reader-error">${message}</div>`; status.textContent = "无法打开"; }
+function fail(message) { loadingStatus.hidden = true; loadingIndicator.remove(); content.innerHTML = `<div class="reader-error">${message}</div>`; status.textContent = "无法打开"; const errorNode = content.querySelector(".reader-error"); if (errorNode) errorNode.title = `${readerStage}: ${message}`; }
 function fetchWithReaderTimeout(url, timeoutMs) { const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), timeoutMs); return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timeout)); }
 function fetchReaderResponse() { return fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS).then((response) => response.ok ? response : fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS), () => fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS)); }
 function fetchFoliateResponse() { return fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS).then((response) => response.ok ? response : fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS), () => fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS)); }
