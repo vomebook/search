@@ -16,6 +16,11 @@ if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = fu
 if (!Math.sumPrecise) { Math.sumPrecise = function(values) { let sum = 0, correction = 0; for (const value of values) { const next = sum + value; correction += Math.abs(sum) >= Math.abs(value) ? (sum - next) + value : (value - next) + sum; sum = next; } return sum + correction; }; }
 const params = new URLSearchParams(location.search), sourceUrl = params.get("url") || "", contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`, downloadUrl = params.get("download") || sourceUrl, extension = (params.get("ext") || "").toLowerCase(), chapterManifestUrl = params.get("chapter_manifest") || "", fallbackUrl = params.get("fallback") || "";
 const capability = VoiceOfMLReader.capability(extension);
+window.fetchFile = async (url) => {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return new File([await response.blob()], new URL(response.url).pathname, { type: response.headers.get("content-type") || "application/octet-stream" });
+};
 let returnUrl = params.get("return") || "", returnNavigationToken = params.get("nav") || "", returnNeedsReload = false;
 function normalizeReaderReturnUrl(rawUrl) { try { const target = new URL(rawUrl || "/search/", location.origin); if (target.origin === location.origin && target.pathname === "/") return new URL("/search/", location.origin).href; return target.href; } catch (_) { return new URL("/search/", location.origin).href; } }
 try { const state = history.state, saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null"); let stateUrl = state && state.voiceReaderOverlay && state.readerUrl ? new URL(state.readerUrl, location.origin) : null; if (!stateUrl && saved && saved.shareUrl === location.href && saved.readerUrl) stateUrl = new URL(saved.readerUrl, location.origin); const cleanStateUrl = stateUrl && new URL(stateUrl.href); if (cleanStateUrl) { cleanStateUrl.searchParams.delete("return"); cleanStateUrl.searchParams.delete("nav"); } if (stateUrl && stateUrl.origin === location.origin && stateUrl.pathname === "/search/static/reader.html" && cleanStateUrl.href === location.href) { if (!returnUrl) returnUrl = stateUrl.searchParams.get("return") || ""; if (!returnNavigationToken) returnNavigationToken = stateUrl.searchParams.get("nav") || ""; returnNeedsReload = true; } } catch (_) {}
@@ -239,7 +244,7 @@ function prepareDocument() {
   if (capability.mode === "markdown") return Promise.all([fetchReaderResponse(), Promise.all([loadScript(MARKED_URL), loadScript(PURIFY_URL)])]).then(([response, engines]) => ({ response, engines }));
   if (capability.mode === "html") return Promise.all([fetchReaderResponse(), loadScript(PURIFY_URL)]).then(([response, engine]) => ({ response, engine }));
   if (capability.mode === "text") return fetchReaderResponse().then((response) => ({ response }));
-  if (capability.mode === "foliate") return fetchFoliateResponse().then((response) => [response]);
+  if (capability.mode === "foliate") return Promise.resolve(null);
   if (capability.mode === "docx") return Promise.all([fetchReaderResponse(), loadScript(JSZIP_URL).then(() => loadScript(DOCX_PREVIEW_URL))]);
   if (capability.mode === "audio" || capability.mode === "video") return Promise.resolve(null);
   if (capability.mode === "image") return new Promise((resolve, reject) => { const image = new Image(); image.className = "reader-image"; image.alt = title; image.decoding = "async"; let fallback = false; image.onload = () => resolve(image); image.onerror = () => { if (!fallback) { fallback = true; image.src = sourceUrl; } else reject(new Error("image load failed")); }; image.src = contentUrl; });
@@ -247,9 +252,6 @@ function prepareDocument() {
 }
 
 async function renderFoliate(prepared) {
-  const [response] = await prepared; if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const frame = document.createElement("iframe"); frame.className = "foliate-reader-frame"; frame.title = title; frame.setAttribute("sandbox", "allow-same-origin allow-scripts"); frame.src = `./foliate-reader/reader.html?url=${encodeURIComponent(sourceUrl)}`; content.replaceChildren(frame); loadingIndicator.remove(); loadingStatus.hidden = true; status.textContent = "正在打开电子书...";
-  await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("FOLIATE_LOAD_TIMEOUT")), READER_PROXY_TIMEOUT_MS); frame.addEventListener("load", () => { clearTimeout(timer); resolve(); }, { once: true }); });
-  frame.contentWindow.postMessage({ type: "reader-file-url", url: sourceUrl }, location.origin);
-  frame.addEventListener("load", () => { status.textContent = "EPUB"; loadingObserver.disconnect(); }, { once: true });
+  await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("FOLIATE_LOAD_TIMEOUT")), READER_PROXY_TIMEOUT_MS); frame.addEventListener("load", () => { clearTimeout(timer); status.textContent = "EPUB"; loadingObserver.disconnect(); resolve(); }, { once: true }); });
 }
