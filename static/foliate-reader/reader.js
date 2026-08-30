@@ -118,7 +118,10 @@ class Reader {
             })
         })
         this.view.renderer.setStyles?.(getCSS(this.style))
-        await this.view.goToTextStart()
+        await Promise.race([
+            this.view.goToTextStart(),
+            new Promise(resolve => setTimeout(resolve, 3000)),
+        ])
 
         $('#header-bar').style.visibility = 'visible'
         $('#nav-bar').style.visibility = 'visible'
