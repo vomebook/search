@@ -7,5 +7,6 @@ export async function openFoliate(bytes, name, type = "application/octet-stream"
   document.querySelector("#content").appendChild(view);
   await view.open(new File([bytes], name, { type }));
   view.renderer.setAttribute("flow", "scrolled");
+  await view.renderer.next();
   return view;
 }
