@@ -251,5 +251,5 @@ async function renderFoliate(prepared) {
   view.themes = { select() {}, fontSize() {} }; view.display = (target) => view.goTo(target); view.prev = () => view.renderer.prev(); view.next = () => view.renderer.next(); epubRendition = view; epubBook = view.book;
   const entries = []; const append = (items, depth = 0) => { for (const item of items || []) { entries.push({ label: item.label || "未命名章节", href: item.href, depth, activate: () => view.goTo(item.href) }); append(item.subitems, depth + 1); } }; append(view.book.toc); setToc(entries);
   view.addEventListener("relocate", (event) => { const item = event.detail && event.detail.tocItem; if (item && item.href) { const index = entries.findIndex((entry) => entry.href === item.href); if (index >= 0) { currentChapterIndex = index; updateTocCurrentMark(); } } });
-  content.appendChild(view); await view.goTo(0); loadingIndicator.remove(); loadingObserver.disconnect(); status.textContent = "EPUB";
+  await view.goTo(0); loadingIndicator.remove(); loadingObserver.disconnect(); status.textContent = "EPUB";
 }
