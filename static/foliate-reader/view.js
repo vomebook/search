@@ -70,6 +70,8 @@ export class NotFoundError extends Error {}
 export class UnsupportedTypeError extends Error {}
 
 const fetchFile = async url => {
+    if (window.parent !== window && typeof window.parent.fetchFile === 'function')
+        return window.parent.fetchFile(url)
     const res = await fetch(url)
     if (!res.ok) throw new ResponseError(
         `${res.status} ${res.statusText}`, { cause: res })
