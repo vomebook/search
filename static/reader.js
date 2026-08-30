@@ -106,6 +106,7 @@ function loadScript(url) { return new Promise((resolve, reject) => { const scrip
 function fail(message) { loadingStatus.hidden = true; loadingIndicator.remove(); content.innerHTML = `<div class="reader-error">${message}</div>`; status.textContent = "无法打开"; }
 function fetchWithReaderTimeout(url, timeoutMs) { const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), timeoutMs); return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timeout)); }
 function fetchReaderResponse() { return fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS).then((response) => response.ok ? response : fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS), () => fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS)); }
+function fetchFoliateResponse() { return fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS).then((response) => response.ok ? response : fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS), () => fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS)); }
 function loadPdfTaskWithTimeout(pdfjs, options, url) { const task = pdfjs.getDocument(options(url)); return new Promise((resolve, reject) => { const timeout = setTimeout(() => { task.destroy().catch(() => {}); reject(new Error("reader PDF timeout")); }, PDF_PROXY_TIMEOUT_MS); task.promise.then((document) => { clearTimeout(timeout); resolve(document); }, (error) => { clearTimeout(timeout); reject(error); }); }); }
 function loadPdfWithTimeout(pdfjs, options) { return loadPdfTaskWithTimeout(pdfjs, options, contentUrl).catch(() => loadPdfTaskWithTimeout(pdfjs, options, sourceUrl)); }
 async function renderPdf(prepared) {
@@ -238,7 +239,7 @@ function prepareDocument() {
   if (capability.mode === "markdown") return Promise.all([fetchReaderResponse(), Promise.all([loadScript(MARKED_URL), loadScript(PURIFY_URL)])]).then(([response, engines]) => ({ response, engines }));
   if (capability.mode === "html") return Promise.all([fetchReaderResponse(), loadScript(PURIFY_URL)]).then(([response, engine]) => ({ response, engine }));
   if (capability.mode === "text") return fetchReaderResponse().then((response) => ({ response }));
-  if (capability.mode === "foliate") return fetchReaderResponse().then((response) => [response]);
+  if (capability.mode === "foliate") return fetchFoliateResponse().then((response) => [response]);
   if (capability.mode === "docx") return Promise.all([fetchReaderResponse(), loadScript(JSZIP_URL).then(() => loadScript(DOCX_PREVIEW_URL))]);
   if (capability.mode === "audio" || capability.mode === "video") return Promise.resolve(null);
   if (capability.mode === "image") return new Promise((resolve, reject) => { const image = new Image(); image.className = "reader-image"; image.alt = title; image.decoding = "async"; let fallback = false; image.onload = () => resolve(image); image.onerror = () => { if (!fallback) { fallback = true; image.src = sourceUrl; } else reject(new Error("image load failed")); }; image.src = contentUrl; });
