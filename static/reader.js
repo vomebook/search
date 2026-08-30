@@ -254,5 +254,5 @@ function prepareDocument() {
 }
 
 async function renderFoliate(prepared) {
-  const response = await fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS); if (!response.ok) throw new Error(`HTTP ${response.status}`); const bytes = await response.arrayBuffer(); const adapter = await import("/search/static/foliate-adapter.mjs"); epubRendition = await adapter.openFoliate(bytes, new URL(sourceUrl).pathname.split("/").pop() || "book.epub", response.headers.get("content-type") || "application/epub+zip"); epubBook = epubRendition.book; loadingIndicator.remove(); loadingStatus.hidden = true; loadingObserver.disconnect(); status.textContent = "EPUB";
+  const response = await fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS); if (!response.ok) throw new Error(`HTTP ${response.status}`); const bytes = await response.arrayBuffer(); const adapter = await import("/search/static/foliate-adapter.mjs?v=outer2"); epubRendition = await adapter.openFoliate(bytes, new URL(sourceUrl).pathname.split("/").pop() || "book.epub", response.headers.get("content-type") || "application/epub+zip"); epubBook = epubRendition.book; loadingIndicator.remove(); loadingStatus.hidden = true; loadingObserver.disconnect(); status.textContent = "EPUB";
 }
