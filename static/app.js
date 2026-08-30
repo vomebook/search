@@ -134,13 +134,14 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-  if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.pdf|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)$/.test(asset.p || "")) return record;
-  var readerExtensions = { p: "pdf", e: "epub", d: "docx", h: "html", a: "audio", v: "video" };
-  var chapterBundle = asset.m === "p" && !!asset.c;
-  return Object.assign({}, record, {
-    ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (chapterBundle ? asset.c : asset.p),
-    ReaderExtension: chapterBundle ? "epub-chapters" : readerExtensions[asset.m],
-    ReaderChapterManifest: chapterBundle ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.c : "",
+  if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)$/.test(asset.p || "")) return record;
+  var originalExtension = String(record.Extension || record.extension || "").toLowerCase();
+  var readerExtensions = { p: "pdf", e: ["epub", "mobi", "azw3", "fb2"].indexOf(originalExtension) >= 0 ? originalExtension : "epub", d: "docx", h: "html", a: "audio", v: "video" };
+   var chapterBundle = asset.m === "p" && !!asset.c;
+   return Object.assign({}, record, {
+     ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (chapterBundle ? asset.c : asset.p),
+     ReaderExtension: chapterBundle ? "epub-chapters" : readerExtensions[asset.m],
+     ReaderChapterManifest: chapterBundle ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.c : "",
     ReaderFallback: asset.f || "",
     DownloadLink: originalLink,
   });
@@ -399,7 +400,7 @@ function warmReaderIntent(rawUrl) {
   var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader.js"];
   var engineAssets = extension === "pdf"
     ? ["/search/static/vendor/pdf.min.f80490490320.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.8ab0e5e30031.mjs"]
-    : extension === "epub" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/epub.min.06eae1574510.js"]
+    : extension === "epub" ? []
     : extension === "docx" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/docx-preview.min.051ef503f267.js"]
      : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.69451c8541c9.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
   shellAssets.concat(engineAssets).forEach(function(href) {
