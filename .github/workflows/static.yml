@@ -41,7 +41,8 @@ jobs:
           cp index.html manifest.json sw.js _site/
           cp -a icons data _site/
           node scripts/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
-          node scripts/copy_reader_vendor.mjs _site/static/vendor
+           node scripts/copy_reader_vendor.mjs _site/static/vendor
+           cp -a static/vendor/foliate _site/static/vendor/foliate
           npx --yes esbuild@0.28.2 static/app.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
           npx --yes esbuild@0.28.2 static/reader-contract.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-contract.js
           npx --yes esbuild@0.28.2 static/reader-store.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-store.js
@@ -49,7 +50,8 @@ jobs:
           npx --yes esbuild@0.28.2 static/index-worker.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/index-worker.js
           npx --yes esbuild@0.28.2 static/style.css --minify --outfile=_site/static/style.css
           npx --yes esbuild@0.28.2 static/reader.css --minify --outfile=_site/static/reader.css
-          cp static/reader.html _site/static/reader.html
+           cp static/reader.html _site/static/reader.html
+           cp static/foliate-adapter.mjs _site/static/foliate-adapter.mjs
           cp static/pdf-worker-wrapper.mjs _site/static/pdf-worker-wrapper.mjs
           npx --yes esbuild@0.28.2 sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
           node --check _site/static/app.js
