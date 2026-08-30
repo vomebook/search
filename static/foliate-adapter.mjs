@@ -14,11 +14,22 @@ export async function openFoliate(bytes, name, type = "application/octet-stream"
       : { background: "#181b1e", color: "#e7e9eb", link: "#8ab4e8" };
     view.renderer?.setStyles(`:root, body { background: ${colors.background} !important; color: ${colors.color} !important; } body, body :is(p, div, span, li, td, th, blockquote, pre, code, h1, h2, h3, h4, h5, h6) { color: ${colors.color} !important; } a, a * { color: ${colors.link} !important; } img, svg, video { max-width: 100%; }`);
   };
-  view.addEventListener("load", applyReaderTheme);
+  const forceFrameVisible = () => {
+    const documentView = view.renderer?.getContents?.()[0]?.doc?.defaultView;
+    const frame = documentView?.frameElement;
+    if (!frame) return;
+    frame.style.setProperty("display", "block", "important");
+    frame.style.setProperty("visibility", "visible", "important");
+    frame.style.setProperty("opacity", "1", "important");
+    frame.style.setProperty("width", "100%", "important");
+    frame.style.setProperty("height", "100%", "important");
+  };
+  view.addEventListener("load", () => { applyReaderTheme(); forceFrameVisible(); });
   await view.open(new File([bytes], name, { type }));
   view.renderer.setAttribute("flow", "scrolled");
   view.setReaderTheme = (theme) => { readerTheme = theme === "light" ? "light" : "dark"; applyReaderTheme(); };
   const navigation = view.goToTextStart();
   await Promise.race([firstLoad, navigation]);
+  forceFrameVisible();
   return view;
 }
