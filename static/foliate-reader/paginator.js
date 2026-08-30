@@ -268,7 +268,9 @@ class View {
 
                 this.#contentRange.selectNodeContents(doc.body)
                 const layout = beforeRender?.({ vertical, rtl, background })
-                this.#iframe.style.display = 'block'
+                this.#iframe.style.setProperty('display', 'block', 'important')
+                this.#iframe.style.setProperty('visibility', 'visible', 'important')
+                this.#iframe.style.setProperty('opacity', '1', 'important')
                 this.render(layout)
                 this.#observer.observe(doc.body)
 
