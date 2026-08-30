@@ -99,7 +99,7 @@ document.querySelector("#history").addEventListener("click", () => setReaderPane
 viewport.addEventListener("scroll", scheduleMarkerSync, { passive: true });
 window.addEventListener("pagehide", saveProgress);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveProgress(); });
- function validSource(raw) { try { const url = new URL(raw); if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname)) return false; const readerAsset = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(chapter-manifest\.json|document\.pdf|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)$/.test(url.pathname); if (extension === "docx") return readerAsset; return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset; } catch (_) { return false; } }
+  function validSource(raw) { try { const url = new URL(raw); if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname)) return false; const readerAsset = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(chapter-manifest\.json|document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)$/.test(url.pathname); if (extension === "docx") return readerAsset; return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset; } catch (_) { return false; } }
  function validFallback(raw) { try { const url = new URL(raw); return url.protocol === "https:" && ["huggingface.co", "hf-mirror.com"].includes(url.hostname) && /\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?document\.pdf$/.test(url.pathname); } catch (_) { return false; } }
 function validOcr(raw) { try { const url = new URL(raw); return url.protocol === "https:" && url.hostname === "voiceofml-search.hf.space" && url.pathname.startsWith("/txt/"); } catch (_) { return false; } }
 function loadScript(url) { return new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = url; script.onload = resolve; script.onerror = reject; document.head.appendChild(script); }); }
@@ -228,7 +228,7 @@ async function start() {
   } catch (error) {
     console.error(error);
     if (capability.mode === "epub-chapters" && validFallback(fallbackUrl)) { const target = new URL(location.href); target.searchParams.set("url", fallbackUrl); target.searchParams.set("ext", "pdf"); target.searchParams.delete("chapter_manifest"); target.searchParams.delete("fallback"); if (window.parent !== window) window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin); else location.replace(target.href); return; }
-    fail(error && error.message === "EPUB_INVALID" ? "源 EPUB 文件不完整或已损坏，请下载原文件检查。" : "原文件加载失败，请检查网络后重试，或下载原文件。");
+    fail(error && error.message === "EPUB_INVALID" ? "源 EPUB 文件不完整或已损坏，请下载原文件检查。" : error && error.message === "FOLIATE_LOAD_TIMEOUT" ? "电子书正文加载超时，请检查源文件或网络后重试。" : "原文件加载失败，请检查网络后重试，或下载原文件。");
   }
 }
 
