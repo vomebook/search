@@ -7,6 +7,7 @@ export async function openFoliate(bytes, name, type = "application/octet-stream"
   document.querySelector("#content").appendChild(view);
   onView?.(view);
   let readerTheme = "dark";
+  const firstLoad = new Promise((resolve) => view.addEventListener("load", resolve, { once: true }));
   const applyReaderTheme = () => {
     const colors = readerTheme === "light"
       ? { background: "#ffffff", color: "#202124", link: "#165ea8" }
@@ -17,6 +18,7 @@ export async function openFoliate(bytes, name, type = "application/octet-stream"
   await view.open(new File([bytes], name, { type }));
   view.renderer.setAttribute("flow", "scrolled");
   view.setReaderTheme = (theme) => { readerTheme = theme === "light" ? "light" : "dark"; applyReaderTheme(); };
-  await view.goToTextStart();
+  const navigation = view.goToTextStart();
+  await Promise.race([firstLoad, navigation]);
   return view;
 }
