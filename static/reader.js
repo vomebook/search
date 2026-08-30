@@ -256,15 +256,20 @@ async function scrollToEpubTocEntry(index) {
   epubRendition.display = (href, ...args) => { requestedHref = String(href || ""); return display(href, ...args); };
   try { await tocEntries[index].activate(); } finally { epubRendition.display = display; }
   await new Promise((resolve) => requestAnimationFrame(resolve));
-  const location = epubRendition.currentLocation && epubRendition.currentLocation();
-  const targetHref = String(requestedHref || tocEntries[index].href || (location && location.start && location.start.href) || "").split("#")[0];
+  const targetHref = String(requestedHref || tocEntries[index].href || "").split("#")[0];
   const contents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
-  const target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref);
-  const frame = [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item)) || (target && target.document && target.document.defaultView && target.document.defaultView.frameElement);
-  setReaderPanelOpen(false, true);
-  if (frame) {
-    viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+  let target = contents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref);
+  let frame = [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item));
+  for (let pass = 0; !frame && pass < 60; pass++) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const currentContents = typeof epubRendition.getContents === "function" ? epubRendition.getContents() : [];
+    target = currentContents.find((item) => targetHref && String(item.href || "").split("#")[0] === targetHref) || target;
+    frame = [...document.querySelectorAll(".epub-frame iframe")].find((item) => !framesBefore.has(item)) || (target && target.document && target.document.defaultView && target.document.defaultView.frameElement);
   }
+  setReaderPanelOpen(false, true);
+  if (!frame) return;
+  const align = () => { viewport.scrollTop += frame.getBoundingClientRect().top - viewport.getBoundingClientRect().top; };
+  for (let pass = 0; pass < 8; pass++) await new Promise((resolve) => requestAnimationFrame(resolve)), align();
 }
 document.addEventListener("click", (event) => {
   if (capability.mode !== "epub") return;
