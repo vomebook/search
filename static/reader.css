@@ -67,6 +67,8 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 :root[data-theme="light"] .full-search-snippet { color: #3f464b; }
 .reader-progress-undo:disabled, .reader-chapter-prev:disabled, .reader-chapter-next:disabled { opacity: .35; cursor: default; }
 .panel-view-header { min-height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; }
+#history-view .panel-view-header { justify-content: flex-start; gap: 8px; }
+#history-view .panel-view-header > strong { margin-right: auto; }
 .panel-view-header > span { display: flex; align-items: center; gap: 3px; }
 #history-view .panel-view-header > span .text-action, #bookmarks-panel .panel-view-header > span .text-action { min-height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 2px; line-height: 1; transform: none; }
 .panel-search-toggle { width: auto; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 2px; font-size: 12px; line-height: 1; transform: translateY(-1px); }
