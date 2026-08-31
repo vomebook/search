@@ -97,6 +97,8 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .theme-toggle { min-height: 34px; padding: 0 10px; border: 1px solid #464c52; border-radius: 4px; background: #25292d; color: inherit; cursor: pointer; }
 .reader-theme-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .reader-theme-toggle.is-changing svg { animation: reader-theme-icon 260ms cubic-bezier(.2, .8, .2, 1); }
+.reader-panel > header .icon-btn { width: 32px; height: 32px; padding: 0; border: 0; background: transparent; color: inherit; display: inline-grid; place-items: center; border-radius: 4px; cursor: pointer; }
+.reader-panel > header .icon-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 @keyframes reader-theme-icon { from { opacity: 0; transform: rotate(-35deg) scale(.72); } to { opacity: 1; transform: rotate(0) scale(1); } }
 #history-close { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; font-family: Arial, sans-serif; font-size: 22px; line-height: 1; transform: translateY(-2px); }
 .reader-viewport { min-height: 0; flex: 1; overflow: auto; background: #121416; }
