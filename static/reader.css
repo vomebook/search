@@ -137,6 +137,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .foliate-reader-frame { display: block; width: 100%; height: 100%; min-height: 100%; border: 0; background: #181b1e; }
 .foliate-continuous { width: min(100%, 900px); min-height: 100%; margin: 0 auto; padding: 24px 20px 64px; background: #181b1e; color: #e7e9eb; }
 .foliate-continuous > article { margin: 0 auto 32px; line-height: 1.7; }
+.foliate-continuous > article { font-size: calc(1em * var(--reader-zoom)); }
 .foliate-continuous img, .foliate-continuous svg, .foliate-continuous video { max-width: 100%; height: auto; }
 :root[data-theme="light"] .foliate-continuous { background: #fff; color: #202124; }
 .reader-content[data-mode="foliate"] { width: 100%; height: calc(100dvh - 44px); min-height: calc(100dvh - 44px); padding: 0; }
