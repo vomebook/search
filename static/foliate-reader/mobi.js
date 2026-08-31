@@ -844,7 +844,9 @@ class MOBI6 {
     }
     async createDocument(section) {
         const str = await this.loadText(section)
-        return this.parser.parseFromString(str, this.#type)
+        const doc = this.parser.parseFromString(str, this.#type)
+        await this.replaceResources(doc)
+        return doc
     }
     async loadSection(section) {
         if (this.#cache.has(section)) return this.#cache.get(section)
@@ -1167,7 +1169,8 @@ class KF8 {
     }
     async createDocument(section) {
         const str = await this.loadText(section)
-        return this.parser.parseFromString(str, this.#type)
+        const replaced = await this.replaceResources(str)
+        return this.parser.parseFromString(replaced, this.#type)
     }
     async loadSection(section) {
         if (this.#cache.has(section)) return this.#cache.get(section)
