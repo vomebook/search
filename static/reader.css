@@ -69,6 +69,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .panel-view-header { min-height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; }
 #history-view .panel-view-header { justify-content: flex-start; gap: 8px; }
 #history-view .panel-view-header > strong { margin-right: auto; }
+.panel-view-header > .text-action { min-height: 28px; padding: 0 2px; line-height: 1; }
 .panel-view-header > span { display: flex; align-items: center; gap: 3px; }
 #history-view .panel-view-header > span .text-action, #bookmarks-panel .panel-view-header > span .text-action { min-height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 2px; line-height: 1; transform: none; }
 .panel-search-toggle { width: auto; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 2px; font-size: 12px; line-height: 1; transform: translateY(-1px); }
@@ -93,8 +94,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .toc-item { padding-left: calc(12px + var(--toc-depth, 0) * 16px); }
 .toc-item .panel-item-main { user-select: text; }
 .toc-current-mark { color: #8ab4f8; font-weight: 700; }
-.reader-panel > footer { flex: none; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-top: 1px solid #34383d; }
-.theme-toggle { min-height: 34px; padding: 0 10px; border: 1px solid #464c52; border-radius: 4px; background: #25292d; color: inherit; cursor: pointer; }
+.theme-toggle { min-height: 28px; padding: 0 2px; border: 0; background: transparent; color: #aeb5ba; cursor: pointer; }
 .reader-theme-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .reader-theme-toggle.is-changing svg { animation: reader-theme-icon 260ms cubic-bezier(.2, .8, .2, 1); }
 .reader-panel > header .icon-btn { width: 32px; height: 32px; padding: 0; border: 0; background: transparent; color: inherit; display: inline-grid; place-items: center; border-radius: 4px; cursor: pointer; }
