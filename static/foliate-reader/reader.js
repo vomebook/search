@@ -143,7 +143,7 @@ class Reader {
         })
         this.view.renderer.setStyles?.(getCSS(this.style))
         await Promise.race([
-            this.view.goToTextStart(),
+            this.view.goTo(0),
             new Promise(resolve => setTimeout(resolve, 3000)),
         ])
 
