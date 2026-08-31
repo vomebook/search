@@ -301,5 +301,12 @@ window.addEventListener('message', event => {
     if (event.source !== window.parent || event.data?.type !== 'voice-foliate-goto') return
     if (event.data.href) globalThis.reader?.view?.goTo(event.data.href).catch(e => console.error(e))
 })
+window.addEventListener('message', event => {
+    if (event.source !== window.parent) return
+    const type = event.data?.type
+    if (type === 'voice-foliate-seek') globalThis.reader?.view?.goToFraction(Number(event.data.percent) / 100)
+    else if (type === 'voice-foliate-prev') globalThis.reader?.view?.prev()
+    else if (type === 'voice-foliate-next') globalThis.reader?.view?.next()
+})
 if (url) open(proxy || url).then(() => window.parent !== window && window.parent.postMessage({ type: 'voice-foliate-ready' }, location.origin)).catch(e => { console.error(e); if (window.parent !== window) window.parent.postMessage({ type: 'voice-foliate-error', message: e?.message || 'FOLIATE_LOAD_FAILED' }, location.origin) })
 else dropTarget.style.visibility = 'visible'
