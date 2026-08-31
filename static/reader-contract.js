@@ -2,7 +2,7 @@
   "use strict";
   const ReaderMode = Object.freeze({ UNSUPPORTED: 0, ORIGINAL: 1, CONVERTED: 2, PENDING: 3, FAILED: 4 });
   const modes = Object.freeze({
-   pdf: "pdf", epub: "foliate", mobi: "foliate", azw: "foliate", azw3: "foliate", fb2: "foliate", fbz: "foliate", "epub-chapters": "epub-chapters", docx: "docx", html: "html", htm: "html", txt: "text", md: "markdown", markdown: "markdown",
+    pdf: "pdf", "pdf-pages": "pdf-pages", epub: "foliate", mobi: "foliate", azw: "foliate", azw3: "foliate", fb2: "foliate", fbz: "foliate", "epub-chapters": "epub-chapters", docx: "docx", html: "html", htm: "html", txt: "text", md: "markdown", markdown: "markdown",
     jpg: "image", jpeg: "image", png: "image", gif: "image", bmp: "image", webp: "image",
     mp3: "audio", wav: "audio", m4a: "audio", flac: "audio", mpga: "audio", audio: "audio",
     mp4: "video", mov: "video", video: "video",
@@ -17,8 +17,9 @@
     const source = record && (record.ReaderLink || record.readerLink || record.Link || record.link);
     const readerExtension = record && (record.ReaderExtension || record.readerExtension || record.Extension || record.extension);
     if (!source || capability(readerExtension).readerMode === ReaderMode.UNSUPPORTED) return "";
-    const params = new URLSearchParams({ url: source, title: (record.File || record.name || "") + ((record.Extension || record.extension) ? "." + (record.Extension || record.extension) : ""), ext: readerExtension || "" });
-    if (record.DownloadLink || record.downloadLink) params.set("download", record.DownloadLink || record.downloadLink);
+    const assetMatch = source.match(/\/objects\/[0-9a-f]{2}\/([0-9a-f]{16})[0-9a-f]{48}\//i);
+    const params = new URLSearchParams(assetMatch ? { id: assetMatch[1], ext: readerExtension || "" } : { url: source, title: (record.File || record.name || "") + ((record.Extension || record.extension) ? "." + (record.Extension || record.extension) : ""), ext: readerExtension || "" });
+    if (!assetMatch && (record.DownloadLink || record.downloadLink)) params.set("download", record.DownloadLink || record.downloadLink);
     if (record.OcrUrl || record.ocrUrl) params.set("ocr", record.OcrUrl || record.ocrUrl);
      if (record.ReaderFallback || record.readerFallback) params.set("fallback", record.ReaderFallback || record.readerFallback);
      if (record.ReaderChapterManifest || record.readerChapterManifest || record.ChapterManifest || record.chapterManifest) params.set("chapter_manifest", record.ReaderChapterManifest || record.readerChapterManifest || record.ChapterManifest || record.chapterManifest);
