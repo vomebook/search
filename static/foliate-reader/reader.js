@@ -294,6 +294,7 @@ $('#file-button').addEventListener('click', () => $('#file-input').click())
 const params = new URLSearchParams(location.search)
 const url = params.get('url')
 const proxy = params.get('proxy')
+if (params.get('embed') === '1') document.documentElement.classList.add('embedded')
 const fileNameHint = params.get('file_name') || ''
 globalThis.foliateFileNameHint = fileNameHint
 window.addEventListener('message', event => {
