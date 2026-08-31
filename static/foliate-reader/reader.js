@@ -195,6 +195,15 @@ class Reader {
                 this.closeSideBar()
             })
             $('#toc-view').append(this.#tocView.element)
+            const entries = []
+            const append = (items, depth = 0) => {
+                for (const item of items || []) {
+                    entries.push({ label: item.label || '未命名章节', href: item.href, depth })
+                    append(item.subitems, depth + 1)
+                }
+            }
+            append(toc)
+            if (window.parent !== window) window.parent.postMessage({ type: 'voice-foliate-toc', entries }, location.origin)
         }
 
         // load and show highlights embedded in the file by Calibre
@@ -249,6 +258,11 @@ class Reader {
         slider.value = fraction
         slider.title = `${percent} · ${loc}`
         if (tocItem?.href) this.#tocView?.setCurrentHref?.(tocItem.href)
+        const start = location?.start || {}
+        if (window.parent !== window) window.parent.postMessage({
+            type: 'voice-foliate-relocate', fraction,
+            cfi: start.cfi || '', href: start.href || tocItem?.href || ''
+        }, globalThis.location.origin)
     }
 }
 
@@ -282,5 +296,9 @@ const url = params.get('url')
 const proxy = params.get('proxy')
 const fileNameHint = params.get('file_name') || ''
 globalThis.foliateFileNameHint = fileNameHint
+window.addEventListener('message', event => {
+    if (event.source !== window.parent || event.data?.type !== 'voice-foliate-goto') return
+    if (event.data.href) globalThis.reader?.view?.goTo(event.data.href).catch(e => console.error(e))
+})
 if (url) open(proxy || url).then(() => window.parent !== window && window.parent.postMessage({ type: 'voice-foliate-ready' }, location.origin)).catch(e => { console.error(e); if (window.parent !== window) window.parent.postMessage({ type: 'voice-foliate-error', message: e?.message || 'FOLIATE_LOAD_FAILED' }, location.origin) })
 else dropTarget.style.visibility = 'visible'
