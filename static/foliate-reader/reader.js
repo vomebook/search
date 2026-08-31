@@ -101,12 +101,13 @@ class Reader {
         $('#menu-button').append(menu.element)
         $('#menu-button > button').addEventListener('click', () =>
             menu.element.classList.toggle('show'))
-        menu.groups.layout.select('paginated')
+        menu.groups.layout.select('scrolled')
     }
     async open(file) {
         this.view = document.createElement('foliate-view')
         document.body.append(this.view)
         await this.view.open(file)
+        this.view.renderer.setAttribute('flow', 'scrolled')
         this.view.addEventListener('load', this.#onLoad.bind(this))
         this.view.addEventListener('relocate', this.#onRelocate.bind(this))
 
