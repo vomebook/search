@@ -227,10 +227,12 @@ async function renderChapterManifest(prepared) {
   await load(manifest.chapters[0]); status.textContent = `EPUB · ${manifest.chapters.length} 章`;
 }
 
+async function renderFoliateClean() { readerStage = "foliate-iframe"; const frame = document.createElement("iframe"); frame.className = "foliate-reader-frame"; frame.title = title; frame.setAttribute("sandbox", "allow-same-origin allow-scripts"); frame.src = `./foliate-reader/reader.html?url=${encodeURIComponent(sourceUrl)}`; content.replaceChildren(frame); await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("FOLIATE_LOAD_TIMEOUT")), READER_PROXY_TIMEOUT_MS); const onMessage = (event) => { if (event.source !== frame.contentWindow) return; const message = event.data || {}; if (message.type === "voice-foliate-ready") { clearTimeout(timer); window.removeEventListener("message", onMessage); resolve(); } else if (message.type === "voice-foliate-error") { clearTimeout(timer); window.removeEventListener("message", onMessage); reject(new Error(message.message || "FOLIATE_LOAD_FAILED")); } }; window.addEventListener("message", onMessage); }); loadingIndicator.remove(); loadingStatus.hidden = true; status.textContent = "EPUB"; }
 async function start() {
   if ((!validSource(sourceUrl) && !validSource(chapterManifestUrl)) || capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED) return fail("此文件暂不支持在线阅读，请下载原文件。");
   document.querySelector("#download").href = `https://voiceofml-search.hf.space/api/download?file=${encodeURIComponent(title)}&link=${encodeURIComponent(downloadUrl)}`;
   try {
+    if (capability.mode === "foliate") { await renderFoliateClean(); restorationReady = !restorationFailed; scheduleSave(); return; }
     readerStage = "prepare";
     let prepared; [restoredEntry, prepared] = await Promise.all([VoiceOfMLReaderStore.get(sourceUrl).catch(() => { restorationFailed = true; return null; }), prepareDocument()]);
     if (restoredEntry && restoredEntry.zoom) setZoom(restoredEntry.zoom, false);
@@ -258,7 +260,7 @@ function prepareDocument() {
 }
 
 // Foliate owns the complete ebook search index, including MOBI/AZW3/FB2.
-if (capability.mode === "foliate") {
+if (false && capability.mode === "foliate") {
   fullSearchButton.hidden = false;
   fullSearchInput.addEventListener("input", async () => {
     const query = fullSearchInput.value.trim();
