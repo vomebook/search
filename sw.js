@@ -8,7 +8,6 @@ const PRECACHE_URLS = [
   "/search/static/reader.html",
   "/search/static/reader.css",
   "/search/static/reader.js",
-  "/search/static/foliate-adapter.mjs",
   "/search/static/app.js",
   "/search/static/index-worker.js",
   "/search/data/initial/manifest.json",
@@ -26,7 +25,6 @@ const READER_RUNTIME_PATHS = new Set([
   "/search/static/reader.css",
   "/search/static/reader.js",
   "/search/static/pdf-worker-wrapper.mjs"
-  ,"/search/static/foliate-adapter.mjs"
 ]);
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -69,12 +67,10 @@ self.addEventListener("fetch", (event) => {
   if ((event.request.mode === "navigate" && url.pathname === "/search/static/reader.html") || READER_RUNTIME_PATHS.has(url.pathname)) {
     const cacheKey = event.request.mode === "navigate" ? "/search/static/reader.html" : event.request;
     event.respondWith(
-      caches.open(CACHE_NAME).then((cache) => cache.match(cacheKey).then((cached) =>
-        fetch(event.request).then((response) => {
-          if (response.ok) cache.put(cacheKey, response.clone());
-          return response.ok || !cached ? response : cached;
-        }).catch(() => cached)
-      ))
+      caches.open(CACHE_NAME).then((cache) => fetch(event.request).then((response) => {
+        if (response.ok) cache.put(cacheKey, response.clone());
+        return response;
+      }).catch(() => cache.match(cacheKey)))
     );
     return;
   }
