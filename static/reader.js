@@ -259,7 +259,8 @@ async function start() {
   } catch (error) {
     console.error(error);
     if (capability.mode === "epub-chapters" && validFallback(fallbackUrl)) { const target = new URL(location.href); target.searchParams.set("url", fallbackUrl); target.searchParams.set("ext", "pdf"); target.searchParams.delete("chapter_manifest"); target.searchParams.delete("fallback"); if (window.parent !== window) window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin); else location.replace(target.href); return; }
-    fail(error && error.message === "EPUB_INVALID" ? "源 EPUB 文件不完整或已损坏，请下载原文件检查。" : error && error.message === "FOLIATE_LOAD_TIMEOUT" ? "电子书正文加载超时，请检查源文件或网络后重试。" : `原文件加载失败，请检查网络后重试，或下载原文件。 [${readerStage}]`);
+    const detail = error && error.message && !/^(?:FOLIATE_LOAD_FAILED|原文件加载失败)/u.test(error.message) ? ` (${error.message.slice(0, 180)})` : "";
+    fail(error && error.message === "EPUB_INVALID" ? "源 EPUB 文件不完整或已损坏，请下载原文件检查。" : error && error.message === "FOLIATE_LOAD_TIMEOUT" ? "电子书正文加载超时，请检查源文件或网络后重试。" : `原文件加载失败，请检查网络后重试，或下载原文件。${detail}`);
   }
 }
 
