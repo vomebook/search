@@ -1170,7 +1170,11 @@ class KF8 {
     async createDocument(section) {
         const str = await this.loadText(section)
         const replaced = await this.replaceResources(str)
-        return this.parser.parseFromString(replaced, this.#type)
+        const doc = this.parser.parseFromString(replaced, this.#type)
+        for (const [url, node] of this.#inlineMap)
+            for (const el of doc.querySelectorAll(`img[src="${url}"]`))
+                el.replaceWith(node)
+        return doc
     }
     async loadSection(section) {
         if (this.#cache.has(section)) return this.#cache.get(section)
