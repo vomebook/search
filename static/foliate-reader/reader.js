@@ -110,17 +110,14 @@ class Reader {
         this.view.renderer.setAttribute('flow', 'scrolled')
         let moving = false
         let previousStart = null
-        const moveAcrossSections = async () => {
+        const moveSection = async direction => {
             const renderer = this.view.renderer
-            if (moving || !renderer.scrolled) return
+            if (moving || !renderer.scrolled || !direction) return
             const start = renderer.start
             const end = renderer.end
             const viewSize = renderer.viewSize
-            const direction = previousStart == null ? 0 : start - previousStart
-            previousStart = start
             if (direction > 0 && end < viewSize - 2) return
             if (direction < 0 && start > 2) return
-            if (!direction) return
             moving = true
             try {
                 if (direction > 0) await this.view.next()
@@ -130,7 +127,27 @@ class Reader {
                 previousStart = null
             }
         }
+        const moveAcrossSections = () => {
+            const renderer = this.view.renderer
+            const start = renderer.start
+            const direction = previousStart == null ? 0 : start - previousStart
+            previousStart = start
+            moveSection(direction)
+        }
         this.view.renderer.addEventListener('scroll', moveAcrossSections)
+        this.view.renderer.addEventListener('wheel', event => {
+            if (event.deltaY) moveSection(event.deltaY > 0 ? 1 : -1)
+        }, { passive: true })
+        let touchStartY = null
+        this.view.renderer.addEventListener('touchstart', event => {
+            touchStartY = event.touches[0]?.clientY ?? null
+        }, { passive: true })
+        this.view.renderer.addEventListener('touchend', event => {
+            if (touchStartY == null) return
+            const delta = touchStartY - (event.changedTouches[0]?.clientY ?? touchStartY)
+            touchStartY = null
+            if (Math.abs(delta) > 24) moveSection(delta > 0 ? 1 : -1)
+        }, { passive: true })
         this.view.addEventListener('load', this.#onLoad.bind(this))
         this.view.addEventListener('relocate', this.#onRelocate.bind(this))
 
