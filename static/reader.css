@@ -97,6 +97,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .reader-theme-toggle.is-changing svg { animation: reader-theme-icon 260ms cubic-bezier(.2, .8, .2, 1); }
 @keyframes reader-theme-icon { from { opacity: 0; transform: rotate(-35deg) scale(.72); } to { opacity: 1; transform: rotate(0) scale(1); } }
 #history-close { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; font-family: Arial, sans-serif; font-size: 22px; line-height: 1; transform: translateY(-2px); }
+#history-clear { display: inline-flex; align-items: center; justify-content: center; }
 .reader-viewport { min-height: 0; flex: 1; overflow: auto; background: #121416; }
 .bookmark-ribbon { position: fixed; z-index: 12; top: 44px; left: max(10px, calc((100vw - min(100vw, 1100px)) / 2 + 2px)); width: 28px; height: 42px; padding: 0; border: 0; background: #b64b50; box-shadow: 0 2px 8px #0006; cursor: pointer; clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 76%, 0 100%); }
 .bookmark-ribbon:hover, .bookmark-ribbon:focus-visible { background: #d35b61; outline: 2px solid #8ab4f8; outline-offset: 2px; }
@@ -139,12 +140,8 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .foliate-continuous > article { margin: 0 auto 32px; line-height: 1.7; }
 .foliate-continuous img, .foliate-continuous svg, .foliate-continuous video { max-width: 100%; height: auto; }
 :root[data-theme="light"] .foliate-continuous { background: #fff; color: #202124; }
-.reader-content[data-mode="foliate"] { width: 100%; height: calc(100vh - 44px); min-height: calc(100vh - 44px); padding: 0; }
+.reader-content[data-mode="foliate"] { width: 100%; height: calc(100dvh - 44px); min-height: calc(100dvh - 44px); padding: 0; }
 .reader-content[data-mode="foliate"] > .foliate-reader-view { width: 100%; height: 100%; min-height: 320px; }
-.foliate-webview-stream { width: 100%; min-height: 100%; padding: 20px 16px 60px; overflow-wrap: anywhere; }
-.foliate-webview-stream > article { max-width: 900px; margin: 0 auto 32px; line-height: 1.7; }
-.foliate-webview-stream > article:first-child { min-height: 320px; }
-.foliate-webview-stream img, .foliate-webview-stream svg, .foliate-webview-stream video { max-width: 100%; height: auto; }
 .html-frame { display: block; width: 100%; height: calc(100vh - 96px); border: 0; background: white; color-scheme: only light; }
 .docx-body { overflow-x: auto; color: #e7e9eb; }
 .docx-body .reader-docx-wrapper { background: transparent; padding: 0; zoom: var(--reader-zoom); }
