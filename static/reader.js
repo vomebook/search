@@ -249,7 +249,7 @@ async function start() {
   if ((!validSource(sourceUrl) && !validSource(chapterManifestUrl)) || capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED) return fail("此文件暂不支持在线阅读，请下载原文件。");
   document.querySelector("#download").href = `https://voiceofml-search.hf.space/api/download?file=${encodeURIComponent(title)}&link=${encodeURIComponent(downloadUrl)}`;
   try {
-    if (capability.mode === "foliate") { readerStage = "foliate"; await renderFoliate(prepareDocument()); restorationReady = !restorationFailed; scheduleSave(); return; }
+    if (capability.mode === "foliate") { readerStage = "foliate"; await renderFoliate(null); restorationReady = !restorationFailed; scheduleSave(); return; }
     readerStage = "prepare";
     let prepared; [restoredEntry, prepared] = await Promise.all([VoiceOfMLReaderStore.get(sourceUrl).catch(() => { restorationFailed = true; return null; }), prepareDocument()]);
     if (restoredEntry && restoredEntry.zoom) setZoom(restoredEntry.zoom, false);
@@ -259,7 +259,7 @@ async function start() {
   } catch (error) {
     console.error(error);
     if (capability.mode === "epub-chapters" && validFallback(fallbackUrl)) { const target = new URL(location.href); target.searchParams.set("url", fallbackUrl); target.searchParams.set("ext", "pdf"); target.searchParams.delete("chapter_manifest"); target.searchParams.delete("fallback"); if (window.parent !== window) window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin); else location.replace(target.href); return; }
-    fail(error && error.message === "EPUB_INVALID" ? "源 EPUB 文件不完整或已损坏，请下载原文件检查。" : error && error.message === "FOLIATE_LOAD_TIMEOUT" ? "电子书正文加载超时，请检查源文件或网络后重试。" : "原文件加载失败，请检查网络后重试，或下载原文件。");
+    fail(error && error.message === "EPUB_INVALID" ? "源 EPUB 文件不完整或已损坏，请下载原文件检查。" : error && error.message === "FOLIATE_LOAD_TIMEOUT" ? "电子书正文加载超时，请检查源文件或网络后重试。" : `原文件加载失败，请检查网络后重试，或下载原文件。 [${readerStage}]`);
   }
 }
 
