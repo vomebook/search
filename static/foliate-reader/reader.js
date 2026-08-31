@@ -108,6 +108,20 @@ class Reader {
         document.body.append(this.view)
         await this.view.open(file)
         this.view.renderer.setAttribute('flow', 'scrolled')
+        let moving = false
+        const moveAcrossSections = async () => {
+            if (moving || !this.view.renderer.scrolled) return
+            const renderer = this.view.renderer
+            if (!renderer.atEnd() && !renderer.atStart()) return
+            moving = true
+            try {
+                if (renderer.atEnd()) await this.view.next()
+                else if (renderer.atStart()) await this.view.prev()
+            } finally {
+                moving = false
+            }
+        }
+        this.view.renderer.addEventListener('scroll', moveAcrossSections)
         this.view.addEventListener('load', this.#onLoad.bind(this))
         this.view.addEventListener('relocate', this.#onRelocate.bind(this))
 
