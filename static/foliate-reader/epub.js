@@ -1038,7 +1038,7 @@ ${doc.querySelector('parsererror').innerText}`)
     async loadDocument(item) {
         const url = await this.#loader.loadItem(item)
         const response = await fetch(url)
-        return this.parser.parseFromString(await response.text(), item.mediaType)
+        return this.parser.parseFromString(await response.text(), MIME.HTML)
     }
     getMediaOverlay() {
         return new MediaOverlay(this, this.#loadXML.bind(this))
