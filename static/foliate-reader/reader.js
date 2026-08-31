@@ -1,4 +1,4 @@
-import './view.js?foliate-ready-v3'
+import './view.js?reader-v1'
 import { createTOCView } from './ui/tree.js'
 import { createMenu } from './ui/menu.js'
 import { Overlayer } from './overlayer.js'

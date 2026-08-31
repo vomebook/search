@@ -259,7 +259,7 @@ async function start() {
   if ((!validSource(sourceUrl) && !validSource(chapterManifestUrl)) || capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED) return fail("此文件暂不支持在线阅读，请下载原文件。");
   document.querySelector("#download").href = `https://voiceofml-search.hf.space/api/download?file=${encodeURIComponent(title)}&link=${encodeURIComponent(downloadUrl)}`;
   try {
-    if (capability.mode === "foliate") { readerStage = "foliate"; if (/Android|wv|WebView/i.test(navigator.userAgent)) await renderFoliateWebView(); else { await import("/search/static/foliate-reader/view.js?direct-v2"); await renderFoliate(null); } restorationReady = !restorationFailed; scheduleSave(); return; }
+    if (capability.mode === "foliate") { readerStage = "foliate"; if (/Android|wv|WebView/i.test(navigator.userAgent)) await renderFoliateWebView(); else { await import("/search/static/foliate-reader/view.js?reader-v1"); await renderFoliate(null); } restorationReady = !restorationFailed; scheduleSave(); return; }
     readerStage = "prepare";
     let prepared; [restoredEntry, prepared] = await Promise.all([VoiceOfMLReaderStore.get(sourceUrl).catch(() => { restorationFailed = true; return null; }), prepareDocument()]);
     if (restoredEntry && restoredEntry.zoom) setZoom(restoredEntry.zoom, false);
@@ -281,7 +281,7 @@ function prepareDocument() {
   if (capability.mode === "markdown") return Promise.all([fetchReaderResponse(), Promise.all([loadScript(MARKED_URL), loadScript(PURIFY_URL)])]).then(([response, engines]) => ({ response, engines }));
   if (capability.mode === "html") return Promise.all([fetchReaderResponse(), loadScript(PURIFY_URL)]).then(([response, engine]) => ({ response, engine }));
   if (capability.mode === "text") return fetchReaderResponse().then((response) => ({ response }));
-  if (capability.mode === "foliate") return import("/search/static/foliate-reader/view.js?flow-v2").catch((error) => { readerStage = "foliate-import"; throw error; });
+  if (capability.mode === "foliate") return import("/search/static/foliate-reader/view.js?reader-v1").catch((error) => { readerStage = "foliate-import"; throw error; });
   if (capability.mode === "docx") return Promise.all([fetchReaderResponse(), loadScript(JSZIP_URL).then(() => loadScript(DOCX_PREVIEW_URL))]);
   if (capability.mode === "audio" || capability.mode === "video") return Promise.resolve(null);
   if (capability.mode === "image") return new Promise((resolve, reject) => { const image = new Image(); image.className = "reader-image"; image.alt = title; image.decoding = "async"; let fallback = false; image.onload = () => resolve(image); image.onerror = () => { if (!fallback) { fallback = true; image.src = sourceUrl; } else reject(new Error("image load failed")); }; image.src = contentUrl; });
