@@ -94,7 +94,8 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .toc-item { padding-left: calc(12px + var(--toc-depth, 0) * 16px); }
 .toc-item .panel-item-main { user-select: text; }
 .toc-current-mark { color: #8ab4f8; font-weight: 700; }
-.theme-toggle { min-height: 28px; padding: 0 2px; border: 0; background: transparent; color: #aeb5ba; cursor: pointer; }
+.theme-toggle { width: 32px; height: 32px; flex: none; padding: 0; border: 0; background: transparent; color: inherit; display: inline-grid; place-items: center; cursor: pointer; border-radius: 4px; }
+.theme-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .reader-theme-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .reader-theme-toggle.is-changing svg { animation: reader-theme-icon 260ms cubic-bezier(.2, .8, .2, 1); }
 .reader-panel > header .icon-btn { width: 32px; height: 32px; padding: 0; border: 0; background: transparent; color: inherit; display: inline-grid; place-items: center; border-radius: 4px; cursor: pointer; }
