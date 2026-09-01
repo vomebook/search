@@ -353,6 +353,10 @@ function handleReaderMessage(event) {
   try {
     var target = new URL(message.url, location.origin);
     if (target.origin !== location.origin || target.pathname !== "/search/") return;
+    var activeQuery = (DOM.searchInput ? DOM.searchInput.value : STATE.query).trim();
+    var hashParts = target.hash.split("?", 2), folderParams = new URLSearchParams(hashParts[1] || "");
+    if (activeQuery) folderParams.set("q", activeQuery); else folderParams.delete("q");
+    target.hash = hashParts[0] + (folderParams.toString() ? "?" + folderParams.toString() : "");
     closeReaderOverlay();
     history.replaceState(null, "", target.href);
     ROUTER.apply();
