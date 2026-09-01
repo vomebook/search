@@ -236,7 +236,6 @@ function normalizeReaderReturnUrl(rawUrl) {
 }
 
 var readerOverlay = null;
-var readerResolveControllers = new Set();
 var readerReturnFocus = null;
 var readerBackgroundState = [];
 function clearReaderNavigation(url) {
@@ -249,8 +248,6 @@ function clearReaderNavigation(url) {
 }
 function closeReaderOverlay(restoreFocus) {
   if (!readerOverlay) return false;
-  readerResolveControllers.forEach(function(controller) { controller.abort(); });
-  readerResolveControllers.clear();
   readerOverlay.remove();
   readerOverlay = null;
   for (var i = 0; i < readerBackgroundState.length; i++) {
@@ -380,9 +377,7 @@ function navigateToReader(rawUrl, returnUrl) {
     sessionStorage.setItem("reader-return:" + token, new URL(returnUrl, location.origin).href);
     url.searchParams.set("nav", token);
   } catch (_) {}
-  const id = url.searchParams.get("id");
   openReaderOverlay(url);
-  if (id) { var controller = new AbortController(); readerResolveControllers.add(controller); fetch("https://voiceofml-search.hf.space/api/reader-resolve?id=" + encodeURIComponent(id), { cache: "no-store", signal: controller.signal }).then((response) => response.ok ? response.json() : null).then((resolved) => { if (resolved) try { sessionStorage.setItem("reader-resolve:" + id, JSON.stringify(resolved)); } catch (_) {} }).catch(() => {}).finally(() => readerResolveControllers.delete(controller)); }
   return true;
 }
 
