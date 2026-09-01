@@ -205,7 +205,9 @@ function getReaderLink(rec, returnUrl) {
     const stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
     readerRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt";
   }
-  return VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
+  var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
+  try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) sessionStorage.setItem("reader-source:" + readerId, JSON.stringify({ url: readerRecord.Link, title: readerRecord.File, extension: readerRecord.Extension, repo: readerRecord.Repo, folder: readerRecord.Folder })); } catch (_) {}
+  return readerUrl;
 }
 
 function syncReaderFolderFilter(rawUrl) {
