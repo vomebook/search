@@ -377,7 +377,13 @@ function navigateToReader(rawUrl, returnUrl) {
     sessionStorage.setItem("reader-return:" + token, new URL(returnUrl, location.origin).href);
     url.searchParams.set("nav", token);
   } catch (_) {}
-  openReaderOverlay(url);
+  const id = url.searchParams.get("id");
+  if (id) {
+    fetch("https://voiceofml-search.hf.space/api/reader-resolve?id=" + encodeURIComponent(id), { cache: "no-store" })
+      .then((response) => { if (!response.ok) throw new Error("reader resolve failed"); return response.json(); })
+      .then((resolved) => { try { sessionStorage.setItem("reader-resolve:" + id, JSON.stringify(resolved)); } catch (_) {} openReaderOverlay(url); })
+      .catch(() => openReaderOverlay(url));
+  } else openReaderOverlay(url);
   return true;
 }
 
