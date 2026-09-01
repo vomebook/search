@@ -31,6 +31,7 @@ let canReturnWithHistory = false;
 try { const target = new URL(returnUrl, location.origin), storedReturnUrl = returnHistoryKey ? sessionStorage.getItem(returnHistoryKey) : ""; canReturnWithHistory = !!returnHistoryKey && storedReturnUrl === target.href; } catch (_) {}
 let zoom = 1;
 let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
+let restorationApplied = false;
 let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
@@ -179,7 +180,7 @@ progressRange.addEventListener("input", () => { progressPercent.textContent = `$
 fullSearchView.id = "full-search-view"; fullSearchView.className = "reader-panel-view full-search-view"; fullSearchView.dataset.panelView = "full-search"; fullSearchView.hidden = true;
 fullSearchView.innerHTML = '<div class="full-search-bar"><input id="full-search-input" class="full-search-input" type="search" placeholder="搜索正文" aria-label="搜索正文"><button id="full-search-clear" class="icon-button" type="button" aria-label="清除全文搜索" title="清除">×</button></div><div id="full-search-status" class="full-search-status" role="status">输入关键词搜索正文</div><div class="full-search-nav"><button id="full-search-prev" type="button" disabled>上一个</button><button id="full-search-next" type="button" disabled>下一个</button></div><div id="full-search-results" class="full-search-results"></div>';
 document.querySelector("#history-panel").insertBefore(fullSearchView, document.querySelector(".reader-panel-tabs"));
- const fullSearchButton = document.querySelector("#full-search-toggle"); fullSearchButton.setAttribute("aria-label", "全文搜索");
+ const fullSearchButton = document.querySelector("#full-search-toggle"); fullSearchButton.textContent = "全文搜索"; fullSearchButton.setAttribute("aria-label", "全文搜索");
 fullSearchButton.hidden = !["pdf", "text", "markdown", "docx", "html", "epub", "foliate"].includes(capability.mode);
 let fullSearchResults = [], fullSearchIndex = -1, fullSearchGeneration = 0;
 const fullSearchInput = fullSearchView.querySelector("#full-search-input"), fullSearchStatus = fullSearchView.querySelector("#full-search-status"), fullSearchResultsNode = fullSearchView.querySelector("#full-search-results");
