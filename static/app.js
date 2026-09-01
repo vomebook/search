@@ -206,7 +206,7 @@ function getReaderLink(rec, returnUrl) {
     readerRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt";
   }
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
-  try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) sessionStorage.setItem("reader-source:" + readerId, JSON.stringify({ url: readerRecord.ReaderLink || readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder })); } catch (_) {}
+  try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) sessionStorage.setItem("reader-source:" + readerId, JSON.stringify({ url: readerRecord.ReaderLink || readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder })); } catch (_) {}
   return readerUrl;
 }
 
