@@ -177,6 +177,8 @@ function getReaderFolderUrl(rec) {
   if (!repo) return "";
   var folder = Array.isArray(rec.Folder) ? rec.Folder.join("/") : "";
   var sp = new URLSearchParams();
+  var activeQuery = (DOM.searchInput ? DOM.searchInput.value : STATE.query).trim();
+  if (activeQuery) sp.set("q", activeQuery);
   if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
   if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
   if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
