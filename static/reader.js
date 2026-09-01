@@ -53,6 +53,8 @@ document.querySelector(".page-controls").hidden = !["pdf", "pdf-pages", "docx"].
 document.querySelector(".zoom-controls").hidden = ["audio", "video"].indexOf(capability.mode) >= 0;
 document.querySelector("#title").textContent = title + (extension && !title.toLowerCase().endsWith(`.${extension}`) ? `.${extension}` : ""); readerPath.textContent = readerPathLabel; readerPath.hidden = !readerPathLabel; status.hidden = true; document.title = title + " - VoiceOfML Reader";
 new MutationObserver(() => { title = document.querySelector("#title").textContent; }).observe(document.querySelector("#title"), { childList: true });
+function syncOriginalTitle() { const data = resolvedReaderData, node = document.querySelector("#title"); if (!data || !data.title || !data.original_extension || !node) return; const extension = String(data.original_extension).toLowerCase(), value = data.title + (String(data.title).toLowerCase().endsWith(`.${extension}`) ? "" : `.${extension}`); if (node.textContent !== value) node.textContent = value; }
+new MutationObserver(syncOriginalTitle).observe(document.querySelector("#title"), { childList: true });
 let readerTheme = localStorage.getItem("theme") === "light" ? "light" : "dark";
 const THEME_SUN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>', THEME_MOON_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
 const readerThemeToggle = document.querySelector("#theme-toggle"); let themeAnimationTimer = 0;
