@@ -27,9 +27,8 @@
     if (!shortId && (record.ReturnUrl || record.returnUrl)) params.set("return", record.ReturnUrl || record.returnUrl);
     const repo = String(record.Repo || record.repo || "").split("/").pop();
     const folder = Array.isArray(record.Folder || record.folder) ? (record.Folder || record.folder).join("/") : "";
-     if (repo) params.set("path", repo + (folder ? "/" + folder : ""));
-     if (record.FolderUrl || record.folderUrl) params.set("folder_url", record.FolderUrl || record.folderUrl);
-     if (shortId) params.set("title", (record.File || record.name || "") + ((record.Extension || record.extension) ? "." + (record.Extension || record.extension) : ""));
+      if (!shortId && repo) params.set("path", repo + (folder ? "/" + folder : ""));
+      if (!shortId && (record.FolderUrl || record.folderUrl)) params.set("folder_url", record.FolderUrl || record.folderUrl);
    return (basePath || "/search/static/reader.html") + "?" + params.toString();
   }
   function shortSourceId(value) { let hash = 1469598103934665603n; for (const byte of new TextEncoder().encode(value)) { hash ^= BigInt(byte); hash = BigInt.asUintN(64, hash * 1099511628211n); } return hash.toString(36).padStart(13, "0"); }
