@@ -14,8 +14,7 @@ if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = fu
 if (!Math.sumPrecise) { Math.sumPrecise = function(values) { let sum = 0, correction = 0; for (const value of values) { const next = sum + value; correction += Math.abs(sum) >= Math.abs(value) ? (sum - next) + value : (value - next) + sum; sum = next; } return sum + correction; }; }
 const params = new URLSearchParams(location.search), readerId = params.get("id") || ""; let localReaderData = null; try { localReaderData = JSON.parse(sessionStorage.getItem(`reader-source:${readerId}`) || "null"); if (localReaderData) sessionStorage.removeItem(`reader-source:${readerId}`); } catch (_) {} let sourceUrl = params.get("url") || (localReaderData && localReaderData.url) || "", contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`, downloadUrl = params.get("download") || sourceUrl, extension = (params.get("ext") || "").toLowerCase(), chapterManifestUrl = params.get("chapter_manifest") || "", fallbackUrl = params.get("fallback") || "";
 const capability = VoiceOfMLReader.capability(extension);
-let historyTitle = title;
-let resolvedReaderData = null;
+let resolvedReaderData = localReaderData;
 try { const cached = sessionStorage.getItem(`reader-resolve:${readerId}`); if (cached) { resolvedReaderData = JSON.parse(cached); sessionStorage.removeItem(`reader-resolve:${readerId}`); } } catch (_) {}
 let directFoliateMoving = false, directFoliateContainer = null;
 let readerStage = "startup";
