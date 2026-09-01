@@ -32,6 +32,7 @@ try { const target = new URL(returnUrl, location.origin), storedReturnUrl = retu
 let zoom = 1;
 let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
 let restorationApplied = false;
+let restorationApplied = false;
 let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
@@ -246,7 +247,7 @@ async function renderChapterManifest(prepared) {
 }
 
 async function start() {
-  if (readerId) { const response = await fetch(`https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(readerId)}`); if (response.ok) { const resolved = await response.json(); const resolvedTitle = resolved.title && resolved.title !== "在线阅读" ? resolved.title : sourceName, resolvedExtension = String(resolved.extension || extension).toLowerCase(); document.querySelector("#title").textContent = resolvedTitle + (resolvedExtension && !String(resolvedTitle).toLowerCase().endsWith(`.${resolvedExtension}`) ? `.${resolvedExtension}` : ""); readerPath.textContent = readerPathLabel; readerPath.hidden = !readerPathLabel; status.hidden = true; } }
+  if (readerId) { const response = await fetch(`https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(readerId)}`); if (response.ok) { const resolved = await response.json(); const resolvedTitle = resolved.title && resolved.title !== "在线阅读" ? resolved.title : sourceName, resolvedExtension = String(resolved.extension || extension).toLowerCase(); document.querySelector("#title").textContent = resolvedTitle + (resolvedExtension && !String(resolvedTitle).toLowerCase().endsWith(`.${resolvedExtension}`) ? `.${resolvedExtension}` : ""); readerPath.textContent = resolved.path || ""; readerPath.hidden = !readerPath.textContent; if (readerPath.textContent && resolved.repo) { const folderTarget = new URL("/search/", location.origin); const folder = new URLSearchParams(); if (resolved.folder) folder.set("folder_self", resolved.folder); folderTarget.hash = "#/" + encodeURIComponent(resolved.repo) + (folder.toString() ? "?" + folder.toString() : ""); readerPath.onclick = () => window.parent !== window ? window.parent.postMessage({ type: "voice-reader-navigate", url: folderTarget.href }, location.origin) : location.assign(folderTarget.href); } status.hidden = true; } }
   if (readerId && !sourceUrl) { const response = await fetch(`https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(readerId)}`); if (!response.ok) throw new Error(`READER_RESOLVE_HTTP_${response.status}`); const resolved = await response.json(); sourceUrl = resolved.url || ""; contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`; downloadUrl = resolved.download || sourceUrl; }
   if ((!validSource(sourceUrl) && !validSource(chapterManifestUrl)) || capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED) return fail("此文件暂不支持在线阅读，请下载原文件。");
   document.querySelector("#download").href = `https://voiceofml-search.hf.space/api/download?file=${encodeURIComponent(title)}&link=${encodeURIComponent(downloadUrl)}`;
