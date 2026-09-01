@@ -40,7 +40,7 @@ jobs:
           mkdir -p _site/static
           cp index.html manifest.json sw.js _site/
           cp -a icons data _site/
-           node scripts/fetch_reader_assets.mjs _site/data/reader_assets.json.gz || cp data/reader_assets.json.gz _site/data/reader_assets.json.gz
+          node scripts/fetch_reader_assets.mjs _site/data/reader_assets.json.gz || cp data/reader_assets.json.gz _site/data/reader_assets.json.gz
           node scripts/copy_reader_vendor.mjs _site/static/vendor
           npx --yes esbuild@0.28.2 static/app.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
           npx --yes esbuild@0.28.2 static/reader-contract.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-contract.js
