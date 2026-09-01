@@ -32,7 +32,6 @@ try { const target = new URL(returnUrl, location.origin), storedReturnUrl = retu
 let zoom = 1;
 let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
 let restorationApplied = false;
-let restorationApplied = false;
 let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
