@@ -134,9 +134,9 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-  if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?(document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)$/.test(asset.p || "")) return record;
+   if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|page-manifest\.json|(?:[a-z0-9-]+\/)?(document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4))$/.test(asset.p || "")) return record;
   var originalExtension = String(record.Extension || record.extension || "").toLowerCase();
-  var readerExtensions = { p: "pdf", e: ["epub", "mobi", "azw3", "fb2"].indexOf(originalExtension) >= 0 ? originalExtension : "epub", d: "docx", h: "html", a: "audio", v: "video" };
+   var readerExtensions = { p: asset.p.endsWith("page-manifest.json") ? "pdf-pages" : "pdf", e: ["epub", "mobi", "azw3", "fb2"].indexOf(originalExtension) >= 0 ? originalExtension : "epub", d: "docx", h: "html", a: "audio", v: "video" };
    var chapterBundle = asset.m === "p" && !!asset.c;
    return Object.assign({}, record, {
      ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (chapterBundle ? asset.c : asset.p),
@@ -177,7 +177,6 @@ function getReaderFolderUrl(rec) {
   if (!repo) return "";
   var folder = Array.isArray(rec.Folder) ? rec.Folder.join("/") : "";
   var sp = new URLSearchParams();
-  if (STATE.query) sp.set("q", STATE.query);
   if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
   if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
   if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
@@ -215,7 +214,8 @@ function syncReaderFolderFilter(rawUrl) {
     var folderUrl = new URL(folderRaw, location.origin);
     var hashParts = folderUrl.hash.split("?", 2);
     var inHash = hashParts.length > 1;
-    var folderParams = inHash ? new URLSearchParams(hashParts[1]) : folderUrl.searchParams;
+     var folderParams = inHash ? new URLSearchParams(hashParts[1]) : folderUrl.searchParams;
+     folderParams.delete("q");
     folderParams.delete("ext");
     if (STATE.filterExtensions.length > 0) folderParams.set("ext", STATE.filterExtensions.join(","));
     if (inHash) folderUrl.hash = hashParts[0] + (folderParams.toString() ? "?" + folderParams.toString() : "");
@@ -1500,7 +1500,6 @@ const ROUTER = {
   navigate: function(mode, repo, folder) {
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = new URLSearchParams();
-    if (STATE.query) sp.set("q", STATE.query);
     if (mode !== "global" && folder !== undefined && folder !== null) sp.set("path", folder);
     else if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
     if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
@@ -1682,7 +1681,6 @@ const ROUTER = {
 function syncStateToURL() {
   let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
   const sp = new URLSearchParams();
-  if (STATE.query) sp.set("q", STATE.query);
   if (STATE.mode === "global") {
     STATE.filterRepos.forEach(function(r) {
       sp.append("repo", r.split("/").pop());
