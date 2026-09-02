@@ -146,7 +146,6 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .foliate-continuous > article { font-size: calc(1em * var(--reader-zoom)); }
 .foliate-continuous > article > :first-child { margin-top: 0 !important; }
 .foliate-continuous a { color: #8ab4e8 !important; }
-.foliate-continuous > article :is(a, p, li, td, th, h1, h2, h3, h4, h5, h6, span, div) { color: inherit !important; }
 .foliate-continuous a[href]:not([href^="http:"]):not([href^="https:"]) { text-decoration: none !important; }
 .foliate-continuous :is(p, div, span, li, td, th, blockquote, pre, code, h1, h2, h3, h4, h5, h6) { color: inherit !important; }
 .foliate-continuous img, .foliate-continuous svg, .foliate-continuous video { max-width: 100%; height: auto; }
