@@ -134,10 +134,19 @@ class Reader {
             previousStart = start
             moveSection(direction)
         }
-        this.view.renderer.addEventListener('scroll', moveAcrossSections)
-        this.view.renderer.addEventListener('wheel', event => {
+        let boundContainer = null
+        const bindScrollContainer = () => {
+            const container = this.view.renderer.shadowRoot?.querySelector('#container') || this.view.renderer
+            if (container === boundContainer) return
+            boundContainer = container
+            container.addEventListener('scroll', moveAcrossSections)
+            container.addEventListener('wheel', event => {
             if (event.deltaY) moveSection(event.deltaY > 0 ? 1 : -1)
-        }, { passive: true })
+            }, { passive: true })
+        }
+        bindScrollContainer()
+        this.view.renderer.addEventListener('load', bindScrollContainer)
+        setInterval(bindScrollContainer, 200)
         let touchStartY = null
         this.view.renderer.addEventListener('touchstart', event => {
             touchStartY = event.touches[0]?.clientY ?? null
@@ -307,6 +316,19 @@ window.addEventListener('message', event => {
     if (type === 'voice-foliate-seek') globalThis.reader?.view?.goToFraction(Number(event.data.percent) / 100)
     else if (type === 'voice-foliate-prev') globalThis.reader?.view?.prev()
     else if (type === 'voice-foliate-next') globalThis.reader?.view?.next()
+})
+window.addEventListener('message', event => {
+    if (event.source !== window.parent || event.data?.type !== 'voice-foliate-goto-cfi') return
+    if (event.data.cfi) globalThis.reader?.view?.goTo(event.data.cfi).catch(e => console.error(e))
+})
+window.addEventListener('message', async event => {
+    if (event.source !== window.parent || event.data?.type !== 'voice-foliate-search') return
+    const results = []
+    for await (const group of globalThis.reader?.view?.search?.({ query: event.data.query }) || []) {
+        for (const item of group.subitems || []) results.push({ label: group.label || '电子书位置', cfi: item.cfi, excerpt: item.excerpt || { pre: '', match: event.data.query, post: '' } })
+        if (results.length >= 100) break
+    }
+    window.parent.postMessage({ type: 'voice-foliate-search-results', results: results.slice(0, 100) }, location.origin)
 })
 if (url) open(proxy || url).then(() => window.parent !== window && window.parent.postMessage({ type: 'voice-foliate-ready' }, location.origin)).catch(e => { console.error(e); if (window.parent !== window) window.parent.postMessage({ type: 'voice-foliate-error', message: e?.message || 'FOLIATE_LOAD_FAILED' }, location.origin) })
 else dropTarget.style.visibility = 'visible'
