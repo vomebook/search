@@ -1047,7 +1047,7 @@ ${doc.querySelector('parsererror').innerText}`)
         return this.resources.resolveCFI(cfi)
     }
     resolveHref(href) {
-        const [path, hash] = href.split('#')
+        const [path, hash] = String(href ?? '').split('#')
         const item = this.resources.getItemByHref(decodeURI(path))
         if (!item) return null
         const index = this.resources.spine.findIndex(({ idref }) => idref === item.id)
