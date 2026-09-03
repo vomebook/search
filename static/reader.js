@@ -38,7 +38,7 @@ try { const target = new URL(returnUrl, location.origin), storedReturnUrl = retu
 let zoom = Math.min(4, Math.max(0.25, Number(localStorage.getItem("reader-zoom") || 100) / 100));
 let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
 let restorationApplied = false;
-let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false;
+let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false, foliateSectionLoader = null;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
 let historySuppressed = false, restorationReady = false, restorationFailed = false, markerFrame = 0, tocEntries = [], currentChapterIndex = -1, pendingBookmarkSnapshot = null, editingBookmark = null, showingAllBookmarks = false, bookmarkRenderGeneration = 0, mediaElement = null;
@@ -90,7 +90,7 @@ function cleanTocLabel(value) { return String(value || "未命名章节").replac
 function sameEpubPath(left, right) { try { left = decodeURIComponent(left); right = decodeURIComponent(right); } catch (_) {} return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`); }
 function updateTocCurrentMark() { const rows = [...document.querySelectorAll("#toc-list .toc-item")]; if (pageCount > 1 && currentPage > 0) { let pageIndex = -1; for (const [index, row] of rows.entries()) { const match = row.textContent.match(/第\s*(\d+)\s*页/u); if (match && Number(match[1]) <= currentPage) pageIndex = index; } if (pageIndex >= 0) currentChapterIndex = pageIndex; } for (const [index, row] of rows.entries()) { let mark = row.querySelector(".toc-current-mark"); if (!mark) { mark = document.createElement("span"); mark.className = "toc-current-mark"; mark.textContent = "✓"; row.appendChild(mark); } mark.hidden = index !== currentChapterIndex; row.classList.toggle("is-current", index === currentChapterIndex); } }
 function syncEpubTocLocation(location) { const href = location && location.start && String(location.start.href || "").split("#")[0]; if (!href) return; const index = tocEntries.findIndex((entry) => sameEpubPath(String(entry.href || "").split("#")[0], href)); if (index >= 0) { currentChapterIndex = index; updateTocCurrentMark(); } }
-async function activateFoliateTocEntry(entry) { const href = String(entry.href || ""), target = await epubRendition?.book?.resolveHref(href), section = target && epubRendition.book.sections[target.index], sections = epubRendition.book.sections.filter((item) => item.linear !== "no"), visibleIndex = section ? sections.indexOf(section) : -1; if (!section || visibleIndex < 0) return; let node = document.querySelector(`.foliate-continuous > article[data-section="${visibleIndex}"]`); if (!node) { const doc = await section.createDocument(), article = document.createElement("article"); article.className = "foliate-continuous-section"; article.dataset.section = String(visibleIndex); article.innerHTML = doc.body?.innerHTML || ""; const next = [...document.querySelectorAll(".foliate-continuous > article[data-section]")].find((item) => Number(item.dataset.section) > visibleIndex); document.querySelector(".foliate-continuous").insertBefore(article, next || null); node = article; } const anchorDocument = { getElementById: (id) => node.querySelector(`[id="${CSS.escape(id)}"]`), querySelector: (selector) => node.querySelector(selector) }; let anchor = null; try { anchor = typeof target.anchor === "function" ? target.anchor(anchorDocument) : null; } catch (_) {} if (!anchor) { const fragment = href.split("#")[1] || "", id = fragment ? decodeURIComponent(fragment) : ""; anchor = id ? node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`) : null; } const destination = anchor || node; viewport.scrollTop = Math.max(0, viewport.scrollTop + destination.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8); currentChapterIndex = tocEntries.indexOf(entry); updateTocCurrentMark(); setReaderPanelOpen(false, true); }
+async function activateFoliateTocEntry(entry) { const href = String(entry.href || ""), target = await epubRendition?.book?.resolveHref(href), section = target && epubRendition.book.sections[target.index], sections = epubRendition.book.sections.filter((item) => item.linear !== "no"), visibleIndex = section ? sections.indexOf(section) : -1; if (!section || visibleIndex < 0) return; let node = document.querySelector(`.foliate-continuous > article[data-section="${visibleIndex}"]`); if (!node && foliateSectionLoader) node = await foliateSectionLoader(visibleIndex); if (!node) return; const anchorDocument = { getElementById: (id) => node.querySelector(`[id="${CSS.escape(id)}"]`), querySelector: (selector) => node.querySelector(selector) }; let anchor = null; try { anchor = typeof target.anchor === "function" ? target.anchor(anchorDocument) : null; } catch (_) {} if (!anchor) { const fragment = href.split("#")[1] || "", id = fragment ? decodeURIComponent(fragment) : ""; anchor = id ? node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`) : null; } const destination = anchor || node; viewport.scrollTop = Math.max(0, viewport.scrollTop + destination.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8); currentChapterIndex = tocEntries.indexOf(entry); updateTocCurrentMark(); setReaderPanelOpen(false, true); }
 document.addEventListener("click", async (event) => { const link = event.target.closest(".foliate-continuous a[href]"); if (!link || !epubRendition?.book) return; const raw = link.getAttribute("href") || ""; if (!raw || epubRendition.book.isExternal?.(raw) || /^(?:https?:|mailto:|tel:)/i.test(raw)) return; event.preventDefault(); const index = Number(link.closest("article[data-section]")?.dataset.section), section = epubRendition.book.sections.filter((item) => item.linear !== "no")[index]; let href = raw; try { href = section?.resolveHref?.(raw) || raw; } catch (_) {} await activateFoliateTocEntry({ href }); });
 function placeReadingProgress() { const panel = document.querySelector("#history-panel"), tocPanel = document.querySelector("#toc-panel"), tocList = tocPanel.querySelector(".panel-list"), noToc = loadingStatus.hidden && !tocEntries.length && !mediaElement; progressTools.classList.toggle("reader-no-toc", noToc); tocPanel.querySelector(".panel-view-header strong").textContent = noToc ? "阅读状态" : "目录"; if (noToc && (progressTools.parentElement !== tocPanel || progressTools.nextElementSibling !== tocList)) tocPanel.insertBefore(progressTools, tocList); else if (!noToc && panel.lastElementChild !== progressTools) panel.appendChild(progressTools); }
 async function navigateReader(rawUrl) { await saveProgress(); if (window.parent !== window) window.parent.postMessage({ type: "voice-reader-open", url: rawUrl }, location.origin); else location.assign(rawUrl); }
@@ -219,24 +219,212 @@ fullSearchButton.addEventListener("click", (event) => { const panel = document.q
 fullSearchView.querySelector("#full-search-clear").addEventListener("click", clearFullSearchMarks, true);
 
 async function renderFoliate(prepared) {
-  const response = await fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS);
+  const response = await fetchWithReaderTimeout(
+    contentUrl,
+    READER_PROXY_TIMEOUT_MS,
+  );
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   await import("/search/static/foliate-reader/view.js?reader-v1");
-  const bytes = await response.arrayBuffer(), view = document.createElement("foliate-view"), stream = document.createElement("div");
-  view.className = "foliate-reader-view"; stream.className = "foliate-continuous"; content.replaceChildren(view, stream); epubRendition = view;
-  await view.open(new File([bytes], new URL(sourceUrl, location.href).pathname.split("/").pop() || "book.epub", { type: response.headers.get("content-type") || "application/epub+zip" }));
-  epubBook = view.book; view.style.display = "none";
-  const sections = view.book.sections.filter((section) => section.linear !== "no"), loaded = new Set();
-  const load = async (section, index) => { if (loaded.has(index)) return; const doc = await section.createDocument(), all = [...doc.querySelectorAll("*")], localName = (element) => String(element.localName || element.tagName || "").split(":").pop().toLowerCase(), named = (name) => all.filter((element) => localName(element) === name), assetUrl = (value) => { try { const resolved = section.resolveHref?.(value); const path = resolved || new URL(value, `https://reader.invalid/${String(section.href || "")}`).pathname.replace(/^\//, ""); return `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(sourceUrl)}&path=${encodeURIComponent(path)}`; } catch (_) { return value; } }; for (const element of all.filter((item) => ["img", "source", "audio", "video"].includes(localName(item)))) for (const name of ["src", "poster"]) { const value = element.getAttribute(name); if (value && !/^(?:data:|blob:|https?:)/i.test(value)) element.setAttribute(name, assetUrl(value)); } for (const element of all.filter((item) => item.hasAttribute("srcset"))) { const value = element.getAttribute("srcset"); if (value) element.setAttribute("srcset", value.split(",").map((part) => { const [url, ...descriptor] = part.trim().split(/\s+/); return [assetUrl(url), ...descriptor].join(" "); }).join(", ")); } for (const link of named("link").filter((item) => /stylesheet/i.test(item.getAttribute("rel") || "") && item.hasAttribute("href"))) { const value = link.getAttribute("href"); if (value && !/^(?:data:|blob:|https?:)/i.test(value)) link.setAttribute("href", assetUrl(value)); } const body = named("body")[0], head = named("head")[0], article = document.createElement("article"); article.className = "foliate-continuous-section"; article.dataset.section = String(index); const styles = head ? [...head.children].filter((node) => ["style", "link"].includes(localName(node))).map((node) => node.outerHTML).join("") : ""; article.innerHTML = (styles + (body?.innerHTML || doc.documentElement?.innerHTML || "")).replace(/<\/html:/gi, "</").replace(/<html:/gi, "<"); stream.appendChild(article); loaded.add(index); observer.observe(article); };
-  const observer = new IntersectionObserver((items) => items.filter((item) => item.isIntersecting).forEach((item) => { const index = Number(item.target.dataset.section) + 1; if (sections[index]) load(sections[index], index).catch(() => {}); }), { root: viewport, rootMargin: "1000px" });
+  const bytes = await response.arrayBuffer(),
+    view = document.createElement("foliate-view"),
+    stream = document.createElement("div");
+  view.className = "foliate-reader-view";
+  stream.className = "foliate-continuous";
+  content.replaceChildren(view, stream);
+  epubRendition = view;
+  await view.open(
+    new File(
+      [bytes],
+      new URL(sourceUrl, location.href).pathname.split("/").pop() ||
+        "book.epub",
+      { type: response.headers.get("content-type") || "application/epub+zip" },
+    ),
+  );
+  epubBook = view.book;
+  view.style.display = "none";
+  const sections = view.book.sections.filter(
+      (section) => section.linear !== "no",
+    ),
+    loaded = new Set(),
+    pending = new Map();
+  const load = async (section, index) => {
+    const existing = stream.querySelector(`article[data-section="${index}"]`);
+    if (existing) {
+      loaded.add(index);
+      return existing;
+    }
+    if (pending.has(index)) return pending.get(index);
+    const task = (async () => {
+      const doc = await section.createDocument(),
+      all = [...doc.querySelectorAll("*")],
+      localName = (element) =>
+        String(element.localName || element.tagName || "")
+          .split(":")
+          .pop()
+          .toLowerCase(),
+      named = (name) => all.filter((element) => localName(element) === name),
+      assetUrl = (value) => {
+        try {
+          const resolved = section.resolveHref?.(value);
+          const path =
+            resolved ||
+            new URL(
+              value,
+              `https://reader.invalid/${String(section.href || "")}`,
+            ).pathname.replace(/^\//, "");
+          return `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(sourceUrl)}&path=${encodeURIComponent(path)}`;
+        } catch (_) {
+          return value;
+        }
+      };
+    for (const element of all.filter((item) =>
+      ["img", "source", "audio", "video"].includes(localName(item)),
+    ))
+      for (const name of ["src", "poster"]) {
+        const value = element.getAttribute(name);
+        if (value && !/^(?:data:|blob:|https?:)/i.test(value))
+          element.setAttribute(name, assetUrl(value));
+      }
+    for (const element of all.filter((item) => item.hasAttribute("srcset"))) {
+      const value = element.getAttribute("srcset");
+      if (value)
+        element.setAttribute(
+          "srcset",
+          value
+            .split(",")
+            .map((part) => {
+              const [url, ...descriptor] = part.trim().split(/\s+/);
+              return [assetUrl(url), ...descriptor].join(" ");
+            })
+            .join(", "),
+        );
+    }
+    for (const link of named("link").filter(
+      (item) =>
+        /stylesheet/i.test(item.getAttribute("rel") || "") &&
+        item.hasAttribute("href"),
+    )) {
+      const value = link.getAttribute("href");
+      if (value && !/^(?:data:|blob:|https?:)/i.test(value))
+        link.setAttribute("href", assetUrl(value));
+    }
+      const body = named("body")[0],
+        head = named("head")[0],
+        article = document.createElement("article");
+      article.className = "foliate-continuous-section";
+      article.dataset.section = String(index);
+      const styles = head
+        ? [...head.children]
+            .filter((node) => ["style", "link"].includes(localName(node)))
+            .map((node) => node.outerHTML)
+            .join("")
+        : "";
+      article.innerHTML = (
+        styles + (body?.innerHTML || doc.documentElement?.innerHTML || "")
+      )
+        .replace(/<\/html:/gi, "</")
+        .replace(/<html:/gi, "<");
+      const next = [...stream.querySelectorAll("article[data-section]")].find(
+        (item) => Number(item.dataset.section) > index,
+      );
+      stream.insertBefore(article, next || null);
+      loaded.add(index);
+      observer.observe(article);
+      return article;
+    })().finally(() => pending.delete(index));
+    pending.set(index, task);
+    return task;
+  };
+  const observer = new IntersectionObserver(
+    (items) =>
+      items
+        .filter((item) => item.isIntersecting)
+        .forEach((item) => {
+          const index = Number(item.target.dataset.section);
+          for (const adjacent of [index - 1, index + 1])
+            if (sections[adjacent])
+              load(sections[adjacent], adjacent).catch(() => {});
+        }),
+    { root: viewport, rootMargin: "1000px" },
+  );
+  foliateSectionLoader = (index) =>
+    sections[index] ? load(sections[index], index) : Promise.resolve(null);
   if (sections[0]) await load(sections[0], 0);
-  const entries = [], append = (items, depth = 0) => { for (const item of items || []) { const href = item?.href ? String(item.href) : ""; if (href) entries.push({ label: item.label || "未命名章节", href, depth, activate: () => view.goTo(href) }); append(item.subitems, depth + 1); } };
-  append(view.book.toc); if (entries.length) setToc(entries);
-  viewport.addEventListener("scroll", () => { let current = 0; for (const node of stream.querySelectorAll("article[data-section]")) if (node.getBoundingClientRect().top <= viewport.getBoundingClientRect().top + 80) current = Number(node.dataset.section); const item = entries.find((entry) => { const target = view.book.resolveHref(entry.href), section = target && view.book.sections[target.index]; return section && sections.indexOf(section) === current; }); if (item) { currentChapterIndex = entries.indexOf(item); updateTocCurrentMark(); } }, { passive: true });
-  loadingIndicator.remove(); loadingStatus.hidden = true; loadingObserver.disconnect(); status.textContent = "EPUB";
+  const entries = [],
+    append = (items, depth = 0) => {
+      for (const item of items || []) {
+        const href = item?.href ? String(item.href) : "";
+        if (href)
+          entries.push({
+            label: item.label || "未命名章节",
+            href,
+            depth,
+            activate: () => view.goTo(href),
+          });
+        append(item.subitems, depth + 1);
+      }
+    };
+  append(view.book.toc);
+  if (entries.length) setToc(entries);
+  viewport.addEventListener(
+    "scroll",
+    () => {
+      let current = 0;
+      for (const node of stream.querySelectorAll("article[data-section]"))
+        if (
+          node.getBoundingClientRect().top <=
+          viewport.getBoundingClientRect().top + 80
+        )
+          current = Number(node.dataset.section);
+      const item = entries.find((entry) => {
+        const target = view.book.resolveHref(entry.href),
+          section = target && view.book.sections[target.index];
+        return section && sections.indexOf(section) === current;
+      });
+      if (item) {
+        currentChapterIndex = entries.indexOf(item);
+        updateTocCurrentMark();
+      }
+    },
+    { passive: true },
+  );
+  loadingIndicator.remove();
+  loadingStatus.hidden = true;
+  loadingObserver.disconnect();
+  status.textContent = "EPUB";
 }
-setInterval(() => { const detail = epubRendition?.lastLocation, start = detail?.start || detail?.location?.start; if (!start) return; epubLocation = start.cfi || start.href || epubLocation; epubProgress = Number.isFinite(start.percentage) ? start.percentage : epubProgress; if (start.href) syncEpubTocLocation({ start }); updateProgressTools(); }, 200);
-setInterval(() => { for (const image of document.querySelectorAll(".foliate-continuous image")) { const value = image.getAttributeNS("http://www.w3.org/1999/xlink", "href") || image.getAttribute("xlink:href"); if (!value || /^(?:data:|blob:|https?:|#)/i.test(value) || image.dataset.readerResource) continue; const section = image.closest("[data-section]")?.dataset.section; const item = epubBook?.sections?.[Number(section)]; if (!item) continue; const resource = item.resolveHref(value); const proxy = `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(sourceUrl)}&path=${encodeURIComponent(resource)}`; image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", proxy); image.setAttribute("href", proxy); image.dataset.readerResource = "1"; } }, 250);
+setInterval(() => {
+  const detail = epubRendition?.lastLocation,
+    start = detail?.start || detail?.location?.start;
+  if (!start) return;
+  epubLocation = start.cfi || start.href || epubLocation;
+  epubProgress = Number.isFinite(start.percentage)
+    ? start.percentage
+    : epubProgress;
+  if (start.href) syncEpubTocLocation({ start });
+  updateProgressTools();
+}, 200);
+setInterval(() => {
+  for (const image of document.querySelectorAll(".foliate-continuous image")) {
+    const value =
+      image.getAttributeNS("http://www.w3.org/1999/xlink", "href") ||
+      image.getAttribute("xlink:href");
+    if (
+      !value ||
+      /^(?:data:|blob:|https?:|#)/i.test(value) ||
+      image.dataset.readerResource
+    )
+      continue;
+    const section = image.closest("[data-section]")?.dataset.section;
+    const item = epubBook?.sections?.[Number(section)];
+    if (!item) continue;
+    const resource = item.resolveHref(value);
+    const proxy = `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(sourceUrl)}&path=${encodeURIComponent(resource)}`;
+    image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", proxy);
+    image.setAttribute("href", proxy);
+    image.dataset.readerResource = "1";
+  }
+}, 250);
 
 // Chapter bundles are intentionally outside the EPUB engine: the manifest and
 // first chapter are cheap to load, while later chapters enter through the viewport.
@@ -244,35 +432,106 @@ async function renderChapterManifest(prepared) {
   const response = await prepared;
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const manifest = await response.json();
-  if (manifest.version !== 1 || manifest.kind !== "epub-chapters" || !Array.isArray(manifest.chapters) || !manifest.chapters.length) throw new Error("EPUB_INVALID");
-  const frame = document.createElement("div"); frame.className = "epub-frame"; content.appendChild(frame);
-  const loaded = new Set(), pending = new Map(), base = chapterManifestUrl || sourceUrl;
+  if (
+    manifest.version !== 1 ||
+    manifest.kind !== "epub-chapters" ||
+    !Array.isArray(manifest.chapters) ||
+    !manifest.chapters.length
+  )
+    throw new Error("EPUB_INVALID");
+  const frame = document.createElement("div");
+  frame.className = "epub-frame";
+  content.appendChild(frame);
+  const loaded = new Set(),
+    pending = new Map(),
+    base = chapterManifestUrl || sourceUrl;
   const load = async (chapter) => {
     if (loaded.has(chapter.index)) return;
     if (pending.has(chapter.index)) return pending.get(chapter.index);
     const task = (async () => {
       const url = new URL(chapter.path, base).href;
-      let result = await fetchWithReaderTimeout(`https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url)}`, READER_PROXY_TIMEOUT_MS);
-      if (!result.ok) result = await fetchWithReaderTimeout(url, READER_PROXY_TIMEOUT_MS);
+      let result = await fetchWithReaderTimeout(
+        `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url)}`,
+        READER_PROXY_TIMEOUT_MS,
+      );
+      if (!result.ok)
+        result = await fetchWithReaderTimeout(url, READER_PROXY_TIMEOUT_MS);
       if (!result.ok) throw new Error(`HTTP ${result.status}`);
-      const doc = new DOMParser().parseFromString(await result.text(), "text/html");
-      for (const node of doc.querySelectorAll("script,iframe,object,embed,base,form")) node.remove();
+      const doc = new DOMParser().parseFromString(
+        await result.text(),
+        "text/html",
+      );
+      for (const node of doc.querySelectorAll(
+        "script,iframe,object,embed,base,form",
+      ))
+        node.remove();
       for (const element of doc.querySelectorAll("*")) {
-        for (const attribute of [...element.attributes]) if (attribute.name.toLowerCase().startsWith("on")) element.removeAttribute(attribute.name);
-        for (const name of ["src", "href", "poster"]) if (element.hasAttribute(name)) {
-          const value = element.getAttribute(name);
-          if (!value.startsWith("#")) { try { element.setAttribute(name, new URL(value, url).href); } catch (_) { element.removeAttribute(name); } }
-        }
+        for (const attribute of [...element.attributes])
+          if (attribute.name.toLowerCase().startsWith("on"))
+            element.removeAttribute(attribute.name);
+        for (const name of ["src", "href", "poster"])
+          if (element.hasAttribute(name)) {
+            const value = element.getAttribute(name);
+            if (!value.startsWith("#")) {
+              try {
+                element.setAttribute(name, new URL(value, url).href);
+              } catch (_) {
+                element.removeAttribute(name);
+              }
+            }
+          }
       }
-      const article = document.createElement("article"); article.className = "reader-markdown reader-epub-chapter"; article.dataset.chapter = String(chapter.index); article.innerHTML = doc.body ? doc.body.innerHTML : ""; frame.appendChild(article); loaded.add(chapter.index); pending.delete(chapter.index);
-      setToc(manifest.chapters.map((item) => ({ label: item.title || `章节 ${item.index}`, depth: 0, activate: async () => { await load(item); const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${item.index}"]`); if (node) node.scrollIntoView({ block: "start" }); } })));
-      const next = manifest.chapters.find((item) => item.index === chapter.index + 1);
-      if (next) { const sentinel = document.createElement("div"); sentinel.className = "reader-chapter-sentinel"; sentinel.dataset.chapter = String(next.index); frame.appendChild(sentinel); observer.observe(sentinel); }
+      const article = document.createElement("article");
+      article.className = "reader-markdown reader-epub-chapter";
+      article.dataset.chapter = String(chapter.index);
+      article.innerHTML = doc.body ? doc.body.innerHTML : "";
+      frame.appendChild(article);
+      loaded.add(chapter.index);
+      pending.delete(chapter.index);
+      setToc(
+        manifest.chapters.map((item) => ({
+          label: item.title || `章节 ${item.index}`,
+          depth: 0,
+          activate: async () => {
+            await load(item);
+            const node = frame.querySelector(
+              `.reader-epub-chapter[data-chapter="${item.index}"]`,
+            );
+            if (node) node.scrollIntoView({ block: "start" });
+          },
+        })),
+      );
+      const next = manifest.chapters.find(
+        (item) => item.index === chapter.index + 1,
+      );
+      if (next) {
+        const sentinel = document.createElement("div");
+        sentinel.className = "reader-chapter-sentinel";
+        sentinel.dataset.chapter = String(next.index);
+        frame.appendChild(sentinel);
+        observer.observe(sentinel);
+      }
     })();
-    pending.set(chapter.index, task); return task;
+    pending.set(chapter.index, task);
+    return task;
   };
-  const observer = new IntersectionObserver((entries) => entries.filter((entry) => entry.isIntersecting).forEach((entry) => { const chapter = manifest.chapters.find((item) => item.index === Number(entry.target.dataset.chapter)); if (chapter) load(chapter).catch((error) => console.warn("EPUB chapter could not be loaded", error)); }), { root: viewport, rootMargin: "900px 0px" });
-  await load(manifest.chapters[0]); status.textContent = `EPUB · ${manifest.chapters.length} 章`;
+  const observer = new IntersectionObserver(
+    (entries) =>
+      entries
+        .filter((entry) => entry.isIntersecting)
+        .forEach((entry) => {
+          const chapter = manifest.chapters.find(
+            (item) => item.index === Number(entry.target.dataset.chapter),
+          );
+          if (chapter)
+            load(chapter).catch((error) =>
+              console.warn("EPUB chapter could not be loaded", error),
+            );
+        }),
+    { root: viewport, rootMargin: "900px 0px" },
+  );
+  await load(manifest.chapters[0]);
+  status.textContent = `EPUB · ${manifest.chapters.length} 章`;
 }
 
 function renderImageDocument(image) { content.appendChild(image); status.textContent = "图片"; }
