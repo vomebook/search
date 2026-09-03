@@ -40,7 +40,7 @@ jobs:
           mkdir -p _site/static
           cp index.html manifest.json sw.js _site/
           cp -a icons data _site/
-          cp data/reader_assets.json.gz _site/data/reader_assets.json.gz
+          node scripts/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
           node scripts/copy_reader_vendor.mjs _site/static/vendor
           npx --yes esbuild@0.28.2 static/app.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
           npx --yes esbuild@0.28.2 static/reader-contract.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-contract.js
@@ -49,17 +49,20 @@ jobs:
           npx --yes esbuild@0.28.2 static/reader-chapter-repository.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-chapter-repository.js
           npx --yes esbuild@0.28.2 static/reader-scroll-anchor.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-scroll-anchor.js
           npx --yes esbuild@0.28.2 static/reader-section-virtualizer.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-section-virtualizer.js
+          npx --yes esbuild@0.28.2 static/reader-runtime.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-runtime.js
+          npx --yes esbuild@0.28.2 static/reader-format-adapters.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-format-adapters.js
           npx --yes esbuild@0.28.2 static/reader.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader.js
           npx --yes esbuild@0.28.2 static/index-worker.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/index-worker.js
           npx --yes esbuild@0.28.2 static/style.css --minify --outfile=_site/static/style.css
           npx --yes esbuild@0.28.2 static/reader.css --minify --outfile=_site/static/reader.css
-           cp static/reader.html _site/static/reader.html
-           cp static/pdf-worker-wrapper.mjs _site/static/pdf-worker-wrapper.mjs
-           cp -a static/foliate-reader _site/static/foliate-reader
-           npx --yes esbuild@0.28.2 sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
+          cp static/reader.html _site/static/reader.html
+          cp static/pdf-worker-wrapper.mjs _site/static/pdf-worker-wrapper.mjs
+          cp -a static/foliate-reader _site/static/foliate-reader
+          npx --yes esbuild@0.28.2 sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
           node --check _site/static/app.js
           node --check _site/static/index-worker.js
           node --check _site/sw.js
+          node scripts/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
