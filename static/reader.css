@@ -144,6 +144,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 .foliate-continuous { width: min(100%, 900px); min-height: 100%; margin: 0 auto; padding: 24px 20px 64px; background: #181b1e; color: #e7e9eb; }
 .foliate-continuous > article { min-height: 0 !important; height: auto !important; margin: 0 auto 32px; padding-top: 0 !important; line-height: 1.7; break-before: auto !important; page-break-before: auto !important; }
 .foliate-continuous > article { font-size: calc(1em * var(--reader-zoom)); }
+.foliate-continuous > article.foliate-section-placeholder { height: var(--foliate-placeholder-height) !important; min-height: var(--foliate-placeholder-height) !important; padding: 0 !important; contain: strict; pointer-events: none; }
 .foliate-continuous > article > :first-child { margin-top: 0 !important; }
 .foliate-continuous a { color: #8ab4e8 !important; }
 .foliate-continuous a[href]:not([href^="http:"]):not([href^="https:"]) { text-decoration: none !important; }
