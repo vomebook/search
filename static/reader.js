@@ -38,7 +38,7 @@ try { const target = new URL(returnUrl, location.origin), storedReturnUrl = retu
 let zoom = Math.min(4, Math.max(0.25, Number(localStorage.getItem("reader-zoom") || 100) / 100));
 let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
 let restorationApplied = false;
-let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false, foliateSectionLoader = null;
+let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false, foliateSectionLoader = null, foliateSectionSettler = null;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
 let historySuppressed = false, restorationReady = false, restorationFailed = false, markerFrame = 0, tocEntries = [], currentChapterIndex = -1, navigationGeneration = 0, pendingBookmarkSnapshot = null, editingBookmark = null, showingAllBookmarks = false, bookmarkRenderGeneration = 0, mediaElement = null;
@@ -91,7 +91,7 @@ function cleanTocLabel(value) { return String(value || "未命名章节").replac
 function sameEpubPath(left, right) { try { left = decodeURIComponent(left); right = decodeURIComponent(right); } catch (_) {} return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`); }
 function updateTocCurrentMark() { const rows = [...document.querySelectorAll("#toc-list .toc-item")]; if (pageCount > 1 && currentPage > 0) { let pageIndex = -1; for (const [index, row] of rows.entries()) { const match = row.textContent.match(/第\s*(\d+)\s*页/u); if (match && Number(match[1]) <= currentPage) pageIndex = index; } if (pageIndex >= 0) currentChapterIndex = pageIndex; } for (const [index, row] of rows.entries()) { let mark = row.querySelector(".toc-current-mark"); if (!mark) { mark = document.createElement("span"); mark.className = "toc-current-mark"; mark.textContent = "✓"; row.appendChild(mark); } mark.hidden = index !== currentChapterIndex; row.classList.toggle("is-current", index === currentChapterIndex); } }
 function syncEpubTocLocation(location) { const href = location && location.start && String(location.start.href || "").split("#")[0]; if (!href) return; const index = tocEntries.findIndex((entry) => sameEpubPath(String(entry.href || "").split("#")[0], href)); if (index >= 0) { currentChapterIndex = index; updateTocCurrentMark(); } }
-async function activateFoliateTocEntry(entry, generation = ++navigationGeneration) { const href = String(entry.href || ""), target = await epubRendition?.book?.resolveHref(href), section = target && epubRendition.book.sections[target.index], sections = epubRendition.book.sections.filter((item) => item.linear !== "no"), visibleIndex = section ? sections.indexOf(section) : -1; if (!section || visibleIndex < 0) return; let node = document.querySelector(`.foliate-continuous > article[data-section="${visibleIndex}"]`); if (!node && foliateSectionLoader) node = await foliateSectionLoader(visibleIndex); if (!node || generation !== navigationGeneration) return; const anchorDocument = { getElementById: (id) => node.querySelector(`[id="${CSS.escape(id)}"]`), querySelector: (selector) => node.querySelector(selector) }; let anchor = null; try { anchor = typeof target.anchor === "function" ? target.anchor(anchorDocument) : null; } catch (_) {} if (!anchor) { const fragment = href.split("#")[1] || "", id = fragment ? decodeURIComponent(fragment) : ""; anchor = id ? node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`) : null; } if (generation !== navigationGeneration) return; const destination = anchor || node; viewport.scrollTop = Math.max(0, viewport.scrollTop + destination.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8); currentChapterIndex = tocEntries.indexOf(entry); updateTocCurrentMark(); setReaderPanelOpen(false, true); }
+async function activateFoliateTocEntry(entry, generation = ++navigationGeneration) { const href = String(entry.href || ""), target = await epubRendition?.book?.resolveHref(href), section = target && epubRendition.book.sections[target.index], sections = epubRendition.book.sections.filter((item) => item.linear !== "no"), visibleIndex = section ? sections.indexOf(section) : -1; if (!section || visibleIndex < 0) return; let node = document.querySelector(`.foliate-continuous > article[data-section="${visibleIndex}"]`); if (!node && foliateSectionLoader) node = await foliateSectionLoader(visibleIndex); if (foliateSectionSettler) await foliateSectionSettler(); if (!node || generation !== navigationGeneration) return; const anchorDocument = { getElementById: (id) => node.querySelector(`[id="${CSS.escape(id)}"]`), querySelector: (selector) => node.querySelector(selector) }; let anchor = null; try { anchor = typeof target.anchor === "function" ? target.anchor(anchorDocument) : null; } catch (_) {} if (!anchor) { const fragment = href.split("#")[1] || "", id = fragment ? decodeURIComponent(fragment) : ""; anchor = id ? node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`) : null; } if (generation !== navigationGeneration) return; const destination = anchor || node; viewport.scrollTop = Math.max(0, viewport.scrollTop + destination.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8); currentChapterIndex = tocEntries.indexOf(entry); updateTocCurrentMark(); setReaderPanelOpen(false, true); }
 document.addEventListener("click", async (event) => { const link = event.target.closest(".foliate-continuous a[href]"); if (!link || !epubRendition?.book) return; const raw = link.getAttribute("href") || ""; if (!raw || epubRendition.book.isExternal?.(raw) || /^(?:https?:|mailto:|tel:)/i.test(raw)) return; event.preventDefault(); const generation = ++navigationGeneration, index = Number(link.closest("article[data-section]")?.dataset.section), section = epubRendition.book.sections.filter((item) => item.linear !== "no")[index]; let href = raw; try { href = section?.resolveHref?.(raw) || raw; } catch (_) {} try { await activateFoliateTocEntry({ href }, generation); } catch (error) { if (generation === navigationGeneration) console.warn("Reader navigation failed", error); } });
 function placeReadingProgress() { const panel = document.querySelector("#history-panel"), tocPanel = document.querySelector("#toc-panel"), tocList = tocPanel.querySelector(".panel-list"), noToc = loadingStatus.hidden && !tocEntries.length && !mediaElement; progressTools.classList.toggle("reader-no-toc", noToc); tocPanel.querySelector(".panel-view-header strong").textContent = noToc ? "阅读状态" : "目录"; if (noToc && (progressTools.parentElement !== tocPanel || progressTools.nextElementSibling !== tocList)) tocPanel.insertBefore(progressTools, tocList); else if (!noToc && panel.lastElementChild !== progressTools) panel.appendChild(progressTools); }
 async function navigateReader(rawUrl) { await saveProgress(); if (window.parent !== window) window.parent.postMessage({ type: "voice-reader-open", url: rawUrl }, location.origin); else location.assign(rawUrl); }
@@ -99,18 +99,252 @@ async function renderHistory() { const list = document.querySelector("#history-l
 function readerProgressPercent() { if (epubLocation) { const location = epubRendition && epubRendition.currentLocation ? epubRendition.currentLocation() : null, percentage = location && location.start && Number.isFinite(location.start.percentage) ? location.start.percentage : epubProgress; return Math.round(Math.max(0, Math.min(1, percentage)) * 1000) / 10; } if (htmlFrame && htmlFrame.contentDocument) { const doc = htmlFrame.contentDocument.documentElement, win = htmlFrame.contentWindow; return Math.round(Math.max(0, Math.min(1, win.scrollY / Math.max(1, doc.scrollHeight - win.innerHeight))) * 1000) / 10; } const position = viewport.scrollTop / Math.max(1, viewport.scrollHeight - viewport.clientHeight); return Math.round(Math.max(0, Math.min(1, position)) * 1000) / 10; }
 function excerptFromCaret(doc, root, x, y) { let node, offset = 0; const position = doc.caretPositionFromPoint ? doc.caretPositionFromPoint(x, y) : null; if (position) { node = position.offsetNode; offset = position.offset; } else if (doc.caretRangeFromPoint) { const range = doc.caretRangeFromPoint(x, y); if (range) { node = range.startContainer; offset = range.startOffset; } } if (!node || !root.contains(node)) return ""; if (node.nodeType !== Node.TEXT_NODE) { const first = doc.createTreeWalker(node, NodeFilter.SHOW_TEXT).nextNode(); if (!first) return ""; node = first; offset = 0; } const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT); walker.currentNode = node; let excerpt = node.data.slice(offset); while (excerpt.length < 220 && walker.nextNode()) excerpt += ` ${walker.currentNode.data}`; return excerpt.replace(/\s+/g, " ").trim().slice(0, 160); }
 function bookmarkExcerpt() { if (["image", "audio", "video"].includes(capability.mode)) return ""; if (capability.mode === "pdf") { const shell = pageAtMarker(), items = shell && shell._bookmarkTextItems; if (items && items.length) { const rect = shell.getBoundingClientRect(), targetY = Math.max(0, bookmarkRibbon.getBoundingClientRect().bottom - rect.top) / Math.max(1, rect.height); let nearest = 0, distance = Infinity; items.forEach((item, index) => { const nextDistance = Math.abs(item.y - targetY); if (nextDistance < distance) { nearest = index; distance = nextDistance; } }); return items.slice(nearest).map((item) => item.text).join(" ").replace(/\s+/g, " ").trim().slice(0, 160); } } const x = Math.round(viewport.getBoundingClientRect().width / 2), y = Math.round(bookmarkRibbon.getBoundingClientRect().bottom + 8), frames = [...document.querySelectorAll("iframe")].filter((frame) => { const rect = frame.getBoundingClientRect(); return rect.left <= x && rect.right >= x && rect.top <= y && rect.bottom >= y; }), frame = frames[frames.length - 1]; try { if (frame && frame.contentDocument && frame.contentDocument.body) { const rect = frame.getBoundingClientRect(); return excerptFromCaret(frame.contentDocument, frame.contentDocument.body, x - rect.left, y - rect.top); } } catch (_) {} const exact = excerptFromCaret(document, content, x, y); if (exact) return exact; const text = content.textContent.replace(/\s+/g, " ").trim(), start = Math.floor(text.length * readerProgressPercent() / 100); return text.slice(start, start + 160).trim(); }
-async function renderBookmarks() { const list = document.querySelector("#bookmarks-list"), generation = ++bookmarkRenderGeneration; try { const entries = showingAllBookmarks ? await VoiceOfMLReaderStore.listAllBookmarks() : await VoiceOfMLReaderStore.listBookmarks(sourceUrl); if (generation !== bookmarkRenderGeneration) return; list.textContent = ""; for (const entry of entries) { const row = document.createElement("div"); row.className = "panel-item"; const open = document.createElement("button"); open.type = "button"; open.className = "panel-item-main"; open.textContent = showingAllBookmarks ? `${entry.title || "未命名书籍"} · ${entry.label}` : entry.label; open.addEventListener("click", async () => { if (entry.url !== sourceUrl) { await navigateReader(entry.readerUrl); return; } if (entry.epubLocation && epubRendition) await epubRendition.display(entry.epubLocation); else if (entry.page) { await goToPage(entry.page); if (Number.isFinite(entry.pageOffset)) { const shell = content.querySelector(`.reader-page[data-page="${entry.page}"], .reader-docx-page[data-page="${entry.page}"]`); if (shell) viewport.scrollTop = shell.offsetTop + entry.pageOffset; } } else if (Number.isFinite(entry.htmlScrollTop) && htmlFrame && htmlFrame.contentWindow) htmlFrame.contentWindow.scrollTo(0, entry.htmlScrollTop); else viewport.scrollTop = entry.scrollTop || 0; }); const excerpt = document.createElement("p"); excerpt.className = "bookmark-excerpt"; excerpt.textContent = entry.excerpt || ""; excerpt.hidden = !entry.excerpt; const meta = document.createElement("small"); meta.textContent = new Date(entry.createdAt).toLocaleString(); const remove = document.createElement("button"); remove.type = "button"; remove.className = "panel-item-remove"; remove.textContent = "删除"; remove.addEventListener("click", async () => { await VoiceOfMLReaderStore.removeBookmark(entry.id); row.remove(); if (!list.querySelector(".panel-item")) emptyPanel(list, "暂无书签"); }); row.append(open, remove, excerpt, meta); list.appendChild(row); } if (!list.childElementCount) emptyPanel(list, "暂无书签"); filterPanel(document.querySelector("#bookmarks-panel")); } catch (_) { if (generation === bookmarkRenderGeneration) emptyPanel(list, "无法读取书签"); } }
-function pageAtMarker() { const y = bookmarkRibbon.getBoundingClientRect().bottom, pages = [...content.querySelectorAll(".reader-page, .reader-docx-page")]; if (!pages.length) return null; return pages.find((page) => { const rect = page.getBoundingClientRect(); return rect.top <= y && rect.bottom > y; }) || pages.find((page) => page.getBoundingClientRect().bottom > y) || pages[pages.length - 1]; }
-function syncCurrentPageFromMarker() { const page = pageAtMarker(); if (!page) return; const next = Number(page.dataset.page); if (!next || next === currentPage) return; currentPage = next; pageInput.value = String(next); }
-function scheduleMarkerSync() { if (markerFrame) return; markerFrame = requestAnimationFrame(() => { markerFrame = 0; syncCurrentPageFromMarker(); scheduleSave(); }); }
-function formatMediaTime(seconds) { if (!Number.isFinite(seconds) || seconds < 0) return "00:00"; const total = Math.floor(seconds), hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), secs = total % 60; return `${hours ? `${String(hours).padStart(2, "0")}:` : ""}${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`; }
-function captureBookmarkSnapshot() { if (mediaElement) { const time = Number.isFinite(mediaElement.currentTime) ? mediaElement.currentTime : 0; return { locator: `media:${Math.round(time * 10) / 10}`, label: `时间 ${formatMediaTime(time)}`, excerpt: "", progress: mediaElement.duration ? Math.round(time / mediaElement.duration * 1000) / 10 : 0, mediaTime: time, page: 0, pageOffset: 0, epubLocation: "", scrollTop: 0, htmlScrollTop: 0 }; } syncCurrentPageFromMarker(); const shell = pageCount ? pageAtMarker() : null, pageOffset = shell ? Math.max(0, viewport.scrollTop - shell.offsetTop) : 0, progress = readerProgressPercent(), htmlScrollTop = htmlFrame && htmlFrame.contentWindow ? htmlFrame.contentWindow.scrollY : 0, scrollTop = viewport.scrollTop, pagedDocument = pageCount && !["text", "markdown"].includes(capability.mode), locator = epubLocation ? `epub:${epubLocation}` : pagedDocument ? `page:${currentPage}:${Math.round(pageOffset)}` : `progress:${progress}:${Math.round(htmlFrame ? htmlScrollTop : scrollTop)}`; return { locator, label: pagedDocument ? `第 ${currentPage} / ${pageCount} 页` : `阅读进度 ${progress.toFixed(1)}%`, excerpt: bookmarkExcerpt(), progress, page: pagedDocument ? currentPage : 0, pageOffset, epubLocation, scrollTop, htmlScrollTop }; }
-function setBookmarkDialogModal(open) { document.documentElement.classList.toggle("bookmark-dialog-open", open); }
-function closeBookmarkPopover() { pendingBookmarkSnapshot = null; editingBookmark = null; bookmarkPopover.hidden = true; bookmarkRibbon.setAttribute("aria-expanded", "false"); setBookmarkDialogModal(false); bookmarkRibbon.focus(); }
-bookmarkRibbon.addEventListener("click", () => { const prompt = document.querySelector("#bookmark-prompt"); pendingBookmarkSnapshot = captureBookmarkSnapshot(); editingBookmark = null; prompt.textContent = `在${pendingBookmarkSnapshot.label}添加书签？`; bookmarkLabelInput.value = pendingBookmarkSnapshot.label; bookmarkExcerptInput.value = pendingBookmarkSnapshot.excerpt || ""; bookmarkPopover.hidden = false; bookmarkRibbon.setAttribute("aria-expanded", "true"); setBookmarkDialogModal(true); bookmarkLabelInput.focus(); });
-document.querySelector("#bookmark-cancel").addEventListener("click", closeBookmarkPopover);
-document.querySelector("#bookmark-add").addEventListener("click", async () => { const snapshot = pendingBookmarkSnapshot || captureBookmarkSnapshot(), now = Date.now(), label = bookmarkLabelInput.value.trim() || snapshot.label, excerpt = bookmarkExcerptInput.value.trim(); if (editingBookmark) { await VoiceOfMLReaderStore.putBookmark({ ...editingBookmark, label, excerpt }); } else { await VoiceOfMLReaderStore.putBookmark({ id: `${sourceUrl}\0${snapshot.locator}`, url: sourceUrl, title, extension, readerUrl: location.href, label, excerpt, progress: snapshot.progress, mediaTime: snapshot.mediaTime, page: snapshot.page, pageOffset: snapshot.pageOffset, epubLocation: snapshot.epubLocation, scrollTop: snapshot.scrollTop, htmlScrollTop: snapshot.htmlScrollTop, createdAt: now }); } pendingBookmarkSnapshot = null; editingBookmark = null; bookmarkPopover.hidden = true; bookmarkRibbon.setAttribute("aria-expanded", "false"); setBookmarkDialogModal(false); if (!document.querySelector("#bookmarks-panel").hidden) renderBookmarks(); bookmarkRibbon.focus(); });
-bookmarkPopover.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); closeBookmarkPopover(); return; } if (event.key !== "Tab") return; const buttons = [...bookmarkPopover.querySelectorAll("button")], first = buttons[0], last = buttons[buttons.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } });
+function captureFoliateBookmarkPosition() { if (!foliateContinuous) return null; const marker = viewport.getBoundingClientRect().top + 8, rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")]; const article = rows.find((row) => { const rect = row.getBoundingClientRect(); return rect.top <= marker && rect.bottom > marker; }) || rows.find((row) => row.getBoundingClientRect().top > marker) || rows[rows.length - 1]; return article ? { foliateSection: Number(article.dataset.section), foliateOffset: viewport.scrollTop - article.offsetTop, foliateTocIndex: currentChapterIndex } : null; }
+async function restoreFoliateBookmarkPosition(entry) { const generation = ++navigationGeneration; if (!foliateSectionLoader || !Number.isInteger(entry.foliateSection)) return; const article = await foliateSectionLoader(entry.foliateSection); if (foliateSectionSettler) await foliateSectionSettler(); if (!article || generation !== navigationGeneration) return; viewport.scrollTop = Math.max(0, article.offsetTop + (Number(entry.foliateOffset) || 0)); if (Number.isInteger(entry.foliateTocIndex) && entry.foliateTocIndex >= 0 && entry.foliateTocIndex < tocEntries.length) currentChapterIndex = entry.foliateTocIndex; updateTocCurrentMark(); setReaderPanelOpen(false, true); }
+async function renderBookmarks() {
+  const list = document.querySelector("#bookmarks-list"),
+    generation = ++bookmarkRenderGeneration;
+  try {
+    const entries = showingAllBookmarks
+      ? await VoiceOfMLReaderStore.listAllBookmarks()
+      : await VoiceOfMLReaderStore.listBookmarks(sourceUrl);
+    if (generation !== bookmarkRenderGeneration) return;
+    list.textContent = "";
+    for (const entry of entries) {
+      const row = document.createElement("div");
+      row.className = "panel-item";
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "panel-item-main";
+      open.textContent = showingAllBookmarks
+        ? `${entry.title || "未命名书籍"} · ${entry.label}`
+        : entry.label;
+      open.addEventListener("click", async () => {
+        if (entry.url !== sourceUrl) {
+          await navigateReader(entry.readerUrl);
+          return;
+        }
+        if (Number.isInteger(entry.foliateSection) && foliateContinuous)
+          await restoreFoliateBookmarkPosition(entry);
+        else if (entry.epubLocation && epubRendition)
+          await epubRendition.display(entry.epubLocation);
+        else if (entry.page) {
+          await goToPage(entry.page);
+          if (Number.isFinite(entry.pageOffset)) {
+            const shell = content.querySelector(
+              `.reader-page[data-page="${entry.page}"], .reader-docx-page[data-page="${entry.page}"]`,
+            );
+            if (shell) viewport.scrollTop = shell.offsetTop + entry.pageOffset;
+          }
+        } else if (
+          Number.isFinite(entry.htmlScrollTop) &&
+          htmlFrame &&
+          htmlFrame.contentWindow
+        )
+          htmlFrame.contentWindow.scrollTo(0, entry.htmlScrollTop);
+        else viewport.scrollTop = entry.scrollTop || 0;
+      });
+      const excerpt = document.createElement("p");
+      excerpt.className = "bookmark-excerpt";
+      excerpt.textContent = entry.excerpt || "";
+      excerpt.hidden = !entry.excerpt;
+      const meta = document.createElement("small");
+      meta.textContent = new Date(entry.createdAt).toLocaleString();
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "panel-item-remove";
+      remove.textContent = "删除";
+      remove.addEventListener("click", async () => {
+        await VoiceOfMLReaderStore.removeBookmark(entry.id);
+        row.remove();
+        if (!list.querySelector(".panel-item")) emptyPanel(list, "暂无书签");
+      });
+      row.append(open, remove, excerpt, meta);
+      list.appendChild(row);
+    }
+    if (!list.childElementCount) emptyPanel(list, "暂无书签");
+    filterPanel(document.querySelector("#bookmarks-panel"));
+  } catch (_) {
+    if (generation === bookmarkRenderGeneration)
+      emptyPanel(list, "无法读取书签");
+  }
+}
+function pageAtMarker() {
+  const y = bookmarkRibbon.getBoundingClientRect().bottom,
+    pages = [...content.querySelectorAll(".reader-page, .reader-docx-page")];
+  if (!pages.length) return null;
+  return (
+    pages.find((page) => {
+      const rect = page.getBoundingClientRect();
+      return rect.top <= y && rect.bottom > y;
+    }) ||
+    pages.find((page) => page.getBoundingClientRect().bottom > y) ||
+    pages[pages.length - 1]
+  );
+}
+function syncCurrentPageFromMarker() {
+  const page = pageAtMarker();
+  if (!page) return;
+  const next = Number(page.dataset.page);
+  if (!next || next === currentPage) return;
+  currentPage = next;
+  pageInput.value = String(next);
+}
+function scheduleMarkerSync() {
+  if (markerFrame) return;
+  markerFrame = requestAnimationFrame(() => {
+    markerFrame = 0;
+    syncCurrentPageFromMarker();
+    scheduleSave();
+  });
+}
+function formatMediaTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
+  const total = Math.floor(seconds),
+    hours = Math.floor(total / 3600),
+    minutes = Math.floor((total % 3600) / 60),
+    secs = total % 60;
+  return `${hours ? `${String(hours).padStart(2, "0")}:` : ""}${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+function captureBookmarkSnapshot() {
+  if (mediaElement) {
+    const time = Number.isFinite(mediaElement.currentTime)
+      ? mediaElement.currentTime
+      : 0;
+    return {
+      locator: `media:${Math.round(time * 10) / 10}`,
+      label: `时间 ${formatMediaTime(time)}`,
+      excerpt: "",
+      progress: mediaElement.duration
+        ? Math.round((time / mediaElement.duration) * 1000) / 10
+        : 0,
+      mediaTime: time,
+      page: 0,
+      pageOffset: 0,
+      epubLocation: "",
+      scrollTop: 0,
+      htmlScrollTop: 0,
+    };
+  }
+  syncCurrentPageFromMarker();
+  const foliatePosition = captureFoliateBookmarkPosition();
+  const shell = pageCount ? pageAtMarker() : null,
+    pageOffset = shell ? Math.max(0, viewport.scrollTop - shell.offsetTop) : 0,
+    progress = readerProgressPercent(),
+    htmlScrollTop =
+      htmlFrame && htmlFrame.contentWindow
+        ? htmlFrame.contentWindow.scrollY
+        : 0,
+    scrollTop = viewport.scrollTop,
+    pagedDocument =
+      pageCount && !["text", "markdown"].includes(capability.mode),
+    locator = foliatePosition
+      ? `foliate:${foliatePosition.foliateSection}:${Math.round(foliatePosition.foliateOffset)}`
+      : epubLocation
+      ? `epub:${epubLocation}`
+      : pagedDocument
+        ? `page:${currentPage}:${Math.round(pageOffset)}`
+        : `progress:${progress}:${Math.round(htmlFrame ? htmlScrollTop : scrollTop)}`;
+  return {
+    locator,
+    label: pagedDocument
+      ? `第 ${currentPage} / ${pageCount} 页`
+      : `阅读进度 ${progress.toFixed(1)}%`,
+    excerpt: bookmarkExcerpt(),
+    progress,
+    page: pagedDocument ? currentPage : 0,
+    pageOffset,
+    epubLocation,
+    scrollTop,
+    htmlScrollTop,
+    ...(foliatePosition || {}),
+  };
+}
+function setBookmarkDialogModal(open) {
+  document.documentElement.classList.toggle("bookmark-dialog-open", open);
+}
+function closeBookmarkPopover() {
+  pendingBookmarkSnapshot = null;
+  editingBookmark = null;
+  bookmarkPopover.hidden = true;
+  bookmarkRibbon.setAttribute("aria-expanded", "false");
+  setBookmarkDialogModal(false);
+  bookmarkRibbon.focus();
+}
+bookmarkRibbon.addEventListener("click", () => {
+  const prompt = document.querySelector("#bookmark-prompt");
+  pendingBookmarkSnapshot = captureBookmarkSnapshot();
+  editingBookmark = null;
+  prompt.textContent = `在${pendingBookmarkSnapshot.label}添加书签？`;
+  bookmarkLabelInput.value = pendingBookmarkSnapshot.label;
+  bookmarkExcerptInput.value = pendingBookmarkSnapshot.excerpt || "";
+  bookmarkPopover.hidden = false;
+  bookmarkRibbon.setAttribute("aria-expanded", "true");
+  setBookmarkDialogModal(true);
+  bookmarkLabelInput.focus();
+});
+document
+  .querySelector("#bookmark-cancel")
+  .addEventListener("click", closeBookmarkPopover);
+document.querySelector("#bookmark-add").addEventListener("click", async () => {
+  const snapshot = pendingBookmarkSnapshot || captureBookmarkSnapshot(),
+    now = Date.now(),
+    label = bookmarkLabelInput.value.trim() || snapshot.label,
+    excerpt = bookmarkExcerptInput.value.trim();
+  if (editingBookmark) {
+    await VoiceOfMLReaderStore.putBookmark({
+      ...editingBookmark,
+      label,
+      excerpt,
+    });
+  } else {
+    await VoiceOfMLReaderStore.putBookmark({
+      id: `${sourceUrl}\0${snapshot.locator}`,
+      url: sourceUrl,
+      title,
+      extension,
+      readerUrl: location.href,
+      label,
+      excerpt,
+      progress: snapshot.progress,
+      mediaTime: snapshot.mediaTime,
+      page: snapshot.page,
+      pageOffset: snapshot.pageOffset,
+      epubLocation: snapshot.epubLocation,
+      foliateSection: snapshot.foliateSection,
+      foliateOffset: snapshot.foliateOffset,
+      foliateTocIndex: snapshot.foliateTocIndex,
+      scrollTop: snapshot.scrollTop,
+      htmlScrollTop: snapshot.htmlScrollTop,
+      createdAt: now,
+    });
+  }
+  pendingBookmarkSnapshot = null;
+  editingBookmark = null;
+  bookmarkPopover.hidden = true;
+  bookmarkRibbon.setAttribute("aria-expanded", "false");
+  setBookmarkDialogModal(false);
+  if (!document.querySelector("#bookmarks-panel").hidden) renderBookmarks();
+  bookmarkRibbon.focus();
+});
+bookmarkPopover.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeBookmarkPopover();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const buttons = [...bookmarkPopover.querySelectorAll("button")],
+    first = buttons[0],
+    last = buttons[buttons.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 for (const button of document.querySelectorAll(".reader-panel-tabs button")) button.addEventListener("click", () => selectPanel(button.dataset.panel));
 document.querySelector(".reader-panel-tabs").addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; const tabs = [...document.querySelectorAll(".reader-panel-tabs button:not([hidden])")], current = tabs.indexOf(document.activeElement); if (current < 0) return; event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length; selectPanel(tabs[next].dataset.panel); tabs[next].focus(); });
 bookmarksAllButton.addEventListener("click", () => { showingAllBookmarks = !showingAllBookmarks; bookmarksAllButton.textContent = showingAllBookmarks ? "本书书签" : "全部书签"; bookmarksAllButton.setAttribute("aria-pressed", String(showingAllBookmarks)); renderBookmarks(); });
@@ -202,7 +436,7 @@ document.querySelector("#history-panel").insertBefore(fullSearchView, document.q
 fullSearchButton.hidden = !["pdf", "text", "markdown", "docx", "html", "epub", "foliate"].includes(capability.mode);
 let fullSearchResults = [], fullSearchIndex = -1, fullSearchGeneration = 0;
 const fullSearchInput = fullSearchView.querySelector("#full-search-input"), fullSearchStatus = fullSearchView.querySelector("#full-search-status"), fullSearchResultsNode = fullSearchView.querySelector("#full-search-results");
-async function runFoliateFullSearch() { const query = fullSearchInput.value.trim(); if (!query || !epubRendition || typeof epubRendition.search !== "function") return; fullSearchResults = []; fullSearchResultsNode.textContent = ""; fullSearchStatus.textContent = "正在搜索正文…"; for await (const group of epubRendition.search({ query })) { for (const item of group.subitems || []) { const excerpt = item.excerpt || { pre: "", match: query, post: "" }; fullSearchResults.push({ location: group.label || "电子书位置", snippet: { text: `${excerpt.pre}${excerpt.match}${excerpt.post}`, matchStart: excerpt.pre.length, matchLength: excerpt.match.length, prefix: "", suffix: "" }, activate: () => epubRendition.goTo(item.cfi) }); if (fullSearchResults.length >= 100) break; } if (fullSearchResults.length >= 100) break; } for (const result of fullSearchResults) { const row = document.createElement("button"); row.type = "button"; row.className = "full-search-result"; const location = document.createElement("small"); location.className = "full-search-location"; location.textContent = result.location; row.append(location, fullSearchSnippetDom(result.snippet)); row.addEventListener("click", async () => { await result.activate(); setReaderPanelOpen(false, true); }); fullSearchResultsNode.appendChild(row); } fullSearchStatus.textContent = fullSearchResults.length ? `${fullSearchResults.length}${fullSearchResults.length >= 100 ? "+" : ""} 个结果` : "没有找到匹配正文"; }
+async function runFoliateFullSearch() { const query = fullSearchInput.value.trim(), generation = ++fullSearchGeneration; if (!query || !epubRendition || typeof epubRendition.search !== "function") return; fullSearchResults = []; fullSearchResultsNode.textContent = ""; fullSearchStatus.textContent = "正在搜索正文…"; for await (const group of epubRendition.search({ query })) { let occurrence = 0; for (const item of group.subitems || []) { const excerpt = item.excerpt || { pre: "", match: query, post: "" }; fullSearchResults.push({ location: group.label || "电子书位置", cfi: item.cfi, occurrence: occurrence++, snippet: { text: `${excerpt.pre}${excerpt.match}${excerpt.post}`, matchStart: excerpt.pre.length, matchLength: excerpt.match.length, prefix: "", suffix: "" } }); if (fullSearchResults.length >= 100) break; } if (generation !== fullSearchGeneration || fullSearchResults.length >= 100) break; } if (generation !== fullSearchGeneration) return; for (const [index, result] of fullSearchResults.entries()) { const row = document.createElement("button"); row.type = "button"; row.className = "full-search-result"; const location = document.createElement("small"); location.className = "full-search-location"; location.textContent = result.location; row.append(location, fullSearchSnippetDom(result.snippet)); row.addEventListener("click", () => { fullSearchIndex = index; navigateFoliateSearchResult(result); }); fullSearchResultsNode.appendChild(row); } fullSearchStatus.textContent = fullSearchResults.length ? `${fullSearchResults.length}${fullSearchResults.length >= 100 ? "+" : ""} 个结果` : "没有找到匹配正文"; }
 fullSearchInput.addEventListener("input", event => { if (capability.mode === "foliate") { event.stopImmediatePropagation(); clearFullSearchMarks(); runFoliateFullSearch().catch(error => { fullSearchStatus.textContent = `搜索失败：${error.message}`; }); } }, true);
 function fullSearchEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 let fullSearchActiveMarks = [];
@@ -211,7 +445,8 @@ function fullSearchTextNodes(root) { const nodes = [], walker = root.ownerDocume
 function fullSearchSnippet(text, index, length) { const start = Math.max(0, index - 72), end = Math.min(text.length, index + length + 88); return { text: text.slice(start, end), matchStart: index - start, matchLength: length, prefix: start ? "…" : "", suffix: end < text.length ? "…" : "" }; }
 function fullSearchSnippetDom(snippet) { const node = document.createElement("span"); node.className = "full-search-snippet"; if (snippet.prefix) node.append(snippet.prefix); node.append(snippet.text.slice(0, snippet.matchStart)); const mark = document.createElement("mark"); mark.className = "search-match"; mark.textContent = snippet.text.slice(snippet.matchStart, snippet.matchStart + snippet.matchLength); node.append(mark, snippet.text.slice(snippet.matchStart + snippet.matchLength)); if (snippet.suffix) node.append(snippet.suffix); return node; }
 function fullSearchLocation(node, fallback) { const page = node.parentElement && node.parentElement.closest("[data-page]"); return page ? `第 ${page.dataset.page} 页` : fallback; }
-function fullSearchDomMatches(root, fallback) { const query = fullSearchInput.value.trim(), pattern = new RegExp(fullSearchEscape(query), "giu"), nodes = fullSearchTextNodes(root), offsets = [], text = nodes.map((node) => { const start = offsets.length ? offsets[offsets.length - 1].end : 0; offsets.push({ node, start, end: start + node.data.length }); return node.data; }).join(""), matches = [...text.matchAll(pattern)].slice(0, 100), output = []; for (const match of [...matches].reverse()) { const end = match.index + match[0].length, parts = offsets.filter((part) => part.end > match.index && part.start < end), anchors = []; for (const part of [...parts].reverse()) { const start = Math.max(match.index, part.start) - part.start, finish = Math.min(end, part.end) - part.start, after = part.node.splitText(finish), selected = part.node.splitText(start), mark = part.node.ownerDocument.createElement("mark"); mark.className = "full-search-highlight"; mark.textContent = selected.data; selected.parentNode.replaceChild(mark, selected); fullSearchActiveMarks.push(mark); anchors.unshift(mark); } const first = anchors[0], source = nodes.find((node) => node === parts[0].node) || parts[0].node; output.unshift({ location: fullSearchLocation(source, fallback), snippet: fullSearchSnippet(text, match.index, match[0].length), activate: () => first.scrollIntoView({ block: "center" }) }); } return output; }
+function fullSearchDomMatches(root, fallback) { const query = fullSearchInput.value.trim(), pattern = new RegExp(fullSearchEscape(query), "giu"), nodes = fullSearchTextNodes(root), offsets = [], text = nodes.map((node) => { const start = offsets.length ? offsets[offsets.length - 1].end : 0; offsets.push({ node, start, end: start + node.data.length }); return node.data; }).join(""), matches = [...text.matchAll(pattern)].slice(0, 100), output = []; for (const match of [...matches].reverse()) { const end = match.index + match[0].length, parts = offsets.filter((part) => part.end > match.index && part.start < end), anchors = []; for (const part of [...parts].reverse()) { const start = Math.max(match.index, part.start) - part.start, finish = Math.min(end, part.end) - part.start, after = part.node.splitText(finish), selected = part.node.splitText(start), mark = part.node.ownerDocument.createElement("mark"); mark.className = "full-search-highlight"; mark.textContent = selected.data; selected.parentNode.replaceChild(mark, selected); fullSearchActiveMarks.push(mark); anchors.unshift(mark); } const first = anchors[0], source = nodes.find((node) => node === parts[0].node) || parts[0].node; output.unshift({ location: fullSearchLocation(source, fallback), snippet: fullSearchSnippet(text, match.index, match[0].length), target: first, activate: () => first.scrollIntoView({ block: "center" }) }); } return output; }
+async function navigateFoliateSearchResult(result) { const generation = ++navigationGeneration, resolved = await epubRendition?.resolveNavigation?.(result.cfi); if (!resolved || generation !== navigationGeneration) return; const section = epubBook?.sections?.[resolved.index], sections = epubBook?.sections?.filter((item) => item.linear !== "no") || [], visibleIndex = section ? sections.indexOf(section) : -1; if (visibleIndex < 0 || !foliateSectionLoader) return; const node = await foliateSectionLoader(visibleIndex); if (foliateSectionSettler) await foliateSectionSettler(); if (!node || generation !== navigationGeneration) return; clearFullSearchMarks(); const matches = fullSearchDomMatches(node, "电子书位置"), match = matches[Math.min(result.occurrence || 0, Math.max(0, matches.length - 1))]; if (generation !== navigationGeneration || !match) return; const targetRect = match.target.getBoundingClientRect(), viewportRect = viewport.getBoundingClientRect(); viewport.scrollTop = Math.max(0, viewport.scrollTop + targetRect.top - viewportRect.top - (viewport.clientHeight - targetRect.height) / 2); const tocIndex = tocEntries.findIndex((entry) => { const target = epubBook.resolveHref(entry.href), targetSection = target && epubBook.sections[target.index]; return targetSection === section; }); if (tocIndex >= 0) { currentChapterIndex = tocIndex; updateTocCurrentMark(); } setReaderPanelOpen(false, true); }
 async function fullSearchPdfMatches(query) { const output = [], pattern = new RegExp(fullSearchEscape(query), "giu"), highlightPattern = new RegExp(fullSearchEscape(query), "iu"); for (let page = 1; page <= pdfDocument.numPages && output.length < 100; page++) { const pdfPage = await pdfDocument.getPage(page), textContent = await pdfPage.getTextContent(), text = textContent.items.map((item) => item.str + (item.hasEOL ? "\n" : " ")).join("").trim(), shell = content.querySelector(`.reader-page[data-page="${page}"]`); if (shell) { await renderPdfText(pdfPage, shell); for (const span of shell.querySelectorAll(".reader-pdf-text span")) if (highlightPattern.test(span.textContent)) { span.classList.add("full-search-highlight"); fullSearchActiveMarks.push(span); } } for (const match of text.matchAll(pattern)) { if (output.length >= 100) break; output.push({ location: `第 ${page} 页`, snippet: fullSearchSnippet(text, match.index, match[0].length), activate: () => goToPage(page) }); } } return output; }
 async function runFullSearch() { const query = fullSearchInput.value.trim(); ++fullSearchGeneration; const generation = fullSearchGeneration; fullSearchResults = []; fullSearchIndex = -1; fullSearchResultsNode.textContent = ""; fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => { button.disabled = true; }); if (!query) { fullSearchStatus.textContent = "输入关键词搜索正文"; return; } fullSearchStatus.textContent = "正在搜索正文…"; try { if (capability.mode === "pdf") fullSearchResults = pdfDocument ? await fullSearchPdfMatches(query) : []; else if (["text", "markdown", "docx"].includes(capability.mode)) fullSearchResults = fullSearchDomMatches(content, "阅读位置"); else if (capability.mode === "html") fullSearchResults = htmlFrame && htmlFrame.contentDocument && htmlFrame.contentDocument.body ? fullSearchDomMatches(htmlFrame.contentDocument.body, "HTML 阅读位置") : []; else if (capability.mode === "epub") { const contents = epubRendition && typeof epubRendition.getContents === "function" ? epubRendition.getContents() : []; if (!contents.length) throw new Error("EPUB 尚未加载可搜索章节"); for (const item of contents) { fullSearchResults.push(...fullSearchDomMatches(item.document.body, "EPUB 当前章节")); if (fullSearchResults.length >= 100) break; } fullSearchResults.length = Math.min(fullSearchResults.length, 100); } else throw new Error("此格式没有可搜索文本"); if (generation !== fullSearchGeneration) return; for (const result of fullSearchResults) { const row = document.createElement("button"); row.type = "button"; row.className = "full-search-result"; const location = document.createElement("small"); location.className = "full-search-location"; location.textContent = result.location; row.append(location, fullSearchSnippetDom(result.snippet)); row.addEventListener("click", async () => { await result.activate(); setReaderPanelOpen(false, true); }); fullSearchResultsNode.appendChild(row); } fullSearchStatus.textContent = fullSearchResults.length ? `${fullSearchResults.length}${fullSearchResults.length === 100 ? "+" : ""} 个结果` : "未找到正文匹配"; } catch (error) { if (generation === fullSearchGeneration) fullSearchStatus.textContent = error.message || "正文搜索不可用"; } finally { if (generation === fullSearchGeneration) fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => { button.disabled = !fullSearchResults.length; }); } }
 function moveFullSearch(step) { if (!fullSearchResults.length) return; fullSearchIndex = (fullSearchIndex + step + fullSearchResults.length) % fullSearchResults.length; const result = fullSearchResults[fullSearchIndex]; Promise.resolve(result.activate()).then(() => fullSearchResultsNode.children[fullSearchIndex].scrollIntoView({ block: "nearest" })); }
@@ -332,6 +567,7 @@ async function renderFoliate(prepared) {
   );
   foliateSectionLoader = (index) =>
     sections[index] ? load(sections[index], index) : Promise.resolve(null);
+  foliateSectionSettler = async () => { const indices = [...stream.querySelectorAll("article[data-section]")].map((article) => Number(article.dataset.section)); await Promise.all(indices.flatMap((index) => [index - 1, index + 1]).filter((index) => sections[index]).map((index) => load(sections[index], index))); for (let attempt = 0; attempt < 4; attempt++) { await new Promise((resolve) => requestAnimationFrame(resolve)); const tasks = [...pending.values()]; if (tasks.length) await Promise.allSettled(tasks); } };
   if (sections[0]) await load(sections[0], 0);
   const entries = [],
     append = (items, depth = 0) => {
@@ -570,36 +806,3 @@ function prepareDocument() {
 }
 
 async function renderPdfManifestShell(shell, force = false, priority = false) { if (shell.dataset.renderState === "rendering" || (!force && shell.dataset.renderState === "rendered")) return shell._renderPromise; let finish; shell._renderPromise = new Promise((resolve) => { finish = resolve; }); shell.dataset.renderState = "rendering"; await acquirePdfRenderSlot(priority); try { const entry = pdfPageManifest.entries[Number(shell.dataset.page) - 1], image = shell.querySelector("img"); image.src = new URL("/datasets/vomebook/Reader-Assets/resolve/main/" + entry.path, "https://huggingface.co").href; await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; }); shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`; image.classList.add("ready"); shell.dataset.renderState = "rendered"; shell.dataset.renderUsedAt = String(Date.now()); } catch (error) { shell.dataset.renderState = "idle"; if (priority) throw error; } finally { releasePdfRenderSlot(); finish(); delete shell._renderPromise; } }
-// Foliate owns the complete ebook search index, including MOBI/AZW3/FB2.
-if (false && capability.mode === "foliate") {
-  fullSearchButton.hidden = false;
-  fullSearchInput.addEventListener("input", async () => {
-    const query = fullSearchInput.value.trim();
-    if (!query || !epubRendition || typeof epubRendition.search !== "function") return;
-    fullSearchResultsNode.textContent = "";
-    fullSearchStatus.textContent = "正在搜索正文…";
-    const results = [];
-    for await (const group of epubRendition.search({ query })) {
-      if (!group.subitems) continue;
-      for (const item of group.subitems) {
-        if (results.length >= 100) break;
-        const excerpt = item.excerpt || { pre: "", match: "", post: "" };
-        results.push({ location: group.label || "电子书位置", snippet: {
-          text: `${excerpt.pre}${excerpt.match}${excerpt.post}`,
-          matchStart: excerpt.pre.length, matchLength: excerpt.match.length,
-          prefix: "", suffix: "",
-        }, activate: () => epubRendition.goTo(item.cfi) });
-      }
-      if (results.length >= 100) break;
-    }
-    fullSearchResults = results;
-    for (const result of results) {
-      const row = document.createElement("button"); row.type = "button"; row.className = "full-search-result";
-      const location = document.createElement("small"); location.className = "full-search-location"; location.textContent = result.location;
-      row.append(location, fullSearchSnippetDom(result.snippet));
-      row.addEventListener("click", async () => { await result.activate(); setReaderPanelOpen(false, true); });
-      fullSearchResultsNode.appendChild(row);
-    }
-    fullSearchStatus.textContent = results.length ? `${results.length}${results.length >= 100 ? "+" : ""} 个结果` : "没有找到匹配正文";
-  });
-}
