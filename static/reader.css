@@ -125,6 +125,7 @@ body { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex
 @keyframes reader-loading-spin { to { transform: rotate(360deg); } }
 .reader-page { position: relative; margin: 0 auto 18px; background: white; box-shadow: 0 2px 14px #0008; min-height: 160px; }
 .reader-content[data-mode="pdf"] .reader-page, .reader-content[data-mode="pdf-pages"] .reader-page { width: calc(100% * var(--reader-zoom)); }
+.reader-content[data-mode="pdf-pages"] .reader-page > img { display: block; width: 100%; max-width: 100%; height: auto; }
 .reader-page canvas { display: block; position: relative; width: 100%; height: auto; opacity: 0; transition: opacity 120ms ease; }
 .reader-page canvas.ready { opacity: 1; }
 .reader-pdf-text { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre; border: 0; }

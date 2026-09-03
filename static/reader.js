@@ -784,7 +784,7 @@ async function start() {
   }
 }
 
-function loadPdfDocument() { return import(PDFJS_URL).then((pdfjs) => { pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL; const options = (url) => ({ url, rangeChunkSize: 262144, disableAutoFetch: true, disableStream: false, wasmUrl: PDFJS_WASM_URL, cMapUrl: PDFJS_CMAP_URL, cMapPacked: true, standardFontDataUrl: PDFJS_STANDARD_FONT_URL, withCredentials: false }); return loadPdfWithTimeout(pdfjs, options); }); }
+function loadPdfDocument() { return import(PDFJS_URL).then((pdfjs) => { pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL; const options = (url) => ({ url, rangeChunkSize: 262144, disableAutoFetch: true, disableStream: true, wasmUrl: PDFJS_WASM_URL, cMapUrl: PDFJS_CMAP_URL, cMapPacked: true, standardFontDataUrl: PDFJS_STANDARD_FONT_URL, withCredentials: false }); return loadPdfWithTimeout(pdfjs, options); }); }
 function loadTextDocument() { return fetchReaderResponse().then((response) => ({ response })); }
 function loadMarkdownDocument() { return Promise.all([fetchReaderResponse(), Promise.all([loadScript(MARKED_URL), loadScript(PURIFY_URL)])]).then(([response, engines]) => ({ response, engines })); }
 function loadHtmlDocument() { return Promise.all([fetchReaderResponse(), loadScript(PURIFY_URL)]).then(([response, engine]) => ({ response, engine })); }
