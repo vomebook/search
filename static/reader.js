@@ -1,4 +1,5 @@
 import "/search/static/reader-request-manager.js";
+import "/search/static/reader-chapter-repository.js";
 const PDFJS_URL = "/search/static/vendor/pdf.min.f80490490320.mjs";
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
 const PDFJS_WASM_URL = "/search/static/vendor/wasm/";
@@ -42,7 +43,7 @@ try { const target = new URL(returnUrl, location.origin), storedReturnUrl = retu
 let zoom = Math.min(4, Math.max(0.25, Number(localStorage.getItem("reader-zoom") || 100) / 100));
 let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
 let restorationApplied = false;
-let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false, foliateSectionLoader = null, foliateSectionSettler = null, foliateSectionObserver = null, foliateScrollFrame = 0;
+let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false, foliateChapterRepository = null, foliateSectionLoader = null, foliateSectionSettler = null, foliateSectionObserver = null, foliateScrollFrame = 0;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
 let historySuppressed = false, restorationReady = false, restorationFailed = false, markerFrame = 0, tocEntries = [], currentChapterIndex = -1, navigationGeneration = 0, pendingBookmarkSnapshot = null, editingBookmark = null, showingAllBookmarks = false, bookmarkRenderGeneration = 0, mediaElement = null;
@@ -420,7 +421,7 @@ viewport.addEventListener("scroll", scheduleMarkerSync, { passive: true });
 viewport.addEventListener("scroll", scheduleFoliateScrollSync, { passive: true });
 window.addEventListener("pagehide", saveProgress);
 if (localReaderData?.repo) { const folderTarget = new URL("/search/", location.origin), folder = new URLSearchParams(); if (localReaderData.folder?.length) folder.set("folder_self", localReaderData.folder.join("/")); folderTarget.hash = "#/" + encodeURIComponent(localReaderData.repo) + (folder.toString() ? "?" + folder.toString() : ""); readerPath.onclick = () => window.parent !== window ? window.parent.postMessage({ type: "voice-reader-navigate", url: folderTarget.href }, location.origin) : location.assign(folderTarget.href); }
-function disposeReader() { if (readerLifecycle.disposed) return; readerLifecycle.disposed = true; readerLifecycle.phase = "disposed"; document.documentElement.dataset.readerPhase = "disposed"; restorationReady = false; navigationGeneration++; fullSearchGeneration++; bookmarkRenderGeneration++; pdfRenderGeneration++; readerRequestManager.dispose(); foliateSectionObserver?.disconnect(); loadingObserver.disconnect(); clearTimeout(saveTimer); clearTimeout(themeAnimationTimer); clearTimeout(panelAnimationTimer); if (markerFrame) cancelAnimationFrame(markerFrame); if (foliateScrollFrame) cancelAnimationFrame(foliateScrollFrame); if (epubSeekFrame) cancelAnimationFrame(epubSeekFrame); saveTimer = 0; themeAnimationTimer = 0; panelAnimationTimer = 0; markerFrame = 0; foliateScrollFrame = 0; epubSeekFrame = 0; try { const destroying = pdfDocument?.destroy?.(); if (destroying?.catch) destroying.catch(() => {}); } catch (_) {} pdfDocument = null; if (mediaElement) { mediaElement.pause(); mediaElement.removeAttribute("src"); mediaElement.load(); mediaElement = null; } foliateSectionLoader = null; foliateSectionSettler = null; epubRendition = null; epubBook = null; htmlFrame = null; }
+function disposeReader() { if (readerLifecycle.disposed) return; readerLifecycle.disposed = true; readerLifecycle.phase = "disposed"; document.documentElement.dataset.readerPhase = "disposed"; restorationReady = false; navigationGeneration++; fullSearchGeneration++; bookmarkRenderGeneration++; pdfRenderGeneration++; readerRequestManager.dispose(); foliateChapterRepository?.dispose(); foliateSectionObserver?.disconnect(); loadingObserver.disconnect(); clearTimeout(saveTimer); clearTimeout(themeAnimationTimer); clearTimeout(panelAnimationTimer); if (markerFrame) cancelAnimationFrame(markerFrame); if (foliateScrollFrame) cancelAnimationFrame(foliateScrollFrame); if (epubSeekFrame) cancelAnimationFrame(epubSeekFrame); saveTimer = 0; themeAnimationTimer = 0; panelAnimationTimer = 0; markerFrame = 0; foliateScrollFrame = 0; epubSeekFrame = 0; try { const destroying = pdfDocument?.destroy?.(); if (destroying?.catch) destroying.catch(() => {}); } catch (_) {} pdfDocument = null; if (mediaElement) { mediaElement.pause(); mediaElement.removeAttribute("src"); mediaElement.load(); mediaElement = null; } foliateChapterRepository = null; foliateSectionLoader = null; foliateSectionSettler = null; epubRendition = null; epubBook = null; htmlFrame = null; }
 window.addEventListener("pagehide", disposeReader, { once: true });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveProgress(); });
   function validSource(raw) { try { const url = new URL(raw); if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname)) return false; const readerAsset = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(?:pdf_manifest\.json|objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|page-manifest\.json|pages\/page-[0-9]{6}\.webp|(?:[a-z0-9-]+\/)?(chapter-manifest\.json|document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)))$/.test(url.pathname); if (extension === "docx") return readerAsset; return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset; } catch (_) { return false; } }
@@ -539,19 +540,10 @@ async function renderFoliate(prepared) {
   epubBook = view.book;
   view.style.display = "none";
   const sections = view.book.sections.filter(
-      (section) => section.linear !== "no",
-    ),
-    loaded = new Set(),
-    pending = new Map();
-  const load = async (section, index) => {
-    const existing = stream.querySelector(`article[data-section="${index}"]`);
-    if (existing) {
-      loaded.add(index);
-      return existing;
-    }
-    if (pending.has(index)) return pending.get(index);
-    const task = (async () => {
-      const doc = await section.createDocument(),
+    (section) => section.linear !== "no",
+  );
+  const createSection = async (index) => {
+      const section = sections[index], doc = await section.createDocument(),
       all = [...doc.querySelectorAll("*")],
       localName = (element) =>
         String(element.localName || element.tagName || "")
@@ -603,16 +595,7 @@ async function renderFoliate(prepared) {
       article.innerHTML = (body?.innerHTML || doc.documentElement?.innerHTML || "")
         .replace(/<\/html:/gi, "</")
         .replace(/<html:/gi, "<");
-      const next = [...stream.querySelectorAll("article[data-section]")].find(
-        (item) => Number(item.dataset.section) > index,
-      );
-      stream.insertBefore(article, next || null);
-      loaded.add(index);
-      observer.observe(article);
       return article;
-    })().finally(() => pending.delete(index));
-    pending.set(index, task);
-    return task;
   };
   const observer = new IntersectionObserver(
     (items) =>
@@ -622,15 +605,15 @@ async function renderFoliate(prepared) {
           const index = Number(item.target.dataset.section);
           for (const adjacent of [index - 1, index + 1])
             if (sections[adjacent])
-              load(sections[adjacent], adjacent).catch(() => {});
+              foliateChapterRepository.load(adjacent).catch(() => {});
         }),
     { root: viewport, rootMargin: "1000px" },
   );
   foliateSectionObserver = observer;
-  foliateSectionLoader = (index) =>
-    sections[index] ? load(sections[index], index) : Promise.resolve(null);
-  foliateSectionSettler = async () => { const indices = [...stream.querySelectorAll("article[data-section]")].map((article) => Number(article.dataset.section)); await Promise.all(indices.flatMap((index) => [index - 1, index + 1]).filter((index) => sections[index]).map((index) => load(sections[index], index))); for (let attempt = 0; attempt < 4; attempt++) { await new Promise((resolve) => requestAnimationFrame(resolve)); const tasks = [...pending.values()]; if (tasks.length) await Promise.allSettled(tasks); } };
-  if (sections[0]) await load(sections[0], 0);
+  foliateChapterRepository = VoiceOfMLReaderChapters.createChapterRepository({ count: sections.length, find: (index) => stream.querySelector(`article[data-section="${index}"]`), create: createSection, commit: (index, article) => { const next = [...stream.querySelectorAll("article[data-section]")].find((item) => Number(item.dataset.section) > index); stream.insertBefore(article, next || null); observer.observe(article); return article; } });
+  foliateSectionLoader = (index) => foliateChapterRepository.load(index);
+  foliateSectionSettler = async () => { const indices = [...stream.querySelectorAll("article[data-section]")].map((article) => Number(article.dataset.section)); await Promise.all(indices.flatMap((index) => [index - 1, index + 1]).filter((index) => sections[index]).map((index) => foliateChapterRepository.load(index))); for (let attempt = 0; attempt < 4; attempt++) { await new Promise((resolve) => requestAnimationFrame(resolve)); const tasks = foliateChapterRepository.pending; if (tasks.length) await Promise.allSettled(tasks); } };
+  if (sections[0]) await foliateChapterRepository.load(0);
   const entries = [],
     append = (items, depth = 0) => {
       for (const item of items || []) {
