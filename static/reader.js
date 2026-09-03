@@ -607,10 +607,9 @@ async function renderFoliate(prepared) {
         .filter((item) => item.isIntersecting)
         .forEach((item) => {
           const index = Number(item.target.dataset.section);
-          if (item.target.classList.contains("foliate-section-placeholder")) { foliateChapterRepository.load(index).catch(() => {}); return; }
-          for (const adjacent of [index - 1, index + 1])
-            if (sections[adjacent])
-              foliateChapterRepository.load(adjacent).catch(() => {});
+          if (item.target.classList.contains("foliate-section-placeholder")) { foliateChapterRepository.load(index).then(() => foliateSectionVirtualizer?.trim(index)).catch(() => {}); return; }
+          const adjacentLoads = [index - 1, index + 1].filter((adjacent) => sections[adjacent]).map((adjacent) => foliateChapterRepository.load(adjacent));
+          if (adjacentLoads.length) Promise.allSettled(adjacentLoads).then(() => foliateSectionVirtualizer?.trim(index));
         }),
     { root: viewport, rootMargin: "1000px" },
   );
