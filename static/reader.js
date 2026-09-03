@@ -299,29 +299,11 @@ async function renderFoliate(prepared) {
             .join(", "),
         );
     }
-    for (const link of named("link").filter(
-      (item) =>
-        /stylesheet/i.test(item.getAttribute("rel") || "") &&
-        item.hasAttribute("href"),
-    )) {
-      const value = link.getAttribute("href");
-      if (value && !/^(?:data:|blob:|https?:)/i.test(value))
-        link.setAttribute("href", assetUrl(value));
-    }
       const body = named("body")[0],
-        head = named("head")[0],
         article = document.createElement("article");
       article.className = "foliate-continuous-section";
       article.dataset.section = String(index);
-      const styles = head
-        ? [...head.children]
-            .filter((node) => ["style", "link"].includes(localName(node)))
-            .map((node) => node.outerHTML)
-            .join("")
-        : "";
-      article.innerHTML = (
-        styles + (body?.innerHTML || doc.documentElement?.innerHTML || "")
-      )
+      article.innerHTML = (body?.innerHTML || doc.documentElement?.innerHTML || "")
         .replace(/<\/html:/gi, "</")
         .replace(/<html:/gi, "<");
       const next = [...stream.querySelectorAll("article[data-section]")].find(
