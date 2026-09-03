@@ -1,3 +1,4 @@
+import "/search/static/reader-request-manager.js";
 const PDFJS_URL = "/search/static/vendor/pdf.min.f80490490320.mjs";
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
 const PDFJS_WASM_URL = "/search/static/vendor/wasm/";
@@ -8,8 +9,7 @@ const PURIFY_URL = "/search/static/vendor/purify.min.c2f26ea4fc0d.js";
 const JSZIP_URL = "/search/static/vendor/jszip.min.acc7e41455a8.js";
 const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.051ef503f267.js";
 const READER_PROXY_TIMEOUT_MS = 120000;
-const activeReaderControllers = new Set();
-const readerRequests = new Map();
+const readerRequestManager = VoiceOfMLReaderRequests.createReaderRequestManager();
 const PDF_PROXY_TIMEOUT_MS = 60000;
 if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = function(key, callback) { if (this.has(key)) return this.get(key); const value = callback(key); this.set(key, value); return value; }; }
 if (!Math.sumPrecise) { Math.sumPrecise = function(values) { let sum = 0, correction = 0; for (const value of values) { const next = sum + value; correction += Math.abs(sum) >= Math.abs(value) ? (sum - next) + value : (value - next) + sum; sum = next; } return sum + correction; }; }
@@ -421,7 +421,7 @@ viewport.addEventListener("scroll", scheduleMarkerSync, { passive: true });
 viewport.addEventListener("scroll", scheduleFoliateScrollSync, { passive: true });
 window.addEventListener("pagehide", saveProgress);
 if (localReaderData?.repo) { const folderTarget = new URL("/search/", location.origin), folder = new URLSearchParams(); if (localReaderData.folder?.length) folder.set("folder_self", localReaderData.folder.join("/")); folderTarget.hash = "#/" + encodeURIComponent(localReaderData.repo) + (folder.toString() ? "?" + folder.toString() : ""); readerPath.onclick = () => window.parent !== window ? window.parent.postMessage({ type: "voice-reader-navigate", url: folderTarget.href }, location.origin) : location.assign(folderTarget.href); }
-function disposeReader() { if (readerLifecycle.disposed) return; readerLifecycle.disposed = true; readerLifecycle.phase = "disposed"; document.documentElement.dataset.readerPhase = "disposed"; navigationGeneration++; activeReaderControllers.forEach((controller) => controller.abort()); activeReaderControllers.clear(); foliateSectionObserver?.disconnect(); loadingObserver.disconnect(); if (foliateScrollFrame) cancelAnimationFrame(foliateScrollFrame); foliateScrollFrame = 0; }
+function disposeReader() { if (readerLifecycle.disposed) return; readerLifecycle.disposed = true; readerLifecycle.phase = "disposed"; document.documentElement.dataset.readerPhase = "disposed"; navigationGeneration++; readerRequestManager.dispose(); foliateSectionObserver?.disconnect(); loadingObserver.disconnect(); if (foliateScrollFrame) cancelAnimationFrame(foliateScrollFrame); foliateScrollFrame = 0; }
 window.addEventListener("pagehide", disposeReader, { once: true });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveProgress(); });
   function validSource(raw) { try { const url = new URL(raw); if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname)) return false; const readerAsset = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(?:pdf_manifest\.json|objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|page-manifest\.json|pages\/page-[0-9]{6}\.webp|(?:[a-z0-9-]+\/)?(chapter-manifest\.json|document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)))$/.test(url.pathname); if (extension === "docx") return readerAsset; return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset; } catch (_) { return false; } }
@@ -429,7 +429,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 function validOcr(raw) { try { const url = new URL(raw); return url.protocol === "https:" && url.hostname === "voiceofml-search.hf.space" && url.pathname.startsWith("/txt/"); } catch (_) { return false; } }
 function loadScript(url) { return new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = url; script.onload = resolve; script.onerror = reject; document.head.appendChild(script); }); }
 function fail(message, code = "READER_PARSE") { if (readerLifecycle.disposed) return; readerLifecycle.errorCode = code; setReaderPhase("failed"); content.dataset.errorCode = code; loadingStatus.hidden = true; loadingIndicator.remove(); const visibleMessage = `${message} [${readerStage}]`; content.innerHTML = `<div class="reader-error"></div>`; content.querySelector(".reader-error").textContent = visibleMessage; status.textContent = "无法打开"; }
-function fetchWithReaderTimeout(url, timeoutMs) { if (readerRequests.has(url)) return readerRequests.get(url); const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), timeoutMs); activeReaderControllers.add(controller); const request = fetch(url, { signal: controller.signal }).finally(() => { clearTimeout(timeout); activeReaderControllers.delete(controller); }).catch((error) => { if (error && error.name === "AbortError") throw error; return url === contentUrl && sourceUrl ? fetchWithReaderTimeout(sourceUrl, timeoutMs) : Promise.reject(error); }); readerRequests.set(url, request); request.then(() => readerRequests.delete(url), () => readerRequests.delete(url)); return request; }
+function fetchWithReaderTimeout(url, timeoutMs = READER_PROXY_TIMEOUT_MS) { return readerRequestManager.request(url, timeoutMs); }
 function fetchReaderResponse() { return fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS).then((response) => response.ok ? response : fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS), () => fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS)); }
 function loadPdfTaskWithTimeout(pdfjs, options, url) { const task = pdfjs.getDocument(options(url)); return new Promise((resolve, reject) => { const timeout = setTimeout(() => { task.destroy().catch(() => {}); reject(new Error("reader PDF timeout")); }, PDF_PROXY_TIMEOUT_MS); task.promise.then((document) => { clearTimeout(timeout); resolve(document); }, (error) => { clearTimeout(timeout); reject(error); }); }); }
 function loadPdfWithTimeout(pdfjs, options) { return loadPdfTaskWithTimeout(pdfjs, options, contentUrl).catch((error) => { if (error && error.name === "AbortError") throw error; return loadPdfTaskWithTimeout(pdfjs, options, sourceUrl); }); }
@@ -519,10 +519,7 @@ fullSearchButton.addEventListener("click", (event) => { const panel = document.q
 fullSearchView.querySelector("#full-search-clear").addEventListener("click", clearFullSearchMarks, true);
 
 async function renderFoliate(prepared) {
-  const response = await fetchWithReaderTimeout(
-    contentUrl,
-    READER_PROXY_TIMEOUT_MS,
-  );
+  const response = await fetchReaderResponse();
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   await import("/search/static/foliate-reader/view.js?reader-v1");
   const bytes = await response.arrayBuffer(),
