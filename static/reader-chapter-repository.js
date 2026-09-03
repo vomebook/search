@@ -49,14 +49,24 @@
       return record ? Object.freeze({ status: record.status, attempts: record.attempts, value: record.value, error: record.error }) : null;
     }
 
+    function release(index) {
+      if (disposed || !Number.isInteger(index) || index < 0 || index >= records.length) return false;
+      const record = records[index];
+      if (record.promise) return false;
+      record.status = "idle";
+      record.value = null;
+      record.error = null;
+      return true;
+    }
+
     function dispose() {
       if (disposed) return;
       disposed = true;
       generation += 1;
-      for (const record of records) if (record.status === "loading") record.status = "idle";
+      for (const record of records) { record.status = "idle"; record.value = null; record.error = null; }
     }
 
-    return Object.freeze({ load, state, dispose, get pending() { return records.flatMap((record) => record.promise ? [record.promise] : []); }, get disposed() { return disposed; } });
+    return Object.freeze({ load, state, release, dispose, get pending() { return records.flatMap((record) => record.promise ? [record.promise] : []); }, get disposed() { return disposed; } });
   }
 
   root.VoiceOfMLReaderChapters = Object.freeze({ createChapterRepository });
