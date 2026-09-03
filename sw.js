@@ -6,6 +6,7 @@ const PRECACHE_URLS = [
   "/search/static/reader-contract.js",
   "/search/static/reader-store.js",
   "/search/static/reader-request-manager.js",
+  "/search/static/reader-chapter-repository.js",
   "/search/static/reader.html",
   "/search/static/reader.css",
   "/search/static/reader.js",
@@ -24,6 +25,7 @@ const READER_RUNTIME_PATHS = new Set([
   "/search/static/reader-contract.js",
   "/search/static/reader-store.js",
   "/search/static/reader-request-manager.js",
+  "/search/static/reader-chapter-repository.js",
   "/search/static/reader.css",
   "/search/static/reader.js",
   "/search/static/pdf-worker-wrapper.mjs"
