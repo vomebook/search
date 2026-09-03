@@ -38,7 +38,7 @@ try { const target = new URL(returnUrl, location.origin), storedReturnUrl = retu
 let zoom = Math.min(4, Math.max(0.25, Number(localStorage.getItem("reader-zoom") || 100) / 100));
 let currentPage = 1, pageCount = 0, restoredEntry = null, saveTimer = 0;
 let restorationApplied = false;
-let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false, foliateSectionLoader = null, foliateSectionSettler = null;
+let pdfDocument = null, pdfPageManifest = null, pdfRenderGeneration = 0, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false, foliateSectionLoader = null, foliateSectionSettler = null, foliateSectionObserver = null, foliateScrollFrame = 0;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
 let historySuppressed = false, restorationReady = false, restorationFailed = false, markerFrame = 0, tocEntries = [], currentChapterIndex = -1, navigationGeneration = 0, pendingBookmarkSnapshot = null, editingBookmark = null, showingAllBookmarks = false, bookmarkRenderGeneration = 0, mediaElement = null;
@@ -91,6 +91,8 @@ function cleanTocLabel(value) { return String(value || "未命名章节").replac
 function sameEpubPath(left, right) { try { left = decodeURIComponent(left); right = decodeURIComponent(right); } catch (_) {} return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`); }
 function updateTocCurrentMark() { const rows = [...document.querySelectorAll("#toc-list .toc-item")]; if (pageCount > 1 && currentPage > 0) { let pageIndex = -1; for (const [index, row] of rows.entries()) { const match = row.textContent.match(/第\s*(\d+)\s*页/u); if (match && Number(match[1]) <= currentPage) pageIndex = index; } if (pageIndex >= 0) currentChapterIndex = pageIndex; } for (const [index, row] of rows.entries()) { let mark = row.querySelector(".toc-current-mark"); if (!mark) { mark = document.createElement("span"); mark.className = "toc-current-mark"; mark.textContent = "✓"; row.appendChild(mark); } mark.hidden = index !== currentChapterIndex; row.classList.toggle("is-current", index === currentChapterIndex); } }
 function syncEpubTocLocation(location) { const href = location && location.start && String(location.start.href || "").split("#")[0]; if (!href) return; const index = tocEntries.findIndex((entry) => sameEpubPath(String(entry.href || "").split("#")[0], href)); if (index >= 0) { currentChapterIndex = index; updateTocCurrentMark(); } }
+function syncFoliateScrollLocation() { if (!foliateContinuous || !tocEntries.length) return; const rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")], top = viewport.getBoundingClientRect().top + 80; let sectionIndex = -1, sectionNode = null; for (const row of rows) if (row.getBoundingClientRect().top <= top) { sectionIndex = Number(row.dataset.section); sectionNode = row; } if (!sectionNode) return; let best = -1; for (const [index, entry] of tocEntries.entries()) { if (entry.sectionIndex !== sectionIndex) continue; let position = sectionNode.getBoundingClientRect().top; if (entry.fragment) { const anchor = sectionNode.querySelector(`[id="${CSS.escape(entry.fragment)}"], [name="${CSS.escape(entry.fragment)}"]`); if (anchor) position = anchor.getBoundingClientRect().top; } if (position <= top || best < 0) best = index; } if (best >= 0 && best !== currentChapterIndex) { currentChapterIndex = best; updateTocCurrentMark(); updateProgressTools(); } }
+function scheduleFoliateScrollSync() { if (foliateScrollFrame) return; foliateScrollFrame = requestAnimationFrame(() => { foliateScrollFrame = 0; syncFoliateScrollLocation(); }); }
 async function activateFoliateTocEntry(entry, generation = ++navigationGeneration) { const href = String(entry.href || ""), target = await epubRendition?.book?.resolveHref(href), section = target && epubRendition.book.sections[target.index], sections = epubRendition.book.sections.filter((item) => item.linear !== "no"), visibleIndex = section ? sections.indexOf(section) : -1; if (!section || visibleIndex < 0) return; let node = document.querySelector(`.foliate-continuous > article[data-section="${visibleIndex}"]`); if (!node && foliateSectionLoader) node = await foliateSectionLoader(visibleIndex); if (foliateSectionSettler) await foliateSectionSettler(); if (!node || generation !== navigationGeneration) return; const anchorDocument = { getElementById: (id) => node.querySelector(`[id="${CSS.escape(id)}"]`), querySelector: (selector) => node.querySelector(selector) }; let anchor = null; try { anchor = typeof target.anchor === "function" ? target.anchor(anchorDocument) : null; } catch (_) {} if (!anchor) { const fragment = href.split("#")[1] || "", id = fragment ? decodeURIComponent(fragment) : ""; anchor = id ? node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`) : null; } if (generation !== navigationGeneration) return; const destination = anchor || node; viewport.scrollTop = Math.max(0, viewport.scrollTop + destination.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8); currentChapterIndex = tocEntries.indexOf(entry); updateTocCurrentMark(); setReaderPanelOpen(false, true); }
 document.addEventListener("click", async (event) => { const link = event.target.closest(".foliate-continuous a[href]"); if (!link || !epubRendition?.book) return; const raw = link.getAttribute("href") || ""; if (!raw || epubRendition.book.isExternal?.(raw) || /^(?:https?:|mailto:|tel:)/i.test(raw)) return; event.preventDefault(); const generation = ++navigationGeneration, index = Number(link.closest("article[data-section]")?.dataset.section), section = epubRendition.book.sections.filter((item) => item.linear !== "no")[index]; let href = raw; try { href = section?.resolveHref?.(raw) || raw; } catch (_) {} try { await activateFoliateTocEntry({ href }, generation); } catch (error) { if (generation === navigationGeneration) console.warn("Reader navigation failed", error); } });
 function placeReadingProgress() { const panel = document.querySelector("#history-panel"), tocPanel = document.querySelector("#toc-panel"), tocList = tocPanel.querySelector(".panel-list"), noToc = loadingStatus.hidden && !tocEntries.length && !mediaElement; progressTools.classList.toggle("reader-no-toc", noToc); tocPanel.querySelector(".panel-view-header strong").textContent = noToc ? "阅读状态" : "目录"; if (noToc && (progressTools.parentElement !== tocPanel || progressTools.nextElementSibling !== tocList)) tocPanel.insertBefore(progressTools, tocList); else if (!noToc && panel.lastElementChild !== progressTools) panel.appendChild(progressTools); }
@@ -357,9 +359,10 @@ readerThemeToggle.addEventListener("click", () => { const theme = readerTheme ==
 window.addEventListener("message", (event) => { if (event.origin === location.origin && event.source === window.parent && event.data && event.data.type === "voice-reader-theme-state") applyReaderTheme(event.data.theme, false); });
 document.querySelector("#history").addEventListener("click", () => setReaderPanelOpen(document.querySelector("#history").getAttribute("aria-expanded") !== "true")); document.querySelector("#history-close").addEventListener("click", () => setReaderPanelOpen(false, true));
 viewport.addEventListener("scroll", scheduleMarkerSync, { passive: true });
+viewport.addEventListener("scroll", scheduleFoliateScrollSync, { passive: true });
 window.addEventListener("pagehide", saveProgress);
 if (localReaderData?.repo) { const folderTarget = new URL("/search/", location.origin), folder = new URLSearchParams(); if (localReaderData.folder?.length) folder.set("folder_self", localReaderData.folder.join("/")); folderTarget.hash = "#/" + encodeURIComponent(localReaderData.repo) + (folder.toString() ? "?" + folder.toString() : ""); readerPath.onclick = () => window.parent !== window ? window.parent.postMessage({ type: "voice-reader-navigate", url: folderTarget.href }, location.origin) : location.assign(folderTarget.href); }
-window.addEventListener("pagehide", () => { activeReaderControllers.forEach((controller) => controller.abort()); activeReaderControllers.clear(); }, { once: true });
+window.addEventListener("pagehide", () => { navigationGeneration++; activeReaderControllers.forEach((controller) => controller.abort()); activeReaderControllers.clear(); foliateSectionObserver?.disconnect(); loadingObserver.disconnect(); if (foliateScrollFrame) cancelAnimationFrame(foliateScrollFrame); foliateScrollFrame = 0; }, { once: true });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveProgress(); });
   function validSource(raw) { try { const url = new URL(raw); if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname)) return false; const readerAsset = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(?:pdf_manifest\.json|objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|page-manifest\.json|pages\/page-[0-9]{6}\.webp|(?:[a-z0-9-]+\/)?(chapter-manifest\.json|document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)))$/.test(url.pathname); if (extension === "docx") return readerAsset; return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset; } catch (_) { return false; } }
   function validFallback(raw) { try { const url = new URL(raw); return url.protocol === "https:" && ["huggingface.co", "hf-mirror.com"].includes(url.hostname) && /\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[a-z0-9-]+\/)?document\.pdf)$/.test(url.pathname); } catch (_) { return false; } }
@@ -536,6 +539,7 @@ async function renderFoliate(prepared) {
             .join(", "),
         );
     }
+    for (const image of named("image")) { const value = image.getAttributeNS("http://www.w3.org/1999/xlink", "href") || image.getAttribute("xlink:href") || image.getAttribute("href"); if (value && !/^(?:data:|blob:|https?:|#)/i.test(value)) { const proxy = assetUrl(value); image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", proxy); image.setAttribute("href", proxy); } }
       const body = named("body")[0],
         article = document.createElement("article");
       article.className = "foliate-continuous-section";
@@ -566,6 +570,7 @@ async function renderFoliate(prepared) {
         }),
     { root: viewport, rootMargin: "1000px" },
   );
+  foliateSectionObserver = observer;
   foliateSectionLoader = (index) =>
     sections[index] ? load(sections[index], index) : Promise.resolve(null);
   foliateSectionSettler = async () => { const indices = [...stream.querySelectorAll("article[data-section]")].map((article) => Number(article.dataset.section)); await Promise.all(indices.flatMap((index) => [index - 1, index + 1]).filter((index) => sections[index]).map((index) => load(sections[index], index))); for (let attempt = 0; attempt < 4; attempt++) { await new Promise((resolve) => requestAnimationFrame(resolve)); const tasks = [...pending.values()]; if (tasks.length) await Promise.allSettled(tasks); } };
@@ -585,66 +590,14 @@ async function renderFoliate(prepared) {
       }
     };
   append(view.book.toc);
+  await Promise.all(entries.map(async (entry) => { try { const target = await view.book.resolveHref(entry.href), section = target && view.book.sections[target.index]; entry.sectionIndex = section ? sections.indexOf(section) : -1; const fragment = entry.href.split("#")[1] || ""; entry.fragment = fragment ? decodeURIComponent(fragment) : ""; } catch (_) { entry.sectionIndex = -1; entry.fragment = ""; } }));
   if (entries.length) setToc(entries);
-  viewport.addEventListener(
-    "scroll",
-    () => {
-      let current = 0;
-      for (const node of stream.querySelectorAll("article[data-section]"))
-        if (
-          node.getBoundingClientRect().top <=
-          viewport.getBoundingClientRect().top + 80
-        )
-          current = Number(node.dataset.section);
-      const item = entries.find((entry) => {
-        const target = view.book.resolveHref(entry.href),
-          section = target && view.book.sections[target.index];
-        return section && sections.indexOf(section) === current;
-      });
-      if (item) {
-        currentChapterIndex = entries.indexOf(item);
-        updateTocCurrentMark();
-      }
-    },
-    { passive: true },
-  );
+  scheduleFoliateScrollSync();
   loadingIndicator.remove();
   loadingStatus.hidden = true;
   loadingObserver.disconnect();
   status.textContent = "EPUB";
 }
-setInterval(() => {
-  const detail = epubRendition?.lastLocation,
-    start = detail?.start || detail?.location?.start;
-  if (!start) return;
-  epubLocation = start.cfi || start.href || epubLocation;
-  epubProgress = Number.isFinite(start.percentage)
-    ? start.percentage
-    : epubProgress;
-  if (start.href) syncEpubTocLocation({ start });
-  updateProgressTools();
-}, 200);
-setInterval(() => {
-  for (const image of document.querySelectorAll(".foliate-continuous image")) {
-    const value =
-      image.getAttributeNS("http://www.w3.org/1999/xlink", "href") ||
-      image.getAttribute("xlink:href");
-    if (
-      !value ||
-      /^(?:data:|blob:|https?:|#)/i.test(value) ||
-      image.dataset.readerResource
-    )
-      continue;
-    const section = image.closest("[data-section]")?.dataset.section;
-    const item = epubBook?.sections?.[Number(section)];
-    if (!item) continue;
-    const resource = item.resolveHref(value);
-    const proxy = `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(sourceUrl)}&path=${encodeURIComponent(resource)}`;
-    image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", proxy);
-    image.setAttribute("href", proxy);
-    image.dataset.readerResource = "1";
-  }
-}, 250);
 
 // Chapter bundles are intentionally outside the EPUB engine: the manifest and
 // first chapter are cheap to load, while later chapters enter through the viewport.
