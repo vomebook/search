@@ -405,7 +405,7 @@ function warmReaderIntent(rawUrl) {
     extension = (readerUrl.searchParams.get("ext") || "").toLowerCase();
     sourceUrl = readerUrl.searchParams.get("url") || "";
   } catch (_) { return; }
-  var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader-request-manager.js", "/search/static/reader-chapter-repository.js", "/search/static/reader-scroll-anchor.js", "/search/static/reader.js"];
+  var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader-request-manager.js", "/search/static/reader-chapter-repository.js", "/search/static/reader-scroll-anchor.js", "/search/static/reader-section-virtualizer.js", "/search/static/reader.js"];
   var engineAssets = extension === "pdf"
     ? ["/search/static/vendor/pdf.min.f80490490320.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.8ab0e5e30031.mjs"]
     : extension === "epub" ? []

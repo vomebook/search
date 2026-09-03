@@ -69,10 +69,11 @@
 
     const resizeObserver = ResizeObserverImpl ? new ResizeObserverImpl(() => restore(anchor)) : null;
     function observe(node) { resizeObserver?.observe(node); if (!anchor) capture(); }
+    function unobserve(node) { resizeObserver?.unobserve(node); if (anchor?.node === node || node?.contains?.(anchor?.node)) anchor = null; }
     function invalidate() { generation += 1; if (captureFrame) cancelFrame(captureFrame); if (restoreFrame) cancelFrame(restoreFrame); captureFrame = 0; restoreFrame = 0; anchor = null; }
     function dispose() { if (disposed) return; disposed = true; resizeObserver?.disconnect(); invalidate(); }
 
-    return Object.freeze({ capture, restore, remember, preserve, observe, invalidate, dispose });
+    return Object.freeze({ capture, restore, remember, preserve, observe, unobserve, invalidate, dispose });
   }
 
   root.VoiceOfMLReaderScroll = Object.freeze({ createScrollAnchorManager });
