@@ -51,6 +51,7 @@ jobs:
           npx --yes esbuild@0.28.2 static/reader-section-virtualizer.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-section-virtualizer.js
           npx --yes esbuild@0.28.2 static/reader-runtime.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-runtime.js
           npx --yes esbuild@0.28.2 static/reader-format-adapters.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-format-adapters.js
+          npx --yes esbuild@0.28.2 static/reader-security.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-security.js
           npx --yes esbuild@0.28.2 static/reader.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader.js
           npx --yes esbuild@0.28.2 static/index-worker.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/index-worker.js
           npx --yes esbuild@0.28.2 static/style.css --minify --outfile=_site/static/style.css
