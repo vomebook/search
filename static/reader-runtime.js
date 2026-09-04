@@ -57,6 +57,7 @@
         navigation: Object.freeze({ ...state.navigation }),
         search: Object.freeze({ ...state.search }),
         panel: Object.freeze({ ...state.panel }),
+        formats: Object.freeze(Object.fromEntries(Object.entries(state.formats).map(([name, value]) => [name, Object.freeze({ ...value })]))),
         capability: state.capability,
       });
     }
@@ -66,6 +67,13 @@
       const current = snapshot();
       events.emit(`state:${domain}`, current);
       events.emit("state", current);
+      return true;
+    }
+    function updateFormat(format, patch) {
+      if (state.lifecycle.disposed || !state.formats[format]) return false;
+      Object.assign(state.formats[format], patch);
+      events.emit(`format:${format}`, snapshot());
+      events.emit("state", snapshot());
       return true;
     }
     function setPhase(phase) {
@@ -114,7 +122,7 @@
       events.emit("dispose", snapshot());
       events.dispose();
     }
-    return Object.freeze({ state, events, snapshot, update, setPhase, setStage, fail, nextGeneration, isCurrent, track, untrack, negotiate, dispose });
+    return Object.freeze({ state, events, snapshot, update, updateFormat, setPhase, setStage, fail, nextGeneration, isCurrent, track, untrack, negotiate, dispose });
   }
 
   root.VoiceOfMLReaderRuntime = Object.freeze({ FEATURE_MATRIX, createEventBus, createReaderRuntime });
