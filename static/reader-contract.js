@@ -8,9 +8,11 @@
     mp4: "video", mov: "video", video: "video",
   });
   const articleExtensions = Object.freeze(Object.keys(modes));
+  const features = Object.freeze({ pdf: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false }, "pdf-pages": { toc: false, search: false, zoom: true, bookmarks: true, pagination: true, media: false }, foliate: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, "epub-chapters": { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, docx: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false }, html: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, text: { toc: false, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, markdown: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, image: { toc: false, search: false, zoom: true, bookmarks: true, pagination: false, media: false }, audio: { toc: false, search: false, zoom: false, bookmarks: true, pagination: false, media: true }, video: { toc: false, search: false, zoom: false, bookmarks: true, pagination: false, media: true } });
   function capability(extension) {
     const normalized = String(extension || "").toLowerCase();
-    return Object.freeze({ extension: normalized, mode: modes[normalized] || null, readerMode: modes[normalized] ? ReaderMode.ORIGINAL : ReaderMode.UNSUPPORTED, article: !!modes[normalized] });
+    const mode = modes[normalized];
+    return Object.freeze({ extension: normalized, mode: mode || null, readerMode: mode ? ReaderMode.ORIGINAL : ReaderMode.UNSUPPORTED, article: !!mode, features: Object.freeze({ ...(features[mode] || { toc: false, search: false, zoom: false, bookmarks: false, pagination: false, media: false }) }) });
   }
   function clampNumber(value, minimum, maximum, fallback) { const numeric = Math.round(Number(value)); return Number.isFinite(numeric) ? Math.min(maximum, Math.max(minimum, numeric)) : fallback; }
   function readerUrl(record, basePath) {
@@ -32,5 +34,5 @@
    return (basePath || "/search/static/reader.html") + "?" + params.toString();
   }
   function shortSourceId(value) { let hash = 1469598103934665603n; for (const byte of new TextEncoder().encode(value)) { hash ^= BigInt(byte); hash = BigInt.asUintN(64, hash * 1099511628211n); } return hash.toString(36).padStart(13, "0"); }
-  root.VoiceOfMLReader = Object.freeze({ ReaderMode, articleExtensions, capability, clampNumber, readerUrl });
+  root.VoiceOfMLReader = Object.freeze({ ReaderMode, articleExtensions, capability, features, clampNumber, readerUrl });
 })(typeof self !== "undefined" ? self : window);

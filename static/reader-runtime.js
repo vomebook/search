@@ -118,7 +118,7 @@
     function cancelFrame(handle) { if (!frames.has(handle)) return; cancelAnimationFrame(handle); frames.delete(handle); }
     function negotiate(capability) {
       const mode = capability?.mode || "unsupported";
-      const value = Object.freeze({ ...capability, features: Object.freeze({ ...(FEATURE_MATRIX[mode] || FEATURE_MATRIX.unsupported) }) });
+      const value = Object.freeze({ ...capability, features: Object.freeze({ ...(capability?.features || FEATURE_MATRIX[mode] || FEATURE_MATRIX.unsupported) }) });
       state.capability = value;
       events.emit("capability", value);
       return value;
