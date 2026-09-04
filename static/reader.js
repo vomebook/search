@@ -105,9 +105,9 @@ document.addEventListener("keydown", event => { if (event.defaultPrevented || ev
 document.querySelector("#page-prev").addEventListener("click", () => documentState.pageCount ? goToPage(documentState.page - 1).catch(handlePageNavigationFailure) : turnViewport(-1)); document.querySelector("#page-next").addEventListener("click", () => documentState.pageCount ? goToPage(documentState.page + 1).catch(handlePageNavigationFailure) : turnViewport(1));
 async function goToPage(value) { if (!documentState.pageCount) return; const page = VoiceOfMLReader.clampNumber(value, 1, documentState.pageCount, 1); await pdfShellsReady; const shell = content.querySelector(`.reader-page[data-page="${page}"], .reader-docx-page[data-page="${page}"]`); if (shell) { if (shell.classList.contains("reader-page")) await renderPdfShell(shell, false, true); shell.scrollIntoView({ block: "start" }); if (!restorationApplied && documentState.restoredEntry && page === documentState.restoredEntry.page && documentState.restoredEntry.pageOffset) { viewport.scrollTop += documentState.restoredEntry.pageOffset; restorationApplied = true; } } updateDocumentState({ page }); pageInput.value = String(page); scheduleSave(); }
 function scheduleSave() { if (readerLifecycle.disposed) return; readerRuntime.cancel(saveTimer); saveTimer = readerRuntime.schedule(saveProgress, 500); }
-async function saveProgress() {
+async function saveProgress(event) {
   if (readerLifecycle.disposed || !documentState.restorationReady || !validSource(sourceUrl) || historySuppressed) return;
-  syncCurrentPageFromMarker();
+  if (event?.type !== "pagehide") syncCurrentPageFromMarker();
   const shell = documentState.pageCount
       ? content.querySelector(
           `.reader-page[data-page="${documentState.page}"], .reader-docx-page[data-page="${documentState.page}"]`,
