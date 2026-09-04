@@ -594,6 +594,7 @@ async function renderFoliate(prepared) {
           );
       }
       for (const image of doc.querySelectorAll("image")) { const value = image.getAttributeNS("http://www.w3.org/1999/xlink", "href") || image.getAttribute("xlink:href") || image.getAttribute("href"); if (value && !/^(?:data:|blob:|https?:|#)/i.test(value)) { const proxy = assetUrl(value); image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", proxy); image.setAttribute("href", proxy); } }
+      for (const link of doc.querySelectorAll("a[href]")) { const href = link.getAttribute("href") || ""; if (/^(?:https?:|mailto:|tel:)/i.test(href)) { link.target = "_blank"; link.rel = "noopener noreferrer"; } }
       const article = document.createElement("article");
       article.className = "foliate-continuous-section";
       article.dataset.section = String(index);
