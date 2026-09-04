@@ -3,7 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((items, value, index, all) => value.startsWith("--") ? [...items, [value.slice(2), all[index + 1]?.startsWith("--") ? true : all[index + 1]]] : items, []));
-const required = ["reader.html", "reader.css", "reader.js", "reader-contract.js", "reader-store.js", "reader-request-manager.js", "reader-chapter-repository.js", "reader-scroll-anchor.js", "reader-section-virtualizer.js", "reader-runtime.js", "reader-format-adapters.js", "pdf-worker-wrapper.mjs", "foliate-reader/view.js"];
+const required = ["reader.html", "reader.css", "reader.js", "reader-contract.js", "reader-store.js", "reader-request-manager.js", "reader-chapter-repository.js", "reader-scroll-anchor.js", "reader-section-virtualizer.js", "reader-runtime.js", "reader-format-adapters.js", "reader-security.js", "pdf-worker-wrapper.mjs", "foliate-reader/view.js"];
 const behavioral = ["createReaderRuntime", "createAdapterRegistry", "registerReaderFormatAdapters", "formatAdapters.activate(capability.mode)", "disableStream: true", "nextReaderGeneration(\"navigation\")"];
 const hash = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const normalized = (file) => fs.readFileSync(file, "utf8").replaceAll("/search/static/", "/static/").replace(/\s+/g, "");
@@ -23,7 +23,7 @@ function checkProject(root, artifact) {
   return crypto.createHash("sha256").update(manifest).digest("hex");
 }
 function crossCheck(githubRoot, hfRoot) {
-  const exact = ["reader-request-manager.js", "reader-chapter-repository.js", "reader-scroll-anchor.js", "reader-section-virtualizer.js", "pdf-worker-wrapper.mjs"];
+  const exact = ["reader-request-manager.js", "reader-chapter-repository.js", "reader-scroll-anchor.js", "reader-section-virtualizer.js", "reader-security.js", "pdf-worker-wrapper.mjs"];
   for (const file of exact) assert(hash(path.join(githubRoot, "static", file)) === hash(path.join(hfRoot, "static", file)), `cross-project drift: ${file}`);
   for (const file of ["reader-runtime.js", "reader-format-adapters.js"]) assert(normalized(path.join(githubRoot, "static", file)) === normalized(path.join(hfRoot, "static", file)), `cross-project runtime drift: ${file}`);
   for (const marker of behavioral) for (const root of [githubRoot, hfRoot]) assert(fs.readFileSync(path.join(root, "static/reader.js"), "utf8").includes(marker), `cross-project behavior missing: ${marker}`);
