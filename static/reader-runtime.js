@@ -48,6 +48,8 @@
     };
     const generations = new Map();
     const disposables = new Set();
+    const timers = new Set();
+    const frames = new Set();
 
     function snapshot() {
       return Object.freeze({
@@ -102,6 +104,18 @@
     function isCurrent(name, value) { return !state.lifecycle.disposed && generations.get(name) === value; }
     function track(disposable) { if (disposable) disposables.add(disposable); return disposable; }
     function untrack(disposable) { disposables.delete(disposable); }
+    function schedule(callback, delay = 0) {
+      const handle = setTimeout(() => { timers.delete(handle); callback(); }, delay);
+      timers.add(handle);
+      return handle;
+    }
+    function cancel(handle) { if (!timers.has(handle)) return; clearTimeout(handle); timers.delete(handle); }
+    function frame(callback) {
+      const handle = requestAnimationFrame(() => { frames.delete(handle); callback(); });
+      frames.add(handle);
+      return handle;
+    }
+    function cancelFrame(handle) { if (!frames.has(handle)) return; cancelAnimationFrame(handle); frames.delete(handle); }
     function negotiate(capability) {
       const mode = capability?.mode || "unsupported";
       const value = Object.freeze({ ...capability, features: Object.freeze({ ...(FEATURE_MATRIX[mode] || FEATURE_MATRIX.unsupported) }) });
@@ -117,12 +131,15 @@
       for (const disposable of [...disposables].reverse()) {
         try { if (typeof disposable === "function") disposable(); else disposable.dispose?.(); } catch (_) {}
       }
+      for (const handle of timers) clearTimeout(handle);
+      for (const handle of frames) cancelAnimationFrame(handle);
+      timers.clear(); frames.clear();
       disposables.clear();
       events.emit("phase", { phase: "disposed", state: snapshot() });
       events.emit("dispose", snapshot());
       events.dispose();
     }
-    return Object.freeze({ state, events, snapshot, update, updateFormat, setPhase, setStage, fail, nextGeneration, isCurrent, track, untrack, negotiate, dispose });
+    return Object.freeze({ state, events, snapshot, update, updateFormat, setPhase, setStage, fail, nextGeneration, isCurrent, track, untrack, schedule, cancel, frame, cancelFrame, negotiate, dispose });
   }
 
   root.VoiceOfMLReaderRuntime = Object.freeze({ FEATURE_MATRIX, createEventBus, createReaderRuntime });
