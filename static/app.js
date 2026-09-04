@@ -136,10 +136,10 @@ function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
    if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|page-manifest\.json|(?:[a-z0-9-]+\/)?(document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4))$/.test(asset.p || "")) return record;
   var originalExtension = String(record.Extension || record.extension || "").toLowerCase();
-   var readerExtensions = { p: asset.p.endsWith("page-manifest.json") ? "pdf-pages" : "pdf", e: ["epub", "mobi", "azw3", "fb2"].indexOf(originalExtension) >= 0 ? originalExtension : "epub", d: "docx", h: "html", a: "audio", v: "video" };
+    var bucketAsset = asset.b === "vomebook/pdf-pages", readerExtensions = { p: asset.p.endsWith("page-manifest.json") ? "pdf-pages" : "pdf", e: ["epub", "mobi", "azw3", "fb2"].indexOf(originalExtension) >= 0 ? originalExtension : "epub", d: "docx", h: "html", a: "audio", v: "video" };
    var chapterBundle = asset.m === "p" && !!asset.c;
    return Object.assign({}, record, {
-     ReaderLink: "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (chapterBundle ? asset.c : asset.p),
+      ReaderLink: bucketAsset ? "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + encodeURIComponent(asset.p) : "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (chapterBundle ? asset.c : asset.p),
      ReaderExtension: chapterBundle ? "epub-chapters" : readerExtensions[asset.m],
      ReaderChapterManifest: chapterBundle ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.c : "",
     ReaderFallback: asset.f || "",
@@ -405,7 +405,7 @@ function warmReaderIntent(rawUrl) {
     extension = (readerUrl.searchParams.get("ext") || "").toLowerCase();
     sourceUrl = readerUrl.searchParams.get("url") || "";
   } catch (_) { return; }
-  var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader-request-manager.js", "/search/static/reader-chapter-repository.js", "/search/static/reader-scroll-anchor.js", "/search/static/reader-section-virtualizer.js", "/search/static/reader-runtime.js", "/search/static/reader-format-adapters.js", "/search/static/reader.js"];
+  var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader-request-manager.js", "/search/static/reader-chapter-repository.js", "/search/static/reader-scroll-anchor.js", "/search/static/reader-section-virtualizer.js", "/search/static/reader-runtime.js", "/search/static/reader-format-adapters.js", "/search/static/reader-security.js", "/search/static/reader.js"];
   var engineAssets = extension === "pdf"
     ? ["/search/static/vendor/pdf.min.f80490490320.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.8ab0e5e30031.mjs"]
     : extension === "epub" ? []

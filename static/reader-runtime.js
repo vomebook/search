@@ -101,6 +101,7 @@
       events.emit("generation", { name, value });
       return value;
     }
+    function currentGeneration(name) { return generations.get(name) || 0; }
     function isCurrent(name, value) { return !state.lifecycle.disposed && generations.get(name) === value; }
     function track(disposable) { if (disposable) disposables.add(disposable); return disposable; }
     function untrack(disposable) { disposables.delete(disposable); }
@@ -139,7 +140,7 @@
       events.emit("dispose", snapshot());
       events.dispose();
     }
-    return Object.freeze({ state, events, snapshot, update, updateFormat, setPhase, setStage, fail, nextGeneration, isCurrent, track, untrack, schedule, cancel, frame, cancelFrame, negotiate, dispose });
+    return Object.freeze({ state, events, snapshot, update, updateFormat, setPhase, setStage, fail, nextGeneration, currentGeneration, isCurrent, track, untrack, schedule, cancel, frame, cancelFrame, negotiate, dispose });
   }
 
   root.VoiceOfMLReaderRuntime = Object.freeze({ FEATURE_MATRIX, createEventBus, createReaderRuntime });
