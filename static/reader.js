@@ -29,6 +29,7 @@ try { const cached = sessionStorage.getItem(`reader-resolve:${readerId}`); if (c
 const readerLifecycle = readerRuntime.state.lifecycle;
 readerRuntime.update("source", { id: readerId, url: sourceUrl, contentUrl, downloadUrl, extension, metadata: resolvedReaderData });
 readerRuntime.events.on("phase", ({ phase }) => { document.documentElement.dataset.readerPhase = phase; });
+const unsubscribeReaderStore = VoiceOfMLReaderStore.subscribe?.((change) => { if (!change?.remote || readerLifecycle.disposed) return; if (change.type === "history-clear" || change.type === "history-remove" || change.url === sourceUrl) { if (!document.querySelector("#history-panel").hidden) renderHistory(); } if ((change.type === "bookmark" || change.type === "bookmark-remove") && (!change.url || change.url === sourceUrl) && !document.querySelector("#bookmarks-panel").hidden) renderBookmarks(); });
 function setReaderPhase(phase) { return readerRuntime.setPhase(phase); }
 function setReaderStage(stage) { return readerRuntime.setStage(stage); }
 function classifyReaderError(error, fallback = "READER_PARSE") { const value = `${error?.name || ""} ${error?.message || error || ""}`; if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK"; if (/EPUB_INVALID|corrupt|damage|truncated|central directory|end of data|invalid zip/i.test(value)) return "READER_CORRUPT"; return fallback; }
