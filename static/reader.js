@@ -107,7 +107,7 @@ async function goToPage(value) { if (!documentState.pageCount) return; const pag
 function scheduleSave() { if (readerLifecycle.disposed) return; readerRuntime.cancel(saveTimer); saveTimer = readerRuntime.schedule(saveProgress, 500); }
 async function saveProgress(event) {
   if (readerLifecycle.disposed || !documentState.restorationReady || !validSource(sourceUrl) || historySuppressed) return;
-  if (event?.type !== "pagehide") syncCurrentPageFromMarker();
+  if (event?.type !== "pagehide" && document.visibilityState !== "hidden") syncCurrentPageFromMarker();
   const shell = documentState.pageCount
       ? content.querySelector(
           `.reader-page[data-page="${documentState.page}"], .reader-docx-page[data-page="${documentState.page}"]`,
