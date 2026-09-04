@@ -910,8 +910,7 @@ async function start() {
     const [restored, prepared] = await Promise.all([VoiceOfMLReaderStore.get(sourceUrl).catch(() => { restorationFailed = true; return null; }), formatAdapters.active.open()]); updateDocumentState({ restoredEntry: restored });
     if (documentState.restoredEntry?.zoom) setZoom(documentState.restoredEntry.zoom, false);
      await formatAdapters.active.render(prepared);
-    if (documentState.restoredEntry) await formatAdapters.active.restore(documentState.restoredEntry);
-    loadingIndicator.remove(); loadingStatus.hidden = true; if (!documentState.pageCount && documentState.restoredEntry) viewport.scrollTop = documentState.restoredEntry.scrollTop || 0; if (!setReaderPhase("ready")) return; updateDocumentState({ restorationReady: !restorationFailed }); scheduleSave();
+    loadingIndicator.remove(); loadingStatus.hidden = true; if (!documentState.pageCount && documentState.restoredEntry) viewport.scrollTop = documentState.restoredEntry.scrollTop || 0; if (!setReaderPhase("ready")) return; if (documentState.restoredEntry) await formatAdapters.active.restore(documentState.restoredEntry); updateDocumentState({ restorationReady: !restorationFailed }); scheduleSave();
   } catch (error) {
     console.error(error);
     if (capability.mode === "epub-chapters" && validFallback(fallbackUrl)) { const target = new URL(location.href); target.searchParams.set("url", fallbackUrl); target.searchParams.set("ext", "pdf"); target.searchParams.delete("chapter_manifest"); target.searchParams.delete("fallback"); if (window.parent !== window) window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin); else location.replace(target.href); return; }
