@@ -62,7 +62,7 @@ let restorationApplied = false;
 let pdfDocument = null, pdfPageManifest = null, pdfActiveRenders = 0, pdfShellsReady = Promise.resolve(), epubRendition = null, epubBook = null, epubLocation = "", epubProgress = 0, htmlFrame = null, foliateContinuous = false, foliateChapterRepository = null, foliateSectionVirtualizer = null, foliateSectionLoader = null, foliateSectionSettler = null, foliateSectionObserver = null, foliateScrollFrame = 0;
 const pdfRenderWaiters = [];
 let lastSavedProgress = "", progressSaveChain = Promise.resolve();
-let historySuppressed = false, restorationFailed = false, markerFrame = 0, pendingBookmarkSnapshot = null, mediaElement = null;
+let historySuppressed = false, restorationFailed = false, markerFrame = 0, pageNavigationLockUntil = 0, pendingBookmarkSnapshot = null, mediaElement = null;
 function nextReaderGeneration(name) { return readerRuntime.nextGeneration(name); }
 function isReaderGenerationCurrent(name, value) { return readerRuntime.isCurrent(name, value); }
 for (const generationName of ["navigation", "search", "bookmarks", "pdf"]) nextReaderGeneration(generationName);
@@ -103,7 +103,7 @@ pageInput.addEventListener("change", () => goToPage(pageInput.value).catch(handl
 function turnViewport(direction) { const amount = Math.max(160, viewport.clientHeight * 0.86) * direction; if (htmlFrame?.contentWindow) htmlFrame.contentWindow.scrollBy({ top: amount, behavior: "smooth" }); else viewport.scrollBy({ top: amount, behavior: "smooth" }); }
 document.addEventListener("keydown", event => { if (event.defaultPrevented || event.target.matches("input,textarea,select,button,a")) return; if (event.key === "PageDown" || event.key === " " || event.key === "ArrowDown") { event.preventDefault(); turnViewport(1); } else if (event.key === "PageUp" || event.key === "ArrowUp") { event.preventDefault(); turnViewport(-1); } });
 document.querySelector("#page-prev").addEventListener("click", () => documentState.pageCount ? goToPage(documentState.page - 1).catch(handlePageNavigationFailure) : turnViewport(-1)); document.querySelector("#page-next").addEventListener("click", () => documentState.pageCount ? goToPage(documentState.page + 1).catch(handlePageNavigationFailure) : turnViewport(1));
-async function goToPage(value) { if (!documentState.pageCount) return; const page = VoiceOfMLReader.clampNumber(value, 1, documentState.pageCount, 1); await pdfShellsReady; const shell = content.querySelector(`.reader-page[data-page="${page}"], .reader-docx-page[data-page="${page}"]`); if (shell) { if (shell.classList.contains("reader-page")) await renderPdfShell(shell, false, true); viewport.scrollTop = shell.offsetTop; if (!restorationApplied && documentState.restoredEntry && page === documentState.restoredEntry.page && documentState.restoredEntry.pageOffset) { viewport.scrollTop += documentState.restoredEntry.pageOffset; restorationApplied = true; } } updateDocumentState({ page }); pageInput.value = String(page); scheduleSave(); }
+async function goToPage(value) { if (!documentState.pageCount) return; const page = VoiceOfMLReader.clampNumber(value, 1, documentState.pageCount, 1); await pdfShellsReady; const shell = content.querySelector(`.reader-page[data-page="${page}"], .reader-docx-page[data-page="${page}"]`); if (shell) { if (shell.classList.contains("reader-page")) await renderPdfShell(shell, false, true); viewport.scrollTop = shell.offsetTop; if (!restorationApplied && documentState.restoredEntry && page === documentState.restoredEntry.page && documentState.restoredEntry.pageOffset) { viewport.scrollTop += documentState.restoredEntry.pageOffset; restorationApplied = true; } } pageNavigationLockUntil = performance.now() + 500; updateDocumentState({ page }); pageInput.value = String(page); scheduleSave(); }
 function scheduleSave() { if (readerLifecycle.disposed) return; readerRuntime.cancel(saveTimer); saveTimer = readerRuntime.schedule(saveProgress, 500); }
 async function saveProgress(event) {
   if (readerLifecycle.disposed || !documentState.restorationReady || !validSource(sourceUrl) || historySuppressed) return;
@@ -268,6 +268,7 @@ function pageAtMarker() {
   );
 }
 function syncCurrentPageFromMarker() {
+  if (performance.now() < pageNavigationLockUntil) return;
   const page = pageAtMarker();
   if (!page) return;
   const next = Number(page.dataset.page);
