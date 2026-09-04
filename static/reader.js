@@ -464,9 +464,9 @@ async function renderPdfPages(prepared) {
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const manifest = JSON.parse(await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes));
   if (manifest.version !== 1 || manifest.kind !== "pdf-pages" || !Array.isArray(manifest.pages) || !manifest.pages.length) throw new Error("PDF_MANIFEST_INVALID");
-  const rootMatch = String(sourceUrl).match(/\/objects\/([0-9a-f]{2}\/[0-9a-f]{64})\/page-manifest\.json$/);
   const entries = manifest.pages.map((item) => ({ page: Number(item.page), path: String(item.path || "") })).sort((a, b) => a.page - b.page);
-  if (!rootMatch || entries.some((item, index) => item.page !== index + 1 || !new RegExp(`^objects/${rootMatch[1]}/pages/page-[0-9]{6}\\.webp$`).test(item.path))) throw new Error("PDF_MANIFEST_INVALID");
+  const rootMatch = entries[0]?.path.match(/^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16})\/pages\//);
+  if (!rootMatch || entries.some((item, index) => item.page !== index + 1 || !new RegExp(`^${rootMatch[1]}/pages/page-[0-9]{6}\\.webp$`).test(item.path))) throw new Error("PDF_MANIFEST_INVALID");
   pdfPageManifest = { entries }; updateDocumentState({ pageCount: entries.length }); pageInput.max = String(documentState.pageCount); document.querySelector("#page-total").textContent = `/ ${documentState.pageCount}`; status.textContent = `${documentState.pageCount} 页`;
   const observer = new IntersectionObserver((items) => items.forEach((entry) => { entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0"; if (entry.isIntersecting) renderPdfManifestShell(entry.target); }), { root: viewport, rootMargin: "1200px 0px" });
   const pageObserver = new IntersectionObserver(() => scheduleMarkerSync(), { root: viewport, threshold: [0, 0.5, 1] });
