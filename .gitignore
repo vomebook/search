@@ -3,3 +3,9 @@ static/vendor/
 __pycache__/
 *.py[cod]
 tests/benchmark-results.json
+/tests/
+/TESTING.md
+/requirements-test.txt
+/docs/READER_GUIDE.md
+/docs/
+/AGENTS.md
