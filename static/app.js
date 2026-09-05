@@ -275,6 +275,8 @@ var readerOverlay = null;
 var readerReturnFocus = null;
 var readerBackgroundState = [];
 var readerReturnScrollState = null;
+var readerReturnRestoreGeneration = 0;
+var readerReturnRestoreActive = false;
 function captureReaderReturnScroll() {
   if (!DOM.resultsContainer) return null;
   var top = DOM.resultsContainer.scrollTop, index = 0, offset = top;
@@ -283,14 +285,17 @@ function captureReaderReturnScroll() {
     index = findVirtualIndex(top);
     offset = top - getVirtualOffset(index);
   }
-  return { route: location.href, top: top, index: index, offset: offset };
+  return { route: location.href, viewKey: getSearchViewKey(), top: top, index: index, offset: offset };
 }
 function restoreReaderReturnScroll() {
   var saved = readerReturnScrollState;
   if (!saved) return;
   if (saved.route && saved.route !== location.href) { readerReturnScrollState = null; return; }
+  if (saved.viewKey && saved.viewKey !== getSearchViewKey()) { readerReturnScrollState = null; return; }
+  var generation = ++readerReturnRestoreGeneration;
   var attempts = 0;
   function restore() {
+    if (generation !== readerReturnRestoreGeneration) return;
     if (!DOM.resultsContainer || !STATE.results.length) {
       if (++attempts < 20) requestAnimationFrame(restore);
       return;
@@ -299,15 +304,18 @@ function restoreReaderReturnScroll() {
     var index = Math.min(saved.index, STATE.results.length - 1);
     var target = Math.max(0, getVirtualOffset(index) + saved.offset);
     var max = Math.max(0, DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
+    readerReturnRestoreActive = true;
     DOM.resultsContainer.scrollTop = Math.min(target, max);
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
     renderVisible();
     updateScrollTrack();
+    readerReturnRestoreActive = false;
     if (++attempts < 4 && Math.abs(DOM.resultsContainer.scrollTop - target) > 1) requestAnimationFrame(restore);
     else readerReturnScrollState = null;
   }
-  requestAnimationFrame(function() { requestAnimationFrame(restore); });
+  restore();
+  if (readerReturnScrollState === saved) requestAnimationFrame(function() { requestAnimationFrame(restore); });
 }
 function clearReaderNavigation(url) {
   try {
@@ -329,14 +337,28 @@ function closeReaderOverlay(restoreFocus, restoreScroll) {
   }
   readerBackgroundState = [];
   document.body.classList.remove("reader-overlay-open");
-  if (restoreScroll !== false) restoreReaderReturnScroll();
+  if (restoreScroll !== false) {
+    var saved = readerReturnScrollState;
+    var snapshot = saved && saved.viewKey ? searchViewSnapshots.get(saved.viewKey) : null;
+    var sameView = snapshot && saved.viewKey === getSearchViewKey();
+    var changed = sameView && (STATE.results.length !== snapshot.results.length || STATE._loadedPage !== snapshot.loadedPage);
+    if (changed) {
+      readerReturnScrollState = null;
+      restoreSearchViewSnapshot(saved.viewKey, false);
+      readerReturnScrollState = Object.assign({}, saved, { route: location.href });
+    }
+    restoreReaderReturnScroll();
+  }
   if (restoreFocus !== false && readerReturnFocus && readerReturnFocus.isConnected) readerReturnFocus.focus();
   readerReturnFocus = null;
   return true;
 }
 
 function openReaderOverlay(url, addHistory) {
-  if (addHistory !== false && !readerReturnScrollState) readerReturnScrollState = captureReaderReturnScroll();
+  if (addHistory !== false && !readerReturnScrollState) {
+    readerReturnScrollState = captureReaderReturnScroll();
+    saveSearchViewSnapshot(readerReturnScrollState && readerReturnScrollState.viewKey || getSearchViewKey());
+  }
   var frame = document.createElement("iframe");
   frame.className = "reader-overlay";
   frame.title = "在线阅读";
@@ -1430,6 +1452,7 @@ async function restoreSearchSession() {
 }
 
 const VSCROLL = {
+  viewKey: "",
   renderStart: 0,
   renderEnd: 0,
   heights: [],
@@ -1440,6 +1463,7 @@ const VSCROLL = {
   contentVersion: 0,
   measuredWindowKey: "",
   measuredRowKeys: [],
+  heightCache: new Map(),
   renderFrame: 0,
   estimatedHeight: 60,
   isDraggingThumb: false,
@@ -1626,6 +1650,7 @@ const ROUTER = {
     const route = this.parse();
     const prevMode = STATE.mode;
     const prevRepo = STATE.repo;
+    saveSearchViewSnapshot();
     STATE.mode = route.mode;
     STATE.repo = route.repo;
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
@@ -1917,6 +1942,114 @@ function stableSearchStringify(value) {
   return JSON.stringify(value);
 }
 
+const SEARCH_VIEW_SNAPSHOT_VERSION = 1;
+const searchViewSnapshots = new Map();
+const SEARCH_VIEW_SNAPSHOT_MAX = 20;
+function getSearchViewKey() {
+  return stableSearchStringify({
+    mode: STATE.mode,
+    repo: STATE.repoFull || "",
+    query: STATE.query || "",
+    repos: STATE.filterRepos.slice().sort(),
+    extensions: STATE.filterExtensions.slice().sort(),
+    folders: {
+      self: STATE.filterFolderSelfs.slice().sort(),
+      subtree: STATE.filterFolderSubtrees.slice().sort(),
+    },
+    browserPath: STATE.browserPath || "",
+    minSize: STATE.filterMinSize,
+    maxSize: STATE.filterMaxSize,
+    sort: STATE.sort || "relevance",
+    searchFolders: STATE.searchFolders,
+    exact: STATE.exact,
+    useLocalMode: STATE.useLocalMode,
+    pageSize: STATE.pageSize,
+  });
+}
+function getHeightMeasurementKey() {
+  return (DOM.resultsContainer?.clientWidth || 0) + ":" + (STATE.isMobile ? "mobile" : "desktop") + ":" + (STATE.isDark ? "dark" : "light");
+}
+function getResultStableId(result) {
+  if (!result || typeof result !== "object") return "";
+  if (result.Id || result.id) return String(result.Id || result.id);
+  return `${result.Repo || ""}\0${buildRecordRelativePath(result)}`;
+}
+function cloneSearchResult(result) {
+  return result && typeof result === "object"
+    ? Object.assign({}, result, Array.isArray(result.Folder) ? { Folder: result.Folder.slice() } : {})
+    : result;
+}
+function cloneSearchPageCache(cache) {
+  const copy = {};
+  Object.keys(cache || {}).forEach(function(page) {
+    copy[page] = Array.isArray(cache[page]) ? cache[page].map(cloneSearchResult) : cache[page];
+  });
+  return copy;
+}
+function saveSearchViewSnapshot(key = getSearchViewKey()) {
+  if (!DOM.resultsContainer) return null;
+  ensureHeightTree();
+  const heightRecords = STATE.results.map(function(result, index) {
+    const id = getResultStableId(result);
+    const measurementKey = VSCROLL.measuredRowKeys[index];
+    return id && measurementKey && VSCROLL.heights[index]
+      ? [id, { height: VSCROLL.heights[index], measurementKey: measurementKey }]
+      : null;
+  }).filter(Boolean);
+  const snapshot = {
+    version: SEARCH_VIEW_SNAPSHOT_VERSION,
+    key,
+    results: STATE.results.map(cloneSearchResult),
+    total: STATE.total,
+    page: STATE.page,
+    loadedPage: STATE._loadedPage,
+    pageCache: cloneSearchPageCache(STATE._pageCache),
+    hasMore: STATE.hasMore,
+    estimatedHeight: VSCROLL.estimatedHeight,
+    heightCache: Array.from(VSCROLL.heightCache.entries()).map(([id, value]) => [id, Object.assign({}, value)]),
+    heightRecords: heightRecords,
+    scroll: captureReaderReturnScroll(),
+    savedAt: Date.now(),
+  };
+  searchViewSnapshots.delete(key);
+  searchViewSnapshots.set(key, snapshot);
+  while (searchViewSnapshots.size > SEARCH_VIEW_SNAPSHOT_MAX) searchViewSnapshots.delete(searchViewSnapshots.keys().next().value);
+  return snapshot;
+}
+function activateSearchView(key = getSearchViewKey()) {
+  if (VSCROLL.viewKey === key) return;
+  VSCROLL.viewKey = key;
+  const snapshot = searchViewSnapshots.get(key);
+  VSCROLL.heightCache = new Map(snapshot?.heightCache || []);
+}
+function restoreSearchViewSnapshot(key, restoreScroll = true) {
+  const snapshot = searchViewSnapshots.get(key);
+  if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION) return false;
+  if (searchAbortController) searchAbortController.abort();
+  if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
+  searchAbortController = new AbortController();
+  searchPrefetchAbortController = null;
+  searchPrefetchKey = null;
+  searchRequestId++;
+  STATE.results = snapshot.results.map(cloneSearchResult);
+  STATE.total = snapshot.total;
+  STATE.page = snapshot.page;
+  STATE._loadedPage = snapshot.loadedPage;
+  STATE._pageCache = cloneSearchPageCache(snapshot.pageCache);
+  STATE.hasMore = snapshot.hasMore;
+  STATE.isLoading = false;
+  VSCROLL.viewKey = key;
+  VSCROLL.estimatedHeight = snapshot.estimatedHeight || VSCROLL.estimatedHeight;
+  VSCROLL.heightCache = new Map(snapshot.heightCache || []);
+  (snapshot.heightRecords || []).forEach(function(record) { VSCROLL.heightCache.set(record[0], record[1]); });
+  readerReturnScrollState = restoreScroll && snapshot.scroll ? Object.assign({}, snapshot.scroll, { route: location.href, viewKey: key }) : null;
+  resetVirtualScrollState();
+  renderResults(false);
+  updateStatusBar();
+  updateLoadInfo();
+  return true;
+}
+
 function cloneSearchData(data) {
   if (!data || !Array.isArray(data.results)) return data;
   return {
@@ -2138,6 +2271,7 @@ function debouncedSearch() {
   if (searchComposing) return;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
+    saveSearchViewSnapshot();
     STATE.query = DOM.searchInput.value.trim();
     STATE.page = 1;
     addHistoryItem(STATE.query);
@@ -2397,6 +2531,7 @@ function doSearchFallbackLocal(params, append, id) {
 
 function renderResults(animate = false) {
   pendingResultEntrance = false;
+  activateSearchView();
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
     DOM.resultsList.innerHTML = "";
@@ -2671,6 +2806,7 @@ function findVirtualIndex(offset) {
 function resetVirtualScrollState() {
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
+  activateSearchView();
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
@@ -2687,6 +2823,7 @@ function prepareRouteTransitionResults() {
   if (!DOM.resultsContainer || STATE.results.length === 0) return;
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
+  activateSearchView();
   DOM.resultsContainer.scrollTop = 0;
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
@@ -2708,7 +2845,10 @@ function ensureVirtualHeights(len) {
   VSCROLL.heights.length = len;
   VSCROLL.measuredRowKeys.length = len;
   for (let i = oldLen; i < len; i++) {
-    VSCROLL.heights[i] = VSCROLL.estimatedHeight;
+    const cached = VSCROLL.heightCache.get(getResultStableId(STATE.results[i]));
+    VSCROLL.heights[i] = cached?.measurementKey === getHeightMeasurementKey()
+      ? cached.height
+      : VSCROLL.estimatedHeight;
   }
   if (canExtendTree) {
     const newPrefix = new Array(len - oldLen + 1).fill(0);
@@ -2756,8 +2896,7 @@ function ensureVirtualViewportCovered() {
 }
 
 function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
-  const containerWidth = DOM.resultsContainer.clientWidth;
-  const rowMeasureKey = VSCROLL.contentVersion + ":" + containerWidth;
+  const rowMeasureKey = getHeightMeasurementKey();
   const measureKey = [rowMeasureKey, start, end].join(":");
   if (VSCROLL.measuredWindowKey === measureKey) return false;
   const els = DOM.resultsList.querySelectorAll(".result-item");
@@ -2779,6 +2918,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
     measuredSum += height;
     measuredCount++;
     VSCROLL.measuredRowKeys[idx] = rowMeasureKey;
+    VSCROLL.heightCache.set(getResultStableId(STATE.results[idx]), { height, measurementKey: rowMeasureKey });
   }
   for (let i = 0; i < measurements.length; i++) {
     const idx = measurements[i][0];
@@ -2798,6 +2938,9 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
     const nextEstimate = measuredSum / measuredCount;
     if (Math.abs(nextEstimate - VSCROLL.estimatedHeight) > 1) {
       VSCROLL.estimatedHeight = nextEstimate;
+      for (let index = 0; index < VSCROLL.heights.length; index++) {
+        if (!VSCROLL.measuredRowKeys[index]) VSCROLL.heights[index] = nextEstimate;
+      }
       VSCROLL.heightsDirty = true;
       changed = true;
     }
@@ -3841,6 +3984,7 @@ function updateScrollTrack() {
 
 function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("scroll", () => {
+    if (readerReturnScrollState && !readerReturnRestoreActive) { readerReturnRestoreGeneration++; readerReturnScrollState = null; }
     if (!VSCROLL.isDraggingThumb) ensureVirtualViewportCovered();
     if (!scrollTicking) {
       requestAnimationFrame(() => {
@@ -4101,6 +4245,7 @@ function setupKeyboard() {
     if (e.key === "Enter") {
       if (isInput && document.activeElement === DOM.searchInput) {
         e.preventDefault();
+        saveSearchViewSnapshot();
         STATE.query = DOM.searchInput.value.trim();
         STATE.page = 1;
         STATE.results = [];
@@ -4120,6 +4265,7 @@ function setupKeyboard() {
   DOM.searchInput.addEventListener("keydown", function(e) {
     if (e.key === "Enter") {
       e.preventDefault();
+      saveSearchViewSnapshot();
       STATE.query = DOM.searchInput.value.trim();
       STATE.page = 1;
       STATE.results = [];
@@ -4224,6 +4370,7 @@ function setupResultDelegation() {
 
 async function init() {
   cacheDOM();
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   await restoreSearchSession();
   setupReaderIntentWarming();
   STATE.isDark = localStorage.getItem("theme") !== "light";
@@ -4277,11 +4424,15 @@ async function init() {
     if (delBtn) { removeHistoryItem(delBtn.dataset.del); return; }
     var item = e.target.closest(".history-item");
     if (item) {
+      saveSearchViewSnapshot();
       DOM.searchInput.value = item.dataset.query;
       STATE.query = item.dataset.query;
       STATE.page = 1;
-      STATE.results = [];
-      doSearch();
+      syncStateToURL();
+      if (!restoreSearchViewSnapshot(getSearchViewKey())) {
+        STATE.results = [];
+        doSearch();
+      }
       hideDropdown();
       DOM.searchInput.blur();
       return;
