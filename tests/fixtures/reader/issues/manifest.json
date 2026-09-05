@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "fixtures": [
+    { "id": "pdf-pages-wide-image", "format": "pdf-pages", "source": "production-id:0ii7sf11ig9ls", "expected": "images fit page shells without overlap", "test": "test_converted_pdf_pages_fit_wide_images_without_overlap" },
+    { "id": "epub-nested-resources", "format": "epub", "source": "minimized from nested package resource failures", "expected": "chapter images resolve through the reader resource boundary", "test": "test_foliate_navigation_path_dark_links_and_unique_sections" },
+    { "id": "text-multibyte-boundary", "format": "txt", "source": "minimized from split UTF-8 and legacy encoding failures", "expected": "stream decoding preserves split multibyte characters", "test": "test_txt_displays_before_stream_finishes_and_preserves_split_utf8" }
+    ,{ "id": "reader-security-boundaries", "format": "html/epub-chapters/epub", "source": "inline deterministic browser routes", "expected": "active resources, oversized chapter resources, and ZIP bomb metadata are rejected while safe text remains", "test": "test_malicious_html_css_and_svg_are_inert_and_keep_safe_text" }
+    ,{ "id": "reader-navigation-matrix", "format": "html/md/pdf/epub-chapters", "source": "inline deterministic browser routes", "expected": "TOC, outline, first/lazy chapter, and cross-panel store updates navigate through visible Reader UI", "test": "test_epub_chapters_load_first_lazy_next_and_toc_destination" }
+  ]
+}

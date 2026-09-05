@@ -1,1 +1,5 @@
 _site/
+static/vendor/
+__pycache__/
+*.py[cod]
+tests/benchmark-results.json

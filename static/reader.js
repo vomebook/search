@@ -22,22 +22,41 @@ readerRuntime.track(readerRequestManager);
 const PDF_PROXY_TIMEOUT_MS = 60000;
 if (!Map.prototype.getOrInsertComputed) { Map.prototype.getOrInsertComputed = function(key, callback) { if (this.has(key)) return this.get(key); const value = callback(key); this.set(key, value); return value; }; }
 if (!Math.sumPrecise) { Math.sumPrecise = function(values) { let sum = 0, correction = 0; for (const value of values) { const next = sum + value; correction += Math.abs(sum) >= Math.abs(value) ? (sum - next) + value : (value - next) + sum; sum = next; } return sum + correction; }; }
-const params = new URLSearchParams(location.search), readerId = params.get("id") || ""; let localReaderData = null; try { localReaderData = JSON.parse(sessionStorage.getItem(`reader-source:${readerId}`) || "null"); if (localReaderData) sessionStorage.removeItem(`reader-source:${readerId}`); } catch (_) {} let sourceUrl = params.get("url") || (localReaderData && localReaderData.url) || "", contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`, downloadUrl = params.get("download") || (localReaderData && localReaderData.download) || sourceUrl, extension = (params.get("ext") || "").toLowerCase(), chapterManifestUrl = params.get("chapter_manifest") || "", fallbackUrl = params.get("fallback") || "";
+const params = new URLSearchParams(location.search), readerId = params.get("id") || ""; let localReaderData = null; try { localReaderData = JSON.parse(sessionStorage.getItem(`reader-source:${readerId}`) || "null"); if (localReaderData) sessionStorage.removeItem(`reader-source:${readerId}`); } catch (_) {} let sourceUrl = params.get("url") || (!readerId && localReaderData && localReaderData.url) || "", contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`, downloadUrl = params.get("download") || (localReaderData && localReaderData.download) || sourceUrl, extension = (params.get("ext") || "").toLowerCase();
+let chapterManifestUrl = params.get("chapter_manifest") || "", fallbackUrl = params.get("fallback") || "";
+const ocrUrl = params.get("ocr") || "";
+if (sourceUrl.startsWith("/api/reader-bucket-resource?")) sourceUrl = `https://voiceofml-search.hf.space${sourceUrl}`;
 let capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
+if (extension === "pdf" && /\/api\/reader-bucket-resource\?/.test(sourceUrl)
+    && new URL(sourceUrl, location.href).searchParams.get("path")?.endsWith("page-manifest.json")) {
+  extension = "pdf-pages";
+  capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
+}
 let resolvedReaderData = localReaderData;
+let cachedReaderData = null;
 if (localReaderData) { if (localReaderData.title) params.set("title", localReaderData.title); if (localReaderData.extension) params.set("ext", localReaderData.extension); if (localReaderData.repo) params.set("path", [localReaderData.repo, ...(localReaderData.folder || [])].join("/")); }
-try { const cached = sessionStorage.getItem(`reader-resolve:${readerId}`); if (cached) { resolvedReaderData = JSON.parse(cached); sessionStorage.removeItem(`reader-resolve:${readerId}`); } } catch (_) {}
+try { const cached = sessionStorage.getItem(`reader-resolve:${readerId}`); if (cached) { cachedReaderData = JSON.parse(cached); resolvedReaderData = cachedReaderData; sessionStorage.removeItem(`reader-resolve:${readerId}`); } } catch (_) {}
 const readerLifecycle = readerRuntime.state.lifecycle;
 readerRuntime.update("source", { id: readerId, url: sourceUrl, contentUrl, downloadUrl, extension, metadata: resolvedReaderData });
 readerRuntime.events.on("phase", ({ phase }) => { document.documentElement.dataset.readerPhase = phase; });
 const unsubscribeReaderStore = VoiceOfMLReaderStore.subscribe?.((change) => { if (!change?.remote || readerLifecycle.disposed) return; if (change.type === "history-clear" || change.type === "history-remove" || change.url === sourceUrl) { if (!document.querySelector("#history-panel").hidden) renderHistory(); } if ((change.type === "bookmark" || change.type === "bookmark-remove") && (!change.url || change.url === sourceUrl) && !document.querySelector("#bookmarks-panel").hidden) renderBookmarks(); });
 function setReaderPhase(phase) { return readerRuntime.setPhase(phase); }
 function setReaderStage(stage) { return readerRuntime.setStage(stage); }
+async function resolveReaderId(id) {
+  const endpoint = `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await readerRequestManager.request(endpoint, READER_PROXY_TIMEOUT_MS);
+    if (response.ok) return response.json();
+    if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt) throw new Error(`HTTP ${response.status}`);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+  throw new Error("Reader ID resolution failed");
+}
 function classifyReaderError(error, fallback = "READER_PARSE") { const value = `${error?.name || ""} ${error?.message || error || ""}`; if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK"; if (/EPUB_INVALID|corrupt|damage|truncated|central directory|end of data|invalid zip/i.test(value)) return "READER_CORRUPT"; return fallback; }
 setReaderPhase("startup");
 window.fetchFile = async (url) => {
   const requestUrl = String(url) === sourceUrl ? contentUrl : url;
-  const response = await fetch(requestUrl);
+  const response = await readerRequestManager.request(requestUrl, READER_PROXY_TIMEOUT_MS);
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   const fileName = new URL(url).pathname.split("/").pop() || "book";
   return new File([await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes)], fileName, { type: response.headers.get("content-type") || "application/octet-stream" });
@@ -45,7 +64,8 @@ window.fetchFile = async (url) => {
 let returnUrl = params.get("return") || "", returnNavigationToken = params.get("nav") || "", returnNeedsReload = false;
 function normalizeReaderReturnUrl(rawUrl) { try { const target = new URL(rawUrl || "/search/", location.origin); if (target.origin === location.origin && target.pathname === "/") return new URL("/search/", location.origin).href; return target.href; } catch (_) { return new URL("/search/", location.origin).href; } }
 try { const state = history.state, saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null"); let stateUrl = state && state.voiceReaderOverlay && state.readerUrl ? new URL(state.readerUrl, location.origin) : null; if (!stateUrl && saved && saved.shareUrl === location.href && saved.readerUrl) stateUrl = new URL(saved.readerUrl, location.origin); const cleanStateUrl = stateUrl && new URL(stateUrl.href); if (cleanStateUrl) { cleanStateUrl.searchParams.delete("return"); cleanStateUrl.searchParams.delete("nav"); } if (stateUrl && stateUrl.origin === location.origin && stateUrl.pathname === "/search/static/reader.html" && cleanStateUrl.href === location.href) { if (!returnUrl) returnUrl = stateUrl.searchParams.get("return") || ""; if (!returnNavigationToken) returnNavigationToken = stateUrl.searchParams.get("nav") || ""; returnNeedsReload = true; } } catch (_) {}
- let sourceName = (() => { try { const name = decodeURIComponent(new URL(sourceUrl, location.href).pathname.split("/").pop() || ""); return name.replace(/\.[^.]+$/, "") || "在线阅读"; } catch (_) { return "在线阅读"; } })(), content = document.querySelector("#content"), status = document.querySelector("#status"), initialTitle = params.get("title") || sourceName, ocrUrl = params.get("ocr") || "", readerPathLabel = params.get("path") || "", folderReturnUrl = params.get("folder_url") || "", returnHistoryKey = returnNavigationToken ? "reader-return:" + returnNavigationToken : ""; const loadingIndicator = document.createElement("div"); loadingIndicator.className = "reader-loading-indicator"; loadingIndicator.setAttribute("role", "status"); loadingIndicator.innerHTML = '<span class="reader-loading-spinner" aria-hidden="true"></span><span>正在加载正文...</span>'; content.appendChild(loadingIndicator);
+ let sourceName = (() => { try { const name = decodeURIComponent(new URL(sourceUrl, location.href).pathname.split("/").pop() || ""); return name.replace(/\.[^.]+$/, "") || "在线阅读"; } catch (_) { return "在线阅读"; } })(), content = document.querySelector("#content"), status = document.querySelector("#status"), initialTitle = params.get("title") || sourceName, readerPathLabel = params.get("path") || "", folderReturnUrl = params.get("folder_url") || "", returnHistoryKey = returnNavigationToken ? "reader-return:" + returnNavigationToken : ""; const loadingIndicator = document.createElement("div"); loadingIndicator.className = "reader-loading-indicator"; loadingIndicator.setAttribute("role", "status"); loadingIndicator.innerHTML = '<span class="reader-loading-spinner" aria-hidden="true"></span><span>正在加载正文...</span>'; content.appendChild(loadingIndicator);
+let chapterManifestObserver = null;
 const documentState = readerRuntime.state.document, navigationState = readerRuntime.state.navigation, searchState = readerRuntime.state.search, panelState = readerRuntime.state.panel;
 function updateDocumentState(patch) { return readerRuntime.update("document", patch); }
 function updateNavigationState(patch) { return readerRuntime.update("navigation", patch); }
@@ -179,7 +199,7 @@ async function activateFoliateTocEntry(entry, generation = nextReaderGeneration(
 document.addEventListener("click", async (event) => { const path = event.composedPath(), link = path.find((node) => node instanceof Element && node.matches?.("a[href]")), article = path.find((node) => node instanceof Element && node.matches?.(".foliate-continuous article[data-section]")); if (!link || !article || !epubRendition?.book) return; const raw = link.getAttribute("href") || ""; if (!raw || epubRendition.book.isExternal?.(raw) || /^(?:https?:|mailto:|tel:)/i.test(raw)) return; event.preventDefault(); const generation = nextReaderGeneration("navigation"), index = Number(article.dataset.section), section = epubRendition.book.sections.filter((item) => item.linear !== "no")[index]; let href = raw; try { href = section?.resolveHref?.(raw) || raw; } catch (_) {} try { await activateFoliateTocEntry({ href }, generation); } catch (error) { if (isReaderGenerationCurrent("navigation", generation)) console.warn("Reader navigation failed", error); } });
 function placeReadingProgress() { const panel = document.querySelector("#history-panel"), tocPanel = document.querySelector("#toc-panel"), tocList = tocPanel.querySelector(".panel-list"), noToc = loadingStatus.hidden && !navigationState.tocEntries.length && !mediaElement; progressTools.classList.toggle("reader-no-toc", noToc); tocPanel.querySelector(".panel-view-header strong").textContent = noToc ? "阅读状态" : "目录"; if (noToc && (progressTools.parentElement !== tocPanel || progressTools.nextElementSibling !== tocList)) tocPanel.insertBefore(progressTools, tocList); else if (!noToc && panel.lastElementChild !== progressTools) panel.appendChild(progressTools); }
 async function navigateReader(rawUrl) { await saveProgress(); if (window.parent !== window) window.parent.postMessage({ type: "voice-reader-open", url: rawUrl }, location.origin); else location.assign(rawUrl); }
-async function renderHistory() { const list = document.querySelector("#history-list"); list.textContent = ""; try { for (const entry of await VoiceOfMLReaderStore.list()) { const row = document.createElement("div"); row.className = "panel-item"; const link = document.createElement("button"); link.type = "button"; link.className = "panel-item-main"; link.textContent = entry.title || entry.url; link.addEventListener("click", () => navigateReader(entry.readerUrl)); const meta = document.createElement("small"); meta.textContent = `${entry.pageCount ? `第 ${entry.page || 1} / ${entry.pageCount} 页 · ` : ""}${new Date(entry.lastReadAt).toLocaleString()}`; const remove = document.createElement("button"); remove.type = "button"; remove.className = "panel-item-remove"; remove.textContent = "删除"; remove.addEventListener("click", async () => { await VoiceOfMLReaderStore.remove(entry.url); if (entry.url === sourceUrl) historySuppressed = true; row.remove(); if (!list.querySelector(".panel-item")) emptyPanel(list, "暂无阅读记录"); }); row.append(link, remove, meta); list.appendChild(row); } if (!list.childElementCount) emptyPanel(list, "暂无阅读记录"); filterPanel(document.querySelector("#history-view")); } catch (_) { emptyPanel(list, "无法读取本地记录"); } }
+async function renderHistory() { const list = document.querySelector("#history-list"); list.textContent = ""; try { for (const entry of await VoiceOfMLReaderStore.list()) { const row = document.createElement("div"); row.className = "panel-item"; const link = document.createElement("button"); link.type = "button"; link.className = "panel-item-main"; link.textContent = entry.title || entry.url; link.addEventListener("click", () => { const target = new URL(entry.readerUrl, location.href); if (!target.searchParams.get("title") && entry.title) target.searchParams.set("title", entry.title); navigateReader(target.href); }); const meta = document.createElement("small"); meta.textContent = `${entry.pageCount ? `第 ${entry.page || 1} / ${entry.pageCount} 页 · ` : ""}${new Date(entry.lastReadAt).toLocaleString()}`; const remove = document.createElement("button"); remove.type = "button"; remove.className = "panel-item-remove"; remove.textContent = "删除"; remove.addEventListener("click", async () => { await VoiceOfMLReaderStore.remove(entry.url); if (entry.url === sourceUrl) historySuppressed = true; row.remove(); if (!list.querySelector(".panel-item")) emptyPanel(list, "暂无阅读记录"); }); row.append(link, remove, meta); list.appendChild(row); } if (!list.childElementCount) emptyPanel(list, "暂无阅读记录"); filterPanel(document.querySelector("#history-view")); } catch (_) { emptyPanel(list, "无法读取本地记录"); } }
 function readerProgressPercent() { if (foliateContinuous) { const position = captureFoliateBookmarkPosition(), count = epubBook?.sections?.filter((section) => section.linear !== "no").length || 0, article = position && document.querySelector(`.foliate-continuous article[data-section="${position.foliateSection}"]`), fraction = article ? Math.max(0, Math.min(1, position.foliateOffset / Math.max(1, article.getBoundingClientRect().height))) : 0; return count && position ? Math.round((position.foliateSection + fraction) / count * 1000) / 10 : 0; } if (epubLocation) { const location = epubRendition && epubRendition.currentLocation ? epubRendition.currentLocation() : null, percentage = location && location.start && Number.isFinite(location.start.percentage) ? location.start.percentage : epubProgress; return Math.round(Math.max(0, Math.min(1, percentage)) * 1000) / 10; } if (htmlFrame && htmlFrame.contentDocument) { const doc = htmlFrame.contentDocument.documentElement, win = htmlFrame.contentWindow; return Math.round(Math.max(0, Math.min(1, win.scrollY / Math.max(1, doc.scrollHeight - win.innerHeight))) * 1000) / 10; } const position = viewport.scrollTop / Math.max(1, viewport.scrollHeight - viewport.clientHeight); return Math.round(Math.max(0, Math.min(1, position)) * 1000) / 10; }
 function excerptFromCaret(doc, root, x, y) { let node, offset = 0; const position = doc.caretPositionFromPoint ? doc.caretPositionFromPoint(x, y) : null; if (position) { node = position.offsetNode; offset = position.offset; } else if (doc.caretRangeFromPoint) { const range = doc.caretRangeFromPoint(x, y); if (range) { node = range.startContainer; offset = range.startOffset; } } if (!node || !root.contains(node)) return ""; if (node.nodeType !== Node.TEXT_NODE) { const first = doc.createTreeWalker(node, NodeFilter.SHOW_TEXT).nextNode(); if (!first) return ""; node = first; offset = 0; } const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT); walker.currentNode = node; let excerpt = node.data.slice(offset); while (excerpt.length < 220 && walker.nextNode()) excerpt += ` ${walker.currentNode.data}`; return excerpt.replace(/\s+/g, " ").trim().slice(0, 160); }
 function bookmarkExcerpt() { if (["image", "audio", "video"].includes(capability.mode)) return ""; if (capability.mode === "pdf") { const shell = pageAtMarker(), items = shell && shell._bookmarkTextItems; if (items && items.length) { const rect = shell.getBoundingClientRect(), targetY = Math.max(0, bookmarkRibbon.getBoundingClientRect().bottom - rect.top) / Math.max(1, rect.height); let nearest = 0, distance = Infinity; items.forEach((item, index) => { const nextDistance = Math.abs(item.y - targetY); if (nextDistance < distance) { nearest = index; distance = nextDistance; } }); return items.slice(nearest).map((item) => item.text).join(" ").replace(/\s+/g, " ").trim().slice(0, 160); } } const x = Math.round(viewport.getBoundingClientRect().width / 2), y = Math.round(bookmarkRibbon.getBoundingClientRect().bottom + 8), frames = [...document.querySelectorAll("iframe")].filter((frame) => { const rect = frame.getBoundingClientRect(); return rect.left <= x && rect.right >= x && rect.top <= y && rect.bottom >= y; }), frame = frames[frames.length - 1]; try { if (frame && frame.contentDocument && frame.contentDocument.body) { const rect = frame.getBoundingClientRect(); return excerptFromCaret(frame.contentDocument, frame.contentDocument.body, x - rect.left, y - rect.top); } } catch (_) {} const exact = excerptFromCaret(document, content, x, y); if (exact) return exact; const sourceText = foliateContinuous ? [...content.querySelectorAll(".foliate-continuous article[data-section]:not(.foliate-section-placeholder)")].map((article) => foliateSectionRoot(article).textContent).join(" ") : content.textContent, text = sourceText.replace(/\s+/g, " ").trim(), start = Math.floor(text.length * readerProgressPercent() / 100); return text.slice(start, start + 160).trim(); }
@@ -444,28 +464,72 @@ document.querySelector("#history").addEventListener("click", () => setReaderPane
 viewport.addEventListener("scroll", scheduleMarkerSync, { passive: true });
 viewport.addEventListener("scroll", scheduleFoliateScrollSync, { passive: true });
 viewport.addEventListener("scroll", foliateScrollAnchors.remember, { passive: true });
-window.addEventListener("pagehide", saveProgress);
 if (localReaderData?.repo) { const folderTarget = new URL("/search/", location.origin), folder = new URLSearchParams(); if (localReaderData.folder?.length) folder.set("folder_self", localReaderData.folder.join("/")); folderTarget.hash = "#/" + encodeURIComponent(localReaderData.repo) + (folder.toString() ? "?" + folder.toString() : ""); readerPath.onclick = () => window.parent !== window ? window.parent.postMessage({ type: "voice-reader-navigate", url: folderTarget.href }, location.origin) : location.assign(folderTarget.href); }
-window.addEventListener("pagehide", disposeReader, { once: true });
+window.addEventListener("pagehide", (event) => { saveProgress(); if (!event.persisted) disposeReader(); });
+window.addEventListener("pageshow", (event) => { if (!event.persisted || readerLifecycle.disposed) return; scheduleFoliateScrollSync(); updateProgressTools(); });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveProgress(); });
-  function validSource(raw) { try { const url = new URL(raw), bucketPath = url.searchParams.get("path") || ""; if (url.origin === "https://voiceofml-search.hf.space" && url.pathname === "/api/reader-bucket-resource" && /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?\/(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)$/.test(bucketPath)) return true; if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname)) return false; const readerAsset = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(?:pdf_manifest\.json|objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[a-z0-9-]+\/)?(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp|chapter-manifest\.json|document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)))$/.test(url.pathname); if (extension === "docx") return readerAsset; return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset; } catch (_) { return false; } }
+  function validSource(raw) { try { const url = new URL(raw), bucketPath = url.searchParams.get("path") || ""; if (url.origin === "https://voiceofml-search.hf.space" && url.pathname === "/api/reader-bucket-resource" && /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?\/(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)$/.test(bucketPath)) return true; if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname)) return false; const readerAsset = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(?:pdf_manifest\.json|objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[a-z0-9-]+\/)?(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp|chapter-manifest\.json|document\.(?:pdf|epub|mobi|azw|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4)))$/.test(url.pathname); if (extension === "docx") return readerAsset; return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset; } catch (_) { return false; } }
   function validFallback(raw) { try { const url = new URL(raw); return url.protocol === "https:" && ["huggingface.co", "hf-mirror.com"].includes(url.hostname) && /\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[a-z0-9-]+\/)?document\.pdf)$/.test(url.pathname); } catch (_) { return false; } }
 function validOcr(raw) { try { const url = new URL(raw); return url.protocol === "https:" && url.hostname === "voiceofml-search.hf.space" && url.pathname.startsWith("/txt/"); } catch (_) { return false; } }
 function loadScript(url) { return new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = url; script.onload = resolve; script.onerror = reject; document.head.appendChild(script); }); }
-function disposeReader() { if (readerLifecycle.disposed) return; updateDocumentState({ restorationReady: false }); nextReaderGeneration("navigation"); nextReaderGeneration("search"); nextReaderGeneration("bookmarks"); nextReaderGeneration("pdf"); formatAdapters.dispose(); foliateSectionVirtualizer?.dispose(); foliateChapterRepository?.dispose(); foliateSectionObserver?.disconnect(); loadingObserver.disconnect(); clearTimeout(saveTimer); clearTimeout(themeAnimationTimer); clearTimeout(panelAnimationTimer); if (markerFrame) cancelAnimationFrame(markerFrame); if (foliateScrollFrame) cancelAnimationFrame(foliateScrollFrame); if (epubSeekFrame) cancelAnimationFrame(epubSeekFrame); saveTimer = 0; themeAnimationTimer = 0; panelAnimationTimer = 0; markerFrame = 0; foliateScrollFrame = 0; epubSeekFrame = 0; try { const destroying = pdfDocument?.destroy?.(); if (destroying?.catch) destroying.catch(() => {}); } catch (_) {} pdfDocument = null; if (mediaElement) { mediaElement.pause(); mediaElement.removeAttribute("src"); mediaElement.load(); mediaElement = null; } foliateSectionVirtualizer = null; foliateChapterRepository = null; foliateSectionLoader = null; foliateSectionSettler = null; epubRendition = null; epubBook = null; htmlFrame = null; VoiceOfMLReaderStore.dispose?.(); readerRuntime.dispose(); }
+function disposeReader() { if (readerLifecycle.disposed) return; updateDocumentState({ restorationReady: false }); nextReaderGeneration("navigation"); nextReaderGeneration("search"); nextReaderGeneration("bookmarks"); nextReaderGeneration("pdf"); formatAdapters.dispose(); foliateSectionVirtualizer?.dispose(); foliateChapterRepository?.dispose(); foliateSectionObserver?.disconnect(); loadingObserver.disconnect(); clearTimeout(saveTimer); clearTimeout(themeAnimationTimer); clearTimeout(panelAnimationTimer); if (markerFrame) cancelAnimationFrame(markerFrame); if (foliateScrollFrame) cancelAnimationFrame(foliateScrollFrame); if (epubSeekFrame) cancelAnimationFrame(epubSeekFrame); saveTimer = 0; themeAnimationTimer = 0; panelAnimationTimer = 0; markerFrame = 0; foliateScrollFrame = 0; epubSeekFrame = 0; try { const destroying = pdfDocument?.destroy?.(); if (destroying?.catch) destroying.catch(() => {}); } catch (_) {} pdfDocument = null; if (mediaElement) { mediaElement.pause(); mediaElement.removeAttribute("src"); mediaElement.load(); mediaElement = null; } foliateSectionVirtualizer = null; foliateChapterRepository = null; foliateSectionLoader = null; foliateSectionSettler = null; epubRendition = null; epubBook = null; chapterManifestObserver?.disconnect(); chapterManifestObserver = null; htmlFrame = null; VoiceOfMLReaderStore.dispose?.(); readerRuntime.dispose(); }
 function fail(message, code = "READER_PARSE") { if (readerLifecycle.disposed) return; readerRuntime.fail(code); content.dataset.errorCode = code; loadingStatus.hidden = true; loadingIndicator.remove(); const visibleMessage = `${message} [${readerLifecycle.stage}]`; content.innerHTML = `<div class="reader-error"></div>`; content.querySelector(".reader-error").textContent = visibleMessage; status.textContent = "无法打开"; }
 function fetchWithReaderTimeout(url, timeoutMs = READER_PROXY_TIMEOUT_MS) { return readerRequestManager.request(url, timeoutMs); }
 function fetchReaderResponse() { if (String(sourceUrl).includes("/api/reader-bucket-resource?")) return fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS); return fetchWithReaderTimeout(contentUrl, READER_PROXY_TIMEOUT_MS).then((response) => response.ok ? response : fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS), () => fetchWithReaderTimeout(sourceUrl, READER_PROXY_TIMEOUT_MS)); }
 async function validateArchiveResponse(response) { if (!response.ok) return response; const bytes = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes); VoiceOfMLReaderSecurity.inspectZip(bytes); return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers }); }
-function sanitizeReaderDocument(doc) { for (const node of doc.querySelectorAll("script,iframe,object,embed,base,form,link,style")) node.remove(); for (const element of doc.querySelectorAll("*")) for (const attribute of [...element.attributes]) { const name = attribute.name.toLowerCase(), value = String(attribute.value || "").trim(); if (name.startsWith("on") || name === "srcdoc" || ((name === "href" || name === "xlink:href" || name === "src") && /^javascript:/i.test(value))) element.removeAttribute(attribute.name); } return doc; }
+ const EPUB_HTML_TAGS = new Set("a,abbr,address,area,article,aside,audio,b,base,bdi,bdo,blockquote,body,br,button,canvas,caption,cite,code,col,colgroup,data,datalist,dd,del,details,dfn,dialog,div,dl,dt,em,fieldset,figcaption,figure,footer,form,h1,h2,h3,h4,h5,h6,head,header,hgroup,hr,html,i,iframe,img,input,ins,kbd,label,legend,li,link,main,map,mark,menu,meta,meter,nav,noscript,object,ol,optgroup,option,output,p,picture,pre,progress,q,rp,rt,ruby,s,samp,script,search,section,select,slot,small,source,span,strong,style,sub,summary,sup,table,tbody,td,template,textarea,tfoot,th,thead,time,title,tr,track,u,ul,var,video,wbr".split(","));
+
+ function normalizeEpubDocument(doc) {
+   // Legacy CHM conversions can use an XHTML prefix even in HTML content.
+   for (const element of [...doc.querySelectorAll("*")]) {
+     const tagName = String(element.tagName || "").toLowerCase();
+     const localName = tagName.includes(":") ? tagName.slice(tagName.lastIndexOf(":") + 1) : tagName;
+     if (tagName === localName || !EPUB_HTML_TAGS.has(localName)) continue;
+     const replacement = doc.createElement(localName);
+     for (const attribute of [...element.attributes]) {
+       if (!attribute.name.toLowerCase().startsWith("xmlns:")) replacement.setAttribute(attribute.name, attribute.value);
+     }
+     while (element.firstChild) replacement.appendChild(element.firstChild);
+     element.replaceWith(replacement);
+   }
+   return doc;
+ }
+
+ function sanitizeReaderDocument(doc, { preserveEpubStyles = false } = {}) {
+   const blocked = preserveEpubStyles ? "script,iframe,object,embed,base,form" : "script,iframe,object,embed,base,form,link,style";
+   for (const node of doc.querySelectorAll(blocked)) node.remove();
+   if (preserveEpubStyles) {
+     for (const link of doc.querySelectorAll("link")) {
+       const rel = (link.getAttribute("rel") || "").toLowerCase().split(/\s+/);
+       if (!rel.includes("stylesheet") || !/^blob:/i.test(link.getAttribute("href") || "")) link.remove();
+     }
+     for (const style of doc.querySelectorAll("style")) {
+       if (/(?:@import\s+|url\s*\(\s*[\"']?)(?:https?:|\/\/|javascript:)/i.test(style.textContent || "")) style.remove();
+     }
+   }
+   for (const element of doc.querySelectorAll("*")) for (const attribute of [...element.attributes]) {
+     const name = attribute.name.toLowerCase(), value = String(attribute.value || "").trim();
+     if (name.startsWith("on") || name === "srcdoc" || ((name === "href" || name === "xlink:href" || name === "src") && /^javascript:/i.test(value))) element.removeAttribute(attribute.name);
+   }
+   return doc;
+ }
+
+ function sanitizeEpubDocument(doc) {
+   return sanitizeReaderDocument(normalizeEpubDocument(doc), { preserveEpubStyles: true });
+ }
+
+ function epubContentBody(doc) {
+   const nestedBody = [...doc.querySelectorAll("body")].find((body) => body !== doc.body);
+   return nestedBody || doc.body || doc.documentElement;
+ }
 function loadPdfTaskWithTimeout(pdfjs, options, url) { const task = pdfjs.getDocument(options(url)); return new Promise((resolve, reject) => { const timeout = setTimeout(() => { task.destroy().catch(() => {}); reject(new Error("reader PDF timeout")); }, PDF_PROXY_TIMEOUT_MS); task.promise.then((document) => { clearTimeout(timeout); resolve(document); }, (error) => { clearTimeout(timeout); reject(error); }); }); }
 function loadPdfWithTimeout(pdfjs, options) { return loadPdfTaskWithTimeout(pdfjs, options, contentUrl).catch((error) => { if (error && error.name === "AbortError") throw error; return loadPdfTaskWithTimeout(pdfjs, options, sourceUrl); }); }
 async function renderPdfPages(prepared) {
   const response = await prepared;
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const manifest = JSON.parse(await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes));
-  if (manifest.version !== 1 || manifest.kind !== "pdf-pages" || !Array.isArray(manifest.pages) || !manifest.pages.length) throw new Error("PDF_MANIFEST_INVALID");
+  const manifest = VoiceOfMLReaderSecurity.validatePdfPageManifest(JSON.parse(await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)));
   const entries = manifest.pages.map((item) => ({ page: Number(item.page), path: String(item.path || "") })).sort((a, b) => a.page - b.page);
+  if (entries.length > VoiceOfMLReaderSecurity.LIMITS.pdfPages) throw new Error("READER_RESOURCE_LIMIT");
   const rootMatch = entries[0]?.path.match(/^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?)\/pages\//);
   if (!rootMatch || entries.some((item, index) => item.page !== index + 1 || !new RegExp(`^${rootMatch[1]}/pages/page-[0-9]{6}\\.webp$`).test(item.path))) throw new Error("PDF_MANIFEST_INVALID");
   pdfPageManifest = { entries }; updateDocumentState({ pageCount: entries.length }); pageInput.max = String(documentState.pageCount); document.querySelector("#page-total").textContent = `/ ${documentState.pageCount}`; status.textContent = `${documentState.pageCount} 页`;
@@ -494,7 +558,7 @@ function acquirePdfRenderSlot(priority = false) { const limit = matchMedia("(max
 function releasePdfRenderSlot() { pdfActiveRenders = Math.max(0, pdfActiveRenders - 1); const resume = pdfRenderWaiters.shift(); if (resume) resume(); }
 function trimPdfCanvases() { const limit = matchMedia("(max-width: 700px)").matches ? 7 : 11, rendered = [...content.querySelectorAll('.reader-page[data-render-state="rendered"]')]; if (rendered.length <= limit) return; rendered.sort((a, b) => Math.abs(Number(b.dataset.page) - documentState.page) - Math.abs(Number(a.dataset.page) - documentState.page) || Number(a.dataset.renderUsedAt || 0) - Number(b.dataset.renderUsedAt || 0)); while (rendered.length > limit) { const shell = rendered.shift(); if (Number(shell.dataset.page) === documentState.page && rendered.length >= limit) { rendered.push(shell); continue; } const canvas = shell.querySelector("canvas"); canvas.width = 0; canvas.height = 0; canvas.classList.remove("ready"); shell.dataset.renderState = "idle"; } }
 function rerenderVisiblePdfPages() { nextReaderGeneration("pdf"); for (const shell of content.querySelectorAll(".reader-page")) { const rect = shell.getBoundingClientRect(); if (rect.bottom >= -1200 && rect.top <= innerHeight + 1200) renderPdfShell(shell, true); } }
-async function renderText(markdown, prepared) { const response = await prepared.response; if (!response.ok) throw new Error(`HTTP ${response.status}`); if (!markdown) await renderPlainText(response); else { const bytes = await VoiceOfMLReaderSecurity.readBytes(response), text = new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes); await prepared.engines; const article = document.createElement("article"); article.className = "reader-markdown"; article.innerHTML = DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } }); content.appendChild(article); const headings = [...article.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter((heading) => heading.textContent.trim()); setToc(headings.map((heading) => ({ label: heading.textContent.trim(), depth: Number(heading.tagName.slice(1)) - 1, activate: () => heading.scrollIntoView({ block: "start" }) }))); } status.textContent = "已加载"; }
+async function renderText(markdown, prepared) { const response = await prepared.response; if (!response.ok) throw new Error(`HTTP ${response.status}`); if (!markdown) await renderPlainText(response); else { const bytes = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.documentBytes), text = new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes); await prepared.engines; const article = document.createElement("article"); article.className = "reader-markdown"; article.innerHTML = DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } }); content.appendChild(article); const headings = [...article.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter((heading) => heading.textContent.trim()); setToc(headings.map((heading) => ({ label: heading.textContent.trim(), depth: Number(heading.tagName.slice(1)) - 1, activate: () => heading.scrollIntoView({ block: "start" }) }))); } status.textContent = "已加载"; }
 function sanitizeOfflineHtml(text) { const clean = DOMPurify.sanitize(text, { USE_PROFILES: { html: true }, ADD_TAGS: ["style"], FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"], FORBID_ATTR: ["action", "formaction", "srcdoc"], ALLOWED_URI_REGEXP: /^data:image\/(?:gif|png|jpeg|webp);/i }), template = document.createElement("template"); template.innerHTML = clean; for (const style of template.content.querySelectorAll("style")) style.textContent = style.textContent.replace(/@import[^;]+;|url\s*\([^)]*\)/gi, ""); for (const element of template.content.querySelectorAll("[style]")) element.setAttribute("style", element.getAttribute("style").replace(/@import[^;]+;|url\s*\([^)]*\)/gi, "")); return template.innerHTML; }
 async function renderHtml(prepared) { const response = await prepared.response; if (!response.ok) throw new Error(`HTTP ${response.status}`); const bytes = await VoiceOfMLReaderSecurity.readBytes(response), text = new TextDecoder(detectHtmlEncoding(bytes, documentState.title)).decode(bytes); await prepared.engine; const clean = sanitizeOfflineHtml(text), frame = document.createElement("iframe"); htmlFrame = frame; frame.className = "html-frame"; frame.setAttribute("sandbox", "allow-same-origin"); frame.setAttribute("referrerpolicy", "no-referrer"); frame.style.colorScheme = "only light"; const frameLoaded = new Promise((resolve) => frame.addEventListener("load", () => { repairHtmlContrast(frame); frame.contentDocument.documentElement.style.zoom = String(documentState.zoom); if (documentState.restoredEntry && Number.isFinite(documentState.restoredEntry.htmlScrollTop)) frame.contentWindow.scrollTo(0, documentState.restoredEntry.htmlScrollTop); frame.contentWindow.addEventListener("scroll", scheduleSave, { passive: true }); const headings = [...frame.contentDocument.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter((heading) => heading.textContent.trim()); setToc(headings.map((heading) => ({ label: heading.textContent.trim(), depth: Number(heading.tagName.slice(1)) - 1, activate: () => heading.scrollIntoView({ block: "start" }) }))); resolve(); }, { once: true })); frame.srcdoc = clean + '<meta name="color-scheme" content="only light"><style>:root{color-scheme:only light!important;background:#fff!important}html,body{min-height:100%;background:#fff!important;color:#111!important}</style>'; content.appendChild(frame); await frameLoaded; status.textContent = "HTML"; }
 function detectHtmlEncoding(bytes, hint = "") { const probe = String.fromCharCode(...bytes.subarray(0, 8192)), match = probe.match(/charset\s*=\s*["']?\s*([a-z0-9._:-]+)/i); if (match) { const label = ({ gb2312: "gb18030", "gb-2312": "gb18030", gbk: "gb18030", "x-gbk": "gb18030" })[match[1].toLowerCase()] || match[1]; try { new TextDecoder(label); return label; } catch (_) {} } return detectTextEncoding(bytes, hint); }
@@ -504,14 +568,19 @@ async function renderPlainText(response) { const pre = document.createElement("p
   const textNode = document.createTextNode("");
   pre.appendChild(textNode);
   content.appendChild(pre);
-  if (!response.body || !response.body.getReader) { const bytes = new Uint8Array(await response.arrayBuffer());
+  const limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes;
+  VoiceOfMLReaderSecurity.assertResponseSize(response, limit);
+  if (!response.body || !response.body.getReader) { const bytes = await VoiceOfMLReaderSecurity.readBytes(response, limit);
   textNode.data = new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes).replace(/\ufffd/g, "");
   return;
   } const reader = response.body.getReader(), chunks = [], asciiPreview = [];
+  let totalBytes = 0;
   let sampleSize = 0, displayedSampleSize = 0, streamDone = false, asciiPreviewPossible = true;
   while (!streamDone && sampleSize < 65540) { const { value, done } = await reader.read();
   streamDone = done;
-  if (value && value.length) { chunks.push(value);
+  if (value && value.length) { totalBytes += value.byteLength;
+  if (totalBytes > limit) { await reader.cancel(); throw new Error("READER_RESOURCE_LIMIT"); }
+  chunks.push(value);
   sampleSize += value.length;
   if (!displayedSampleSize && asciiPreviewPossible) { for (const byte of value) { if (!byte || byte >= 128) { asciiPreviewPossible = false;
   break;
@@ -538,14 +607,17 @@ async function renderPlainText(response) { const pre = document.createElement("p
   while (!streamDone) { const { value, done } = await reader.read();
   if (done) { streamDone = true;
   break;
-  } pending += decoder.decode(value, { stream: true }).replace(/\ufffd/g, "");
+  }
+  totalBytes += value?.byteLength || 0;
+  if (totalBytes > limit) { await reader.cancel(); throw new Error("READER_RESOURCE_LIMIT"); }
+  pending += decoder.decode(value, { stream: true }).replace(/\ufffd/g, "");
   scheduleFlush();
   } pending += decoder.decode().replace(/\ufffd/g, "");
   if (frame) cancelAnimationFrame(frame);
   flush();
   }
 function detectTextEncoding(bytes, hint = "") { if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8"; if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le"; if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be"; const evenNulls = bytes.filter((value, index) => !value && index % 2 === 0).length, oddNulls = bytes.filter((value, index) => !value && index % 2 === 1).length; if (oddNulls > bytes.length / 8 && oddNulls > evenNulls * 4) return "utf-16le"; if (evenNulls > bytes.length / 8 && evenNulls > oddNulls * 4) return "utf-16be"; try { new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true }); return "utf-8"; } catch (_) {} if (/[\u0400-\u04ff]/.test(hint)) return "windows-1251"; const candidates = /[\u3400-\u9fff]/.test(hint) ? ["gb18030", "big5"] : ["gb18030", "big5", "windows-1251", "windows-1252"]; let best = "gb18030", bestScore = -Infinity; for (const encoding of candidates) { try { const text = new TextDecoder(encoding).decode(bytes), controls = (text.match(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g) || []).length, replacements = (text.match(/\ufffd/g) || []).length, cjk = (text.match(/[\u3400-\u9fff]/g) || []).length, cyrillic = (text.match(/[\u0400-\u04ff]/g) || []).length, commonCjk = (text.match(/[的一是在不了有和人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经之进着等部家自理起现实都体制当本性应开合因由然前外政社义事相全与关各重新内正反明原利质向道命此变结解问意建公系军情者立代通题党程展料员革文总品活长求老基资级图统知组别期论运农指区战任处理世]/g) || []).length, score = Math.max(cjk + commonCjk * 5, cyrillic) - controls * 20 - replacements * 40; if (score > bestScore) { best = encoding; bestScore = score; } } catch (_) {} } return best; }
-async function renderDocx(prepared) { const [response] = await prepared; if (!response.ok) throw new Error(`HTTP ${response.status}`); const bytes = await response.arrayBuffer(), styles = document.createElement("div"), body = document.createElement("div"); styles.className = "docx-styles"; body.className = "docx-body"; content.append(styles, body); await docx.renderAsync(bytes, body, styles, { className: "reader-docx", inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: false, useBase64URL: true, renderHeaders: true, renderFooters: true, renderFootnotes: true, renderEndnotes: true, renderChanges: false, renderComments: false, renderAltChunks: false, debug: false }); body.classList.toggle("reader-document-dark", readerTheme === "dark"); if (!(body.textContent || "").trim() && !body.querySelector("img, table, svg, canvas")) throw new Error("DOCX rendered no supported content"); const pages = [...body.querySelectorAll(":scope > .reader-docx-wrapper > section.reader-docx")]; if (pages.length) { updateDocumentState({ pageCount: pages.length }); pageInput.max = String(documentState.pageCount); document.querySelector("#page-total").textContent = `/ ${documentState.pageCount}`; document.querySelector(".page-controls").hidden = false; pages.forEach((page, index) => { page.classList.add("reader-docx-page"); page.dataset.page = String(index + 1); }); const headings = [...body.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter((heading) => heading.textContent.trim()); setToc(headings.map((heading) => ({ label: heading.textContent.trim(), depth: Number(heading.tagName.slice(1)) - 1, activate: () => heading.scrollIntoView({ block: "start" }) }))); if (documentState.restoredEntry?.page) await goToPage(documentState.restoredEntry.page); else syncCurrentPageFromMarker(); } for (const link of body.querySelectorAll("a[href]")) { const href = link.getAttribute("href") || ""; if (!href.startsWith("#") && !/^https?:\/\//i.test(href)) link.removeAttribute("href"); else if (!href.startsWith("#")) { link.target = "_blank"; link.rel = "noopener noreferrer"; } } status.textContent = documentState.pageCount ? `${documentState.pageCount} 页` : "DOCX"; }
+async function renderDocx(prepared) { const [response] = await prepared; if (!response.ok) throw new Error(`HTTP ${response.status}`); const bytes = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.documentBytes), styles = document.createElement("div"), body = document.createElement("div"); styles.className = "docx-styles"; body.className = "docx-body"; content.append(styles, body); await docx.renderAsync(bytes, body, styles, { className: "reader-docx", inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: false, useBase64URL: true, renderHeaders: true, renderFooters: true, renderFootnotes: true, renderEndnotes: true, renderChanges: false, renderComments: false, renderAltChunks: false, debug: false }); body.classList.toggle("reader-document-dark", readerTheme === "dark"); if (!(body.textContent || "").trim() && !body.querySelector("img, table, svg, canvas")) throw new Error("DOCX rendered no supported content"); const pages = [...body.querySelectorAll(":scope > .reader-docx-wrapper > section.reader-docx")]; if (pages.length) { updateDocumentState({ pageCount: pages.length }); pageInput.max = String(documentState.pageCount); document.querySelector("#page-total").textContent = `/ ${documentState.pageCount}`; document.querySelector(".page-controls").hidden = false; pages.forEach((page, index) => { page.classList.add("reader-docx-page"); page.dataset.page = String(index + 1); }); const headings = [...body.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter((heading) => heading.textContent.trim()); setToc(headings.map((heading) => ({ label: heading.textContent.trim(), depth: Number(heading.tagName.slice(1)) - 1, activate: () => heading.scrollIntoView({ block: "start" }) }))); if (documentState.restoredEntry?.page) await goToPage(documentState.restoredEntry.page); else syncCurrentPageFromMarker(); } for (const link of body.querySelectorAll("a[href]")) { const href = link.getAttribute("href") || ""; if (!href.startsWith("#") && !/^https?:\/\//i.test(href)) link.removeAttribute("href"); else if (!href.startsWith("#")) { link.target = "_blank"; link.rel = "noopener noreferrer"; } } status.textContent = documentState.pageCount ? `${documentState.pageCount} 页` : "DOCX"; }
 function renderMedia(mode) { const media = document.createElement(mode); mediaElement = media; media.className = mode === "audio" ? "reader-audio" : "reader-video"; media.controls = true; media.preload = "metadata"; if (mode === "video") media.playsInline = true; media.addEventListener("loadedmetadata", () => { if (documentState.restoredEntry && Number.isFinite(documentState.restoredEntry.mediaTime)) media.currentTime = documentState.restoredEntry.mediaTime; }); media.addEventListener("timeupdate", () => { const time = formatMediaTime(media.currentTime), timeNode = document.querySelector(".media-panel-time"); if (timeNode) timeNode.textContent = `${time} / ${formatMediaTime(media.duration)}`; scheduleSave(); }, { passive: true }); media.addEventListener("error", () => fail("媒体加载失败，请检查网络后重试，或下载原文件。", "READER_MEDIA"), { once: true }); media.src = contentUrl; content.appendChild(media); status.textContent = mode === "audio" ? "音频" : "视频"; }
 new MutationObserver(() => { for (const row of document.querySelectorAll("#bookmarks-list .panel-item")) if (!row.querySelector(".panel-item-edit")) { const edit = document.createElement("button"); edit.type = "button"; edit.className = "panel-item-edit"; edit.textContent = "编辑"; edit.onclick = () => { const main = row.querySelector(".panel-item-main"), excerpt = row.querySelector(".bookmark-excerpt"), bookmark = { label: main.textContent, excerpt: excerpt ? excerpt.textContent : "" }; updatePanelState({ editingBookmark: bookmark }); bookmarkLabelInput.value = bookmark.label; bookmarkExcerptInput.value = bookmark.excerpt; bookmarkPopover.hidden = false; setBookmarkDialogModal(true); bookmarkLabelInput.focus(); }; row.insertBefore(edit, row.querySelector(".panel-item-remove")); } }).observe(document.querySelector("#bookmarks-list"), { childList: true });
 document.addEventListener("click", async (event) => { if (!event.target.closest(".panel-item-edit")) return; const row = event.target.closest(".panel-item"), rows = [...document.querySelectorAll("#bookmarks-list .panel-item")], index = rows.indexOf(row), entries = panelState.showingAllBookmarks ? await VoiceOfMLReaderStore.listAllBookmarks() : await VoiceOfMLReaderStore.listBookmarks(sourceUrl); if (entries[index]) { updatePanelState({ editingBookmark: { ...entries[index] } }); document.querySelector("#bookmark-prompt").textContent = `编辑书签 · 阅读进度 ${(Number(panelState.editingBookmark.progress) || 0).toFixed(1)}%`; bookmarkLabelInput.value = panelState.editingBookmark.label || ""; bookmarkExcerptInput.value = panelState.editingBookmark.excerpt || ""; } }, true);
@@ -669,9 +741,8 @@ fullSearchButton.addEventListener("click", (event) => { const panel = document.q
 fullSearchView.querySelector("#full-search-clear").addEventListener("click", clearFullSearchMarks, true);
 
 async function renderFoliate(prepared) {
-  const response = await fetchReaderResponse();
+  const [response] = await Promise.all([fetchReaderResponse(), import("/search/static/foliate-reader/view.js?reader-v1")]);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  await import("/search/static/foliate-reader/view.js?reader-v1");
   const bytes = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes);
   if (VoiceOfMLReaderSecurity.isZipContainer(extension)) VoiceOfMLReaderSecurity.inspectZip(bytes);
   const view = document.createElement("foliate-view"),
@@ -694,47 +765,65 @@ async function renderFoliate(prepared) {
     (section) => section.linear !== "no",
   );
   const createSection = async (index) => {
-      const section = sections[index], doc = sanitizeReaderDocument(await section.createDocument()),
+      const section = sections[index], doc = sanitizeEpubDocument(await section.createDocument()),
         assetUrl = (value) => {
+          const raw = String(value || "").trim();
+          if (/^(?:data:image\/(?:gif|png|jpeg|webp);|blob:)/i.test(raw)) return raw;
+          if (!raw || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(raw)) return "";
           try {
-            const path = section.resolveHref(value);
+            const path = String(section.resolveHref(raw) || "").trim();
+            if (!path || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(path)) return "";
             return `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(sourceUrl)}&path=${encodeURIComponent(path)}`;
           } catch (_) {
-            return value;
+            return "";
           }
+        },
+        setAsset = (element, name) => {
+          const value = element.getAttribute(name);
+          if (!value) return;
+          const resolved = assetUrl(value);
+          if (resolved) element.setAttribute(name, resolved);
+          else element.removeAttribute(name);
         };
       for (const element of doc.querySelectorAll(
         "img[src],source[src],audio[src],video[src],video[poster]",
       ))
-        for (const name of ["src", "poster"]) {
-          const value = element.getAttribute(name);
-          if (value && !/^(?:data:|blob:|https?:)/i.test(value))
-            element.setAttribute(name, assetUrl(value));
-        }
+        for (const name of ["src", "poster"]) setAsset(element, name);
       for (const element of doc.querySelectorAll("[srcset]")) {
         const value = element.getAttribute("srcset");
-        if (value)
-          element.setAttribute(
-            "srcset",
-            value
-              .split(",")
-              .map((part) => {
-                const [url, ...descriptor] = part.trim().split(/\s+/);
-                return [assetUrl(url), ...descriptor].join(" ");
-              })
-              .join(", "),
-          );
+        if (!value) continue;
+        const candidates = value.split(",").map((part) => {
+          const [url, ...descriptor] = part.trim().split(/\s+/), resolved = assetUrl(url);
+          return resolved ? [resolved, ...descriptor].join(" ") : "";
+        }).filter(Boolean);
+        if (candidates.length) element.setAttribute("srcset", candidates.join(", "));
+        else element.removeAttribute("srcset");
       }
-      for (const image of doc.querySelectorAll("image")) { const value = image.getAttributeNS("http://www.w3.org/1999/xlink", "href") || image.getAttribute("xlink:href") || image.getAttribute("href"); if (value && !/^(?:data:|blob:|https?:|#)/i.test(value)) { const proxy = assetUrl(value); image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", proxy); image.setAttribute("href", proxy); } }
+      for (const image of doc.querySelectorAll("image,[xlink\\:href]")) {
+        const value = image.getAttributeNS("http://www.w3.org/1999/xlink", "href") || image.getAttribute("xlink:href") || image.getAttribute("href");
+        if (!value || value.startsWith("#")) continue;
+        const resolved = assetUrl(value);
+        if (resolved) {
+          image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", resolved);
+          image.setAttribute("href", resolved);
+        } else {
+          image.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
+          image.removeAttribute("xlink:href");
+          image.removeAttribute("href");
+        }
+      }
       for (const link of doc.querySelectorAll("a[href]")) { const href = link.getAttribute("href") || ""; if (/^(?:https?:|mailto:|tel:)/i.test(href)) { link.target = "_blank"; link.rel = "noopener noreferrer"; } }
-      const article = document.createElement("article");
+       const styles = [...doc.querySelectorAll("style,link")].map((node) => node.cloneNode(true));
+       for (const node of doc.querySelectorAll("style,link")) node.remove();
+       const article = document.createElement("article");
       article.className = "foliate-continuous-section";
       article.dataset.section = String(index);
       const shadow = article.attachShadow({ mode: "open" }), baseStyle = document.createElement("style"), sectionBody = document.createElement("div");
       baseStyle.textContent = ":host{display:block;color:inherit}*{box-sizing:border-box}.reader-section-body{display:block;color:inherit;line-height:inherit}.reader-section-body>:first-child{margin-top:0!important}a{color:var(--reader-book-link)!important}img,svg,video{max-width:100%;height:auto}mark.full-search-highlight{background:#ffd54f;color:#111}";
       sectionBody.className = "reader-section-body";
-      sectionBody.innerHTML = doc.body?.innerHTML || "";
-       shadow.append(baseStyle, sectionBody);
+       const body = epubContentBody(doc);
+       sectionBody.innerHTML = body?.innerHTML || "";
+       shadow.append(baseStyle, ...styles, sectionBody);
       return article;
   };
   const observer = new IntersectionObserver(
@@ -794,6 +883,57 @@ async function renderFoliate(prepared) {
   status.textContent = "EPUB";
 }
 
+function readerAssetFamily(raw) {
+  try {
+    const url = new URL(raw, location.href);
+    if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname)) return null;
+    const match = url.pathname.match(/^(\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?)\//i);
+    return match ? Object.freeze({ origin: url.origin, rootPath: `${match[1]}/` }) : null;
+  } catch (_) {
+    return null;
+  }
+}
+function trustedChapterUrl(raw, base, family) {
+  if (typeof raw !== "string" || !raw.trim() || !family || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("/") || raw.includes("\\")) return null;
+  let decoded;
+  try { decoded = decodeURIComponent(raw); } catch (_) { return null; }
+  if (decoded.includes("\\") || decoded.startsWith("/") || decoded.split("/").some((part) => !part)) return null;
+  try {
+    const url = new URL(raw, base);
+    return url.origin === family.origin && url.pathname.startsWith(family.rootPath) ? url : null;
+  } catch (_) {
+    return null;
+  }
+}
+function sanitizeChapterResources(doc, base, family) {
+  const local = (value) => /^(?:data:image\/(?:gif|png|jpeg|webp);|blob:|#)/i.test(value);
+  const resolve = (value) => local(value) ? value : trustedChapterUrl(value, base, family)?.href || "";
+  for (const element of doc.querySelectorAll("*[src], *[poster], *[data], *[href], *[xlink\\:href]")) {
+    for (const name of ["src", "poster", "data", "href", "xlink:href"]) {
+      if (!element.hasAttribute(name)) continue;
+      const value = String(element.getAttribute(name) || "").trim();
+      if (name === "href" && element.matches("a[href]")) {
+        if (/^(?:https?:|mailto:|tel:|#)/i.test(value)) {
+          if (/^https?:/i.test(value)) { element.target = "_blank"; element.rel = "noopener noreferrer"; }
+        } else {
+          const target = resolve(value);
+          if (target) element.setAttribute(name, target); else element.removeAttribute(name);
+        }
+        continue;
+      }
+      const target = resolve(value);
+      if (target) element.setAttribute(name, target); else element.removeAttribute(name);
+    }
+  }
+  for (const element of doc.querySelectorAll("[srcset]")) {
+    const values = String(element.getAttribute("srcset") || "").split(",").map((part) => {
+      const [value, ...descriptor] = part.trim().split(/\s+/), target = resolve(value);
+      return target ? [target, ...descriptor].join(" ") : "";
+    }).filter(Boolean);
+    if (values.length) element.setAttribute("srcset", values.join(", ")); else element.removeAttribute("srcset");
+  }
+}
+
 // Chapter bundles are intentionally outside the EPUB engine: the manifest and
 // first chapter are cheap to load, while later chapters enter through the viewport.
 async function renderChapterManifest(prepared) {
@@ -805,71 +945,76 @@ async function renderChapterManifest(prepared) {
   content.appendChild(frame);
   const loaded = new Set(),
     pending = new Map(),
-    base = chapterManifestUrl || sourceUrl;
+    base = chapterManifestUrl || sourceUrl,
+    chapterFamily = readerAssetFamily(base);
+  if (!chapterFamily) throw new Error("EPUB_INVALID");
+  const insertChapterInOrder = (article) => {
+    const index = Number(article.dataset.chapter);
+    for (const sentinel of frame.querySelectorAll(`.reader-chapter-sentinel[data-chapter="${index}"]`)) {
+      chapterManifestObserver?.unobserve(sentinel);
+      sentinel.remove();
+    }
+    const next = [...frame.children].find((node) => Number(node.dataset.chapter) > index);
+    frame.insertBefore(article, next || null);
+  };
+  const ensureChapterSentinel = (chapter) => {
+    if (loaded.has(chapter.index) || frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`)) return;
+    let sentinel = frame.querySelector(`.reader-chapter-sentinel[data-chapter="${chapter.index}"]`);
+    if (!sentinel) {
+      sentinel = document.createElement("div");
+      sentinel.className = "reader-chapter-sentinel";
+      sentinel.dataset.chapter = String(chapter.index);
+      const next = [...frame.children].find((node) => Number(node.dataset.chapter) > chapter.index);
+      frame.insertBefore(sentinel, next || null);
+    }
+    chapterManifestObserver?.observe(sentinel);
+  };
+  const setChapterToc = () => setToc(manifest.chapters.map((item) => ({
+    label: item.title || `章节 ${item.index}`,
+    depth: 0,
+    activate: async () => {
+      await load(item);
+      const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${item.index}"]`);
+      if (node) node.scrollIntoView({ block: "start" });
+    },
+  })));
   const load = async (chapter) => {
     if (loaded.has(chapter.index)) return;
     if (pending.has(chapter.index)) return pending.get(chapter.index);
     const task = (async () => {
-      const url = new URL(chapter.path, base).href;
+      const url = trustedChapterUrl(chapter.path, base, chapterFamily);
+      if (!url) throw new Error("EPUB_INVALID");
       let result = await fetchWithReaderTimeout(
-        `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url)}`,
+        `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url.href)}`,
         READER_PROXY_TIMEOUT_MS,
       );
       if (!result.ok)
-        result = await fetchWithReaderTimeout(url, READER_PROXY_TIMEOUT_MS);
+        result = await fetchWithReaderTimeout(url.href, READER_PROXY_TIMEOUT_MS);
       if (!result.ok) throw new Error(`HTTP ${result.status}`);
-      const doc = sanitizeReaderDocument(new DOMParser().parseFromString(
+      const doc = sanitizeReaderDocument(normalizeEpubDocument(new DOMParser().parseFromString(
         await VoiceOfMLReaderSecurity.readText(result, VoiceOfMLReaderSecurity.LIMITS.chapterBytes),
         "text/html",
-      ));
-      for (const element of doc.querySelectorAll("*")) {
-        for (const name of ["src", "href", "poster"])
-          if (element.hasAttribute(name)) {
-            const value = element.getAttribute(name);
-            if (!value.startsWith("#")) {
-              try {
-                element.setAttribute(name, new URL(value, url).href);
-              } catch (_) {
-                element.removeAttribute(name);
-              }
-            }
-          }
-      }
+      )));
+      sanitizeChapterResources(doc, url.href, chapterFamily);
       const article = document.createElement("article");
       article.className = "reader-markdown reader-epub-chapter";
       article.dataset.chapter = String(chapter.index);
       article.innerHTML = doc.body ? doc.body.innerHTML : "";
-      frame.appendChild(article);
+      insertChapterInOrder(article);
       loaded.add(chapter.index);
-      pending.delete(chapter.index);
-      setToc(
-        manifest.chapters.map((item) => ({
-          label: item.title || `章节 ${item.index}`,
-          depth: 0,
-          activate: async () => {
-            await load(item);
-            const node = frame.querySelector(
-              `.reader-epub-chapter[data-chapter="${item.index}"]`,
-            );
-            if (node) node.scrollIntoView({ block: "start" });
-          },
-        })),
-      );
+      setChapterToc();
       const next = manifest.chapters.find(
         (item) => item.index === chapter.index + 1,
       );
-      if (next) {
-        const sentinel = document.createElement("div");
-        sentinel.className = "reader-chapter-sentinel";
-        sentinel.dataset.chapter = String(next.index);
-        frame.appendChild(sentinel);
-        observer.observe(sentinel);
-      }
+      if (next) ensureChapterSentinel(next);
     })();
     pending.set(chapter.index, task);
+    task.finally(() => {
+      if (pending.get(chapter.index) === task) pending.delete(chapter.index);
+    }).catch(() => {});
     return task;
   };
-  const observer = new IntersectionObserver(
+  chapterManifestObserver = new IntersectionObserver(
     (entries) =>
       entries
         .filter((entry) => entry.isIntersecting)
@@ -882,7 +1027,7 @@ async function renderChapterManifest(prepared) {
               console.warn("EPUB chapter could not be loaded", error),
             );
         }),
-    { root: viewport, rootMargin: "900px 0px" },
+    { root: viewport, rootMargin: "0px" },
   );
   await load(manifest.chapters[0]);
   status.textContent = `EPUB · ${manifest.chapters.length} 章`;
@@ -890,7 +1035,7 @@ async function renderChapterManifest(prepared) {
 
 function renderImageDocument(image) { content.appendChild(image); status.textContent = "图片"; }
 function renderMediaDocument() { return renderMedia(capability.mode); }
-function disposeFormatResources(mode) { if (["pdf", "pdf-pages"].includes(mode)) { try { const task = pdfDocument?.destroy?.(); task?.catch?.(() => {}); } catch (_) {} pdfDocument = null; pdfPageManifest = null; } if (mode === "foliate") { foliateSectionObserver?.disconnect(); foliateSectionVirtualizer?.dispose(); foliateChapterRepository?.dispose(); foliateSectionVirtualizer = null; foliateChapterRepository = null; foliateSectionLoader = null; foliateSectionSettler = null; epubRendition = null; epubBook = null; } if (mode === "html") { htmlFrame?.remove?.(); htmlFrame = null; } if (["audio", "video"].includes(mode) && mediaElement) { mediaElement.pause(); mediaElement.removeAttribute("src"); mediaElement.load(); mediaElement = null; } }
+function disposeFormatResources(mode) { if (["pdf", "pdf-pages"].includes(mode)) { try { const task = pdfDocument?.destroy?.(); task?.catch?.(() => {}); } catch (_) {} pdfDocument = null; pdfPageManifest = null; } if (mode === "foliate") { foliateSectionObserver?.disconnect(); foliateSectionVirtualizer?.dispose(); foliateChapterRepository?.dispose(); foliateSectionVirtualizer = null; foliateChapterRepository = null; foliateSectionLoader = null; foliateSectionSettler = null; try { const closing = epubRendition?.close?.(); closing?.catch?.(() => {}); } catch (_) {} epubRendition = null; epubBook = null; } if (mode === "html") { htmlFrame?.remove?.(); htmlFrame = null; } if (["audio", "video"].includes(mode) && mediaElement) { mediaElement.pause(); mediaElement.removeAttribute("src"); mediaElement.load(); mediaElement = null; } }
 function renderTextDocument(prepared) { return renderText(false, prepared); }
 function renderMarkdownDocument(prepared) { return renderText(true, prepared); }
 function navigateFormat(mode, value) { if (["pdf", "pdf-pages", "docx"].includes(mode)) return goToPage(value); if (["foliate", "epub-chapters"].includes(mode)) return navigateTocEntry(Number(value)); const entry = navigationState.tocEntries[Number(value)]; return entry?.activate ? Promise.resolve(entry.activate()) : Promise.resolve(); }
@@ -899,12 +1044,23 @@ async function restoreFormat(mode, entry) { if (!entry) return; if (mode === "fo
 function registerReaderFormatAdapters() { for (const mode of Object.keys(VoiceOfMLReaderRuntime.FEATURE_MATRIX).filter((item) => item !== "unsupported")) formatAdapters.register(mode, { open: () => prepareDocumentDirect(), render: (prepared) => renderByMode(prepared), navigate: (value) => navigateFormat(mode, value), search: (query) => searchFormat(mode, query), progress: () => captureBookmarkSnapshot(), restore: (entry) => restoreFormat(mode, entry), dispose: () => disposeFormatResources(mode) }); }
 async function renderByMode(prepared) { const renderers = { "epub-chapters": renderChapterManifest, "pdf-pages": renderPdfPages, pdf: renderPdf, image: renderImageDocument, text: renderTextDocument, markdown: renderMarkdownDocument, html: renderHtml, foliate: renderFoliate, docx: renderDocx, audio: renderMediaDocument, video: renderMediaDocument }; const renderer = renderers[capability.mode]; if (renderer) return renderer(prepared); }
 async function start() {
-  if (readerId) { const remote = await fetch(`https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(readerId)}`).then((response) => response.ok ? response.json() : null).catch(() => null), resolved = remote || resolvedReaderData; if (resolved) { applyReaderMetadata(resolved); if (!readerPath.hidden && resolved.repo) { const folderTarget = new URL("/search/", location.origin); const folder = new URLSearchParams(); if (resolved.folder) folder.set("folder_self", resolved.folder); folderTarget.hash = "#/" + encodeURIComponent(resolved.repo) + (folder.toString() ? "?" + folder.toString() : ""); readerPath.onclick = () => window.parent !== window ? window.parent.postMessage({ type: "voice-reader-navigate", url: folderTarget.href }, location.origin) : location.assign(folderTarget.href); } status.hidden = true; } }
-  if (readerId && !sourceUrl) { const resolved = resolvedReaderData || await fetch(`https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(readerId)}`).then((response) => { if (!response.ok) throw new Error(`READER_RESOLVE_HTTP_${response.status}`); return response.json(); }); sourceUrl = resolved.url || ""; if (sourceUrl.startsWith("/api/")) sourceUrl = `https://voiceofml-search.hf.space${sourceUrl}`; contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`; downloadUrl = resolved.download || sourceUrl; if (resolved.extension) { extension = String(resolved.extension).toLowerCase(); capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension)); content.dataset.mode = capability.mode; document.querySelector(".page-controls").hidden = !capability.features.pagination; document.querySelector(".zoom-controls").hidden = !capability.features.zoom; } readerRuntime.update("source", { url: sourceUrl, contentUrl, downloadUrl, extension, metadata: resolved }); }
+  if (readerId && !sourceUrl) { setReaderStage("resolve"); let resolved = cachedReaderData; if (!resolved?.url) { try { resolved = await resolveReaderId(readerId); } catch (error) { if (!localReaderData?.url) throw error; resolved = localReaderData; } } resolvedReaderData = resolved; }
+  if (readerId && !sourceUrl) { const resolved = resolvedReaderData; if (!resolved?.url) throw new Error("READER_RESOLVE_EMPTY"); sourceUrl = resolved.url || ""; if (sourceUrl.startsWith("/api/")) sourceUrl = `https://voiceofml-search.hf.space${sourceUrl}`; contentUrl = `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(sourceUrl)}`; downloadUrl = resolved.download || sourceUrl; chapterManifestUrl = resolved.chapter_manifest || chapterManifestUrl; fallbackUrl = resolved.fallback || fallbackUrl; if (resolved.extension) { extension = String(resolved.extension).toLowerCase(); capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension)); content.dataset.mode = capability.mode; document.querySelector(".page-controls").hidden = !capability.features.pagination; document.querySelector(".zoom-controls").hidden = !capability.features.zoom; } readerRuntime.update("source", { url: sourceUrl, contentUrl, downloadUrl, extension, metadata: resolved }); }
   if ((!validSource(sourceUrl) && !validSource(chapterManifestUrl) && !readerId) || capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED) return fail("此文件暂不支持在线阅读，请下载原文件。", "READER_UNSUPPORTED");
   formatAdapters.activate(capability.mode);
   applyReaderMetadata(resolvedReaderData);
   document.querySelector("#download").href = `https://voiceofml-search.hf.space/api/download?file=${encodeURIComponent(documentState.title)}&link=${encodeURIComponent(downloadUrl)}`;
+  if (validOcr(ocrUrl)) {
+    const ocr = document.querySelector("#ocr") || document.createElement("a");
+    ocr.id = "ocr";
+    ocr.className = "text-button";
+    ocr.target = "_blank";
+    ocr.rel = "noopener noreferrer";
+    ocr.textContent = "OCR";
+    if (!ocr.parentElement) document.querySelector(".reader-actions")?.prepend(ocr);
+    ocr.href = ocrUrl;
+    ocr.hidden = false;
+  }
   try {
     if (capability.mode === "foliate") { setReaderStage("foliate"); foliateContinuous = true; const [restored] = await Promise.all([VoiceOfMLReaderStore.get(sourceUrl).catch(() => { restorationFailed = true; return null; }), renderFoliate(null)]); updateDocumentState({ restoredEntry: restored }); if (documentState.restoredEntry?.zoom) setZoom(documentState.restoredEntry.zoom, false); if (Number.isInteger(documentState.restoredEntry?.foliateSection)) await restoreFoliateBookmarkPosition(documentState.restoredEntry); else if (documentState.restoredEntry) viewport.scrollTop = documentState.restoredEntry.scrollTop || 0; if (!setReaderPhase("ready")) return; updateDocumentState({ restorationReady: !restorationFailed }); scheduleSave(); return; }
     setReaderStage("prepare");

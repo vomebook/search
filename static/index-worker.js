@@ -33,14 +33,11 @@ function tokenize(text) {
   const lower = String(text || "").toLowerCase();
   const alpha = lower.match(/[a-z0-9]+/g);
   if (alpha) tokens.push.apply(tokens, alpha);
-  const chineseChars = [];
-  for (const ch of lower) {
-    if (("\u4e00" <= ch && ch <= "\u9fff") || ("\u3400" <= ch && ch <= "\u4dbf")) {
-      chineseChars.push(ch);
-      tokens.push(ch);
-    }
+  const chineseRuns = lower.match(/[\u4e00-\u9fff\u3400-\u4dbf]+/g) || [];
+  for (const run of chineseRuns) {
+    for (const ch of run) tokens.push(ch);
+    for (let i = 0; i < run.length - 1; i++) tokens.push(run[i] + run[i + 1]);
   }
-  for (let i = 0; i < chineseChars.length - 1; i++) tokens.push(chineseChars[i] + chineseChars[i + 1]);
   return Array.from(new Set(tokens));
 }
 
@@ -61,7 +58,12 @@ function editDistance(s1, s2, maxDist) {
   return prev[prev.length - 1];
 }
 
+function isChineseToken(token) {
+  return /^[\u4e00-\u9fff\u3400-\u4dbf]+$/.test(token);
+}
+
 function couldBeFuzzy(token, word, maxDist) {
+  if (isChineseToken(token) && token.length > 1 && token.length !== word.length) return false;
   if (Math.abs(token.length - word.length) > maxDist) return false;
   if (token.length < 4) return true;
   const counts = {};
@@ -261,8 +263,8 @@ function applyFilters(indices, params) {
   const repos = params.repos || null;
   const extensions = params.extensions || null;
   const folders = params.folders || null;
-  const selfFolders = new Set((params.folderSelfs || []).map(cleanPath).filter(Boolean));
-  const subtreeFolders = new Set((params.folderSubtrees || []).map(cleanPath).filter(Boolean));
+  const selfFolders = new Set((params.folderSelfs || []).map(cleanPath).filter((path) => typeof path === "string"));
+  const subtreeFolders = new Set((params.folderSubtrees || []).map(cleanPath).filter((path) => typeof path === "string"));
   return indices.filter((index) => {
     const record = records[index] || {};
     if (repos && repos.length && !repos.includes(record.Repo)) return false;
