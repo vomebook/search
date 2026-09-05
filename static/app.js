@@ -1761,21 +1761,15 @@ const ROUTER = {
     this.updateUI();
     updateRandomTxtVisibility();
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
-      const targetKey = getSearchViewKey();
-      if (searchViewSnapshots.has(targetKey) && restoreSearchViewSnapshot(targetKey)) {
-        const routeId = ++routeRenderId;
-        renderSidebarAndFiltersDeferred(routeId);
-      } else {
-        this.onModeChanged();
-        if (route.params.wide === "1") {
-          DOM.leftSidebar.classList.add("expanded-wide");
-          if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "→";
-          syncStateToURL();
-        }
+      this.onModeChanged();
+      if (route.params.wide === "1") {
+        DOM.leftSidebar.classList.add("expanded-wide");
+        if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "→";
+        syncStateToURL();
       }
     } else {
       const routeId = ++routeRenderId;
-      if (!restoreSearchViewSnapshot(getSearchViewKey())) searchWithInitialFallback();
+      searchWithInitialFallback();
       renderSidebarAndFiltersDeferred(routeId);
     }
     routeInitialized = true;
@@ -1811,7 +1805,7 @@ const ROUTER = {
   },
 };
 
-function syncStateToURL(replace = true) {
+function syncStateToURL() {
   if (readerOverlay) return;
   let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
   const sp = new URLSearchParams();
@@ -1841,8 +1835,7 @@ function syncStateToURL(replace = true) {
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
   if (window.location.hash !== hash) {
-    if (replace) history.replaceState(null, "", hash);
-    else history.pushState(null, "", hash);
+    history.replaceState(null, "", hash);
   }
   persistSearchSession();
 }
@@ -1994,7 +1987,7 @@ function cloneSearchPageCache(cache) {
   return copy;
 }
 function saveSearchViewSnapshot(key = getSearchViewKey()) {
-  if (!DOM.resultsContainer || !routeInitialized) return null;
+  if (!DOM.resultsContainer) return null;
   ensureHeightTree();
   const heightRecords = STATE.results.map(function(result, index) {
     const id = getResultStableId(result);
@@ -2038,19 +2031,13 @@ function restoreSearchViewSnapshot(key, restoreScroll = true) {
   searchPrefetchAbortController = null;
   searchPrefetchKey = null;
   searchRequestId++;
-  searchId++;
   STATE.results = snapshot.results.map(cloneSearchResult);
   STATE.total = snapshot.total;
   STATE.page = snapshot.page;
   STATE._loadedPage = snapshot.loadedPage;
   STATE._pageCache = cloneSearchPageCache(snapshot.pageCache);
-  STATE._pendingPage = 0;
-  STATE._deferredAppendWhileDragging = false;
   STATE.hasMore = snapshot.hasMore;
   STATE.isLoading = false;
-  STATE.resultsSkeletonActive = false;
-  if (DOM.resultsLoading) DOM.resultsLoading.style.display = "none";
-  DOM.resultsList.classList.remove("results-pending");
   VSCROLL.viewKey = key;
   VSCROLL.estimatedHeight = snapshot.estimatedHeight || VSCROLL.estimatedHeight;
   VSCROLL.heightCache = new Map(snapshot.heightCache || []);
@@ -2471,7 +2458,7 @@ function handleApiSearchFailure(append, id) {
     if (!ok || id !== searchId) return;
     STATE.useLocalMode = true;
     if (DOM.localModeToggle) DOM.localModeToggle.checked = true;
-    syncStateToURL(false);
+    syncStateToURL();
     doSearch();
   });
 }
@@ -3253,12 +3240,10 @@ async function renderRepoFilter(routeId) {
     });
   }
   renderCheckboxList(DOM.filterRepoList, items, STATE.filterRepos, function(vals) {
-    saveSearchViewSnapshot();
     STATE.filterRepos = vals;
     STATE.page = 1;
     STATE.results = [];
     updateFilterCancelButtons();
-    syncStateToURL(false);
     doSearch();
   });
 }
@@ -3329,12 +3314,10 @@ async function renderExtensionFilter(routeId) {
     items.push({ key: ordered[j].name, label: "." + ordered[j].name, count: ordered[j].count });
   }
   renderExtensionTree(DOM.filterExtList, items, rest, STATE.filterExtensions, function(vals) {
-    saveSearchViewSnapshot();
     STATE.filterExtensions = vals;
     STATE.page = 1;
     saveStoredExtensionFilters();
     updateFilterCancelButtons();
-    syncStateToURL(false);
     doSearch();
   });
 }
@@ -3665,7 +3648,6 @@ function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
 }
 
 function persistFolderSelection(subtreeSet, selfSet) {
-  saveSearchViewSnapshot();
   STATE.filterFolderSubtrees = Array.from(subtreeSet);
   STATE.filterFolderSelfs = Array.from(selfSet);
   const merged = [];
@@ -3675,7 +3657,6 @@ function persistFolderSelection(subtreeSet, selfSet) {
   saveStoredFolderFilters(STATE.repo);
   STATE.page = 1;
   updateFilterCancelButtons();
-  syncStateToURL(false);
   doSearch();
 }
 
@@ -4297,7 +4278,6 @@ function setupKeyboard() {
 }
 
 function clearAllFilters() {
-  saveSearchViewSnapshot();
   STATE.filterRepos = [];
   STATE.filterExtensions = [];
   STATE.filterFolders = [];
@@ -4312,7 +4292,6 @@ function clearAllFilters() {
   DOM.filterMinSize.value = "";
   DOM.filterMaxSize.value = "";
   renderFilters(routeRenderId);
-  syncStateToURL(false);
   doSearch();
   showToast("已清空所有筛选条件");
   syncStateToURL();
@@ -4369,7 +4348,6 @@ function setupResultDelegation() {
         const qs = sp.toString();
         window.location.hash = qs ? hash + "?" + qs : hash;
       } else if (folder !== undefined) {
-        saveSearchViewSnapshot();
         STATE.filterFolders = folder ? [folder] : [];
         STATE.filterFolderSubtrees = [];
         STATE.filterFolderSelfs = folder ? [folder] : [];
@@ -4377,7 +4355,6 @@ function setupResultDelegation() {
         STATE.page = 1;
         STATE.results = [];
         renderFilters(routeRenderId);
-        syncStateToURL(false);
         doSearch();
       }
       return;
@@ -4451,8 +4428,8 @@ async function init() {
       DOM.searchInput.value = item.dataset.query;
       STATE.query = item.dataset.query;
       STATE.page = 1;
-       syncStateToURL(false);
-       if (!restoreSearchViewSnapshot(getSearchViewKey())) {
+      syncStateToURL();
+      if (!restoreSearchViewSnapshot(getSearchViewKey())) {
         STATE.results = [];
         doSearch();
       }
@@ -4552,13 +4529,11 @@ async function init() {
   DOM.mobileToggleBtn.addEventListener("click", toggleMobile);
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
   DOM.repoFilterCancel.addEventListener("click", function() {
-    saveSearchViewSnapshot();
     STATE.filterRepos = [];
     STATE.page = 1;
     STATE.results = [];
     updateFilterCancelButtons();
     renderRepoFilter(routeRenderId);
-    syncStateToURL(false);
     doSearch();
   });
   DOM.folderFilterCancel.addEventListener("click", function() {
@@ -4566,35 +4541,28 @@ async function init() {
     renderFilterFolderTree();
   });
   DOM.extFilterCancel.addEventListener("click", function() {
-    saveSearchViewSnapshot();
     STATE.filterExtensions = [];
     STATE.page = 1;
     STATE.results = [];
     saveStoredExtensionFilters();
     updateFilterCancelButtons();
     renderExtensionFilter(routeRenderId);
-    syncStateToURL(false);
     doSearch();
   });
   DOM.searchFoldersToggle.addEventListener("change", function() {
-    saveSearchViewSnapshot();
     STATE.searchFolders = DOM.searchFoldersToggle.checked;
     clearResultTemplateCache();
     STATE.page = 1;
     STATE.results = [];
-    syncStateToURL(false);
     doSearch();
   });
   DOM.exactSearchToggle.addEventListener("change", function() {
-    saveSearchViewSnapshot();
     STATE.exact = DOM.exactSearchToggle.checked;
     STATE.page = 1;
     STATE.results = [];
-    syncStateToURL(false);
     doSearch();
   });
   DOM.localModeToggle.addEventListener("change", function() {
-    saveSearchViewSnapshot();
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
       setExactSearchSectionVisible(false, true);
@@ -4604,8 +4572,8 @@ async function init() {
       DOM.emptyState.style.display = "none";
       updateStatusBar();
       updateLoadInfo();
-       syncStateToURL(false);
-       ensureLocalDataLoaded(true, false);
+      syncStateToURL();
+      ensureLocalDataLoaded(true, false);
       return;
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
@@ -4613,16 +4581,15 @@ async function init() {
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.page = 1;
     STATE.results = [];
-    syncStateToURL(false);
     doSearch();
+    syncStateToURL();
   });
   DOM.sortSelect.addEventListener("change", function() {
-    saveSearchViewSnapshot();
     STATE.sort = DOM.sortSelect.value;
     STATE.page = 1;
     STATE.results = [];
-    syncStateToURL(false);
     doSearch();
+    syncStateToURL();
   });
   DOM.overlay.addEventListener("click", function() {
     STATE.leftSidebarOpen = false;
@@ -4646,12 +4613,10 @@ async function init() {
   var applySizeFilter = function() {
     clearTimeout(sizeTimer_local);
     sizeTimer_local = setTimeout(function() {
-      saveSearchViewSnapshot();
       STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
       STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
       STATE.page = 1;
       STATE.results = [];
-      syncStateToURL(false);
       doSearch();
     }, 500);
   };
@@ -4660,23 +4625,19 @@ async function init() {
   DOM.filterMinUnit.addEventListener("change", applySizeFilter);
   DOM.filterMaxUnit.addEventListener("change", applySizeFilter);
   DOM.extSelectAll.addEventListener("click", function() {
-    saveSearchViewSnapshot();
     STATE.filterExtensions = STATE.extensionList.slice();
     STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
-    syncStateToURL(false);
     doSearch();
   });
   DOM.extDeselectAll.addEventListener("click", function() {
-    saveSearchViewSnapshot();
     var allExtNames = STATE.extensionList.slice();
     var currentSet = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
     STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
-    syncStateToURL(false);
     doSearch();
   });
   DOM.folderSelectAll.addEventListener("click", function() {
