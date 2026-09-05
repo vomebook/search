@@ -75,7 +75,7 @@ self.addEventListener("activate", (event) => {
 });
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (url.hostname !== self.location.hostname) {
+  if (url.hostname !== self.location.hostname || (event.request.method || "GET") !== "GET") {
     return;
   }
   if ((event.request.mode === "navigate" && url.pathname === "/search/static/reader.html") || READER_RUNTIME_PATHS.has(url.pathname)) {
