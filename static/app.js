@@ -274,6 +274,41 @@ function normalizeReaderReturnUrl(rawUrl) {
 var readerOverlay = null;
 var readerReturnFocus = null;
 var readerBackgroundState = [];
+var readerReturnScrollState = null;
+function captureReaderReturnScroll() {
+  if (!DOM.resultsContainer) return null;
+  var top = DOM.resultsContainer.scrollTop, index = 0, offset = top;
+  if (STATE.results.length) {
+    ensureHeightTree();
+    index = findVirtualIndex(top);
+    offset = top - getVirtualOffset(index);
+  }
+  return { route: location.href, top: top, index: index, offset: offset };
+}
+function restoreReaderReturnScroll() {
+  var saved = readerReturnScrollState;
+  if (!saved) return;
+  if (saved.route && saved.route !== location.href) { readerReturnScrollState = null; return; }
+  var attempts = 0;
+  function restore() {
+    if (!DOM.resultsContainer || !STATE.results.length) {
+      if (++attempts < 20) requestAnimationFrame(restore);
+      return;
+    }
+    ensureHeightTree();
+    var index = Math.min(saved.index, STATE.results.length - 1);
+    var target = Math.max(0, getVirtualOffset(index) + saved.offset);
+    var max = Math.max(0, DOM.resultsContainer.scrollHeight - DOM.resultsContainer.clientHeight);
+    DOM.resultsContainer.scrollTop = Math.min(target, max);
+    VSCROLL.renderStart = -1;
+    VSCROLL.renderEnd = -1;
+    renderVisible();
+    updateScrollTrack();
+    if (++attempts < 4 && Math.abs(DOM.resultsContainer.scrollTop - target) > 1) requestAnimationFrame(restore);
+    else readerReturnScrollState = null;
+  }
+  requestAnimationFrame(function() { requestAnimationFrame(restore); });
+}
 function clearReaderNavigation(url) {
   try {
     var token = url.searchParams.get("nav");
@@ -282,7 +317,7 @@ function clearReaderNavigation(url) {
     if (saved && saved.readerUrl === url.href) sessionStorage.removeItem("reader-navigation-current");
   } catch (_) {}
 }
-function closeReaderOverlay(restoreFocus) {
+function closeReaderOverlay(restoreFocus, restoreScroll) {
   if (!readerOverlay) return false;
   readerOverlay.remove();
   readerOverlay = null;
@@ -294,12 +329,14 @@ function closeReaderOverlay(restoreFocus) {
   }
   readerBackgroundState = [];
   document.body.classList.remove("reader-overlay-open");
+  if (restoreScroll !== false) restoreReaderReturnScroll();
   if (restoreFocus !== false && readerReturnFocus && readerReturnFocus.isConnected) readerReturnFocus.focus();
   readerReturnFocus = null;
   return true;
 }
 
 function openReaderOverlay(url, addHistory) {
+  if (addHistory !== false && !readerReturnScrollState) readerReturnScrollState = captureReaderReturnScroll();
   var frame = document.createElement("iframe");
   frame.className = "reader-overlay";
   frame.title = "在线阅读";
@@ -320,7 +357,7 @@ function openReaderOverlay(url, addHistory) {
     var shareUrl = new URL(url.href);
     shareUrl.searchParams.delete("return");
     shareUrl.searchParams.delete("nav");
-    try { sessionStorage.setItem("reader-navigation-current", JSON.stringify({ shareUrl: shareUrl.href, readerUrl: url.href })); } catch (_) {}
+      try { sessionStorage.setItem("reader-navigation-current", JSON.stringify({ shareUrl: shareUrl.href, readerUrl: url.href, returnScroll: readerReturnScrollState })); } catch (_) {}
     history.pushState({ voiceReaderOverlay: true, readerUrl: url.href }, "", shareUrl.href);
   }
 }
@@ -333,7 +370,7 @@ function restoreReaderOverlay(state) {
   try {
     var url = new URL(state.readerUrl, location.origin);
     if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return;
-    closeReaderOverlay(false);
+    closeReaderOverlay(false, false);
     openReaderOverlay(url, false);
   } catch (_) {}
 }
@@ -376,10 +413,10 @@ function handleReaderMessage(event) {
       if (!nextReader.searchParams.get("return") && currentReader.searchParams.get("return")) nextReader.searchParams.set("return", currentReader.searchParams.get("return"));
       if (!nextReader.searchParams.get("nav") && currentReader.searchParams.get("nav")) nextReader.searchParams.set("nav", currentReader.searchParams.get("nav"));
       var shareReader = new URL(nextReader.href); shareReader.searchParams.delete("return"); shareReader.searchParams.delete("nav");
-      sessionStorage.setItem("reader-navigation-current", JSON.stringify({ shareUrl: shareReader.href, readerUrl: nextReader.href }));
+      sessionStorage.setItem("reader-navigation-current", JSON.stringify({ shareUrl: shareReader.href, readerUrl: nextReader.href, returnScroll: readerReturnScrollState }));
       history.replaceState({ voiceReaderOverlay: true, readerUrl: nextReader.href }, "", shareReader.href);
       var returnFocus = readerReturnFocus;
-      closeReaderOverlay(false);
+      closeReaderOverlay(false, false);
       openReaderOverlay(nextReader, false);
       readerReturnFocus = returnFocus;
     } catch (_) {}
@@ -424,6 +461,7 @@ function restoreReaderFromSession() {
     if (!saved || saved.shareUrl !== location.href || !saved.readerUrl) return;
     var readerUrl = new URL(saved.readerUrl, location.origin);
     if (readerUrl.origin !== location.origin || readerUrl.pathname !== "/search/static/reader.html") return;
+    readerReturnScrollState = saved.returnScroll || null;
     history.replaceState({ voiceReaderOverlay: true, readerUrl: readerUrl.href }, "", saved.shareUrl);
     openReaderOverlay(readerUrl, false);
   } catch (_) {}
@@ -1743,6 +1781,7 @@ const ROUTER = {
 };
 
 function syncStateToURL() {
+  if (readerOverlay) return;
   let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
   const sp = new URLSearchParams();
   if (STATE.query) sp.set("q", STATE.query);
@@ -2375,6 +2414,7 @@ function renderResults(animate = false) {
   VSCROLL.renderEnd = 0;
   pendingResultEntrance = animate;
   renderVisible();
+  if (readerReturnScrollState && !readerOverlay) restoreReaderReturnScroll();
 }
 
 function animateVisibleResultRows() {
