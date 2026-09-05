@@ -8,7 +8,7 @@
     mp4: "video", mov: "video", video: "video",
   });
   const articleExtensions = Object.freeze(Object.keys(modes));
-  const features = Object.freeze({ pdf: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false }, "pdf-pages": { toc: false, search: false, zoom: true, bookmarks: true, pagination: true, media: false }, foliate: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, "epub-chapters": { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, docx: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false }, html: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, text: { toc: false, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, markdown: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, image: { toc: false, search: false, zoom: true, bookmarks: true, pagination: false, media: false }, audio: { toc: false, search: false, zoom: false, bookmarks: true, pagination: false, media: true }, video: { toc: false, search: false, zoom: false, bookmarks: true, pagination: false, media: true } });
+  const features = Object.freeze({ pdf: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false }, "pdf-pages": { toc: false, search: false, zoom: true, bookmarks: true, pagination: true, media: false }, foliate: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, "epub-chapters": { toc: true, search: false, zoom: true, bookmarks: true, pagination: false, media: false }, docx: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false }, html: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, text: { toc: false, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, markdown: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false }, image: { toc: false, search: false, zoom: true, bookmarks: true, pagination: false, media: false }, audio: { toc: false, search: false, zoom: false, bookmarks: true, pagination: false, media: true }, video: { toc: false, search: false, zoom: false, bookmarks: true, pagination: false, media: true } });
   function capability(extension) {
     const normalized = String(extension || "").toLowerCase();
     const mode = modes[normalized];
@@ -19,12 +19,13 @@
     const source = record && (record.ReaderLink || record.readerLink || record.Link || record.link);
     const readerExtension = record && (record.ReaderExtension || record.readerExtension || record.Extension || record.extension);
     if (!source || capability(readerExtension).readerMode === ReaderMode.UNSUPPORTED) return "";
-    const assetMatch = source.match(/\/objects\/[0-9a-f]{2}\/([0-9a-f]{16})[0-9a-f]{48}\//i);
+  const assetMatch = source.match(/(?:^|[\/=])objects\/[0-9a-f]{2}\/([0-9a-f]{16})[0-9a-f]{48}(?:\/[0-9a-f]{16})?\//i);
     const shortId = assetMatch ? assetMatch[1] : /^https:\/\/huggingface\.co\/datasets\//i.test(source) ? shortSourceId(source) : "";
-    const params = new URLSearchParams(shortId ? { id: shortId, ext: readerExtension || "" } : { url: source, title: (record.File || record.name || "") + ((record.Extension || record.extension) ? "." + (record.Extension || record.extension) : ""), ext: readerExtension || "" });
+    const title = (record.File || record.name || "") + ((record.Extension || record.extension) ? "." + (record.Extension || record.extension) : "");
+    const params = new URLSearchParams(shortId ? { id: shortId, title, ext: readerExtension || "" } : { url: source, title, ext: readerExtension || "" });
     if (!shortId && (record.DownloadLink || record.downloadLink)) params.set("download", record.DownloadLink || record.downloadLink);
     if (!shortId && (record.OcrUrl || record.ocrUrl)) params.set("ocr", record.OcrUrl || record.ocrUrl);
-     if (!shortId && (record.ReaderFallback || record.readerFallback)) params.set("fallback", record.ReaderFallback || record.readerFallback);
+    if (!shortId && (record.ReaderFallback || record.readerFallback)) params.set("fallback", record.ReaderFallback || record.readerFallback);
      if (!shortId && (record.ReaderChapterManifest || record.readerChapterManifest || record.ChapterManifest || record.chapterManifest)) params.set("chapter_manifest", record.ReaderChapterManifest || record.readerChapterManifest || record.ChapterManifest || record.chapterManifest);
     if (!shortId && (record.ReturnUrl || record.returnUrl)) params.set("return", record.ReturnUrl || record.returnUrl);
     const repo = String(record.Repo || record.repo || "").split("/").pop();

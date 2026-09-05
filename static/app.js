@@ -111,14 +111,47 @@ var readerAssets = null;
 var readerAssetsPending = null;
 var readerAssetsRetryAt = 0;
 var convertedReaderRecords = null;
+var READER_ASSETS_COMPRESSED_LIMIT = 32 * 1024 * 1024;
+var READER_ASSETS_EXPANDED_LIMIT = 128 * 1024 * 1024;
+
+function readBoundedReaderStream(stream, limit) {
+  if (!stream || typeof stream.getReader !== "function") throw new Error("READER_ASSETS_UNAVAILABLE");
+  var reader = stream.getReader(), chunks = [], total = 0;
+  return (async function() {
+    try {
+      while (true) {
+        var part = await reader.read();
+        if (part.done) break;
+        if (!part.value || !part.value.byteLength) continue;
+        total += part.value.byteLength;
+        if (total > limit) throw new Error("READER_ASSETS_LIMIT");
+        chunks.push(part.value);
+      }
+      var bytes = new Uint8Array(total), offset = 0;
+      chunks.forEach(function(chunk) { bytes.set(chunk, offset); offset += chunk.byteLength; });
+      return bytes;
+    } catch (error) {
+      await Promise.resolve(reader.cancel(error)).catch(function() { return undefined; });
+      throw error;
+    }
+  })();
+}
 
 function loadReaderAssets() {
   if (readerAssets) return Promise.resolve(readerAssets);
   if (Date.now() < readerAssetsRetryAt) return Promise.resolve({});
   if (readerAssetsPending) return readerAssetsPending;
-  readerAssetsPending = fetchWithTimeout("/search/data/reader_assets.json.gz", 10000).then(function(response) {
+  readerAssetsPending = fetchWithTimeout("/search/data/reader_assets.json.gz", 10000).then(async function(response) {
     if (!response.ok || !response.body || typeof DecompressionStream === "undefined") throw new Error("READER_ASSETS_UNAVAILABLE");
-    return new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json();
+    var compressedLength = Number(response.headers && response.headers.get && response.headers.get("content-length"));
+    if (Number.isFinite(compressedLength) && compressedLength > READER_ASSETS_COMPRESSED_LIMIT) {
+      await Promise.resolve().then(function() { return response.body.cancel(); }).catch(function() { return undefined; });
+      throw new Error("READER_ASSETS_LIMIT");
+    }
+    var compressed = await readBoundedReaderStream(response.body, READER_ASSETS_COMPRESSED_LIMIT);
+    var expandedStream = new Response(compressed).body.pipeThrough(new DecompressionStream("gzip"));
+    var expanded = await readBoundedReaderStream(expandedStream, READER_ASSETS_EXPANDED_LIMIT);
+    return JSON.parse(new TextDecoder().decode(expanded));
   }).then(function(data) {
     if (!data || data.v !== 1 || !data.f || typeof data.f !== "object") throw new Error("READER_ASSETS_UNAVAILABLE");
     readerAssets = data.f;
@@ -134,17 +167,18 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-   if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|page-manifest\.json|(?:[a-z0-9-]+\/)?(document\.(?:pdf|epub|mobi|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4))$/.test(asset.p || "")) return record;
-  var originalExtension = String(record.Extension || record.extension || "").toLowerCase();
-    var bucketAsset = asset.b === "vomebook/pdf-pages", readerExtensions = { p: asset.p.endsWith("page-manifest.json") ? "pdf-pages" : "pdf", e: ["epub", "mobi", "azw3", "fb2"].indexOf(originalExtension) >= 0 ? originalExtension : "epub", d: "docx", h: "html", a: "audio", v: "video" };
-   var chapterBundle = asset.m === "p" && !!asset.c;
+   var assetPath = String(asset && asset.p || ""), bucketPage = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)$/.test(assetPath);
+   if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[0-9a-f]{16}\/)?(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)|(?:[a-z0-9-]+\/)?(document\.(?:pdf|epub|mobi|azw|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4))$/.test(assetPath) || (bucketPage && asset.b !== "vomebook/pdf-pages")) return record;
+    var assetExtension = /(?:^|\/)document\.(epub|mobi|azw|azw3|fb2)$/i.exec(assetPath)?.[1]?.toLowerCase() || "epub";
+    var bucketAsset = bucketPage && asset.b === "vomebook/pdf-pages", readerExtensions = { p: asset.p.endsWith("page-manifest.json") ? "pdf-pages" : "pdf", e: assetExtension, d: "docx", h: "html", a: "audio", v: "video" };
+   var chapterBundle = !!asset.c;
    return Object.assign({}, record, {
-      ReaderLink: bucketAsset ? "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + encodeURIComponent(asset.p) : "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + (chapterBundle ? asset.c : asset.p),
-     ReaderExtension: chapterBundle ? "epub-chapters" : readerExtensions[asset.m],
-     ReaderChapterManifest: chapterBundle ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.c : "",
-    ReaderFallback: asset.f || "",
-    DownloadLink: originalLink,
-  });
+      ReaderLink: bucketAsset ? "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + encodeURIComponent(asset.p) : "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
+      ReaderExtension: chapterBundle ? "epub-chapters" : readerExtensions[asset.m],
+      ReaderChapterManifest: chapterBundle ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.c : "",
+     ReaderFallback: asset.f ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.f : "",
+     DownloadLink: originalLink,
+   });
 }
 
 function getConvertedReaderRecords(repo) {
@@ -206,7 +240,7 @@ function getReaderLink(rec, returnUrl) {
     readerRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt";
   }
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
-  try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) sessionStorage.setItem("reader-source:" + readerId, JSON.stringify({ url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder })); } catch (_) {}
+  try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", fallback: readerRecord.ReaderFallback || "" }; sessionStorage.setItem("reader-source:" + readerId, JSON.stringify(sourceData)); sessionStorage.setItem("reader-resolve:" + readerId, JSON.stringify(sourceData)); } } catch (_) {}
   return readerUrl;
 }
 
@@ -397,30 +431,38 @@ function restoreReaderFromSession() {
 
 var warmedReaderAssets = new Set();
 var warmedReaderSources = new Set();
+var readerWarmupInFlight = 0;
 function warmReaderIntent(rawUrl) {
   if (!rawUrl) return;
-  var extension = "", sourceUrl = "";
+  var extension = "", sourceUrl = "", readerId = "";
   try {
     var readerUrl = new URL(rawUrl, location.origin);
     extension = (readerUrl.searchParams.get("ext") || "").toLowerCase();
     sourceUrl = readerUrl.searchParams.get("url") || "";
+    readerId = readerUrl.searchParams.get("id") || "";
   } catch (_) { return; }
   var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader-request-manager.js", "/search/static/reader-chapter-repository.js", "/search/static/reader-scroll-anchor.js", "/search/static/reader-section-virtualizer.js", "/search/static/reader-runtime.js", "/search/static/reader-format-adapters.js", "/search/static/reader-security.js", "/search/static/reader.js"];
   var engineAssets = extension === "pdf"
     ? ["/search/static/vendor/pdf.min.f80490490320.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.8ab0e5e30031.mjs"]
-    : extension === "epub" ? []
+    : extension === "epub" ? ["/search/static/foliate-reader/view.js?reader-v1"]
     : extension === "docx" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/docx-preview.min.051ef503f267.js"]
      : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.69451c8541c9.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
-    var link = document.createElement("link"); link.rel = "prefetch"; link.href = href; document.head.appendChild(link);
+    var link = document.createElement("link"); link.rel = href.indexOf("/foliate-reader/view.js") >= 0 ? "modulepreload" : "prefetch"; link.href = href; document.head.appendChild(link);
   });
-  if (sourceUrl && warmedReaderSources.size < 8 && !warmedReaderSources.has(sourceUrl)) {
-    warmedReaderSources.add(sourceUrl);
-    fetch(API_BASE + "/api/reader-content?url=" + encodeURIComponent(sourceUrl), {
-      method: "HEAD", cache: "no-store", keepalive: true, mode: "cors"
-    }).catch(function() {});
+  var warmKey = readerId ? "id:" + readerId : sourceUrl;
+  if (warmKey && readerWarmupInFlight < 1 && warmedReaderSources.size < 8 && !warmedReaderSources.has(warmKey)) {
+    warmedReaderSources.add(warmKey);
+    readerWarmupInFlight++;
+    var sourceRequest = readerId
+      ? fetch(API_BASE + "/api/reader-resolve?id=" + encodeURIComponent(readerId), { cache: "no-store", keepalive: true, mode: "cors" })
+      : fetch(API_BASE + "/api/reader-content?url=" + encodeURIComponent(sourceUrl), { method: "HEAD", cache: "no-store", keepalive: true, mode: "cors" });
+    sourceRequest.then(function(response) {
+      if (!readerId || !response.ok) return null;
+      return response.json().then(function(data) { if (data && data.url) sessionStorage.setItem("reader-resolve:" + readerId, JSON.stringify(data)); });
+    }).catch(function() {}).finally(function() { readerWarmupInFlight--; });
   }
   try { fetch(API_BASE + "/api/ping", { cache: "no-store", mode: "cors" }).catch(function() {}); } catch (_) {}
 }
@@ -553,8 +595,8 @@ function mergeFolderFilters(selfs, subtrees) {
 function loadStoredFolderFilters(repo) {
   try {
     var data = JSON.parse(sessionStorage.getItem(folderFilterStorageKey(repo)) || "{}");
-    var selfs = Array.isArray(data.selfs) ? data.selfs.filter(Boolean) : [];
-    var subtrees = Array.isArray(data.subtrees) ? data.subtrees.filter(Boolean) : [];
+    var selfs = Array.isArray(data.selfs) ? data.selfs.filter(function(path) { return typeof path === "string"; }) : [];
+    var subtrees = Array.isArray(data.subtrees) ? data.subtrees.filter(function(path) { return typeof path === "string"; }) : [];
     return { selfs: selfs, subtrees: subtrees, folders: mergeFolderFilters(selfs, subtrees) };
   } catch (e) {
     return { selfs: [], subtrees: [], folders: [] };
@@ -572,8 +614,8 @@ function loadStoredExtensionFilters() {
 
 function saveStoredFolderFilters(repo) {
   if (!repo) return;
-  var selfs = (STATE.filterFolderSelfs || []).filter(Boolean);
-  var subtrees = (STATE.filterFolderSubtrees || []).filter(Boolean);
+  var selfs = (STATE.filterFolderSelfs || []).filter(function(path) { return typeof path === "string"; });
+  var subtrees = (STATE.filterFolderSubtrees || []).filter(function(path) { return typeof path === "string"; });
   try {
     if (!selfs.length && !subtrees.length) {
       sessionStorage.removeItem(folderFilterStorageKey(repo));
@@ -796,6 +838,18 @@ async function doSearchLocal(params) {
   };
 }
 
+function isValidSearchResponse(data, expectedPage, expectedPageSize) {
+  return !!data
+    && Array.isArray(data.results)
+    && data.results.every(function(item) { return !!item && typeof item === "object" && !Array.isArray(item); })
+    && Number.isSafeInteger(data.total)
+    && data.total >= 0
+    && Number.isInteger(data.page)
+    && data.page === expectedPage
+    && Number.isInteger(data.page_size)
+    && data.page_size === expectedPageSize;
+}
+
 async function doSearchAPI(params, append, requestId) {
   if (requestId !== searchRequestId) {
     return false;
@@ -885,6 +939,7 @@ async function doSearchAPI(params, append, requestId) {
     resp = await fetch(base, fetchOptions);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     data = await resp.json();
+    if (!isValidSearchResponse(data, body.page, body.page_size)) throw new Error("INVALID_API_RESPONSE");
     noteApiSuccess();
     setCachedSearchResponse(cacheKey, data);
   } catch (e) {
@@ -980,9 +1035,11 @@ function prefetchNextPage() {
     STATE._pageCache[nextPage] = cached.results;
     return Promise.resolve();
   }
+  if (searchPrefetchPromise && searchPrefetchCacheKey === cacheKey) return searchPrefetchPromise;
   if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
   var prefetchController = new AbortController();
   searchPrefetchAbortController = prefetchController;
+  searchPrefetchCacheKey = cacheKey;
   searchPrefetchPromise = fetch(base, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -993,18 +1050,18 @@ function prefetchNextPage() {
     return resp.json();
   }).then(function(data) {
     if (reqId !== searchRequestId) return;
-    if (data && data.results) {
-      noteApiSuccess();
-      setCachedSearchResponse(cacheKey, data);
-      STATE._pageCache[nextPage] = data.results;
-    }
+    if (!isValidSearchResponse(data, body.page, body.page_size)) throw new Error("INVALID_API_RESPONSE");
+    noteApiSuccess();
+    setCachedSearchResponse(cacheKey, data);
+    STATE._pageCache[nextPage] = data.results;
   }).catch(function(err) {
     if (err && err.name === "AbortError") return;
-    noteApiFailure();
+    if (reqId === searchRequestId) noteApiFailure();
   }).finally(function() {
     if (searchPrefetchAbortController === prefetchController) {
       searchPrefetchAbortController = null;
       searchPrefetchPromise = null;
+      searchPrefetchCacheKey = null;
     }
   });
   return searchPrefetchPromise;
@@ -1579,8 +1636,8 @@ const ROUTER = {
       var urlSubtrees = route.params.folder_subtree;
       urlSelfs = urlSelfs === undefined ? [] : (Array.isArray(urlSelfs) ? urlSelfs : [urlSelfs]);
       urlSubtrees = urlSubtrees === undefined ? [] : (Array.isArray(urlSubtrees) ? urlSubtrees : [urlSubtrees]);
-      urlSelfs = urlSelfs.filter(Boolean);
-      urlSubtrees = urlSubtrees.filter(Boolean);
+      urlSelfs = urlSelfs.filter(function(path) { return typeof path === "string"; });
+      urlSubtrees = urlSubtrees.filter(function(path) { return typeof path === "string"; });
       if (urlSelfs.length || urlSubtrees.length) {
         STATE.filterFolderSelfs = urlSelfs;
         STATE.filterFolderSubtrees = urlSubtrees;
@@ -1656,14 +1713,13 @@ const ROUTER = {
     persistSearchSession();
   },
   updateUI: function() {
+    DOM.headerLogo.href = "/search/";
     if (STATE.mode === "global") {
       DOM.headerTitle.textContent = "VoiceOfML";
-      DOM.headerLogo.href = "https://huggingface.co/VoiceOfML";
       DOM.searchInput.placeholder = "搜索 VoiceOfML 数据仓库...";
       DOM.sidebarTitle.textContent = "仓库列表";
     } else {
       DOM.headerTitle.textContent = STATE.repo;
-      DOM.headerLogo.href = "#/";
       DOM.searchInput.placeholder = "搜索 " + STATE.repo + "...";
       DOM.sidebarTitle.textContent = STATE.repo;
     }
@@ -1689,6 +1745,7 @@ const ROUTER = {
 function syncStateToURL() {
   let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
   const sp = new URLSearchParams();
+  if (STATE.query) sp.set("q", STATE.query);
   if (STATE.mode === "global") {
     STATE.filterRepos.forEach(function(r) {
       sp.append("repo", r.split("/").pop());
@@ -1732,6 +1789,8 @@ let composeSafetyTimer = null;
 let searchId = 0;
 let searchAbortController = null;
 let searchPrefetchAbortController = null;
+let searchPrefetchPromise = null;
+let searchPrefetchCacheKey = null;
 let searchRequestId = 0;
 let routeRenderId = 0;
 let apiAvailable = true;
@@ -3223,7 +3282,7 @@ function refreshFilterFolderSelectionState() {
   const collect = function(nodes) {
     for (let i = 0; i < (nodes || []).length; i++) {
       const node = nodes[i];
-      if (node.path) nodeMap.set(node.path, node);
+      nodeMap.set(node.path, node);
       if (node.children && node.children.length > 0) collect(node.children);
     }
   };
@@ -3347,8 +3406,9 @@ function getFolderSelfSet() {
 function isNodeFullySelected(node, subtreeSet, selfSet) {
   if (!node) return false;
   if (node.isRoot) {
+    if (node.hasDirectFiles && !selfSet.has(node.path)) return false;
     const childNodes = node.children || [];
-    if (childNodes.length === 0) return false;
+    if (childNodes.length === 0) return node.hasDirectFiles;
     for (let i = 0; i < childNodes.length; i++) {
       if (!isNodeFullySelected(childNodes[i], subtreeSet, selfSet)) return false;
     }
@@ -3389,7 +3449,7 @@ function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
     selfSet.clear();
   }
   if (enabled) {
-    if (node.hasDirectFiles && !node.isRoot) selfSet.add(node.path);
+    if (node.hasDirectFiles) selfSet.add(node.path);
     const childNodes = node.children || [];
     for (let i = 0; i < childNodes.length; i++) {
       setNodeSubtreeSelection(childNodes[i], true, subtreeSet, selfSet);
@@ -3408,7 +3468,7 @@ function persistFolderSelection(subtreeSet, selfSet) {
   STATE.filterFolderSubtrees = Array.from(subtreeSet);
   STATE.filterFolderSelfs = Array.from(selfSet);
   const merged = [];
-  selfSet.forEach(function(path) { if (path) merged.push(path); });
+  selfSet.forEach(function(path) { if (!merged.includes(path)) merged.push(path); });
   subtreeSet.forEach(function(path) { if (path && !merged.includes(path)) merged.push(path); });
   STATE.filterFolders = merged;
   saveStoredFolderFilters(STATE.repo);
@@ -3421,7 +3481,7 @@ function collectFolderNodePaths(nodes, subtreePaths, selfPaths) {
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
     if (!node.isRoot && node.path) subtreePaths.push(node.path);
-    if (!node.isRoot && node.hasDirectFiles) selfPaths.push(node.path);
+    if (node.hasDirectFiles) selfPaths.push(node.path);
     if (node.children && node.children.length > 0) {
       collectFolderNodePaths(node.children, subtreePaths, selfPaths);
     }
