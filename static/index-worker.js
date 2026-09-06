@@ -263,12 +263,15 @@ function applyFilters(indices, params) {
   const repos = params.repos || null;
   const extensions = params.extensions || null;
   const folders = params.folders || null;
+  const extensionSet = extensions && extensions.length
+    ? new Set(extensions.map((extension) => String(extension || "").toLowerCase()))
+    : null;
   const selfFolders = new Set((params.folderSelfs || []).map(cleanPath).filter((path) => typeof path === "string"));
   const subtreeFolders = new Set((params.folderSubtrees || []).map(cleanPath).filter((path) => typeof path === "string"));
   return indices.filter((index) => {
     const record = records[index] || {};
     if (repos && repos.length && !repos.includes(record.Repo)) return false;
-    if (extensions && extensions.length && !extensions.includes(String(record.Extension || "").toLowerCase())) return false;
+    if (extensionSet && !extensionSet.has(String(record.Extension || "").toLowerCase())) return false;
     const recordFolders = Array.isArray(record.Folder) ? record.Folder : [];
     const folderPath = recordFolders.join("/");
     if (params.folderMatchMode === "mixed") {
