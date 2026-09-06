@@ -4540,8 +4540,10 @@ async function init() {
     updateSelectionUI();
   });
   if (DOM.multiSelectAll) DOM.multiSelectAll.addEventListener("click", function() {
-    for (var si = 0; si < STATE.results.length; si++) selectedIndices[si] = true;
-    lastSelectedIndex = STATE.results.length > 0 ? STATE.results.length - 1 : -1;
+    var allSelected = STATE.results.length > 0 && STATE.results.every(function(_record, index) { return selectedIndices[index]; });
+    if (allSelected) selectedIndices = {};
+    else for (var si = 0; si < STATE.results.length; si++) selectedIndices[si] = true;
+    lastSelectedIndex = allSelected ? -1 : STATE.results.length - 1;
     updateSelectionUI();
   });
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
@@ -4655,7 +4657,9 @@ async function init() {
   DOM.filterMinUnit.addEventListener("change", applySizeFilter);
   DOM.filterMaxUnit.addEventListener("change", applySizeFilter);
   DOM.extSelectAll.addEventListener("click", function() {
-    STATE.filterExtensions = STATE.extensionList.slice();
+    var allExtensions = STATE.extensionList.slice();
+    var selected = new Set(STATE.filterExtensions);
+    STATE.filterExtensions = allExtensions.length > 0 && allExtensions.every(function(extension) { return selected.has(extension); }) ? [] : allExtensions;
     STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
@@ -4674,6 +4678,14 @@ async function init() {
     if (!STATE.folderTree || STATE.folderTree.length === 0) return;
     var subtreeSet = new Set();
     var selfSet = new Set();
+    var currentSubtreeSet = getFolderSubtreeSet();
+    var currentSelfSet = getFolderSelfSet();
+    var allSelected = STATE.folderTree.every(function(node) { return isNodeFullySelected(node, currentSubtreeSet, currentSelfSet); });
+    if (allSelected) {
+      persistFolderSelection(subtreeSet, selfSet);
+      refreshFilterFolderSelectionState();
+      return;
+    }
     for (var i = 0; i < STATE.folderTree.length; i++) {
       setNodeSubtreeSelection(STATE.folderTree[i], true, subtreeSet, selfSet);
     }
