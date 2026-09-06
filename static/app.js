@@ -1856,6 +1856,8 @@ let searchPrefetchAbortController = null;
 let searchPrefetchPromise = null;
 let searchPrefetchCacheKey = null;
 let searchRequestId = 0;
+let filterSearchTimer = null;
+const FILTER_SEARCH_DEBOUNCE_MS = 200;
 let routeRenderId = 0;
 let apiAvailable = true;
 let apiFailureCount = 0;
@@ -2306,6 +2308,8 @@ function clearResultsSkeleton() {
 }
 
 function doSearch(append) {
+  clearTimeout(filterSearchTimer);
+  filterSearchTimer = null;
   const id = ++searchId;
   var activeFolderFilters = [];
   var folderMatchMode = null;
@@ -2969,6 +2973,24 @@ function setSearchVisualLoading(loading) {
   updateStatusBar();
 }
 
+function scheduleFilterSearch() {
+  clearTimeout(filterSearchTimer);
+  if (searchAbortController) searchAbortController.abort();
+  if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
+  searchId++;
+  searchRequestId++;
+  searchPrefetchAbortController = null;
+  searchPrefetchPromise = null;
+  searchPrefetchCacheKey = null;
+  STATE.isLoading = true;
+  setSearchVisualLoading(true);
+  syncStateToURL(true);
+  filterSearchTimer = setTimeout(() => {
+    filterSearchTimer = null;
+    doSearch();
+  }, FILTER_SEARCH_DEBOUNCE_MS);
+}
+
 function updateLoadInfo() {
   if (STATE.total === 0 && STATE.results.length === 0) {
     DOM.loadInfo.style.display = "none";
@@ -3244,7 +3266,7 @@ async function renderRepoFilter(routeId) {
     STATE.page = 1;
     STATE.results = [];
     updateFilterCancelButtons();
-    doSearch();
+    scheduleFilterSearch();
   });
 }
 
@@ -3318,7 +3340,7 @@ async function renderExtensionFilter(routeId) {
     STATE.page = 1;
     saveStoredExtensionFilters();
     updateFilterCancelButtons();
-    doSearch();
+    scheduleFilterSearch();
   });
 }
 
@@ -3657,7 +3679,7 @@ function persistFolderSelection(subtreeSet, selfSet) {
   saveStoredFolderFilters(STATE.repo);
   STATE.page = 1;
   updateFilterCancelButtons();
-  doSearch();
+  scheduleFilterSearch();
 }
 
 function collectFolderNodePaths(nodes, subtreePaths, selfPaths) {
@@ -4534,11 +4556,11 @@ async function init() {
     STATE.results = [];
     updateFilterCancelButtons();
     renderRepoFilter(routeRenderId);
-    doSearch();
+    scheduleFilterSearch();
   });
   DOM.folderFilterCancel.addEventListener("click", function() {
     persistFolderSelection(new Set(), new Set());
-    renderFilterFolderTree();
+    refreshFilterFolderSelectionState();
   });
   DOM.extFilterCancel.addEventListener("click", function() {
     STATE.filterExtensions = [];
@@ -4547,7 +4569,7 @@ async function init() {
     saveStoredExtensionFilters();
     updateFilterCancelButtons();
     renderExtensionFilter(routeRenderId);
-    doSearch();
+    scheduleFilterSearch();
   });
   DOM.searchFoldersToggle.addEventListener("change", function() {
     STATE.searchFolders = DOM.searchFoldersToggle.checked;
@@ -4629,7 +4651,7 @@ async function init() {
     STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
-    doSearch();
+    scheduleFilterSearch();
   });
   DOM.extDeselectAll.addEventListener("click", function() {
     var allExtNames = STATE.extensionList.slice();
@@ -4638,7 +4660,7 @@ async function init() {
     STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
-    doSearch();
+    scheduleFilterSearch();
   });
   DOM.folderSelectAll.addEventListener("click", function() {
     if (!STATE.folderTree || STATE.folderTree.length === 0) return;
@@ -4648,7 +4670,7 @@ async function init() {
       setNodeSubtreeSelection(STATE.folderTree[i], true, subtreeSet, selfSet);
     }
     persistFolderSelection(subtreeSet, selfSet);
-    renderFilterFolderTree();
+    refreshFilterFolderSelectionState();
   });
   DOM.folderDeselectAll.addEventListener("click", function() {
     if (!STATE.folderTree || STATE.folderTree.length === 0) return;
@@ -4666,7 +4688,7 @@ async function init() {
       if (!selfSet.has(allSelfPaths[j])) nextSelfSet.add(allSelfPaths[j]);
     }
     persistFolderSelection(nextSubtreeSet, nextSelfSet);
-    renderFilterFolderTree();
+    refreshFilterFolderSelectionState();
   });
   setupVirtualScroll();
   setupQuickScroll();
