@@ -1,12 +1,15 @@
 (function(root) {
   "use strict";
 
-  function createScrollAnchorManager({ viewport, candidates, ResizeObserverImpl = root.ResizeObserver, requestFrame = root.requestAnimationFrame.bind(root), cancelFrame = root.cancelAnimationFrame.bind(root) }) {
+  function createScrollAnchorManager({ viewport, candidates, ResizeObserverImpl = root.ResizeObserver, requestFrame = root.requestAnimationFrame.bind(root), cancelFrame = root.cancelAnimationFrame.bind(root), setTimer = root.setTimeout.bind(root), clearTimer = root.clearTimeout.bind(root), scrollIdleDelay = 140 }) {
     let anchor = null;
     let captureFrame = 0;
     let restoreFrame = 0;
     let disposed = false;
     let generation = 0;
+    let scrolling = false;
+    let scrollTimer = 0;
+    const idleTasks = new Set();
 
     function measure(node) {
       if (!node?.isConnected) return null;
@@ -30,6 +33,7 @@
 
     function restore(snapshot = anchor) {
       if (disposed || snapshot?.generation !== generation || !snapshot.node?.isConnected) return false;
+      if (scrolling) { capture(); return false; }
       const current = measure(snapshot.node);
       if (!current) return false;
       const delta = current.offset - snapshot.offset;
@@ -62,18 +66,45 @@
     function preserve(change) {
       const snapshot = capture();
       const result = change();
+      if (scrolling) { capture(); return result; }
       restore(snapshot);
       scheduleRestore(snapshot);
       return result;
     }
 
-    const resizeObserver = ResizeObserverImpl ? new ResizeObserverImpl(() => restore(anchor)) : null;
+    function finishScroll() {
+      scrollTimer = 0;
+      scrolling = false;
+      const tasks = [...idleTasks];
+      idleTasks.clear();
+      for (const task of tasks) task();
+      capture();
+    }
+
+    function scheduleScrollEnd() {
+      if (disposed) return;
+      if (scrollTimer) clearTimer(scrollTimer);
+      scrollTimer = setTimer(finishScroll, scrollIdleDelay);
+    }
+
+    function handleScrollIntent() { scrolling = true; scheduleScrollEnd(); }
+    function handleScroll() { if (scrolling) scheduleScrollEnd(); }
+
+    function whenIdle(task) {
+      if (disposed || typeof task !== "function") return;
+      if (!scrolling) task();
+      else idleTasks.add(task);
+    }
+
+    viewport.addEventListener?.("scroll", handleScroll, { passive: true });
+    for (const name of ["wheel", "touchstart", "pointerdown"]) viewport.addEventListener?.(name, handleScrollIntent, { passive: true });
+    const resizeObserver = ResizeObserverImpl ? new ResizeObserverImpl(() => scrolling ? capture() : restore(anchor)) : null;
     function observe(node) { resizeObserver?.observe(node); if (!anchor) capture(); }
     function unobserve(node) { resizeObserver?.unobserve(node); if (anchor?.node === node || node?.contains?.(anchor?.node)) anchor = null; }
     function invalidate() { generation += 1; if (captureFrame) cancelFrame(captureFrame); if (restoreFrame) cancelFrame(restoreFrame); captureFrame = 0; restoreFrame = 0; anchor = null; }
-    function dispose() { if (disposed) return; disposed = true; resizeObserver?.disconnect(); invalidate(); }
+    function dispose() { if (disposed) return; disposed = true; viewport.removeEventListener?.("scroll", handleScroll); for (const name of ["wheel", "touchstart", "pointerdown"]) viewport.removeEventListener?.(name, handleScrollIntent); if (scrollTimer) clearTimer(scrollTimer); scrollTimer = 0; scrolling = false; idleTasks.clear(); resizeObserver?.disconnect(); invalidate(); }
 
-    return Object.freeze({ capture, restore, remember, preserve, observe, unobserve, invalidate, dispose });
+    return Object.freeze({ capture, restore, remember, preserve, observe, unobserve, invalidate, dispose, whenIdle, get scrolling() { return scrolling; } });
   }
 
   root.VoiceOfMLReaderScroll = Object.freeze({ createScrollAnchorManager });
