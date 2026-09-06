@@ -3197,11 +3197,12 @@ async function renderFilters(routeId) {
     DOM.filterFolderSection.style.display = "";
     DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">加载中...</div>';
     var folderTree = folderTreeCache.get(folderRepoFull) || null;
+    var initialFolderTree = null;
     if (!folderTree || !folderTree.length) {
       try {
         var initialSidebar = await loadSidebarInitial(folderRepo);
         if (initialSidebar && Array.isArray(initialSidebar.folders)) {
-          folderTree = initialSidebar.folders.map(function(folder) {
+          initialFolderTree = initialSidebar.folders.map(function(folder) {
             return { name: folder.name, path: folder.path || folder.name, count: folder.count || 0, children: [], hasChildren: false, hasDirectFiles: true };
           });
         }
@@ -3226,6 +3227,9 @@ async function renderFilters(routeId) {
         folderTree = localTree && localTree.tree || [];
         if (folderTree.length) folderTreeCache.set(folderRepoFull, folderTree);
       } catch (e) {}
+    }
+    if ((!folderTree || !folderTree.length) && initialFolderTree && initialFolderTree.length) {
+      folderTree = initialFolderTree;
     }
     if (routeId && routeId !== routeRenderId) return;
     if (STATE.mode !== "repo" || STATE.repo !== folderRepo || STATE.repoFull !== folderRepoFull) return;
@@ -4724,7 +4728,11 @@ async function init() {
   loadReaderAssets().then(function() {
     clearResultTemplateCache();
     if (STATE.results.length > 0) renderResults();
-    if (STATE.mode === "repo") renderBrowser(STATE.browserPath || "", ++routeRenderId);
+    if (STATE.mode === "repo") {
+      const routeId = ++routeRenderId;
+      renderBrowser(STATE.browserPath || "", routeId);
+      renderFilters(routeId);
+    }
   });
   fetchHitokoto();
   setInterval(fetchHitokoto, 30000);
