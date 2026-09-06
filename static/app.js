@@ -2228,8 +2228,12 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
     if (ok) {
       STATE.extensionList = extensionList;
       updateRandomTxtVisibility();
-      renderExtensionFilter(routeRenderId);
-      if (STATE.mode === "global") renderRepoFilter(routeRenderId);
+      if (STATE.mode === "repo") {
+        renderFilters(routeRenderId);
+      } else {
+        renderExtensionFilter(routeRenderId);
+        renderRepoFilter(routeRenderId);
+      }
       if (STATE._initialActive) {
         STATE._initialActive = false;
       } else if (triggerSearchAfterLoad) {
