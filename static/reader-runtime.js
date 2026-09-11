@@ -3,7 +3,7 @@
 
   const FEATURE_MATRIX = Object.freeze({
     pdf: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false },
-    "pdf-pages": { toc: false, search: false, zoom: true, bookmarks: true, pagination: true, media: false },
+    "pdf-pages": { toc: true, search: false, zoom: true, bookmarks: true, pagination: true, media: false },
     foliate: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false },
     "epub-chapters": { toc: true, search: false, zoom: true, bookmarks: true, pagination: false, media: false },
     docx: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false },

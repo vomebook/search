@@ -1,5 +1,34 @@
 (function (root) {
   "use strict";
+  (function preloadPdfOpeningResources() {
+    try {
+      const params = new URLSearchParams(location.search);
+      const id = params.get("id") || "";
+      let source = params.get("url") || "";
+      if (!source && id) {
+        for (const key of [`reader-source:${id}`, `reader-resolve:${id}`]) {
+          const value = JSON.parse(sessionStorage.getItem(key) || "null");
+          if (value?.url) { source = value.url; break; }
+        }
+      }
+      if (!source) return;
+      if (source.startsWith("/api/")) source = `https://voiceofml-search.hf.space${source}`;
+      const manifestUrl = new URL(source, location.origin);
+      const path = manifestUrl.searchParams.get("path") || "";
+      const bucket = manifestUrl.origin === "https://voiceofml-search.hf.space" && manifestUrl.pathname === "/api/reader-bucket-resource" && /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/page-manifest\.json$/.test(path);
+      const direct = ["huggingface.co", "hf-mirror.com"].includes(manifestUrl.hostname) && /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/page-manifest\.json$/.test(manifestUrl.pathname);
+      if (!bucket && !direct) return;
+      const pageUrl = new URL(manifestUrl.href);
+      if (bucket) pageUrl.searchParams.set("path", path.replace(/\/page-manifest\.json$/, "/pages/page-000001.webp"));
+      else pageUrl.pathname = manifestUrl.pathname.replace(/\/page-manifest\.json$/, "/pages/page-000001.webp");
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 120000);
+      const manifestRequest = fetch(manifestUrl.href, { priority: "low", signal: controller.signal }).then(async (response) => { const bytes = await response.arrayBuffer(); if (bytes.byteLength > 8 * 1024 * 1024) throw new Error("READER_RESOURCE_LIMIT"); return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers }); }).finally(() => clearTimeout(timer));
+      const preload = { manifestUrl: manifestUrl.href, manifest: manifestRequest, pageUrl: pageUrl.href, image: null };
+      preload.manifest.catch(() => {});
+      if (!navigator.connection?.saveData) { preload.image = new Image(); preload.image.decoding = "async"; preload.image.fetchPriority = "low"; preload.image.src = pageUrl.href; }
+      root.__VOICE_PDF_PRELOAD__ = preload;
+    } catch (_) {}
+  })();
   const ReaderMode = Object.freeze({ UNSUPPORTED: 0, ORIGINAL: 1, CONVERTED: 2, PENDING: 3, FAILED: 4 });
   const modes = Object.freeze({
     pdf: "pdf", "pdf-pages": "pdf-pages", epub: "foliate", mobi: "foliate", azw: "foliate", azw3: "foliate", fb2: "foliate", fbz: "foliate", "epub-chapters": "epub-chapters", docx: "docx", html: "html", htm: "html", txt: "text", md: "markdown", markdown: "markdown",
