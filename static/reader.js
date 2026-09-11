@@ -34,6 +34,7 @@ if (extension === "pdf" && /\/api\/reader-bucket-resource\?/.test(sourceUrl)
 }
 let resolvedReaderData = localReaderData;
 let cachedReaderData = null;
+let pdfFirstPagePreload = null;
 if (localReaderData) { if (localReaderData.title) params.set("title", localReaderData.title); if (localReaderData.extension) params.set("ext", localReaderData.extension); if (localReaderData.repo) params.set("path", [localReaderData.repo, ...(localReaderData.folder || [])].join("/")); }
 try { const cached = sessionStorage.getItem(`reader-resolve:${readerId}`); if (cached) { cachedReaderData = JSON.parse(cached); resolvedReaderData = cachedReaderData; sessionStorage.removeItem(`reader-resolve:${readerId}`); } } catch (_) {}
 const readerLifecycle = readerRuntime.state.lifecycle;
@@ -529,6 +530,23 @@ async function validateArchiveResponse(response) { if (!response.ok) return resp
  }
 function loadPdfTaskWithTimeout(pdfjs, options, url) { const task = pdfjs.getDocument(options(url)); return new Promise((resolve, reject) => { const timeout = setTimeout(() => { task.destroy().catch(() => {}); reject(new Error("reader PDF timeout")); }, PDF_PROXY_TIMEOUT_MS); task.promise.then((document) => { clearTimeout(timeout); resolve(document); }, (error) => { clearTimeout(timeout); reject(error); }); }); }
 function loadPdfWithTimeout(pdfjs, options) { return loadPdfTaskWithTimeout(pdfjs, options, contentUrl).catch((error) => { if (error && error.name === "AbortError") throw error; return loadPdfTaskWithTimeout(pdfjs, options, sourceUrl); }); }
+function preloadPdfFirstPage() {
+  try {
+    const manifestUrl = new URL(sourceUrl, location.href);
+    let pageUrl;
+    if (manifestUrl.pathname === "/api/reader-bucket-resource") {
+      const path = manifestUrl.searchParams.get("path") || "";
+      if (!path.endsWith("/page-manifest.json")) return;
+      pageUrl = new URL(manifestUrl.href);
+      pageUrl.searchParams.set("path", path.replace(/\/page-manifest\.json$/, "/pages/page-000001.webp"));
+    } else if (manifestUrl.pathname.endsWith("/page-manifest.json")) {
+      pageUrl = new URL(manifestUrl.href.replace(/\/page-manifest\.json(?:\?.*)?$/, "/pages/page-000001.webp"));
+    } else return;
+    pdfFirstPagePreload = new Image();
+    pdfFirstPagePreload.decoding = "async";
+    pdfFirstPagePreload.src = pageUrl.href;
+  } catch (_) {}
+}
 async function renderPdfPages(prepared) {
   const response = await prepared;
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -541,7 +559,7 @@ async function renderPdfPages(prepared) {
   if (Array.isArray(manifest.toc) && manifest.toc.length) setToc(manifest.toc.map((item) => ({ label: `${item.title} · 第 ${item.page} 页`, depth: item.depth, activate: () => goToPage(item.page) })));
   const observer = new IntersectionObserver((items) => items.forEach((entry) => { entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0"; if (entry.isIntersecting) renderPdfManifestShell(entry.target); }), { root: viewport, rootMargin: "1200px 0px" });
   const pageObserver = new IntersectionObserver(() => scheduleMarkerSync(), { root: viewport, threshold: [0, 0.5, 1] });
-  const createShell = (page) => { const shell = document.createElement("section"); shell.className = "reader-page"; shell.dataset.page = String(page); shell.style.aspectRatio = "1 / 1.414"; shell.tabIndex = 0; shell.setAttribute("role", "region"); shell.setAttribute("aria-label", `第 ${page} 页`); const image = new Image(); image.alt = `第 ${page} 页`; image.decoding = "async"; shell.appendChild(image); shell.addEventListener("focus", () => renderPdfManifestShell(shell)); observer.observe(shell); pageObserver.observe(shell); return shell; };
+  const createShell = (page) => { const shell = document.createElement("section"); shell.className = "reader-page"; shell.dataset.page = String(page); shell.style.aspectRatio = "1 / 1.414"; shell.tabIndex = 0; shell.setAttribute("role", "region"); shell.setAttribute("aria-label", `第 ${page} 页`); const image = page === 1 && pdfFirstPagePreload && (!pdfFirstPagePreload.complete || pdfFirstPagePreload.naturalWidth) ? pdfFirstPagePreload : new Image(); image.alt = `第 ${page} 页`; image.decoding = "async"; shell.appendChild(image); shell.addEventListener("focus", () => renderPdfManifestShell(shell)); observer.observe(shell); pageObserver.observe(shell); return shell; };
   const firstShell = createShell(1); content.appendChild(firstShell); await renderPdfManifestShell(firstShell, false, true);
   pdfShellsReady = (async () => { for (let start = 2; start <= documentState.pageCount; start += 24) { const fragment = document.createDocumentFragment(); for (let page = start; page < Math.min(start + 24, documentState.pageCount + 1); page++) fragment.appendChild(createShell(page)); content.appendChild(fragment); await new Promise((resolve) => setTimeout(resolve, 0)); } })(); await pdfShellsReady;
   if (documentState.restoredEntry?.page) await goToPage(documentState.restoredEntry.page); else syncCurrentPageFromMarker();
@@ -1050,7 +1068,7 @@ async function renderChapterManifest(prepared) {
 
 function renderImageDocument(image) { content.appendChild(image); status.textContent = "图片"; }
 function renderMediaDocument() { return renderMedia(capability.mode); }
-function disposeFormatResources(mode) { if (["pdf", "pdf-pages"].includes(mode)) { try { const task = pdfDocument?.destroy?.(); task?.catch?.(() => {}); } catch (_) {} pdfDocument = null; pdfPageManifest = null; } if (mode === "foliate") { foliateSectionObserver?.disconnect(); foliateSectionVirtualizer?.dispose(); foliateChapterRepository?.dispose(); foliateSectionVirtualizer = null; foliateChapterRepository = null; foliateSectionLoader = null; foliateSectionSettler = null; try { const closing = epubRendition?.close?.(); closing?.catch?.(() => {}); } catch (_) {} epubRendition = null; epubBook = null; } if (mode === "html") { htmlFrame?.remove?.(); htmlFrame = null; } if (["audio", "video"].includes(mode) && mediaElement) { mediaElement.pause(); mediaElement.removeAttribute("src"); mediaElement.load(); mediaElement = null; } }
+function disposeFormatResources(mode) { if (["pdf", "pdf-pages"].includes(mode)) { try { const task = pdfDocument?.destroy?.(); task?.catch?.(() => {}); } catch (_) {} pdfDocument = null; pdfPageManifest = null; pdfFirstPagePreload = null; } if (mode === "foliate") { foliateSectionObserver?.disconnect(); foliateSectionVirtualizer?.dispose(); foliateChapterRepository?.dispose(); foliateSectionVirtualizer = null; foliateChapterRepository = null; foliateSectionLoader = null; foliateSectionSettler = null; try { const closing = epubRendition?.close?.(); closing?.catch?.(() => {}); } catch (_) {} epubRendition = null; epubBook = null; } if (mode === "html") { htmlFrame?.remove?.(); htmlFrame = null; } if (["audio", "video"].includes(mode) && mediaElement) { mediaElement.pause(); mediaElement.removeAttribute("src"); mediaElement.load(); mediaElement = null; } }
 function renderTextDocument(prepared) { return renderText(false, prepared); }
 function renderMarkdownDocument(prepared) { return renderText(true, prepared); }
 function navigateFormat(mode, value) { if (["pdf", "pdf-pages", "docx"].includes(mode)) return goToPage(value); if (["foliate", "epub-chapters"].includes(mode)) return navigateTocEntry(Number(value)); const entry = navigationState.tocEntries[Number(value)]; return entry?.activate ? Promise.resolve(entry.activate()) : Promise.resolve(); }
@@ -1103,7 +1121,7 @@ function loadFoliateDocument() { return import("/search/static/foliate-reader/vi
 function prepareDocumentDirect() {
   const loaders = {
     "epub-chapters": loadChapterManifestDocument,
-    "pdf-pages": () => fetchReaderResponse(),
+    "pdf-pages": () => { preloadPdfFirstPage(); return fetchReaderResponse(); },
     pdf: loadPdfDocument,
     markdown: loadMarkdownDocument,
     html: loadHtmlDocument,
@@ -1117,4 +1135,4 @@ function prepareDocumentDirect() {
   return loaders[capability.mode] ? loaders[capability.mode]() : Promise.resolve(null);
 }
 
-async function renderPdfManifestShell(shell, force = false, priority = false) { if (shell.dataset.renderState === "rendering" || (!force && shell.dataset.renderState === "rendered")) return shell._renderPromise; let finish; shell._renderPromise = new Promise((resolve) => { finish = resolve; }); shell.dataset.renderState = "rendering"; await acquirePdfRenderSlot(priority); try { const entry = pdfPageManifest.entries[Number(shell.dataset.page) - 1], image = shell.querySelector("img"); image.src = sourceUrl.includes("/api/reader-bucket-resource?") ? new URL("https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + encodeURIComponent(entry.path)).href : new URL("/datasets/vomebook/Reader-Assets/resolve/main/" + entry.path, "https://huggingface.co").href; await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; }); shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`; image.classList.add("ready"); shell.dataset.renderState = "rendered"; shell.dataset.renderUsedAt = String(Date.now()); } catch (error) { shell.dataset.renderState = "idle"; if (priority) throw error; } finally { releasePdfRenderSlot(); finish(); delete shell._renderPromise; } }
+async function renderPdfManifestShell(shell, force = false, priority = false) { if (shell.dataset.renderState === "rendering" || (!force && shell.dataset.renderState === "rendered")) return shell._renderPromise; let finish; shell._renderPromise = new Promise((resolve) => { finish = resolve; }); shell.dataset.renderState = "rendering"; await acquirePdfRenderSlot(priority); try { const entry = pdfPageManifest.entries[Number(shell.dataset.page) - 1], image = shell.querySelector("img"), target = sourceUrl.includes("/api/reader-bucket-resource?") ? new URL("https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + encodeURIComponent(entry.path)).href : new URL("/datasets/vomebook/Reader-Assets/resolve/main/" + entry.path, "https://huggingface.co").href; if (image.src !== target) image.src = target; if (!(image.complete && image.naturalWidth)) await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; }); shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`; image.classList.add("ready"); shell.dataset.renderState = "rendered"; shell.dataset.renderUsedAt = String(Date.now()); } catch (error) { shell.dataset.renderState = "idle"; if (priority) throw error; } finally { releasePdfRenderSlot(); finish(); delete shell._renderPromise; } }
