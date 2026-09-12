@@ -1,0 +1,11 @@
+{
+  "overrides": [
+    {
+      "files": [
+        "static/reader*.{js,css,html}",
+        "scripts/check_reader_release.mjs"
+      ],
+      "options": { "printWidth": 100, "trailingComma": "none" }
+    }
+  ]
+}
