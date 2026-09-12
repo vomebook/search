@@ -4,7 +4,7 @@
   let databasePromise = null;
   const subscribers = new Set(), storeChannel = typeof root.BroadcastChannel === "function" ? new root.BroadcastChannel("voiceofml-reader-store-v1") : null;
   let disposed = false;
-  storeChannel && (storeChannel.onmessage = (event) => { for (const listener of subscribers) listener({ ...event.data, remote: true }); });
+  storeChannel && (storeChannel.onmessage = (event) => { if (disposed) return; for (const listener of subscribers) listener({ ...event.data, remote: true }); });
   function notify(change) { if (disposed) return; try { storeChannel?.postMessage(change); } catch (_) {} for (const listener of subscribers) listener({ ...change, remote: false }); }
   function subscribe(listener) { if (typeof listener !== "function") throw new TypeError("Reader store subscriber must be a function"); if (disposed) return () => {}; subscribers.add(listener); return () => subscribers.delete(listener); }
   function dispose() { if (disposed) return; disposed = true; subscribers.clear(); try { storeChannel?.close?.(); } catch (_) {} }
