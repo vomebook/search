@@ -1,19 +1,82 @@
-(function(root) {
+(function (root) {
   "use strict";
 
   const FEATURE_MATRIX = Object.freeze({
     pdf: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false },
-    "pdf-pages": { toc: true, search: false, zoom: true, bookmarks: true, pagination: true, media: false },
-    foliate: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false },
-    "epub-chapters": { toc: true, search: false, zoom: true, bookmarks: true, pagination: false, media: false },
+    "pdf-pages": {
+      toc: true,
+      search: false,
+      zoom: true,
+      bookmarks: true,
+      pagination: true,
+      media: false
+    },
+    foliate: {
+      toc: true,
+      search: true,
+      zoom: true,
+      bookmarks: true,
+      pagination: false,
+      media: false
+    },
+    "epub-chapters": {
+      toc: true,
+      search: false,
+      zoom: true,
+      bookmarks: true,
+      pagination: false,
+      media: false
+    },
     docx: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false },
     html: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false },
-    text: { toc: false, search: true, zoom: true, bookmarks: true, pagination: false, media: false },
-    markdown: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false },
-    image: { toc: false, search: false, zoom: true, bookmarks: true, pagination: false, media: false },
-    audio: { toc: false, search: false, zoom: false, bookmarks: true, pagination: false, media: true },
-    video: { toc: false, search: false, zoom: false, bookmarks: true, pagination: false, media: true },
-    unsupported: { toc: false, search: false, zoom: false, bookmarks: false, pagination: false, media: false },
+    text: {
+      toc: false,
+      search: true,
+      zoom: true,
+      bookmarks: true,
+      pagination: false,
+      media: false
+    },
+    markdown: {
+      toc: true,
+      search: true,
+      zoom: true,
+      bookmarks: true,
+      pagination: false,
+      media: false
+    },
+    image: {
+      toc: false,
+      search: false,
+      zoom: true,
+      bookmarks: true,
+      pagination: false,
+      media: false
+    },
+    audio: {
+      toc: false,
+      search: false,
+      zoom: false,
+      bookmarks: true,
+      pagination: false,
+      media: true
+    },
+    video: {
+      toc: false,
+      search: false,
+      zoom: false,
+      bookmarks: true,
+      pagination: false,
+      media: true
+    },
+    unsupported: {
+      toc: false,
+      search: false,
+      zoom: false,
+      bookmarks: false,
+      pagination: false,
+      media: false
+    }
   });
 
   function createEventBus() {
@@ -22,15 +85,30 @@
     function on(type, listener) {
       if (disposed) return () => {};
       const set = listeners.get(type) || new Set();
-      set.add(listener); listeners.set(type, set);
-      return () => { set.delete(listener); if (!set.size) listeners.delete(type); };
+      set.add(listener);
+      listeners.set(type, set);
+      return () => {
+        set.delete(listener);
+        if (!set.size) listeners.delete(type);
+      };
     }
     function emit(type, detail) {
       if (disposed) return;
-      for (const listener of [...(listeners.get(type) || []), ...(listeners.get("*") || [])]) listener(detail, type);
+      for (const listener of [...(listeners.get(type) || []), ...(listeners.get("*") || [])])
+        listener(detail, type);
     }
-    function dispose() { disposed = true; listeners.clear(); }
-    return Object.freeze({ on, emit, dispose, get disposed() { return disposed; } });
+    function dispose() {
+      disposed = true;
+      listeners.clear();
+    }
+    return Object.freeze({
+      on,
+      emit,
+      dispose,
+      get disposed() {
+        return disposed;
+      }
+    });
   }
 
   function createReaderRuntime(options = {}) {
@@ -38,13 +116,20 @@
     const state = {
       lifecycle: { phase: "startup", stage: "startup", disposed: false, errorCode: "" },
       source: { id: "", url: "", contentUrl: "", downloadUrl: "", extension: "", metadata: null },
-      document: { title: "", zoom: 1, page: 1, pageCount: 0, restoredEntry: null, restorationReady: false },
+      document: {
+        title: "",
+        zoom: 1,
+        page: 1,
+        pageCount: 0,
+        restoredEntry: null,
+        restorationReady: false
+      },
       navigation: { tocEntries: [], currentChapterIndex: -1 },
       search: { query: "", results: [], index: -1 },
       panel: { open: false, selected: "toc", showingAllBookmarks: false, editingBookmark: null },
       formats: { active: null, pdf: {}, foliate: {}, html: {}, media: {} },
       capability: null,
-      ...(options.initialState || {}),
+      ...(options.initialState || {})
     };
     const generations = new Map();
     const disposables = new Set();
@@ -59,8 +144,15 @@
         navigation: Object.freeze({ ...state.navigation }),
         search: Object.freeze({ ...state.search }),
         panel: Object.freeze({ ...state.panel }),
-        formats: Object.freeze(Object.fromEntries(Object.entries(state.formats).map(([name, value]) => [name, Object.freeze({ ...value })]))),
-        capability: state.capability,
+        formats: Object.freeze(
+          Object.fromEntries(
+            Object.entries(state.formats).map(([name, value]) => [
+              name,
+              Object.freeze({ ...value })
+            ])
+          )
+        ),
+        capability: state.capability
       });
     }
     function update(domain, patch) {
@@ -101,25 +193,53 @@
       events.emit("generation", { name, value });
       return value;
     }
-    function currentGeneration(name) { return generations.get(name) || 0; }
-    function isCurrent(name, value) { return !state.lifecycle.disposed && generations.get(name) === value; }
-    function track(disposable) { if (disposable) disposables.add(disposable); return disposable; }
-    function untrack(disposable) { disposables.delete(disposable); }
+    function currentGeneration(name) {
+      return generations.get(name) || 0;
+    }
+    function isCurrent(name, value) {
+      return !state.lifecycle.disposed && generations.get(name) === value;
+    }
+    function track(disposable) {
+      if (disposable) disposables.add(disposable);
+      return disposable;
+    }
+    function untrack(disposable) {
+      disposables.delete(disposable);
+    }
     function schedule(callback, delay = 0) {
-      const handle = setTimeout(() => { timers.delete(handle); callback(); }, delay);
+      const handle = setTimeout(() => {
+        timers.delete(handle);
+        callback();
+      }, delay);
       timers.add(handle);
       return handle;
     }
-    function cancel(handle) { if (!timers.has(handle)) return; clearTimeout(handle); timers.delete(handle); }
+    function cancel(handle) {
+      if (!timers.has(handle)) return;
+      clearTimeout(handle);
+      timers.delete(handle);
+    }
     function frame(callback) {
-      const handle = requestAnimationFrame(() => { frames.delete(handle); callback(); });
+      const handle = requestAnimationFrame(() => {
+        frames.delete(handle);
+        callback();
+      });
       frames.add(handle);
       return handle;
     }
-    function cancelFrame(handle) { if (!frames.has(handle)) return; cancelAnimationFrame(handle); frames.delete(handle); }
+    function cancelFrame(handle) {
+      if (!frames.has(handle)) return;
+      cancelAnimationFrame(handle);
+      frames.delete(handle);
+    }
     function negotiate(capability) {
       const mode = capability?.mode || "unsupported";
-      const value = Object.freeze({ ...capability, features: Object.freeze({ ...(capability?.features || FEATURE_MATRIX[mode] || FEATURE_MATRIX.unsupported) }) });
+      const value = Object.freeze({
+        ...capability,
+        features: Object.freeze({
+          ...(capability?.features || FEATURE_MATRIX[mode] || FEATURE_MATRIX.unsupported)
+        })
+      });
       state.capability = value;
       events.emit("capability", value);
       return value;
@@ -130,18 +250,46 @@
       state.lifecycle.phase = "disposed";
       for (const name of generations.keys()) nextGeneration(name);
       for (const disposable of [...disposables].reverse()) {
-        try { if (typeof disposable === "function") disposable(); else disposable.dispose?.(); } catch (_) {}
+        try {
+          if (typeof disposable === "function") disposable();
+          else disposable.dispose?.();
+        } catch (_) {}
       }
       for (const handle of timers) clearTimeout(handle);
       for (const handle of frames) cancelAnimationFrame(handle);
-      timers.clear(); frames.clear();
+      timers.clear();
+      frames.clear();
       disposables.clear();
       events.emit("phase", { phase: "disposed", state: snapshot() });
       events.emit("dispose", snapshot());
       events.dispose();
     }
-    return Object.freeze({ state, events, snapshot, update, updateFormat, setPhase, setStage, fail, nextGeneration, currentGeneration, isCurrent, track, untrack, schedule, cancel, frame, cancelFrame, negotiate, dispose });
+    return Object.freeze({
+      state,
+      events,
+      snapshot,
+      update,
+      updateFormat,
+      setPhase,
+      setStage,
+      fail,
+      nextGeneration,
+      currentGeneration,
+      isCurrent,
+      track,
+      untrack,
+      schedule,
+      cancel,
+      frame,
+      cancelFrame,
+      negotiate,
+      dispose
+    });
   }
 
-  root.VoiceOfMLReaderRuntime = Object.freeze({ FEATURE_MATRIX, createEventBus, createReaderRuntime });
+  root.VoiceOfMLReaderRuntime = Object.freeze({
+    FEATURE_MATRIX,
+    createEventBus,
+    createReaderRuntime
+  });
 })(typeof self !== "undefined" ? self : globalThis);

@@ -1,4 +1,4 @@
-(function(root) {
+(function (root) {
   "use strict";
 
   function createReaderRequestManager(options = {}) {
@@ -17,10 +17,9 @@
       active.delete(record);
     }
 
-    function abort(record) {
+    function abort(record, reason) {
       if (record.settled) return;
-      const reason = new DOMException("Reader request aborted", "AbortError");
-      record.controller.abort();
+      record.controller.abort(reason);
       record.abortBody?.(reason);
       settle(record);
     }
@@ -37,7 +36,8 @@
 
     function wrapResponse(record, response) {
       const ResponseImpl = root.Response || (typeof Response === "function" ? Response : null);
-      const ReadableStreamImpl = root.ReadableStream || (typeof ReadableStream === "function" ? ReadableStream : null);
+      const ReadableStreamImpl =
+        root.ReadableStream || (typeof ReadableStream === "function" ? ReadableStream : null);
       if (!response?.body?.getReader || !ResponseImpl || !ReadableStreamImpl) {
         settle(record);
         return response;
@@ -69,12 +69,12 @@
         cancel(reason) {
           settle(record);
           return sourceReader.cancel(reason);
-        },
+        }
       });
       return new ResponseImpl(stream, {
         status: response.status,
         statusText: response.statusText,
-        headers: response.headers,
+        headers: response.headers
       });
     }
 
@@ -82,24 +82,37 @@
       if (disposed) return Promise.reject(new DOMException("Reader disposed", "AbortError"));
       if (pending.has(url)) return responseForCaller(pending.get(url));
       const controller = new AbortControllerImpl();
-      const record = { controller, timeout: null, promise: null, responseClaimed: false, settled: false, abortBody: null };
-      record.timeout = setTimer(() => abort(record), timeoutMs);
+      const record = {
+        controller,
+        timeout: null,
+        promise: null,
+        responseClaimed: false,
+        settled: false,
+        abortBody: null
+      };
+      record.timeout = setTimer(
+        () => abort(record, new DOMException("Reader request timed out", "TimeoutError")),
+        timeoutMs
+      );
       active.add(record);
       record.promise = Promise.resolve()
         .then(() => {
-          if (controller.signal.aborted) throw new DOMException("Reader request aborted", "AbortError");
+          controller.signal.throwIfAborted();
           return fetchImpl(url, { signal: controller.signal });
         })
         .then(async (response) => {
           if (controller.signal.aborted) {
-            const reason = new DOMException("Reader request aborted", "AbortError");
-            try { await response.body?.cancel?.(reason); } catch (_) {}
+            const reason = controller.signal.reason;
+            try {
+              await response.body?.cancel?.(reason);
+            } catch (_) {}
             throw reason;
           }
           return wrapResponse(record, response);
         })
         .catch((error) => {
           settle(record);
+          controller.signal.throwIfAborted();
           throw error;
         })
         .finally(() => {
@@ -112,11 +125,23 @@
     function dispose() {
       if (disposed) return;
       disposed = true;
-      for (const record of active) abort(record);
+      for (const record of active) abort(record, new DOMException("Reader disposed", "AbortError"));
       pending.clear();
     }
 
-    return Object.freeze({ request, dispose, get pendingCount() { return pending.size; }, get activeCount() { return active.size; }, get disposed() { return disposed; } });
+    return Object.freeze({
+      request,
+      dispose,
+      get pendingCount() {
+        return pending.size;
+      },
+      get activeCount() {
+        return active.size;
+      },
+      get disposed() {
+        return disposed;
+      }
+    });
   }
 
   root.VoiceOfMLReaderRequests = Object.freeze({ createReaderRequestManager });
