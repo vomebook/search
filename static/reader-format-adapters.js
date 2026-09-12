@@ -1,6 +1,6 @@
 (function(root) {
   "use strict";
-  const METHODS = Object.freeze(["open", "render", "navigate", "search", "progress", "restore", "dispose"]);
+  const METHODS = Object.freeze(["open", "render", "restore", "dispose"]);
   function createAdapterRegistry() {
     const adapters = new Map();
     let active = null;

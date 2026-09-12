@@ -257,7 +257,7 @@ class Reader {
         doc.addEventListener('keydown', this.#handleKeydown.bind(this))
     }
     #onRelocate({ detail }) {
-        const { fraction, location, tocItem, pageItem } = detail
+        const { fraction, location, tocItem, pageItem, cfi } = detail
         const percent = percentFormat.format(fraction)
         const loc = pageItem
             ? `Page ${pageItem.label}`
@@ -267,10 +267,9 @@ class Reader {
         slider.value = fraction
         slider.title = `${percent} · ${loc}`
         if (tocItem?.href) this.#tocView?.setCurrentHref?.(tocItem.href)
-        const start = location?.start || {}
         if (window.parent !== window) window.parent.postMessage({
             type: 'voice-foliate-relocate', fraction,
-            cfi: start.cfi || '', href: start.href || tocItem?.href || ''
+            cfi: cfi || '', href: tocItem?.href || ''
         }, globalThis.location.origin)
     }
 }
