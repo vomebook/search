@@ -642,6 +642,7 @@ class Resources {
         this.manifest = $$($manifest, 'item')
             .map(getAttributes('href', 'id', 'media-type', 'properties', 'media-overlay'))
             .map(item => {
+                item.rawHref = item.href
                 item.href = resolveHref(item.href)
                 item.properties = item.properties?.split(/\s/)
                 return item
@@ -993,6 +994,14 @@ ${doc.querySelector('parsererror').innerText}`)
                 linear,
                 pageSpread: getPageSpread(properties),
                 resolveHref: href => resolveURL(href, item.href),
+                resolveResourceHref: href => {
+                    // Resolve raw URIs before decoding once to a literal ZIP member name.
+                    const root = 'https://invalid.invalid/'
+                    const base = new URL(item.rawHref, root + opfPath.split('/').map(encodeURIComponent).join('/'))
+                    const url = new URL(href, base)
+                    if (base.origin !== new URL(root).origin || url.origin !== base.origin || url.hash) return null
+                    return decodeURIComponent(url.pathname.slice(1))
+                },
                 mediaOverlay: item.mediaOverlay
                     ? this.resources.getItemByID(item.mediaOverlay) : null,
             }

@@ -7,7 +7,23 @@
     const setTimer = options.setTimer || root.setTimeout.bind(root);
     const clearTimer = options.clearTimer || root.clearTimeout.bind(root);
     const pending = new Map();
+    const active = new Set();
     let disposed = false;
+
+    function settle(record) {
+      if (record.settled) return;
+      record.settled = true;
+      clearTimer(record.timeout);
+      active.delete(record);
+    }
+
+    function abort(record) {
+      if (record.settled) return;
+      const reason = new DOMException("Reader request aborted", "AbortError");
+      record.controller.abort();
+      record.abortBody?.(reason);
+      settle(record);
+    }
 
     function responseForCaller(record) {
       return record.promise.then((response) => {
@@ -23,33 +39,35 @@
       const ResponseImpl = root.Response || (typeof Response === "function" ? Response : null);
       const ReadableStreamImpl = root.ReadableStream || (typeof ReadableStream === "function" ? ReadableStream : null);
       if (!response?.body?.getReader || !ResponseImpl || !ReadableStreamImpl) {
-        clearTimer(record.timeout);
+        settle(record);
         return response;
       }
       const sourceReader = response.body.getReader();
-      let settled = false;
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        clearTimer(record.timeout);
-      };
       const stream = new ReadableStreamImpl({
+        start(controller) {
+          record.abortBody = (reason) => {
+            controller.error(reason);
+            sourceReader.cancel(reason).catch(() => {});
+          };
+        },
         async pull(controller) {
           try {
             const result = await sourceReader.read();
+            if (record.settled) return;
             if (result.done) {
-              settle();
+              settle(record);
               controller.close();
             } else {
               controller.enqueue(result.value);
             }
           } catch (error) {
-            settle();
+            if (record.settled) return;
+            settle(record);
             controller.error(error);
           }
         },
         cancel(reason) {
-          settle();
+          settle(record);
           return sourceReader.cancel(reason);
         },
       });
@@ -64,13 +82,24 @@
       if (disposed) return Promise.reject(new DOMException("Reader disposed", "AbortError"));
       if (pending.has(url)) return responseForCaller(pending.get(url));
       const controller = new AbortControllerImpl();
-      const timeout = setTimer(() => controller.abort(), timeoutMs);
-      const record = { controller, timeout, promise: null, responseClaimed: false };
+      const record = { controller, timeout: null, promise: null, responseClaimed: false, settled: false, abortBody: null };
+      record.timeout = setTimer(() => abort(record), timeoutMs);
+      active.add(record);
       record.promise = Promise.resolve()
-        .then(() => fetchImpl(url, { signal: controller.signal }))
-        .then((response) => wrapResponse(record, response))
+        .then(() => {
+          if (controller.signal.aborted) throw new DOMException("Reader request aborted", "AbortError");
+          return fetchImpl(url, { signal: controller.signal });
+        })
+        .then(async (response) => {
+          if (controller.signal.aborted) {
+            const reason = new DOMException("Reader request aborted", "AbortError");
+            try { await response.body?.cancel?.(reason); } catch (_) {}
+            throw reason;
+          }
+          return wrapResponse(record, response);
+        })
         .catch((error) => {
-          clearTimer(timeout);
+          settle(record);
           throw error;
         })
         .finally(() => {
@@ -83,14 +112,11 @@
     function dispose() {
       if (disposed) return;
       disposed = true;
-      for (const record of pending.values()) {
-        clearTimer(record.timeout);
-        record.controller.abort();
-      }
+      for (const record of active) abort(record);
       pending.clear();
     }
 
-    return Object.freeze({ request, dispose, get pendingCount() { return pending.size; }, get disposed() { return disposed; } });
+    return Object.freeze({ request, dispose, get pendingCount() { return pending.size; }, get activeCount() { return active.size; }, get disposed() { return disposed; } });
   }
 
   root.VoiceOfMLReaderRequests = Object.freeze({ createReaderRequestManager });
