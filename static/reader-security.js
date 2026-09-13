@@ -230,37 +230,12 @@
     return manifest;
   }
   function validatePdfPageManifest(manifest) {
-    if (!manifest || ![1, 2].includes(manifest.version) || manifest.kind !== "pdf-pages")
+    if (!manifest || manifest.version !== 2 || manifest.kind !== "pdf-pages")
       throw error("PDF_MANIFEST_INVALID");
-    let pageCount = 0;
-    if (manifest.version === 1) {
-      if (!Array.isArray(manifest.pages) || !manifest.pages.length)
-        throw error("PDF_MANIFEST_INVALID");
-      pageCount = manifest.pages.length;
-      if (pageCount > LIMITS.pdfPages) throw error("READER_RESOURCE_LIMIT");
-      const seen = new Set();
-      for (const item of manifest.pages) {
-        if (
-          !item ||
-          !Number.isInteger(item.page) ||
-          item.page < 1 ||
-          seen.has(item.page) ||
-          typeof item.path !== "string" ||
-          !item.path.trim()
-        )
-          throw error("PDF_MANIFEST_INVALID");
-        seen.add(item.page);
-      }
-    } else {
-      if (
-        !Number.isInteger(manifest.page_count) ||
-        manifest.page_count < 1 ||
-        manifest.pages !== undefined
-      )
-        throw error("PDF_MANIFEST_INVALID");
-      pageCount = manifest.page_count;
-      if (pageCount > LIMITS.pdfPages) throw error("READER_RESOURCE_LIMIT");
-    }
+    if (!Number.isInteger(manifest.page_count) || manifest.page_count < 1 || manifest.pages !== undefined)
+      throw error("PDF_MANIFEST_INVALID");
+    const pageCount = manifest.page_count;
+    if (pageCount > LIMITS.pdfPages) throw error("READER_RESOURCE_LIMIT");
     if (manifest.toc !== undefined) {
       if (!Array.isArray(manifest.toc) || manifest.toc.length > 2000)
         throw error("PDF_MANIFEST_INVALID");
