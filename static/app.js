@@ -3886,6 +3886,7 @@ function renderCheckboxList(container, items, selected, onChange) {
 }
 
 function renderFilterFolderTree() {
+  setupFolderTreeEvents();
   DOM.filterFolderTree.innerHTML = "";
   if (!STATE.folderTree || STATE.folderTree.length === 0) {
     DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">暂无目录</div>';
@@ -3898,18 +3899,40 @@ function refreshFilterFolderSelectionState() {
   if (!DOM.filterFolderTree || !STATE.folderTree || STATE.folderTree.length === 0) return;
   const subtreeSet = getFolderSubtreeSet();
   const selfSet = getFolderSelfSet();
-  const nodeMap = new Map();
-  const collect = function(nodes) {
-    for (let i = 0; i < (nodes || []).length; i++) {
-      const node = nodes[i];
-      nodeMap.set(node.path, node);
-      if (node.children && node.children.length > 0) collect(node.children);
-    }
-  };
-  collect(STATE.folderTree);
   DOM.filterFolderTree.querySelectorAll(".filter-folder-item").forEach(function(row) {
-    const node = nodeMap.get(row.dataset.path || "");
+    const node = row._folderNode;
     if (node) applyFolderSelectionToNode(node, row, subtreeSet, selfSet);
+  });
+}
+
+function setupFolderTreeEvents() {
+  const tree = DOM.filterFolderTree;
+  if (tree._eventsReady) return;
+  tree._eventsReady = true;
+  tree.addEventListener("change", event => {
+    const row = event.target.closest(".filter-folder-item");
+    if (row?._folderNode && event.target.matches('input[type="checkbox"]')) handleFolderCheckboxChange(row._folderNode);
+  });
+  tree.addEventListener("click", event => {
+    const row = event.target.closest(".filter-folder-item");
+    if (!row?._folderNode) return;
+    const node = row._folderNode;
+    if (event.target.closest(".folder-self-toggle")) {
+      event.preventDefault();
+      handleFolderSelfToggle(node);
+    } else {
+      const toggle = event.target.closest(".tree-toggle");
+      if (!toggle) return;
+      const children = row.nextElementSibling;
+      const expanding = !!STATE.folderTreeCollapsed[node.path];
+      STATE.folderTreeCollapsed[node.path] = !expanding;
+      if (expanding && !children._childrenRendered) {
+        renderFilterTreeNodes(children, node.children, Number(row.style.getPropertyValue("--fdepth")) + 1);
+        children._childrenRendered = true;
+      }
+      toggle.setAttribute("aria-expanded", String(expanding));
+      toggleFolderChildrenAnimated(children, toggle, expanding);
+    }
   });
 }
 
@@ -4165,6 +4188,7 @@ function renderFilterTreeNodes(container, nodes, depth) {
     row.className = "filter-folder-item";
     row.style.setProperty("--fdepth", depth);
     row.dataset.path = node.path;
+    row._folderNode = node;
     var collapsed = !!STATE.folderTreeCollapsed[node.path];
     row.innerHTML = (has ? ('<button type="button" class="tree-toggle' + (collapsed ? '' : ' expanded') + '" aria-label="' + (collapsed ? '展开子文件夹' : '收起子文件夹') + '" title="' + (collapsed ? '展开' : '收起') + '"><span class="tree-toggle-glyph" aria-hidden="true"></span></button>') : '<span class="tree-toggle-placeholder"></span>') +
       '<input type="checkbox" value="' + escapeHTML(node.path) + '">' +
@@ -4172,33 +4196,15 @@ function renderFilterTreeNodes(container, nodes, depth) {
       (node.showSelfToggle ? '<button type="button" class="folder-self-toggle" data-path="' + escapeHTML(node.path) + '">本层文件</button>' : '') +
       '<span class="folder-count">' + (node.count || 0).toLocaleString() + '</span>';
     const toggle = row.querySelector(".tree-toggle");
-    const cb = row.querySelector("input[type='checkbox']");
-    const selfBtn = row.querySelector(".folder-self-toggle");
     applyFolderSelectionToNode(node, row, subtreeSet, selfSet);
-    cb.addEventListener("change", function() {
-      handleFolderCheckboxChange(node);
-    });
-    if (selfBtn) {
-      selfBtn.addEventListener("click", function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        handleFolderSelfToggle(node);
-      });
-    }
     container.appendChild(row);
     if (has) {
       const childDiv = document.createElement("div");
       childDiv.className = "tree-children";
       if (collapsed) childDiv.style.display = "none";
-      renderFilterTreeNodes(childDiv, node.children, depth + 1);
-      toggle.addEventListener("click", function(currentNode) {
-        return function(e) {
-          e.stopPropagation();
-          const expanding = !!STATE.folderTreeCollapsed[currentNode.path];
-          STATE.folderTreeCollapsed[currentNode.path] = !expanding;
-          toggleFolderChildrenAnimated(childDiv, toggle, expanding);
-        };
-      }(node));
+      if (!collapsed) renderFilterTreeNodes(childDiv, node.children, depth + 1);
+      childDiv._childrenRendered = !collapsed;
+      toggle.setAttribute("aria-expanded", String(!collapsed));
       container.appendChild(childDiv);
     }
   }
@@ -4775,9 +4781,11 @@ function focusKeyboardResult(index) {
 
 function setupKeyboard() {
   document.addEventListener("keydown", function(e) {
-    if (e.isComposing || searchComposing || e.keyCode === 229) return;
-    const tag = document.activeElement.tagName;
-    const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (e.defaultPrevented || e.isComposing || searchComposing || e.keyCode === 229 || readerOverlay) return;
+    const target = e.target instanceof Element ? e.target : document.activeElement;
+    const isInput = target.isContentEditable || !!target.closest("input, textarea, select");
+    if (isInput && !(target === DOM.searchInput && e.key === "Escape")) return;
+    if (["Enter", "ArrowDown", "ArrowUp"].includes(e.key) && target.closest("button, a, [role='button']")) return;
     if (e.key === "/" && !isInput) {
       e.preventDefault();
       DOM.searchInput.focus();
@@ -4808,6 +4816,7 @@ function setupKeyboard() {
       return;
     }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (STATE.results.length === 0) return;
       e.preventDefault();
       if (e.key === "ArrowDown") focusKeyboardResult(keyboardResultIndex < 0 ? 0 : keyboardResultIndex + 1);
@@ -4815,18 +4824,7 @@ function setupKeyboard() {
       return;
     }
     if (e.key === "Enter") {
-      if (isInput && document.activeElement === DOM.searchInput) {
-        e.preventDefault();
-        saveSearchViewSnapshot();
-        STATE.query = DOM.searchInput.value.trim();
-        STATE.page = 1;
-        STATE.results = [];
-        keyboardResultIndex = -1;
-        addHistoryItem(STATE.query);
-        doSearch();
-        DOM.searchInput.blur();
-        return;
-      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
         const rec = STATE.results[keyboardResultIndex];
         if (rec) openExternalWindow(getRecordLink(rec));
@@ -4835,7 +4833,6 @@ function setupKeyboard() {
     }
   });
   DOM.searchInput.addEventListener("keydown", function(e) {
-    if (e.isComposing || searchComposing || e.keyCode === 229) return;
     if (e.isComposing || searchComposing || e.keyCode === 229) return;
     if (e.key === "Enter") {
       e.preventDefault();
