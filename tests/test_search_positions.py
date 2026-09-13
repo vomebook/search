@@ -112,6 +112,10 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate('DOM.resultsContainer.scrollTop=getVirtualOffset(120)+9')
         self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index===120')
         saved=self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.assertTrue(self.page.evaluate('''() => {
+          const page=recentSearchPages.get(JSON.stringify([getSearchViewKey(),2]));
+          return page?.generation.startsWith('worker:') && getResultStableId(page.results[20])===searchPositions.get(getSearchViewKey()).anchorId;
+        }'''))
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate("searchViewSnapshots.clear(); STATE.query=''; doSearch()")
