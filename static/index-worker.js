@@ -6,6 +6,7 @@ let records = [];
 let recordIds = [];
 let metadata = emptyMetadata();
 let generation = 0;
+const corpusInstance = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
 let wordIndex = null;
 let wordIndexFilesOnly = null;
 let vocabSorted = [];
@@ -330,19 +331,40 @@ function pageResult(indices, params) {
   const page = Math.max(1, Number(params.page) || 1);
   const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, Number(params.pageSize) || 100));
   const pageItems = indices.slice((page - 1) * pageSize, page * pageSize);
-  return {
+  const result = {
     records: pageItems.map((index) => records[index]),
     ids: pageItems.map((index) => recordIds[index]),
     total: indices.length,
     page,
     pageSize,
     generation,
+    snapshot_generation: `worker:${corpusInstance}:${generation}`,
   };
+  if (typeof params.anchorId === "string") {
+    result.anchor_index = indices.findIndex(index => {
+      const record = records[index];
+      const filename = (record.File || "") + (record.Extension ? "." + record.Extension : "");
+      const path = (record.Folder || []).concat(filename).join("/");
+      return `${record.Repo || ""}\0${path}` === params.anchorId;
+    });
+  }
+  return result;
 }
 
 function searchLocal(params) {
   const query = String(params.q || "").trim();
   const searchFolders = params.searchFolders !== false;
+  const cacheParams = Object.assign({}, params);
+  delete cacheParams.page;
+  delete cacheParams.pageSize;
+  delete cacheParams.anchorId;
+  const cacheKey = JSON.stringify(cacheParams);
+  let ordered = searchOrderCache.get(cacheKey);
+  if (ordered) {
+    searchOrderCache.delete(cacheKey);
+    searchOrderCache.set(cacheKey, ordered);
+    return pageResult(ordered, params);
+  }
   let matched = [];
   if (!query) {
     const order = emptySearchOrder(params);
@@ -380,16 +402,6 @@ function searchLocal(params) {
       if (!tokenMatches.length) break;
     }
     matched = tokenMatches || [];
-  }
-  const cacheParams = Object.assign({}, params);
-  delete cacheParams.page;
-  delete cacheParams.pageSize;
-  const cacheKey = JSON.stringify(cacheParams);
-  let ordered = searchOrderCache.get(cacheKey);
-  if (ordered) {
-    searchOrderCache.delete(cacheKey);
-    searchOrderCache.set(cacheKey, ordered);
-    return pageResult(ordered, params);
   }
   const tokens = tokenize(query);
   const scored = applyFilters(matched, params).map((index) => {
