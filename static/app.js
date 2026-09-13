@@ -1694,6 +1694,7 @@ const ROUTER = {
     const prevMode = STATE.mode;
     const prevRepo = STATE.repo;
     saveSearchViewSnapshot();
+    cancelPositionRestore();
     STATE.mode = route.mode;
     STATE.repo = route.repo;
     STATE.repoFull = route.repo ? "VoiceOfML/" + route.repo : null;
@@ -1996,6 +1997,227 @@ const SEARCH_VIEW_SNAPSHOT_VERSION = 1;
 const searchViewSnapshots = new Map();
 const SEARCH_VIEW_SNAPSHOT_MAX = 20;
 const SEARCH_VIEW_SNAPSHOT_BYTES_MAX = 8 * 1024 * 1024;
+const SEARCH_POSITION_MAX = 500;
+const SEARCH_POSITION_TTL = 90 * 24 * 60 * 60 * 1000;
+const searchPositions = new Map();
+let searchPositionDB = null;
+let displayedSearchView = null;
+let positionSaveTimer = null;
+let positionRestore = null;
+
+function validSearchPosition(value) {
+  return value && value.version === 1 && typeof value.key === "string"
+    && Number.isInteger(value.index) && value.index >= 0
+    && Number.isFinite(value.offset) && value.offset >= 0
+    && Number.isInteger(value.loadedPage) && value.loadedPage >= 1
+    && typeof value.anchorId === "string" && value.savedAt > Date.now() - SEARCH_POSITION_TTL;
+}
+
+async function initSearchPositions() {
+  await new Promise(resolve => {
+    const timer = setTimeout(resolve, 1500);
+    try {
+      const request = indexedDB.open("voice-search-positions", 1);
+      request.onupgradeneeded = () => {
+        const store = request.result.createObjectStore("positions", { keyPath: "key" });
+        store.createIndex("savedAt", "savedAt");
+      };
+      request.onerror = request.onblocked = () => { clearTimeout(timer); resolve(); };
+      request.onsuccess = () => {
+        searchPositionDB = request.result;
+        searchPositionDB.onversionchange = () => { searchPositionDB.close(); searchPositionDB = null; };
+        const transaction = searchPositionDB.transaction("positions", "readwrite");
+        const store = transaction.objectStore("positions");
+        let count = 0;
+        store.index("savedAt").openCursor(null, "prev").onsuccess = event => {
+          const cursor = event.target.result;
+          if (!cursor) return;
+          const value = cursor.value;
+          if (!validSearchPosition(value) || ++count > SEARCH_POSITION_MAX) cursor.delete();
+          else if (!searchPositions.has(value.key)) searchPositions.set(value.key, value);
+          cursor.continue();
+        };
+        transaction.oncomplete = transaction.onabort = () => { clearTimeout(timer); resolve(); };
+      };
+    } catch (_) { clearTimeout(timer); resolve(); }
+  });
+}
+
+function rememberDisplayedSearchView() {
+  if (STATE._loadedPage < 1) return;
+  displayedSearchView = { key: getSearchViewKey(), results: STATE.results,
+    total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache };
+}
+
+function saveSearchPosition() {
+  clearTimeout(positionSaveTimer);
+  const view = displayedSearchView;
+  if (!view || positionRestore || readerOverlay || !view.results.length || !VSCROLL.heights.length) return null;
+  const index = Math.min(findVirtualIndex(DOM.resultsContainer.scrollTop), view.results.length - 1);
+  const position = { version: 1, key: view.key, index,
+    offset: Math.max(0, DOM.resultsContainer.scrollTop - getVirtualOffset(index)),
+    anchorId: getResultStableId(view.results[index]), loadedPage: view.loadedPage,
+    savedAt: Date.now() };
+  searchPositions.set(view.key, position);
+  const ordered = Array.from(searchPositions.values()).sort((a, b) => b.savedAt - a.savedAt);
+  ordered.forEach((item, i) => { if (!validSearchPosition(item) || i >= SEARCH_POSITION_MAX) searchPositions.delete(item.key); });
+  if (searchPositionDB) try {
+    const transaction = searchPositionDB.transaction("positions", "readwrite");
+    const store = transaction.objectStore("positions");
+    store.put(position);
+    let count = 0;
+    store.index("savedAt").openCursor(null, "prev").onsuccess = event => {
+      const cursor = event.target.result;
+      if (!cursor) return;
+      if (!validSearchPosition(cursor.value) || ++count > SEARCH_POSITION_MAX) cursor.delete();
+      cursor.continue();
+    };
+    transaction.onabort = () => {}; // Memory restoration still works if storage is unavailable.
+  } catch (_) {}
+  return position;
+}
+
+function setupSearchPositionSaving() {
+  DOM.resultsContainer.addEventListener("scroll", () => {
+    if (positionRestore || STATE.isLoading || displayedSearchView?.key !== getSearchViewKey()) return;
+    clearTimeout(positionSaveTimer);
+    positionSaveTimer = setTimeout(saveSearchPosition, 250);
+  }, { passive: true });
+  // Capture before controls mutate filters, clear results, or replace the route.
+  for (const type of ["change", "click", "keydown"]) document.addEventListener(type, () => saveSearchViewSnapshot(), true);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) saveSearchPosition(); });
+  window.addEventListener("pagehide", saveSearchPosition);
+}
+
+function showPositionRestoreStatus(message, retry = false) {
+  let status = document.getElementById("search-position-status");
+  if (!status) {
+    status = document.createElement("div");
+    status.id = "search-position-status";
+    status.setAttribute("role", "status");
+    DOM.resultsContainer.parentElement.appendChild(status);
+  }
+  status.replaceChildren();
+  status.hidden = !message;
+  DOM.resultsContainer.classList.toggle("position-restoring", !!message);
+  if (!message) return;
+  const text = document.createElement("span");
+  text.textContent = message;
+  status.appendChild(text);
+  if (retry) {
+    const button = document.createElement("button");
+    button.className = "text-btn-sm";
+    button.textContent = "重试恢复";
+    button.onclick = () => doSearch();
+    status.appendChild(button);
+  }
+  const cancel = document.createElement("button");
+  cancel.className = "text-btn-sm";
+  cancel.textContent = "从头浏览";
+  cancel.onclick = () => { cancelPositionRestore(); doSearch(false, true); };
+  status.appendChild(cancel);
+}
+
+function cancelPositionRestore() {
+  if (!positionRestore) return;
+  positionRestore.controller.abort();
+  positionRestore = null;
+  STATE.isLoading = false;
+  showPositionRestoreStatus("");
+}
+
+function tryRestoreSearchPosition(key) {
+  const position = searchPositions.get(key);
+  if (!validSearchPosition(position)) return false;
+  if (positionRestore?.key === key && !positionRestore.failed) return true;
+  cancelPositionRestore();
+  searchAbortController?.abort();
+  searchPrefetchAbortController?.abort();
+  searchId++;
+  searchRequestId++;
+  const controller = new AbortController();
+  const task = { key, controller };
+  positionRestore = task;
+  const current = () => positionRestore === task && key === getSearchViewKey() && !controller.signal.aborted;
+  STATE.isLoading = true;
+  resetPagingRecovery();
+  showPositionRestoreStatus("正在恢复上次位置…");
+  (async () => {
+    try {
+      const query = JSON.parse(key);
+      const results = [];
+      let total = null, page = 0;
+      do {
+        const data = await fetchPositionPage(query, ++page, controller.signal);
+        if (!current()) return;
+        if (!data || !Array.isArray(data.results) || data.page !== page ||
+            !Number.isInteger(data.total) || data.total < 0 ||
+            (total !== null && total !== data.total) ||
+            (!data.results.length && results.length < data.total)) throw new Error("RESTORE_PAGE_CHANGED");
+        total = data.total;
+        results.push(...data.results);
+        showPositionRestoreStatus(`正在恢复上次位置…（${page}/${Math.min(position.loadedPage, Math.max(1, Math.ceil(total / query.pageSize)))} 页）`);
+      } while (page < position.loadedPage && results.length < total);
+      if (!current()) return;
+      const found = results.findIndex(record => getResultStableId(record) === position.anchorId);
+      const index = found < 0 ? Math.min(position.index, Math.max(0, results.length - 1)) : found;
+      const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key, results, total,
+        page, loadedPage: page, pageCache: {}, hasMore: results.length < total,
+        estimatedHeight: VSCROLL.estimatedHeight, heightCache: [], heightRecords: [],
+        scroll: { index, offset: position.offset, viewKey: key }, savedAt: Date.now() };
+      positionRestore = null;
+      showPositionRestoreStatus("");
+      searchViewSnapshots.set(key, snapshot);
+      restoreSearchViewSnapshot(key);
+      trimSearchViewSnapshots();
+      if (found < 0) showToast("搜索结果已变化，已恢复到原位置附近");
+    } catch (error) {
+      if (!current()) return;
+      STATE.isLoading = false;
+      task.failed = true;
+      showPositionRestoreStatus("暂时无法恢复上次位置", true);
+    }
+  })();
+  return true;
+}
+
+async function fetchPositionPage(query, page, signal) {
+  const mixed = query.folders.self.length || query.folders.subtree.length;
+  const params = { q: query.query, repos: query.mode === "repo" ? [query.repo] : query.repos,
+    extensions: query.extensions, folders: query.plainFolders, folderMatchMode: mixed ? "mixed" : "prefix",
+    folderSelfs: query.folders.self, folderSubtrees: query.folders.subtree,
+    minSize: query.minSize, maxSize: query.maxSize, sort: query.sort,
+    searchFolders: query.searchFolders, exact: query.exact, page, pageSize: query.pageSize };
+  if (query.useLocalMode || mixed || !apiAvailable) {
+    const ok = STATE.dataLoaded || await ensureLocalDataLoaded(false, true);
+    if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+    if (!ok) throw new Error("LOCAL_UNAVAILABLE");
+    return doSearchLocal(params);
+  }
+  const body = { q: params.q, repos: params.repos, extensions: params.extensions,
+    folders: params.folders, min_size: params.minSize, max_size: params.maxSize,
+    sort: params.sort, search_folders: params.searchFolders, exact: params.exact,
+    page, page_size: params.pageSize };
+  const url = query.mode === "repo" ? API_BASE + "/api/search/" + encodeURIComponent(query.repo.split("/").pop()) : API_BASE + "/api/search";
+  try {
+    const data = await fetchSearchPage(url + "|" + stableSearchStringify(body), url, body, signal, WORKER_REQUEST_TIMEOUT);
+    noteApiSuccess();
+    return data;
+  } catch (error) {
+    if (!signal.aborted) noteSearchApiFailure(error);
+    throw error;
+  }
+}
+
+function trimSearchViewSnapshots() {
+  let bytes = 0;
+  for (const [key, snapshot] of Array.from(searchViewSnapshots).reverse()) {
+    if (!snapshot.bytes) snapshot.bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
+    bytes += snapshot.bytes;
+    if (snapshot.bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX || bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) searchViewSnapshots.delete(key);
+  }
+  while (searchViewSnapshots.size > SEARCH_VIEW_SNAPSHOT_MAX) searchViewSnapshots.delete(searchViewSnapshots.keys().next().value);
+}
 function getSearchViewKey() {
   return stableSearchStringify({
     mode: STATE.mode,
@@ -2007,7 +2229,7 @@ function getSearchViewKey() {
       self: STATE.filterFolderSelfs.slice().sort(),
       subtree: STATE.filterFolderSubtrees.slice().sort(),
     },
-    browserPath: STATE.browserPath || "",
+    plainFolders: STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ? [] : STATE.filterFolders.slice().sort(),
     minSize: STATE.filterMinSize,
     maxSize: STATE.filterMaxSize,
     sort: STATE.sort || "relevance",
@@ -2037,10 +2259,12 @@ function cloneSearchPageCache(cache) {
   });
   return copy;
 }
-function saveSearchViewSnapshot(key = getSearchViewKey()) {
-  if (!DOM.resultsContainer) return null;
+function saveSearchViewSnapshot(key = displayedSearchView?.key) {
+  const view = displayedSearchView;
+  if (!DOM.resultsContainer || !view || positionRestore || key !== view.key || view.loadedPage < 1) return null;
+  const position = saveSearchPosition();
   ensureHeightTree();
-  const heightRecords = STATE.results.map(function(result, index) {
+  const heightRecords = view.results.map(function(result, index) {
     const id = getResultStableId(result);
     const measurementKey = VSCROLL.measuredRowKeys[index];
     return id && measurementKey && VSCROLL.heights[index]
@@ -2050,28 +2274,21 @@ function saveSearchViewSnapshot(key = getSearchViewKey()) {
   const snapshot = {
     version: SEARCH_VIEW_SNAPSHOT_VERSION,
     key,
-    results: STATE.results.map(cloneSearchResult),
-    total: STATE.total,
-    page: STATE.page,
-    loadedPage: STATE._loadedPage,
-    pageCache: cloneSearchPageCache(STATE._pageCache),
-    hasMore: STATE.hasMore,
+    results: view.results.map(cloneSearchResult),
+    total: view.total,
+    page: view.loadedPage,
+    loadedPage: view.loadedPage,
+    pageCache: cloneSearchPageCache(view.pageCache),
+    hasMore: view.results.length < view.total,
     estimatedHeight: VSCROLL.estimatedHeight,
     heightCache: Array.from(VSCROLL.heightCache.entries()).map(([id, value]) => [id, Object.assign({}, value)]),
     heightRecords: heightRecords,
-    scroll: Object.assign({}, captureReaderReturnScroll(), { viewKey: key }),
+    scroll: position ? { ...position, viewKey: key } : { index: 0, offset: 0, viewKey: key },
     savedAt: Date.now(),
   };
   searchViewSnapshots.delete(key);
   searchViewSnapshots.set(key, snapshot);
-  while (searchViewSnapshots.size > SEARCH_VIEW_SNAPSHOT_MAX) searchViewSnapshots.delete(searchViewSnapshots.keys().next().value);
-  var snapshotBytes = 0;
-  searchViewSnapshots.forEach(function(item) { snapshotBytes += JSON.stringify(item).length; });
-  while (snapshotBytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX && searchViewSnapshots.size > 1) {
-    var oldest = searchViewSnapshots.keys().next().value;
-    snapshotBytes -= JSON.stringify(searchViewSnapshots.get(oldest)).length;
-    searchViewSnapshots.delete(oldest);
-  }
+  trimSearchViewSnapshots();
   return snapshot;
 }
 function activateSearchView(key = getSearchViewKey()) {
@@ -2082,7 +2299,10 @@ function activateSearchView(key = getSearchViewKey()) {
 }
 function restoreSearchViewSnapshot(key, restoreScroll = true) {
   const snapshot = searchViewSnapshots.get(key);
-  if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION) return false;
+  if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
+  cancelPositionRestore();
+  clearTimeout(filterSearchTimer);
+  clearTimeout(searchTimer);
   if (searchAbortController) searchAbortController.abort();
   if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
   searchAbortController = new AbortController();
@@ -2101,6 +2321,8 @@ function restoreSearchViewSnapshot(key, restoreScroll = true) {
   STATE.page = STATE._loadedPage;
   STATE._pendingPage = 0;
   STATE._deferredAppendWhileDragging = false;
+  STATE._initialActive = false;
+  setSearchVisualLoading(false);
   selectedIndices = {};
   lastSelectedIndex = -1;
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
@@ -2114,6 +2336,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true) {
   renderResults(false);
   updateStatusBar();
   updateLoadInfo();
+  syncStateToURL(true);
   return true;
 }
 
@@ -2253,6 +2476,15 @@ async function tryInitialSearchPayload(searchMode, searchRepo) {
 }
 
 function searchWithInitialFallback() {
+  saveSearchViewSnapshot();
+  cancelPositionRestore();
+  if (!restoreSearchViewSnapshot(getSearchViewKey())) {
+    return searchWithInitialFallbackFresh();
+  }
+  return Promise.resolve(true);
+}
+
+function searchWithInitialFallbackFresh() {
   var searchMode = STATE.mode;
   var searchRepo = STATE.repo;
   function isCurrentSearchRoute() {
@@ -2377,9 +2609,12 @@ function clearResultsSkeleton() {
   DOM.resultsList.querySelectorAll(".result-skeleton-item").forEach((row) => row.remove());
 }
 
-function doSearch(append) {
-  if (!append && STATE.results.length > 0 && VSCROLL.viewKey && VSCROLL.viewKey !== getSearchViewKey()) saveSearchViewSnapshot(VSCROLL.viewKey);
-  if (!append && restoreSearchViewSnapshot(getSearchViewKey())) return;
+function doSearch(append, fromStart = false) {
+  if (!append) {
+    saveSearchViewSnapshot();
+    cancelPositionRestore();
+    if (!fromStart && restoreSearchViewSnapshot(getSearchViewKey())) return;
+  }
   if (append && STATE.isLoading) return;
   if (append && !STATE._loadedPage) append = false;
   if (!append) STATE.page = 1;
@@ -2638,6 +2873,7 @@ function doSearchFallbackLocal(params, append, id) {
 
 function renderResults(animate = false) {
   pendingResultEntrance = false;
+  if (!positionRestore && STATE._loadedPage >= 1) rememberDisplayedSearchView();
   activateSearchView();
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
@@ -2841,22 +3077,22 @@ function renderVisible() {
   const topH = fenwickSum(VSCROLL.heightTree, start);
   const endH = fenwickSum(VSCROLL.heightTree, end);
   const bottomH = Math.max(0, totalH - endH);
+  const anchorIndex = findVirtualIndex(scrollTop);
+  const anchor = { index: anchorIndex, offset: scrollTop - getVirtualOffset(anchorIndex) };
   reconcileVirtualRows(items, start, end, topH, bottomH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
-  requestAnimationFrame(function() {
-    if (VSCROLL.isDraggingThumb) return;
-    if (measureHeights(start, end)) {
-      VSCROLL.renderStart = -1;
-      VSCROLL.renderEnd = -1;
-      scheduleVirtualRender();
-      return;
-    }
-    updateScrollTrack();
-    if (pendingResultEntrance) {
-      pendingResultEntrance = false;
-      animateVisibleResultRows();
-    }
-  });
+  // Correct the rendered window before paint, using one content anchor.
+  // A deferred measurement can otherwise run against another window/query.
+  if (!VSCROLL.isDraggingThumb && measureHeights(start, end, anchor)) {
+    VSCROLL.renderStart = -1;
+    VSCROLL.renderEnd = -1;
+    scheduleVirtualRender();
+  }
+  updateScrollTrack();
+  if (pendingResultEntrance) {
+    pendingResultEntrance = false;
+    animateVisibleResultRows();
+  }
 }
 
 function ensureHeightTree() {
@@ -2911,6 +3147,8 @@ function findVirtualIndex(offset) {
 }
 
 function resetVirtualScrollState() {
+  rememberDisplayedSearchView();
+  cancelQuickScroll();
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
   activateSearchView();
@@ -2922,27 +3160,14 @@ function resetVirtualScrollState() {
   VSCROLL.lastScrollTop = 0;
   VSCROLL.lastScrollTime = 0;
   VSCROLL.scrollVelocity = 0;
+  VSCROLL.estimateMeasurementKey = "";
   clearResultTemplateCache();
   updateScrollTrack();
 }
 
 function prepareRouteTransitionResults() {
-  if (!DOM.resultsContainer || STATE.results.length === 0) return;
-  if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
-  VSCROLL.renderFrame = 0;
-  activateSearchView();
-  DOM.resultsContainer.scrollTop = 0;
-  VSCROLL.renderStart = -1;
-  VSCROLL.renderEnd = -1;
-  VSCROLL.heights = [];
-  VSCROLL.heightTree = [];
-  VSCROLL.heightsDirty = true;
-  VSCROLL.lastScrollTop = 0;
-  VSCROLL.lastScrollTime = 0;
-  VSCROLL.scrollVelocity = 0;
-  clearResultTemplateCache();
-  ensureVirtualHeights(Math.min(STATE.results.length, STATE.pageSize));
-  renderVisible();
+  saveSearchViewSnapshot();
+  cancelQuickScroll();
 }
 
 function ensureVirtualHeights(len) {
@@ -2978,10 +3203,11 @@ function ensureVirtualHeights(len) {
 }
 
 function refreshVirtualAfterAppend() {
+  if (!positionRestore && STATE._loadedPage >= 1) rememberDisplayedSearchView();
   ensureVirtualHeights(STATE.results.length);
   const topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
   const bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
-  if (!topSpacer || !bottomSpacer) {
+  if (!topSpacer || !bottomSpacer || VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) {
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
     renderVisible();
@@ -3002,7 +3228,11 @@ function ensureVirtualViewportCovered() {
   if (viewTop < getVirtualOffset(VSCROLL.renderStart) || viewBottom > getVirtualOffset(VSCROLL.renderEnd)) renderVisible();
 }
 
-function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
+function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, anchor = null) {
+  if (VSCROLL.isDraggingThumb || start !== VSCROLL.renderStart || end !== VSCROLL.renderEnd) return false;
+  const container = DOM.resultsContainer;
+  const anchorIndex = anchor ? anchor.index : findVirtualIndex(container.scrollTop);
+  const anchorOffset = anchor ? anchor.offset : container.scrollTop - getVirtualOffset(anchorIndex);
   const rowMeasureKey = getHeightMeasurementKey();
   const measureKey = [rowMeasureKey, start, end].join(":");
   if (VSCROLL.measuredWindowKey === measureKey) return false;
@@ -3013,7 +3243,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
   let changed = false;
   for (let i = 0; i < els.length; i++) {
     const idx = parseInt(els[i].dataset.index);
-    if (idx < 0) continue;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= VSCROLL.heights.length) continue;
     if (VSCROLL.measuredRowKeys[idx] === rowMeasureKey && VSCROLL.heights[idx] > 0) {
       measuredSum += VSCROLL.heights[idx];
       measuredCount++;
@@ -3041,16 +3271,27 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd) {
       changed = true;
     }
   }
-  if (measuredCount > 10) {
+  if (measuredCount > 10 && VSCROLL.estimateMeasurementKey !== rowMeasureKey) {
+    VSCROLL.estimateMeasurementKey = rowMeasureKey;
     const nextEstimate = measuredSum / measuredCount;
     if (Math.abs(nextEstimate - VSCROLL.estimatedHeight) > 1) {
       VSCROLL.estimatedHeight = nextEstimate;
-      for (let index = 0; index < VSCROLL.heights.length; index++) {
-        if (!VSCROLL.measuredRowKeys[index]) VSCROLL.heights[index] = nextEstimate;
+      // Seed estimates at the top only. Rescaling the entire unseen list
+      // from each new window moves the thumb and can clamp scrollTop to bottom.
+      if (container.scrollTop === 0 && start === 0) {
+        for (let index = 0; index < VSCROLL.heights.length; index++) {
+          if (!VSCROLL.measuredRowKeys[index]) VSCROLL.heights[index] = nextEstimate;
+        }
+        VSCROLL.heightsDirty = true;
+        changed = true;
       }
-      VSCROLL.heightsDirty = true;
-      changed = true;
     }
+  }
+  if (changed) {
+    refreshVirtualAfterAppend();
+    const target = getVirtualOffset(anchorIndex) + Math.min(anchorOffset, VSCROLL.heights[anchorIndex] - 1);
+    if (Math.abs(container.scrollTop - target) > 0.5) container.scrollTop = Math.max(0, target);
+    VSCROLL.lastScrollTop = container.scrollTop;
   }
   VSCROLL.measuredWindowKey = measureKey;
   return changed;
@@ -3077,7 +3318,8 @@ function setSearchVisualLoading(loading) {
 }
 
 function scheduleFilterSearch() {
-  if (STATE.results.length > 0 && VSCROLL.viewKey) saveSearchViewSnapshot(VSCROLL.viewKey);
+  saveSearchViewSnapshot();
+  cancelPositionRestore();
   resetPagingRecovery();
   clearTimeout(filterSearchTimer);
   if (searchAbortController) searchAbortController.abort();
@@ -4133,6 +4375,7 @@ function retryBottomPage() {
 }
 
 function maybeLoadNextPage(bottomOnly = false, retry = false) {
+  if (positionRestore) return;
   expireSearchRequests();
   if (document.hidden || readerOverlay || pagingFailures >= 2 || Date.now() < pagingRetryAt) return;
   if (VSCROLL.isDraggingThumb) return;
@@ -4147,6 +4390,7 @@ function maybeLoadNextPage(bottomOnly = false, retry = false) {
 }
 
 function recoverScrollState() {
+  cancelQuickScroll();
   expireSearchRequests();
   if (!STATE.isLoading) resetPagingRecovery();
   scrollRecoveryTimer = null;
@@ -4233,24 +4477,26 @@ function setupVirtualScroll() {
 
 function updateScrollThumb() {
   const scrollTop = DOM.resultsContainer.scrollTop;
-  const scrollHeight = DOM.resultsContainer.scrollHeight;
+  const drag = VSCROLL.dragMetrics;
+  const scrollHeight = drag ? drag.scrollHeight : DOM.resultsContainer.scrollHeight;
   const clientHeight = DOM.resultsContainer.clientHeight;
   if (scrollHeight <= clientHeight || !DOM.scrollTrack.clientHeight) { DOM.scrollTrack.classList.remove("visible"); return; }
   DOM.scrollTrack.classList.add("visible");
-  const trackHeight = DOM.scrollTrack.clientHeight;
-  const th = Math.max(40, Math.min(trackHeight, (clientHeight / scrollHeight) * trackHeight));
-  const tt = (scrollTop / Math.max(1, scrollHeight - clientHeight)) * (trackHeight - th);
+  const trackHeight = drag ? drag.trackHeight : DOM.scrollTrack.clientHeight;
+  const th = drag ? drag.thumbHeight : Math.max(40, Math.min(trackHeight, (clientHeight / scrollHeight) * trackHeight));
+  const tt = Math.min(1, scrollTop / Math.max(1, scrollHeight - clientHeight)) * (trackHeight - th);
   DOM.scrollThumb.style.height = th + "px";
   DOM.scrollThumb.style.transform = "translateY(" + tt + "px)";
 }
 
+let cancelQuickScroll = () => {};
 function setupQuickScroll() {
   let startY, startST, dragRange, maxScrollTop;
   let dragFrame = 0;
   let pendingScrollTop = null;
   function applyPendingScrollTop() {
     dragFrame = 0;
-    if (pendingScrollTop === null) return;
+    if (pendingScrollTop === null || !VSCROLL.isDraggingThumb) return;
     DOM.resultsContainer.scrollTop = pendingScrollTop;
     pendingScrollTop = null;
     renderVisible();
@@ -4261,21 +4507,30 @@ function setupQuickScroll() {
     if (!dragFrame) dragFrame = requestAnimationFrame(applyPendingScrollTop);
   }
   function beginDrag(clientY) {
+    cancelQuickScroll();
+    updateScrollTrack();
     const scrollEl = DOM.resultsContainer;
     startY = clientY;
     startST = scrollEl.scrollTop;
     dragRange = Math.max(1, DOM.scrollTrack.clientHeight - DOM.scrollThumb.clientHeight);
     maxScrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
     VSCROLL.isDraggingThumb = true;
+    VSCROLL.dragMetrics = { scrollHeight: scrollEl.scrollHeight, trackHeight: DOM.scrollTrack.clientHeight, thumbHeight: DOM.scrollThumb.clientHeight };
+    DOM.resultsList.style.minHeight = scrollEl.scrollHeight + "px";
   }
   function finishDrag() {
     if (dragFrame) cancelAnimationFrame(dragFrame);
     applyPendingScrollTop();
     VSCROLL.isDraggingThumb = false;
-    ensureVirtualViewportCovered();
+    VSCROLL.dragMetrics = null;
+    DOM.resultsList.style.minHeight = "";
+    VSCROLL.renderStart = -1;
+    VSCROLL.renderEnd = -1;
+    renderVisible();
     updateScrollTrack();
   }
   function onMouseMove(e) {
+    if (!VSCROLL.isDraggingThumb) return;
     const delta = e.clientY - startY;
     const ratio = delta / dragRange;
     setResultScrollTop(startST + ratio * maxScrollTop);
@@ -4296,6 +4551,7 @@ function setupQuickScroll() {
     document.addEventListener("mouseup", onMouseUp);
   });
   function onTouchMove(e) {
+    if (!VSCROLL.isDraggingThumb) return;
     e.preventDefault();
     const delta = e.touches[0].clientY - startY;
     const ratio = delta / dragRange;
@@ -4304,7 +4560,7 @@ function setupQuickScroll() {
   function onTouchEnd() {
     document.removeEventListener("touchmove", onTouchMove);
     document.removeEventListener("touchend", onTouchEnd);
-    document.removeEventListener("touchcancel", onTouchEnd);
+    document.removeEventListener("touchcancel", onTouchCancel);
     finishDrag();
     if (STATE._deferredAppendWhileDragging) {
       STATE._deferredAppendWhileDragging = false;
@@ -4312,12 +4568,33 @@ function setupQuickScroll() {
     }
     maybeLoadNextPage();
   }
+  function onTouchCancel() {
+    cancelQuickScroll();
+    VSCROLL.renderStart = -1;
+    VSCROLL.renderEnd = -1;
+    renderVisible();
+  }
   DOM.scrollThumb.addEventListener("touchstart", (e) => {
     beginDrag(e.touches[0].clientY); e.stopPropagation();
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", onTouchEnd);
-    document.addEventListener("touchcancel", onTouchEnd);
+    document.addEventListener("touchcancel", onTouchCancel);
   });
+  cancelQuickScroll = () => {
+    if (dragFrame) cancelAnimationFrame(dragFrame);
+    dragFrame = 0;
+    pendingScrollTop = null;
+    VSCROLL.isDraggingThumb = false;
+    VSCROLL.dragMetrics = null;
+    DOM.resultsList.style.minHeight = "";
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+    document.removeEventListener("touchmove", onTouchMove);
+    document.removeEventListener("touchend", onTouchEnd);
+    document.removeEventListener("touchcancel", onTouchCancel);
+  };
+  window.addEventListener("blur", cancelQuickScroll);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) cancelQuickScroll(); });
 }
 
 function toggleTheme() {
@@ -4603,6 +4880,8 @@ function setupResultDelegation() {
 
 async function init() {
   cacheDOM();
+  await initSearchPositions();
+  setupSearchPositionSaving();
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   await restoreSearchSession();
   setupReaderIntentWarming();

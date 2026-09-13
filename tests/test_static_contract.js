@@ -174,8 +174,9 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /if \(!dragFrame\) dragFrame = requestAnimationFrame\(applyPendingScrollTop\)/);
   assert.match(app, /DOM\.resultsContainer\.scrollTop = pendingScrollTop;\s*pendingScrollTop = null;\s*renderVisible\(\);/);
   assert.match(app, /VSCROLL\.isDraggingThumb\s*\? viewH \* 0\.35/);
-  assert.match(app, /if \(VSCROLL\.isDraggingThumb\) return;\s*if \(measureHeights/);
-  assert.match(app, /VSCROLL\.isDraggingThumb = false;\s*ensureVirtualViewportCovered\(\);\s*updateScrollTrack\(\);/);
+  assert.match(app, /if \(!VSCROLL\.isDraggingThumb && measureHeights\(start, end, anchor\)\)/);
+  assert.match(app, /VSCROLL\.dragMetrics = null/);
+  assert.match(css, /overflow-anchor: none/);
   assert.strictEqual(/function finishDrag\(\)[\s\S]*?measureHeights/.test(app), false);
   assert.match(app, /dragRange = Math\.max\(1, DOM\.scrollTrack\.clientHeight - DOM\.scrollThumb\.clientHeight\)/);
   assert.match(app, /applyPendingScrollTop\(\);\s*VSCROLL\.isDraggingThumb = false/);
