@@ -212,3 +212,23 @@ class PositionWindowTests(unittest.TestCase):
         self.assertFalse(self.page.evaluate('!!positionRestore.preview'))
         self.page.evaluate('releaseWindow()')
         self.wait_anchor(49850)
+
+    def test_large_api_records_prioritize_visible_content_within_storage_budget(self):
+        self.page.evaluate('''() => {
+          STATE.results.forEach(record=>record.Metadata='中'.repeat(900));
+          const original=fetchPositionPage;
+          fetchPositionPage=async (...args)=>{
+            const data=await original(...args);data.results.forEach(record=>record.Metadata='中'.repeat(900));return data;
+          };
+        }''')
+        self.persist_viewport()
+        self.assertTrue(self.page.evaluate('''() => {
+          const saved=searchViewportSnapshots.get(originalWindowKey);
+          return saved.records.length<80 && new TextEncoder().encode(JSON.stringify(saved)).byteLength<=SEARCH_VIEWPORT_BYTES_MAX;
+        }'''))
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();windowStall=1;STATE.query='paging-original';doSearch()")
+        self.assert_cached_viewport()
+        self.page.evaluate('releaseWindow()')
+        self.wait_anchor(49850)
