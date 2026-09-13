@@ -133,3 +133,82 @@ class PositionWindowTests(unittest.TestCase):
         self.jump(25050)
         self.wait_anchor(25050)
         self.assertEqual(self.page.evaluate('windowCalls.filter(page=>page===251).length'), 1)
+
+    def persist_viewport(self):
+        self.page.evaluate('''async () => {
+          searchPositions.get(originalWindowKey).savedAt=0;saveSearchPosition();
+          await new Promise(resolve=>{const tx=searchPositionDB.transaction(['positions','viewports']);tx.oncomplete=resolve});
+        }''')
+
+    def assert_cached_viewport(self):
+        self.page.wait_for_function('positionRestore?.preview && !!window.releaseWindow')
+        self.assertTrue(self.page.evaluate('''() => {
+          const box=DOM.resultsContainer.getBoundingClientRect();
+          return findVirtualIndex(DOM.resultsContainer.scrollTop)===49850 &&
+            Math.abs(DOM.resultsContainer.scrollTop-getVirtualOffset(49850)-11)<2 &&
+            getComputedStyle(DOM.resultsContainer).visibility==='visible' &&
+            [...DOM.resultsList.querySelectorAll('.result-window-placeholder')].every(row=>{
+              const rect=row.getBoundingClientRect();return rect.bottom<=box.top || rect.top>=box.bottom;
+            });
+        }'''))
+        self.assertIn('49,851', self.page.locator('#current-result-position').text_content())
+        self.assertTrue(self.page.evaluate('Object.keys(VSCROLL.heights).length<300 && Object.keys(VSCROLL.heightTree).length<2000'))
+
+    def test_persisted_viewport_shows_before_lookup_and_keeps_nodes_after_validation(self):
+        self.persist_viewport()
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();windowStall=1;STATE.query='paging-original';doSearch()")
+        self.assert_cached_viewport()
+        self.page.evaluate("window.cachedRow=DOM.resultsList.querySelector('[data-index=\"49850\"]');releaseWindow()")
+        self.wait_anchor(49850)
+        self.assertTrue(self.page.evaluate("cachedRow===DOM.resultsList.querySelector('[data-index=\"49850\"]')"))
+
+    def test_reload_displays_saved_content_while_network_is_blocked(self):
+        self.page.set_viewport_size({'width':390,'height':844})
+        self.page.wait_for_timeout(100)
+        self.persist_viewport()
+        fetcher = self.page.evaluate('fetchPositionPage.toString()')
+        self.page.add_init_script('''document.addEventListener('DOMContentLoaded',()=>{
+          window.windowCalls=[];window.windowFailures=new Set();window.windowGeneration='one';
+          window.windowAnchor=49850;window.windowTotal=50001;window.windowStall=1;
+          prefetchNextPage=()=>{};maybeLoadNextPage=()=>{};fetchPositionPage=(''' + fetcher + ''');
+        });''')
+        self.page.reload(wait_until='domcontentloaded')
+        self.assert_cached_viewport()
+        self.page.evaluate('releaseWindow()')
+        self.wait_anchor(49850)
+
+    def test_loading_an_adjacent_page_does_not_replace_visible_rows(self):
+        self.page.evaluate('window.keptRow=DOM.resultsList.querySelector(\'[data-index="49850"]\');loadResultWindowPage(497)')
+        self.page.wait_for_function('resultWindow.pages.has(497)')
+        self.assertTrue(self.page.evaluate('keptRow===DOM.resultsList.querySelector(\'[data-index="49850"]\')'))
+        self.assertTrue(self.page.evaluate('''() => {
+          const button=keptRow.querySelector('[data-action="read"]'), before=button.dataset.readerUrl;
+          readerAssets={[getResultStableId(STATE.results[49850])]:{s:2,m:'p',p:'objects/00/'+'0'.repeat(64)+'/linearized.pdf'}};
+          refreshResultReaderActions();renderVisible();
+          return keptRow===DOM.resultsList.querySelector('[data-index="49850"]') &&
+            button===keptRow.querySelector('[data-action="read"]') && button.dataset.readerUrl!==before;
+        }'''))
+
+    def test_failed_validation_leaves_cached_content_visible_and_cancels_cleanly(self):
+        self.persist_viewport()
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("searchViewSnapshots.clear();windowFailures.add(1);STATE.query='paging-original';doSearch()")
+        self.page.get_by_text('重试恢复', exact=True).wait_for()
+        self.assertEqual(self.page.evaluate('findVirtualIndex(DOM.resultsContainer.scrollTop)'), 49850)
+        self.assertEqual(self.page.evaluate('getComputedStyle(DOM.resultsContainer).visibility'), 'visible')
+        self.page.get_by_text('从头浏览', exact=True).click()
+        self.page.wait_for_function('!positionRestore && !STATE.isLoading && !resultWindow')
+
+    def test_saved_viewport_is_bounded_and_not_used_for_another_anchor(self):
+        self.persist_viewport()
+        self.assertLessEqual(self.page.evaluate('searchViewportSnapshots.get(originalWindowKey).records.length'), 80)
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("searchViewSnapshots.clear();searchPositions.get(originalWindowKey).anchorId='different';windowStall=1;STATE.query='paging-original';doSearch()")
+        self.page.wait_for_function('!!window.releaseWindow')
+        self.assertFalse(self.page.evaluate('!!positionRestore.preview'))
+        self.page.evaluate('releaseWindow()')
+        self.wait_anchor(49850)
