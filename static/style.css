@@ -715,12 +715,25 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 
 .results-container {
   flex: 1;
+  overflow-anchor: none;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: none;
 }
 
 .results-container::-webkit-scrollbar { width: 0; height: 0; }
+
+.results-container.position-restoring { visibility: hidden; }
+#search-position-status {
+  position: absolute;
+  inset: 90px 16px auto;
+  z-index: 45;
+  padding: 24px;
+  background: var(--surface);
+  color: var(--on-surface);
+  text-align: center;
+}
+#search-position-status button { margin: 12px 8px 0; }
 
 .result-item {
   display: flex;
