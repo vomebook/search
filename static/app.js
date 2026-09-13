@@ -907,6 +907,8 @@ async function doSearchLocal(params) {
     total: data.total || 0,
     page: data.page,
     page_size: data.pageSize,
+    generation: data.snapshot_generation,
+    anchor_index: data.anchor_index,
   };
 }
 
@@ -2006,6 +2008,10 @@ let searchPositionDB = null;
 let displayedSearchView = null;
 let positionSaveTimer = null;
 let positionRestore = null;
+let lastPositionPruneAt = 0;
+let displayedViewRevision = 0;
+let measuredHeightRevision = 0;
+const searchSnapshotSources = new WeakMap();
 
 function validSearchPosition(value) {
   return value && value.version === 1 && typeof value.key === "string"
@@ -2047,8 +2053,14 @@ async function initSearchPositions() {
 
 function rememberDisplayedSearchView() {
   if (STATE._loadedPage < 1) return;
+  const previous = displayedSearchView;
+  const key = getSearchViewKey();
+  const unchanged = previous && previous.key === key && previous.results === STATE.results
+    && previous.length === STATE.results.length && previous.total === STATE.total
+    && previous.loadedPage === STATE._loadedPage && previous.pageCache === STATE._pageCache;
   displayedSearchView = { key: getSearchViewKey(), results: STATE.results,
-    total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache };
+    total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache,
+    length: STATE.results.length, revision: unchanged ? previous.revision : ++displayedViewRevision };
 }
 
 function saveSearchPosition() {
@@ -2061,15 +2073,24 @@ function saveSearchPosition() {
     offset: Math.max(0, DOM.resultsContainer.scrollTop - getVirtualOffset(index)),
     anchorId: getResultStableId(view.results[index]), loadedPage: view.loadedPage,
     savedAt: Date.now() };
+  const previous = searchPositions.get(view.key);
+  if (previous && position.savedAt - previous.savedAt < 1000 && previous.index === position.index
+      && previous.offset === position.offset && previous.anchorId === position.anchorId
+      && previous.loadedPage === position.loadedPage) return previous;
+  // Initialization reads newest first; only sort when enforcing the small cap.
   searchPositions.set(view.key, position);
-  const ordered = Array.from(searchPositions.values()).sort((a, b) => b.savedAt - a.savedAt);
-  ordered.forEach((item, i) => { if (!validSearchPosition(item) || i >= SEARCH_POSITION_MAX) searchPositions.delete(item.key); });
+  const prune = Date.now() - lastPositionPruneAt >= 60000 || searchPositions.size > SEARCH_POSITION_MAX;
+  if (prune) {
+    const ordered = Array.from(searchPositions.values()).sort((a, b) => b.savedAt - a.savedAt);
+    ordered.forEach((item, i) => { if (!validSearchPosition(item) || i >= SEARCH_POSITION_MAX) searchPositions.delete(item.key); });
+    lastPositionPruneAt = Date.now();
+  }
   if (searchPositionDB) try {
     const transaction = searchPositionDB.transaction("positions", "readwrite");
     const store = transaction.objectStore("positions");
     store.put(position);
     let count = 0;
-    store.index("savedAt").openCursor(null, "prev").onsuccess = event => {
+    if (prune) store.index("savedAt").openCursor(null, "prev").onsuccess = event => {
       const cursor = event.target.result;
       if (!cursor) return;
       if (!validSearchPosition(cursor.value) || ++count > SEARCH_POSITION_MAX) cursor.delete();
@@ -2116,7 +2137,7 @@ function showPositionRestoreStatus(message, retry = false) {
     const button = document.createElement("button");
     button.className = "text-btn-sm";
     button.textContent = "重试恢复";
-    button.onclick = () => doSearch();
+    button.onclick = () => tryRestoreSearchPosition(getSearchViewKey());
     status.appendChild(button);
   }
   const cancel = document.createElement("button");
@@ -2138,13 +2159,16 @@ function tryRestoreSearchPosition(key) {
   const position = searchPositions.get(key);
   if (!validSearchPosition(position)) return false;
   if (positionRestore?.key === key && !positionRestore.failed) return true;
+  const previous = positionRestore?.key === key && positionRestore.failed ? positionRestore : null;
   cancelPositionRestore();
   searchAbortController?.abort();
   searchPrefetchAbortController?.abort();
   searchId++;
   searchRequestId++;
   const controller = new AbortController();
-  const task = { key, controller };
+  const task = { key, controller, results: previous?.results || [], page: previous?.page || 0,
+    total: previous?.total ?? null, generation: previous?.generation,
+    targetPage: previous?.targetPage || position.loadedPage };
   positionRestore = task;
   const current = () => positionRestore === task && key === getSearchViewKey() && !controller.signal.aborted;
   STATE.isLoading = true;
@@ -2153,20 +2177,32 @@ function tryRestoreSearchPosition(key) {
   (async () => {
     try {
       const query = JSON.parse(key);
-      const results = [];
-      let total = null, page = 0;
+      const results = task.results;
       do {
-        const data = await fetchPositionPage(query, ++page, controller.signal);
+        const page = task.page + 1;
+        const data = await fetchPositionPage(query, page, controller.signal, page === 1 ? position.anchorId : undefined);
         if (!current()) return;
         if (!data || !Array.isArray(data.results) || data.page !== page ||
             !Number.isInteger(data.total) || data.total < 0 ||
-            (total !== null && total !== data.total) ||
-            (!data.results.length && results.length < data.total)) throw new Error("RESTORE_PAGE_CHANGED");
-        total = data.total;
+            data.page_size !== query.pageSize ||
+            (task.total !== null && (task.total !== data.total || task.generation !== data.generation)) ||
+            data.results.length !== Math.min(query.pageSize, Math.max(0, data.total - results.length))) {
+          // A new retry must start from one coherent generation, never a mixed prefix.
+          task.results = []; task.page = 0; task.total = null; task.generation = undefined;
+          task.targetPage = position.loadedPage;
+          throw new Error("RESTORE_PAGE_CHANGED");
+        }
+        if (page === 1 && Number.isInteger(data.anchor_index) && data.anchor_index >= 0 && data.anchor_index < data.total) {
+          task.targetPage = Math.max(position.loadedPage, Math.floor(data.anchor_index / query.pageSize) + 1);
+        }
+        task.total = data.total;
+        task.generation = data.generation;
+        task.page = page;
         results.push(...data.results);
-        showPositionRestoreStatus(`正在恢复上次位置…（${page}/${Math.min(position.loadedPage, Math.max(1, Math.ceil(total / query.pageSize)))} 页）`);
-      } while (page < position.loadedPage && results.length < total);
+        showPositionRestoreStatus(`正在恢复上次位置…（${page}/${Math.min(task.targetPage, Math.max(1, Math.ceil(task.total / query.pageSize)))} 页）`);
+      } while (task.page < task.targetPage && results.length < task.total);
       if (!current()) return;
+      const { total, page } = task;
       const found = results.findIndex(record => getResultStableId(record) === position.anchorId);
       const index = found < 0 ? Math.min(position.index, Math.max(0, results.length - 1)) : found;
       const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key, results, total,
@@ -2183,19 +2219,21 @@ function tryRestoreSearchPosition(key) {
       if (!current()) return;
       STATE.isLoading = false;
       task.failed = true;
-      showPositionRestoreStatus("暂时无法恢复上次位置", true);
+      showPositionRestoreStatus(error.message === "RESTORE_PAGE_CHANGED"
+        ? "搜索数据已更新，请重试恢复" : `暂时无法恢复上次位置（已保留 ${task.page} 页）`, true);
     }
   })();
   return true;
 }
 
-async function fetchPositionPage(query, page, signal) {
+async function fetchPositionPage(query, page, signal, anchorId) {
   const mixed = query.folders.self.length || query.folders.subtree.length;
   const params = { q: query.query, repos: query.mode === "repo" ? [query.repo] : query.repos,
     extensions: query.extensions, folders: query.plainFolders, folderMatchMode: mixed ? "mixed" : "prefix",
     folderSelfs: query.folders.self, folderSubtrees: query.folders.subtree,
     minSize: query.minSize, maxSize: query.maxSize, sort: query.sort,
-    searchFolders: query.searchFolders, exact: query.exact, page, pageSize: query.pageSize };
+    searchFolders: query.searchFolders, exact: query.exact, page, pageSize: query.pageSize,
+    ...(anchorId === undefined ? {} : { anchorId }) };
   if (query.useLocalMode || mixed || !apiAvailable) {
     const ok = STATE.dataLoaded || await ensureLocalDataLoaded(false, true);
     if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
@@ -2205,7 +2243,8 @@ async function fetchPositionPage(query, page, signal) {
   const body = { q: params.q, repos: params.repos, extensions: params.extensions,
     folders: params.folders, min_size: params.minSize, max_size: params.maxSize,
     sort: params.sort, search_folders: params.searchFolders, exact: params.exact,
-    page, page_size: params.pageSize };
+    page, page_size: params.pageSize,
+    ...(anchorId === undefined ? {} : { anchor_id: anchorId }) };
   const url = query.mode === "repo" ? API_BASE + "/api/search/" + encodeURIComponent(query.repo.split("/").pop()) : API_BASE + "/api/search";
   try {
     const data = await fetchSearchPage(url + "|" + stableSearchStringify(body), url, body, signal, WORKER_REQUEST_TIMEOUT);
@@ -2220,9 +2259,10 @@ async function fetchPositionPage(query, page, signal) {
 function trimSearchViewSnapshots() {
   let bytes = 0;
   for (const [key, snapshot] of Array.from(searchViewSnapshots).reverse()) {
-    if (!snapshot.bytes) snapshot.bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
-    bytes += snapshot.bytes;
-    if (snapshot.bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX || bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) searchViewSnapshots.delete(key);
+    // Reserve room for position-only updates without serializing the results again.
+    if (!snapshot.bytes) snapshot.bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength + 256;
+    if (bytes + snapshot.bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) searchViewSnapshots.delete(key);
+    else bytes += snapshot.bytes;
   }
   while (searchViewSnapshots.size > SEARCH_VIEW_SNAPSHOT_MAX) searchViewSnapshots.delete(searchViewSnapshots.keys().next().value);
 }
@@ -2271,6 +2311,16 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const view = displayedSearchView;
   if (!DOM.resultsContainer || !view || positionRestore || key !== view.key || view.loadedPage < 1) return null;
   const position = saveSearchPosition();
+  const existing = searchViewSnapshots.get(key);
+  const source = existing && searchSnapshotSources.get(existing);
+  const signature = `${view.revision}:${measuredHeightRevision}:${getHeightMeasurementKey()}`;
+  if (source?.signature === signature) {
+    if (position) existing.scroll = { ...position, viewKey: key };
+    existing.savedAt = Date.now();
+    searchViewSnapshots.delete(key);
+    searchViewSnapshots.set(key, existing);
+    return existing;
+  }
   ensureHeightTree();
   const heightRecords = view.results.map(function(result, index) {
     const id = getResultStableId(result);
@@ -2282,7 +2332,7 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const snapshot = {
     version: SEARCH_VIEW_SNAPSHOT_VERSION,
     key,
-    results: view.results.map(cloneSearchResult),
+    results: source?.revision === view.revision ? existing.results : view.results.map(cloneSearchResult),
     total: view.total,
     page: view.loadedPage,
     loadedPage: view.loadedPage,
@@ -2296,6 +2346,10 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   };
   searchViewSnapshots.delete(key);
   searchViewSnapshots.set(key, snapshot);
+  const resultsBytes = source?.revision === view.revision ? source.resultsBytes
+    : new TextEncoder().encode(JSON.stringify(snapshot.results)).byteLength;
+  snapshot.bytes = resultsBytes + new TextEncoder().encode(JSON.stringify({ ...snapshot, results: [] })).byteLength + 256;
+  searchSnapshotSources.set(snapshot, { signature, revision: view.revision, resultsBytes });
   trimSearchViewSnapshots();
   return snapshot;
 }
@@ -2351,6 +2405,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true) {
 function cloneSearchData(data) {
   if (!data || !Array.isArray(data.results)) return data;
   return {
+    ...data,
     results: data.results.slice(),
     total: data.total,
     page: data.page,
@@ -3263,6 +3318,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
     measuredSum += height;
     measuredCount++;
     VSCROLL.measuredRowKeys[idx] = rowMeasureKey;
+    measuredHeightRevision++;
     VSCROLL.heightCache.set(getResultStableId(STATE.results[idx]), { height, measurementKey: rowMeasureKey });
   }
   for (let i = 0; i < measurements.length; i++) {

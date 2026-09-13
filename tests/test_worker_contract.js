@@ -93,6 +93,29 @@ async function names(params) {
 test("registers one versioned message protocol listener", () => {
   assert.strictEqual(typeof makeWorker().listeners.message, "function");
 });
+test("cached pages bypass matching and locate anchors in the complete filtered order", async () => {
+  const { worker } = await loaded();
+  const first = await worker.request("local-search", {q: "alpha", exact: false, pageSize: 1});
+  vm.runInContext('wildcardPatternToRegExp = () => { throw new Error("unexpected scan"); }; literalSearch = () => { throw new Error("unexpected scan"); };', worker.context);
+  const later = await worker.request("local-search", {q: "alpha", exact: false, pageSize: 1, page: 2,
+    anchorId: "Repo/A\0docs/child/beta alpha.pdf"});
+  assert.strictEqual(later.anchor_index, 1);
+  assert.strictEqual(later.records[0].File, "beta alpha");
+  assert.strictEqual(later.snapshot_generation, first.snapshot_generation);
+  const missing = await worker.request("local-search", {q: "alpha", exact: false, pageSize: 1,
+    anchorId: "Repo/B\0archive/beta notes.md"});
+  assert.strictEqual(missing.anchor_index, -1);
+});
+test("same-count corpus replacement changes snapshot identity and relocates anchors", async () => {
+  const { worker } = await loaded();
+  const params = {pageSize: 1, anchorId: "Repo/A\0docs/root/alpha guide.txt"};
+  const old = await worker.request("local-search", params);
+  await worker.request("replace-corpus", {data: compact(records.slice().reverse())});
+  const current = await worker.request("local-search", params);
+  assert.strictEqual(old.total, current.total);
+  assert.notStrictEqual(old.snapshot_generation, current.snapshot_generation);
+  assert.strictEqual(current.anchor_index, records.length - 1);
+});
 test("random reader selection uses supported original extensions", async () => {
   const harness = await loaded([
     { Repo: "Repo/A", File: "scan", Extension: "pdf", Folder: [], Size: 1, HasTxt: false },

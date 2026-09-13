@@ -136,3 +136,81 @@ class SearchPositionTests(unittest.TestCase):
           return {count:searchPositions.size,expired:searchPositions.has('expired'),oldest:searchPositions.has('test-504')};
         }''')
         self.assertEqual(result, {'count': 500, 'expired': False, 'oldest': False})
+
+    def test_oversized_snapshot_does_not_evict_smaller_views(self):
+        kept = self.page.evaluate('''() => {
+          searchViewSnapshots.clear();
+          searchViewSnapshots.set('small', {bytes: 1024});
+          searchViewSnapshots.set('large', {bytes: SEARCH_VIEW_SNAPSHOT_BYTES_MAX+1});
+          trimSearchViewSnapshots(); return [...searchViewSnapshots.keys()];
+        }''')
+        self.assertEqual(kept, ['small'])
+
+    def test_unchanged_controls_reuse_snapshot_and_do_not_scan_storage(self):
+        result = self.page.evaluate('''async () => {
+          const first=saveSearchViewSnapshot(), results=first.results;
+          let scans=0; const cursor=IDBIndex.prototype.openCursor;
+          IDBIndex.prototype.openCursor=function(...args){scans++; return cursor.apply(this,args)};
+          lastPositionPruneAt=Date.now();
+          try {
+            for(let i=0;i<20;i++) saveSearchViewSnapshot();
+            const tx=searchPositionDB.transaction('positions');
+            await new Promise(resolve=>{tx.oncomplete=resolve});
+            return {same:searchViewSnapshots.get(getSearchViewKey()).results===results,scans};
+          } finally {IDBIndex.prototype.openCursor=cursor;}
+        }''')
+        self.assertEqual(result, {'same': True, 'scans': 0})
+
+    def begin_rebuild(self, script):
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('searchViewSnapshots.clear()')
+        self.page.evaluate(script)
+        self.page.evaluate("STATE.query='paging-original'; doSearch()")
+
+    def test_retry_continues_from_failed_page(self):
+        self.begin_rebuild('''() => {
+          const original=fetchPositionPage; window.restoreCalls=[]; window.failPage=true;
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]);
+            if(args[1]===2 && failPage) throw new Error('offline');
+            return original(...args);
+          };
+        }''')
+        self.page.get_by_text('重试恢复', exact=True).wait_for()
+        self.assertEqual(self.page.evaluate('positionRestore.page'), 1)
+        self.page.evaluate('failPage=false')
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('restoreCalls.filter(page=>page<=2)'), [1, 2, 2])
+
+    def test_same_total_generation_change_restarts_coherent_prefix(self):
+        self.begin_rebuild('''() => {
+          const original=fetchPositionPage; window.restoreCalls=[]; window.changed=false;
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]); const data=await original(...args);
+            if(args[1]===2) changed=true;
+            return {...data,generation:changed?'new':'old'};
+          };
+        }''')
+        self.page.get_by_text('搜索数据已更新，请重试恢复', exact=True).wait_for()
+        self.assertEqual(self.page.evaluate('positionRestore.results.length'), 0)
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('restoreCalls.filter(page=>page<=2)'), [1, 2, 1, 2])
+
+    def test_moved_anchor_loads_beyond_old_page_range(self):
+        self.begin_rebuild('''() => {
+          const original=fetchPositionPage;
+          fetchPositionPage=async (...args)=>{
+            const data=await original(...args);
+            data.generation='moved';
+            if(args[1]===1) data.anchor_index=250;
+            if(args[1]===2) data.results[25].File='paging-250';
+            if(args[1]===3) data.results[50].File='paging-125';
+            return data;
+          };
+        }''')
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('findVirtualIndex(DOM.resultsContainer.scrollTop)'), 250)
+        self.assertGreaterEqual(self.page.evaluate('STATE._loadedPage'), 3)
