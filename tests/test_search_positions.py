@@ -215,7 +215,7 @@ class SearchPositionTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('findVirtualIndex(DOM.resultsContainer.scrollTop)'), 250)
         self.assertGreaterEqual(self.page.evaluate('STATE._loadedPage'), 3)
 
-    def test_parallel_rebuild_is_bounded_and_keeps_all_ids_in_order(self):
+    def test_window_restore_does_not_fetch_unvisited_prefix(self):
         self.begin_rebuild('''() => {
           pagingTotal=800;searchResponseCache.clear();
           const originalKey=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
@@ -228,11 +228,12 @@ class SearchPositionTests(unittest.TestCase):
           };
         }''')
         self.assert_position()
-        self.assertEqual(self.page.evaluate('restorePeak'), 3)
-        self.assertEqual(self.page.evaluate('restoreCalls'), list(range(1, 9)))
-        self.assertEqual(self.page.evaluate('STATE.results.map(record=>record.ID)'), [str(i) for i in range(800)])
+        self.assertEqual(self.page.evaluate('restorePeak'), 2)
+        self.assertEqual(self.page.evaluate('restoreCalls'), [1,2,3])
+        self.assertEqual(self.page.evaluate('STATE.results.filter(Boolean).map(record=>record.ID)'), [str(i) for i in range(300)])
+        self.assertEqual(self.page.evaluate('STATE.results.length'), 800)
 
-    def test_parallel_retry_reuses_completed_suffix(self):
+    def test_window_retry_reuses_completed_neighbor(self):
         self.begin_rebuild('''() => {
           pagingTotal=400;searchResponseCache.clear();
           const key=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
@@ -245,11 +246,11 @@ class SearchPositionTests(unittest.TestCase):
           };
         }''')
         self.page.get_by_text('重试恢复', exact=True).wait_for()
-        self.assertEqual(self.page.evaluate('[positionRestore.page,...positionRestore.ready.keys()]'), [1,3,4])
+        self.assertEqual(self.page.evaluate('[positionRestore.page,...positionRestore.ready.keys()]'), [1,1,3])
         self.page.evaluate('failPage=false')
         self.page.get_by_text('重试恢复', exact=True).click()
         self.assert_position()
-        self.assertEqual(self.page.evaluate('restoreCalls'), [1,2,3,4,2])
+        self.assertEqual(self.page.evaluate('restoreCalls'), [1,2,3,2])
         self.assertEqual(self.page.evaluate('STATE.results.length'), 400)
 
     def test_parallel_generation_mismatch_discards_entire_buffer(self):
