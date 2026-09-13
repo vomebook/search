@@ -520,7 +520,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(result["files"], ["root-file", "nested-file", "deep-file"])
         self.assertEqual(result["total"], 3)
         self.assertIn("", result["self"])
-        self.assertEqual(result["subtrees"], ["child", "child/deep"])
+        self.assertEqual(result["subtrees"], ["child"])
         self.assertIn("child", result["folders"])
         self.assertTrue(result["rootChecked"])
         self.assertFalse(result["rootPartial"])
@@ -571,9 +571,8 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(result["files"], ["nested-file", "deep-file"])
         self.assertEqual(result["total"], 2)
         self.assertTrue(result["checked"])
-        self.assertIn("child", result["self"])
-        self.assertIn("child", result["subtrees"])
-        self.assertIn("child/deep", result["subtrees"])
+        self.assertEqual(result["self"], [])
+        self.assertEqual(result["subtrees"], ["child"])
         self.assertEqual(self.page_errors, [])
 
     def test_section_filter_cancel_buttons_follow_selected_state(self):
