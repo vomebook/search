@@ -381,7 +381,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   const randomReaderBlock = app.slice(app.indexOf("async function randomTxt"), app.indexOf("let toastTimer"));
   assert.match(randomReaderBlock, /if \(!originalCount && !readerAssets\) await loadReaderAssets\(\);\s*else loadReaderAssets\(\);/);
   assert.doesNotMatch(randomReaderBlock, /try \{\s*await loadReaderAssets\(\)/);
-  assert.match(app, /loadReaderAssets\(\)\.then\(function\(\) \{\s*clearResultTemplateCache\(\);\s*if \(STATE\.results\.length > 0\) renderResults\(\);/);
+  assert.match(app, /loadReaderAssets\(\)\.then\(function\(\) \{\s*refreshResultReaderActions\(\);/);
   assert.match(readerHtml, /id="page-number"/);
   assert.match(reader, /document\.querySelector\("\.page-controls"\)\.hidden = !capability\.features\.pagination/);
   assert.match(reader, /document\.createElement\(mode\)/);

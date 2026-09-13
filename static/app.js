@@ -2149,6 +2149,69 @@ let lastPositionPruneAt = 0;
 let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
 const searchSnapshotSources = new WeakMap();
+const searchViewportSnapshots = new Map();
+const SEARCH_VIEWPORT_MAX = 64;
+const SEARCH_VIEWPORT_BYTES_MAX = 64 * 1024;
+const resultRowRecords = new WeakMap();
+
+function saveSearchViewport(position, view) {
+  const start = Math.max(0, position.index - 24);
+  const end = Math.min(view.results.length, position.index + 56);
+  const records = [];
+  for (let index = start; index < end; index++) {
+    if (view.results[index]) records.push([index, cloneSearchResult(view.results[index]), VSCROLL.heights[index] || VSCROLL.estimatedHeight]);
+  }
+  const viewport = { key: position.key, savedAt: position.savedAt, anchorId: position.anchorId, index: position.index,
+    total: view.total, estimatedHeight: VSCROLL.estimatedHeight, measurementKey: getHeightMeasurementKey(), records };
+  if (new TextEncoder().encode(JSON.stringify(viewport)).byteLength > SEARCH_VIEWPORT_BYTES_MAX) return;
+  searchViewportSnapshots.delete(viewport.key);
+  searchViewportSnapshots.set(viewport.key, viewport);
+  while (searchViewportSnapshots.size > SEARCH_VIEWPORT_MAX) searchViewportSnapshots.delete(searchViewportSnapshots.keys().next().value);
+  if (searchPositionDB?.objectStoreNames.contains("viewports")) try {
+    const tx = searchPositionDB.transaction("viewports", "readwrite"), store = tx.objectStore("viewports");
+    store.put(viewport);
+    let count = 0;
+    store.index("savedAt").openKeyCursor(null, "prev").onsuccess = event => {
+      const cursor = event.target.result;
+      if (!cursor) return;
+      if (++count > SEARCH_VIEWPORT_MAX || cursor.key < Date.now() - SEARCH_POSITION_TTL) store.delete(cursor.primaryKey);
+      cursor.continue();
+    };
+  } catch (_) {}
+}
+
+async function readSearchViewport(key) {
+  if (searchViewportSnapshots.has(key)) return searchViewportSnapshots.get(key);
+  if (!searchPositionDB?.objectStoreNames.contains("viewports")) return null;
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(null), 150);
+    try {
+      const request = searchPositionDB.transaction("viewports").objectStore("viewports").get(key);
+      request.onsuccess = () => { clearTimeout(timer); resolve(request.result); };
+      request.onerror = () => { clearTimeout(timer); resolve(null); };
+    } catch (_) { clearTimeout(timer); resolve(null); }
+  });
+}
+
+function showSavedSearchViewport(viewport, position, task) {
+  if (!viewport || viewport.key !== position.key || viewport.index !== position.index || viewport.anchorId !== position.anchorId
+      || viewport.savedAt < Date.now() - SEARCH_POSITION_TTL || !Number.isInteger(viewport.total) || viewport.total <= position.index
+      || !Array.isArray(viewport.records) || viewport.records.length > 80
+      || !viewport.records.some(([index, record]) => index === position.index && getResultStableId(record) === position.anchorId)) return;
+  const size = JSON.parse(position.key).pageSize;
+  const results = new Array(Math.min(viewport.total, position.loadedPage * size));
+  for (const [index, record] of viewport.records) if (Number.isInteger(index) && index >= 0 && index < results.length) results[index] = record;
+  const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key: position.key, results, total: viewport.total,
+    page: position.loadedPage, loadedPage: position.loadedPage, pageCache: {}, hasMore: results.length < viewport.total,
+    window: { preview: true, pages: [], count: Object.keys(results).length }, estimatedHeight: viewport.estimatedHeight,
+    heightCache: viewport.records.map(([, record, height]) => [getResultStableId(record), {height, measurementKey: viewport.measurementKey}]),
+    scroll: {index: position.index, offset: position.offset, viewKey: position.key}, savedAt: Date.now() };
+  task.preview = true;
+  searchViewSnapshots.set(position.key, snapshot);
+  restoreSearchViewSnapshot(position.key, true, true);
+  searchViewSnapshots.delete(position.key);
+  showPositionRestoreStatus("已恢复上次画面，正在核对结果…");
+}
 
 function validSearchPosition(value) {
   return value && value.version === 1 && typeof value.key === "string"
@@ -2162,10 +2225,12 @@ async function initSearchPositions() {
   await new Promise(resolve => {
     const timer = setTimeout(resolve, 1500);
     try {
-      const request = indexedDB.open("voice-search-positions", 1);
+      const request = indexedDB.open("voice-search-positions", 2);
       request.onupgradeneeded = () => {
-        const store = request.result.createObjectStore("positions", { keyPath: "key" });
-        store.createIndex("savedAt", "savedAt");
+        for (const name of ["positions", "viewports"]) if (!request.result.objectStoreNames.contains(name)) {
+          const store = request.result.createObjectStore(name, { keyPath: "key" });
+          store.createIndex("savedAt", "savedAt");
+        }
       };
       request.onerror = request.onblocked = () => { clearTimeout(timer); resolve(); };
       request.onsuccess = () => {
@@ -2217,6 +2282,7 @@ function saveSearchPosition() {
       && previous.loadedPage === position.loadedPage) return previous;
   // Initialization reads newest first; only sort when enforcing the small cap.
   searchPositions.set(view.key, position);
+  saveSearchViewport(position, view);
   const prune = Date.now() - lastPositionPruneAt >= 60000 || searchPositions.size > SEARCH_POSITION_MAX;
   if (prune) {
     const ordered = Array.from(searchPositions.values()).sort((a, b) => b.savedAt - a.savedAt);
@@ -2266,7 +2332,8 @@ function showPositionRestoreStatus(message, retry = false) {
   }
   status.replaceChildren();
   status.hidden = !message;
-  DOM.resultsContainer.classList.toggle("position-restoring", !!message);
+  DOM.resultsContainer.classList.toggle("position-restoring", !!message && !positionRestore?.preview);
+  status.classList.toggle("position-preview-status", !!positionRestore?.preview);
   if (!message) return;
   const text = document.createElement("span");
   text.textContent = message;
@@ -2316,6 +2383,9 @@ function tryRestoreSearchPosition(key) {
   (async () => {
     try {
       const query = JSON.parse(key);
+      const viewport = await readSearchViewport(key);
+      if (!current()) return;
+      showSavedSearchViewport(viewport, position, task);
       const lookup = task.lookup || await fetchPositionPage(query, 1, controller.signal, position.anchorId);
       if (!current()) return;
       validatePositionWindowPage(lookup, 1, query.pageSize);
@@ -2340,17 +2410,26 @@ function tryRestoreSearchPosition(key) {
       // Empty slots reserve scroll geometry only; visible slots are fetched on demand.
       const page = Math.min(lastPage, Math.max(position.loadedPage, targetPage + 1));
       const results = new Array(Math.min(total, page * query.pageSize));
-      for (const [number, data] of task.ready) data.results.forEach((record, offset) => { results[(number - 1) * query.pageSize + offset] = record; });
-      const found = results.findIndex(record => getResultStableId(record) === position.anchorId);
+      let found = -1;
+      for (const [number, data] of task.ready) data.results.forEach((record, offset) => {
+        const index = (number - 1) * query.pageSize + offset;
+        results[index] = record;
+        if (getResultStableId(record) === position.anchorId) found = index;
+      });
       const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key, results, total,
         page, loadedPage: page, pageCache: {}, hasMore: results.length < total,
         window: { generation: lookup.generation, pages: [...task.ready.keys()], count: [...task.ready.values()].reduce((sum, data) => sum + data.results.length, 0) },
         estimatedHeight: VSCROLL.estimatedHeight, heightCache: [], heightRecords: [],
         scroll: { index: found < 0 ? index : found, offset: position.offset, viewKey: key }, savedAt: Date.now() };
+      while (task.preview && VSCROLL.isDraggingThumb && current()) await new Promise(resolve => setTimeout(resolve, 30));
+      if (!current()) return;
       positionRestore = null;
       showPositionRestoreStatus("");
-      searchViewSnapshots.set(key, snapshot);
-      restoreSearchViewSnapshot(key);
+      if (task.preview && found === position.index) applyValidatedSearchViewport(snapshot);
+      else {
+        searchViewSnapshots.set(key, snapshot);
+        restoreSearchViewSnapshot(key);
+      }
       trimSearchViewSnapshots();
       if (found < 0) showToast("搜索结果已变化，已恢复到原位置附近");
     } catch (error) {
@@ -2363,6 +2442,29 @@ function tryRestoreSearchPosition(key) {
     }
   })();
   return true;
+}
+
+function applyValidatedSearchViewport(snapshot) {
+  const anchor = captureReaderReturnScroll();
+  const previous = STATE.results;
+  for (const key of Object.keys(snapshot.results)) {
+    if (previous[key] && JSON.stringify(previous[key]) === JSON.stringify(snapshot.results[key])) snapshot.results[key] = previous[key];
+    else { VSCROLL.templateCache.delete(Number(key)); VSCROLL.measuredRowKeys[key] = null; }
+  }
+  resultWindow?.controller.abort();
+  resultWindow = { ...snapshot.window, key: snapshot.key, total: snapshot.total, query: JSON.parse(snapshot.key),
+    pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
+  STATE.results = snapshot.results; STATE.total = snapshot.total;
+  STATE.page = STATE._loadedPage = snapshot.loadedPage;
+  STATE.hasMore = snapshot.hasMore; STATE.isLoading = false;
+  if (VSCROLL.heights.length > STATE.results.length) { VSCROLL.heights.length = STATE.results.length; VSCROLL.heightsDirty = true; }
+  ensureVirtualHeights(STATE.results.length);
+  VSCROLL.measuredWindowKey = "";
+  refreshVirtualAfterAppend(false);
+  DOM.resultsContainer.scrollTop = getVirtualOffset(Math.min(anchor.index, STATE.results.length - 1)) + anchor.offset;
+  VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+  rememberDisplayedSearchView(); renderVisible(); updateStatusBar(); updateLoadInfo(); updatePagingStatus();
+  clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveSearchPosition, 250);
 }
 
 function validatePositionWindowPage(data, page, pageSize, expected) {
@@ -2425,7 +2527,7 @@ function requestResultWindowPage(window, page) {
 
 async function loadResultWindowPage(page, prefetch = false) {
   const window = resultWindow;
-  if (!window || !resultWindowCurrent(window) || window.pages.has(page) || page < 1 || page > Math.ceil(window.total / window.query.pageSize)) return false;
+  if (!window || positionRestore || !resultWindowCurrent(window) || window.pages.has(page) || page < 1 || page > Math.ceil(window.total / window.query.pageSize)) return false;
   try {
     const data = await requestResultWindowPage(window, page);
     if (!data || !resultWindowCurrent(window) || window.invalid || window.pages.has(page)) return false;
@@ -2435,8 +2537,11 @@ async function loadResultWindowPage(page, prefetch = false) {
       while (window.prefetched.size > 3) window.prefetched.delete(window.prefetched.keys().next().value);
       return true;
     }
-    const results = STATE.results.slice();
-    data.results.forEach((record, offset) => { results[(page - 1) * window.query.pageSize + offset] = record; });
+    const results = STATE.results;
+    data.results.forEach((record, offset) => {
+      const index = (page - 1) * window.query.pageSize + offset;
+      results[index] = record; VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
+    });
     STATE.results = results;
     window.pages.add(page); window.prefetched?.delete(page);
     window.failures.delete(page); updateResultWindowStatus();
@@ -2444,9 +2549,10 @@ async function loadResultWindowPage(page, prefetch = false) {
     STATE._loadedPage = Math.max(1, Math.ceil(results.length / window.query.pageSize));
     STATE.page = STATE._loadedPage;
     STATE.hasMore = results.length < STATE.total;
-    clearResultTemplateCache();
+    VSCROLL.measuredWindowKey = "";
     ensureVirtualHeights(results.length);
     VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+    displayedSearchView = null;
     rememberDisplayedSearchView();
     renderVisible(); updateLoadInfo(); updatePagingStatus();
     clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveSearchPosition, 250);
@@ -2456,7 +2562,7 @@ async function loadResultWindowPage(page, prefetch = false) {
     window.failures.set(page, error);
     if (error.message === "RESTORE_PAGE_CHANGED") window.invalid = true;
     updateResultWindowStatus();
-    VSCROLL.contentVersion++;
+    DOM.resultsList.querySelectorAll(".result-window-placeholder").forEach(row => row.remove());
     VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
     scheduleVirtualRender();
     return false;
@@ -2467,6 +2573,8 @@ function ensureResultWindowPages(start, end) {
   if (!resultWindow || positionRestore || readerReturnScrollState || VSCROLL.isDraggingThumb) return;
   const size = resultWindow.query.pageSize;
   for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadResultWindowPage(page);
+  const visiblePage = Math.floor(findVirtualIndex(DOM.resultsContainer.scrollTop) / size) + 1;
+  loadResultWindowPage(visiblePage + 1); loadResultWindowPage(visiblePage - 1);
 }
 
 function createResultWindowPlaceholder(index) {
@@ -2476,11 +2584,15 @@ function createResultWindowPlaceholder(index) {
   row.dataset.index = String(index);
   row.dataset.contentVersion = String(VSCROLL.contentVersion);
   row.style.height = (VSCROLL.heights[index] || VSCROLL.estimatedHeight) + "px";
-  const button = document.createElement("button");
-  button.className = "text-btn-sm";
-  button.dataset.windowPage = String(page);
-  button.textContent = resultWindow?.invalid ? "数据已更新，点击重新定位" : resultWindow?.failures.has(page) ? "加载失败，点击重试" : "正在加载此处的结果…";
-  row.appendChild(button);
+  if (resultWindow?.invalid || resultWindow?.failures.has(page)) {
+    const button = document.createElement("button");
+    button.className = "text-btn-sm"; button.dataset.windowPage = String(page);
+    button.textContent = resultWindow.invalid ? "数据已更新，点击重新定位" : "加载失败，点击重试";
+    row.appendChild(button);
+  } else {
+    row.setAttribute("aria-label", "正在加载结果");
+    row.innerHTML = '<div class="window-placeholder-lines" aria-hidden="true"><i></i><i></i></div>';
+  }
   return row;
 }
 
@@ -2618,10 +2730,10 @@ function activateSearchView(key = getSearchViewKey()) {
   const snapshot = searchViewSnapshots.get(key);
   VSCROLL.heightCache = new Map(snapshot?.heightCache || []);
 }
-function restoreSearchViewSnapshot(key, restoreScroll = true) {
+function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
   const snapshot = searchViewSnapshots.get(key);
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
-  cancelPositionRestore();
+  if (!preserveRestore) cancelPositionRestore();
   clearTimeout(filterSearchTimer);
   clearTimeout(searchTimer);
   if (searchAbortController) searchAbortController.abort();
@@ -3216,6 +3328,10 @@ function renderResults(animate = false) {
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   pendingResultEntrance = animate;
+  if (readerReturnScrollState && !readerOverlay) {
+    reconcileVirtualRows(STATE.results, 0, 0, 0, getVirtualTotalHeight());
+    DOM.resultsContainer.scrollTop = getVirtualOffset(readerReturnScrollState.index) + readerReturnScrollState.offset;
+  }
   renderVisible();
   if (readerReturnScrollState && !readerOverlay) restoreReaderReturnScroll();
 }
@@ -3270,6 +3386,28 @@ function buildResultHTML(rec, idx) {
   );
 }
 
+function refreshResultReaderActions() {
+  VSCROLL.templateCache.clear();
+  for (const row of DOM.resultsList.querySelectorAll(".result-item[data-index]")) {
+    const index = Number(row.dataset.index), record = STATE.results[index];
+    if (!record) continue;
+    const readerRecord = applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record));
+    if (!isReadableRecord(readerRecord)) continue;
+    let button = row.querySelector('[data-action="read"]');
+    if (!button) {
+      button = document.createElement("button"); button.className = "result-action-btn"; button.dataset.action = "read";
+      row.querySelector(".result-actions").appendChild(button);
+      VSCROLL.measuredRowKeys[index] = null;
+    }
+    button.dataset.readerUrl = getReaderLink(readerRecord);
+    const label = ["audio", "video"].includes(VoiceOfMLReader.capability(readerRecord.ReaderExtension || readerRecord.Extension).mode) ? "在线播放" : "在线阅读";
+    if (button.textContent !== label) { button.textContent = label; VSCROLL.measuredRowKeys[index] = null; }
+  }
+  VSCROLL.measuredWindowKey = "";
+  VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+  scheduleVirtualRender();
+}
+
 function getResultsHTMLCacheKey() {
   return [
     STATE.query || "",
@@ -3318,7 +3456,9 @@ function createResultRow(rec, idx) {
     VSCROLL.templateCache.delete(idx);
     VSCROLL.templateCache.set(idx, template);
   }
-  return template.cloneNode(true);
+  const row = template.cloneNode(true);
+  resultRowRecords.set(row, rec);
+  return row;
 }
 
 function reconcileVirtualRows(items, start, end, topH, bottomH) {
@@ -3340,7 +3480,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   const existing = new Map();
   DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
     const idx = Number(row.dataset.index);
-    if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion) row.remove();
+    if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion || resultRowRecords.get(row) !== items[idx]) row.remove();
     else existing.set(idx, row);
   });
   let cursor = topSpacer.nextSibling;
@@ -3386,6 +3526,7 @@ function renderVisible() {
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
   ensureResultWindowPages(safeStart, safeEnd);
+  updateCurrentResultPosition();
   if (!pendingResultEntrance && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
@@ -3426,6 +3567,12 @@ function renderVisible() {
 function ensureHeightTree() {
   const len = VSCROLL.heights.length;
   if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === len + 1) return;
+  if (VSCROLL.sparseHeights) {
+    const tree = new Array(len + 1);
+    for (const key of Object.keys(VSCROLL.heights)) fenwickAdd(tree, Number(key) + 1, VSCROLL.heights[key] - VSCROLL.heightBase);
+    VSCROLL.heightTree = tree; VSCROLL.heightsDirty = false;
+    return;
+  }
   const tree = new Array(len + 1).fill(0);
   const est = VSCROLL.estimatedHeight || 60;
   for (let i = 1; i <= len; i++) {
@@ -3438,12 +3585,13 @@ function ensureHeightTree() {
 }
 
 function fenwickAdd(tree, idx, delta) {
-  for (let i = idx; i < tree.length; i += i & -i) tree[i] += delta;
+  if (!delta) return;
+  for (let i = idx; i < tree.length; i += i & -i) tree[i] = (tree[i] || 0) + delta;
 }
 
 function fenwickSum(tree, idx) {
-  let sum = 0;
-  for (let i = idx; i > 0; i -= i & -i) sum += tree[i];
+  let sum = VSCROLL.sparseHeights ? idx * VSCROLL.heightBase : 0;
+  for (let i = idx; i > 0; i -= i & -i) sum += tree[i] || 0;
   return sum;
 }
 
@@ -3466,9 +3614,10 @@ function findVirtualIndex(offset) {
   let sum = 0;
   for (; bit > 0; bit >>= 1) {
     const next = idx + bit;
-    if (next < VSCROLL.heightTree.length && sum + VSCROLL.heightTree[next] <= offset) {
+    const height = (VSCROLL.heightTree[next] || 0) + (VSCROLL.sparseHeights ? (next & -next) * VSCROLL.heightBase : 0);
+    if (next < VSCROLL.heightTree.length && sum + height <= offset) {
       idx = next;
-      sum += VSCROLL.heightTree[next];
+      sum += height;
     }
   }
   return Math.min(Math.max(0, idx), Math.max(0, STATE.results.length - 1));
@@ -3483,6 +3632,8 @@ function resetVirtualScrollState() {
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
+  VSCROLL.sparseHeights = !!resultWindow;
+  VSCROLL.heightBase = VSCROLL.estimatedHeight || 60;
   VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
   VSCROLL.lastScrollTop = 0;
@@ -3501,6 +3652,16 @@ function prepareRouteTransitionResults() {
 function ensureVirtualHeights(len) {
   if (VSCROLL.heights.length >= len) return;
   const oldLen = VSCROLL.heights.length;
+  if (VSCROLL.sparseHeights) {
+    VSCROLL.heights.length = len; VSCROLL.measuredRowKeys.length = len;
+    const measurementKey = getHeightMeasurementKey();
+    for (const key of Object.keys(STATE.results)) if (Number(key) >= oldLen) {
+      const cached = VSCROLL.heightCache.get(getResultStableId(STATE.results[key]));
+      if (cached?.measurementKey === measurementKey) VSCROLL.heights[key] = cached.height;
+    }
+    VSCROLL.heightsDirty = true;
+    return;
+  }
   const canExtendTree = !VSCROLL.heightsDirty && VSCROLL.heightTree.length === oldLen + 1;
   VSCROLL.heights.length = len;
   VSCROLL.measuredRowKeys.length = len;
@@ -3602,7 +3763,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
       changed = true;
     }
   }
-  if (measuredCount > 10 && VSCROLL.estimateMeasurementKey !== rowMeasureKey) {
+  if (!VSCROLL.sparseHeights && measuredCount > 10 && VSCROLL.estimateMeasurementKey !== rowMeasureKey) {
     VSCROLL.estimateMeasurementKey = rowMeasureKey;
     const nextEstimate = measuredSum / measuredCount;
     if (Math.abs(nextEstimate - VSCROLL.estimatedHeight) > 1) {
@@ -3669,6 +3830,13 @@ function scheduleFilterSearch() {
   }, FILTER_SEARCH_DEBOUNCE_MS);
 }
 
+function updateCurrentResultPosition() {
+  const label = document.getElementById("current-result-position");
+  if (!label) return;
+  label.hidden = !resultWindow;
+  if (resultWindow && STATE.results.length) label.textContent = `当前第 ${(findVirtualIndex(DOM.resultsContainer.scrollTop) + 1).toLocaleString()} 条 · `;
+}
+
 function updateLoadInfo() {
   if (STATE.total === 0 && STATE.results.length === 0) {
     DOM.loadInfo.style.display = "none";
@@ -3677,6 +3845,7 @@ function updateLoadInfo() {
   DOM.loadInfo.style.display = "";
   DOM.loadedCount.textContent = (resultWindow ? resultWindow.count : STATE.results.length).toLocaleString();
   DOM.totalCount.textContent = STATE.total.toLocaleString();
+  updateCurrentResultPosition();
   requestAnimationFrame(updateScrollTrack);
 }
 
@@ -5614,8 +5783,7 @@ async function init() {
   ROUTER.apply();
   restoreReaderFromSession();
   loadReaderAssets().then(function() {
-    clearResultTemplateCache();
-    if (STATE.results.length > 0) renderResults();
+    refreshResultReaderActions();
     if (STATE.mode === "repo") {
       const routeId = ++routeRenderId;
       renderBrowser(STATE.browserPath || "", routeId);
