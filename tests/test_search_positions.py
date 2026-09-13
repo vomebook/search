@@ -214,3 +214,54 @@ class SearchPositionTests(unittest.TestCase):
         self.assert_position()
         self.assertEqual(self.page.evaluate('findVirtualIndex(DOM.resultsContainer.scrollTop)'), 250)
         self.assertGreaterEqual(self.page.evaluate('STATE._loadedPage'), 3)
+
+    def test_parallel_rebuild_is_bounded_and_keeps_all_ids_in_order(self):
+        self.begin_rebuild('''() => {
+          pagingTotal=800;searchResponseCache.clear();
+          const originalKey=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          searchPositions.get(originalKey).loadedPage=8;
+          const original=fetchPositionPage;window.restoreCalls=[];window.restorePeak=0;let active=0;
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]);active++;restorePeak=Math.max(restorePeak,active);
+            await new Promise(resolve=>setTimeout(resolve,args[1]%3===2?60:10));
+            try {return await original(...args);} finally {active--;}
+          };
+        }''')
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('restorePeak'), 3)
+        self.assertEqual(self.page.evaluate('restoreCalls'), list(range(1, 9)))
+        self.assertEqual(self.page.evaluate('STATE.results.map(record=>record.ID)'), [str(i) for i in range(800)])
+
+    def test_parallel_retry_reuses_completed_suffix(self):
+        self.begin_rebuild('''() => {
+          pagingTotal=400;searchResponseCache.clear();
+          const key=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          searchPositions.get(key).loadedPage=4;
+          const original=fetchPositionPage;window.restoreCalls=[];window.failPage=true;
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]);
+            if(args[1]===2 && failPage) throw new Error('offline');
+            return original(...args);
+          };
+        }''')
+        self.page.get_by_text('重试恢复', exact=True).wait_for()
+        self.assertEqual(self.page.evaluate('[positionRestore.page,...positionRestore.ready.keys()]'), [1,3,4])
+        self.page.evaluate('failPage=false')
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('restoreCalls'), [1,2,3,4,2])
+        self.assertEqual(self.page.evaluate('STATE.results.length'), 400)
+
+    def test_parallel_generation_mismatch_discards_entire_buffer(self):
+        self.begin_rebuild('''() => {
+          pagingTotal=400;searchResponseCache.clear();
+          const key=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          searchPositions.get(key).loadedPage=4;
+          const original=fetchPositionPage;window.coherent=false;
+          fetchPositionPage=async (...args)=>({...await original(...args),generation:coherent||args[1]===3?'new':'old'});
+        }''')
+        self.page.get_by_text('搜索数据已更新，请重试恢复', exact=True).wait_for()
+        self.assertEqual(self.page.evaluate('[positionRestore.results.length,positionRestore.ready.size,positionRestore.page]'), [0,0,0])
+        self.page.evaluate('coherent=true')
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
