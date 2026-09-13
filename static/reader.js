@@ -1856,6 +1856,14 @@ window.addEventListener("message", (event) => {
   if (
     event.origin === location.origin &&
     event.source === window.parent &&
+    event.data?.type === "voice-reader-abort"
+  ) {
+    disposeReader();
+    return;
+  }
+  if (
+    event.origin === location.origin &&
+    event.source === window.parent &&
     event.data &&
     event.data.type === "voice-reader-theme-state"
   )
@@ -2229,16 +2237,9 @@ async function renderPdfPages(prepared) {
     )
   );
   assertReaderActive();
-  const entries =
-    manifest.version === 1
-      ? manifest.pages
-          .map((item) => ({ page: Number(item.page), path: String(item.path || "") }))
-          .sort((a, b) => a.page - b.page)
-      : null;
-  const rootMatch = entries
-    ? entries[0]?.path.match(/^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?)\/pages\//)
-    : pdfManifestRootPath()?.match(/^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16})$/);
-  const totalPages = entries ? entries.length : manifest.page_count;
+  const entries = null;
+  const rootMatch = pdfManifestRootPath()?.match(/^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16})$/);
+  const totalPages = manifest.page_count;
   if (
     !rootMatch ||
     (entries &&
