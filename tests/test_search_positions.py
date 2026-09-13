@@ -1,0 +1,138 @@
+"""Persistent positions: real IndexedDB, API paging, navigation and cancellation."""
+import unittest
+from tests import test_paging_recovery as paging
+
+
+class SearchPositionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        paging.PagingRecoveryTests.setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        paging.PagingRecoveryTests.tearDownClass()
+
+    def setUp(self):
+        self.fixture = paging.PagingRecoveryTests()
+        self.fixture.setUp()
+        self.page = self.fixture.page
+        self.page.add_init_script("window.addEventListener('DOMContentLoaded',()=>{pagingMode='normal'})")
+        self.page.evaluate("pagingMode='normal'; STATE.query='paging-original'; doSearch()")
+        self.page.wait_for_function("STATE.query==='paging-original' && !STATE.isLoading && STATE._pageCache[2]")
+        self.page.evaluate('maybeLoadNextPage(false,true)')
+        self.page.wait_for_function('STATE._loadedPage>=2 && !STATE.isLoading')
+        self.page.evaluate('DOM.resultsContainer.scrollTop=getVirtualOffset(125)+17')
+        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index===125')
+        self.saved = self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.page.evaluate('''() => new Promise(resolve => {
+          const tx=searchPositionDB.transaction('positions');
+          tx.objectStore('positions').get(getSearchViewKey()); tx.oncomplete=resolve;
+        })''')
+
+    def tearDown(self):
+        self.fixture.tearDown()
+
+    def assert_position(self):
+        self.page.wait_for_function("!positionRestore && !STATE.isLoading && STATE.query==='paging-original'")
+        self.page.wait_for_function('''saved => {
+          const index=findVirtualIndex(DOM.resultsContainer.scrollTop);
+          return getResultStableId(STATE.results[index])===saved.anchorId &&
+            Math.abs(DOM.resultsContainer.scrollTop-getVirtualOffset(index)-saved.offset)<2;
+        }''', arg=self.saved)
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_reload_rebuilds_pages_from_indexeddb(self):
+        self.page.reload(wait_until='domcontentloaded')
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('pagingRequests.slice(0,2)'), [1, 2])
+        self.assertGreaterEqual(self.page.evaluate('STATE.results.length'), 200)
+
+    def test_evicted_results_after_filters_and_repo_round_trip(self):
+        for ext in ['pdf', 'epub', 'txt']:
+            self.page.evaluate('ext=>{STATE.filterExtensions=[ext]; scheduleFilterSearch()}', ext)
+            self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("ROUTER.navigate('repo','Test')")
+        self.page.wait_for_function("STATE.mode==='repo' && !STATE.isLoading")
+        self.page.evaluate("ROUTER.navigate('global')")
+        self.page.wait_for_function("STATE.mode==='global' && !STATE.isLoading")
+        self.page.evaluate('''() => {
+          searchViewSnapshots.clear(); searchResponseCache.clear();
+          STATE.useLocalMode=false; apiAvailable=true;
+          STATE.filterExtensions=[]; STATE.query='paging-original'; DOM.searchInput.value=STATE.query;
+          scheduleFilterSearch();
+        }''')
+        self.assert_position()
+
+    def test_history_click_recovers_evicted_position(self):
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("searchViewSnapshots.clear(); addHistoryItem('paging-original'); DOM.searchInput.focus(); renderDropdown()")
+        self.page.locator('.history-item[data-query="paging-original"]').click()
+        self.assert_position()
+
+    def test_cancelled_rebuild_does_not_apply_late_page(self):
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('''() => {
+          searchViewSnapshots.clear();
+          const fetchPage=fetchPositionPage;
+          fetchPositionPage=async (...args)=>{
+            const data=await fetchPage(...args);
+            if(args[1]===2) await new Promise(resolve=>{window.releaseRestore=resolve});
+            return data;
+          };
+          STATE.query='paging-original'; doSearch();
+        }''')
+        self.page.wait_for_function('!!window.releaseRestore')
+        self.page.evaluate("STATE.query='paging-latest'; doSearch(); releaseRestore()")
+        self.page.wait_for_function("STATE.query==='paging-latest' && !STATE.isLoading && !positionRestore")
+        self.assertEqual(self.page.evaluate('displayedSearchView.key'), self.page.evaluate('getSearchViewKey()'))
+        self.assertEqual(self.page.evaluate('searchPositions.get(' + repr(self.saved['key']) + ').anchorId'), self.saved['anchorId'])
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_rebuild_failure_keeps_position_and_retry_succeeds(self):
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('''() => {
+          searchViewSnapshots.clear(); window.positionFail=true;
+          const fetchPage=fetchPositionPage;
+          fetchPositionPage=(...args)=>window.positionFail?Promise.reject(new Error('offline')):fetchPage(...args);
+          STATE.query='paging-original'; doSearch();
+        }''')
+        self.page.get_by_text('重试恢复', exact=True).wait_for()
+        self.page.evaluate('window.positionFail=false')
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
+
+    def test_local_worker_rebuild_restores_position_after_cache_eviction(self):
+        self.page.evaluate("STATE.query=''; STATE.useLocalMode=true; doSearch()")
+        self.page.wait_for_function('STATE.dataLoaded && !STATE.isLoading && STATE.results.length>=100')
+        self.page.evaluate('maybeLoadNextPage(false,true)')
+        self.page.wait_for_function('STATE._loadedPage>=2 && !STATE.isLoading')
+        self.page.evaluate('DOM.resultsContainer.scrollTop=getVirtualOffset(120)+9')
+        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index===120')
+        saved=self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("searchViewSnapshots.clear(); STATE.query=''; doSearch()")
+        self.page.wait_for_function('!positionRestore && !STATE.isLoading')
+        self.page.wait_for_function('''saved=>{
+          const index=findVirtualIndex(DOM.resultsContainer.scrollTop);
+          return getResultStableId(STATE.results[index])===saved.anchorId &&
+            Math.abs(DOM.resultsContainer.scrollTop-getVirtualOffset(index)-saved.offset)<2;
+        }''',arg=saved)
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_expiry_and_count_prune_positions_independently(self):
+        result = self.page.evaluate('''async () => {
+          const original=searchPositions.get(getSearchViewKey());
+          await new Promise(resolve=>{
+            const tx=searchPositionDB.transaction('positions','readwrite'),store=tx.objectStore('positions');
+            for(let i=0;i<505;i++) store.put({...original,key:'test-'+i,savedAt:Date.now()-i*1000});
+            store.put({...original,key:'expired',savedAt:Date.now()-SEARCH_POSITION_TTL-1});
+            tx.oncomplete=resolve;
+          });
+          searchPositions.clear(); searchPositionDB.close(); await initSearchPositions();
+          return {count:searchPositions.size,expired:searchPositions.has('expired'),oldest:searchPositions.has('test-504')};
+        }''')
+        self.assertEqual(result, {'count': 500, 'expired': False, 'oldest': False})

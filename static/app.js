@@ -905,6 +905,8 @@ async function doSearchLocal(params) {
   return {
     results: data.records || [],
     total: data.total || 0,
+    page: data.page,
+    page_size: data.pageSize,
   };
 }
 
@@ -2053,6 +2055,7 @@ function saveSearchPosition() {
   clearTimeout(positionSaveTimer);
   const view = displayedSearchView;
   if (!view || positionRestore || readerOverlay || !view.results.length || !VSCROLL.heights.length) return null;
+  if (STATE.results !== view.results || (STATE.isLoading && view.key !== getSearchViewKey())) return searchPositions.get(view.key) || null;
   const index = Math.min(findVirtualIndex(DOM.resultsContainer.scrollTop), view.results.length - 1);
   const position = { version: 1, key: view.key, index,
     offset: Math.max(0, DOM.resultsContainer.scrollTop - getVirtualOffset(index)),
@@ -2084,7 +2087,12 @@ function setupSearchPositionSaving() {
     positionSaveTimer = setTimeout(saveSearchPosition, 250);
   }, { passive: true });
   // Capture before controls mutate filters, clear results, or replace the route.
-  for (const type of ["change", "click", "keydown"]) document.addEventListener(type, () => saveSearchViewSnapshot(), true);
+  for (const type of ["change", "click", "keydown"]) document.addEventListener(type, event => {
+    if (!(event.target instanceof Element)) return;
+    if (event.target.closest("#results-container, #scroll-track, #search-position-status")) return;
+    if (type === "keydown" && !["Enter", "Escape"].includes(event.key)) return;
+    saveSearchViewSnapshot();
+  }, true);
   document.addEventListener("visibilitychange", () => { if (document.hidden) saveSearchPosition(); });
   window.addEventListener("pagehide", saveSearchPosition);
 }
@@ -3202,8 +3210,8 @@ function ensureVirtualHeights(len) {
   }
 }
 
-function refreshVirtualAfterAppend() {
-  if (!positionRestore && STATE._loadedPage >= 1) rememberDisplayedSearchView();
+function refreshVirtualAfterAppend(updateView = true) {
+  if (updateView && !positionRestore && STATE._loadedPage >= 1) rememberDisplayedSearchView();
   ensureVirtualHeights(STATE.results.length);
   const topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
   const bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
@@ -3288,7 +3296,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
     }
   }
   if (changed) {
-    refreshVirtualAfterAppend();
+    refreshVirtualAfterAppend(false);
     const target = getVirtualOffset(anchorIndex) + Math.min(anchorOffset, VSCROLL.heights[anchorIndex] - 1);
     if (Math.abs(container.scrollTop - target) > 0.5) container.scrollTop = Math.max(0, target);
     VSCROLL.lastScrollTop = container.scrollTop;
