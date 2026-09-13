@@ -2059,7 +2059,7 @@ function saveSearchViewSnapshot(key = getSearchViewKey()) {
     estimatedHeight: VSCROLL.estimatedHeight,
     heightCache: Array.from(VSCROLL.heightCache.entries()).map(([id, value]) => [id, Object.assign({}, value)]),
     heightRecords: heightRecords,
-    scroll: captureReaderReturnScroll(),
+    scroll: Object.assign({}, captureReaderReturnScroll(), { viewKey: key }),
     savedAt: Date.now(),
   };
   searchViewSnapshots.delete(key);
@@ -2378,6 +2378,8 @@ function clearResultsSkeleton() {
 }
 
 function doSearch(append) {
+  if (!append && STATE.results.length > 0 && VSCROLL.viewKey && VSCROLL.viewKey !== getSearchViewKey()) saveSearchViewSnapshot(VSCROLL.viewKey);
+  if (!append && restoreSearchViewSnapshot(getSearchViewKey())) return;
   if (append && STATE.isLoading) return;
   if (append && !STATE._loadedPage) append = false;
   if (!append) STATE.page = 1;
@@ -3075,6 +3077,7 @@ function setSearchVisualLoading(loading) {
 }
 
 function scheduleFilterSearch() {
+  if (STATE.results.length > 0 && VSCROLL.viewKey) saveSearchViewSnapshot(VSCROLL.viewKey);
   resetPagingRecovery();
   clearTimeout(filterSearchTimer);
   if (searchAbortController) searchAbortController.abort();
