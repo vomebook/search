@@ -1249,6 +1249,7 @@ function consumeCachedAppendPage() {
 }
 
 function prefetchNextPage() {
+  if (resultWindow) { loadResultWindowPage(STATE._loadedPage + 1, true); return; }
   if (!STATE._loadedPage) return Promise.resolve();
   if (!apiAvailable) return Promise.resolve();
   if (STATE.useLocalMode && STATE.dataLoaded) return Promise.resolve();
@@ -2143,6 +2144,7 @@ let searchPositionDB = null;
 let displayedSearchView = null;
 let positionSaveTimer = null;
 let positionRestore = null;
+let resultWindow = null;
 let lastPositionPruneAt = 0;
 let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
@@ -2192,10 +2194,10 @@ function rememberDisplayedSearchView() {
   const key = getSearchViewKey();
   const unchanged = previous && previous.key === key && previous.results === STATE.results
     && previous.length === STATE.results.length && previous.total === STATE.total
-    && previous.loadedPage === STATE._loadedPage && previous.pageCache === STATE._pageCache;
+    && previous.loadedPage === STATE._loadedPage && previous.pageCache === STATE._pageCache && previous.window === resultWindow;
   displayedSearchView = { key: getSearchViewKey(), results: STATE.results,
     total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache,
-    length: STATE.results.length, revision: unchanged ? previous.revision : ++displayedViewRevision };
+    length: STATE.results.length, window: resultWindow, revision: unchanged ? previous.revision : ++displayedViewRevision };
 }
 
 function saveSearchPosition() {
@@ -2204,6 +2206,7 @@ function saveSearchPosition() {
   if (!view || positionRestore || readerOverlay || !view.results.length || !VSCROLL.heights.length) return null;
   if (STATE.results !== view.results || (STATE.isLoading && view.key !== getSearchViewKey())) return searchPositions.get(view.key) || null;
   const index = Math.min(findVirtualIndex(DOM.resultsContainer.scrollTop), view.results.length - 1);
+  if (!view.results[index]) return searchPositions.get(view.key) || null;
   const position = { version: 1, key: view.key, index,
     offset: Math.max(0, DOM.resultsContainer.scrollTop - getVirtualOffset(index)),
     anchorId: getResultStableId(view.results[index]), loadedPage: view.loadedPage,
@@ -2283,6 +2286,9 @@ function showPositionRestoreStatus(message, retry = false) {
 }
 
 function cancelPositionRestore() {
+  if (resultWindow) resultWindow.controller.abort();
+  resultWindow = null;
+  updateResultWindowStatus();
   if (!positionRestore) return;
   positionRestore.controller.abort();
   positionRestore = null;
@@ -2301,9 +2307,7 @@ function tryRestoreSearchPosition(key) {
   searchId++;
   searchRequestId++;
   const controller = new AbortController();
-  const task = { key, controller, results: previous?.results || [], page: previous?.page || 0,
-    total: previous?.total ?? null, generation: previous?.generation,
-    targetPage: previous?.targetPage || position.loadedPage, ready: previous?.ready || new Map() };
+  const task = { key, controller, lookup: previous?.lookup, ready: previous?.ready || new Map(), page: 0, results: [] };
   positionRestore = task;
   const current = () => positionRestore === task && key === getSearchViewKey() && !controller.signal.aborted;
   STATE.isLoading = true;
@@ -2312,50 +2316,37 @@ function tryRestoreSearchPosition(key) {
   (async () => {
     try {
       const query = JSON.parse(key);
-      const results = task.results;
-      do {
-        // Resolve the anchor/generation first, then rebuild in bounded parallel windows.
-        // Keep the small out-of-order suffix on failure; only commit contiguous pages.
-        const end = task.total === null ? 1 : Math.min(task.targetPage, Math.max(1, Math.ceil(task.total / query.pageSize)), task.page + 3);
-        const pages = Array.from({ length: end - task.page }, (_, index) => task.page + index + 1);
-        const responses = await Promise.all(pages.map(async page => {
-          if (task.ready.has(page)) return { page, data: task.ready.get(page) };
-          try { return { page, data: await fetchPositionPage(query, page, controller.signal, page === 1 ? position.anchorId : undefined) }; }
-          catch (error) { return { page, error }; }
-        }));
-        if (!current()) return;
-        for (const response of responses) if (!response.error) task.ready.set(response.page, response.data);
-        for (const { page, data, error } of responses) {
-          if (error) throw error;
-          if (!data || !Array.isArray(data.results) || data.page !== page ||
-            !Number.isInteger(data.total) || data.total < 0 ||
-            data.page_size !== query.pageSize ||
-            (task.total !== null && (task.total !== data.total || task.generation !== data.generation)) ||
-            data.results.length !== Math.min(query.pageSize, Math.max(0, data.total - results.length))) {
-            // A new retry must start from one coherent generation, never a mixed prefix.
-            task.results = []; task.page = 0; task.total = null; task.generation = undefined;
-            task.targetPage = position.loadedPage; task.ready.clear();
-            throw new Error("RESTORE_PAGE_CHANGED");
-          }
-          if (page === 1 && Number.isInteger(data.anchor_index) && data.anchor_index >= 0 && data.anchor_index < data.total) {
-            task.targetPage = Math.max(position.loadedPage, Math.floor(data.anchor_index / query.pageSize) + 1);
-          }
-          task.total = data.total;
-          task.generation = data.generation;
-          task.page = page;
-          results.push(...data.results);
-          task.ready.delete(page);
-        }
-        showPositionRestoreStatus(`正在恢复上次位置…（${task.page}/${Math.min(task.targetPage, Math.max(1, Math.ceil(task.total / query.pageSize)))} 页）`);
-      } while (task.page < task.targetPage && results.length < task.total);
+      const lookup = task.lookup || await fetchPositionPage(query, 1, controller.signal, position.anchorId);
       if (!current()) return;
-      const { total, page } = task;
+      validatePositionWindowPage(lookup, 1, query.pageSize);
+      task.lookup = lookup; task.ready.set(1, lookup); task.page = 1;
+      const total = lookup.total;
+      const index = Number.isInteger(lookup.anchor_index) && lookup.anchor_index >= 0 && lookup.anchor_index < total
+        ? lookup.anchor_index : Math.min(position.index, Math.max(0, total - 1));
+      const targetPage = Math.floor(index / query.pageSize) + 1;
+      const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
+      const pages = Array.from({length: Math.min(lastPage, targetPage + 1) - Math.max(1, targetPage - 1) + 1}, (_, i) => Math.max(1, targetPage - 1) + i);
+      const responses = await Promise.all(pages.map(async page => {
+        try { return {page, data: task.ready.get(page) || await fetchPositionPage(query, page, controller.signal)}; }
+        catch (error) { return {page, error}; }
+      }));
+      if (!current()) return;
+      for (const {page, data, error} of responses) if (!error) {
+        validatePositionWindowPage(data, page, query.pageSize, lookup);
+        task.ready.set(page, data);
+      }
+      const failure = responses.find(response => response.error);
+      if (failure) throw failure.error;
+      // Empty slots reserve scroll geometry only; visible slots are fetched on demand.
+      const page = Math.min(lastPage, Math.max(position.loadedPage, targetPage + 1));
+      const results = new Array(Math.min(total, page * query.pageSize));
+      for (const [number, data] of task.ready) data.results.forEach((record, offset) => { results[(number - 1) * query.pageSize + offset] = record; });
       const found = results.findIndex(record => getResultStableId(record) === position.anchorId);
-      const index = found < 0 ? Math.min(position.index, Math.max(0, results.length - 1)) : found;
       const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key, results, total,
         page, loadedPage: page, pageCache: {}, hasMore: results.length < total,
+        window: { generation: lookup.generation, pages: [...task.ready.keys()], count: [...task.ready.values()].reduce((sum, data) => sum + data.results.length, 0) },
         estimatedHeight: VSCROLL.estimatedHeight, heightCache: [], heightRecords: [],
-        scroll: { index, offset: position.offset, viewKey: key }, savedAt: Date.now() };
+        scroll: { index: found < 0 ? index : found, offset: position.offset, viewKey: key }, savedAt: Date.now() };
       positionRestore = null;
       showPositionRestoreStatus("");
       searchViewSnapshots.set(key, snapshot);
@@ -2366,11 +2357,131 @@ function tryRestoreSearchPosition(key) {
       if (!current()) return;
       STATE.isLoading = false;
       task.failed = true;
+      if (error.message === "RESTORE_PAGE_CHANGED") { task.lookup = null; task.ready.clear(); task.page = 0; }
       showPositionRestoreStatus(error.message === "RESTORE_PAGE_CHANGED"
-        ? "搜索数据已更新，请重试恢复" : `暂时无法恢复上次位置（已保留 ${task.page} 页）`, true);
+        ? "搜索数据已更新，请重试恢复" : "暂时无法加载原位置附近的结果", true);
     }
   })();
   return true;
+}
+
+function validatePositionWindowPage(data, page, pageSize, expected) {
+  if (!data || !Array.isArray(data.results) || data.page !== page || data.page_size !== pageSize ||
+      !Number.isInteger(data.total) || data.total < 0 ||
+      data.results.length !== Math.min(pageSize, Math.max(0, data.total - (page - 1) * pageSize)) ||
+      data.results.some(record => !record || typeof record !== "object") ||
+      (expected && (data.total !== expected.total || data.generation !== expected.generation))) throw new Error("RESTORE_PAGE_CHANGED");
+}
+
+function resultWindowCurrent(window) {
+  return resultWindow === window && window.key === getSearchViewKey() && !window.controller.signal.aborted;
+}
+
+function restartResultWindow() {
+  const key = getSearchViewKey();
+  saveSearchPosition();
+  searchViewSnapshots.delete(key);
+  cancelPositionRestore();
+  tryRestoreSearchPosition(key);
+}
+
+function updateResultWindowStatus() {
+  let status = document.getElementById("search-window-status");
+  if (!status && resultWindow && (resultWindow.invalid || resultWindow.failures.size)) {
+    status = document.createElement("div");
+    status.id = "search-window-status";
+    status.setAttribute("role", "status");
+    status.innerHTML = '<span></span> <button type="button" class="text-btn-sm"></button>';
+    status.querySelector("button").onclick = () => {
+      if (!resultWindow) return;
+      if (resultWindow.invalid) return restartResultWindow();
+      const pages = [...resultWindow.failures.keys()];
+      resultWindow.failures.clear(); updateResultWindowStatus();
+      pages.forEach(page => loadResultWindowPage(page));
+    };
+    DOM.resultsContainer.parentElement.appendChild(status);
+  }
+  if (status) {
+    status.hidden = !resultWindow || (!resultWindow.invalid && !resultWindow.failures.size);
+    status.querySelector("span").textContent = resultWindow?.invalid ? "搜索数据已更新" : "部分结果暂时无法加载";
+    status.querySelector("button").textContent = resultWindow?.invalid ? "重新定位" : "重试加载";
+  }
+}
+
+function requestResultWindowPage(window, page) {
+  if (window.prefetched?.has(page)) return Promise.resolve(window.prefetched.get(page));
+  if (window.pending.has(page)) return window.pending.get(page);
+  if (window.pending.size >= 3 || window.failures.has(page) || window.invalid) return Promise.resolve(null);
+  const request = fetchPositionPage(window.query, page, window.controller.signal).then(data => {
+    validatePositionWindowPage(data, page, window.query.pageSize, window);
+    return data;
+  }).finally(() => {
+    window.pending.delete(page);
+    if (resultWindowCurrent(window)) scheduleVirtualRender();
+  });
+  window.pending.set(page, request);
+  return request;
+}
+
+async function loadResultWindowPage(page, prefetch = false) {
+  const window = resultWindow;
+  if (!window || !resultWindowCurrent(window) || window.pages.has(page) || page < 1 || page > Math.ceil(window.total / window.query.pageSize)) return false;
+  try {
+    const data = await requestResultWindowPage(window, page);
+    if (!data || !resultWindowCurrent(window) || window.invalid || window.pages.has(page)) return false;
+    if (prefetch || VSCROLL.isDraggingThumb) {
+      if (!window.prefetched) window.prefetched = new Map();
+      window.prefetched.set(page, data);
+      while (window.prefetched.size > 3) window.prefetched.delete(window.prefetched.keys().next().value);
+      return true;
+    }
+    const results = STATE.results.slice();
+    data.results.forEach((record, offset) => { results[(page - 1) * window.query.pageSize + offset] = record; });
+    STATE.results = results;
+    window.pages.add(page); window.prefetched?.delete(page);
+    window.failures.delete(page); updateResultWindowStatus();
+    window.count += data.results.length;
+    STATE._loadedPage = Math.max(1, Math.ceil(results.length / window.query.pageSize));
+    STATE.page = STATE._loadedPage;
+    STATE.hasMore = results.length < STATE.total;
+    clearResultTemplateCache();
+    ensureVirtualHeights(results.length);
+    VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+    rememberDisplayedSearchView();
+    renderVisible(); updateLoadInfo(); updatePagingStatus();
+    clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveSearchPosition, 250);
+    return true;
+  } catch (error) {
+    if (!resultWindowCurrent(window)) return false;
+    window.failures.set(page, error);
+    if (error.message === "RESTORE_PAGE_CHANGED") window.invalid = true;
+    updateResultWindowStatus();
+    VSCROLL.contentVersion++;
+    VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+    scheduleVirtualRender();
+    return false;
+  }
+}
+
+function ensureResultWindowPages(start, end) {
+  if (!resultWindow || positionRestore || readerReturnScrollState || VSCROLL.isDraggingThumb) return;
+  const size = resultWindow.query.pageSize;
+  for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadResultWindowPage(page);
+}
+
+function createResultWindowPlaceholder(index) {
+  const page = Math.floor(index / STATE.pageSize) + 1;
+  const row = document.createElement("div");
+  row.className = "result-item result-window-placeholder";
+  row.dataset.index = String(index);
+  row.dataset.contentVersion = String(VSCROLL.contentVersion);
+  row.style.height = (VSCROLL.heights[index] || VSCROLL.estimatedHeight) + "px";
+  const button = document.createElement("button");
+  button.className = "text-btn-sm";
+  button.dataset.windowPage = String(page);
+  button.textContent = resultWindow?.invalid ? "数据已更新，点击重新定位" : resultWindow?.failures.has(page) ? "加载失败，点击重试" : "正在加载此处的结果…";
+  row.appendChild(button);
+  return row;
 }
 
 async function fetchPositionPage(query, page, signal, anchorId) {
@@ -2485,6 +2596,7 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
     loadedPage: view.loadedPage,
     pageCache: cloneSearchPageCache(view.pageCache),
     hasMore: view.results.length < view.total,
+    window: view.window ? { generation: view.window.generation, pages: [...view.window.pages], count: view.window.count } : null,
     estimatedHeight: VSCROLL.estimatedHeight,
     heightCache: Array.from(VSCROLL.heightCache.entries()).map(([id, value]) => [id, Object.assign({}, value)]),
     heightRecords: heightRecords,
@@ -2526,6 +2638,8 @@ function restoreSearchViewSnapshot(key, restoreScroll = true) {
   STATE._loadedPage = snapshot.loadedPage;
   STATE._pageCache = cloneSearchPageCache(snapshot.pageCache);
   STATE.hasMore = snapshot.hasMore;
+  if (snapshot.window) resultWindow = { ...snapshot.window, key, total: snapshot.total, query: JSON.parse(key),
+    pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
   STATE.isLoading = false;
   STATE.page = STATE._loadedPage;
   STATE._pendingPage = 0;
@@ -2820,6 +2934,7 @@ function clearResultsSkeleton() {
 }
 
 function doSearch(append, fromStart = false) {
+  if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
   if (!append) {
     saveSearchViewSnapshot();
     cancelPositionRestore();
@@ -3186,6 +3301,7 @@ function ensureResultTemplateCache() {
 }
 
 function createResultRow(rec, idx) {
+  if (!rec) return createResultWindowPlaceholder(idx);
   ensureResultTemplateCache();
   let template = VSCROLL.templateCache.get(idx);
   if (!template) {
@@ -3269,6 +3385,7 @@ function renderVisible() {
   VSCROLL.lastScrollTop = scrollTop;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
+  ensureResultWindowPages(safeStart, safeEnd);
   if (!pendingResultEntrance && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
@@ -3280,6 +3397,7 @@ function renderVisible() {
   let end = Math.min(len, findVirtualIndex(scrollTop + viewH + afterPx) + 1);
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
   if (pendingResultEntrance && start === 0) end = Math.min(len, Math.max(end, 30));
+  ensureResultWindowPages(start, end);
   if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
@@ -3386,9 +3504,10 @@ function ensureVirtualHeights(len) {
   const canExtendTree = !VSCROLL.heightsDirty && VSCROLL.heightTree.length === oldLen + 1;
   VSCROLL.heights.length = len;
   VSCROLL.measuredRowKeys.length = len;
+  const measurementKey = getHeightMeasurementKey();
   for (let i = oldLen; i < len; i++) {
     const cached = VSCROLL.heightCache.get(getResultStableId(STATE.results[i]));
-    VSCROLL.heights[i] = cached?.measurementKey === getHeightMeasurementKey()
+    VSCROLL.heights[i] = cached?.measurementKey === measurementKey
       ? cached.height
       : VSCROLL.estimatedHeight;
   }
@@ -3453,6 +3572,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
   let changed = false;
   for (let i = 0; i < els.length; i++) {
     const idx = parseInt(els[i].dataset.index);
+    if (!STATE.results[idx]) continue;
     if (!Number.isInteger(idx) || idx < 0 || idx >= VSCROLL.heights.length) continue;
     if (VSCROLL.measuredRowKeys[idx] === rowMeasureKey && VSCROLL.heights[idx] > 0) {
       measuredSum += VSCROLL.heights[idx];
@@ -3555,7 +3675,7 @@ function updateLoadInfo() {
     return;
   }
   DOM.loadInfo.style.display = "";
-  DOM.loadedCount.textContent = STATE.results.length.toLocaleString();
+  DOM.loadedCount.textContent = (resultWindow ? resultWindow.count : STATE.results.length).toLocaleString();
   DOM.totalCount.textContent = STATE.total.toLocaleString();
   requestAnimationFrame(updateScrollTrack);
 }
@@ -5034,6 +5154,7 @@ function setupKeyboard() {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (keyboardResultIndex >= 0 && keyboardResultIndex < STATE.results.length) {
         const rec = STATE.results[keyboardResultIndex];
+        if (!rec) { loadResultWindowPage(Math.floor(keyboardResultIndex / STATE.pageSize) + 1); return; }
         if (rec) openExternalWindow(getRecordLink(rec));
         return;
       }
@@ -5077,6 +5198,12 @@ function clearAllFilters() {
 
 function setupResultDelegation() {
   DOM.resultsList.addEventListener("click", function(e) {
+    const missing = e.target.closest("[data-window-page]");
+    if (missing && resultWindow) {
+      if (resultWindow.invalid) restartResultWindow();
+      else { const page = Number(missing.dataset.windowPage); resultWindow.failures.delete(page); loadResultWindowPage(page); }
+      return;
+    }
     const actionBtn = e.target.closest("[data-action]");
     if (actionBtn) {
       e.preventDefault();
@@ -5238,7 +5365,7 @@ async function init() {
     if (e.shiftKey && lastSelectedIndex >= 0) {
       var lo = Math.min(lastSelectedIndex, idx);
       var hi = Math.max(lastSelectedIndex, idx);
-      for (var si = lo; si <= hi; si++) selectedIndices[si] = true;
+      for (var si = lo; si <= hi; si++) if (STATE.results[si]) selectedIndices[si] = true;
     } else if (cb.checked) {
       selectedIndices[idx] = true;
     } else {
@@ -5287,9 +5414,9 @@ async function init() {
     updateSelectionUI();
   });
   if (DOM.multiSelectAll) DOM.multiSelectAll.addEventListener("click", function() {
-    var allSelected = STATE.results.length > 0 && STATE.results.every(function(_record, index) { return selectedIndices[index]; });
+    var allSelected = STATE.results.length > 0 && STATE.results.every(function(record, index) { return !record || selectedIndices[index]; });
     if (allSelected) selectedIndices = {};
-    else for (var si = 0; si < STATE.results.length; si++) selectedIndices[si] = true;
+    else for (var si = 0; si < STATE.results.length; si++) if (STATE.results[si]) selectedIndices[si] = true;
     lastSelectedIndex = allSelected ? -1 : STATE.results.length - 1;
     updateSelectionUI();
   });
