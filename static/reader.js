@@ -2987,6 +2987,7 @@ async function renderChapterManifest(prepared) {
   const loaded = new Set(),
     pending = new Map(),
     manifestBase = trustedReaderAssetManifestUrl(chapterManifestUrl || sourceUrl);
+  const chapterPrefetchCount = 6;
   const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
   if (!manifestBase) throw new Error("EPUB_INVALID_MANIFEST_PATH");
   const chapterUrl = (chapter) => trustedChapterUrl(chapter.path, manifestBase);
@@ -3104,6 +3105,12 @@ async function renderChapterManifest(prepared) {
     pending.set(chapter.index, task);
     return task;
   };
+  const prefetchChapters = (startIndex) => {
+    const tasks = manifest.chapters
+      .slice(startIndex, startIndex + chapterPrefetchCount)
+      .map((chapter) => fetchChapter(chapter).catch(() => null));
+    if (tasks.length) Promise.all(tasks).catch(() => {});
+  };
   chapterManifestObserver = new IntersectionObserver(
     (entries) =>
       entries
@@ -3113,12 +3120,9 @@ async function renderChapterManifest(prepared) {
           const chapter = manifest.chapters.find(
             (item) => item.index === Number(entry.target.dataset.chapter)
           );
-          if (chapter)
-            fetchChapter(chapter).catch((error) =>
-              console.warn("EPUB chapter could not be loaded", error)
-            );
+          if (chapter) prefetchChapters(chapter.index - 1);
         }),
-    { root: viewport, rootMargin: "0px" }
+    { root: viewport, rootMargin: "4000px 0px" }
   );
   trackReaderResource(() => {
     chapterManifestObserver?.disconnect();
@@ -3133,6 +3137,7 @@ async function renderChapterManifest(prepared) {
   };
   setChapterToc();
   await fetchChapter(manifest.chapters[0]);
+  prefetchChapters(1);
   assertReaderActive();
   status.textContent = `EPUB · ${manifest.chapters.length} 章`;
 }
