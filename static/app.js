@@ -5,6 +5,11 @@ const HF_DATASET_BASE = "https://huggingface.co/datasets";
 const WORKER_PROTOCOL_VERSION = 1;
 const WORKER_REQUEST_TIMEOUT = 10000;
 const WORKER_LOAD_TIMEOUT = 60000;
+const APPEND_REQUEST_TIMEOUT = 5000;
+const pendingSearchPages = new Map();
+let pagingCheckTimer = null;
+let pagingFailures = 0;
+let pagingRetryAt = 0;
 
 const ORDERED_EXTENSIONS = [
   "pdf", "txt",
@@ -327,6 +332,7 @@ function clearReaderNavigation(url) {
 }
 function closeReaderOverlay(restoreFocus, restoreScroll) {
   if (!readerOverlay) return false;
+  try { readerOverlay.contentWindow?.postMessage({ type: "voice-reader-abort" }, location.origin); } catch (_) {}
   readerOverlay.remove();
   readerOverlay = null;
   for (var i = 0; i < readerBackgroundState.length; i++) {
@@ -801,13 +807,17 @@ function postCorpusWorkerRequest(type, payload, timeoutMs) {
   if (!corpusWorker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Search Worker is unavailable"));
   const id = ++corpusWorkerRequestId;
   return new Promise(function(resolve, reject) {
-    const timer = setTimeout(function() {
+    const expire = function() {
+      if (!corpusWorkerPending.has(id)) return;
+      clearTimeout(timer);
       corpusWorkerPending.delete(id);
       const error = makeWorkerError("WORKER_TIMEOUT", "Search Worker request timed out");
       terminateCorpusWorker(error);
       reject(error);
-    }, timeoutMs || WORKER_REQUEST_TIMEOUT);
-    corpusWorkerPending.set(id, { resolve: resolve, reject: reject, timer: timer });
+    };
+    const duration = timeoutMs || WORKER_REQUEST_TIMEOUT;
+    const timer = setTimeout(expire, duration);
+    corpusWorkerPending.set(id, { resolve: resolve, reject: reject, timer: timer, expire: expire, deadline: Date.now() + duration });
     corpusWorker.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: type, id: id, payload: payload || {} });
   });
 }
@@ -910,6 +920,61 @@ function isValidSearchResponse(data, expectedPage, expectedPageSize) {
     && data.page_size === expectedPageSize;
 }
 
+// Prefetch and foreground pagination share one bounded request per search/page.
+function fetchSearchPage(cacheKey, url, body, signal, timeoutMs) {
+  if (signal && signal.aborted) return Promise.reject(new DOMException("Cancelled", "AbortError"));
+  let entry = pendingSearchPages.get(cacheKey);
+  if (entry && Date.now() >= entry.deadline) entry.expire();
+  if (!entry || entry.controller.signal.aborted) {
+    const controller = new AbortController();
+    entry = { controller, deadline: Date.now() + timeoutMs, listeners: [] };
+    const stopped = new Promise((resolve, reject) => {
+      entry.expire = () => {
+        reject(new Error("API_TIMEOUT"));
+        controller.abort();
+      };
+      controller.signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true });
+    });
+    const timer = setTimeout(entry.expire, timeoutMs);
+    const request = fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), signal: controller.signal,
+    }).then(async response => {
+      if (!response.ok) throw Object.assign(new Error("HTTP " + response.status), { status: response.status });
+      const data = await response.json();
+      if (!isValidSearchResponse(data, body.page, body.page_size) ||
+          (!data.results.length && (body.page - 1) * body.page_size < data.total)) throw new Error("INVALID_API_RESPONSE");
+      return data;
+    });
+    const current = entry;
+    entry.promise = Promise.race([request, stopped]).finally(() => {
+      clearTimeout(timer);
+      current.listeners.forEach(([owner, cancel]) => owner.removeEventListener("abort", cancel));
+      if (pendingSearchPages.get(cacheKey) === current) pendingSearchPages.delete(cacheKey);
+    });
+    pendingSearchPages.set(cacheKey, entry);
+  }
+  if (signal) {
+    const current = entry;
+    const cancel = () => current.controller.abort();
+    signal.addEventListener("abort", cancel, { once: true });
+    entry.listeners.push([signal, cancel]);
+  }
+  return entry.promise;
+}
+
+function expireSearchRequests() {
+  const now = Date.now();
+  pendingSearchPages.forEach(entry => { if (now >= entry.deadline) entry.expire(); });
+  corpusWorkerPending.forEach(entry => { if (now >= entry.deadline) entry.expire(); });
+}
+
+function noteSearchApiFailure(error) {
+  if (error.name === "AbortError" || error.apiFailureNoted) return;
+  error.apiFailureNoted = true;
+  noteApiFailure();
+}
+
 async function doSearchAPI(params, append, requestId) {
   if (requestId !== searchRequestId) {
     return false;
@@ -978,40 +1043,16 @@ async function doSearchAPI(params, append, requestId) {
     STATE.hasMore = STATE.results.length < STATE.total;
     return true;
   }
-  const fetchOptions = {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  };
-  var timeoutMs = append ? 5000 : 10000;
-  var timeoutAbort = false;
-  var timeoutController = new AbortController();
-  var timeoutId = setTimeout(function() {
-    timeoutAbort = true;
-    timeoutController.abort();
-  }, timeoutMs);
-  fetchOptions.signal = timeoutController.signal;
-  if (params.signal) {
-    params.signal.addEventListener("abort", function() { timeoutController.abort(); });
-  }
-  var resp, data;
+  var data;
   try {
-    resp = await fetch(base, fetchOptions);
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    data = await resp.json();
-    if (!isValidSearchResponse(data, body.page, body.page_size)) throw new Error("INVALID_API_RESPONSE");
+    data = await fetchSearchPage(cacheKey, base, body, params.signal, append ? APPEND_REQUEST_TIMEOUT : 10000);
+    if (requestId !== searchRequestId || (params.signal && params.signal.aborted)) return false;
     noteApiSuccess();
     setCachedSearchResponse(cacheKey, data);
   } catch (e) {
-    clearTimeout(timeoutId);
-    var cancelledByUser = params.signal && params.signal.aborted && !timeoutAbort;
-    if (!cancelledByUser) noteApiFailure();
-    if (timeoutAbort && (e.name === "AbortError" || e.name === "TimeoutError")) {
-      throw new Error("API_TIMEOUT");
-    }
+    if (requestId === searchRequestId && !(params.signal && params.signal.aborted)) noteSearchApiFailure(e);
     throw e;
   }
-  clearTimeout(timeoutId);
   if (requestId !== searchRequestId) {
     return false;
   }
@@ -1055,6 +1096,7 @@ function consumeCachedAppendPage() {
     np++;
   }
   STATE._loadedPage = np - 1;
+  STATE.page = STATE._loadedPage;
   STATE.hasMore = STATE.results.length < STATE.total;
   STATE._pendingPage = 0;
   STATE.isLoading = false;
@@ -1063,11 +1105,13 @@ function consumeCachedAppendPage() {
   updateLoadInfo();
   syncStateToURL();
   prefetchNextPage();
+  finishPagingAttempt(true);
   return true;
 }
 
 function prefetchNextPage() {
   if (!apiAvailable) return Promise.resolve();
+  if (STATE.useLocalMode && STATE.dataLoaded) return Promise.resolve();
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
   var nextPage = STATE._loadedPage + 1;
   var totalPages = Math.ceil(STATE.total / STATE.pageSize);
@@ -1100,23 +1144,16 @@ function prefetchNextPage() {
   var prefetchController = new AbortController();
   searchPrefetchAbortController = prefetchController;
   searchPrefetchCacheKey = cacheKey;
-  searchPrefetchPromise = fetch(base, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: prefetchController.signal,
-  }).then(function(resp) {
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    return resp.json();
-  }).then(function(data) {
+  searchPrefetchPromise = fetchSearchPage(cacheKey, base, body, prefetchController.signal, APPEND_REQUEST_TIMEOUT).then(function(data) {
     if (reqId !== searchRequestId) return;
     if (!isValidSearchResponse(data, body.page, body.page_size)) throw new Error("INVALID_API_RESPONSE");
     noteApiSuccess();
     setCachedSearchResponse(cacheKey, data);
     STATE._pageCache[nextPage] = data.results;
+    scheduleBottomLoad();
   }).catch(function(err) {
     if (err && err.name === "AbortError") return;
-    if (reqId === searchRequestId) noteApiFailure();
+    if (reqId === searchRequestId) noteSearchApiFailure(err);
   }).finally(function() {
     if (searchPrefetchAbortController === prefetchController) {
       searchPrefetchAbortController = null;
@@ -1129,21 +1166,18 @@ function prefetchNextPage() {
 
 function scheduleBackgroundLocalDataLoad() {
   clearTimeout(localDataLoadTimer);
-  var waitForPrefetch = searchPrefetchPromise || Promise.resolve();
-  waitForPrefetch.catch(function() {}).finally(function() {
-    var connection = navigator.connection;
-    var delay = connection && (connection.saveData || /^(slow-)?2g$/.test(connection.effectiveType || "")) ? 2500 : 100;
-    localDataLoadTimer = setTimeout(function() {
-      var start = function() {
-        if (!STATE.dataLoaded) ensureLocalDataLoaded(false, true);
-      };
-      if (typeof window.requestIdleCallback === "function") {
-        window.requestIdleCallback(start, { timeout: 2500 });
-      } else {
-        setTimeout(start, 1000);
-      }
-    }, delay);
-  });
+  var connection = navigator.connection;
+  var delay = connection && (connection.saveData || /^(slow-)?2g$/.test(connection.effectiveType || "")) ? 2500 : 100;
+  localDataLoadTimer = setTimeout(function() {
+    var start = function() {
+      if (!STATE.dataLoaded) ensureLocalDataLoaded(false, true);
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(start, { timeout: 2500 });
+    } else {
+      setTimeout(start, 1000);
+    }
+  }, delay);
 }
 
 let repoApiCache = null;
@@ -2031,7 +2065,9 @@ function restoreSearchViewSnapshot(key, restoreScroll = true) {
   if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
   searchAbortController = new AbortController();
   searchPrefetchAbortController = null;
-  searchPrefetchKey = null;
+  searchPrefetchPromise = null;
+  searchPrefetchCacheKey = null;
+  searchId++;
   searchRequestId++;
   STATE.results = snapshot.results.map(cloneSearchResult);
   STATE.total = snapshot.total;
@@ -2040,6 +2076,10 @@ function restoreSearchViewSnapshot(key, restoreScroll = true) {
   STATE._pageCache = cloneSearchPageCache(snapshot.pageCache);
   STATE.hasMore = snapshot.hasMore;
   STATE.isLoading = false;
+  STATE.page = STATE._loadedPage;
+  STATE._pendingPage = 0;
+  STATE._deferredAppendWhileDragging = false;
+  resetPagingRecovery();
   VSCROLL.viewKey = key;
   VSCROLL.estimatedHeight = snapshot.estimatedHeight || VSCROLL.estimatedHeight;
   VSCROLL.heightCache = new Map(snapshot.heightCache || []);
@@ -2312,6 +2352,7 @@ function clearResultsSkeleton() {
 }
 
 function doSearch(append) {
+  if (append && STATE.isLoading) return;
   clearTimeout(filterSearchTimer);
   filterSearchTimer = null;
   const id = ++searchId;
@@ -2342,16 +2383,18 @@ function doSearch(append) {
     pageSize: STATE.pageSize,
   };
   STATE.isLoading = true;
+  updatePagingStatus();
   setSearchVisualLoading(false);
   if (!append) {
+    resetPagingRecovery();
     if (!canUseInitialSearchPayload()) STATE._initialActive = false;
     if (STATE.results.length === 0) DOM.emptyState.style.display = "none";
     selectedIndices = {};
     lastSelectedIndex = -1;
     if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
-    if (apiAvailable && searchAbortController) searchAbortController.abort();
+    if (searchAbortController) searchAbortController.abort();
     if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
-    if (apiAvailable) searchAbortController = new AbortController();
+    searchAbortController = new AbortController();
     searchPrefetchAbortController = null;
     searchRequestId++;
     STATE._pageCache = {};
@@ -2395,9 +2438,14 @@ function doSearch(append) {
     if (!searchAbortController) searchAbortController = new AbortController();
     params.signal = searchAbortController.signal;
     const requestId = searchRequestId;
+    let pagingSucceeded = false;
+    let pagingError = null;
     doSearchAPI(params, append, requestId).then(function(applied) {
       if (!applied) return;
       if (id !== searchId) return;
+      if (STATE._deferredAppendWhileDragging) return;
+      STATE.page = STATE._loadedPage;
+      pagingSucceeded = true;
       if (append) {
         refreshVirtualAfterAppend();
       } else {
@@ -2421,6 +2469,8 @@ function doSearch(append) {
       warmConnection();
       syncStateToURL();
     }).catch(function(err) {
+      if (id !== searchId) return;
+      pagingError = err.name === "AbortError" ? null : err;
       if (err.message === "API_TIMEOUT") {
         console.warn("API timeout");
         return handleApiSearchFailure(append, id);
@@ -2428,6 +2478,7 @@ function doSearch(append) {
       if (err.name === "AbortError") {
         if (id === searchId) {
           STATE.isLoading = false;
+          if (append) STATE.page = Math.max(1, STATE._loadedPage);
           if (!append) setSearchVisualLoading(false);
         }
         return;
@@ -2441,6 +2492,8 @@ function doSearch(append) {
         STATE.resultsSkeletonActive = false;
         if (!append) setSearchVisualLoading(false);
         else updateStatusBar();
+        if (append && !STATE._deferredAppendWhileDragging && (pagingSucceeded || pagingError)) finishPagingAttempt(pagingSucceeded, pagingError);
+        else updatePagingStatus();
       }
     });
     return;
@@ -2448,6 +2501,10 @@ function doSearch(append) {
   if (!STATE.dataLoaded) {
     STATE.isLoading = false;
     setSearchVisualLoading(false);
+    if (append) {
+      STATE.page = Math.max(1, STATE._loadedPage);
+      finishPagingAttempt(false);
+    }
     showToast("数据加载中，请稍后...");
     return;
   }
@@ -2457,7 +2514,7 @@ function doSearch(append) {
 function handleApiSearchFailure(append, id) {
   if (id !== searchId) return Promise.resolve();
   if (append) {
-    STATE.page = Math.max(1, STATE.page - 1);
+    STATE.page = Math.max(1, STATE._loadedPage);
     showToast("加载更多失败，请重试");
     return Promise.resolve();
   }
@@ -2473,10 +2530,13 @@ function handleApiSearchFailure(append, id) {
 
 function doSearchFallbackLocal(params, append, id) {
   (async function() {
+    let pagingSucceeded = false;
+    let pagingError = null;
     if (id !== searchId) return;
     try {
       const data = await doSearchLocal(params);
       if (id !== searchId) return;
+      if (append && !data.results.length && STATE.results.length < data.total) throw new Error("EMPTY_LOCAL_PAGE");
       STATE.total = data.total;
       if (append) {
         if (VSCROLL.isDraggingThumb) {
@@ -2490,6 +2550,9 @@ function doSearchFallbackLocal(params, append, id) {
       } else {
         STATE.results = data.results;
       }
+      STATE._loadedPage = params.page;
+      STATE.page = STATE._loadedPage;
+      pagingSucceeded = true;
       STATE.hasMore = STATE.results.length < STATE.total;
       if (append) {
         refreshVirtualAfterAppend();
@@ -2514,6 +2577,8 @@ function doSearchFallbackLocal(params, append, id) {
     } catch (err) {
       console.error("Local Worker search failed:", err);
       if (id !== searchId) return;
+      pagingError = err;
+      if (append) STATE.page = Math.max(1, STATE._loadedPage);
       STATE.dataLoaded = false;
       if (params.folderMatchMode === "mixed") {
         showToast("本地目录筛选不可用，请刷新后重试");
@@ -2522,6 +2587,8 @@ function doSearchFallbackLocal(params, append, id) {
         if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
         syncStateToURL();
         showToast("本地搜索不可用，正在切换在线搜索...");
+        STATE.isLoading = false;
+        if (append) STATE.page = STATE._loadedPage + 1;
         doSearch(append);
       } else {
         showToast("本地搜索不可用");
@@ -2532,6 +2599,8 @@ function doSearchFallbackLocal(params, append, id) {
         STATE.resultsSkeletonActive = false;
         if (!append) setSearchVisualLoading(false);
         else updateStatusBar();
+        if (append && (pagingSucceeded || pagingError)) finishPagingAttempt(pagingSucceeded, pagingError);
+        else updatePagingStatus();
       }
     }
   })();
@@ -2978,6 +3047,7 @@ function setSearchVisualLoading(loading) {
 }
 
 function scheduleFilterSearch() {
+  resetPagingRecovery();
   clearTimeout(filterSearchTimer);
   if (searchAbortController) searchAbortController.abort();
   if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
@@ -3939,19 +4009,82 @@ const sidebarRetryCounts = new Map();
 var selectedIndices = {};
 var lastSelectedIndex = -1;
 
-function maybeLoadNextPage() {
+function isResultsAtBottom() {
+  const container = DOM.resultsContainer;
+  return STATE.results.length > 0 && container.clientHeight > 0 &&
+    container.scrollHeight - container.scrollTop - container.clientHeight <= 4;
+}
+
+function updatePagingStatus() {
+  if (!DOM.loadInfo) return;
+  let button = document.getElementById("paging-status");
+  if (!button) {
+    button = document.createElement("button");
+    button.id = "paging-status";
+    button.type = "button";
+    button.className = "text-btn-sm";
+    button.setAttribute("aria-live", "polite");
+    button.addEventListener("click", () => {
+      resetPagingRecovery();
+      maybeLoadNextPage(false, true);
+    });
+    DOM.loadInfo.appendChild(button);
+  }
+  const loading = STATE.isLoading && STATE.page > STATE._loadedPage;
+  button.hidden = !STATE.hasMore || (!loading && !pagingFailures);
+  button.disabled = loading;
+  button.textContent = loading ? "加载中…" : "加载失败，重试";
+}
+
+function resetPagingRecovery() {
+  clearTimeout(pagingCheckTimer);
+  pagingCheckTimer = null;
+  pagingFailures = 0;
+  pagingRetryAt = 0;
+  updatePagingStatus();
+}
+
+function scheduleBottomLoad(delay = 0) {
+  clearTimeout(pagingCheckTimer);
+  const generation = searchRequestId;
+  pagingCheckTimer = setTimeout(() => {
+    pagingCheckTimer = null;
+    if (generation === searchRequestId) maybeLoadNextPage(true);
+  }, Math.max(delay, pagingRetryAt - Date.now()));
+}
+
+function finishPagingAttempt(success, error) {
+  pagingFailures = success ? 0 : pagingFailures + 1;
+  if (error && error.status >= 400 && error.status < 500) pagingFailures = 2;
+  pagingRetryAt = success ? 0 : Date.now() + 750;
+  updatePagingStatus();
+  if (pagingFailures < 2) scheduleBottomLoad();
+}
+
+function retryBottomPage() {
+  if (!isResultsAtBottom()) return;
+  expireSearchRequests();
+  if (!STATE.isLoading && Date.now() >= pagingRetryAt && pagingFailures >= 2) resetPagingRecovery();
+  scheduleBottomLoad();
+}
+
+function maybeLoadNextPage(bottomOnly = false, retry = false) {
+  expireSearchRequests();
+  if (document.hidden || readerOverlay || pagingFailures >= 2 || Date.now() < pagingRetryAt) return;
   if (VSCROLL.isDraggingThumb) return;
   if (STATE.isLoading || !STATE.hasMore) return;
   const scrollTop = DOM.resultsContainer.scrollTop;
   const loadedHeight = DOM.resultsList.scrollHeight;
   const triggerPoint = loadedHeight * 0.05;
-  if (scrollTop >= triggerPoint) {
-    STATE.page++;
+  if (retry || isResultsAtBottom() || (!bottomOnly && scrollTop >= triggerPoint)) {
+    STATE.page = STATE._loadedPage + 1;
     doSearch(true);
   }
 }
 
 function recoverScrollState() {
+  expireSearchRequests();
+  if (!STATE.isLoading) resetPagingRecovery();
   scrollRecoveryTimer = null;
   scrollTicking = false;
   if (scrollLoadTimer) {
@@ -4013,6 +4146,9 @@ function updateScrollTrack() {
 }
 
 function setupVirtualScroll() {
+  DOM.resultsContainer.addEventListener("wheel", event => { if (event.deltaY > 0) retryBottomPage(); }, { passive: true });
+  DOM.resultsContainer.addEventListener("touchend", retryBottomPage, { passive: true });
+  DOM.resultsContainer.addEventListener("scrollend", () => scheduleBottomLoad(), { passive: true });
   DOM.resultsContainer.addEventListener("scroll", () => {
     if (readerReturnScrollState && !readerReturnRestoreActive) { readerReturnRestoreGeneration++; readerReturnScrollState = null; }
     if (!VSCROLL.isDraggingThumb) ensureVirtualViewportCovered();
@@ -4736,7 +4872,7 @@ async function init() {
   });
   window.addEventListener("pageshow", function() { scheduleScrollRecovery(); });
   window.addEventListener("focus", function() { scheduleScrollRecovery(); warmConnection(); });
-  window.addEventListener("online", function() { warmConnection(true); });
+  window.addEventListener("online", function() { scheduleScrollRecovery(); warmConnection(true); });
   lastKeepaliveAt = Date.now();
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   ROUTER.apply();
