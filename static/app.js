@@ -2171,14 +2171,14 @@ async function initSearchPositions() {
         searchPositionDB.onversionchange = () => { searchPositionDB.close(); searchPositionDB = null; };
         const transaction = searchPositionDB.transaction("positions", "readwrite");
         const store = transaction.objectStore("positions");
-        let count = 0;
-        store.index("savedAt").openCursor(null, "prev").onsuccess = event => {
-          const cursor = event.target.result;
-          if (!cursor) return;
-          const value = cursor.value;
-          if (!validSearchPosition(value) || ++count > SEARCH_POSITION_MAX) cursor.delete();
-          else if (!searchPositions.has(value.key)) searchPositions.set(value.key, value);
-          cursor.continue();
+        store.getAll().onsuccess = event => {
+          // The position store is capped at 500; read it in one database round trip.
+          let count = 0;
+          const values = event.target.result.sort((a, b) => b.savedAt - a.savedAt);
+          for (const value of values) {
+            if (!validSearchPosition(value) || ++count > SEARCH_POSITION_MAX) store.delete(value.key);
+            else if (!searchPositions.has(value.key)) searchPositions.set(value.key, value);
+          }
         };
         transaction.oncomplete = transaction.onabort = () => { clearTimeout(timer); resolve(); };
       };
@@ -2303,7 +2303,7 @@ function tryRestoreSearchPosition(key) {
   const controller = new AbortController();
   const task = { key, controller, results: previous?.results || [], page: previous?.page || 0,
     total: previous?.total ?? null, generation: previous?.generation,
-    targetPage: previous?.targetPage || position.loadedPage };
+    targetPage: previous?.targetPage || position.loadedPage, ready: previous?.ready || new Map() };
   positionRestore = task;
   const current = () => positionRestore === task && key === getSearchViewKey() && !controller.signal.aborted;
   STATE.isLoading = true;
@@ -2314,27 +2314,39 @@ function tryRestoreSearchPosition(key) {
       const query = JSON.parse(key);
       const results = task.results;
       do {
-        const page = task.page + 1;
-        const data = await fetchPositionPage(query, page, controller.signal, page === 1 ? position.anchorId : undefined);
+        // Resolve the anchor/generation first, then rebuild in bounded parallel windows.
+        // Keep the small out-of-order suffix on failure; only commit contiguous pages.
+        const end = task.total === null ? 1 : Math.min(task.targetPage, Math.max(1, Math.ceil(task.total / query.pageSize)), task.page + 3);
+        const pages = Array.from({ length: end - task.page }, (_, index) => task.page + index + 1);
+        const responses = await Promise.all(pages.map(async page => {
+          if (task.ready.has(page)) return { page, data: task.ready.get(page) };
+          try { return { page, data: await fetchPositionPage(query, page, controller.signal, page === 1 ? position.anchorId : undefined) }; }
+          catch (error) { return { page, error }; }
+        }));
         if (!current()) return;
-        if (!data || !Array.isArray(data.results) || data.page !== page ||
+        for (const response of responses) if (!response.error) task.ready.set(response.page, response.data);
+        for (const { page, data, error } of responses) {
+          if (error) throw error;
+          if (!data || !Array.isArray(data.results) || data.page !== page ||
             !Number.isInteger(data.total) || data.total < 0 ||
             data.page_size !== query.pageSize ||
             (task.total !== null && (task.total !== data.total || task.generation !== data.generation)) ||
             data.results.length !== Math.min(query.pageSize, Math.max(0, data.total - results.length))) {
-          // A new retry must start from one coherent generation, never a mixed prefix.
-          task.results = []; task.page = 0; task.total = null; task.generation = undefined;
-          task.targetPage = position.loadedPage;
-          throw new Error("RESTORE_PAGE_CHANGED");
+            // A new retry must start from one coherent generation, never a mixed prefix.
+            task.results = []; task.page = 0; task.total = null; task.generation = undefined;
+            task.targetPage = position.loadedPage; task.ready.clear();
+            throw new Error("RESTORE_PAGE_CHANGED");
+          }
+          if (page === 1 && Number.isInteger(data.anchor_index) && data.anchor_index >= 0 && data.anchor_index < data.total) {
+            task.targetPage = Math.max(position.loadedPage, Math.floor(data.anchor_index / query.pageSize) + 1);
+          }
+          task.total = data.total;
+          task.generation = data.generation;
+          task.page = page;
+          results.push(...data.results);
+          task.ready.delete(page);
         }
-        if (page === 1 && Number.isInteger(data.anchor_index) && data.anchor_index >= 0 && data.anchor_index < data.total) {
-          task.targetPage = Math.max(position.loadedPage, Math.floor(data.anchor_index / query.pageSize) + 1);
-        }
-        task.total = data.total;
-        task.generation = data.generation;
-        task.page = page;
-        results.push(...data.results);
-        showPositionRestoreStatus(`正在恢复上次位置…（${page}/${Math.min(task.targetPage, Math.max(1, Math.ceil(task.total / query.pageSize)))} 页）`);
+        showPositionRestoreStatus(`正在恢复上次位置…（${task.page}/${Math.min(task.targetPage, Math.max(1, Math.ceil(task.total / query.pageSize)))} 页）`);
       } while (task.page < task.targetPage && results.length < task.total);
       if (!current()) return;
       const { total, page } = task;
