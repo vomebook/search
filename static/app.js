@@ -2162,8 +2162,21 @@ function saveSearchViewport(position, view) {
     if (view.results[index]) records.push([index, cloneSearchResult(view.results[index]), VSCROLL.heights[index] || VSCROLL.estimatedHeight]);
   }
   const viewport = { key: position.key, savedAt: position.savedAt, anchorId: position.anchorId, index: position.index,
-    total: view.total, estimatedHeight: VSCROLL.estimatedHeight, measurementKey: getHeightMeasurementKey(), records };
-  if (new TextEncoder().encode(JSON.stringify(viewport)).byteLength > SEARCH_VIEWPORT_BYTES_MAX) return;
+    total: view.total, estimatedHeight: VSCROLL.estimatedHeight, measurementKey: getHeightMeasurementKey(), records: [] };
+  // API records can include long URLs. Spend the budget on the visible screen
+  // first, then its nearest neighbors, rather than discarding the whole preview.
+  const visibleEnd = findVirtualIndex(DOM.resultsContainer.scrollTop + DOM.resultsContainer.clientHeight);
+  const distance = index => Math.max(position.index - index, index - visibleEnd, 0);
+  records.sort((a, b) => distance(a[0]) - distance(b[0]) || a[0] - b[0]);
+  const encoder = new TextEncoder();
+  let bytes = encoder.encode(JSON.stringify(viewport)).byteLength;
+  for (const record of records) {
+    const cost = encoder.encode(JSON.stringify(record)).byteLength + 1;
+    if (bytes + cost > SEARCH_VIEWPORT_BYTES_MAX) continue;
+    viewport.records.push(record); bytes += cost;
+  }
+  viewport.records.sort((a, b) => a[0] - b[0]);
+  if (!viewport.records.some(([index]) => index === position.index)) return;
   searchViewportSnapshots.delete(viewport.key);
   searchViewportSnapshots.set(viewport.key, viewport);
   while (searchViewportSnapshots.size > SEARCH_VIEWPORT_MAX) searchViewportSnapshots.delete(searchViewportSnapshots.keys().next().value);
