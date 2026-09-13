@@ -10,6 +10,8 @@ let wordIndex = null;
 let wordIndexFilesOnly = null;
 let vocabSorted = [];
 let vocabSortedFilesOnly = [];
+const searchOrderCache = new Map();
+const SEARCH_ORDER_CACHE_MAX = 8;
 let recordIndices = [];
 let repoRecordIndices = {};
 let txtRecordIndices = [];
@@ -166,6 +168,7 @@ function scheduleSortOrders(expectedGeneration) {
 
 function replaceCorpus(nextRecords) {
   if (sortBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(sortBuildTimer);
+  searchOrderCache.clear();
   records = nextRecords;
   const repoCounts = {};
   const extensionCounts = {};
@@ -326,10 +329,10 @@ function emptySearchOrder(params) {
 function pageResult(indices, params) {
   const page = Math.max(1, Number(params.page) || 1);
   const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, Number(params.pageSize) || 100));
-  const pageIndices = indices.slice((page - 1) * pageSize, page * pageSize);
+  const pageItems = indices.slice((page - 1) * pageSize, page * pageSize);
   return {
-    records: pageIndices.map((index) => records[index]),
-    ids: pageIndices.map((index) => recordIds[index]),
+    records: pageItems.map((index) => records[index]),
+    ids: pageItems.map((index) => recordIds[index]),
     total: indices.length,
     page,
     pageSize,
@@ -378,6 +381,16 @@ function searchLocal(params) {
     }
     matched = tokenMatches || [];
   }
+  const cacheParams = Object.assign({}, params);
+  delete cacheParams.page;
+  delete cacheParams.pageSize;
+  const cacheKey = JSON.stringify(cacheParams);
+  let ordered = searchOrderCache.get(cacheKey);
+  if (ordered) {
+    searchOrderCache.delete(cacheKey);
+    searchOrderCache.set(cacheKey, ordered);
+    return pageResult(ordered, params);
+  }
   const tokens = tokenize(query);
   const scored = applyFilters(matched, params).map((index) => {
     const record = records[index] || {};
@@ -395,17 +408,10 @@ function searchLocal(params) {
   if (params.sort === "name") scored.sort((a, b) => String(records[a.index].File || "").localeCompare(String(records[b.index].File || ""), "zh"));
   else if (params.sort === "size") scored.sort((a, b) => (Number(records[b.index].Size) || 0) - (Number(records[a.index].Size) || 0));
   else if (query) scored.sort((a, b) => b.score - a.score);
-  const page = Math.max(1, Number(params.page) || 1);
-  const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, Number(params.pageSize) || 100));
-  const pageItems = scored.slice((page - 1) * pageSize, page * pageSize);
-  return {
-    records: pageItems.map((item) => records[item.index]),
-    ids: pageItems.map((item) => recordIds[item.index]),
-    total: scored.length,
-    page,
-    pageSize,
-    generation,
-  };
+  ordered = scored.map((item) => item.index);
+  searchOrderCache.set(cacheKey, ordered);
+  while (searchOrderCache.size > SEARCH_ORDER_CACHE_MAX) searchOrderCache.delete(searchOrderCache.keys().next().value);
+  return pageResult(ordered, params);
 }
 
 function randomRecord(params) {
