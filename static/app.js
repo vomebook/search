@@ -535,6 +535,7 @@ function warmReaderIntent(rawUrl) {
 
 function setupReaderIntentWarming() {
   var warm = function(event) {
+    if (event.target.closest('[data-action="download"], [data-download]')) return;
     var target = event.target.closest("[data-reader-url], [data-read-url]");
     if (target) warmReaderIntent(target.dataset.readerUrl || target.dataset.readUrl);
   };
@@ -554,34 +555,168 @@ function buildDownloadUrl(filename, link) {
   return API_BASE + "/api/download?file=" + encodeURIComponent(filename || "file") + "&link=" + encodeURIComponent(link || "");
 }
 
-async function downloadFile(filename, link, options) {
-  options = options || {};
-  showToast("开始下载...");
-  try {
-    if (!options.skipCheck) {
-      var resp = await fetchWithTimeout(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""), DOWNLOAD_CHECK_TIMEOUT);
-      if (!resp.ok) {
-        var message = "下载失败";
-        try {
-          var data = await resp.json();
-          if (data && data.error) message = data.error;
-        } catch (e) {}
-        showToast(message, 3500);
+function triggerDownload(url) {
+  const iframe = document.createElement("iframe");
+  iframe.src = url;
+  iframe.style.display = "none";
+  iframe.setAttribute("aria-hidden", "true");
+  document.body.appendChild(iframe);
+  setTimeout(() => iframe.remove(), 60000);
+}
+
+const downloadChecks = new Map();
+const downloadCheckQueue = [];
+const pendingDownloads = new Map();
+let activeDownloadChecks = 0;
+let downloadLaunchTail = Promise.resolve();
+let lastDownloadLaunch = 0;
+let downloadBatch = null;
+
+function checkDownload(link, speculative = false) {
+  const now = Date.now();
+  downloadChecks.forEach((entry, key) => {
+    if (entry.expires && entry.expires <= now) downloadChecks.delete(key);
+  });
+  const existing = downloadChecks.get(link);
+  if (existing) return existing.promise;
+  // Intent warming is opportunistic; actual clicks always get queued.
+  if (speculative && (activeDownloadChecks || downloadCheckQueue.length || downloadBatch && !downloadBatch.done)) return Promise.resolve(false);
+  let resolve;
+  const entry = { promise: new Promise(done => { resolve = done; }), expires: 0 };
+  downloadChecks.set(link, entry);
+  downloadCheckQueue.push(async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DOWNLOAD_CHECK_TIMEOUT);
+    try {
+      const response = await fetch(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""), { signal: controller.signal });
+      const data = await response.json();
+      if (!response.ok || data.ok !== true) throw new Error(data.error || "下载检查失败，请重试");
+      entry.expires = Date.now() + 30000;
+      // Bound successful checks independently of pending, user-requested work.
+      const cached = Array.from(downloadChecks).filter(([, value]) => value.expires);
+      while (cached.length > 64) downloadChecks.delete(cached.shift()[0]);
+      resolve(true);
+    } catch (error) {
+      downloadChecks.delete(link);
+      resolve(error.name === "AbortError" ? "下载检查超时，请重试" : error.message || "下载失败，请稍后重试");
+    } finally {
+      clearTimeout(timer);
+      activeDownloadChecks--;
+      pumpDownloadChecks();
+    }
+  });
+  pumpDownloadChecks();
+  return entry.promise;
+}
+
+function pumpDownloadChecks() {
+  while (activeDownloadChecks < 2 && downloadCheckQueue.length) {
+    activeDownloadChecks++;
+    downloadCheckQueue.shift()();
+  }
+}
+
+function downloadFile(filename, link, options = {}) {
+  if (options.batch && options.batch.cancelled) return Promise.resolve(false);
+  if (pendingDownloads.has(link)) return pendingDownloads.get(link);
+  const button = options.button;
+  const label = button && button.textContent;
+  if (button) { button.textContent = "准备中…"; button.setAttribute("aria-busy", "true"); }
+  if (!options.quiet) showToast("正在准备下载…");
+  const cancelled = () => options.batch && options.batch.cancelled;
+  const task = (async () => {
+    try {
+      if (cancelled()) return false;
+      const checked = options.skipCheck ? true : await checkDownload(link);
+      if (cancelled()) return false;
+      if (checked !== true) {
+        if (!options.quiet) showToast(checked || "下载检查失败，请重试", 3500);
         return false;
       }
+      // Serialize browser handoffs without allocating a timer for every selected file.
+      const launch = downloadLaunchTail.then(async () => {
+        if (cancelled()) return false;
+        const delay = Math.max(0, 300 - (Date.now() - lastDownloadLaunch));
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+        if (cancelled()) return false;
+        triggerDownload(buildDownloadUrl(filename, link));
+        lastDownloadLaunch = Date.now();
+        return true;
+      });
+      downloadLaunchTail = launch.catch(() => {});
+      const started = await launch;
+      if (started && !options.quiet) showToast("已发起下载，请在浏览器下载列表查看");
+      return started;
+    } catch (_) {
+      if (!options.quiet) showToast("下载失败，请稍后重试", 3500);
+      return false;
+    } finally {
+      pendingDownloads.delete(link);
+      if (button && button.textContent === "准备中…") {
+        button.textContent = label;
+        button.removeAttribute("aria-busy");
+      }
     }
-    var a = document.createElement("a");
-    a.href = buildDownloadUrl(filename, link);
-    a.download = filename || "";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    return true;
-  } catch (e) {
-    console.error(e);
-    showToast("下载失败，请稍后重试", 3500);
-    return false;
+  })();
+  pendingDownloads.set(link, task);
+  return task;
+}
+
+function renderDownloadBatch() {
+  const batch = downloadBatch;
+  if (!batch) return;
+  let panel = document.getElementById("download-queue");
+  if (!panel) {
+    panel = document.createElement("section");
+    panel.id = "download-queue";
+    panel.className = "download-queue";
+    panel.setAttribute("aria-label", "批量下载");
+    panel.innerHTML = '<span role="status" aria-live="polite"></span><button type="button" data-queue="cancel">取消待下载</button><button type="button" data-queue="retry">重试失败项</button><button type="button" data-queue="close">关闭</button>';
+    panel.addEventListener("click", event => {
+      const action = event.target.dataset.queue;
+      if (action === "cancel") { downloadBatch.cancelled = true; renderDownloadBatch(); }
+      if (action === "retry" && downloadBatch.done) startDownloadBatch(downloadBatch.failed);
+      if (action === "close" && downloadBatch.done) { panel.remove(); downloadBatch = null; }
+    });
+    document.body.appendChild(panel);
   }
+  panel.querySelector('[role="status"]').textContent = `${batch.cancelled ? "已取消待下载 · " : ""}已发起 ${batch.started}/${batch.items.length} · 失败 ${batch.failed.length}。请在浏览器下载列表查看文件进度。`;
+  panel.querySelector('[data-queue="cancel"]').hidden = batch.done || batch.cancelled;
+  panel.querySelector('[data-queue="retry"]').hidden = !batch.done || !batch.failed.length;
+  panel.querySelector('[data-queue="close"]').hidden = !batch.done;
+}
+
+function startDownloadBatch(items) {
+  if (downloadBatch && !downloadBatch.done) { showToast("已有批量任务，请先完成或取消"); return; }
+  items = Array.from(new Map(items.filter(item => item.link).map(item => [item.link, item])).values());
+  if (!items.length) { showToast("未选中任何文件"); return; }
+  const batch = { items, next: 0, started: 0, failed: [], cancelled: false, done: false };
+  downloadBatch = batch;
+  renderDownloadBatch();
+  const work = async () => {
+    while (!batch.cancelled && batch.next < items.length) {
+      const item = items[batch.next++];
+      const started = await downloadFile(item.filename, item.link, { quiet: true, batch });
+      if (started) batch.started++;
+      else if (!batch.cancelled) batch.failed.push(item);
+      renderDownloadBatch();
+    }
+  };
+  Promise.all([work(), work()]).then(() => {
+    batch.done = true;
+    renderDownloadBatch();
+  });
+}
+
+function setupDownloadIntentWarming() {
+  const warm = event => {
+    if (document.hidden) return;
+    const target = event.target.closest('[data-action="download"], [data-download]');
+    if (!target) return;
+    const owner = target.closest('[data-link]');
+    if (owner && owner.dataset.link) checkDownload(owner.dataset.link, true);
+  };
+  ["pointerover", "pointerdown", "focusin"].forEach(type => document.addEventListener(type, warm, { passive: true }));
 }
 
 function getBrowserFileName(file) {
@@ -3477,6 +3612,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var sizeStr = formatSize(f2.size);
     var browserFileName = getBrowserFileName(f2);
     var browserFileLink = getBrowserFileLink(currentRepo, path || "", f2);
+    div2.dataset.link = browserFileLink;
     var browserAssetPath = path ? path + "/" + browserFileName : browserFileName;
     var warmBrowserRecord = applyReaderAsset({ File: f2.name, Extension: f2.ext, Link: browserFileLink }, currentRepo, browserAssetPath, browserFileLink);
     var warmReaderLink = VoiceOfMLReader.readerUrl(warmBrowserRecord, "/search/static/reader.html");
@@ -3490,7 +3626,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         var fileLink = getBrowserFileLink(currentRepo, ppath, ff);
         if (e.target.closest(".browser-action")) {
           e.stopPropagation();
-          if (fileLink) downloadFile(getBrowserFileName(ff), fileLink);
+          if (fileLink) downloadFile(getBrowserFileName(ff), fileLink, { button: e.target.closest(".browser-action") });
           return;
         }
         var assetPath = ppath ? ppath + "/" + getBrowserFileName(ff) : getBrowserFileName(ff);
@@ -4229,30 +4365,89 @@ function handleFolderSelfToggle(node) {
   refreshFilterFolderSelectionState();
 }
 
-function fetchHitokoto() {
-  fetch("https://vomebook-hitokoto.hf.space/")
-    .then(function(resp) { return resp.json(); })
-    .then(function(data) {
-      const text = data.hitokoto || data.text || data.content || data.sentence || "";
-      if (text) typewriter(DOM.hitokoto, text);
-    })
-    .catch(function() { DOM.hitokoto.textContent = ""; });
+const hitokotoState = { timer: null, controller: null, lastAt: 0, animation: null, suspended: false };
+
+function hitokotoVisible() { return !document.hidden && !hitokotoState.suspended; }
+
+function scheduleHitokoto() {
+  clearTimeout(hitokotoState.timer);
+  hitokotoState.timer = null;
+  if (!hitokotoVisible() || hitokotoState.controller) return;
+  hitokotoState.timer = setTimeout(fetchHitokoto, Math.max(0, 30000 - (Date.now() - hitokotoState.lastAt)));
 }
 
-function typewriter(el, text, speed) {
-  speed = speed || 60;
-  el.style.opacity = "0";
+async function fetchHitokoto() {
+  if (!hitokotoVisible() || hitokotoState.controller) return;
+  clearTimeout(hitokotoState.timer);
+  hitokotoState.timer = null;
+  const controller = new AbortController();
+  hitokotoState.controller = controller;
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const resp = await fetch("https://vomebook-hitokoto.hf.space/", { signal: controller.signal });
+    if (!resp.ok) throw new Error("Hitokoto unavailable");
+    const data = await resp.json();
+    if (hitokotoState.controller !== controller || !hitokotoVisible() || controller.signal.aborted) return;
+    const text = data.hitokoto || data.text || data.content || data.sentence || "";
+    if (typeof text === "string" && text) typewriter(DOM.hitokoto, text);
+  } catch (_) {
+    // Keep the current quotation on transient failures.
+  } finally {
+    clearTimeout(timeout);
+    if (hitokotoState.controller === controller) {
+      hitokotoState.controller = null;
+      hitokotoState.lastAt = Date.now();
+      scheduleHitokoto();
+    }
+  }
+}
+
+function resumeHitokotoAnimation() {
+  const animation = hitokotoState.animation;
+  if (!animation || animation.timer || !hitokotoVisible()) return;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    animation.el.textContent = animation.chars.join("");
+    hitokotoState.animation = null;
+    return;
+  }
+  animation.timer = setTimeout(() => {
+    animation.timer = null;
+    if (!hitokotoVisible()) return;
+    animation.el.textContent = animation.chars.slice(0, ++animation.index).join("");
+    if (animation.index >= animation.chars.length) hitokotoState.animation = null;
+    else resumeHitokotoAnimation();
+  }, animation.speed);
+}
+
+function typewriter(el, text, speed = 60) {
+  if (hitokotoState.animation) clearTimeout(hitokotoState.animation.timer);
+  el.style.opacity = "0.55";
   el.textContent = "";
-  setTimeout(function() {
-    el.style.transition = "opacity 0.5s ease";
-    el.style.opacity = "0.55";
-  }, 100);
-  let i = 0;
-  const t = setInterval(function() {
-    el.textContent = text.slice(0, i + 1);
-    i++;
-    if (i >= text.length) clearInterval(t);
-  }, speed);
+  hitokotoState.animation = { el, chars: Array.from(text), index: 0, speed, timer: null };
+  resumeHitokotoAnimation();
+}
+
+function updateHitokotoVisibility() {
+  if (hitokotoVisible()) {
+    resumeHitokotoAnimation();
+    scheduleHitokoto();
+  } else {
+    clearTimeout(hitokotoState.timer);
+    hitokotoState.timer = null;
+    if (hitokotoState.controller) hitokotoState.controller.abort();
+    hitokotoState.controller = null;
+    if (hitokotoState.animation) {
+      clearTimeout(hitokotoState.animation.timer);
+      hitokotoState.animation.timer = null;
+    }
+  }
+}
+
+function setupHitokoto() {
+  document.addEventListener("visibilitychange", updateHitokotoVisibility);
+  window.addEventListener("pagehide", () => { hitokotoState.suspended = true; updateHitokotoVisibility(); });
+  window.addEventListener("pageshow", () => { hitokotoState.suspended = false; updateHitokotoVisibility(); });
+  updateHitokotoVisibility();
 }
 
 async function getRandomLocal(txtOnly) {
@@ -4881,7 +5076,7 @@ function setupResultDelegation() {
         return;
       }
       if (action === "download") {
-        downloadFile(actionBtn.dataset.filename || "file", actionBtn.dataset.link || "");
+        downloadFile(actionBtn.dataset.filename || "file", actionBtn.dataset.link || "", { button: actionBtn });
         return;
       }
       if (action === "read") {
@@ -5072,10 +5267,7 @@ async function init() {
     var links = getSelectedLinks(false);
     var names = getSelectedFilenames();
     if (links.length === 0) { showToast("未选中任何文件"); return; }
-    for (var bi = 0; bi < links.length; bi++) {
-      setTimeout(function(name, link) { downloadFile(name, link); }, bi * 300, names[bi], links[bi]);
-    }
-    showToast("正在下载 " + links.length + " 个文件");
+    startDownloadBatch(links.map((link, index) => ({ filename: names[index], link })));
   });
   if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
     selectedIndices = {};
@@ -5254,6 +5446,7 @@ async function init() {
   setupQuickScroll();
   setupKeyboard();
   setupResultDelegation();
+  setupDownloadIntentWarming();
   window.addEventListener("message", handleReaderMessage);
   window.addEventListener("popstate", function(event) { restoreReaderOverlay(event.state); });
   window.addEventListener("hashchange", function() {
@@ -5290,7 +5483,6 @@ async function init() {
       renderFilters(routeId);
     }
   });
-  fetchHitokoto();
-  setInterval(fetchHitokoto, 30000);
+  setupHitokoto();
 }
 document.addEventListener("DOMContentLoaded", init);
