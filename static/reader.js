@@ -366,6 +366,9 @@ let foliateContinuous = false,
   foliateSectionObserver = null,
   foliateScrollFrame = 0,
   foliateWindowFrame = 0;
+const FOLIATE_PREFETCH_SECTIONS = 6;
+const FOLIATE_PREFETCH_MARGIN = 4000;
+const FOLIATE_LOADED_SECTION_LIMIT = 12;
 let htmlFrame = null;
 let lastSavedProgress = "";
 let progressSaveChain = Promise.resolve();
@@ -1055,7 +1058,7 @@ function refreshFoliateWindow() {
     ".foliate-continuous article.foliate-section-placeholder[data-section]"
   )) {
     const rect = placeholder.getBoundingClientRect();
-    if (rect.bottom > viewportRect.top - 1000 && rect.top < viewportRect.bottom + 1000)
+    if (rect.bottom > viewportRect.top - FOLIATE_PREFETCH_MARGIN && rect.top < viewportRect.bottom + FOLIATE_PREFETCH_MARGIN)
       foliateChapterRepository.load(Number(placeholder.dataset.section)).catch(() => {});
   }
 }
@@ -3803,15 +3806,15 @@ function setupFoliateWindow(stream, sections) {
               .catch(() => {});
             return;
           }
-          const adjacentLoads = [index - 1, index + 1]
-            .filter((adjacent) => sections[adjacent])
-            .map((adjacent) => foliateChapterRepository.load(adjacent));
-          if (adjacentLoads.length)
-            Promise.allSettled(adjacentLoads).then(() =>
+          const prefetchLoads = Array.from({ length: FOLIATE_PREFETCH_SECTIONS + 1 }, (_, offset) => index + offset)
+            .filter((prefetch) => sections[prefetch])
+            .map((prefetch) => foliateChapterRepository.load(prefetch));
+          if (prefetchLoads.length)
+            Promise.allSettled(prefetchLoads).then(() =>
               foliateScrollAnchors.whenIdle(trimFoliateSections)
             );
         }),
-    { root: viewport, rootMargin: "1000px" }
+    { root: viewport, rootMargin: `${FOLIATE_PREFETCH_MARGIN}px` }
   );
   foliateSectionObserver = observer;
   foliateChapterRepository = VoiceOfMLReaderChapters.createChapterRepository({
@@ -3838,7 +3841,7 @@ function setupFoliateWindow(stream, sections) {
       })
   });
   foliateSectionVirtualizer = VoiceOfMLReaderVirtual.createSectionVirtualizer({
-    limit: 9,
+    limit: FOLIATE_LOADED_SECTION_LIMIT,
     getLoaded: () => [
       ...stream.querySelectorAll("article[data-section]:not(.foliate-section-placeholder)")
     ],
@@ -3847,7 +3850,7 @@ function setupFoliateWindow(stream, sections) {
     canVirtualize: (article) => {
       const rect = article.getBoundingClientRect(),
         viewportRect = viewport.getBoundingClientRect();
-      return rect.bottom < viewportRect.top - 1000 || rect.top > viewportRect.bottom + 1000;
+      return rect.bottom < viewportRect.top - FOLIATE_PREFETCH_MARGIN || rect.top > viewportRect.bottom + FOLIATE_PREFETCH_MARGIN;
     },
     virtualize: (article, index, height) => {
       const placeholder = document.createElement("article");
