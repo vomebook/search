@@ -1110,6 +1110,7 @@ function consumeCachedAppendPage() {
 }
 
 function prefetchNextPage() {
+  if (!STATE._loadedPage) return Promise.resolve();
   if (!apiAvailable) return Promise.resolve();
   if (STATE.useLocalMode && STATE.dataLoaded) return Promise.resolve();
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
@@ -1164,18 +1165,26 @@ function prefetchNextPage() {
   return searchPrefetchPromise;
 }
 
+let localDataLoadTimer = null;
+let localDataIdleCallback = null;
 function scheduleBackgroundLocalDataLoad() {
   clearTimeout(localDataLoadTimer);
+  if (localDataIdleCallback !== null) window.cancelIdleCallback(localDataIdleCallback);
+  localDataIdleCallback = null;
+  if (STATE.dataLoaded) return;
   var connection = navigator.connection;
   var delay = connection && (connection.saveData || /^(slow-)?2g$/.test(connection.effectiveType || "")) ? 2500 : 100;
   localDataLoadTimer = setTimeout(function() {
+    localDataLoadTimer = null;
     var start = function() {
+      localDataIdleCallback = null;
+      localDataLoadTimer = null;
       if (!STATE.dataLoaded) ensureLocalDataLoaded(false, true);
     };
     if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(start, { timeout: 2500 });
+      localDataIdleCallback = window.requestIdleCallback(start, { timeout: 2500 });
     } else {
-      setTimeout(start, 1000);
+      localDataLoadTimer = setTimeout(start, 1000);
     }
   }, delay);
 }
@@ -1704,14 +1713,14 @@ const ROUTER = {
     if (route.params.q !== undefined) {
       STATE.query = route.params.q;
       DOM.searchInput.value = STATE.query;
-    } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
+    } else {
       STATE.query = "";
       DOM.searchInput.value = "";
     }
     if (route.params.repo) {
       STATE.filterRepos = (Array.isArray(route.params.repo) ? route.params.repo : [route.params.repo])
         .map(function(r) { return r.includes("/") ? r : "VoiceOfML/" + r; });
-    } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
+    } else {
       STATE.filterRepos = [];
     }
     if (route.params.ext !== undefined) {
@@ -1725,7 +1734,7 @@ const ROUTER = {
     }
     if (route.params.path) {
       STATE.browserPath = route.params.path;
-    } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
+    } else {
       STATE.browserPath = "";
     }
     if (STATE.mode !== "global") {
@@ -1740,6 +1749,11 @@ const ROUTER = {
         STATE.filterFolderSubtrees = urlSubtrees;
         STATE.filterFolders = mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees);
         saveStoredFolderFilters(STATE.repo);
+      } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
+        var storedFolders = loadStoredFolderFilters(STATE.repo);
+        STATE.filterFolderSelfs = storedFolders.selfs;
+        STATE.filterFolderSubtrees = storedFolders.subtrees;
+        STATE.filterFolders = storedFolders.folders;
       } else {
         STATE.filterFolderSelfs = [];
         STATE.filterFolderSubtrees = [];
@@ -1981,6 +1995,7 @@ function stableSearchStringify(value) {
 const SEARCH_VIEW_SNAPSHOT_VERSION = 1;
 const searchViewSnapshots = new Map();
 const SEARCH_VIEW_SNAPSHOT_MAX = 20;
+const SEARCH_VIEW_SNAPSHOT_BYTES_MAX = 8 * 1024 * 1024;
 function getSearchViewKey() {
   return stableSearchStringify({
     mode: STATE.mode,
@@ -2050,6 +2065,13 @@ function saveSearchViewSnapshot(key = getSearchViewKey()) {
   searchViewSnapshots.delete(key);
   searchViewSnapshots.set(key, snapshot);
   while (searchViewSnapshots.size > SEARCH_VIEW_SNAPSHOT_MAX) searchViewSnapshots.delete(searchViewSnapshots.keys().next().value);
+  var snapshotBytes = 0;
+  searchViewSnapshots.forEach(function(item) { snapshotBytes += JSON.stringify(item).length; });
+  while (snapshotBytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX && searchViewSnapshots.size > 1) {
+    var oldest = searchViewSnapshots.keys().next().value;
+    snapshotBytes -= JSON.stringify(searchViewSnapshots.get(oldest)).length;
+    searchViewSnapshots.delete(oldest);
+  }
   return snapshot;
 }
 function activateSearchView(key = getSearchViewKey()) {
@@ -2079,6 +2101,9 @@ function restoreSearchViewSnapshot(key, restoreScroll = true) {
   STATE.page = STATE._loadedPage;
   STATE._pendingPage = 0;
   STATE._deferredAppendWhileDragging = false;
+  selectedIndices = {};
+  lastSelectedIndex = -1;
+  if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
   resetPagingRecovery();
   VSCROLL.viewKey = key;
   VSCROLL.estimatedHeight = snapshot.estimatedHeight || VSCROLL.estimatedHeight;
@@ -2178,6 +2203,7 @@ function applyInitialSearchPayload(data) {
   STATE._loadedPage = 1;
   STATE._pageCache = {};
   STATE._pendingPage = 0;
+  resetPagingRecovery();
   STATE.hasMore = STATE.results.length < STATE.total;
   STATE.isLoading = false;
   STATE.resultsSkeletonActive = false;
@@ -2353,6 +2379,8 @@ function clearResultsSkeleton() {
 
 function doSearch(append) {
   if (append && STATE.isLoading) return;
+  if (append && !STATE._loadedPage) append = false;
+  if (!append) STATE.page = 1;
   clearTimeout(filterSearchTimer);
   filterSearchTimer = null;
   const id = ++searchId;
@@ -3686,8 +3714,18 @@ function getFolderSelfSet() {
   return new Set(STATE.filterFolderSelfs || []);
 }
 
+function folderPathCovered(path, subtreeSet) {
+  for (let prefix = path; prefix; ) {
+    if (subtreeSet.has(prefix)) return true;
+    const slash = prefix.lastIndexOf("/");
+    prefix = slash < 0 ? "" : prefix.slice(0, slash);
+  }
+  return false;
+}
+
 function isNodeFullySelected(node, subtreeSet, selfSet) {
   if (!node) return false;
+  if (folderPathCovered(node.path, subtreeSet)) return true;
   if (node.isRoot) {
     if (node.hasDirectFiles && !selfSet.has(node.path)) return false;
     const childNodes = node.children || [];
@@ -3722,32 +3760,54 @@ function isNodePartiallySelected(node, subtreeSet, selfSet) {
   return false;
 }
 
-function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
-  if (!node) return;
-  if (!node.isRoot && enabled) {
-    subtreeSet.add(node.path);
-  }
-  if (node.isRoot && !enabled) {
-    subtreeSet.clear();
-    selfSet.clear();
-  }
-  if (enabled) {
-    if (node.hasDirectFiles) selfSet.add(node.path);
-    const childNodes = node.children || [];
-    for (let i = 0; i < childNodes.length; i++) {
-      setNodeSubtreeSelection(childNodes[i], true, subtreeSet, selfSet);
+// Split covering ancestors before removing a branch or its direct files.
+function splitFolderSelection(path, subtreeSet, selfSet, includeSelf = false, nodes = STATE.folderTree) {
+  for (const node of nodes || []) {
+    if (!node.isRoot && node.path !== path && !path.startsWith(node.path + "/")) continue;
+    if (subtreeSet.has(node.path) && (includeSelf || node.path !== path)) {
+      subtreeSet.delete(node.path);
+      if (node.hasDirectFiles) selfSet.add(node.path);
+      for (const child of node.children || []) subtreeSet.add(child.path);
     }
-    return;
-  }
-  subtreeSet.delete(node.path);
-  if (node.hasDirectFiles) selfSet.delete(node.path);
-  const childNodes = node.children || [];
-  for (let i = 0; i < childNodes.length; i++) {
-    setNodeSubtreeSelection(childNodes[i], false, subtreeSet, selfSet);
+    if (node.path !== path) splitFolderSelection(path, subtreeSet, selfSet, includeSelf, node.children);
   }
 }
 
+function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
+  if (!node) return;
+  if (!enabled) splitFolderSelection(node.path, subtreeSet, selfSet);
+  const contains = path => node.isRoot || path === node.path || path.startsWith(node.path + "/");
+  for (const path of subtreeSet) if (contains(path)) subtreeSet.delete(path);
+  for (const path of selfSet) if (contains(path)) selfSet.delete(path);
+  if (!enabled) return;
+  if (!node.isRoot) subtreeSet.add(node.path);
+  else {
+    if (node.hasDirectFiles) selfSet.add(node.path);
+    for (const child of node.children || []) subtreeSet.add(child.path);
+  }
+}
+
+function normalizeFolderSelection(subtreeSet, selfSet) {
+  const collapse = nodes => {
+    for (const node of nodes || []) {
+      collapse(node.children);
+      if (!node.isRoot && isNodeFullySelected(node, subtreeSet, selfSet)) subtreeSet.add(node.path);
+    }
+  };
+  collapse(STATE.folderTree);
+  for (const path of subtreeSet) {
+    const slash = path.lastIndexOf("/");
+    if (slash >= 0 && folderPathCovered(path.slice(0, slash), subtreeSet)) subtreeSet.delete(path);
+  }
+  for (const path of selfSet) if (folderPathCovered(path, subtreeSet)) selfSet.delete(path);
+}
+
 function persistFolderSelection(subtreeSet, selfSet) {
+  normalizeFolderSelection(subtreeSet, selfSet);
+  if (subtreeSet.size > 10000 || selfSet.size > 10000) {
+    showToast("目录筛选最多支持 10000 项，请缩小选择范围");
+    return;
+  }
   STATE.filterFolderSubtrees = Array.from(subtreeSet);
   STATE.filterFolderSelfs = Array.from(selfSet);
   const merged = [];
@@ -3780,7 +3840,7 @@ function applyFolderSelectionToNode(node, row, subtreeSet, selfSet) {
   cb.indeterminate = !full && partial;
   const selfBtn = row.querySelector(".folder-self-toggle");
   if (selfBtn) {
-    const selfOn = selfSet.has(node.path);
+    const selfOn = selfSet.has(node.path) || folderPathCovered(node.path, subtreeSet);
     selfBtn.classList.toggle("active", selfOn);
     selfBtn.setAttribute("aria-pressed", selfOn ? "true" : "false");
   }
@@ -3847,6 +3907,7 @@ function handleFolderCheckboxChange(node) {
 function handleFolderSelfToggle(node) {
   const subtreeSet = getFolderSubtreeSet();
   const selfSet = getFolderSelfSet();
+  splitFolderSelection(node.path, subtreeSet, selfSet, true);
   if (selfSet.has(node.path)) selfSet.delete(node.path);
   else selfSet.add(node.path);
   persistFolderSelection(subtreeSet, selfSet);
@@ -4370,6 +4431,7 @@ function focusKeyboardResult(index) {
 
 function setupKeyboard() {
   document.addEventListener("keydown", function(e) {
+    if (e.isComposing || searchComposing || e.keyCode === 229) return;
     const tag = document.activeElement.tagName;
     const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
     if (e.key === "/" && !isInput) {
@@ -4429,6 +4491,8 @@ function setupKeyboard() {
     }
   });
   DOM.searchInput.addEventListener("keydown", function(e) {
+    if (e.isComposing || searchComposing || e.keyCode === 229) return;
+    if (e.isComposing || searchComposing || e.keyCode === 229) return;
     if (e.key === "Enter") {
       e.preventDefault();
       saveSearchViewSnapshot();
@@ -4837,11 +4901,8 @@ async function init() {
     collectFolderNodePaths(STATE.folderTree, allSubtreePaths, allSelfPaths);
     var nextSubtreeSet = new Set();
     var nextSelfSet = new Set();
-    for (var i = 0; i < allSubtreePaths.length; i++) {
-      if (!subtreeSet.has(allSubtreePaths[i])) nextSubtreeSet.add(allSubtreePaths[i]);
-    }
     for (var j = 0; j < allSelfPaths.length; j++) {
-      if (!selfSet.has(allSelfPaths[j])) nextSelfSet.add(allSelfPaths[j]);
+      if (!selfSet.has(allSelfPaths[j]) && !folderPathCovered(allSelfPaths[j], subtreeSet)) nextSelfSet.add(allSelfPaths[j]);
     }
     persistFolderSelection(nextSubtreeSet, nextSelfSet);
     refreshFilterFolderSelectionState();
