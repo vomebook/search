@@ -1580,6 +1580,7 @@ const STATE = {
   recordHistory: true,
   restoreFromHistory: false,
   sessionRestored: false,
+  returnPositionAvailable: false,
   dataLoaded: false,
   resultsSkeletonActive: false,
   _pendingPage: 0,
@@ -2149,6 +2150,7 @@ let displayedSearchView = null;
 let positionSaveTimer = null;
 let positionRestore = null;
 let resultWindow = null;
+let returnPositionTarget = null;
 let lastPositionPruneAt = 0;
 let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
@@ -3997,6 +3999,12 @@ function updateCurrentResultPosition() {
   label.hidden = !resultWindow;
   if (resultWindow && STATE.results.length) label.textContent = `当前第 ${(findVirtualIndex(DOM.resultsContainer.scrollTop) + 1).toLocaleString()} 条 · `;
   if (DOM.returnToPositionBtn) { const saved = searchPositions.get(getSearchViewKey()); DOM.returnToPositionBtn.hidden = !(saved && STATE.results.length && Math.abs(DOM.resultsContainer.scrollTop - getVirtualOffset(saved.index)) > 80); }
+  if (DOM.returnToPositionBtn) {
+    const saved = searchPositions.get(getSearchViewKey());
+    if (STATE.returnPositionAvailable && !returnPositionTarget && saved) returnPositionTarget = { index: saved.index, offset: saved.offset };
+    if (!STATE.returnPositionAvailable || !returnPositionTarget || !STATE.results.length) DOM.returnToPositionBtn.hidden = true;
+    else DOM.returnToPositionBtn.hidden = Math.abs(DOM.resultsContainer.scrollTop - (getVirtualOffset(returnPositionTarget.index) + returnPositionTarget.offset)) < 240;
+  }
 }
 
 function updateLoadInfo() {
@@ -5610,6 +5618,7 @@ async function init() {
   setupSearchPositionSaving();
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   STATE.sessionRestored = await restoreSearchSession();
+  STATE.returnPositionAvailable = STATE.sessionRestored;
   setupReaderIntentWarming();
   STATE.isDark = localStorage.getItem("theme") !== "light";
   applyTheme();
@@ -5621,7 +5630,7 @@ async function init() {
   DOM.searchInput.addEventListener("input", debouncedSearch);
   const clearSearch = () => { DOM.searchInput.value = ""; STATE.query = ""; STATE.page = 1; STATE.results = []; STATE.restoreFromHistory = false; doSearch(false, true); DOM.searchInput.focus(); };
   DOM.clearSearchBtn?.addEventListener("click", clearSearch);
-  DOM.returnToPositionBtn?.addEventListener("click", () => { const saved = searchPositions.get(getSearchViewKey()); if (!saved) return; DOM.resultsContainer.scrollTop = getVirtualOffset(saved.index) + saved.offset; updateCurrentResultPosition(); });
+  DOM.returnToPositionBtn?.addEventListener("click", () => { if (!returnPositionTarget) return; DOM.resultsContainer.scrollTop = getVirtualOffset(returnPositionTarget.index) + returnPositionTarget.offset; STATE.returnPositionAvailable = false; returnPositionTarget = null; updateCurrentResultPosition(); });
   DOM.searchInput.addEventListener("compositionstart", function() {
     searchComposing = true;
     clearTimeout(composeSafetyTimer);
