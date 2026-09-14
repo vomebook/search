@@ -1722,7 +1722,6 @@ function cacheDOM() {
   DOM.localModeToggle = $("#local-mode-toggle");
   DOM.historyToggle = $("#history-toggle");
   DOM.historyDropdown = $("#search-history-dropdown");
-  DOM.clearSearchBtn = $("#clear-search-btn");
   DOM.returnToPositionBtn = $("#return-to-position-btn");
   DOM.multiToggleLabel = $("#multi-toggle-label");
   DOM.multiSelectToggle = $("#multi-select-toggle");
@@ -5685,8 +5684,6 @@ async function init() {
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
   DOM.searchInput.addEventListener("input", debouncedSearch);
-  const clearSearch = () => { clearTimeout(searchTimer); saveSearchViewSnapshot(); DOM.searchInput.value = ""; STATE.query = ""; STATE.page = 1; STATE.results = []; doSearch(false, true); DOM.searchInput.focus(); };
-  DOM.clearSearchBtn?.addEventListener("click", clearSearch);
   let positionEdit = null;
   const jumpToResult = value => {
     if (!/^\d+$/.test(value)) { updateCurrentResultPosition(); return; }

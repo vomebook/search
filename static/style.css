@@ -288,9 +288,8 @@ body.light .header-logo-icon-light {
   background: transparent;
   min-width: 0;
 }
-.search-input::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
-.search-clear-btn { display: block; flex: 0 0 auto; border: 0; background: transparent; color: var(--on-surface-variant); font-size: 20px; line-height: 1; padding: 2px 6px; cursor: pointer; }
-.search-clear-btn:hover { color: var(--on-surface); }
+/* Override the browser's inline hiding when the search field is empty. */
+.search-input::-webkit-search-cancel-button { opacity: 1 !important; pointer-events: auto !important; cursor: pointer; }
 
 .search-input::placeholder {
   color: var(--on-surface-variant);
