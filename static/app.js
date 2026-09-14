@@ -2497,6 +2497,9 @@ function tryRestoreSearchPosition(key, options = {}) {
   const previous = positionRestore?.key === key && positionRestore.failed && !options.position ? positionRestore : null;
   let position = options.position || previous?.position || searchPositions.get(key);
   if (!validSearchPosition(position)) return false;
+  clearTimeout(searchTimer);
+  clearTimeout(filterSearchTimer);
+  filterSearchTimer = null;
   if (!options.position && positionRestore?.key === key && !positionRestore.failed) return true;
   cancelPositionRestore();
   returnPositionTarget = null;
@@ -2897,6 +2900,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
   if (!preserveRestore) cancelPositionRestore();
   clearTimeout(filterSearchTimer);
+  filterSearchTimer = null;
   clearTimeout(searchTimer);
   if (searchAbortController) searchAbortController.abort();
   if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
@@ -3219,6 +3223,8 @@ function doSearch(append, fromStart = false, restorePosition = false) {
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
   if (!append) {
     clearTimeout(searchTimer);
+    clearTimeout(filterSearchTimer);
+    filterSearchTimer = null;
     saveSearchViewSnapshot();
     cancelPositionRestore();
     prepareReturnPosition(getSearchViewKey(), !fromStart);
