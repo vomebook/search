@@ -4072,6 +4072,7 @@ function updateLoadInfo() {
   }
   DOM.loadInfo.style.display = "";
   DOM.totalCount.textContent = STATE.total.toLocaleString();
+  DOM.currentResultPosition.style.setProperty("--position-width", String(Math.max(1, STATE.total)).length + "ch");
   updateCurrentResultPosition();
   requestAnimationFrame(updateScrollTrack);
 }
