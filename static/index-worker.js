@@ -1,6 +1,9 @@
 const WORKER_PROTOCOL_VERSION = 1;
 const MAX_PAGE_SIZE = 500;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
+// Bump when matching, filtering, collation or public record semantics change.
+const SEARCH_SEMANTICS_VERSION = "worker-search-v1";
+let snapshotGeneration = null;
 
 let records = [];
 let recordIds = [];
@@ -122,7 +125,23 @@ async function fetchGzipJSON(url) {
     throw protocolError("GZIP_UNAVAILABLE", "Streaming gzip decompression is unavailable");
   }
   const stream = response.body.pipeThrough(new DecompressionStream("gzip"));
-  return JSON.parse(await new Response(stream).text());
+  return new Response(stream).text();
+}
+
+async function installCorpus(data, source) {
+  let fingerprint = null;
+  if (typeof crypto !== "undefined" && crypto.subtle && typeof TextEncoder !== "undefined") {
+    const bytes = new TextEncoder().encode(source || JSON.stringify(data));
+    const hash = await crypto.subtle.digest("SHA-256", bytes);
+    // Browser upgrades may change ICU collation; only reuse within that runtime.
+    const runtime = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    const versionHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SEARCH_SEMANTICS_VERSION + runtime));
+    const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
+    fingerprint = "worker:" + hex(versionHash) + ":" + hex(hash);
+  }
+  const result = replaceCorpus(decodeSearchPayload(data));
+  snapshotGeneration = fingerprint;
+  return result;
 }
 
 function stableRecordId(record, occurrence) {
@@ -168,6 +187,7 @@ function scheduleSortOrders(expectedGeneration) {
 }
 
 function replaceCorpus(nextRecords) {
+  snapshotGeneration = null;
   if (sortBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(sortBuildTimer);
   searchOrderCache.clear();
   records = nextRecords;
@@ -338,7 +358,7 @@ function pageResult(indices, params) {
     page,
     pageSize,
     generation,
-    snapshot_generation: `worker:${corpusInstance}:${generation}`,
+    snapshot_generation: snapshotGeneration || `worker:${corpusInstance}:${generation}`,
   };
   if (typeof params.anchorId === "string") {
     result.anchor_index = indices.findIndex(index => {
@@ -503,8 +523,11 @@ function protocolError(code, message) {
 
 async function dispatch(type, payload) {
   if (type === "handshake") return { protocol: WORKER_PROTOCOL_VERSION };
-  if (type === "load-corpus") return replaceCorpus(decodeSearchPayload(await fetchGzipJSON(payload.url)));
-  if (type === "replace-corpus") return replaceCorpus(decodeSearchPayload(payload.data));
+  if (type === "load-corpus") {
+    const source = await fetchGzipJSON(payload.url);
+    return installCorpus(JSON.parse(source), source);
+  }
+  if (type === "replace-corpus") return installCorpus(payload.data);
   if (!records.length) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
   if (type === "metadata") return Object.assign({ generation }, metadata);
   if (type === "local-search") return searchLocal(payload || {});

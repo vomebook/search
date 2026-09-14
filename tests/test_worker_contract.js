@@ -42,19 +42,24 @@ function compact(input) {
   };
 }
 
-function makeWorker() {
+function makeWorker(workerSource = source) {
   const listeners = {};
   const messages = [];
   const context = {
     console,
     Math,
+    TextEncoder: require('util').TextEncoder,
+    crypto: {subtle: {digest: async (_algorithm, bytes) => {
+      const hash = require('crypto').createHash('sha256').update(bytes).digest();
+      return hash.buffer.slice(hash.byteOffset, hash.byteOffset + hash.byteLength);
+    }}},
     self: {
       addEventListener(type, listener) { listeners[type] = listener; },
       postMessage(message) { messages.push(clone(message)); },
     },
   };
   vm.createContext(context);
-  vm.runInContext(source, context, { filename: "static/index-worker.js" });
+  vm.runInContext(workerSource, context, { filename: "static/index-worker.js" });
   async function send(type, payload, options) {
     const settings = Object.assign({ protocol: PROTOCOL, id: "request" }, options || {});
     const before = messages.length;
@@ -115,6 +120,22 @@ test("same-count corpus replacement changes snapshot identity and relocates anch
   assert.strictEqual(old.total, current.total);
   assert.notStrictEqual(old.snapshot_generation, current.snapshot_generation);
   assert.strictEqual(current.anchor_index, records.length - 1);
+});
+test("snapshot identity survives Worker restarts but changes with content and search rules", async () => {
+  const first = await loaded();
+  const second = await loaded();
+  const old = await first.worker.request('local-search', {sort: 'name'});
+  const current = await second.worker.request('local-search', {sort: 'name'});
+  assert.strictEqual(old.snapshot_generation, current.snapshot_generation);
+  assert.deepStrictEqual(old.ids, current.ids);
+  await second.worker.request('replace-corpus', {data: compact(records)});
+  assert.strictEqual(old.snapshot_generation, (await second.worker.request('local-search', {})).snapshot_generation);
+  const changed = makeWorker(source.replace('worker-search-v1', 'worker-search-v2'));
+  await changed.request('replace-corpus', {data: compact(records)});
+  assert.notStrictEqual(old.snapshot_generation, (await changed.request('local-search', {})).snapshot_generation);
+  const resized = records.map(record => Object.assign({}, record, {Size: 1}));
+  await second.worker.request('replace-corpus', {data: compact(resized)});
+  assert.notStrictEqual(old.snapshot_generation, (await second.worker.request('local-search', {})).snapshot_generation);
 });
 test("random reader selection uses supported original extensions", async () => {
   const harness = await loaded([
