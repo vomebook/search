@@ -3666,7 +3666,8 @@ function scheduleVirtualRender() {
 
 function renderVisible() {
   const items = STATE.results;
-  const len = items.length;
+  const len = resultWindow ? resultWindow.total : items.length;
+  ensureVirtualHeights(len);
   if (len === 0) {
     updateScrollTrack();
     return;
@@ -4002,7 +4003,6 @@ function updateCurrentResultPosition() {
     const index = resultWindow ? findVirtualIndex(DOM.resultsContainer.scrollTop) : Math.min(STATE.total - 1, Math.max(0, Math.floor(DOM.resultsContainer.scrollTop / Math.max(1, VSCROLL.estimatedHeight))));
     if (document.activeElement !== label) label.value = index + 1;
   }
-  if (DOM.returnToPositionBtn) { const saved = searchPositions.get(getSearchViewKey()); DOM.returnToPositionBtn.hidden = !(saved && STATE.results.length && Math.abs(DOM.resultsContainer.scrollTop - getVirtualOffset(saved.index)) > 80); }
   if (DOM.returnToPositionBtn) {
     const saved = searchPositions.get(getSearchViewKey());
     if (STATE.returnPositionAvailable && !returnPositionTarget && saved) returnPositionTarget = { index: saved.index, offset: saved.offset };
@@ -4017,7 +4017,6 @@ function updateLoadInfo() {
     return;
   }
   DOM.loadInfo.style.display = "";
-  DOM.loadedCount.textContent = (resultWindow ? resultWindow.count : STATE.results.length).toLocaleString();
   DOM.totalCount.textContent = STATE.total.toLocaleString();
   updateCurrentResultPosition();
   requestAnimationFrame(updateScrollTrack);
