@@ -2639,7 +2639,13 @@ async function renderPdfText(page, shell) {
       } else span.style.position = "static";
       layer.appendChild(span);
     }
-    if (!positioned || !layer.textContent.trim()) layer.textContent = "";
+    if (!positioned)
+      layer.textContent =
+        text.items
+          .map((item) => item.str + (item.hasEOL ? "\n" : " "))
+          .join("")
+          .trim() || "此页没有可提取文本";
+    else if (!layer.textContent.trim()) layer.textContent = "此页没有可提取文本";
     shell.dataset.textReady = "1";
     highlightPdfText(shell);
   } catch (error) {
