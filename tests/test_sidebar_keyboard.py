@@ -61,6 +61,48 @@ class SidebarKeyboardTests(unittest.TestCase):
         }''')
         self.assertEqual(result, dict(rows=2, selected=True, final=3, childChecked=False))
 
+    def test_metadata_deadline_covers_body_and_allows_retry_without_breaker_failure(self):
+        self.page.clock.install()
+        self.page.evaluate('''() => {
+          repoApiCache=null;repoApiPending=null;extensionApiCache.clear();folderTreeCache.clear();
+          apiAvailable=true;noteApiSuccess();window.metadataResults=[];window.metadataCalls=0;
+          const native=window.fetch;
+          window.fetch=(url,options)=>String(url).includes('/api/repos') || String(url).includes('metadata-refactor')
+            ? (metadataCalls++, Promise.resolve({ok:true,json:()=>new Promise((resolve,reject)=>{
+                options.signal.addEventListener('abort',()=>reject(new DOMException('timed out','AbortError')));
+              })})) : native(url,options);
+          fetchRepos().then(value=>metadataResults.push(value));
+          fetchRepos().then(value=>metadataResults.push(value));
+          fetchExtensions('metadata-refactor').then(value=>metadataResults.push(value));
+          fetchFolderTree('metadata-refactor').then(value=>metadataResults.push(value));
+        }''')
+        self.assertEqual(self.page.evaluate('metadataCalls'), 3)
+        self.page.clock.fast_forward(5001)
+        self.page.wait_for_timeout(20)
+        self.assertEqual(self.page.evaluate('metadataResults'), [None] * 4)
+        self.assertEqual(self.page.evaluate('[apiFailureCount,repoApiPending,extensionApiPending.size]'), [0, None, 0])
+        result = self.page.evaluate('''async () => {
+          window.fetch=()=>Promise.resolve(new Response('[]'));
+          return Promise.all([fetchRepos(),fetchExtensions('metadata-refactor'),fetchFolderTree('metadata-refactor')]);
+        }''')
+        self.assertEqual(result, [[], [], []])
+
+    def test_metadata_errors_are_not_cached_and_retain_circuit_breaker(self):
+        result = self.page.evaluate('''async () => {
+          repoApiCache=null;repoApiPending=null;extensionApiCache.clear();folderTreeCache.clear();
+          const request=()=>Promise.all([fetchRepos(),fetchExtensions('invalid-metadata'),fetchFolderTree('invalid-metadata')]);
+          const outcomes=[];
+          for(const status of [503,200]) {
+            noteApiSuccess();
+            window.fetch=()=>Promise.resolve(new Response('{"error":"unavailable"}',{status}));
+            outcomes.push({values:await request(),failures:apiFailureCount,available:apiAvailable});
+          }
+          noteApiSuccess();window.fetch=()=>Promise.resolve(new Response('[]'));
+          return {outcomes,recovered:await request()};
+        }''')
+        self.assertEqual(result, dict(outcomes=[dict(values=[None] * 3, failures=3, available=False)] * 2,
+                                      recovered=[[], [], []]))
+
     def test_directory_requests_coalesce_and_clear_failed_body_for_retry(self):
         self.page.clock.install()
         self.page.evaluate('''() => {
