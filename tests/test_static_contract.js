@@ -172,7 +172,7 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /function scheduleVirtualRender/);
   assert.match(app, /scheduleVirtualRender\(\)/);
   assert.match(app, /if \(!dragFrame\) dragFrame = requestAnimationFrame\(applyPendingScrollTop\)/);
-  assert.match(app, /DOM\.resultsContainer\.scrollTop = pendingScrollTop;\s*pendingScrollTop = null;\s*renderVisible\(\);/);
+  assert.match(app, /setResultScrollTop\(pendingScrollTop\);\s*pendingScrollTop = null;\s*renderVisible\(\);/);
   assert.match(app, /VSCROLL\.isDraggingThumb\s*\? viewH \* 0\.35/);
   assert.match(app, /if \(!VSCROLL\.isDraggingThumb && measureHeights\(start, end, anchor\)\)/);
   assert.match(app, /VSCROLL\.dragMetrics = null/);
