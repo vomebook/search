@@ -119,13 +119,17 @@ var convertedReaderRecords = null;
 var READER_ASSETS_COMPRESSED_LIMIT = 32 * 1024 * 1024;
 var READER_ASSETS_EXPANDED_LIMIT = 128 * 1024 * 1024;
 
-function readBoundedReaderStream(stream, limit) {
+function readBoundedReaderStream(stream, limit, signal) {
   if (!stream || typeof stream.getReader !== "function") throw new Error("READER_ASSETS_UNAVAILABLE");
   var reader = stream.getReader(), chunks = [], total = 0;
+  var abort = function() { reader.cancel().catch(function() {}); };
+  if (signal) signal.addEventListener("abort", abort, { once: true });
   return (async function() {
     try {
       while (true) {
+        if (signal && signal.aborted) throw new DOMException("Reader assets timed out", "AbortError");
         var part = await reader.read();
+        if (signal && signal.aborted) throw new DOMException("Reader assets timed out", "AbortError");
         if (part.done) break;
         if (!part.value || !part.value.byteLength) continue;
         total += part.value.byteLength;
@@ -138,28 +142,41 @@ function readBoundedReaderStream(stream, limit) {
     } catch (error) {
       await Promise.resolve(reader.cancel(error)).catch(function() { return undefined; });
       throw error;
+    } finally {
+      if (signal) signal.removeEventListener("abort", abort);
+      reader.releaseLock();
     }
   })();
 }
 
-function loadReaderAssets() {
-  if (readerAssets) return Promise.resolve(readerAssets);
-  if (Date.now() < readerAssetsRetryAt) return Promise.resolve({});
-  if (readerAssetsPending) return readerAssetsPending;
-  readerAssetsPending = fetchWithTimeout("/search/data/reader_assets.json.gz", 10000).then(async function(response) {
+async function fetchReaderAssetMap() {
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, 10000);
+  try {
+    var response = await fetch("/search/data/reader_assets.json.gz", { signal: controller.signal });
     if (!response.ok || !response.body || typeof DecompressionStream === "undefined") throw new Error("READER_ASSETS_UNAVAILABLE");
     var compressedLength = Number(response.headers && response.headers.get && response.headers.get("content-length"));
     if (Number.isFinite(compressedLength) && compressedLength > READER_ASSETS_COMPRESSED_LIMIT) {
       await Promise.resolve().then(function() { return response.body.cancel(); }).catch(function() { return undefined; });
       throw new Error("READER_ASSETS_LIMIT");
     }
-    var compressed = await readBoundedReaderStream(response.body, READER_ASSETS_COMPRESSED_LIMIT);
+    var compressed = await readBoundedReaderStream(response.body, READER_ASSETS_COMPRESSED_LIMIT, controller.signal);
     var expandedStream = new Response(compressed).body.pipeThrough(new DecompressionStream("gzip"));
-    var expanded = await readBoundedReaderStream(expandedStream, READER_ASSETS_EXPANDED_LIMIT);
-    return JSON.parse(new TextDecoder().decode(expanded));
-  }).then(function(data) {
+    var expanded = await readBoundedReaderStream(expandedStream, READER_ASSETS_EXPANDED_LIMIT, controller.signal);
+    var data = JSON.parse(new TextDecoder().decode(expanded));
     if (!data || data.v !== 1 || !data.f || typeof data.f !== "object") throw new Error("READER_ASSETS_UNAVAILABLE");
-    readerAssets = data.f;
+    return data.f;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function loadReaderAssets() {
+  if (readerAssets) return Promise.resolve(readerAssets);
+  if (Date.now() < readerAssetsRetryAt) return Promise.resolve({});
+  if (readerAssetsPending) return readerAssetsPending;
+  readerAssetsPending = fetchReaderAssetMap().then(function(assets) {
+    readerAssets = assets;
     readerAssetsRetryAt = 0;
     convertedReaderRecords = null;
     return readerAssets;
@@ -277,8 +294,7 @@ function normalizeReaderReturnUrl(rawUrl) {
 }
 
 var readerOverlay = null;
-var readerReturnFocus = null;
-var readerBackgroundState = [];
+const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html");
 var readerReturnScrollState = null;
 var readerReturnRestoreGeneration = 0;
 var readerReturnRestoreActive = false;
@@ -322,27 +338,10 @@ function restoreReaderReturnScroll() {
   restore();
   if (readerReturnScrollState === saved) requestAnimationFrame(function() { requestAnimationFrame(restore); });
 }
-function clearReaderNavigation(url) {
-  try {
-    var token = url.searchParams.get("nav");
-    if (token) sessionStorage.removeItem("reader-return:" + token);
-    var saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
-    if (saved && saved.readerUrl === url.href) sessionStorage.removeItem("reader-navigation-current");
-  } catch (_) {}
-}
 function closeReaderOverlay(restoreFocus, restoreScroll) {
   if (!readerOverlay) return false;
-  try { readerOverlay.contentWindow?.postMessage({ type: "voice-reader-abort" }, location.origin); } catch (_) {}
-  readerOverlay.remove();
+  const returnFocus = readerNavigation.unmount();
   readerOverlay = null;
-  for (var i = 0; i < readerBackgroundState.length; i++) {
-    var state = readerBackgroundState[i];
-    if (!state.inert) state.element.removeAttribute("inert");
-    if (state.ariaHidden === null) state.element.removeAttribute("aria-hidden");
-    else state.element.setAttribute("aria-hidden", state.ariaHidden);
-  }
-  readerBackgroundState = [];
-  document.body.classList.remove("reader-overlay-open");
   if (restoreScroll !== false) {
     var saved = readerReturnScrollState;
     var snapshot = saved && saved.viewKey ? searchViewSnapshots.get(saved.viewKey) : null;
@@ -355,8 +354,7 @@ function closeReaderOverlay(restoreFocus, restoreScroll) {
     }
     restoreReaderReturnScroll();
   }
-  if (restoreFocus !== false && readerReturnFocus && readerReturnFocus.isConnected) readerReturnFocus.focus();
-  readerReturnFocus = null;
+  if (restoreFocus !== false && returnFocus && returnFocus.isConnected) returnFocus.focus();
   return true;
 }
 
@@ -365,29 +363,8 @@ function openReaderOverlay(url, addHistory) {
     readerReturnScrollState = captureReaderReturnScroll();
     saveSearchViewSnapshot(readerReturnScrollState && readerReturnScrollState.viewKey || getSearchViewKey());
   }
-  var frame = document.createElement("iframe");
-  frame.className = "reader-overlay";
-  frame.title = "在线阅读";
-  frame.src = url.href;
-  readerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  readerOverlay = frame;
-  document.body.classList.add("reader-overlay-open");
-  document.body.appendChild(frame);
-  frame.focus();
-  readerBackgroundState = Array.from(document.body.children).filter(function(element) { return element !== frame; }).map(function(element) {
-    var state = { element: element, inert: element.hasAttribute("inert"), ariaHidden: element.getAttribute("aria-hidden") };
-    element.setAttribute("inert", "");
-    element.setAttribute("aria-hidden", "true");
-    return state;
-  });
-  frame.addEventListener("load", function() { if (readerOverlay === frame) frame.focus(); }, { once: true });
-  if (addHistory !== false) {
-    var shareUrl = new URL(url.href);
-    shareUrl.searchParams.delete("return");
-    shareUrl.searchParams.delete("nav");
-      try { sessionStorage.setItem("reader-navigation-current", JSON.stringify({ shareUrl: shareUrl.href, readerUrl: url.href, returnScroll: readerReturnScrollState })); } catch (_) {}
-    history.pushState({ voiceReaderOverlay: true, readerUrl: url.href }, "", shareUrl.href);
-  }
+  readerOverlay = readerNavigation.mount(url);
+  if (addHistory !== false) readerNavigation.remember(url, readerReturnScrollState);
 }
 
 function restoreReaderOverlay(state) {
@@ -396,18 +373,14 @@ function restoreReaderOverlay(state) {
     return;
   }
   try {
-    var url = new URL(state.readerUrl, location.origin);
-    if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return;
+    var url = readerNavigation.parse(state.readerUrl);
     closeReaderOverlay(false, false);
     openReaderOverlay(url, false);
   } catch (_) {}
 }
 
 function handleReaderMessage(event) {
-  if (!readerOverlay || event.origin !== location.origin) return;
-  if (event.source !== readerOverlay.contentWindow) {
-    try { if (!event.source || event.source.frameElement !== readerOverlay) return; } catch (_) { return; }
-  }
+  if (!readerNavigation.accepts(event)) return;
   var message = event.data || {};
   if (message.type === "voice-reader-close") {
     try {
@@ -415,7 +388,7 @@ function handleReaderMessage(event) {
       var returnUrl = readerUrl.searchParams.get("return");
       var target = returnUrl && new URL(returnUrl, location.origin);
       if ((!history.state || !history.state.voiceReaderOverlay) && target && target.origin === location.origin && target.pathname === "/search/") {
-        var returnFocus = readerReturnFocus;
+        var returnFocus = readerNavigation.returnFocus;
         closeReaderOverlay(false);
         history.replaceState(null, "", target.href);
         ROUTER.apply();
@@ -435,18 +408,7 @@ function handleReaderMessage(event) {
   }
   if (message.type === "voice-reader-open") {
     try {
-      var nextReader = new URL(message.url, location.origin);
-      if (nextReader.origin !== location.origin || nextReader.pathname !== "/search/static/reader.html") return;
-      var currentReader = new URL(readerOverlay.src);
-      if (!nextReader.searchParams.get("return") && currentReader.searchParams.get("return")) nextReader.searchParams.set("return", currentReader.searchParams.get("return"));
-      if (!nextReader.searchParams.get("nav") && currentReader.searchParams.get("nav")) nextReader.searchParams.set("nav", currentReader.searchParams.get("nav"));
-      var shareReader = new URL(nextReader.href); shareReader.searchParams.delete("return"); shareReader.searchParams.delete("nav");
-      sessionStorage.setItem("reader-navigation-current", JSON.stringify({ shareUrl: shareReader.href, readerUrl: nextReader.href, returnScroll: readerReturnScrollState }));
-      history.replaceState({ voiceReaderOverlay: true, readerUrl: nextReader.href }, "", shareReader.href);
-      var returnFocus = readerReturnFocus;
-      closeReaderOverlay(false, false);
-      openReaderOverlay(nextReader, false);
-      readerReturnFocus = returnFocus;
+      readerOverlay = readerNavigation.replace(message.url, readerReturnScrollState);
     } catch (_) {}
     return;
   }
@@ -466,18 +428,9 @@ function handleReaderMessage(event) {
 
 function navigateToReader(rawUrl, returnUrl) {
   returnUrl = normalizeReaderReturnUrl(returnUrl || location.href);
-  var url = new URL(syncReaderFolderFilter(rawUrl), location.origin);
-  if (url.origin !== location.origin || url.pathname !== "/search/static/reader.html") return false;
-  url.searchParams.set("return", returnUrl);
-  try {
-    var previous = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
-    if (previous && previous.readerUrl) clearReaderNavigation(new URL(previous.readerUrl, location.origin));
-    var token = typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : Array.from(crypto.getRandomValues(new Uint32Array(4)), function(value) { return value.toString(16).padStart(8, "0"); }).join("");
-    sessionStorage.setItem("reader-return:" + token, new URL(returnUrl, location.origin).href);
-    url.searchParams.set("nav", token);
-  } catch (_) {}
+  var url;
+  try { url = readerNavigation.prepare(syncReaderFolderFilter(rawUrl), returnUrl); }
+  catch (_) { return false; }
   openReaderOverlay(url);
   return true;
 }
@@ -485,10 +438,9 @@ function navigateToReader(rawUrl, returnUrl) {
 function restoreReaderFromSession() {
   if (readerOverlay) return;
   try {
-    var saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+    var saved = readerNavigation.saved();
     if (!saved || saved.shareUrl !== location.href || !saved.readerUrl) return;
-    var readerUrl = new URL(saved.readerUrl, location.origin);
-    if (readerUrl.origin !== location.origin || readerUrl.pathname !== "/search/static/reader.html") return;
+    var readerUrl = readerNavigation.parse(saved.readerUrl);
     readerReturnScrollState = saved.returnScroll || null;
     history.replaceState({ voiceReaderOverlay: true, readerUrl: readerUrl.href }, "", saved.shareUrl);
     openReaderOverlay(readerUrl, false);

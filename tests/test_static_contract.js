@@ -203,7 +203,7 @@ test("Reader return and search snapshot state is preserved", () => {
     "function restoreReaderReturnScroll",
     "viewKey: \"\"",
     "heightCache: new Map()",
-    "returnScroll: readerReturnScrollState",
+    "readerNavigation.remember(url, readerReturnScrollState)",
     "if (saved.viewKey && saved.viewKey !== getSearchViewKey())",
     "if (readerReturnScrollState && !readerReturnRestoreActive)",
   ]) assert.ok(app.includes(value), value);
@@ -355,7 +355,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /PDF_MANIFEST_INVALID/);
   assert.match(app, /page-manifest\.json/);
   assert.match(app, /reader_assets\.json\.gz/);
-  assert.match(app, /fetchWithTimeout\("\/search\/data\/reader_assets\.json\.gz", 10000\)/);
+  assert.match(app, /fetchReaderAssetMap\(\)/);
   assert.match(app, /readerAssetsRetryAt = Date\.now\(\) \+ 5000/);
   assert.doesNotMatch(app, /readerAssets = \{\};\s*convertedReaderRecords = \[\];/);
   assert.doesNotMatch(app, /var currentRepo = STATE\.repoFull;\s*await loadReaderAssets\(\)/);
@@ -366,9 +366,12 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /getReaderLink\(readerRecord\)/);
   assert.match(app, /navigateToReader\(actionBtn\.dataset\.readerUrl\)/);
   assert.match(app, /navigateToReader\(readerLink\)/);
-  assert.match(app, /url\.searchParams\.set\("return", returnUrl\)/);
-  assert.match(app, /sessionStorage\.setItem\("reader-return:" \+ token/);
-  assert.match(app, /crypto\.getRandomValues\(new Uint32Array\(4\)\)/);
+  const navigation = fs.readFileSync('static/reader-navigation.js', 'utf8');
+  assert.match(navigation, /url\.searchParams\.set\("return", returnUrl\)/);
+  assert.match(navigation, /sessionStorage\.setItem\("reader-return:" \+ token/);
+  assert.match(navigation, /crypto\.getRandomValues\(new Uint32Array\(4\)\)/);
+  assert.match(html, /reader-navigation\.js/);
+  assert.match(sw, /reader-navigation\.js/);
   assert.doesNotMatch(app, /openPendingWindow/);
   assert.match(reader, /new URL\(returnUrl, location\.origin\)/);
   assert.match(reader, /sessionStorage\.removeItem\(returnHistoryKey\)/);

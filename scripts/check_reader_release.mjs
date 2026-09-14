@@ -18,6 +18,7 @@ const required = [
   "reader.css",
   "reader.js",
   "reader-contract.js",
+  "reader-navigation.js",
   "reader-store.js",
   "reader-request-manager.js",
   "reader-chapter-repository.js",
@@ -119,6 +120,7 @@ function checkProject(root, artifact) {
 
 function crossCheck(githubRoot, hfRoot) {
   const exact = [
+    "reader-navigation.js",
     "reader.css",
     "reader-request-manager.js",
     "reader-chapter-repository.js",

@@ -87,6 +87,40 @@ class SidebarKeyboardTests(unittest.TestCase):
         }''')
         self.assertEqual(result, [[], [], []])
 
+    def test_reader_assets_body_deadline_releases_shared_load_and_retries(self):
+        self.page.clock.install()
+        self.page.evaluate('''() => {
+          readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;
+          window.assetCalls=0;window.assetResults=[];window.assetAborted=false;
+          const native=window.fetch;
+          window.fetch=(url,options)=>String(url).endsWith('/reader_assets.json.gz')
+            ? (assetCalls++,Promise.resolve(new Response(new ReadableStream({start(controller){
+                options.signal.addEventListener('abort',()=>{
+                  assetAborted=true;controller.error(new DOMException('timed out','AbortError'));
+                });
+              }})))) : native(url,options);
+          loadReaderAssets().then(value=>assetResults.push(value));
+          loadReaderAssets().then(value=>assetResults.push(value));
+        }''')
+        self.assertEqual(self.page.evaluate('assetCalls'), 1)
+        self.page.clock.fast_forward(10001)
+        self.page.wait_for_timeout(20)
+        self.assertEqual(self.page.evaluate('assetResults'), [{}, {}])
+        self.assertEqual(self.page.evaluate('[assetAborted,readerAssetsPending,readerAssets]'), [True, None, None])
+        self.assertEqual(self.page.evaluate('loadReaderAssets()'), {})
+        self.assertEqual(self.page.evaluate('assetCalls'), 1)
+        self.page.clock.fast_forward(5001)
+        recovered = self.page.evaluate('''async () => {
+          const payload={v:1,f:{sample:{s:2,m:'p',p:'sample.pdf'}}};
+          window.fetch=()=>{assetCalls++;return Promise.resolve(new Response(
+            new Blob([JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('gzip'))));};
+          const value=await loadReaderAssets();
+          const cached=await loadReaderAssets();
+          return {value,cached,calls:assetCalls,pending:readerAssetsPending};
+        }''')
+        self.assertEqual(recovered, dict(value={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}},
+                                         cached={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}}, calls=2, pending=None))
+
     def test_metadata_errors_are_not_cached_and_retain_circuit_breaker(self):
         result = self.page.evaluate('''async () => {
           repoApiCache=null;repoApiPending=null;extensionApiCache.clear();folderTreeCache.clear();

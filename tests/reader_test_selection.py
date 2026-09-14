@@ -45,6 +45,7 @@ CATEGORY_METHODS = {
         "test_foliate_normalizes_legacy_chm_markup_and_keeps_resources",
     ),
     "navigation": (
+        "test_large_foliate_toc_keeps_a_bounded_dom_window",
         "test_reader_controls_honor_boundaries_and_keyboard_activation",
         "test_text_bookmark_uses_progress_excerpt_and_highlights_search",
         "test_full_text_search_lists_highlighted_snippets_and_jumps",
