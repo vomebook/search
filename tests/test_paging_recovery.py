@@ -87,6 +87,27 @@ class PagingRecoveryTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('pagingRequests.filter(page => page === 2).length'), 2)
         self.assertEqual(self.errors, [])
 
+    def test_loading_keeps_footer_height_and_does_not_show_status_text(self):
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.page.evaluate('''async()=>{
+          STATE.isMobile=true;applyMobileMode();
+          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        }''')
+        before = self.page.locator('#load-info').bounding_box()
+        self.reach_bottom()
+        self.assertTrue(self.page.locator('#paging-status').is_hidden())
+        self.assertNotIn('加载中', self.page.locator('#load-info').inner_text())
+        during = self.page.locator('#load-info').bounding_box()
+        self.assertEqual(during['height'], before['height'])
+        self.assertEqual(during['y'], before['y'])
+        self.page.evaluate("pagingMode='normal';releaseStalePage()")
+        self.page.wait_for_function('STATE._loadedPage >= 2 && !STATE.isLoading')
+        self.assertTrue(self.page.locator('#paging-status').is_hidden())
+        after = self.page.locator('#load-info').bounding_box()
+        self.assertEqual(after['height'], before['height'])
+        self.assertEqual(after['y'], before['y'])
+        self.assertEqual(self.errors, [])
+
     def test_failure_retries_once_then_button_recovers_same_page(self):
         self.reach_bottom()
         self.expire_pending('fail')
