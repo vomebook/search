@@ -4,6 +4,7 @@ const PRECACHE_URLS = [
   "/search/",
   "/search/static/style.css",
   "/search/static/reader-contract.js",
+  "/search/static/reader-navigation.js",
   "/search/static/reader-store.js",
   "/search/static/reader-request-manager.js",
   "/search/static/reader-chapter-repository.js",
@@ -27,6 +28,7 @@ const PRECACHE_URLS = [
   "/search/icons/icon-512.png"
 ];
 const READER_RUNTIME_PATHS = new Set([
+  "/search/static/reader-navigation.js",
   "/search/static/reader-contract.js",
   "/search/static/reader-store.js",
   "/search/static/reader-request-manager.js",
