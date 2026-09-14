@@ -1693,6 +1693,7 @@ function cacheDOM() {
   DOM.mobileSelectedCount = $("#mobile-selected-count");
   DOM.loadedCount = $("#loaded-count");
   DOM.totalCount = $("#total-count");
+  DOM.currentResultPosition = $("#current-result-position");
   DOM.scrollTrack = $("#scroll-track");
   DOM.scrollThumb = $("#scroll-thumb");
   DOM.hitokoto = $("#hitokoto");
@@ -3999,7 +4000,7 @@ function updateCurrentResultPosition() {
   label.hidden = !(STATE.results.length || STATE.total);
   if (STATE.results.length || STATE.total) {
     const index = resultWindow ? findVirtualIndex(DOM.resultsContainer.scrollTop) : Math.min(STATE.total - 1, Math.max(0, Math.floor(DOM.resultsContainer.scrollTop / Math.max(1, VSCROLL.estimatedHeight))));
-    label.textContent = `当前第 ${(index + 1).toLocaleString()} 条 · `;
+    if (document.activeElement !== label) label.value = index + 1;
   }
   if (DOM.returnToPositionBtn) { const saved = searchPositions.get(getSearchViewKey()); DOM.returnToPositionBtn.hidden = !(saved && STATE.results.length && Math.abs(DOM.resultsContainer.scrollTop - getVirtualOffset(saved.index)) > 80); }
   if (DOM.returnToPositionBtn) {
@@ -5633,6 +5634,17 @@ async function init() {
   DOM.searchInput.addEventListener("input", debouncedSearch);
   const clearSearch = () => { DOM.searchInput.value = ""; STATE.query = ""; STATE.page = 1; STATE.results = []; STATE.restoreFromHistory = false; doSearch(false, true); DOM.searchInput.focus(); };
   DOM.clearSearchBtn?.addEventListener("click", clearSearch);
+  const jumpToResult = () => {
+    const requested = Number(DOM.currentResultPosition?.value);
+    if (!Number.isFinite(requested) || requested < 1 || !STATE.total) return;
+    const index = Math.min(STATE.total - 1, Math.floor(requested) - 1);
+    if (resultWindow) DOM.resultsContainer.scrollTop = getVirtualOffset(index);
+    else if (index < STATE.results.length) DOM.resultsContainer.scrollTop = getVirtualOffset(index);
+    else { showToast("正在加载该位置附近的结果"); loadResultWindowPage(Math.floor(index / STATE.pageSize) + 1); DOM.resultsContainer.scrollTop = getVirtualOffset(index); }
+    updateCurrentResultPosition();
+  };
+  DOM.currentResultPosition?.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); jumpToResult(); e.target.blur(); } });
+  DOM.currentResultPosition?.addEventListener("blur", jumpToResult);
   DOM.returnToPositionBtn?.addEventListener("click", () => { if (!returnPositionTarget) return; DOM.resultsContainer.scrollTop = getVirtualOffset(returnPositionTarget.index) + returnPositionTarget.offset; STATE.returnPositionAvailable = false; returnPositionTarget = null; updateCurrentResultPosition(); });
   DOM.searchInput.addEventListener("compositionstart", function() {
     searchComposing = true;
