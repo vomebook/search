@@ -1314,6 +1314,21 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.wait_for_function("() => document.querySelectorAll('.foliate-continuous article[data-section]:not(.foliate-section-placeholder)').length <= 12")
         context.close()
 
+    def test_large_foliate_toc_keeps_a_bounded_dom_window(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        page = context.new_page()
+        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters(600)))
+        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/large-toc.epub"
+        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=LargeToc", wait_until="domcontentloaded")
+        page.wait_for_function("() => document.querySelector('#toc-list')?.classList.contains('toc-list-virtualized')")
+        page.locator("#history").click()
+        self.assertLess(page.locator("#toc-list .toc-item").count(), 100)
+        page.evaluate("""() => { const panel = document.querySelector('#toc-panel'); panel.scrollTop = 20000; panel.dispatchEvent(new Event('scroll')); }""")
+        page.wait_for_function("() => [...document.querySelectorAll('#toc-list .toc-item')].some(row => row.textContent.includes('章节 501'))")
+        self.assertLess(page.locator("#toc-list .toc-item").count(), 100)
+        context.close()
+
     def test_foliate_full_search_uses_continuous_reader_navigation(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
