@@ -61,6 +61,9 @@ class SearchPositionTests(unittest.TestCase):
           STATE.filterExtensions=[]; STATE.query='paging-original'; DOM.searchInput.value=STATE.query;
           scheduleFilterSearch();
         }''')
+        self.page.wait_for_function('!STATE.isLoading')
+        self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
+        self.page.locator('#return-to-position-btn').click()
         self.assert_position()
 
     def test_history_click_recovers_evicted_position(self):
@@ -81,7 +84,7 @@ class SearchPositionTests(unittest.TestCase):
             if(args[1]===2) await new Promise(resolve=>{window.releaseRestore=resolve});
             return data;
           };
-          STATE.query='paging-original'; doSearch();
+          STATE.query='paging-original'; doSearch(false,false,true);
         }''')
         self.page.wait_for_function('!!window.releaseRestore')
         self.page.evaluate("STATE.query='paging-latest'; doSearch(); releaseRestore()")
@@ -97,7 +100,7 @@ class SearchPositionTests(unittest.TestCase):
           searchViewSnapshots.clear(); window.positionFail=true;
           const fetchPage=fetchPositionPage;
           fetchPositionPage=(...args)=>window.positionFail?Promise.reject(new Error('offline')):fetchPage(...args);
-          STATE.query='paging-original'; doSearch();
+          STATE.query='paging-original'; doSearch(false,false,true);
         }''')
         self.page.get_by_text('重试恢复', exact=True).wait_for()
         self.page.evaluate('window.positionFail=false')
@@ -118,7 +121,7 @@ class SearchPositionTests(unittest.TestCase):
         }'''))
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear(); STATE.query=''; doSearch()")
+        self.page.evaluate("searchViewSnapshots.clear(); STATE.query=''; doSearch(false,false,true)")
         self.page.wait_for_function('!positionRestore && !STATE.isLoading')
         self.page.wait_for_function('''saved=>{
           const index=findVirtualIndex(DOM.resultsContainer.scrollTop);
@@ -170,7 +173,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate('searchViewSnapshots.clear()')
         self.page.evaluate(script)
-        self.page.evaluate("STATE.query='paging-original'; doSearch()")
+        self.page.evaluate("STATE.query='paging-original'; doSearch(false,false,true)")
 
     def test_retry_continues_from_failed_page(self):
         self.begin_rebuild('''() => {
@@ -197,7 +200,8 @@ class SearchPositionTests(unittest.TestCase):
             return {...data,generation:changed?'new':'old'};
           };
         }''')
-        self.page.get_by_text('搜索数据已更新，请重试恢复', exact=True).wait_for()
+        self.page.locator('#retry-position-btn').wait_for()
+        self.assertEqual(self.page.locator('#search-position-status').get_attribute('title'), '搜索数据已更新，请重试恢复')
         self.assertEqual(self.page.evaluate('positionRestore.results.length'), 0)
         self.page.get_by_text('重试恢复', exact=True).click()
         self.assert_position()
@@ -265,7 +269,8 @@ class SearchPositionTests(unittest.TestCase):
           const original=fetchPositionPage;window.coherent=false;
           fetchPositionPage=async (...args)=>({...await original(...args),generation:coherent||args[1]===3?'new':'old'});
         }''')
-        self.page.get_by_text('搜索数据已更新，请重试恢复', exact=True).wait_for()
+        self.page.locator('#retry-position-btn').wait_for()
+        self.assertEqual(self.page.locator('#search-position-status').get_attribute('title'), '搜索数据已更新，请重试恢复')
         self.assertEqual(self.page.evaluate('[positionRestore.results.length,positionRestore.ready.size,positionRestore.page]'), [0,0,0])
         self.page.evaluate('coherent=true')
         self.page.get_by_text('重试恢复', exact=True).click()

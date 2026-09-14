@@ -116,6 +116,10 @@ if (!document.hidden && navigator.onLine) {
       <div class="status-right">
         <button id="clear-filters-btn" class="text-btn" style="display:none">清空筛选</button>
         <button id="return-to-position-btn" class="text-btn" type="button" hidden>回到上次位置</button>
+        <span id="search-position-status" hidden>
+          <button id="retry-position-btn" class="text-btn" type="button" hidden>重试恢复</button>
+          <button id="restart-position-btn" class="text-btn" type="button">从头浏览</button>
+        </span>
         <div class="sort-group">
           <span class="sort-label">排序:</span>
           <select id="sort-select" class="sort-select">
@@ -153,7 +157,7 @@ if (!document.hidden && navigator.onLine) {
     </div>
     <div id="load-info" class="load-info" style="display:none">
       <span id="mobile-selected-count" class="mobile-selected-count" style="display:none"></span>
-       当前第 <input id="current-result-position" class="current-result-position" type="number" min="1" inputmode="numeric" aria-label="当前结果条目号"> / <span id="total-count">0</span> 条
+       当前第 <input id="current-result-position" class="current-result-position" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="当前结果条目号" title="点击编辑，Enter 跳转，Escape 取消"> / <span id="total-count">0</span> 条
     </div>
     <div id="scroll-track" class="scroll-track">
       <div id="scroll-thumb" class="scroll-thumb"></div>
