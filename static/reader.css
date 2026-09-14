@@ -595,6 +595,23 @@ body {
 .toc-item {
   padding-left: calc(12px + var(--toc-depth, 0) * 16px);
 }
+.toc-list-virtualized {
+  position: relative;
+  padding-bottom: 12px;
+}
+.toc-list-virtualized .toc-virtual-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 40px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.toc-list-virtualized .toc-virtual-row .panel-item-main {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .toc-item .panel-item-main {
   user-select: text;
 }
