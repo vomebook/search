@@ -1578,6 +1578,8 @@ const STATE = {
   exact: true,
   useLocalMode: true,
   recordHistory: true,
+  restoreFromHistory: false,
+  sessionRestored: false,
   dataLoaded: false,
   resultsSkeletonActive: false,
   _pendingPage: 0,
@@ -1720,6 +1722,8 @@ function cacheDOM() {
   DOM.localModeToggle = $("#local-mode-toggle");
   DOM.historyToggle = $("#history-toggle");
   DOM.historyDropdown = $("#search-history-dropdown");
+  DOM.clearSearchBtn = $("#clear-search-btn");
+  DOM.returnToPositionBtn = $("#return-to-position-btn");
   DOM.multiToggleLabel = $("#multi-toggle-label");
   DOM.multiSelectToggle = $("#multi-select-toggle");
   DOM.multiActionBar = $("#multi-action-bar");
@@ -2716,7 +2720,9 @@ async function loadResultWindowPage(page, prefetch = false) {
 }
 
 function ensureResultWindowPages(start, end) {
-  if (!resultWindow || readerReturnScrollState || VSCROLL.isDraggingThumb) return;
+  // A restored search window must keep loading visible pages; reader return state
+  // is only a temporary scroll target and must not block normal pagination.
+  if (!resultWindow || readerOverlay || VSCROLL.isDraggingThumb) return;
   const size = resultWindow.query.pageSize;
   if (positionRestore) {
     if (positionRestore.preview) for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadCachedPreviewPage(resultWindow, page);
@@ -3203,7 +3209,9 @@ function doSearch(append, fromStart = false) {
   if (!append) {
     saveSearchViewSnapshot();
     cancelPositionRestore();
-    if (!fromStart && restoreSearchViewSnapshot(getSearchViewKey())) return;
+  if (!fromStart && STATE.restoreFromHistory && restoreSearchViewSnapshot(getSearchViewKey())) return;
+  STATE.restoreFromHistory = false;
+  STATE.sessionRestored = false;
   }
   if (append && STATE.isLoading) return;
   if (append && !STATE._loadedPage) append = false;
@@ -3988,6 +3996,7 @@ function updateCurrentResultPosition() {
   if (!label) return;
   label.hidden = !resultWindow;
   if (resultWindow && STATE.results.length) label.textContent = `当前第 ${(findVirtualIndex(DOM.resultsContainer.scrollTop) + 1).toLocaleString()} 条 · `;
+  if (DOM.returnToPositionBtn) { const saved = searchPositions.get(getSearchViewKey()); DOM.returnToPositionBtn.hidden = !(saved && STATE.results.length && Math.abs(DOM.resultsContainer.scrollTop - getVirtualOffset(saved.index)) > 80); }
 }
 
 function updateLoadInfo() {
@@ -5600,7 +5609,7 @@ async function init() {
   await initSearchPositions();
   setupSearchPositionSaving();
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
-  await restoreSearchSession();
+  STATE.sessionRestored = await restoreSearchSession();
   setupReaderIntentWarming();
   STATE.isDark = localStorage.getItem("theme") !== "light";
   applyTheme();
@@ -5610,6 +5619,9 @@ async function init() {
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
   DOM.searchInput.addEventListener("input", debouncedSearch);
+  const clearSearch = () => { DOM.searchInput.value = ""; STATE.query = ""; STATE.page = 1; STATE.results = []; STATE.restoreFromHistory = false; doSearch(false, true); DOM.searchInput.focus(); };
+  DOM.clearSearchBtn?.addEventListener("click", clearSearch);
+  DOM.returnToPositionBtn?.addEventListener("click", () => { const saved = searchPositions.get(getSearchViewKey()); if (!saved) return; DOM.resultsContainer.scrollTop = getVirtualOffset(saved.index) + saved.offset; updateCurrentResultPosition(); });
   DOM.searchInput.addEventListener("compositionstart", function() {
     searchComposing = true;
     clearTimeout(composeSafetyTimer);
@@ -5655,7 +5667,8 @@ async function init() {
     if (item) {
       saveSearchViewSnapshot();
       DOM.searchInput.value = item.dataset.query;
-      STATE.query = item.dataset.query;
+       STATE.query = item.dataset.query;
+       STATE.restoreFromHistory = true;
       STATE.page = 1;
       syncStateToURL();
       if (!restoreSearchViewSnapshot(getSearchViewKey())) {
