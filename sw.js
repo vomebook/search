@@ -40,23 +40,22 @@ const READER_RUNTIME_PATHS = new Set([
   "/search/static/reader.js",
   "/search/static/pdf-worker-wrapper.mjs"
 ]);
+function precacheManifest(cache, url) {
+  return fetch(url)
+    .then(response => response.ok ? response.json() : null)
+    .then(manifest => {
+      if (manifest && Array.isArray(manifest.urls)) return cache.addAll(manifest.urls);
+    })
+    .catch(() => {});
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(PRECACHE_URLS).then(() => {
         return Promise.all([
-          fetch("/search/data/initial/manifest.json")
-            .then((resp) => resp.ok ? resp.json() : null)
-            .then((manifest) => {
-              if (manifest && Array.isArray(manifest.urls)) return cache.addAll(manifest.urls);
-            })
-            .catch(() => {}),
-          fetch("/search/data/sidebar/manifest.json")
-            .then((resp) => resp.ok ? resp.json() : null)
-            .then((manifest) => {
-              if (manifest && Array.isArray(manifest.urls)) return cache.addAll(manifest.urls);
-            })
-            .catch(() => {})
+          precacheManifest(cache, "/search/data/initial/manifest.json"),
+          precacheManifest(cache, "/search/data/sidebar/manifest.json")
         ]);
       }).catch((err) => {
         console.warn("[SW] precache partial failure:", err);
@@ -88,7 +87,9 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
-  if (url.pathname.endsWith(".json.gz")) {
+  const isGeneratedData = url.pathname.endsWith(".json.gz") ||
+    ((url.pathname.startsWith("/search/data/initial/") || url.pathname.startsWith("/search/data/sidebar/")) && url.pathname.endsWith(".json"));
+  if (isGeneratedData) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((cached) => {
@@ -96,20 +97,6 @@ self.addEventListener("fetch", (event) => {
             if (response.ok) {
               cache.put(event.request, response.clone());
             }
-            return response;
-          }).catch(() => cached);
-          return cached || fetchPromise;
-        });
-      })
-    );
-    return;
-  }
-  if ((url.pathname.startsWith("/search/data/initial/") || url.pathname.startsWith("/search/data/sidebar/")) && url.pathname.endsWith(".json")) {
-    event.respondWith(
-      caches.open(CACHE_NAME).then((cache) => {
-        return cache.match(event.request).then((cached) => {
-          const fetchPromise = fetch(event.request).then((response) => {
-            if (response.ok) cache.put(event.request, response.clone());
             return response;
           }).catch(() => cached);
           return cached || fetchPromise;

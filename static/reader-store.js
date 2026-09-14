@@ -175,17 +175,22 @@
       tx.onabort = () => reject(tx.error);
     });
   }
-  async function list(limit = MAX_ENTRIES) {
+  async function listEntries(
+    storeName,
+    indexName,
+    normalize,
+    { query = null, direction = "next", limit = Infinity } = {}
+  ) {
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
       const entries = [],
-        tx = database.transaction(STORE_NAME, "readwrite"),
-        store = tx.objectStore(STORE_NAME),
-        request = store.index("lastReadAt").openCursor(null, "prev");
+        tx = database.transaction(storeName, "readwrite"),
+        store = tx.objectStore(storeName),
+        request = store.index(indexName).openCursor(query, direction);
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor || entries.length >= limit) return resolve(entries);
-        const entry = normalizeHistoryEntry(cursor.value);
+        const entry = normalize(cursor.value);
         if (entry) {
           entries.push(entry);
           if (cursor.value.schemaVersion !== SCHEMA_VERSION) cursor.update(entry);
@@ -193,6 +198,12 @@
         cursor.continue();
       };
       request.onerror = () => reject(request.error);
+    });
+  }
+  function list(limit = MAX_ENTRIES) {
+    return listEntries(STORE_NAME, "lastReadAt", normalizeHistoryEntry, {
+      direction: "prev",
+      limit
     });
   }
   async function remove(url) {
@@ -219,43 +230,14 @@
     });
   }
   async function listBookmarks(url) {
-    const database = await openDatabase();
-    return new Promise((resolve, reject) => {
-      const entries = [],
-        tx = database.transaction(BOOKMARK_STORE_NAME, "readwrite"),
-        store = tx.objectStore(BOOKMARK_STORE_NAME),
-        request = store.index("url").openCursor(IDBKeyRange.only(url));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) return resolve(entries.sort((a, b) => b.createdAt - a.createdAt));
-        const entry = normalizeBookmarkEntry(cursor.value);
-        if (entry) {
-          entries.push(entry);
-          if (cursor.value.schemaVersion !== SCHEMA_VERSION) cursor.update(entry);
-        } else if (!hasFutureSchema(cursor.value)) cursor.delete();
-        cursor.continue();
-      };
-      request.onerror = () => reject(request.error);
+    const entries = await listEntries(BOOKMARK_STORE_NAME, "url", normalizeBookmarkEntry, {
+      query: IDBKeyRange.only(url)
     });
+    return entries.sort((a, b) => b.createdAt - a.createdAt);
   }
-  async function listAllBookmarks() {
-    const database = await openDatabase();
-    return new Promise((resolve, reject) => {
-      const entries = [],
-        tx = database.transaction(BOOKMARK_STORE_NAME, "readwrite"),
-        store = tx.objectStore(BOOKMARK_STORE_NAME),
-        request = store.index("createdAt").openCursor(null, "prev");
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) return resolve(entries);
-        const entry = normalizeBookmarkEntry(cursor.value);
-        if (entry) {
-          entries.push(entry);
-          if (cursor.value.schemaVersion !== SCHEMA_VERSION) cursor.update(entry);
-        } else if (!hasFutureSchema(cursor.value)) cursor.delete();
-        cursor.continue();
-      };
-      request.onerror = () => reject(request.error);
+  function listAllBookmarks() {
+    return listEntries(BOOKMARK_STORE_NAME, "createdAt", normalizeBookmarkEntry, {
+      direction: "prev"
     });
   }
   async function removeBookmark(id) {
