@@ -235,7 +235,11 @@ test("Chinese multi-character queries require adjacent Chinese pairs", async () 
 });
 
 test("main-thread root select-all represents and persists direct root files with the empty self path", () => {
-  assert.match(app, /if \(node\.isRoot\) \{[\s\S]*?if \(node\.hasDirectFiles && !selfSet\.has\(node\.path\)\) return false/);
+  const context = vm.createContext({ Set });
+  vm.runInContext(app.slice(app.indexOf("function folderPathCovered("), app.indexOf("// Split covering ancestors")), context);
+  const root = { path: "", isRoot: true, hasDirectFiles: true, children: [{ path: "child", hasDirectFiles: true }] };
+  assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set()).full, false);
+  assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set([""])).full, true);
   assert.match(app, /if \(node\.hasDirectFiles\) selfSet\.add\(node\.path\)/);
   assert.match(app, /selfSet\.forEach\(function\(path\) \{ if \(!merged\.includes\(path\)\) merged\.push\(path\); \}\)/);
   assert.match(app, /var selfs = \(STATE\.filterFolderSelfs \|\| \[\]\)\.filter\(function\(path\) \{ return typeof path === "string"; \}\)/);

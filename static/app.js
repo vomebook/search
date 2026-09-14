@@ -584,36 +584,53 @@ function checkDownload(link, speculative = false) {
   let resolve;
   const entry = { promise: new Promise(done => { resolve = done; }), expires: 0 };
   downloadChecks.set(link, entry);
-  downloadCheckQueue.push(async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DOWNLOAD_CHECK_TIMEOUT);
-    try {
-      const response = await fetch(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""), { signal: controller.signal });
-      const data = await response.json();
-      if (!response.ok || data.ok !== true) throw new Error(data.error || "下载检查失败，请重试");
-      entry.expires = Date.now() + 30000;
-      // Bound successful checks independently of pending, user-requested work.
-      const cached = Array.from(downloadChecks).filter(([, value]) => value.expires);
-      while (cached.length > 64) downloadChecks.delete(cached.shift()[0]);
-      resolve(true);
-    } catch (error) {
-      downloadChecks.delete(link);
-      resolve(error.name === "AbortError" ? "下载检查超时，请重试" : error.message || "下载失败，请稍后重试");
-    } finally {
-      clearTimeout(timer);
-      activeDownloadChecks--;
-      pumpDownloadChecks();
-    }
-  });
+  downloadCheckQueue.push({ link, entry, resolve });
   pumpDownloadChecks();
   return entry.promise;
+}
+
+async function runDownloadCheck({ link, entry, resolve }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_CHECK_TIMEOUT);
+  try {
+    const response = await fetch(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""), { signal: controller.signal });
+    const data = await response.json();
+    if (!response.ok || data.ok !== true) throw new Error(data.error || "下载检查失败，请重试");
+    entry.expires = Date.now() + 30000;
+    // Bound successful checks independently of pending, user-requested work.
+    const cached = Array.from(downloadChecks).filter(([, value]) => value.expires);
+    while (cached.length > 64) downloadChecks.delete(cached.shift()[0]);
+    resolve(true);
+  } catch (error) {
+    downloadChecks.delete(link);
+    resolve(error.name === "AbortError" ? "下载检查超时，请重试" : error.message || "下载失败，请稍后重试");
+  } finally {
+    clearTimeout(timer);
+    activeDownloadChecks--;
+    pumpDownloadChecks();
+  }
 }
 
 function pumpDownloadChecks() {
   while (activeDownloadChecks < 2 && downloadCheckQueue.length) {
     activeDownloadChecks++;
-    downloadCheckQueue.shift()();
+    runDownloadCheck(downloadCheckQueue.shift());
   }
+}
+
+function scheduleDownloadLaunch(filename, link, cancelled) {
+  // Only the head of the handoff queue owns a pacing timer.
+  const launch = downloadLaunchTail.then(async () => {
+    if (cancelled()) return false;
+    const delay = Math.max(0, 300 - (Date.now() - lastDownloadLaunch));
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+    if (cancelled()) return false;
+    triggerDownload(buildDownloadUrl(filename, link));
+    lastDownloadLaunch = Date.now();
+    return true;
+  });
+  downloadLaunchTail = launch.catch(() => {});
+  return launch;
 }
 
 function downloadFile(filename, link, options = {}) {
@@ -633,18 +650,7 @@ function downloadFile(filename, link, options = {}) {
         if (!options.quiet) showToast(checked || "下载检查失败，请重试", 3500);
         return false;
       }
-      // Serialize browser handoffs without allocating a timer for every selected file.
-      const launch = downloadLaunchTail.then(async () => {
-        if (cancelled()) return false;
-        const delay = Math.max(0, 300 - (Date.now() - lastDownloadLaunch));
-        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-        if (cancelled()) return false;
-        triggerDownload(buildDownloadUrl(filename, link));
-        lastDownloadLaunch = Date.now();
-        return true;
-      });
-      downloadLaunchTail = launch.catch(() => {});
-      const started = await launch;
+      const started = await scheduleDownloadLaunch(filename, link, cancelled);
       if (started && !options.quiet) showToast("已发起下载，请在浏览器下载列表查看");
       return started;
     } catch (_) {
@@ -693,19 +699,20 @@ function startDownloadBatch(items) {
   const batch = { items, next: 0, started: 0, failed: [], cancelled: false, done: false };
   downloadBatch = batch;
   renderDownloadBatch();
-  const work = async () => {
-    while (!batch.cancelled && batch.next < items.length) {
-      const item = items[batch.next++];
-      const started = await downloadFile(item.filename, item.link, { quiet: true, batch });
-      if (started) batch.started++;
-      else if (!batch.cancelled) batch.failed.push(item);
-      renderDownloadBatch();
-    }
-  };
-  Promise.all([work(), work()]).then(() => {
+  Promise.all([runDownloadBatchWorker(batch), runDownloadBatchWorker(batch)]).then(() => {
     batch.done = true;
     renderDownloadBatch();
   });
+}
+
+async function runDownloadBatchWorker(batch) {
+  while (!batch.cancelled && batch.next < batch.items.length) {
+    const item = batch.items[batch.next++];
+    const started = await downloadFile(item.filename, item.link, { quiet: true, batch });
+    if (started) batch.started++;
+    else if (!batch.cancelled) batch.failed.push(item);
+    renderDownloadBatch();
+  }
 }
 
 function setupDownloadIntentWarming() {
@@ -1425,8 +1432,6 @@ async function fetchFolderContents(repo, path) {
         return resp.json();
       })
       .then(function(data) {
-        clearTimeout(timeoutId);
-        browserApiPending.delete(cacheKey);
         if (data) {
           noteApiSuccess();
           setBrowserApiCache(cacheKey, data);
@@ -1434,10 +1439,12 @@ async function fetchFolderContents(repo, path) {
         return data;
       })
       .catch(function(error) {
-        clearTimeout(timeoutId);
-        browserApiPending.delete(cacheKey);
         if (!error || error.name !== "AbortError") noteApiFailure();
         return null;
+      })
+      .finally(function() {
+        clearTimeout(timeoutId);
+        browserApiPending.delete(cacheKey);
       });
     browserApiPending.set(cacheKey, promise);
     return await promise;
@@ -4545,11 +4552,7 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
   const glyph = toggle.querySelector(".tree-toggle-glyph");
   if (glyph) glyph.getAnimations().forEach(function(animation) { animation.cancel(); });
   const resetChildStyles = function() {
-    childContainer.style.height = "";
-    childContainer.style.opacity = "";
-    childContainer.style.transform = "";
-    childContainer.style.overflow = "";
-    childContainer.style.transition = "";
+    ["height", "opacity", "transform", "overflow", "transition"].forEach(key => { childContainer.style[key] = ""; });
   };
   const stopTransition = function() {
     if (childContainer._transitionCleanup) {
@@ -4563,72 +4566,36 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
   };
   stopTransition();
   resetChildStyles();
-  if (expanding) {
-    childContainer.style.display = "block";
-    const targetHeight = childContainer.scrollHeight;
-    childContainer.style.height = "0px";
-    childContainer.style.opacity = "0";
-    childContainer.style.transform = "translateY(-6px)";
-    childContainer.style.overflow = "hidden";
-    void childContainer.offsetHeight;
-    childContainer.style.transition = "height 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1)";
-    childContainer.style.height = targetHeight + "px";
-    childContainer.style.opacity = "1";
-    childContainer.style.transform = "translateY(0)";
-    childContainer._transitionCleanup = function(event) {
-      if (event.target !== childContainer || event.propertyName !== "height") return;
-      stopTransition();
-      resetChildStyles();
-      childContainer.style.display = "block";
-    };
-    childContainer.addEventListener("transitionend", childContainer._transitionCleanup);
-    childContainer._transitionTimer = setTimeout(function() {
-      if (childContainer._transitionCleanup) childContainer._transitionCleanup({ target: childContainer, propertyName: "height" });
-    }, 260);
-    toggle.classList.add("expanded");
-    if (glyph) {
-      glyph.animate([
-        { transform: "rotate(-45deg)" },
-        { transform: "rotate(45deg)" },
-      ], {
-        duration: 220,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-        fill: "forwards",
-      });
-    }
-    return;
-  }
+  const duration = expanding ? 220 : 190;
+  const easing = "cubic-bezier(0.22, 1, 0.36, 1)";
   childContainer.style.display = "block";
-  const startHeight = childContainer.scrollHeight;
-  childContainer.style.height = startHeight + "px";
-  childContainer.style.opacity = "1";
-  childContainer.style.transform = "translateY(0)";
+  const height = childContainer.scrollHeight + "px";
+  const setFrame = open => {
+    childContainer.style.height = open ? height : "0px";
+    childContainer.style.opacity = open ? "1" : "0";
+    childContainer.style.transform = open ? "translateY(0)" : "translateY(-6px)";
+  };
+  setFrame(!expanding);
   childContainer.style.overflow = "hidden";
   void childContainer.offsetHeight;
-  childContainer.style.transition = "height 190ms cubic-bezier(0.22, 1, 0.36, 1), opacity 190ms cubic-bezier(0.22, 1, 0.36, 1), transform 190ms cubic-bezier(0.22, 1, 0.36, 1)";
-  childContainer.style.height = "0px";
-  childContainer.style.opacity = "0";
-  childContainer.style.transform = "translateY(-6px)";
+  childContainer.style.transition = ["height", "opacity", "transform"].map(key => `${key} ${duration}ms ${easing}`).join(", ");
+  setFrame(expanding);
   childContainer._transitionCleanup = function(event) {
     if (event.target !== childContainer || event.propertyName !== "height") return;
     stopTransition();
-    childContainer.style.display = "none";
     resetChildStyles();
+    childContainer.style.display = expanding ? "block" : "none";
   };
   childContainer.addEventListener("transitionend", childContainer._transitionCleanup);
   childContainer._transitionTimer = setTimeout(function() {
     if (childContainer._transitionCleanup) childContainer._transitionCleanup({ target: childContainer, propertyName: "height" });
-  }, 230);
-  toggle.classList.remove("expanded");
+  }, duration + 40);
+  toggle.classList.toggle("expanded", expanding);
   if (glyph) {
-      glyph.animate([
-      { transform: "rotate(45deg)" },
-      { transform: "rotate(-45deg)" },
-    ], {
-      duration: 190,
-      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      fill: "forwards",
-    });
+    glyph.animate([
+      { transform: expanding ? "rotate(-45deg)" : "rotate(45deg)" },
+      { transform: expanding ? "rotate(45deg)" : "rotate(-45deg)" },
+    ], { duration, easing, fill: "forwards" });
   }
 }
 
@@ -4657,41 +4624,22 @@ function folderPathCovered(path, subtreeSet) {
   return false;
 }
 
-function isNodeFullySelected(node, subtreeSet, selfSet) {
-  if (!node) return false;
-  if (folderPathCovered(node.path, subtreeSet)) return true;
+function folderSelectionState(node, subtreeSet, selfSet) {
+  if (!node) return { full: false, partial: false };
+  if (folderPathCovered(node.path, subtreeSet)) return { full: true, partial: false };
+  const direct = selfSet.has(node.path);
+  const children = (node.children || []).map(child => folderSelectionState(child, subtreeSet, selfSet));
+  let full;
   if (node.isRoot) {
-    if (node.hasDirectFiles && !selfSet.has(node.path)) return false;
-    const childNodes = node.children || [];
-    if (childNodes.length === 0) return node.hasDirectFiles;
-    for (let i = 0; i < childNodes.length; i++) {
-      if (!isNodeFullySelected(childNodes[i], subtreeSet, selfSet)) return false;
-    }
-    return true;
+    full = (!node.hasDirectFiles || direct) && (children.length ? children.every(child => child.full) : !!node.hasDirectFiles);
+  } else if (node.showSelfToggle && !direct) {
+    full = false;
+  } else if (!node.hasChildren) {
+    full = !!node.hasDirectFiles && direct || subtreeSet.has(node.path);
+  } else {
+    full = children.every(child => child.full) && (!node.hasDirectFiles || direct);
   }
-  if (node.showSelfToggle && !selfSet.has(node.path)) return false;
-  if (!node.hasChildren) {
-    if (node.hasDirectFiles) return selfSet.has(node.path) || subtreeSet.has(node.path);
-    return subtreeSet.has(node.path);
-  }
-  const childNodes = node.children || [];
-  for (let i = 0; i < childNodes.length; i++) {
-    if (!isNodeFullySelected(childNodes[i], subtreeSet, selfSet)) return false;
-  }
-  return !node.hasDirectFiles || selfSet.has(node.path);
-}
-
-function isNodePartiallySelected(node, subtreeSet, selfSet) {
-  if (!node) return false;
-  if (isNodeFullySelected(node, subtreeSet, selfSet)) return false;
-  if (selfSet.has(node.path) || subtreeSet.has(node.path)) return true;
-  const childNodes = node.children || [];
-  for (let i = 0; i < childNodes.length; i++) {
-    if (isNodeFullySelected(childNodes[i], subtreeSet, selfSet) || isNodePartiallySelected(childNodes[i], subtreeSet, selfSet)) {
-      return true;
-    }
-  }
-  return false;
+  return { full, partial: !full && (direct || subtreeSet.has(node.path) || children.some(child => child.full || child.partial)) };
 }
 
 // Split covering ancestors before removing a branch or its direct files.
@@ -4725,7 +4673,7 @@ function normalizeFolderSelection(subtreeSet, selfSet) {
   const collapse = nodes => {
     for (const node of nodes || []) {
       collapse(node.children);
-      if (!node.isRoot && isNodeFullySelected(node, subtreeSet, selfSet)) subtreeSet.add(node.path);
+      if (!node.isRoot && folderSelectionState(node, subtreeSet, selfSet).full) subtreeSet.add(node.path);
     }
   };
   collapse(STATE.folderTree);
@@ -4768,8 +4716,7 @@ function collectFolderNodePaths(nodes, subtreePaths, selfPaths) {
 function applyFolderSelectionToNode(node, row, subtreeSet, selfSet) {
   const cb = row.querySelector("input[type='checkbox']");
   if (!cb) return;
-  const full = isNodeFullySelected(node, subtreeSet, selfSet);
-  const partial = isNodePartiallySelected(node, subtreeSet, selfSet);
+  const { full, partial } = folderSelectionState(node, subtreeSet, selfSet);
   cb.checked = full;
   cb.indeterminate = !full && partial;
   const selfBtn = row.querySelector(".folder-self-toggle");
@@ -4815,7 +4762,7 @@ function renderFilterTreeNodes(container, nodes, depth) {
 function handleFolderCheckboxChange(node) {
   const subtreeSet = getFolderSubtreeSet();
   const selfSet = getFolderSelfSet();
-  const full = isNodeFullySelected(node, subtreeSet, selfSet);
+  const { full } = folderSelectionState(node, subtreeSet, selfSet);
   setNodeSubtreeSelection(node, !full, subtreeSet, selfSet);
   persistFolderSelection(subtreeSet, selfSet);
   refreshFilterFolderSelectionState();
@@ -5924,7 +5871,7 @@ async function init() {
     var selfSet = new Set();
     var currentSubtreeSet = getFolderSubtreeSet();
     var currentSelfSet = getFolderSelfSet();
-    var allSelected = STATE.folderTree.every(function(node) { return isNodeFullySelected(node, currentSubtreeSet, currentSelfSet); });
+    var allSelected = STATE.folderTree.every(function(node) { return folderSelectionState(node, currentSubtreeSet, currentSelfSet).full; });
     if (allSelected) {
       persistFolderSelection(subtreeSet, selfSet);
       refreshFilterFolderSelectionState();

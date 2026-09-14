@@ -73,6 +73,44 @@ class ReaderRefactorTest(unittest.TestCase):
           throw new Error('Store condition did not become true');
         }""", arg)
 
+    def test_store_lists_preserve_limits_order_migration_and_future_records(self):
+        self.page.goto(self.reader_url().split('?')[0])
+        result = self.page.evaluate('''async () => {
+          const store=VoiceOfMLReaderStore;
+          await store.put({url:'book-a',lastReadAt:10});
+          await store.put({url:'book-b',lastReadAt:20});
+          await store.put({url:'book-c',lastReadAt:30});
+          await store.put({url:'book-c',lastReadAt:1});
+          const db=await new Promise((resolve,reject)=>{
+            const request=indexedDB.open(store.DB_NAME,2);
+            request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
+          });
+          await new Promise((resolve,reject)=>{
+            const tx=db.transaction('bookmarks','readwrite'), bookmarks=tx.objectStore('bookmarks');
+            for(const entry of [
+              {id:'z',url:'book-a',createdAt:1}, {id:'a',url:'book-a',createdAt:3},
+              {id:'b',url:'book-b',createdAt:2}, {id:'bad',url:42,createdAt:4},
+              {id:'future',url:'book-a',createdAt:5,schemaVersion:2}
+            ]) bookmarks.put(entry);
+            tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);
+          });
+          const history=(await store.list(2)).map(entry=>entry.url);
+          const empty=(await store.list(0)).length;
+          const all=(await store.listAllBookmarks()).map(entry=>entry.id);
+          const one=(await store.listBookmarks('book-a')).map(entry=>entry.id);
+          const raw=await new Promise((resolve,reject)=>{
+            const tx=db.transaction('bookmarks'), request=tx.objectStore('bookmarks').getAll();
+            tx.oncomplete=()=>resolve(request.result);tx.onerror=()=>reject(tx.error);
+          });
+          db.close();await store.removeBookmark('a');
+          return {history,empty,all,one,remaining:(await store.listBookmarks('book-a')).map(entry=>entry.id),
+            migrated:raw.filter(entry=>['z','a','b'].includes(entry.id)).every(entry=>entry.schemaVersion===1),
+            future:raw.some(entry=>entry.id==='future' && entry.schemaVersion===2),
+            corruptRemoved:!raw.some(entry=>entry.id==='bad')};
+        }''')
+        self.assertEqual(result, dict(history=['book-c', 'book-b'], empty=0, all=['a', 'b', 'z'],
+                                      one=['a', 'z'], remaining=['z'], migrated=True, future=True, corruptRemoved=True))
+
     def test_cross_book_bookmark_restores_selected_position_and_rejects_mismatch(self):
         self.serve("start\n" + "ordinary text\n" * 3000)
         book_b = self.reader_url(name="book-b")
