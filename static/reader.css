@@ -849,6 +849,7 @@ body {
   pointer-events: none;
   white-space: pre;
   border: 0;
+  color: transparent;
 }
 .reader-pdf-text span {
   position: absolute;
