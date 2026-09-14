@@ -136,7 +136,8 @@ test("fresh first-page results use bounded entrance motion", () => {
   assert.match(app, /function animateVisibleResultRows/);
   assert.match(app, /Number\(row\.dataset\.index\) >= 30/);
   assert.match(app, /renderResults\(true\)/);
-  assert.strictEqual((app.match(/renderResults\(true\)/g) || []).length, 2);
+  // API and Worker results now enter through the same rendering function.
+  assert.match(app, /function renderSearchPage\(append\)/);
   assert.match(css, /\.result-item\.result-enter/);
   assert.match(css, /animation: result-item-enter 180ms/);
   assert.match(css, /opacity: 0\.82/);
