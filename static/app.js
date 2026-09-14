@@ -2462,10 +2462,10 @@ function showPositionRestoreStatus(message, retry = false) {
     DOM.resultsContainer.parentElement.appendChild(status);
   }
   status.replaceChildren();
-  status.hidden = !message;
+  status.hidden = true;
   DOM.resultsContainer.classList.toggle("position-restoring", !!message && !positionRestore?.preview);
   status.classList.toggle("position-preview-status", !!positionRestore?.preview);
-  if (!message) return;
+  return;
   const text = document.createElement("span");
   text.textContent = message;
   status.appendChild(text);
@@ -3996,8 +3996,11 @@ function scheduleFilterSearch() {
 function updateCurrentResultPosition() {
   const label = document.getElementById("current-result-position");
   if (!label) return;
-  label.hidden = !resultWindow;
-  if (resultWindow && STATE.results.length) label.textContent = `当前第 ${(findVirtualIndex(DOM.resultsContainer.scrollTop) + 1).toLocaleString()} 条 · `;
+  label.hidden = !(STATE.results.length || STATE.total);
+  if (STATE.results.length || STATE.total) {
+    const index = resultWindow ? findVirtualIndex(DOM.resultsContainer.scrollTop) : Math.min(STATE.total - 1, Math.max(0, Math.floor(DOM.resultsContainer.scrollTop / Math.max(1, VSCROLL.estimatedHeight))));
+    label.textContent = `当前第 ${(index + 1).toLocaleString()} 条 · `;
+  }
   if (DOM.returnToPositionBtn) { const saved = searchPositions.get(getSearchViewKey()); DOM.returnToPositionBtn.hidden = !(saved && STATE.results.length && Math.abs(DOM.resultsContainer.scrollTop - getVirtualOffset(saved.index)) > 80); }
   if (DOM.returnToPositionBtn) {
     const saved = searchPositions.get(getSearchViewKey());
