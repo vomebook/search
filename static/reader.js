@@ -369,6 +369,9 @@ let foliateContinuous = false,
 const FOLIATE_PREFETCH_SECTIONS = 6;
 const FOLIATE_PREFETCH_MARGIN = 4000;
 const FOLIATE_LOADED_SECTION_LIMIT = 12;
+const TOC_VIRTUALIZATION_THRESHOLD = 500;
+const TOC_VIRTUAL_ROW_HEIGHT = 40;
+let tocVirtualState = null;
 let htmlFrame = null;
 let lastSavedProgress = "";
 let progressSaveChain = Promise.resolve();
@@ -949,6 +952,48 @@ async function navigateTocEntry(index) {
     reportNavigationError(error, generation);
   }
 }
+function createTocRow(entry, index) {
+  const row = document.createElement("div");
+  row.className = "panel-item toc-item";
+  row.style.setProperty("--toc-depth", String(entry.depth || 0));
+  const link = document.createElement("div");
+  link.className = "panel-item-main";
+  link.tabIndex = 0;
+  link.setAttribute("role", "link");
+  link.textContent = entry.label;
+  const activate = () => {
+    if (!getSelection().toString()) navigateTocEntry(index);
+  };
+  link.addEventListener("click", activate);
+  link.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      activate();
+    }
+  });
+  row.appendChild(link);
+  return row;
+}
+function renderVirtualToc() {
+  const state = tocVirtualState;
+  if (!state) return;
+  const height = Math.max(320, state.panelView.clientHeight),
+    start = Math.max(0, Math.floor(state.panelView.scrollTop / TOC_VIRTUAL_ROW_HEIGHT) - 12),
+    end = Math.min(
+      state.entries.length,
+      start + Math.ceil(height / TOC_VIRTUAL_ROW_HEIGHT) + 24
+    ),
+    fragment = document.createDocumentFragment();
+  state.list.replaceChildren();
+  for (let index = start; index < end; index++) {
+    const row = createTocRow(state.entries[index], index);
+    row.classList.add("toc-virtual-row");
+    row.style.top = `${index * TOC_VIRTUAL_ROW_HEIGHT}px`;
+    fragment.appendChild(row);
+  }
+  state.list.appendChild(fragment);
+  updateTocCurrentMark();
+}
 function setToc(entries) {
   const normalizedEntries = (entries || []).map((entry) => ({
     ...entry,
@@ -964,28 +1009,36 @@ function setToc(entries) {
   tocTab.textContent = normalizedEntries.length ? "目录" : "阅读";
   const previousList = document.querySelector("#toc-list"),
     list = previousList.cloneNode(false);
+  tocVirtualState?.destroy();
+  tocVirtualState = null;
   previousList.replaceWith(list);
-  for (const [index, entry] of normalizedEntries.entries()) {
-    const row = document.createElement("div");
-    row.className = "panel-item toc-item";
-    row.style.setProperty("--toc-depth", String(entry.depth || 0));
-    const link = document.createElement("div");
-    link.className = "panel-item-main";
-    link.tabIndex = 0;
-    link.setAttribute("role", "link");
-    link.textContent = entry.label;
-    const activate = () => {
-      if (!getSelection().toString()) navigateTocEntry(index);
+  if (normalizedEntries.length > TOC_VIRTUALIZATION_THRESHOLD) {
+    const panelView = list.parentElement;
+    list.classList.add("toc-list-virtualized");
+    list.style.height = `${normalizedEntries.length * TOC_VIRTUAL_ROW_HEIGHT}px`;
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        renderVirtualToc();
+      });
     };
-    link.addEventListener("click", activate);
-    link.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        activate();
+    panelView.addEventListener("scroll", onScroll, { passive: true });
+    tocVirtualState = {
+      entries: normalizedEntries,
+      list,
+      panelView,
+      render: renderVirtualToc,
+      destroy: () => {
+        panelView.removeEventListener("scroll", onScroll);
+        if (frame) cancelAnimationFrame(frame);
       }
-    });
-    row.appendChild(link);
-    list.appendChild(row);
+    };
+    renderVirtualToc();
+  } else {
+    for (const [index, entry] of normalizedEntries.entries())
+      list.appendChild(createTocRow(entry, index));
   }
   updateTocCurrentMark();
 }
