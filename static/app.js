@@ -3218,6 +3218,7 @@ function clearResultsSkeleton() {
 function doSearch(append, fromStart = false, restorePosition = false) {
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
   if (!append) {
+    clearTimeout(searchTimer);
     saveSearchViewSnapshot();
     cancelPositionRestore();
     prepareReturnPosition(getSearchViewKey(), !fromStart);
@@ -4032,6 +4033,10 @@ function setSearchVisualLoading(loading) {
   updateStatusBar();
 }
 
+function doFilterSearch() {
+  return doSearch(false, false, true);
+}
+
 function scheduleFilterSearch() {
   saveSearchViewSnapshot();
   cancelPositionRestore();
@@ -4049,7 +4054,7 @@ function scheduleFilterSearch() {
   syncStateToURL(true);
   filterSearchTimer = setTimeout(() => {
     filterSearchTimer = null;
-    doSearch();
+    doFilterSearch();
   }, FILTER_SEARCH_DEBOUNCE_MS);
 }
 
@@ -5587,7 +5592,7 @@ function clearAllFilters() {
   DOM.filterMinSize.value = "";
   DOM.filterMaxSize.value = "";
   renderFilters(routeRenderId);
-  doSearch();
+  doFilterSearch();
   showToast("已清空所有筛选条件");
   syncStateToURL();
 }
@@ -5656,7 +5661,7 @@ function setupResultDelegation() {
         STATE.page = 1;
         STATE.results = [];
         renderFilters(routeRenderId);
-        doSearch();
+        doFilterSearch();
       }
       return;
     }
@@ -5887,13 +5892,13 @@ async function init() {
     clearResultTemplateCache();
     STATE.page = 1;
     STATE.results = [];
-    doSearch();
+    doFilterSearch();
   });
   DOM.exactSearchToggle.addEventListener("change", function() {
     STATE.exact = DOM.exactSearchToggle.checked;
     STATE.page = 1;
     STATE.results = [];
-    doSearch();
+    doFilterSearch();
   });
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
@@ -5906,7 +5911,12 @@ async function init() {
       updateStatusBar();
       updateLoadInfo();
       syncStateToURL();
-      ensureLocalDataLoaded(true, false);
+      const key = getSearchViewKey();
+      const id = ++searchId;
+      ensureLocalDataLoaded(false, false).then(ok => {
+        if (ok && id === searchId && key === getSearchViewKey()) doFilterSearch();
+        else if (!ok && id === searchId) doSearch();
+      });
       return;
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
@@ -5914,14 +5924,14 @@ async function init() {
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.page = 1;
     STATE.results = [];
-    doSearch();
+    doFilterSearch();
     syncStateToURL();
   });
   DOM.sortSelect.addEventListener("change", function() {
     STATE.sort = DOM.sortSelect.value;
     STATE.page = 1;
     STATE.results = [];
-    doSearch();
+    doFilterSearch();
     syncStateToURL();
   });
   DOM.overlay.addEventListener("click", function() {
@@ -5950,7 +5960,7 @@ async function init() {
       STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
       STATE.page = 1;
       STATE.results = [];
-      doSearch();
+      doFilterSearch();
     }, 500);
   };
   DOM.filterMinSize.addEventListener("input", applySizeFilter);
