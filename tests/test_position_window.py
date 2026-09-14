@@ -41,7 +41,7 @@ class PositionWindowTests(unittest.TestCase):
                 return {Repo:'VoiceOfML/Test',File:name,Extension:'txt',Folder:[],Size:1,ID:String(index)};
               })};
           };
-          STATE.query='paging-original';doSearch();
+           STATE.query='paging-original';doSearch(false,false,true);
         }''')
         self.wait_anchor(49850)
 
@@ -50,18 +50,18 @@ class PositionWindowTests(unittest.TestCase):
         self.fixture.tearDown()
         self.assertEqual(errors, [])
 
-    def wait_anchor(self, index):
-        self.page.wait_for_function('''index=>!positionRestore && !!resultWindow &&
-          findVirtualIndex(DOM.resultsContainer.scrollTop)===index && !!STATE.results[index] &&
-          Math.abs(DOM.resultsContainer.scrollTop-getVirtualOffset(index)-11)<2''', arg=index)
+    def wait_anchor(self, index, offset=11):
+        self.page.wait_for_function('''([index,offset])=>!positionRestore && !!resultWindow &&
+          findVirtualIndex(getResultScrollTop())===index && !!STATE.results[index] &&
+          Math.abs(getResultScrollTop()-getVirtualOffset(index)-offset)<2''', arg=[index,offset])
 
     def jump(self, index):
-        self.page.evaluate('index=>{DOM.resultsContainer.scrollTop=getVirtualOffset(index)+11;renderVisible()}', index)
+        self.page.evaluate('index=>{setResultScrollTop(getVirtualOffset(index)+11);renderVisible()}', index)
 
     def test_depth_500_uses_only_anchor_neighborhood_and_real_loaded_count(self):
         self.assertEqual(self.page.evaluate('windowCalls'), [1,498,499,500])
         self.assertEqual(self.page.evaluate('[STATE.results.length,resultWindow.count,STATE.total]'), [50000,400,50001])
-        self.assertEqual(self.page.locator('#loaded-count').text_content(), '400')
+        self.assertEqual(self.page.locator('#current-result-position').input_value(), '49851')
 
     def test_jump_back_fills_only_visible_gap_and_keeps_anchor(self):
         self.jump(25050)
@@ -106,7 +106,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('Object.keys(selectedIndices).every(index=>!!STATE.results[index])'))
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("STATE.query='paging-original';doSearch()")
+        self.page.evaluate("STATE.query='paging-original';doSearch(false,false,true)")
         self.wait_anchor(49850)
         self.assertEqual(self.page.evaluate('resultWindow.count'), 400)
         self.assertFalse(self.page.evaluate('!!STATE.results[25050]'))
@@ -144,21 +144,21 @@ class PositionWindowTests(unittest.TestCase):
         self.page.wait_for_function('positionRestore?.preview && !!window.releaseWindow')
         self.assertTrue(self.page.evaluate('''() => {
           const box=DOM.resultsContainer.getBoundingClientRect();
-          return findVirtualIndex(DOM.resultsContainer.scrollTop)===49850 &&
-            Math.abs(DOM.resultsContainer.scrollTop-getVirtualOffset(49850)-11)<2 &&
+           return findVirtualIndex(getResultScrollTop())===49850 &&
+             Math.abs(getResultScrollTop()-getVirtualOffset(49850)-11)<2 &&
             getComputedStyle(DOM.resultsContainer).visibility==='visible' &&
             [...DOM.resultsList.querySelectorAll('.result-window-placeholder')].every(row=>{
               const rect=row.getBoundingClientRect();return rect.bottom<=box.top || rect.top>=box.bottom;
             });
         }'''))
-        self.assertIn('49,851', self.page.locator('#current-result-position').text_content())
+        self.assertEqual(self.page.locator('#current-result-position').input_value(), '49851')
         self.assertTrue(self.page.evaluate('Object.keys(VSCROLL.heights).length<300 && Object.keys(VSCROLL.heightTree).length<2000'))
 
     def test_persisted_viewport_shows_before_lookup_and_keeps_nodes_after_validation(self):
         self.persist_viewport()
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();windowStall=1;STATE.query='paging-original';doSearch()")
+        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.assert_cached_viewport()
         self.page.evaluate("window.cachedRow=DOM.resultsList.querySelector('[data-index=\"49850\"]');releaseWindow()")
         self.wait_anchor(49850)
@@ -168,6 +168,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.set_viewport_size({'width':390,'height':844})
         self.page.wait_for_timeout(100)
         self.persist_viewport()
+        saved_offset = self.page.evaluate('searchPositions.get(originalWindowKey).offset')
         fetcher = self.page.evaluate('fetchPositionPage.toString()')
         self.page.add_init_script('''document.addEventListener('DOMContentLoaded',()=>{
           window.windowCalls=[];window.windowFailures=new Set();window.windowGeneration='one';
@@ -177,7 +178,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.reload(wait_until='domcontentloaded')
         self.assert_cached_viewport()
         self.page.evaluate('releaseWindow()')
-        self.wait_anchor(49850)
+        self.wait_anchor(49850, saved_offset)
 
     def test_loading_an_adjacent_page_does_not_replace_visible_rows(self):
         self.page.evaluate('window.keptRow=DOM.resultsList.querySelector(\'[data-index="49850"]\');loadResultWindowPage(497)')
@@ -195,9 +196,9 @@ class PositionWindowTests(unittest.TestCase):
         self.persist_viewport()
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();windowFailures.add(1);STATE.query='paging-original';doSearch()")
+        self.page.evaluate("searchViewSnapshots.clear();windowFailures.add(1);STATE.query='paging-original';doSearch(false,false,true)")
         self.page.get_by_text('重试恢复', exact=True).wait_for()
-        self.assertEqual(self.page.evaluate('findVirtualIndex(DOM.resultsContainer.scrollTop)'), 49850)
+        self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 49850)
         self.assertEqual(self.page.evaluate('getComputedStyle(DOM.resultsContainer).visibility'), 'visible')
         self.page.get_by_text('从头浏览', exact=True).click()
         self.page.wait_for_function('!positionRestore && !STATE.isLoading && !resultWindow')
@@ -207,7 +208,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertLessEqual(self.page.evaluate('searchViewportSnapshots.get(originalWindowKey).records.length'), 80)
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();searchPositions.get(originalWindowKey).anchorId='different';windowStall=1;STATE.query='paging-original';doSearch()")
+        self.page.evaluate("searchViewSnapshots.clear();searchPositions.get(originalWindowKey).anchorId='different';windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.page.wait_for_function('!!window.releaseWindow')
         self.assertFalse(self.page.evaluate('!!positionRestore.preview'))
         self.page.evaluate('releaseWindow()')
@@ -228,7 +229,7 @@ class PositionWindowTests(unittest.TestCase):
         }'''))
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();windowStall=1;STATE.query='paging-original';doSearch()")
+        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.assert_cached_viewport()
         self.page.evaluate('releaseWindow()')
         self.wait_anchor(49850)

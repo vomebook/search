@@ -129,10 +129,10 @@ class ApiIntegrationTest(unittest.TestCase):
             })();"""
         )
         self.load()
-        self.page.wait_for_function("searchPrefetchPromise !== null")
+        self.page.wait_for_function("searchPrefetchAbortController?.active.has(2)")
         self.page.wait_for_function("STATE.dataLoaded === true", timeout=30000)
         self.assertGreaterEqual(self.server_state.count("/search/data/search_data.json.gz"), 1)
-        self.assertTrue(self.page.evaluate("searchPrefetchPromise !== null"))
+        self.assertTrue(self.page.evaluate("searchPrefetchAbortController?.active.has(2)"))
 
     def test_local_disabled_sends_complete_api_body_and_renders_response(self):
         self.load("#/?q=body-query&local=0&ext=pdf&sort=size&search_folders=false&exact=0&min_size=10&max_size=20")
@@ -197,7 +197,7 @@ class ApiIntegrationTest(unittest.TestCase):
             })();"""
         )
         self.load("#/?local=0")
-        self.page.wait_for_function("searchPrefetchPromise !== null && window.__releaseStalePrefetch !== null")
+        self.page.wait_for_function("searchPrefetchAbortController?.active.has(2) && window.__releaseStalePrefetch !== null")
         search = self.page.locator("#search-input")
         search.fill("current-query")
         self.page.locator("#results-list").get_by_text("current-query result").wait_for(timeout=10000)
@@ -275,11 +275,10 @@ class ApiIntegrationTest(unittest.TestCase):
             """async () => {
                 if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
                 searchPrefetchAbortController = null;
-                searchPrefetchPromise = null;
-                searchPrefetchCacheKey = null;
                 STATE._loadedPage = 1;
                 STATE.total = Math.max(STATE.total, STATE.pageSize * 3);
                 STATE._pageCache = {};
+                searchResponseCache.clear();
                 let calls = 0;
                 const nativeFetch = window.fetch;
                 window.fetch = function(_input, options) {
@@ -290,7 +289,7 @@ class ApiIntegrationTest(unittest.TestCase):
                 };
                 const first = prefetchNextPage();
                 const second = prefetchNextPage();
-                const result = first === second && calls === 1;
+                const result = first === second && calls === 2;
                 searchPrefetchAbortController.abort();
                 await first;
                 window.fetch = nativeFetch;

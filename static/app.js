@@ -1129,13 +1129,6 @@ async function doSearchAPI(params, append, requestId) {
     STATE.results = STATE.results.concat(STATE._pageCache[cp]);
     delete STATE._pageCache[cp];
     STATE._loadedPage = cp;
-    var np = cp + 1;
-    while (STATE._pageCache[np]) {
-      STATE.results = STATE.results.concat(STATE._pageCache[np]);
-      delete STATE._pageCache[np];
-      np++;
-    }
-    STATE._loadedPage = np - 1;
     STATE.hasMore = STATE.results.length < STATE.total;
     return true;
   }
@@ -1167,13 +1160,9 @@ async function doSearchAPI(params, append, requestId) {
         return true;
       }
       STATE._pageCache[cached.page] = cached.results;
-      var cachedNextPage = STATE._loadedPage + 1;
-      while (STATE._pageCache[cachedNextPage]) {
-        STATE.results = STATE.results.concat(STATE._pageCache[cachedNextPage]);
-        delete STATE._pageCache[cachedNextPage];
-        cachedNextPage++;
-      }
-      STATE._loadedPage = cachedNextPage - 1;
+      STATE.results = STATE.results.concat(STATE._pageCache[cached.page]);
+      delete STATE._pageCache[cached.page];
+      STATE._loadedPage = cached.page;
     } else {
       STATE.results = cached.results;
       STATE._loadedPage = 1;
@@ -1205,14 +1194,9 @@ async function doSearchAPI(params, append, requestId) {
       return true;
     }
     STATE._pageCache[data.page] = data.results;
-    var nextPage = STATE._loadedPage + 1;
-    while (STATE._pageCache[nextPage]) {
-      var pageItems = STATE._pageCache[nextPage];
-      STATE.results = STATE.results.concat(pageItems);
-      delete STATE._pageCache[nextPage];
-      nextPage++;
-    }
-    STATE._loadedPage = nextPage - 1;
+    STATE.results = STATE.results.concat(STATE._pageCache[data.page]);
+    delete STATE._pageCache[data.page];
+    STATE._loadedPage = data.page;
   } else {
     STATE.results = data.results;
     STATE._loadedPage = 1;
@@ -1228,13 +1212,6 @@ function consumeCachedAppendPage() {
   STATE.results = STATE.results.concat(STATE._pageCache[cp]);
   delete STATE._pageCache[cp];
   STATE._loadedPage = cp;
-  var np = cp + 1;
-  while (STATE._pageCache[np]) {
-    STATE.results = STATE.results.concat(STATE._pageCache[np]);
-    delete STATE._pageCache[np];
-    np++;
-  }
-  STATE._loadedPage = np - 1;
   STATE.page = STATE._loadedPage;
   STATE.hasMore = STATE.results.length < STATE.total;
   STATE._pendingPage = 0;
@@ -1248,23 +1225,70 @@ function consumeCachedAppendPage() {
   return true;
 }
 
+function prefetchSearchPages(base, template) {
+  const key = getSearchViewKey(), groupKey = base + "|" + stableSearchStringify(template);
+  let controller = searchPrefetchAbortController;
+  if (!controller || controller.signal.aborted || controller.groupKey !== groupKey) {
+    controller?.abort();
+    controller = new AbortController();
+    controller.groupKey = groupKey;
+    controller.active = new Map();
+    controller.attempted = new Set();
+    searchPrefetchAbortController = controller;
+  }
+  const current = () => searchPrefetchAbortController === controller && !controller.signal.aborted && key === getSearchViewKey();
+  const pump = () => {
+    if (!current() || document.hidden || !navigator.onLine) return;
+    const last = Math.min(Math.ceil(STATE.total / STATE.pageSize), STATE._loadedPage + 3);
+    for (const page of controller.attempted) if (page <= STATE._loadedPage) controller.attempted.delete(page);
+    for (let page = STATE._loadedPage + 1; page <= last && controller.active.size < 2; page++) {
+      if (STATE._pageCache[page] || controller.attempted.has(page)) continue;
+      controller.attempted.add(page);
+      const body = Object.assign({}, template, {page});
+      const cacheKey = base + "|" + stableSearchStringify(body);
+      const metadata = searchPageMetadata.get(STATE.results[0]);
+      const expected = metadata?.generation ? {generation: metadata.generation, total: STATE.total, query: {pageSize: STATE.pageSize}} : null;
+      const task = (async () => {
+        let data = getCachedSearchResponse(cacheKey);
+        if (data && expected && (data.generation !== expected.generation || data.total !== expected.total)) {
+          searchResponseCache.delete(cacheKey); data = null;
+        }
+        if (!data && expected) data = await readRecentSearchPage(key, page, expected);
+        if (!current()) return;
+        if (!data) data = await fetchSearchPage(cacheKey, base, body, controller.signal, APPEND_REQUEST_TIMEOUT);
+        if (!current()) return;
+        validatePositionWindowPage(data, page, body.page_size, expected);
+        noteApiSuccess();
+        rememberSearchPageMetadata(data);
+        setCachedSearchResponse(cacheKey, data);
+        if (page > STATE._loadedPage) STATE._pageCache[page] = data.results;
+        scheduleBottomLoad();
+      })().catch(error => {
+        if (current()) noteSearchApiFailure(error);
+      }).finally(() => { controller.active.delete(page); pump(); });
+      controller.active.set(page, task);
+    }
+  };
+  pump();
+  return controller.active.get(STATE._loadedPage + 1) || Promise.resolve();
+}
+
 function prefetchNextPage() {
-  if (resultWindow) { loadResultWindowPage(STATE._loadedPage + 1, true); return; }
+  if (resultWindow) {
+    const page = Math.floor(findVirtualIndex(getResultScrollTop()) / STATE.pageSize) + 1;
+    for (let next = page + 1; next <= page + 2 && resultWindow.pending.size < 2; next++) loadResultWindowPage(next, true);
+    return;
+  }
   if (!STATE._loadedPage) return Promise.resolve();
   if (!apiAvailable) return Promise.resolve();
   if (STATE.useLocalMode && STATE.dataLoaded) return Promise.resolve();
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
-  var nextPage = STATE._loadedPage + 1;
-  var totalPages = Math.ceil(STATE.total / STATE.pageSize);
-  if (nextPage > totalPages) return Promise.resolve();
-  if (STATE._pageCache[nextPage]) return Promise.resolve();
-  var reqId = searchRequestId;
   var q = STATE.query || "";
   var isRepo = !!STATE.repoFull;
   var base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
   var body = {};
   if (q) body.q = q;
-  body.page = nextPage;
+  body.page = 1;
   body.page_size = STATE.pageSize;
   if (!isRepo && STATE.filterRepos.length > 0) body.repos = STATE.filterRepos;
   if (STATE.filterExtensions.length > 0) body.extensions = STATE.filterExtensions;
@@ -1274,35 +1298,7 @@ function prefetchNextPage() {
   body.sort = STATE.sort || "relevance";
   if (!STATE.searchFolders) body.search_folders = false;
   if (STATE.exact) body.exact = true;
-  var cacheKey = base + "|" + stableSearchStringify(body);
-  var cached = getCachedSearchResponse(cacheKey);
-  if (cached && cached.results) {
-    STATE._pageCache[nextPage] = cached.results;
-    return Promise.resolve();
-  }
-  if (searchPrefetchPromise && searchPrefetchCacheKey === cacheKey) return searchPrefetchPromise;
-  if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
-  var prefetchController = new AbortController();
-  searchPrefetchAbortController = prefetchController;
-  searchPrefetchCacheKey = cacheKey;
-  searchPrefetchPromise = fetchSearchPage(cacheKey, base, body, prefetchController.signal, APPEND_REQUEST_TIMEOUT).then(function(data) {
-    if (reqId !== searchRequestId) return;
-    if (!isValidSearchResponse(data, body.page, body.page_size)) throw new Error("INVALID_API_RESPONSE");
-    noteApiSuccess();
-    setCachedSearchResponse(cacheKey, data);
-    STATE._pageCache[nextPage] = data.results;
-    scheduleBottomLoad();
-  }).catch(function(err) {
-    if (err && err.name === "AbortError") return;
-    if (reqId === searchRequestId) noteSearchApiFailure(err);
-  }).finally(function() {
-    if (searchPrefetchAbortController === prefetchController) {
-      searchPrefetchAbortController = null;
-      searchPrefetchPromise = null;
-      searchPrefetchCacheKey = null;
-    }
-  });
-  return searchPrefetchPromise;
+  return prefetchSearchPages(base, body);
 }
 
 let localDataLoadTimer = null;
@@ -2736,6 +2732,7 @@ function ensureResultWindowPages(start, end) {
   for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadResultWindowPage(page);
   const visiblePage = Math.floor(findVirtualIndex(getResultScrollTop()) / size) + 1;
   loadResultWindowPage(visiblePage + 1); loadResultWindowPage(visiblePage - 1);
+  prefetchNextPage();
 }
 
 function createResultWindowPlaceholder(index) {
