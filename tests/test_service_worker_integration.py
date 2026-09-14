@@ -106,6 +106,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         expected_paths = [
             "/search/#/",
             "/search/static/app.js",
+            "/search/static/reader-navigation.js",
             "/search/static/index-worker.js",
             "/search/data/initial/manifest.json",
             "/search/data/sidebar/manifest.json",
