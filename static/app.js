@@ -1059,43 +1059,45 @@ function isValidSearchResponse(data, expectedPage, expectedPageSize) {
     && data.page_size === expectedPageSize;
 }
 
-// Prefetch and foreground pagination share one bounded request per search/page.
+// One entry owns its network request, deadline and cancellation subscriptions.
+function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
+  const controller = new AbortController();
+  const entry = { controller, deadline: Date.now() + timeoutMs, listeners: [] };
+  const stopped = new Promise((resolve, reject) => {
+    entry.expire = () => {
+      reject(new Error("API_TIMEOUT"));
+      controller.abort();
+    };
+    controller.signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true });
+  });
+  const timer = setTimeout(entry.expire, timeoutMs);
+  const request = fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body), signal: controller.signal,
+  }).then(async response => {
+    if (!response.ok) throw Object.assign(new Error("HTTP " + response.status), { status: response.status });
+    const data = await response.json();
+    if (!isValidSearchResponse(data, body.page, body.page_size) ||
+        (!data.results.length && (body.page - 1) * body.page_size < data.total)) throw new Error("INVALID_API_RESPONSE");
+    return data;
+  });
+  entry.promise = Promise.race([request, stopped]).finally(() => {
+    clearTimeout(timer);
+    entry.listeners.forEach(([owner, cancel]) => owner.removeEventListener("abort", cancel));
+    if (pendingSearchPages.get(cacheKey) === entry) pendingSearchPages.delete(cacheKey);
+  });
+  pendingSearchPages.set(cacheKey, entry);
+  return entry;
+}
+
+// Prefetch and foreground pagination join the same entry for each search/page.
 function fetchSearchPage(cacheKey, url, body, signal, timeoutMs) {
   if (signal && signal.aborted) return Promise.reject(new DOMException("Cancelled", "AbortError"));
   let entry = pendingSearchPages.get(cacheKey);
   if (entry && Date.now() >= entry.deadline) entry.expire();
-  if (!entry || entry.controller.signal.aborted) {
-    const controller = new AbortController();
-    entry = { controller, deadline: Date.now() + timeoutMs, listeners: [] };
-    const stopped = new Promise((resolve, reject) => {
-      entry.expire = () => {
-        reject(new Error("API_TIMEOUT"));
-        controller.abort();
-      };
-      controller.signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true });
-    });
-    const timer = setTimeout(entry.expire, timeoutMs);
-    const request = fetch(url, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body), signal: controller.signal,
-    }).then(async response => {
-      if (!response.ok) throw Object.assign(new Error("HTTP " + response.status), { status: response.status });
-      const data = await response.json();
-      if (!isValidSearchResponse(data, body.page, body.page_size) ||
-          (!data.results.length && (body.page - 1) * body.page_size < data.total)) throw new Error("INVALID_API_RESPONSE");
-      return data;
-    });
-    const current = entry;
-    entry.promise = Promise.race([request, stopped]).finally(() => {
-      clearTimeout(timer);
-      current.listeners.forEach(([owner, cancel]) => owner.removeEventListener("abort", cancel));
-      if (pendingSearchPages.get(cacheKey) === current) pendingSearchPages.delete(cacheKey);
-    });
-    pendingSearchPages.set(cacheKey, entry);
-  }
+  if (!entry || entry.controller.signal.aborted) entry = createSearchPageRequest(cacheKey, url, body, timeoutMs);
   if (signal) {
-    const current = entry;
-    const cancel = () => current.controller.abort();
+    const cancel = () => entry.controller.abort();
     signal.addEventListener("abort", cancel, { once: true });
     entry.listeners.push([signal, cancel]);
   }
@@ -1115,105 +1117,66 @@ function noteSearchApiFailure(error) {
 }
 
 async function doSearchAPI(params, append, requestId) {
-  if (requestId !== searchRequestId) {
-    return false;
-  }
+  if (requestId !== searchRequestId) return false;
   if (append && STATE._pageCache[params.page]) {
-    if (VSCROLL.isDraggingThumb) {
-      STATE._deferredAppendWhileDragging = true;
-      STATE._pendingPage = 0;
-      STATE.isLoading = false;
-      return true;
-    }
-    var cp = params.page;
-    STATE.results = STATE.results.concat(STATE._pageCache[cp]);
-    delete STATE._pageCache[cp];
-    STATE._loadedPage = cp;
-    STATE.hasMore = STATE.results.length < STATE.total;
+    applySearchPage({ page: params.page, results: STATE._pageCache[params.page], total: STATE.total }, true);
     return true;
   }
-  const q = params.q || "";
-  const isRepo = !!STATE.repoFull;
-  const base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
-  const body = {};
-  if (q) body.q = q;
-  body.page = params.page || 1;
-  body.page_size = params.pageSize || STATE.pageSize;
-  if (!isRepo && params.repos && params.repos.length > 0) body.repos = params.repos;
-  if (params.extensions && params.extensions.length > 0) body.extensions = params.extensions;
-  if (params.folders && params.folders.length > 0) body.folders = params.folders;
-  if (params.minSize !== null) body.min_size = params.minSize;
-  if (params.maxSize !== null) body.max_size = params.maxSize;
-  body.sort = params.sort || "relevance";
-  if (!params.searchFolders) body.search_folders = false;
-  if (params.exact) body.exact = true;
+  const base = getSearchApiBase();
+  const body = buildSearchApiBody(params);
   const cacheKey = base + "|" + stableSearchStringify(body);
-  const cached = getCachedSearchResponse(cacheKey);
-  if (cached) {
-    STATE.total = cached.total;
-    if (append) {
-      if (VSCROLL.isDraggingThumb) {
-        STATE._pageCache[cached.page] = cached.results;
-        STATE._deferredAppendWhileDragging = true;
-        STATE._pendingPage = 0;
-        STATE.isLoading = false;
-        return true;
-      }
-      STATE._pageCache[cached.page] = cached.results;
-      STATE.results = STATE.results.concat(STATE._pageCache[cached.page]);
-      delete STATE._pageCache[cached.page];
-      STATE._loadedPage = cached.page;
-    } else {
-      STATE.results = cached.results;
-      STATE._loadedPage = 1;
-      STATE._pageCache = {};
+  let data = getCachedSearchResponse(cacheKey);
+  if (!data) {
+    try {
+      data = await fetchSearchPage(cacheKey, base, body, params.signal, append ? APPEND_REQUEST_TIMEOUT : 10000);
+      if (requestId !== searchRequestId || (params.signal && params.signal.aborted)) return false;
+      noteApiSuccess();
+      setCachedSearchResponse(cacheKey, data);
+    } catch (error) {
+      if (requestId === searchRequestId && !(params.signal && params.signal.aborted)) noteSearchApiFailure(error);
+      throw error;
     }
-    STATE.hasMore = STATE.results.length < STATE.total;
-    return true;
   }
-  var data;
-  try {
-    data = await fetchSearchPage(cacheKey, base, body, params.signal, append ? APPEND_REQUEST_TIMEOUT : 10000);
-    if (requestId !== searchRequestId || (params.signal && params.signal.aborted)) return false;
-    noteApiSuccess();
-    setCachedSearchResponse(cacheKey, data);
-  } catch (e) {
-    if (requestId === searchRequestId && !(params.signal && params.signal.aborted)) noteSearchApiFailure(e);
-    throw e;
-  }
-  if (requestId !== searchRequestId) {
-    return false;
-  }
+  if (requestId !== searchRequestId) return false;
+  applySearchPage(data, append);
+  return true;
+}
+
+function appendSearchResults(page, results = STATE._pageCache[page]) {
+  STATE.results = STATE.results.concat(results);
+  delete STATE._pageCache[page];
+  STATE._loadedPage = page;
+  STATE.hasMore = STATE.results.length < STATE.total;
+}
+
+function deferSearchAppend() {
+  if (!VSCROLL.isDraggingThumb) return false;
+  STATE._deferredAppendWhileDragging = true;
+  STATE._pendingPage = 0;
+  STATE.isLoading = false;
+  return true;
+}
+
+// Network, cached and Worker pages share the same state transition.
+function applySearchPage(data, append) {
   STATE.total = data.total;
   if (append) {
-    if (VSCROLL.isDraggingThumb) {
-      STATE._pageCache[data.page] = data.results;
-      STATE._deferredAppendWhileDragging = true;
-      STATE._pendingPage = 0;
-      STATE.isLoading = false;
-      return true;
-    }
     STATE._pageCache[data.page] = data.results;
-    STATE.results = STATE.results.concat(STATE._pageCache[data.page]);
-    delete STATE._pageCache[data.page];
-    STATE._loadedPage = data.page;
+    if (deferSearchAppend()) return false;
+    appendSearchResults(data.page);
   } else {
     STATE.results = data.results;
     STATE._loadedPage = 1;
     STATE._pageCache = {};
+    STATE.hasMore = STATE.results.length < STATE.total;
   }
-  STATE.hasMore = STATE.results.length < STATE.total;
   return true;
 }
 
 function consumeCachedAppendPage() {
   if (!STATE._pageCache[STATE.page]) return false;
-  var cp = STATE.page;
-  STATE.results = STATE.results.concat(STATE._pageCache[cp]);
-  delete STATE._pageCache[cp];
-  STATE._loadedPage = cp;
+  appendSearchResults(STATE.page);
   STATE.page = STATE._loadedPage;
-  STATE.hasMore = STATE.results.length < STATE.total;
   STATE._pendingPage = 0;
   STATE.isLoading = false;
   refreshVirtualAfterAppend();
@@ -1223,6 +1186,11 @@ function consumeCachedAppendPage() {
   prefetchNextPage();
   finishPagingAttempt(true);
   return true;
+}
+
+function cancelSearchPrefetch() {
+  searchPrefetchAbortController?.abort();
+  searchPrefetchAbortController = null;
 }
 
 function prefetchSearchPages(base, template) {
@@ -1283,22 +1251,7 @@ function prefetchNextPage() {
   if (!apiAvailable) return Promise.resolve();
   if (STATE.useLocalMode && STATE.dataLoaded) return Promise.resolve();
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
-  var q = STATE.query || "";
-  var isRepo = !!STATE.repoFull;
-  var base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
-  var body = {};
-  if (q) body.q = q;
-  body.page = 1;
-  body.page_size = STATE.pageSize;
-  if (!isRepo && STATE.filterRepos.length > 0) body.repos = STATE.filterRepos;
-  if (STATE.filterExtensions.length > 0) body.extensions = STATE.filterExtensions;
-  if (STATE.filterFolders.length > 0) body.folders = STATE.filterFolders;
-  if (STATE.filterMinSize !== null) body.min_size = STATE.filterMinSize;
-  if (STATE.filterMaxSize !== null) body.max_size = STATE.filterMaxSize;
-  body.sort = STATE.sort || "relevance";
-  if (!STATE.searchFolders) body.search_folders = false;
-  if (STATE.exact) body.exact = true;
-  return prefetchSearchPages(base, body);
+  return prefetchSearchPages(getSearchApiBase(), buildCurrentSearchBody(1));
 }
 
 let localDataLoadTimer = null;
@@ -2041,8 +1994,6 @@ let composeSafetyTimer = null;
 let searchId = 0;
 let searchAbortController = null;
 let searchPrefetchAbortController = null;
-let searchPrefetchPromise = null;
-let searchPrefetchCacheKey = null;
 let searchRequestId = 0;
 let filterSearchTimer = null;
 const FILTER_SEARCH_DEBOUNCE_MS = 200;
@@ -2500,7 +2451,7 @@ function tryRestoreSearchPosition(key, options = {}) {
   cancelPositionRestore();
   returnPositionTarget = null;
   searchAbortController?.abort();
-  searchPrefetchAbortController?.abort();
+  cancelSearchPrefetch();
   searchId++;
   searchRequestId++;
   const controller = new AbortController();
@@ -2900,11 +2851,8 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   filterSearchTimer = null;
   clearTimeout(searchTimer);
   if (searchAbortController) searchAbortController.abort();
-  if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
+  cancelSearchPrefetch();
   searchAbortController = new AbortController();
-  searchPrefetchAbortController = null;
-  searchPrefetchPromise = null;
-  searchPrefetchCacheKey = null;
   searchId++;
   searchRequestId++;
   STATE.results = snapshot.results.map(cloneSearchResult);
@@ -2969,23 +2917,38 @@ function setCachedSearchResponse(key, data) {
   }
 }
 
-function buildCurrentSearchBodyForCache(page) {
-  var body = { page: page || STATE.page || 1, page_size: STATE.pageSize, sort: STATE.sort || "relevance" };
-  if (STATE.query) body.q = STATE.query;
-  if (STATE.mode === "global" && STATE.filterRepos.length > 0) body.repos = STATE.filterRepos;
-  if (STATE.filterExtensions.length > 0) body.extensions = STATE.filterExtensions;
-  if (STATE.filterFolders.length > 0) body.folders = STATE.filterFolders;
-  if (STATE.filterMinSize !== null) body.min_size = STATE.filterMinSize;
-  if (STATE.filterMaxSize !== null) body.max_size = STATE.filterMaxSize;
-  if (!STATE.searchFolders) body.search_folders = false;
-  if (STATE.exact) body.exact = true;
-  return body;
+function buildCurrentSearchBody(page) {
+  return buildSearchApiBody({
+    q: STATE.query, page: page || STATE.page || 1, pageSize: STATE.pageSize,
+    repos: STATE.mode === "global" ? STATE.filterRepos : null,
+    extensions: STATE.filterExtensions, folders: STATE.filterFolders,
+    minSize: STATE.filterMinSize, maxSize: STATE.filterMaxSize,
+    sort: STATE.sort, searchFolders: STATE.searchFolders, exact: STATE.exact,
+  });
 }
 
 function getCurrentSearchCacheKey(page) {
-  var isRepo = !!STATE.repoFull;
-  var base = isRepo ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
-  return base + "|" + stableSearchStringify(buildCurrentSearchBodyForCache(page));
+  return getSearchApiBase() + "|" + stableSearchStringify(buildCurrentSearchBody(page));
+}
+
+function getSearchApiBase() {
+  return STATE.repoFull ? API_BASE + "/api/search/" + STATE.repo : API_BASE + "/api/search";
+}
+
+// Ordinary API requests use the existing prefix-folder contract. Mixed folder
+// selection remains on the Worker path, with its separate camelCase protocol.
+function buildSearchApiBody(params) {
+  const body = { page: params.page || 1, page_size: params.pageSize || STATE.pageSize };
+  if (params.q) body.q = params.q;
+  if (!STATE.repoFull && params.repos?.length) body.repos = params.repos;
+  if (params.extensions?.length) body.extensions = params.extensions;
+  if (params.folders?.length) body.folders = params.folders;
+  if (params.minSize !== null) body.min_size = params.minSize;
+  if (params.maxSize !== null) body.max_size = params.maxSize;
+  body.sort = params.sort || "relevance";
+  if (!params.searchFolders) body.search_folders = false;
+  if (params.exact) body.exact = true;
+  return body;
 }
 
 function canUseInitialSearchPayload() {
@@ -3015,9 +2978,8 @@ function applyInitialSearchPayload(data) {
   if (STATE.mode === "repo" && data.repo !== STATE.repoFull) return false;
   if (STATE.mode === "global" && data.mode !== "global") return false;
   if (searchAbortController) searchAbortController.abort();
-  if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
+  cancelSearchPrefetch();
   searchAbortController = new AbortController();
-  searchPrefetchAbortController = null;
   searchRequestId++;
   STATE.total = data.total || 0;
   STATE.page = 1;
@@ -3273,9 +3235,8 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     lastSelectedIndex = -1;
     if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
     if (searchAbortController) searchAbortController.abort();
-    if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
+    cancelSearchPrefetch();
     searchAbortController = new AbortController();
-    searchPrefetchAbortController = null;
     searchRequestId++;
     STATE._pageCache = {};
     STATE._loadedPage = 0;
@@ -3326,25 +3287,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
       if (STATE._deferredAppendWhileDragging) return;
       STATE.page = STATE._loadedPage;
       pagingSucceeded = true;
-      if (append) {
-        refreshVirtualAfterAppend();
-      } else {
-        DOM.resultsContainer.scrollTop = 0;
-        resetVirtualScrollState();
-        clearResultsSkeleton();
-        if (STATE.results.length === 0) {
-          DOM.resultsList.innerHTML = "";
-          DOM.emptyState.style.display = "flex";
-          DOM.emptyDesc.textContent = STATE.query
-            ? '没有找到与 "' + STATE.query + '" 相关的结果'
-            : "暂无数据";
-        } else {
-          DOM.emptyState.style.display = "none";
-          renderResults(true);
-        }
-      }
-      updateStatusBar();
-      updateLoadInfo();
+      renderSearchPage(append);
       prefetchNextPage();
       warmConnection();
       syncStateToURL();
@@ -3417,42 +3360,10 @@ function doSearchFallbackLocal(params, append, id) {
       const data = await doSearchLocal(params);
       if (id !== searchId) return;
       if (append && !data.results.length && STATE.results.length < data.total) throw new Error("EMPTY_LOCAL_PAGE");
-      STATE.total = data.total;
-      if (append) {
-        if (VSCROLL.isDraggingThumb) {
-          STATE._pageCache[params.page] = data.results;
-          STATE._deferredAppendWhileDragging = true;
-          STATE._pendingPage = 0;
-          STATE.isLoading = false;
-          return;
-        }
-        STATE.results = STATE.results.concat(data.results);
-      } else {
-        STATE.results = data.results;
-      }
-      STATE._loadedPage = params.page;
+      if (!applySearchPage(data, append)) return;
       STATE.page = STATE._loadedPage;
       pagingSucceeded = true;
-      STATE.hasMore = STATE.results.length < STATE.total;
-      if (append) {
-        refreshVirtualAfterAppend();
-      } else {
-        DOM.resultsContainer.scrollTop = 0;
-        resetVirtualScrollState();
-        clearResultsSkeleton();
-        if (STATE.results.length === 0) {
-          DOM.resultsList.innerHTML = "";
-          DOM.emptyState.style.display = "flex";
-          DOM.emptyDesc.textContent = STATE.query
-            ? '没有找到与 "' + STATE.query + '" 相关的结果'
-            : "暂无数据";
-        } else {
-          DOM.emptyState.style.display = "none";
-          renderResults(true);
-        }
-      }
-      updateStatusBar();
-      updateLoadInfo();
+      renderSearchPage(append);
       syncStateToURL();
     } catch (err) {
       console.error("Local Worker search failed:", err);
@@ -3484,6 +3395,28 @@ function doSearchFallbackLocal(params, append, id) {
       }
     }
   })();
+}
+
+function renderSearchPage(append) {
+  if (append) {
+    refreshVirtualAfterAppend();
+  } else {
+    DOM.resultsContainer.scrollTop = 0;
+    resetVirtualScrollState();
+    clearResultsSkeleton();
+    if (STATE.results.length === 0) {
+      DOM.resultsList.innerHTML = "";
+      DOM.emptyState.style.display = "flex";
+      DOM.emptyDesc.textContent = STATE.query
+        ? '没有找到与 "' + STATE.query + '" 相关的结果'
+        : "暂无数据";
+    } else {
+      DOM.emptyState.style.display = "none";
+      renderResults(true);
+    }
+  }
+  updateStatusBar();
+  updateLoadInfo();
 }
 
 function renderResults(animate = false) {
@@ -4046,12 +3979,9 @@ function scheduleFilterSearch() {
   resetPagingRecovery();
   clearTimeout(filterSearchTimer);
   if (searchAbortController) searchAbortController.abort();
-  if (searchPrefetchAbortController) searchPrefetchAbortController.abort();
+  cancelSearchPrefetch();
   searchId++;
   searchRequestId++;
-  searchPrefetchAbortController = null;
-  searchPrefetchPromise = null;
-  searchPrefetchCacheKey = null;
   STATE.isLoading = true;
   setSearchVisualLoading(true);
   syncStateToURL(true);
