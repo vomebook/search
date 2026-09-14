@@ -220,6 +220,23 @@ class PositionControlTests(unittest.TestCase):
         self.wait_position(0)
         self.assertEqual(self.page.evaluate('displayedSearchView.key'), self.page.evaluate('getSearchViewKey()'))
 
+    def test_pending_filter_timer_does_not_restart_explicit_position_restore(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        self.page.locator('#sort-select').select_option('name')
+        self.wait_position(0)
+        self.page.evaluate('''()=>{
+          searchViewSnapshots.clear();positionCalls=[];blockPosition=true;
+          readSearchViewport=async()=>null;
+          scheduleFilterSearch();
+        }''')
+        self.page.locator('#sort-select').select_option('relevance')
+        self.page.wait_for_function('!!window.releasePosition')
+        self.page.wait_for_timeout(250)
+        self.assertEqual(self.page.evaluate('positionCalls'), [1])
+        self.page.evaluate('blockPosition=false;releasePosition()')
+        self.wait_position(95000)
+
     def test_debounced_extension_filter_and_clear_all_restore_positions(self):
         self.input_position(95001)
         self.wait_position(95000)
