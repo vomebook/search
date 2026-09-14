@@ -115,6 +115,7 @@ if (!document.hidden && navigator.onLine) {
       </div>
       <div class="status-right">
         <button id="clear-filters-btn" class="text-btn" style="display:none">清空筛选</button>
+        <button id="return-to-position-btn" class="text-btn" type="button" hidden>回到上次位置</button>
         <div class="sort-group">
           <span class="sort-label">排序:</span>
           <select id="sort-select" class="sort-select">
@@ -153,7 +154,6 @@ if (!document.hidden && navigator.onLine) {
     <div id="load-info" class="load-info" style="display:none">
       <span id="mobile-selected-count" class="mobile-selected-count" style="display:none"></span>
        <span id="current-result-position" hidden></span>已加载 <span id="loaded-count">0</span> / <span id="total-count">0</span> 条
-       <button id="return-to-position-btn" class="text-btn" type="button" hidden>回到上次位置</button>
     </div>
     <div id="scroll-track" class="scroll-track">
       <div id="scroll-thumb" class="scroll-thumb"></div>
