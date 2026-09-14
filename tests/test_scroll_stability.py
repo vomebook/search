@@ -113,3 +113,57 @@ class ScrollStabilityTests(unittest.TestCase):
             self.assertIsNotNone(result[key])
             self.assertGreaterEqual(result[key], 0)
         self.assertEqual(self.fixture.errors, [])
+
+    def test_current_number_uses_measured_rows_at_end_of_large_result_set(self):
+        result = self.page.evaluate('''async () => {
+          cancelPositionRestore();
+          STATE.results=Array.from({length:99522},(_,i)=>({Repo:'VoiceOfML/Test',
+            File:'row-'+i,Extension:'txt',Folder:[],Size:1}));
+          STATE.total=99522;STATE.hasMore=false;STATE.isLoading=false;
+          rowStyle.textContent='.result-item {height:138px!important;min-height:0!important;box-sizing:border-box}';
+          resetVirtualScrollState();ensureVirtualHeights(STATE.total);
+          VSCROLL.heights.fill(138);VSCROLL.heightsDirty=true;
+          VSCROLL.estimateMeasurementKey=getHeightMeasurementKey();
+          renderResults();
+          const c=DOM.resultsContainer;c.scrollTop=c.scrollHeight;
+          await scrollFrames();updateCurrentResultPosition();
+          const rows=[...DOM.resultsList.querySelectorAll('.result-item')];
+          const first=rows.find(row=>row.getBoundingClientRect().bottom>c.getBoundingClientRect().top);
+          return {displayed:Number(document.getElementById('current-result-position').value),
+            first:Number(first.dataset.index)+1,last:rows.at(-1).dataset.index,
+            file:STATE.results[99521].File,total:STATE.total};
+        }''')
+        self.assertEqual(result['displayed'], result['first'])
+        self.assertGreater(result['displayed'], 99510)
+        self.assertEqual(result['last'], '99521')
+        self.assertEqual(result['file'], 'row-99521')
+        self.assertEqual(result['total'], 99522)
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_restored_window_thumb_reaches_and_loads_last_page(self):
+        self.page.evaluate('''async () => {
+          cancelPositionRestore();STATE.total=99522;STATE.results=STATE.results.slice(0,100);
+          STATE._loadedPage=1;STATE.hasMore=true;STATE.isLoading=false;
+          const key=getSearchViewKey();window.lastPageRequests=[];
+          resultWindow={key,total:STATE.total,query:JSON.parse(key),generation:'test',
+            pages:new Set([1]),pending:new Map(),failures:new Map(),count:100,controller:new AbortController()};
+          fetchPositionPage=async(query,page)=>{
+            lastPageRequests.push(page);
+            return {page,page_size:query.pageSize,total:99522,generation:'test',
+              results:Array.from({length:Math.min(query.pageSize,99522-(page-1)*query.pageSize)},(_,i)=>({
+                Repo:'VoiceOfML/Test',File:'last-'+((page-1)*query.pageSize+i),Extension:'txt',Folder:[],Size:1}))};
+          };
+          resetVirtualScrollState();renderResults();await scrollFrames();updateScrollTrack();
+          const rect=DOM.scrollThumb.getBoundingClientRect();
+          DOM.scrollThumb.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientY:rect.top+10}));
+          document.dispatchEvent(new MouseEvent('mousemove',{clientY:rect.top+10+DOM.scrollTrack.clientHeight}));
+          await scrollFrames();
+          document.dispatchEvent(new MouseEvent('mouseup'));
+        }''')
+        self.page.wait_for_function("STATE.results[99521]?.File==='last-99521'", timeout=5000)
+        self.page.evaluate('updateCurrentResultPosition()')
+        self.assertGreater(int(self.page.locator('#current-result-position').input_value()), 99510)
+        self.assertEqual(self.page.locator('.result-item').last.get_attribute('data-index'), '99521')
+        self.assertTrue(self.page.evaluate('lastPageRequests.includes(996)'))
+        self.assertFalse(self.page.evaluate('lastPageRequests.includes(500)'))
+        self.assertEqual(self.fixture.errors, [])
