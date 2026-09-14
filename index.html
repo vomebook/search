@@ -51,7 +51,8 @@ if (!document.hidden && navigator.onLine) {
       <input type="search" id="search-input" class="search-input"
              placeholder="搜索 VoiceOfML 数据仓库..."
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <kbd class="search-kbd" id="search-kbd">/</kbd>
+       <kbd class="search-kbd" id="search-kbd">/</kbd>
+       <button id="clear-search-btn" class="search-clear-btn" type="button" aria-label="清除搜索" title="清除搜索">&times;</button>
       <div id="search-history-dropdown" class="search-history-dropdown" style="display:none"></div>
     </div>
   </div>
@@ -151,7 +152,8 @@ if (!document.hidden && navigator.onLine) {
     </div>
     <div id="load-info" class="load-info" style="display:none">
       <span id="mobile-selected-count" class="mobile-selected-count" style="display:none"></span>
-      <span id="current-result-position" hidden></span>已加载 <span id="loaded-count">0</span> / <span id="total-count">0</span> 条
+       <span id="current-result-position" hidden></span>已加载 <span id="loaded-count">0</span> / <span id="total-count">0</span> 条
+       <button id="return-to-position-btn" class="text-btn" type="button" hidden>回到上次位置</button>
     </div>
     <div id="scroll-track" class="scroll-track">
       <div id="scroll-thumb" class="scroll-thumb"></div>
