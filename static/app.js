@@ -3785,7 +3785,7 @@ function findVirtualIndex(offset) {
       sum += height;
     }
   }
-  return Math.min(Math.max(0, idx), Math.max(0, STATE.results.length - 1));
+  return Math.min(Math.max(0, idx), Math.max(0, len - 1));
 }
 
 function resetVirtualScrollState() {
@@ -4000,7 +4000,7 @@ function updateCurrentResultPosition() {
   if (!label) return;
   label.hidden = !(STATE.results.length || STATE.total);
   if (STATE.results.length || STATE.total) {
-    const index = resultWindow ? findVirtualIndex(DOM.resultsContainer.scrollTop) : Math.min(STATE.total - 1, Math.max(0, Math.floor(DOM.resultsContainer.scrollTop / Math.max(1, VSCROLL.estimatedHeight))));
+    const index = findVirtualIndex(DOM.resultsContainer.scrollTop);
     if (document.activeElement !== label) label.value = index + 1;
   }
   if (DOM.returnToPositionBtn) {
