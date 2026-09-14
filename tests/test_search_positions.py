@@ -62,8 +62,6 @@ class SearchPositionTests(unittest.TestCase):
           scheduleFilterSearch();
         }''')
         self.page.wait_for_function('!STATE.isLoading')
-        self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
-        self.page.locator('#return-to-position-btn').click()
         self.assert_position()
 
     def test_history_click_recovers_evicted_position(self):

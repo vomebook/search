@@ -161,6 +161,83 @@ class PositionControlTests(unittest.TestCase):
         self.assertFalse(self.page.evaluate('!!positionRestore'))
         self.assertTrue(self.page.locator('#return-to-position-btn').is_visible())
 
+    def test_sort_round_trip_restores_each_position_then_enter_starts_at_top(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        self.page.locator('#sort-select').select_option('name')
+        self.wait_position(0)
+        self.input_position(5001)
+        self.wait_position(5000)
+        self.page.locator('#sort-select').select_option('relevance')
+        self.wait_position(95000)
+        self.page.locator('#sort-select').select_option('name')
+        self.wait_position(5000)
+        self.page.locator('#search-input').fill('paging-ui')
+        self.page.locator('#search-input').press('Enter')
+        self.wait_position(0)
+        self.page.wait_for_timeout(150)
+        self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
+
+    def test_filter_round_trip_restores_saved_position_after_snapshot_eviction(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        self.page.evaluate('''()=>{
+          DOM.searchFoldersToggle.checked=false;
+          DOM.searchFoldersToggle.dispatchEvent(new Event('change',{bubbles:true}));
+        }''')
+        self.wait_position(0)
+        self.page.evaluate('searchViewSnapshots.clear();positionCalls=[]')
+        self.page.evaluate('''()=>{
+          DOM.searchFoldersToggle.checked=true;
+          DOM.searchFoldersToggle.dispatchEvent(new Event('change',{bubbles:true}));
+        }''')
+        self.wait_position(95000)
+        self.assertEqual(self.page.evaluate('positionCalls.slice(0,4)'), [1,950,951,952])
+
+    def test_typing_existing_query_starts_at_top_after_filter_restore(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        self.page.locator('#search-input').fill('paging-other')
+        self.page.wait_for_function('STATE.query==="paging-other" && !STATE.isLoading')
+        self.wait_position(0)
+        self.page.locator('#search-input').fill('paging-ui')
+        self.page.wait_for_function('STATE.query==="paging-ui" && !STATE.isLoading')
+        self.wait_position(0)
+        self.assertTrue(self.page.locator('#return-to-position-btn').is_visible())
+
+    def test_typing_cancels_pending_filter_restore_and_ignores_late_response(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        self.page.locator('#sort-select').select_option('name')
+        self.wait_position(0)
+        self.page.evaluate('searchViewSnapshots.clear();blockPosition=true')
+        self.page.locator('#sort-select').select_option('relevance')
+        self.page.wait_for_function('!!window.releasePosition')
+        self.page.locator('#search-input').fill('paging-latest')
+        self.page.wait_for_function('STATE.query==="paging-latest" && !STATE.isLoading && !positionRestore')
+        self.page.evaluate('blockPosition=false;releasePosition()')
+        self.page.wait_for_timeout(100)
+        self.wait_position(0)
+        self.assertEqual(self.page.evaluate('displayedSearchView.key'), self.page.evaluate('getSearchViewKey()'))
+
+    def test_debounced_extension_filter_and_clear_all_restore_positions(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        self.page.evaluate('''()=>{
+          STATE.filterExtensions=['txt'];scheduleFilterSearch();
+        }''')
+        self.page.wait_for_function('!filterSearchTimer && !STATE.isLoading')
+        self.wait_position(0)
+        self.input_position(5001)
+        self.wait_position(5000)
+        self.page.locator('#clear-filters-btn').click()
+        self.wait_position(95000)
+        self.page.evaluate('''()=>{
+          STATE.filterExtensions=['txt'];scheduleFilterSearch();
+        }''')
+        self.page.wait_for_function('!filterSearchTimer && !STATE.isLoading')
+        self.wait_position(5000)
+
     def test_reload_cached_viewport_is_visible_before_blocked_validation(self):
         self.input_position(95001)
         self.wait_position(95000)
