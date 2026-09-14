@@ -61,6 +61,55 @@ class SidebarKeyboardTests(unittest.TestCase):
         }''')
         self.assertEqual(result, dict(rows=2, selected=True, final=3, childChecked=False))
 
+    def test_directory_requests_coalesce_and_clear_failed_body_for_retry(self):
+        self.page.clock.install()
+        self.page.evaluate('''() => {
+          window.directoryCalls=0;window.directoryResults=[];
+          const native=window.fetch;
+          window.fetch=(url,options)=>String(url).includes('/contents?path=refactor')
+            ? (directoryCalls++, Promise.resolve({ok:true,json:()=>new Promise((resolve,reject)=>{
+                window.finishDirectory=()=>resolve({folders:[],files:[]});
+                options.signal.addEventListener('abort',()=>reject(new DOMException('timed out','AbortError')));
+              })})) : native(url,options);
+          window.requestDirectory=()=>fetchFolderContents('Test','refactor').catch(()=>null);
+          requestDirectory().then(value=>directoryResults.push(value));
+          requestDirectory().then(value=>directoryResults.push(value));
+        }''')
+        self.assertEqual(self.page.evaluate('directoryCalls'), 1)
+        self.page.clock.fast_forward(12001)
+        self.page.wait_for_function('directoryResults.length===2')
+        self.assertEqual(self.page.evaluate('directoryResults'), [None, None])
+        self.page.evaluate('() => { requestDirectory().then(value=>directoryResults.push(value)); }')
+        self.page.wait_for_function('directoryCalls===2')
+        self.page.evaluate('finishDirectory()')
+        self.page.wait_for_function('directoryResults.length===3')
+        cached = self.page.evaluate('requestDirectory()')
+        self.assertEqual(cached, dict(folders=[], files=[]))
+        self.assertEqual(self.page.evaluate('directoryCalls'), 2)
+
+    def test_tree_animation_reversal_and_fallback_cleanup(self):
+        result = self.page.evaluate('''async () => {
+          const children=document.createElement('div');children.innerHTML='<div>child</div>';
+          const toggle=document.createElement('button');toggle.innerHTML='<span class="tree-toggle-glyph"></span>';
+          document.body.append(toggle,children);
+          toggleFolderChildrenAnimated(children,toggle,true);
+          toggleFolderChildrenAnimated(children,toggle,false);
+          toggleFolderChildrenAnimated(children,toggle,true);
+          children.dispatchEvent(new TransitionEvent('transitionend',{propertyName:'opacity'}));
+          const pending=!!children._transitionCleanup;
+          children.dispatchEvent(new TransitionEvent('transitionend',{propertyName:'height'}));
+          const expanded=children.style.display==='block' && toggle.classList.contains('expanded');
+          const clean=()=>!children._transitionTimer && !children._transitionCleanup &&
+            ['height','opacity','transform','overflow','transition'].every(key=>children.style[key]==='');
+          const afterEvent=clean();
+          toggleFolderChildrenAnimated(children,toggle,false);
+          await new Promise(resolve=>setTimeout(resolve,350));
+          const collapsed=children.style.display==='none' && !toggle.classList.contains('expanded');
+          const afterTimeout=clean();children.remove();toggle.remove();
+          return {pending,expanded,afterEvent,collapsed,afterTimeout};
+        }''')
+        self.assertTrue(all(result.values()), result)
+
     def test_form_controls_and_composition_keep_their_keys(self):
         result = self.page.evaluate('''() => {
           const dispatch=(el,key,extra={})=>{
