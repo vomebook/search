@@ -125,7 +125,7 @@ class ScrollStabilityTests(unittest.TestCase):
           VSCROLL.heights.fill(138);VSCROLL.heightsDirty=true;
           VSCROLL.estimateMeasurementKey=getHeightMeasurementKey();
           renderResults();
-          const c=DOM.resultsContainer;c.scrollTop=c.scrollHeight;
+          const c=DOM.resultsContainer;setResultScrollTop(getVirtualTotalHeight());
           await scrollFrames();updateCurrentResultPosition();
           const rows=[...DOM.resultsList.querySelectorAll('.result-item')];
           const first=rows.find(row=>row.getBoundingClientRect().bottom>c.getBoundingClientRect().top);
