@@ -1061,6 +1061,7 @@ body:not(.mobile) .result-meta { grid-column: 3 / 5; grid-row: 3; margin-top: 0;
   flex-shrink: 0;
   position: relative;
 }
+.current-result-position { width: 76px; margin: 0 3px; padding: 2px 4px; border: 1px solid var(--outline-variant); border-radius: 4px; background: var(--surface); color: var(--on-surface); text-align: center; font-size: 12px; }
 
 .mobile-selected-count {
   display: none;
