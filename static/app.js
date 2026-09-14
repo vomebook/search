@@ -5114,6 +5114,7 @@ function updatePagingStatus() {
     button.id = "paging-status";
     button.type = "button";
     button.className = "text-btn-sm";
+    button.textContent = "加载失败，重试";
     button.setAttribute("aria-live", "polite");
     button.addEventListener("click", () => {
       resetPagingRecovery();
@@ -5122,9 +5123,8 @@ function updatePagingStatus() {
     DOM.loadInfo.appendChild(button);
   }
   const loading = STATE.isLoading && STATE.page > STATE._loadedPage;
-  button.hidden = !STATE.hasMore || (!loading && !pagingFailures);
+  button.hidden = !STATE.hasMore || loading || pagingFailures < 2;
   button.disabled = loading;
-  button.textContent = loading ? "加载中…" : "加载失败，重试";
 }
 
 function resetPagingRecovery() {
