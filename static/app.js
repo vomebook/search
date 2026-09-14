@@ -1294,18 +1294,14 @@ async function fetchRepos() {
   if (repoApiCache) return repoApiCache;
   if (repoApiPending) return repoApiPending;
   if (!apiAvailable) return null;
-  repoApiPending = fetchWithTimeout(API_BASE + "/api/repos", 5000)
-    .then(function(resp) {
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      return resp.json();
-    })
+  repoApiPending = fetchMetadataList(API_BASE + "/api/repos")
     .then(function(data) {
       noteApiSuccess();
       repoApiCache = data;
       return data;
     })
-    .catch(function() {
-      noteApiFailure();
+    .catch(function(error) {
+      if (!error || error.name !== "AbortError") noteApiFailure();
       return null;
     })
     .finally(function() { repoApiPending = null; });
@@ -1318,10 +1314,9 @@ async function fetchExtensions(repo) {
   if (extensionApiPending.has(key)) return extensionApiPending.get(key);
   if (!apiAvailable) return null;
   var url = repo ? API_BASE + "/api/extensions?repo=" + encodeURIComponent(repo) : API_BASE + "/api/extensions";
-  var pending = fetchWithTimeout(url, 5000)
-    .then(function(resp) { if (!resp.ok) throw new Error("HTTP " + resp.status); return resp.json(); })
-    .then(function(data) { if (!Array.isArray(data)) throw new Error("Invalid extensions response"); noteApiSuccess(); extensionApiCache.set(key, data); return data; })
-    .catch(function() { noteApiFailure(); return null; })
+  var pending = fetchMetadataList(url)
+    .then(function(data) { noteApiSuccess(); extensionApiCache.set(key, data); return data; })
+    .catch(function(error) { if (!error || error.name !== "AbortError") noteApiFailure(); return null; })
     .finally(function() { extensionApiPending.delete(key); });
   extensionApiPending.set(key, pending);
   return pending;
@@ -1332,13 +1327,11 @@ async function fetchFolderTree(repo, cacheKey) {
   if (cacheKey && folderTreeCache.has(cacheKey)) return folderTreeCache.get(cacheKey);
   if (!apiAvailable) return null;
   try {
-    var resp = await fetchWithTimeout(API_BASE + "/api/folders/" + encodeURIComponent(repo), 5000);
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    var data = await resp.json();
+    var data = await fetchMetadataList(API_BASE + "/api/folders/" + encodeURIComponent(repo));
     noteApiSuccess();
     if (cacheKey && data) folderTreeCache.set(cacheKey, data);
     return data;
-  } catch (e) { noteApiFailure(); return null; }
+  } catch (e) { if (!e || e.name !== "AbortError") noteApiFailure(); return null; }
 }
 const browserApiCache = new Map();
 const browserApiPending = new Map();
@@ -1346,16 +1339,25 @@ const BROWSER_API_CACHE_MAX = 200;
 const sidebarInitialCache = new Map();
 const sidebarInitialPending = new Map();
 
-async function fetchJsonWithTimeout(url, timeoutMs) {
+async function fetchJsonWithTimeout(url, timeoutMs, requireOK = false) {
   var controller = new AbortController();
   var timeoutId = setTimeout(function() { controller.abort(); }, timeoutMs);
   try {
     var resp = await fetch(url, { signal: controller.signal });
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      if (requireOK) throw new Error("HTTP " + resp.status);
+      return null;
+    }
     return await resp.json();
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function fetchMetadataList(url) {
+  const data = await fetchJsonWithTimeout(url, 5000, true);
+  if (!Array.isArray(data)) throw new Error("Invalid metadata response");
+  return data;
 }
 
 async function fetchWithTimeout(url, timeoutMs) {
