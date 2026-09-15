@@ -1,5 +1,7 @@
 """Search-host navigation: source checks, session handoff and focus ownership."""
 import unittest
+import subprocess
+from pathlib import Path
 from tests import test_paging_recovery as paging
 
 
@@ -22,6 +24,23 @@ class ReaderNavigationHostTests(unittest.TestCase):
     def tearDown(self):
         self.assertEqual(self.fixture.errors, [])
         self.fixture.tearDown()
+
+    def test_composed_app_starts_with_legacy_html_without_navigation_script(self):
+        root = Path(__file__).resolve().parents[1]
+        legacy = subprocess.check_output(['git', '-c', f'safe.directory={root}', 'show', '888265a:index.html'], cwd=root)
+        app = subprocess.check_output(['node', 'scripts/compose_app.mjs'], cwd=root)
+        with self.fixture.browser.new_context(service_workers='block') as context:
+            page = context.new_page()
+            page.on('pageerror', lambda error: self.fixture.errors.append(str(error)))
+            page.add_init_script(paging.FETCH_SCRIPT)
+            page.route('**/api/**', lambda route: route.fulfill(content_type='application/json', body='[]'))
+            page.route('**/static/app.js', lambda route: route.fulfill(content_type='text/javascript', body=app))
+            page.route(self.fixture.origin + '/search/', lambda route: route.fulfill(content_type='text/html', body=legacy))
+            page.goto(self.fixture.origin + '/search/#/?q=paging&local=0', wait_until='domcontentloaded')
+            page.wait_for_function('typeof VoiceOfMLReaderNavigation === "object" && STATE.results.length > 0')
+            self.assertEqual(page.locator('script[src*="reader-navigation"]').count(), 0)
+            self.assertTrue(page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")'))
+            self.assertTrue(page.evaluate('closeReaderOverlay()'))
 
     def test_replace_preserves_return_focus_session_and_background_attributes(self):
         result = self.page.evaluate('''() => {

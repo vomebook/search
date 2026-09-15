@@ -100,8 +100,8 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(workflow, /static\/reader-section-virtualizer\.js/);
   assert.match(app, /extension === "docx" \? \["\/search\/static\/vendor\/jszip\.min\.acc7e41455a8\.js"/);
   assert.match(app, /var warmedReaderSources = new Set\(\)/);
-  assert.match(app, /warmedReaderSources\.size < 8/);
-  assert.match(app, /method: "HEAD", cache: "no-store", keepalive: true/);
+  assert.match(app, /warmedReaderSources\.size >= 8/);
+  assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
   assertCode(reader, 'if (!fallback) { fallback = true; image.src = sourceUrl; } else finish(new Error("image load failed"))');
   assert.match(reader, /image\.src = contentUrl/);
   assert.match(reader, /disableStream: true/);
@@ -512,7 +512,8 @@ test("deployment workflow uses official checkout configure upload and deploy act
 test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.doesNotMatch(workflow, /node tests\//);
   assert.match(workflow, /node-version: '22'/);
-  assert.match(workflow, /esbuild@0\.28\.2 static\/app\.js --minify/);
+  assert.match(workflow, /node scripts\/compose_app\.mjs/);
+  assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify/);
   assert.match(workflow, /esbuild@0\.28\.2 static\/reader\.js --minify/);
   assert.match(workflow, /node scripts\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/copy_reader_vendor\.mjs _site\/static\/vendor/);

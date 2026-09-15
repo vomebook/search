@@ -450,8 +450,52 @@ function restoreReaderFromSession() {
 var warmedReaderAssets = new Set();
 var warmedReaderSources = new Set();
 var readerWarmupInFlight = 0;
+let readerWarmupPending = null;
+const readerWarmupRetryAt = new Map();
+function cancelReaderWarmup() {
+  if (readerWarmupPending) readerWarmupPending.cancel();
+}
+function startReaderSourceWarmup(base, readerId, sourceUrl) {
+  const key = readerId ? "id:" + readerId : sourceUrl;
+  if (!key || readerWarmupPending || warmedReaderSources.size >= 8 || warmedReaderSources.has(key) ||
+      Date.now() < (readerWarmupRetryAt.get(key) || 0)) return;
+  const controller = new AbortController();
+  const task = { cancel() { controller.abort(); finish(false); } };
+  const finish = (success) => {
+    if (readerWarmupPending !== task) return;
+    clearTimeout(timer);
+    readerWarmupPending = null;
+    readerWarmupInFlight = 0;
+    if (success) {
+      warmedReaderSources.add(key);
+      readerWarmupRetryAt.delete(key);
+    } else {
+      controller.abort();
+      readerWarmupRetryAt.delete(key);
+      readerWarmupRetryAt.set(key, Date.now() + 5000);
+      if (readerWarmupRetryAt.size > 64) readerWarmupRetryAt.delete(readerWarmupRetryAt.keys().next().value);
+    }
+  };
+  readerWarmupPending = task;
+  readerWarmupInFlight = 1;
+  const timer = setTimeout(task.cancel, 8000);
+  (async () => {
+    try {
+      const url = base + (readerId ? "/api/reader-resolve?id=" + encodeURIComponent(readerId)
+        : "/api/reader-content?url=" + encodeURIComponent(sourceUrl));
+      const response = await fetch(url, { method: readerId ? "GET" : "HEAD", cache: "no-store",
+        mode: "cors", signal: controller.signal });
+      if (!response.ok) throw new Error("Reader warmup HTTP " + response.status);
+      const data = readerId ? await response.json() : null;
+      if (readerId && (!data || typeof data.url !== "string" || !data.url)) throw new Error("Invalid reader metadata");
+      if (readerWarmupPending !== task || controller.signal.aborted) return;
+      if (readerId) sessionStorage.setItem("reader-resolve:" + readerId, JSON.stringify(data));
+      finish(true);
+    } catch (_) { finish(false); }
+  })();
+}
 function warmReaderIntent(rawUrl) {
-  if (!rawUrl) return;
+  if (!rawUrl || document.hidden || !navigator.onLine) return;
   var extension = "", sourceUrl = "", readerId = "";
   try {
     var readerUrl = new URL(rawUrl, location.origin);
@@ -470,22 +514,14 @@ function warmReaderIntent(rawUrl) {
     warmedReaderAssets.add(href);
     var link = document.createElement("link"); link.rel = href.indexOf("/foliate-reader/view.js") >= 0 ? "modulepreload" : "prefetch"; link.href = href; document.head.appendChild(link);
   });
-  var warmKey = readerId ? "id:" + readerId : sourceUrl;
-  if (warmKey && readerWarmupInFlight < 1 && warmedReaderSources.size < 8 && !warmedReaderSources.has(warmKey)) {
-    warmedReaderSources.add(warmKey);
-    readerWarmupInFlight++;
-    var sourceRequest = readerId
-      ? fetch(API_BASE + "/api/reader-resolve?id=" + encodeURIComponent(readerId), { cache: "no-store", keepalive: true, mode: "cors" })
-      : fetch(API_BASE + "/api/reader-content?url=" + encodeURIComponent(sourceUrl), { method: "HEAD", cache: "no-store", keepalive: true, mode: "cors" });
-    sourceRequest.then(function(response) {
-      if (!readerId || !response.ok) return null;
-      return response.json().then(function(data) { if (data && data.url) sessionStorage.setItem("reader-resolve:" + readerId, JSON.stringify(data)); });
-    }).catch(function() {}).finally(function() { readerWarmupInFlight--; });
-  }
-  try { fetch(API_BASE + "/api/ping", { cache: "no-store", mode: "cors" }).catch(function() {}); } catch (_) {}
+  startReaderSourceWarmup(API_BASE, readerId, sourceUrl);
+  warmConnection();
 }
 
 function setupReaderIntentWarming() {
+  window.addEventListener("pagehide", cancelReaderWarmup);
+  window.addEventListener("offline", cancelReaderWarmup);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) cancelReaderWarmup(); });
   var warm = function(event) {
     if (event.target.closest('[data-action="download"], [data-download]')) return;
     var target = event.target.closest("[data-reader-url], [data-read-url]");
