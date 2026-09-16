@@ -25,7 +25,7 @@ function harness(options) {
   const settings = options || {};
   const listeners = {};
   const stores = new Map();
-  const operations = { addAll: [], put: [], deleted: [], fetch: [], warnings: [], skipWaiting: 0, claim: 0 };
+  const operations = { addAll: [], put: [], deleted: [], fetch: [], warnings: [], lifetimes: [], skipWaiting: 0, claim: 0 };
   function store(name) {
     if (!stores.has(name)) stores.set(name, new Map());
     return stores.get(name);
@@ -43,7 +43,11 @@ function harness(options) {
           return Promise.resolve();
         },
         match(request) { return Promise.resolve(values.get(keyOf(request))); },
-        put(request, value) { operations.put.push(keyOf(request)); values.set(keyOf(request), value); return Promise.resolve(); },
+        put(request, value) {
+          operations.put.push(keyOf(request));
+          if (settings.put) return settings.put(request, value);
+          values.set(keyOf(request), value); return Promise.resolve();
+        },
       });
     },
     keys() { return Promise.resolve(Array.from(stores.keys())); },
@@ -84,7 +88,8 @@ function lifecycle(listener) {
 
 function dispatchFetch(instance, url, mode, method) {
   let promise;
-  instance.listeners.fetch({ request: { url, mode, method: method || "GET" }, respondWith(value) { promise = value; } });
+  instance.listeners.fetch({ request: { url, mode, method: method || "GET" },
+    respondWith(value) { promise = value; }, waitUntil(value) { instance.operations.lifetimes.push(value); } });
   return promise;
 }
 
@@ -178,6 +183,50 @@ test("reader navigations prefer the network and share one query-independent cach
   await tick();
   assert.deepStrictEqual(instance.operations.fetch, [url]);
   assert.deepStrictEqual(instance.operations.put, ["/search/static/reader.html"]);
+});
+test("cached responses return immediately while event lifetime covers delayed network and cache writes", async () => {
+  const url = "https://example.test/search/data/search_data.json.gz";
+  const cached = response("old");
+  let networkDone, writeDone;
+  const instance = harness({cacheEntries: [[url, cached]],
+    fetch: () => new Promise(resolve => { networkDone = resolve; }),
+    put: () => new Promise(resolve => { writeDone = resolve; }),
+  });
+  const result = dispatchFetch(instance, url);
+  assert.strictEqual(instance.operations.lifetimes.length, 1);
+  assert.strictEqual(await result, cached);
+  let finished = false;
+  instance.operations.lifetimes[0].then(() => { finished = true; });
+  networkDone(response("new"));
+  await tick();
+  assert.strictEqual(finished, false);
+  writeDone();
+  await instance.operations.lifetimes[0];
+  assert.strictEqual(finished, true);
+});
+test("network cache misses stream without waiting for persistent cache writes", async () => {
+  let writeDone;
+  const network = response("stream");
+  const instance = harness({fetch: () => Promise.resolve(network), put: () => new Promise(resolve => { writeDone = resolve; })});
+  assert.strictEqual(await dispatchFetch(instance, "https://example.test/search/static/app.js"), network);
+  writeDone();
+  await Promise.all(instance.operations.lifetimes);
+});
+test("unavailable Cache Storage and quota errors preserve successful network responses", async () => {
+  for (const options of [{openError: new Error("storage unavailable")}, {put: () => Promise.reject(new Error("quota"))}]) {
+    const network = response("usable");
+    const instance = harness(Object.assign({fetch: () => Promise.resolve(network)}, options));
+    assert.strictEqual(await dispatchFetch(instance, "https://example.test/search/static/app.js"), network);
+    await Promise.all(instance.operations.lifetimes);
+  }
+});
+test("generated data and Reader partial responses never enter the static cache", async () => {
+  for (const path of ["data/search_data.json.gz", "static/reader.js"]) {
+    const instance = harness({fetch: () => Promise.resolve(response("partial", {status: 206}))});
+    assert.strictEqual((await dispatchFetch(instance, "https://example.test/search/" + path)).status, 206);
+    await Promise.all(instance.operations.lifetimes);
+    assert.deepStrictEqual(instance.operations.put, []);
+  }
 });
 
 for (const route of [

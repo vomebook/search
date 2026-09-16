@@ -29,6 +29,13 @@ let repoSortedBySize = {};
 let nameOrderReady = false;
 let sizeOrderReady = false;
 let sortBuildTimer = null;
+let fulltextBuildTimer = null;
+let fulltextBuild = null;
+const FULLTEXT_BATCH_RECORDS = 256;
+const FULLTEXT_BATCH_MS = 8;
+const directoryIndexes = new Map();
+const DIRECTORY_INDEX_MAX = 4;
+const recordNameCollator = new Intl.Collator("zh");
 
 function emptyMetadata() {
   return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, txt: { available: false, count: 0, byRepo: {} }, reader: { available: false, count: 0, byRepo: {} } };
@@ -150,7 +157,7 @@ function stableRecordId(record, occurrence) {
 }
 
 function compareRecordName(a, b) {
-  return String(records[a].File || "").localeCompare(String(records[b].File || ""), "zh");
+  return recordNameCollator.compare(String(records[a].File || ""), String(records[b].File || ""));
 }
 
 function compareRecordSize(a, b) {
@@ -189,6 +196,10 @@ function scheduleSortOrders(expectedGeneration) {
 function replaceCorpus(nextRecords) {
   snapshotGeneration = null;
   if (sortBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(sortBuildTimer);
+  if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
+  fulltextBuildTimer = null;
+  fulltextBuild = null;
+  directoryIndexes.clear();
   searchOrderCache.clear();
   records = nextRecords;
   const repoCounts = {};
@@ -260,27 +271,95 @@ function replaceCorpus(nextRecords) {
   sortBuildTimer = null;
   generation++;
   scheduleSortOrders(generation);
+  scheduleFulltext(generation, 1500);
   return Object.assign({ state: "corpus-ready", generation }, metadata);
+}
+
+function advanceFulltext(limit, deadline) {
+  if (!fulltextBuild) fulltextBuild = { next: 0, all: {}, files: {} };
+  const build = fulltextBuild;
+  const end = Math.min(records.length, build.next + limit);
+  while (build.next < end) {
+    const i = build.next++;
+    const record = records[i];
+    const folders = Array.isArray(record.Folder) ? record.Folder : [];
+    for (const token of tokenize([record.File || ""].concat(folders).join(" "))) {
+      if (!build.all[token]) build.all[token] = [];
+      build.all[token].push(i);
+    }
+    for (const token of tokenize(record.File || "")) {
+      if (!build.files[token]) build.files[token] = [];
+      build.files[token].push(i);
+    }
+    if (Date.now() >= deadline) break;
+  }
+  if (build.next < records.length) return;
+  // Stable frequency buckets preserve the old descending stable sort, including
+  // tie order used by fuzzy candidates, while allowing vocabulary work to yield.
+  if (!build.allVocab) build.allVocab = createVocabularyBuild(build.all);
+  if (!advanceVocabulary(build.allVocab, deadline)) return;
+  if (!build.filesVocab) build.filesVocab = createVocabularyBuild(build.files);
+  if (!advanceVocabulary(build.filesVocab, deadline)) return;
+  // Publish only complete indexes. Foreground searches finish this same builder.
+  wordIndex = build.all;
+  wordIndexFilesOnly = build.files;
+  vocabSorted = build.allVocab.output;
+  vocabSortedFilesOnly = build.filesVocab.output;
+  fulltextBuild = null;
+}
+
+function createVocabularyBuild(index) {
+  return { index, keys: Object.keys(index), next: 0, groups: new Map(), counts: null,
+    group: 0, item: 0, output: [] };
+}
+
+function advanceVocabulary(build, deadline) {
+  let remaining = deadline === Infinity ? Infinity : 4096;
+  while (build.next < build.keys.length) {
+    if (remaining-- <= 0 || Date.now() >= deadline) return false;
+    const token = build.keys[build.next++];
+    const count = build.index[token].length;
+    if (!build.groups.has(count)) build.groups.set(count, []);
+    build.groups.get(count).push([token, count]);
+  }
+  if (!build.counts) build.counts = Array.from(build.groups.keys()).sort((a, b) => b - a);
+  while (build.group < build.counts.length) {
+    const group = build.groups.get(build.counts[build.group]);
+    while (build.item < group.length) {
+      if (remaining-- <= 0 || Date.now() >= deadline) return false;
+      build.output.push(group[build.item++]);
+    }
+    build.group++;
+    build.item = 0;
+  }
+  return true;
+}
+
+function scheduleFulltext(expectedGeneration, delay) {
+  if (typeof setTimeout !== "function" || wordIndex) return;
+  // Keep lazy construction on devices that explicitly report little memory.
+  if (typeof navigator !== "undefined" && navigator.deviceMemory <= 2) return;
+  fulltextBuildTimer = setTimeout(() => {
+    if (generation !== expectedGeneration) return;
+    fulltextBuildTimer = null;
+    if (wordIndex) return;
+    try {
+      advanceFulltext(FULLTEXT_BATCH_RECORDS, Date.now() + FULLTEXT_BATCH_MS);
+    } catch (_) {
+      // Speculative work must not terminate the Worker. A demanded search can
+      // retry construction and report a normal correlated protocol error.
+      fulltextBuild = null;
+      return;
+    }
+    if (!wordIndex) scheduleFulltext(expectedGeneration, 4);
+  }, delay);
 }
 
 function buildFulltext() {
   if (wordIndex) return;
-  wordIndex = {};
-  wordIndexFilesOnly = {};
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i];
-    const folders = Array.isArray(record.Folder) ? record.Folder : [];
-    for (const token of tokenize([record.File || ""].concat(folders).join(" "))) {
-      if (!wordIndex[token]) wordIndex[token] = [];
-      wordIndex[token].push(i);
-    }
-    for (const token of tokenize(record.File || "")) {
-      if (!wordIndexFilesOnly[token]) wordIndexFilesOnly[token] = [];
-      wordIndexFilesOnly[token].push(i);
-    }
-  }
-  vocabSorted = Object.keys(wordIndex).map((token) => [token, wordIndex[token].length]).sort((a, b) => b[1] - a[1]);
-  vocabSortedFilesOnly = Object.keys(wordIndexFilesOnly).map((token) => [token, wordIndexFilesOnly[token].length]).sort((a, b) => b[1] - a[1]);
+  if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
+  fulltextBuildTimer = null;
+  advanceFulltext(records.length, Infinity);
 }
 
 function applyFilters(indices, params) {
@@ -423,24 +502,27 @@ function searchLocal(params) {
     }
     matched = tokenMatches || [];
   }
-  const tokens = tokenize(query);
-  const scored = applyFilters(matched, params).map((index) => {
-    const record = records[index] || {};
-    const file = String(record.File || "").toLowerCase();
-    const repo = String(record.Repo || "").toLowerCase();
-    const folder = (record.Folder || []).join("/").toLowerCase();
-    let score = 0;
-    for (const token of tokens) {
-      if (file.includes(token)) score += 3;
-      if (searchFolders && folder.includes(token)) score += 2;
-      if (repo.includes(token)) score += 1;
-    }
-    return { index, score };
-  });
-  if (params.sort === "name") scored.sort((a, b) => String(records[a.index].File || "").localeCompare(String(records[b.index].File || ""), "zh"));
-  else if (params.sort === "size") scored.sort((a, b) => (Number(records[b.index].Size) || 0) - (Number(records[a.index].Size) || 0));
-  else if (query) scored.sort((a, b) => b.score - a.score);
-  ordered = scored.map((item) => item.index);
+  const filtered = applyFilters(matched, params);
+  if (params.sort === "name" || params.sort === "size") {
+    ordered = filtered.sort(params.sort === "name" ? compareRecordName : compareRecordSize);
+  } else {
+    const tokens = tokenize(query);
+    const scored = filtered.map((index) => {
+      const record = records[index] || {};
+      const file = String(record.File || "").toLowerCase();
+      const repo = String(record.Repo || "").toLowerCase();
+      const folder = (record.Folder || []).join("/").toLowerCase();
+      let score = 0;
+      for (const token of tokens) {
+        if (file.includes(token)) score += 3;
+        if (searchFolders && folder.includes(token)) score += 2;
+        if (repo.includes(token)) score += 1;
+      }
+      return { index, score };
+    });
+    if (query) scored.sort((a, b) => b.score - a.score);
+    ordered = scored.map((item) => item.index);
+  }
   searchOrderCache.set(cacheKey, ordered);
   while (searchOrderCache.size > SEARCH_ORDER_CACHE_MAX) searchOrderCache.delete(searchOrderCache.keys().next().value);
   return pageResult(ordered, params);
@@ -464,34 +546,34 @@ function randomRecord(params) {
 function folderContents(params) {
   const repo = params.repo || "";
   const path = cleanPath(params.path);
-  const parts = path ? path.split("/") : [];
-  const folders = {};
-  const files = [];
-  for (const record of records) {
-    if (record.Repo !== repo) continue;
-    const recordFolders = record.Folder || [];
-    if (recordFolders.length < parts.length || parts.some((part, index) => recordFolders[index] !== part)) continue;
-    if (recordFolders.length > parts.length) {
-      const name = recordFolders[parts.length];
-      folders[name] = (folders[name] || 0) + 1;
-    } else {
-      files.push({ name: record.File || "", ext: record.Extension || "", hasTxt: !!record.HasTxt, size: record.Size || "" });
-    }
-  }
+  const directory = getDirectoryIndex(repo);
+  const node = directory.nodes[path];
+  const files = (directory.files[path] || []).map(index => {
+    const record = records[index];
+    return { name: record.File || "", ext: record.Extension || "", hasTxt: !!record.HasTxt, size: record.Size || "" };
+  });
   return {
-    folders: Object.keys(folders).sort().map((name) => ({ name, path: parts.concat([name]).join("/"), count: folders[name] })),
+    folders: (node ? node.children.slice() : []).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+      .map(child => ({ name: child.name, path: child.path, count: child.count })),
     files: files.sort((a, b) => a.name.localeCompare(b.name)),
     current_path: path,
     generation,
   };
 }
 
-function folderTree(params) {
-  const repo = params.repo || "";
+function getDirectoryIndex(repo) {
+  const cached = directoryIndexes.get(repo);
+  if (cached) {
+    directoryIndexes.delete(repo);
+    directoryIndexes.set(repo, cached);
+    return cached;
+  }
   const root = { name: repo.split("/").pop(), path: "", children: [], count: 0, isRoot: true, hasDirectFiles: false };
-  const nodes = { "": root };
-  for (const record of records) {
-    if (record.Repo !== repo) continue;
+  const nodes = Object.create(null);
+  const directFiles = Object.create(null);
+  nodes[""] = root;
+  for (const index of repoRecordIndices[repo] || []) {
+    const record = records[index];
     root.count++;
     const folders = record.Folder || [];
     let path = "";
@@ -505,6 +587,8 @@ function folderTree(params) {
       nodes[path].count++;
     }
     nodes[path].hasDirectFiles = true;
+    if (!directFiles[path]) directFiles[path] = [];
+    directFiles[path].push(index);
   }
   for (const path of Object.keys(nodes)) {
     const node = nodes[path];
@@ -512,7 +596,18 @@ function folderTree(params) {
     node.hasChildren = node.children.length > 0;
     node.showSelfToggle = !!(node.path && node.hasDirectFiles && node.hasChildren);
   }
-  return { tree: root.count ? [root] : [], generation };
+  const directory = { tree: root.count ? [root] : [], nodes, files: directFiles };
+  // Unknown repositories do not consume cache capacity. Stored file indices are
+  // disjoint across repositories and therefore bounded by the loaded corpus.
+  if (root.count) {
+    directoryIndexes.set(repo, directory);
+    while (directoryIndexes.size > DIRECTORY_INDEX_MAX) directoryIndexes.delete(directoryIndexes.keys().next().value);
+  }
+  return directory;
+}
+
+function folderTree(params) {
+  return { tree: getDirectoryIndex(params.repo || "").tree, generation };
 }
 
 function protocolError(code, message) {

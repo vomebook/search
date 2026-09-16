@@ -96,6 +96,31 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.assertEqual(registration["script"], self.origin + "/search/sw.js")
         self.assertTrue(registration["controlled"])
 
+    def test_existing_cache_serves_immediately_then_persists_background_refresh(self):
+        self.prime()
+        self.page.evaluate("""async () => {
+            const cache = await caches.open('vomebook-search-v1.0.0');
+            await cache.put('/search/manifest.json?background-test=1', new Response('{"old":true}', {
+                headers: {'Content-Type': 'application/json'}
+            }));
+        }""")
+        with self.server_state.lock:
+            self.server_state.delays["/search/manifest.json"] = 0.5
+        result = self.page.evaluate("fetch('/search/manifest.json?background-test=1', {cache: 'no-store'}).then(response => response.json())")
+        self.assertEqual(result, {"old": True})
+        self.assertTrue(self.page.evaluate("""async () => {
+            const cache = await caches.open('vomebook-search-v1.0.0');
+            for (let attempt = 0; attempt < 100; attempt++) {
+                const response = await cache.match('/search/manifest.json?background-test=1');
+                if ((await response.json()).name) return true;
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            return false;
+        }"""))
+        self.context.set_offline(True)
+        result = self.page.evaluate("fetch('/search/manifest.json?background-test=1', {cache: 'no-store'}).then(response => response.json())")
+        self.assertIn("name", result)
+
     def test_fixed_cache_contains_core_and_both_manifest_payload_lists(self):
         self.prime()
         caches_by_name = self.cache_urls()
