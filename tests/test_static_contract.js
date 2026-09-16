@@ -469,7 +469,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(sw, /url\.pathname === "\/search\/static\/reader\.html"/);
   assert.match(sw, /READER_RUNTIME_PATHS\.has\(url\.pathname\)/);
   assert.match(sw, /"\/search\/static\/pdf-worker-wrapper\.mjs"/);
-  assert.match(sw, /cacheKey = event\.request\.mode === "navigate" \? "\/search\/static\/reader\.html" : event\.request/);
+  assert.match(sw, /readerNavigation = event\.request\.mode === "navigate" && url\.pathname === "\/search\/static\/reader\.html"/);
+  assert.match(sw, /cacheKey = readerNavigation \? "\/search\/static\/reader\.html" : event\.request/);
   assert.match(sw, /fetch\(event\.request\)[\s\S]*cache\.put\(cacheKey/);
 });
 test("mobile shell hides sidebars before application startup", () => {

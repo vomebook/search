@@ -79,46 +79,22 @@ self.addEventListener("fetch", (event) => {
   if (url.hostname !== self.location.hostname || (event.request.method || "GET") !== "GET") {
     return;
   }
-  if ((event.request.mode === "navigate" && url.pathname === "/search/static/reader.html") || READER_RUNTIME_PATHS.has(url.pathname)) {
-    const cacheKey = event.request.mode === "navigate" ? "/search/static/reader.html" : event.request;
-    event.respondWith(
-      caches.open(CACHE_NAME).then((cache) => fetch(event.request).then((response) => {
-        if (response.ok) cache.put(cacheKey, response.clone());
-        return response;
-      }).catch(() => cache.match(cacheKey)))
-    );
-    return;
-  }
-  const isGeneratedData = url.pathname.endsWith(".json.gz") ||
-    ((url.pathname.startsWith("/search/data/initial/") || url.pathname.startsWith("/search/data/sidebar/")) && url.pathname.endsWith(".json"));
-  if (isGeneratedData) {
-    event.respondWith(
-      caches.open(CACHE_NAME).then((cache) => {
-        return cache.match(event.request).then((cached) => {
-          const fetchPromise = fetch(event.request).then((response) => {
-            if (response.ok) {
-              cache.put(event.request, response.clone());
-            }
-            return response;
-          }).catch(() => cached);
-          return cached || fetchPromise;
-        });
-      })
-    );
-    return;
-  }
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const fetchPromise = fetch(event.request).then((response) => {
-        if (response.ok && response.status !== 206) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, clone);
-          });
-        }
-        return response;
-      }).catch(() => cached);
-      return cached || fetchPromise;
-    })
-  );
+  const readerNavigation = event.request.mode === "navigate" && url.pathname === "/search/static/reader.html";
+  const networkFirst = readerNavigation || READER_RUNTIME_PATHS.has(url.pathname);
+  const cacheKey = readerNavigation ? "/search/static/reader.html" : event.request;
+  const cachePromise = caches.open(CACHE_NAME).catch(() => null);
+  const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey) : undefined).catch(() => undefined);
+  let cacheWrite;
+  const networkPromise = cachePromise.then(cache => fetch(event.request).then(response => {
+    if (cache && response.ok && response.status !== 206) {
+      cacheWrite = cache.put(cacheKey, response.clone()).catch(() => {});
+    }
+    return response;
+  }));
+  // A cached response can finish immediately; keep revalidation and the entire
+  // cache write alive independently, without delaying streaming cache misses.
+  event.waitUntil(networkPromise.then(() => cacheWrite).catch(() => {}));
+  event.respondWith(networkFirst
+    ? networkPromise.catch(() => cachedPromise)
+    : cachedPromise.then(cached => cached || networkPromise.catch(() => cached)));
 });

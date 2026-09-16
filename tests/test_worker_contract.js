@@ -42,10 +42,11 @@ function compact(input) {
   };
 }
 
-function makeWorker(workerSource = source) {
+function makeWorker(workerSource = source, options = {}) {
   const listeners = {};
   const messages = [];
   const context = {
+    ...options,
     console,
     Math,
     TextEncoder: require('util').TextEncoder,
@@ -97,6 +98,104 @@ async function names(params) {
 
 test("registers one versioned message protocol listener", () => {
   assert.strictEqual(typeof makeWorker().listeners.message, "function");
+});
+function scheduledWorker(options = {}) {
+  const tasks = new Map();
+  let nextId = 0;
+  const worker = makeWorker(source, Object.assign({
+    setTimeout(fn, delay) { const id = ++nextId; tasks.set(id, { fn, delay }); return id; },
+    clearTimeout(id) { tasks.delete(id); },
+  }, options));
+  function tick() {
+    const [id, task] = tasks.entries().next().value;
+    tasks.delete(id);
+    task.fn();
+  }
+  return { worker, tasks, tick };
+}
+test("background indexing yields, publishes complete indexes and preserves cold search results", async () => {
+  const input = Array.from({length: 400}, (_, i) => Object.assign({}, records[i % records.length]));
+  const cold = await loaded(input);
+  const { worker, tasks, tick } = scheduledWorker();
+  await worker.request("replace-corpus", {data: compact(input)});
+  tick(); // Existing sort preparation.
+  tick(); // Only one word-index slice.
+  assert.strictEqual(vm.runInContext("wordIndex === null && fulltextBuild.next > 0 && fulltextBuild.next <= FULLTEXT_BATCH_RECORDS", worker.context), true);
+  assert.strictEqual((await worker.request("metadata")).count, input.length);
+  assert.strictEqual((await worker.request("local-search", {q: "手*机", exact: true})).total,
+    (await cold.worker.request("local-search", {q: "手*机", exact: true})).total);
+  while (tasks.size) tick();
+  assert.strictEqual(vm.runInContext("wordIndex !== null && fulltextBuild === null", worker.context), true);
+  assert.strictEqual(vm.runInContext(`
+    JSON.stringify(vocabSorted) === JSON.stringify(Object.keys(wordIndex).map(token => [token, wordIndex[token].length]).sort((a, b) => b[1] - a[1])) &&
+    JSON.stringify(vocabSortedFilesOnly) === JSON.stringify(Object.keys(wordIndexFilesOnly).map(token => [token, wordIndexFilesOnly[token].length]).sort((a, b) => b[1] - a[1]))
+  `, worker.context), true);
+  for (const params of [{q: "alpha beta"}, {q: "alhpa"}, {q: "手机"}, {q: "alpha", searchFolders: false}]) {
+    const warmed = await worker.request("local-search", params);
+    const expected = await cold.worker.request("local-search", params);
+    assert.deepStrictEqual(warmed.ids, expected.ids);
+    assert.strictEqual(warmed.total, expected.total);
+  }
+});
+test("foreground indexing resumes partial work and clears the scheduled continuation", async () => {
+  const input = Array.from({length: 400}, (_, i) => Object.assign({}, records[i % records.length]));
+  const { worker, tasks, tick } = scheduledWorker();
+  await worker.request("replace-corpus", {data: compact(input)});
+  tick(); tick();
+  vm.runInContext("globalThis.partialIndex = fulltextBuild.all", worker.context);
+  const result = await worker.request("local-search", {q: "alpha"});
+  const expected = await (await loaded(input)).worker.request("local-search", {q: "alpha"});
+  assert.deepStrictEqual(result.ids, expected.ids);
+  assert.strictEqual(result.total, expected.total);
+  assert.strictEqual(vm.runInContext("wordIndex === partialIndex && fulltextBuild === null", worker.context), true);
+  assert.strictEqual(tasks.size, 0);
+});
+test("corpus replacement cancels partial indexing and stale callbacks cannot alter new work", async () => {
+  const { worker, tasks, tick } = scheduledWorker();
+  await worker.request("replace-corpus", {data: compact(Array.from({length: 400}, () => records[0]))});
+  tick(); tick();
+  const stale = tasks.values().next().value.fn;
+  await worker.request("replace-corpus", {data: compact([records[4]])});
+  stale();
+  while (tasks.size) tick();
+  assert.strictEqual((await worker.request("local-search", {q: "alpha"})).total, 0);
+  assert.strictEqual((await worker.request("local-search", {q: "手机"})).total, 1);
+});
+test("reported low-memory devices retain on-demand word indexing", async () => {
+  const { worker, tasks, tick } = scheduledWorker({navigator: {deviceMemory: 2}});
+  await worker.request("replace-corpus", {data: compact(records)});
+  while (tasks.size) tick();
+  assert.strictEqual(vm.runInContext("wordIndex === null && fulltextBuild === null", worker.context), true);
+  assert.strictEqual((await worker.request("local-search", {q: "alpha"})).total, 3);
+});
+test("failed speculative construction leaves the Worker available for a demanded retry", async () => {
+  const { worker, tasks, tick } = scheduledWorker();
+  await worker.request("replace-corpus", {data: compact(records)});
+  tick();
+  vm.runInContext('globalThis.originalAdvance = advanceFulltext; advanceFulltext = () => { throw new Error("speculation failed"); };', worker.context);
+  tick();
+  assert.strictEqual(tasks.size, 0);
+  assert.strictEqual((await worker.request("metadata")).count, records.length);
+  vm.runInContext('advanceFulltext = originalAdvance;', worker.context);
+  assert.strictEqual((await worker.request("local-search", {q: "alpha"})).total, 3);
+});
+test("directory indexes reuse only their repository and are bounded and replaced with the corpus", async () => {
+  const { worker } = await loaded();
+  const first = await worker.request("folder-contents", {repo: "Repo/A", path: "docs"});
+  assert.deepStrictEqual(first.folders, [
+    {name: "child", path: "docs/child", count: 1}, {name: "root", path: "docs/root", count: 1},
+  ]);
+  vm.runInContext('repoRecordIndices["Repo/A"] = new Proxy([], {get() {throw new Error("repeated repository scan");}})', worker.context);
+  assert.deepStrictEqual(await worker.request("folder-contents", {repo: "Repo/A", path: "docs"}), first);
+  assert.strictEqual((await worker.request("folder-tree", {repo: "Repo/A"})).tree[0].count, 2);
+  await worker.request("folder-tree", {repo: "missing"});
+  assert.strictEqual(vm.runInContext("directoryIndexes.size", worker.context), 1);
+  const many = Array.from({length: 6}, (_, i) => Object.assign({}, records[0], {Repo: "R/" + i}));
+  await worker.request("replace-corpus", {data: compact(many)});
+  assert.strictEqual(vm.runInContext("directoryIndexes.size", worker.context), 0);
+  for (const record of many) await worker.request("folder-tree", {repo: record.Repo});
+  assert.strictEqual(vm.runInContext("directoryIndexes.size", worker.context), 4);
+  assert.deepStrictEqual((await worker.request("folder-contents", {repo: "R/0", path: "docs/root"})).files.map(file => file.name), ["alpha guide"]);
 });
 test("cached pages bypass matching and locate anchors in the complete filtered order", async () => {
   const { worker } = await loaded();
@@ -213,6 +312,18 @@ test("page records are capped while total remains exact", async () => {
 });
 test("normal multi-token search intersects candidates", async () => {
   assert.deepStrictEqual(await names({ q: "alpha beta", exact: false }), ["beta alpha"]);
+});
+test("explicit sorts preserve collation and ties without computing relevance tokens", async () => {
+  const input = ["book 中国", "book 重", "book Chong", "book chong", "book 10", "book 2", "book e\u0301", "book é", "book 重"]
+    .map((File, i) => ({Repo: "Test", File, Folder: [String(i)], Extension: "txt", Size: i % 3, HasTxt: false}));
+  const {worker} = await loaded(input);
+  vm.runInContext('tokenize = () => {throw new Error("unneeded scoring tokens");};', worker.context);
+  for (const sort of ["name", "size"]) {
+    const compare = sort === "name" ? (a, b) => a.File.localeCompare(b.File, "zh") : (a, b) => b.Size - a.Size;
+    const result = await worker.request("local-search", {q: "book", exact: true, sort});
+    assert.deepStrictEqual(result.records, input.slice().sort(compare));
+    assert.strictEqual(result.total, input.length);
+  }
 });
 test("normal search is case-insensitive and retains fuzzy behavior", async () => {
   assert.deepStrictEqual(await names({ q: "ALPHA", exact: false }), ["alpha guide", "beta alpha", "gamma"]);
