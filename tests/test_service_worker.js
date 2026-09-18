@@ -113,21 +113,23 @@ test("registers install activate and fetch listeners", () => {
   const instance = harness();
   assert.deepStrictEqual(Object.keys(instance.listeners).sort(), ["activate", "fetch", "install"]);
 });
-test("install precaches core and both manifest payload lists", async () => {
+test("install precaches only the search shell and global data", async () => {
   const instance = harness({ fetch: manifestsFetch() });
   await lifecycle(instance.listeners.install);
-  assert.strictEqual(instance.operations.addAll.length, 3);
+  assert.strictEqual(instance.operations.addAll.length, 1);
   assert.ok(instance.operations.addAll[0].includes("/search/static/app.js"));
   assert.ok(instance.operations.addAll[0].includes("/search/static/index-worker.js"));
-  assert.deepStrictEqual(instance.operations.addAll[1], ["/search/data/initial/global.json"]);
-  assert.deepStrictEqual(instance.operations.addAll[2], ["/search/data/sidebar/global.json"]);
+  assert.ok(instance.operations.addAll[0].includes("/search/data/initial/global.json"));
+  assert.ok(instance.operations.addAll[0].includes("/search/data/sidebar/global.json"));
+  assert.ok(!instance.operations.addAll[0].some(url => /\/repos\/|\/reader\.(?:html|js|css)$/.test(url)));
+  assert.deepStrictEqual(instance.operations.fetch, []);
   assert.strictEqual(instance.operations.skipWaiting, 1);
 });
 test("install tolerates one manifest fetch failure", async () => {
   const instance = harness({ fetch: manifestsFetch("/search/data/sidebar/manifest.json") });
   await lifecycle(instance.listeners.install);
-  assert.strictEqual(instance.operations.addAll.length, 2);
-  assert.deepStrictEqual(instance.operations.addAll[1], ["/search/data/initial/global.json"]);
+  assert.strictEqual(instance.operations.addAll.length, 1);
+  assert.deepStrictEqual(instance.operations.fetch, []);
   assert.strictEqual(instance.operations.skipWaiting, 1);
 });
 test("install ignores non-ok manifest responses", async () => {
@@ -146,7 +148,7 @@ test("core addAll failure is warned and install still activates", async () => {
 test("payload addAll rejection is isolated inside manifest preload", async () => {
   const instance = harness({ addAllError: new Error("payload quota"), addAllFailureCall: 2, fetch: manifestsFetch() });
   await lifecycle(instance.listeners.install);
-  assert.strictEqual(instance.operations.addAll.length, 3);
+  assert.strictEqual(instance.operations.addAll.length, 1);
   assert.strictEqual(instance.operations.warnings.length, 0);
   assert.strictEqual(instance.operations.skipWaiting, 1);
 });
@@ -272,6 +274,14 @@ test("general static cache hit is returned while network updates cache", async (
   assert.strictEqual(await dispatchFetch(instance, url), cached);
   await tick();
   assert.deepStrictEqual(instance.operations.put, [url]);
+});
+test("content-addressed cache hits need no network request", async () => {
+  const url = "https://example.test/search/static/app.0123456789ab.js";
+  const cached = response("pinned-app");
+  const instance = harness({ cacheEntries: [[url, cached]] });
+  assert.strictEqual(await dispatchFetch(instance, url), cached);
+  await Promise.all(instance.operations.lifetimes);
+  assert.deepStrictEqual(instance.operations.fetch, []);
 });
 test("general static cache miss returns and caches network response", async () => {
   const url = "https://example.test/search/static/style.css";

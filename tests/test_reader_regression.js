@@ -18,7 +18,7 @@ for (const extension of ['epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz']) assert.st
 for (const extension of sandbox.self.VoiceOfMLReader.articleExtensions) assert.deepStrictEqual(Object.keys(sandbox.self.VoiceOfMLReader.capability(extension).features).sort(), ['bookmarks', 'media', 'pagination', 'search', 'toc', 'zoom'])
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('pdf-pages').mode, 'pdf-pages')
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('pdf-pages').features.toc, true)
-assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('epub-chapters').features.search, false)
+assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('epub-chapters').features.search, true)
 for (const extension of ['mp3', 'm4a', 'flac', 'mpga', 'audio']) assert.strictEqual(sandbox.self.VoiceOfMLReader.capability(extension).mode, 'audio')
 for (const extension of ['mp4', 'mov', 'video']) assert.strictEqual(sandbox.self.VoiceOfMLReader.capability(extension).mode, 'video')
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('zip').mode, null)
