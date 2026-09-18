@@ -593,6 +593,8 @@ function applyReaderTheme(theme, persist = true, animate = true) {
   readerThemeToggle.setAttribute("aria-pressed", String(readerTheme === "light"));
   const docxBody = content.querySelector(".docx-body");
   if (docxBody) docxBody.classList.toggle("reader-document-dark", readerTheme === "dark");
+  for (const article of content.querySelectorAll(".foliate-continuous > article"))
+    article.classList.toggle("reader-document-dark", readerTheme === "dark");
   if (persist) localStorage.setItem("theme", readerTheme);
   foliateScrollAnchors.restore(anchor);
 }
@@ -3896,9 +3898,18 @@ async function createFoliateSection(section, index) {
     * { box-sizing: border-box; }
     .reader-section-body { display: block; color: inherit; line-height: inherit; }
     .reader-section-body > :first-child { margin-top: 0 !important; }
+    :host(.reader-document-dark) .reader-section-body,
+    :host(.reader-document-dark) .reader-section-body :where(:not(svg, svg *, img, canvas, video, audio, math, math *)) {
+      color: inherit !important;
+      background-color: transparent !important;
+      border-color: #4a5056 !important;
+      text-shadow: none !important;
+    }
     a { color: var(--reader-book-link) !important; }
+    :host(.reader-document-dark) .reader-section-body a { color: var(--reader-book-link) !important; }
     img, svg, video { max-width: 100%; height: auto; }
     mark.full-search-highlight { background: #ffd54f; color: #111; }
+    :host(.reader-document-dark) .reader-section-body mark.full-search-highlight { background: #ffd54f !important; color: #111 !important; }
     @media (prefers-contrast: more) {
       .reader-section-body a[href] { text-decoration: underline !important; }
       .reader-section-body mark.full-search-highlight { outline: 2px solid currentColor; }
@@ -3911,6 +3922,7 @@ async function createFoliateSection(section, index) {
   shadow.append(baseStyle, ...styles, sectionBody);
   await settleReaderImages(sectionBody);
   assertReaderActive();
+  article.classList.toggle("reader-document-dark", readerTheme === "dark");
   return article;
 }
 function setupFoliateWindow(stream, sections) {
