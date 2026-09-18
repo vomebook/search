@@ -5,21 +5,12 @@ const PRECACHE_URLS = [
   "/search/static/style.css",
   "/search/static/reader-contract.js",
   "/search/static/reader-navigation.js",
-  "/search/static/reader-store.js",
-  "/search/static/reader-request-manager.js",
-  "/search/static/reader-chapter-repository.js",
-  "/search/static/reader-scroll-anchor.js",
-  "/search/static/reader-section-virtualizer.js",
-  "/search/static/reader-runtime.js",
-  "/search/static/reader-format-adapters.js",
-  "/search/static/reader-security.js",
-  "/search/static/reader.html",
-  "/search/static/reader.css",
-  "/search/static/reader.js",
   "/search/static/app.js",
   "/search/static/index-worker.js",
   "/search/data/initial/manifest.json",
   "/search/data/sidebar/manifest.json",
+  "/search/data/initial/global.json",
+  "/search/data/sidebar/global.json",
   "/search/manifest.json",
   "/search/icons/logo.svg",
   "/search/icons/logo-dark.svg",
@@ -28,6 +19,8 @@ const PRECACHE_URLS = [
   "/search/icons/icon-512.png"
 ];
 const READER_RUNTIME_PATHS = new Set([
+  "/search/static/reader-chapter-search.mjs",
+  "/search/static/reader-chapter-search-worker.mjs",
   "/search/static/reader-navigation.js",
   "/search/static/reader-contract.js",
   "/search/static/reader-store.js",
@@ -42,24 +35,11 @@ const READER_RUNTIME_PATHS = new Set([
   "/search/static/reader.js",
   "/search/static/pdf-worker-wrapper.mjs"
 ]);
-function precacheManifest(cache, url) {
-  return fetch(url)
-    .then(response => response.ok ? response.json() : null)
-    .then(manifest => {
-      if (manifest && Array.isArray(manifest.urls)) return cache.addAll(manifest.urls);
-    })
-    .catch(() => {});
-}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_URLS).then(() => {
-        return Promise.all([
-          precacheManifest(cache, "/search/data/initial/manifest.json"),
-          precacheManifest(cache, "/search/data/sidebar/manifest.json")
-        ]);
-      }).catch((err) => {
+      return cache.addAll(PRECACHE_URLS).catch((err) => {
         console.warn("[SW] precache partial failure:", err);
       });
     }).then(() => self.skipWaiting())
@@ -84,8 +64,10 @@ self.addEventListener("fetch", (event) => {
   const cacheKey = readerNavigation ? "/search/static/reader.html" : event.request;
   const cachePromise = caches.open(CACHE_NAME).catch(() => null);
   const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey) : undefined).catch(() => undefined);
+  // Content-addressed assets never need a revalidation request on cache hits.
+  const immutable = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname);
   let cacheWrite;
-  const networkPromise = cachePromise.then(cache => fetch(event.request).then(response => {
+  const networkPromise = Promise.all([cachePromise, immutable ? cachedPromise : null]).then(([cache, cached]) => cached || fetch(event.request).then(response => {
     if (cache && response.ok && response.status !== 206) {
       cacheWrite = cache.put(cacheKey, response.clone()).catch(() => {});
     }
@@ -95,6 +77,6 @@ self.addEventListener("fetch", (event) => {
   // cache write alive independently, without delaying streaming cache misses.
   event.waitUntil(networkPromise.then(() => cacheWrite).catch(() => {}));
   event.respondWith(networkFirst
-    ? networkPromise.catch(() => cachedPromise)
+    ? networkPromise.then(response => response.ok ? response : cachedPromise.then(cached => cached || response)).catch(() => cachedPromise)
     : cachedPromise.then(cached => cached || networkPromise.catch(() => cached)));
 });

@@ -1,6 +1,8 @@
 """HF Reader regressions using GitHub's /search/ server and external API routes."""
 
 import io
+import gzip
+import hashlib
 import json
 import unittest
 import urllib.parse
@@ -72,6 +74,103 @@ class ReaderRefactorTest(unittest.TestCase):
           }
           throw new Error('Store condition did not become true');
         }""", arg)
+
+    def serve_chapter_search(self, failure=None):
+        base = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "b" * 64 + "/foliate-original-v1/epub-chapters/"
+        chapters, texts, bodies = [], [], {}
+        for index in range(1, 13):
+            path = f"chapters/chapter-{index:04d}.xhtml"
+            title = f"Chapter {index}"
+            if index == 12:
+                body = ('<html:html xmlns:html="http://www.w3.org/1999/xhtml"><html:head><html:meta/>'
+                        '<html:title>标题</html:title></html:head><html:body><p><span>独特</span><em>词语</em></p>'
+                        + ''.join(f'<p>第{i}处needle结束</p>' for i in range(155))
+                        + '<p>手机 手。机</p></html:body></html:html>')
+                text = '标题 独特 词语 ' + ' '.join(f'第{i}处needle结束' for i in range(155)) + ' 手机 手。机'
+            else:
+                body = f'<h1>{title}</h1><p style="height:12000px">普通正文</p>'
+                text = title + ' 普通正文'
+            bodies[base + path] = body
+            chapters.append(dict(index=index, path=path, title=title, bytes=len(body.encode())))
+            texts.append(dict(index=index, path=path, text=text))
+        packed = gzip.compress(json.dumps(dict(version=1, kind='epub-search-index', chapters=texts), ensure_ascii=False).encode(), mtime=0)
+        manifest = dict(version=1, kind='epub-chapters', chapters=chapters,
+                        search_index=dict(path='epub-search-index.json.gz', bytes=len(packed), sha256=hashlib.sha256(packed).hexdigest()))
+        requests = []
+        def serve(route):
+            raw = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['url'][0]
+            requests.append(raw)
+            if raw.endswith('chapter-manifest.json'):
+                route.fulfill(content_type='application/json', body=json.dumps(manifest))
+            elif raw.endswith('epub-search-index.json.gz'):
+                attempt = sum(item.endswith('epub-search-index.json.gz') for item in requests)
+                if not failure or not failure(route, attempt, packed):
+                    route.fulfill(content_type='application/gzip', body=packed)
+            else:
+                route.fulfill(content_type='text/html', body=bodies[raw])
+        self.context.route('**/api/reader-content**', serve)
+        self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
+        return requests, base
+
+    def test_chapter_search_lazy_complete_pages_and_unloaded_highlight(self):
+        requests, base = self.serve_chapter_search()
+        self.assertFalse(any('epub-search-index' in url for url in requests))
+        self.search('needle')
+        self.assertEqual(self.page.locator('#full-search-status').text_content(), '155 个结果')
+        self.assertEqual(self.page.locator('.full-search-result').count(), 50)
+        self.assertNotIn(base + 'chapters/chapter-0012.xhtml', requests)
+        field = self.page.locator('#full-search-page')
+        field.fill('4')
+        field.press('Enter')
+        field.blur()
+        self.page.wait_for_function("() => document.querySelectorAll('.full-search-result').length === 5")
+        self.page.locator('.full-search-result').last.click()
+        self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter mark')?.parentElement.textContent === '第154处needle结束'")
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('独特 词语')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.page.locator('.full-search-result').click()
+        self.page.wait_for_function("() => document.querySelectorAll('.reader-epub-chapter mark.full-search-highlight').length === 2")
+        self.assertEqual(self.page.locator('.reader-epub-chapter mark').all_text_contents(), ['独特', '词语'])
+        self.assertEqual(sum('epub-search-index' in url for url in requests), 1)
+
+    def test_chapter_search_retry_and_corrupt_index(self):
+        def failure(route, attempt, packed):
+            if attempt == 1:
+                route.fulfill(status=503, body='unavailable')
+                return True
+            if attempt == 2:
+                route.fulfill(body=packed[:-1] + bytes([packed[-1] ^ 1]))
+                return True
+        self.serve_chapter_search(failure)
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('needle')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('503')")
+        self.page.locator('#full-search-retry').click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('校验失败')")
+        self.page.locator('#full-search-retry').click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '155 个结果'")
+
+    def test_chapter_search_cancel_cannot_publish_stale_results(self):
+        held = []
+        def hold(route, attempt, packed):
+            if attempt == 1:
+                held.append((route, packed))
+                return True
+        requests, _ = self.serve_chapter_search(hold)
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        with self.context.expect_event('request', predicate=lambda request: 'epub-search-index' in request.url):
+            self.page.locator('#full-search-input').fill('needle')
+        self.page.locator('#full-search-cancel').click()
+        self.page.locator('#full-search-input').fill('手机')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        for route, packed in held:
+            route.fulfill(content_type='application/gzip', body=packed)
+        self.assertEqual(self.page.locator('.full-search-result').count(), 1)
+        self.assertEqual(sum('epub-search-index' in url for url in requests), 2)
 
     def test_store_lists_preserve_limits_order_migration_and_future_records(self):
         self.page.goto(self.reader_url().split('?')[0])
