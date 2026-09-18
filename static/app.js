@@ -2093,9 +2093,23 @@ let positionSaveTimer = null;
 let positionRestore = null;
 let resultWindow = null;
 let returnPositionTarget = null;
+let positionControlScroll = null;
 let positionEntryId = 0;
 
+function resetPositionControlScroll() {
+  positionControlScroll = { key: getSearchViewKey(), last: getResultScrollTop(), distance: 0, until: 0 };
+}
+
+function keepPositionAfterStartOver(key) {
+  const saved = searchPositions.get(key);
+  if (!validSearchPosition(saved) || (saved.index <= 0 && saved.offset <= 0)) return;
+  returnPositionTarget = { ...saved };
+  resetPositionControlScroll();
+  updateReturnPositionButton();
+}
+
 function prepareReturnPosition(key, offer = true) {
+  resetPositionControlScroll();
   const saved = searchPositions.get(key);
   returnPositionTarget = offer && validSearchPosition(saved) && (saved.index > 0 || saved.offset > 0)
     ? {...saved} : null;
@@ -2105,6 +2119,10 @@ function prepareReturnPosition(key, offer = true) {
 function updateReturnPositionButton() {
   if (returnPositionTarget?.key !== getSearchViewKey()) returnPositionTarget = null;
   if (DOM.returnToPositionBtn) DOM.returnToPositionBtn.hidden = !returnPositionTarget || !!positionRestore;
+  const restart = document.getElementById("restart-position-btn");
+  if (restart) restart.hidden = !STATE.results.length || getResultScrollTop() <= 0;
+  const status = document.getElementById("search-position-status");
+  if (status) status.hidden = !positionRestore;
 }
 let lastPositionPruneAt = 0;
 let displayedViewRevision = 0;
@@ -2397,10 +2415,28 @@ function saveSearchPosition() {
 }
 
 function setupSearchPositionSaving() {
+  const scrollIntent = event => {
+    if (event.type === "keydown" && (event.isComposing || event.defaultPrevented ||
+        !["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key) ||
+        event.target.closest("input, textarea, select, button, a, [contenteditable]"))) return;
+    if (!positionControlScroll || positionControlScroll.key !== getSearchViewKey()) resetPositionControlScroll();
+    positionControlScroll.until = Date.now() + 1500;
+  };
+  for (const type of ["wheel", "touchstart", "touchmove", "pointerdown"]) {
+    DOM.resultsContainer.addEventListener(type, scrollIntent, { passive: true });
+    DOM.scrollTrack.addEventListener(type, scrollIntent, { passive: true });
+  }
+  document.addEventListener("keydown", scrollIntent);
   DOM.resultsContainer.addEventListener("scroll", () => {
-    if (returnPositionTarget?.key === getSearchViewKey() && !positionRestore && getResultScrollTop() > 240) {
-      returnPositionTarget = null;
-      updateReturnPositionButton();
+    const progress = positionControlScroll;
+    if (progress?.key === getSearchViewKey()) {
+      const top = getResultScrollTop();
+      if (Date.now() <= progress.until) progress.distance += Math.abs(top - progress.last);
+      progress.last = top;
+      if (!positionRestore && progress.distance > Math.max(1200, DOM.resultsContainer.clientHeight * 2)) {
+        returnPositionTarget = null;
+        updateReturnPositionButton();
+      }
     }
     if (positionRestore || STATE.isLoading || displayedSearchView?.key !== getSearchViewKey()) return;
     clearTimeout(positionSaveTimer);
@@ -2409,7 +2445,7 @@ function setupSearchPositionSaving() {
   // Capture before controls mutate filters, clear results, or replace the route.
   for (const type of ["change", "click", "keydown"]) document.addEventListener(type, event => {
     if (!(event.target instanceof Element)) return;
-    if (event.target.closest("#results-container, #scroll-track, #search-position-status, #return-to-position-btn, #current-result-position")) return;
+    if (event.target.closest("#results-container, #scroll-track, #search-position-status, #load-info")) return;
     if (type === "keydown" && !["Enter", "Escape"].includes(event.key)) return;
     saveSearchViewSnapshot();
   }, true);
@@ -3254,9 +3290,13 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     clearTimeout(searchTimer);
     clearTimeout(filterSearchTimer);
     filterSearchTimer = null;
+    if (fromStart && !positionRestore && getResultScrollTop() > 0) returnPositionTarget = null;
     saveSearchViewSnapshot();
+    const previousKey = getSearchViewKey();
+    if (fromStart) saveSearchPosition();
     cancelPositionRestore();
-    prepareReturnPosition(getSearchViewKey(), !fromStart);
+    prepareReturnPosition(previousKey, !fromStart);
+    if (fromStart) keepPositionAfterStartOver(previousKey);
     if (restorePosition) {
       returnPositionTarget = null;
       if (restoreSearchViewSnapshot(getSearchViewKey())) return;
@@ -5666,6 +5706,7 @@ async function init() {
   });
   document.getElementById("retry-position-btn").addEventListener("click", () => tryRestoreSearchPosition(getSearchViewKey()));
   document.getElementById("restart-position-btn").addEventListener("click", () => doSearch(false, true));
+  document.getElementById("cancel-position-btn")?.addEventListener("click", () => doSearch(false, true));
   DOM.searchInput.addEventListener("compositionstart", function() {
     searchComposing = true;
     clearTimeout(composeSafetyTimer);
