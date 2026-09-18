@@ -2151,8 +2151,26 @@ function cacheRecentSearchPage(entry) {
   while (recentSearchPages.size > RECENT_SEARCH_PAGE_MAX) recentSearchPages.delete(recentSearchPages.keys().next().value);
 }
 
+function pruneSearchContentStore(store, limit, ttl) {
+  const index = store.index("savedAt");
+  const expired = index.openKeyCursor(IDBKeyRange.upperBound(Date.now() - ttl, true));
+  expired.onsuccess = event => {
+    const cursor = event.target.result;
+    if (cursor) { store.delete(cursor.primaryKey); cursor.continue(); }
+  };
+  let skipped = false;
+  index.openKeyCursor(null, "prev").onsuccess = event => {
+    const cursor = event.target.result;
+    if (!cursor) return;
+    // Jump over retained keys inside IndexedDB instead of visiting each in JS.
+    if (!skipped) { skipped = true; cursor.advance(limit); return; }
+    store.delete(cursor.primaryKey); cursor.continue();
+  };
+}
+
 function saveRecentSearchPages(position, view, visibleEnd) {
   const size = JSON.parse(view.key).pageSize;
+  let store;
   for (let page = Math.floor(position.index / size) + 1; page <= Math.floor(visibleEnd / size) + 1; page++) {
     const start = (page - 1) * size, length = Math.min(size, view.total - start);
     const metadata = view.window || searchPageMetadata.get(view.results[start]);
@@ -2171,17 +2189,11 @@ function saveRecentSearchPages(position, view, visibleEnd) {
     cacheRecentSearchPage(entry);
     recentSearchPageSources.set(entry, {first: results[0], last: results[length - 1]});
     if (searchPositionDB?.objectStoreNames.contains("recent-pages")) try {
-      const store = searchPositionDB.transaction("recent-pages", "readwrite").objectStore("recent-pages");
+      if (!store) store = searchPositionDB.transaction("recent-pages", "readwrite").objectStore("recent-pages");
       store.put(entry);
-      let count = 0;
-      store.index("savedAt").openKeyCursor(null, "prev").onsuccess = event => {
-        const cursor = event.target.result;
-        if (!cursor) return;
-        if (++count > RECENT_SEARCH_PAGE_MAX || cursor.key < Date.now() - RECENT_SEARCH_PAGE_TTL) store.delete(cursor.primaryKey);
-        cursor.continue();
-      };
     } catch (_) {}
   }
+  if (store) try { pruneSearchContentStore(store, RECENT_SEARCH_PAGE_MAX, RECENT_SEARCH_PAGE_TTL); } catch (_) {}
 }
 
 async function readRecentSearchPage(key, page, expected) {
@@ -2270,13 +2282,7 @@ function saveSearchViewport(position, view) {
   if (searchPositionDB?.objectStoreNames.contains("viewports")) try {
     const tx = searchPositionDB.transaction("viewports", "readwrite"), store = tx.objectStore("viewports");
     store.put(viewport);
-    let count = 0;
-    store.index("savedAt").openKeyCursor(null, "prev").onsuccess = event => {
-      const cursor = event.target.result;
-      if (!cursor) return;
-      if (++count > SEARCH_VIEWPORT_MAX || cursor.key < Date.now() - SEARCH_POSITION_TTL) store.delete(cursor.primaryKey);
-      cursor.continue();
-    };
+    pruneSearchContentStore(store, SEARCH_VIEWPORT_MAX, SEARCH_POSITION_TTL);
   } catch (_) {}
 }
 
