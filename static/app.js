@@ -2465,7 +2465,7 @@ function tryRestoreSearchPosition(key, options = {}) {
       if (!current()) return;
       showSavedSearchViewport(viewport, position, task);
       while (current()) {
-        const lookup = task.lookup || await fetchPositionPage(query, 1, controller.signal, position.anchorId);
+        const lookup = task.lookup || await fetchPositionPageWithRecovery(query, 1, controller.signal, position.anchorId);
         if (!current()) return;
         validatePositionWindowPage(lookup, 1, query.pageSize);
         task.lookup = lookup; task.ready.set(1, lookup); task.page = 1;
@@ -2476,7 +2476,7 @@ function tryRestoreSearchPosition(key, options = {}) {
         const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
         const pages = Array.from({length: Math.min(lastPage, targetPage + 1) - Math.max(1, targetPage - 1) + 1}, (_, i) => Math.max(1, targetPage - 1) + i);
         const responses = await Promise.all(pages.map(async page => {
-          try { return {page, data: task.ready.get(page) || await fetchPositionPage(query, page, controller.signal)}; }
+          try { return {page, data: task.ready.get(page) || await fetchPositionPageWithRecovery(query, page, controller.signal)}; }
           catch (error) { return {page, error}; }
         }));
         if (!current()) return;
@@ -2530,6 +2530,7 @@ function tryRestoreSearchPosition(key, options = {}) {
       if (!current()) return;
       STATE.isLoading = false;
       task.failed = true;
+      task.error = error;
       if (error.message === "RESTORE_PAGE_CHANGED") { task.lookup = null; task.ready.clear(); task.page = 0; }
       showPositionRestoreStatus(error.message === "RESTORE_PAGE_CHANGED"
         ? "搜索数据已更新，请重试恢复" : "暂时无法加载原位置附近的结果", true);
@@ -2604,14 +2605,79 @@ function updateResultWindowStatus() {
   }
 }
 
-function requestResultWindowPage(window, page) {
+function isRecoverableSearchError(error) {
+  if (!error || error.name === "AbortError") return false;
+  if (error.status) return [408, 429, 500, 502, 503, 504].includes(error.status);
+  return /API_TIMEOUT|WORKER_TIMEOUT|LOCAL_UNAVAILABLE|TimeoutError|network|fetch|offline|timed out/i.test(`${error.code || error.name || ""} ${error.message || ""}`) || error.message === "Load failed";
+}
+
+function waitForSearchRecovery(signal, delay, local) {
+  return new Promise((resolve, reject) => {
+    let elapsed = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      document.removeEventListener("visibilitychange", ready);
+      window.removeEventListener("online", ready);
+      window.removeEventListener("pageshow", ready);
+    };
+    const abort = () => { cleanup(); reject(new DOMException("Cancelled", "AbortError")); };
+    const ready = () => {
+      if (elapsed && !document.hidden && (local || navigator.onLine)) { cleanup(); resolve(); }
+    };
+    const timer = setTimeout(() => { elapsed = true; ready(); }, delay);
+    signal.addEventListener("abort", abort, { once: true });
+    document.addEventListener("visibilitychange", ready);
+    window.addEventListener("online", ready);
+    window.addEventListener("pageshow", ready);
+    if (signal.aborted) abort();
+  });
+}
+
+async function fetchPositionPageWithRecovery(query, page, signal, anchorId, demanded = () => true) {
+  for (let attempt = 0; ; attempt++) {
+    if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+    try { return await fetchPositionPage(query, page, signal, anchorId); }
+    catch (error) {
+      if (signal.aborted || attempt >= 2 || !demanded() || !isRecoverableSearchError(error)) throw error;
+      const local = query.useLocalMode || query.folders.self.length || query.folders.subtree.length || !apiAvailable;
+      await waitForSearchRecovery(signal, (attempt + 1) * 750, local);
+    }
+  }
+}
+
+function resumeResultRecovery() {
+  if (document.hidden || readerOverlay) return;
+  if (positionRestore?.failed && isRecoverableSearchError(positionRestore.error)) {
+    if (navigator.onLine || JSON.parse(positionRestore.key).useLocalMode) tryRestoreSearchPosition(positionRestore.key);
+    return;
+  }
+  if (!resultWindow || resultWindow.invalid || (!navigator.onLine && !resultWindow.query.useLocalMode)) return;
+  const start = Math.floor(findVirtualIndex(getResultScrollTop()) / STATE.pageSize);
+  const end = Math.floor(findVirtualIndex(getResultScrollTop() + DOM.resultsContainer.clientHeight) / STATE.pageSize) + 2;
+  for (const [page, error] of resultWindow.failures) {
+    if (page >= start && page <= end && isRecoverableSearchError(error)) resultWindow.failures.delete(page);
+  }
+  resultWindow.prefetchFailures?.clear();
+  updateResultWindowStatus();
+  DOM.resultsList.querySelectorAll(".result-window-placeholder").forEach(row => row.remove());
+  VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+  scheduleVirtualRender();
+}
+
+function requestResultWindowPage(window, page, prefetch = false) {
   if (window.prefetched?.has(page)) return Promise.resolve(window.prefetched.get(page));
-  if (window.pending.has(page)) return window.pending.get(page);
+  if (window.pending.has(page)) {
+    const request = window.pending.get(page);
+    if (!prefetch) request.demanded = true;
+    return request;
+  }
+  if (prefetch && window.prefetchFailures?.has(page)) return Promise.resolve(null);
   if (window.pending.size >= 3 || window.failures.has(page) || window.invalid) return Promise.resolve(null);
   const request = (async () => {
     const cached = await readRecentSearchPage(window.key, page, window);
     if (!resultWindowCurrent(window)) return null;
-    return cached || fetchPositionPage(window.query, page, window.controller.signal);
+    return cached || fetchPositionPageWithRecovery(window.query, page, window.controller.signal, undefined, () => request.demanded);
   })().then(data => {
     if (!data) return null;
     validatePositionWindowPage(data, page, window.query.pageSize, window);
@@ -2621,6 +2687,7 @@ function requestResultWindowPage(window, page) {
     if (resultWindowCurrent(window)) scheduleVirtualRender();
   });
   window.pending.set(page, request);
+  request.demanded = !prefetch;
   return request;
 }
 
@@ -2628,7 +2695,7 @@ async function loadResultWindowPage(page, prefetch = false) {
   const window = resultWindow;
   if (!window || positionRestore || !resultWindowCurrent(window) || window.pages.has(page) || page < 1 || page > Math.ceil(window.total / window.query.pageSize)) return false;
   try {
-    const data = await requestResultWindowPage(window, page);
+    const data = await requestResultWindowPage(window, page, prefetch);
     if (!data || !resultWindowCurrent(window) || window.invalid || window.pages.has(page)) return false;
     if (prefetch || VSCROLL.isDraggingThumb) {
       if (!window.prefetched) window.prefetched = new Map();
@@ -2658,6 +2725,12 @@ async function loadResultWindowPage(page, prefetch = false) {
     return true;
   } catch (error) {
     if (!resultWindowCurrent(window)) return false;
+    if (prefetch && error.message !== "RESTORE_PAGE_CHANGED") {
+      if (!window.prefetchFailures) window.prefetchFailures = new Set();
+      window.prefetchFailures.add(page);
+      if (window.prefetchFailures.size > 64) window.prefetchFailures.delete(window.prefetchFailures.values().next().value);
+      return false;
+    }
     window.failures.set(page, error);
     if (error.message === "RESTORE_PAGE_CHANGED") window.invalid = true;
     updateResultWindowStatus();
@@ -5029,7 +5102,7 @@ function scheduleBottomLoad(delay = 0) {
 
 function finishPagingAttempt(success, error) {
   pagingFailures = success ? 0 : pagingFailures + 1;
-  if (error && error.status >= 400 && error.status < 500) pagingFailures = 2;
+  if (error && error.status >= 400 && error.status < 500 && !isRecoverableSearchError(error)) pagingFailures = 2;
   pagingRetryAt = success ? 0 : Date.now() + 750;
   updatePagingStatus();
   if (pagingFailures < 2) scheduleBottomLoad();
@@ -5917,6 +5990,9 @@ async function init() {
   window.addEventListener("focus", function() { scheduleScrollRecovery(); warmConnection(); });
   window.addEventListener("online", function() { scheduleScrollRecovery(); warmConnection(true); });
   lastKeepaliveAt = Date.now();
+  document.addEventListener("visibilitychange", resumeResultRecovery);
+  window.addEventListener("pageshow", resumeResultRecovery);
+  window.addEventListener("online", resumeResultRecovery);
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   ROUTER.apply();
   restoreReaderFromSession();
