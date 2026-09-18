@@ -203,6 +203,7 @@ async function resolveReaderId(id) {
   throw new Error("Reader ID resolution failed");
 }
 function classifyReaderError(error, fallback = "READER_PARSE") {
+  if (error?.code === "READER_ENGINE_NETWORK") return error.code;
   const value = `${error?.name || ""} ${error?.message || error || ""}`;
   if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK";
   if (
@@ -2281,6 +2282,16 @@ function fail(message, code = "READER_PARSE") {
   const visibleMessage = `${message} [${readerLifecycle.stage}]`;
   content.innerHTML = `<div class="reader-error"></div>`;
   content.querySelector(".reader-error").textContent = visibleMessage;
+  if (code === "READER_ENGINE_NETWORK") {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "text-button";
+    retry.id = "reader-engine-retry";
+    retry.textContent = "重试加载";
+    // Reload clears the browser's failed module map and preserves this book URL.
+    retry.addEventListener("click", () => location.reload());
+    content.querySelector(".reader-error").append(document.createElement("br"), retry);
+  }
   status.textContent = "无法打开";
 }
 
@@ -3606,8 +3617,40 @@ function loadPdfWithTimeout(pdfjs, options) {
     return loadPdfTaskWithTimeout(pdfjs, options, sourceUrl);
   });
 }
+async function loadPdfEngine() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    assertReaderActive();
+    if (attempt) await waitForReader(attempt * 500);
+    assertReaderActive();
+    // Browsers can retain a rejected import for the life of this document.
+    // Use two bounded retry URLs for the same pinned bytes, never a random URL.
+    const url = attempt ? `${PDFJS_URL}?reader-module-retry=${attempt}` : PDFJS_URL;
+    let timer;
+    try {
+      const pdfjs = await awaitReader(Promise.race([
+        import(url),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new DOMException("PDF engine timeout", "TimeoutError")), 20000);
+        })
+      ]));
+      assertReaderActive();
+      return pdfjs;
+    } catch (error) {
+      assertReaderActive();
+      const networkFailure = error?.name === "TimeoutError" ||
+        /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(error?.message || "");
+      if (!networkFailure) throw error;
+      if (attempt === 2)
+        throw Object.assign(new Error("PDF 阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
+          { code: "READER_ENGINE_NETWORK", cause: error });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
 function loadPdfDocument() {
-  return import(PDFJS_URL).then((pdfjs) => {
+  return loadPdfEngine().then((pdfjs) => {
+    assertReaderActive();
     pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
     const options = (url) => ({
       url,
