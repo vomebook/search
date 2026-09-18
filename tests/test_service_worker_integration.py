@@ -121,24 +121,25 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         result = self.page.evaluate("fetch('/search/manifest.json?background-test=1', {cache: 'no-store'}).then(response => response.json())")
         self.assertIn("name", result)
 
-    def test_fixed_cache_contains_core_and_both_manifest_payload_lists(self):
+    def test_fixed_cache_contains_core_without_unused_repository_or_reader_payloads(self):
         self.prime()
         caches_by_name = self.cache_urls()
         self.assertEqual(list(caches_by_name), ["vomebook-search-v1.0.0"])
-        urls = set(caches_by_name["vomebook-search-v1.0.0"])
-        initial = json.loads((self.origin_path("data/initial/manifest.json")).read_text(encoding="utf-8"))
-        sidebar = json.loads((self.origin_path("data/sidebar/manifest.json")).read_text(encoding="utf-8"))
+        urls = {url.split('#', 1)[0] for url in caches_by_name["vomebook-search-v1.0.0"]}
         expected_paths = [
-            "/search/#/",
+            "/search/",
             "/search/static/app.js",
             "/search/static/reader-navigation.js",
             "/search/static/index-worker.js",
             "/search/data/initial/manifest.json",
             "/search/data/sidebar/manifest.json",
-        ] + initial["urls"] + sidebar["urls"]
+            "/search/data/initial/global.json",
+            "/search/data/sidebar/global.json",
+        ]
         for path in expected_paths:
             self.assertIn(self.origin + path, urls, path)
         self.assertFalse(any("/static/vendor/" in url for url in urls))
+        self.assertFalse(any("/repos/" in url or "/static/reader.js" in url for url in urls))
 
     def test_reader_query_navigations_keep_one_normalized_cache_entry(self):
         self.prime()
