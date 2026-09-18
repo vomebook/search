@@ -17,6 +17,8 @@ const required = [
   "reader.html",
   "reader.css",
   "reader.js",
+  "reader-chapter-search.mjs",
+  "reader-chapter-search-worker.mjs",
   "reader-contract.js",
   "reader-navigation.js",
   "reader-store.js",
