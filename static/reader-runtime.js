@@ -21,7 +21,7 @@
     },
     "epub-chapters": {
       toc: true,
-      search: false,
+      search: true,
       zoom: true,
       bookmarks: true,
       pagination: false,
