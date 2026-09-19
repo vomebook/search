@@ -696,7 +696,7 @@ function openExternalWindow(url) {
 }
 
 function bytesToDisplay(bytes) {
-  if (bytes === null || bytes === undefined || bytes === 0) return { value: "", unit: "MB" };
+  if (bytes === null || bytes === undefined) return { value: "", unit: "MB" };
   if (bytes >= 1073741824) return { value: (bytes / 1073741824).toFixed(2).replace(/\.?0+$/, ""), unit: "GB" };
   if (bytes >= 1048576) return { value: (bytes / 1048576).toFixed(1).replace(/\.0$/, ""), unit: "MB" };
   if (bytes >= 1024) return { value: (bytes / 1024).toFixed(1).replace(/\.0$/, ""), unit: "KB" };
@@ -706,7 +706,8 @@ function bytesToDisplay(bytes) {
 function fmtSizeUrl(bytes) {
   if (bytes === null || bytes === undefined) return null;
   var d = bytesToDisplay(bytes);
-  return d.value + d.unit;
+  const formatted = d.value + d.unit;
+  return parseSizeStr(formatted) === bytes ? formatted : String(bytes) + "B";
 }
 
 function parseSizeStr(str) {
@@ -1002,17 +1003,12 @@ async function doSearchLocal(params) {
 }
 
 function isValidSearchResponse(data, expectedPage, expectedPageSize) {
-  return !!data
-    && Array.isArray(data.results)
-    && data.results.length <= expectedPageSize
-    && data.results.every(function(item) { return !!item && typeof item === "object" && !Array.isArray(item); })
-    && Number.isSafeInteger(data.total)
-    && data.total >= 0
-    && Number.isInteger(data.page)
-    && data.page === expectedPage
-    && Number.isInteger(data.page_size)
-    && data.page_size === expectedPageSize
-    && (data.results.length > 0 || (expectedPage - 1) * expectedPageSize >= data.total);
+  if (!data || !Array.isArray(data.results) || !Number.isSafeInteger(data.total) || data.total < 0
+      || !Number.isInteger(data.page) || data.page !== expectedPage
+      || !Number.isInteger(data.page_size) || data.page_size !== expectedPageSize) return false;
+  const remaining = Math.max(0, data.total - (expectedPage - 1) * expectedPageSize);
+  return data.results.length === Math.min(expectedPageSize, remaining)
+    && data.results.every(record => record && typeof record === "object" && !Array.isArray(record));
 }
 
 // One entry owns its network request, deadline and cancellation subscriptions.
@@ -1033,8 +1029,7 @@ function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
   }).then(async response => {
     if (!response.ok) throw Object.assign(new Error("HTTP " + response.status), { status: response.status });
     const data = await response.json();
-    if (!isValidSearchResponse(data, body.page, body.page_size) ||
-        (!data.results.length && (body.page - 1) * body.page_size < data.total)) throw new Error("INVALID_API_RESPONSE");
+    if (!isValidSearchResponse(data, body.page, body.page_size)) throw new Error("INVALID_API_RESPONSE");
     return data;
   });
   entry.promise = Promise.race([request, stopped]).finally(() => {
@@ -3601,7 +3596,7 @@ function animateVisibleResultRows() {
 function buildResultHTML(rec, idx) {
   const iconType = getFileIconType(rec.Extension);
   const titleHTML = highlightText(rec.File, STATE.query);
-  const repoShort = (rec.Repo || "").split("/").pop();
+  const repoShort = escapeHTML((rec.Repo || "").split("/").pop());
   const sizeStr = formatSize(rec.Size);
   const recordLink = getRecordLink(rec);
   const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
