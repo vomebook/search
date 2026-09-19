@@ -1,7 +1,6 @@
 // Shared IndexedDB session plumbing. The application supplies route policy;
 // this module owns database opening and transaction completion only.
-if (!globalThis.VoiceOfMLSearchSession) {
-  globalThis.VoiceOfMLSearchSession = (() => {
+(function (root) {
     const DB_NAME = "voiceofml-search-state";
 
     function openSearchSessionDB() {
@@ -69,6 +68,5 @@ if (!globalThis.VoiceOfMLSearchSession) {
       return { openSearchSessionDB, persistSearchSession, restoreSearchSession };
     }
 
-    return { createSearchSession };
-  })();
-}
+    root.VoiceOfMLSearchSession = { createSearchSession };
+})(typeof self !== "undefined" ? self : globalThis);

@@ -116,7 +116,7 @@ test("registers install activate and fetch listeners", () => {
   const instance = harness();
   assert.deepStrictEqual(Object.keys(instance.listeners).sort(), ["activate", "fetch", "install"]);
 });
-test("bounds old hashed variants while preserving current assets and ordinary data", async () => {
+test("removes every retired hash and alias while preserving current assets and data", async () => {
   for (const [text, prefix, cacheName] of [
     [source, '/search/static/', CACHE_NAME]
   ]) {
@@ -124,15 +124,17 @@ test("bounds old hashed variants while preserving current assets and ordinary da
     const instance = harness({source: text.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([paths[0]]))});
     const values = new Map(paths.map(path => ['https://example.test' + path, response('asset')]));
     values.set('https://example.test/data.json', response('data'));
+    values.set('https://example.test' + prefix + 'app.js', response('retired alias'));
     instance.stores.set(cacheName, values);
     await lifecycle(instance.listeners.activate);
     assert.ok(values.has('https://example.test' + paths[0]));
     assert.ok(!values.has('https://example.test' + paths[1]));
-    assert.strictEqual(values.size, 4);
+    assert.strictEqual(values.size, 2);
     assert.ok(values.has('https://example.test/data.json'));
-    await dispatchFetch(instance, 'https://example.test' + prefix + 'app.555555555555.js');
+    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'app.555555555555.js'), undefined);
+    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'app.js'), undefined);
     await Promise.all(instance.operations.lifetimes);
-    assert.strictEqual(values.size, 4);
+    assert.strictEqual(values.size, 2);
     assert.ok(values.has('https://example.test' + paths[0]));
   }
 });
@@ -161,11 +163,10 @@ test("install ignores non-ok manifest responses", async () => {
   assert.strictEqual(instance.operations.addAll.length, 1);
   assert.strictEqual(instance.operations.skipWaiting, 1);
 });
-test("core addAll failure is warned and install still activates", async () => {
+test("failed core installation cannot activate a partial generation", async () => {
   const instance = harness({ addAllError: new Error("quota"), fetch: manifestsFetch() });
-  await lifecycle(instance.listeners.install);
-  assert.strictEqual(instance.operations.warnings.length, 1);
-  assert.strictEqual(instance.operations.skipWaiting, 1);
+  await assert.rejects(lifecycle(instance.listeners.install), /quota/);
+  assert.strictEqual(instance.operations.skipWaiting, 0);
   assert.strictEqual(instance.operations.fetch.length, 0, "manifests are not attempted after core precache failure");
 });
 test("payload addAll rejection is isolated inside manifest preload", async () => {

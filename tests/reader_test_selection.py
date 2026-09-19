@@ -84,7 +84,7 @@ CATEGORY_METHODS = {
         "test_pagehide_before_restoration_does_not_overwrite_progress",
         "test_blocked_v1_upgrade_does_not_block_document_loading",
         "test_stale_bookmark_query_cannot_overwrite_all_bookmarks",
-        "test_reader_store_migrates_history_and_keeps_bookmarks_when_cleared",
+        "test_reader_store_resets_old_history_and_keeps_current_bookmarks",
         "test_supported_formats_start_loading_while_history_restores",
     ),
 }

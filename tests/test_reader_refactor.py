@@ -262,7 +262,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "node => document.querySelector('#viewport').getBoundingClientRect().top + 8 - node.getBoundingClientRect().top")
         self.assertAlmostEqual(offset, 345, delta=3)
 
-    def test_chapter_manifest_migrates_position_saved_by_foliate(self):
+    def test_chapter_manifest_does_not_translate_foliate_positions(self):
         _, base = self.serve_chapter_search()
         source = base + "chapter-manifest.json"
         self.page.evaluate("""async source => {
@@ -273,10 +273,7 @@ class ReaderRefactorTest(unittest.TestCase):
         }""", source)
         self.page.reload()
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-        offset = self.page.locator('.reader-epub-chapter[data-chapter="11"]').evaluate(
-            "node => document.querySelector('#viewport').getBoundingClientRect().top + 8 - node.getBoundingClientRect().top")
-        self.assertAlmostEqual(offset, 275, delta=3)
-        self.wait_for_store("async source => (await VoiceOfMLReaderStore.get(source))?.chapterIndex === 11", source)
+        self.wait_for_store("async source => (await VoiceOfMLReaderStore.get(source))?.chapterIndex === 1", source)
 
     def test_parent_abort_saves_last_position_before_disposal(self):
         self.serve("reading\n" * 3000)
@@ -293,7 +290,7 @@ class ReaderRefactorTest(unittest.TestCase):
         saved = self.page.evaluate("source => VoiceOfMLReaderStore.get(source)", source)
         self.assertEqual(saved["scrollTop"], 900)
 
-    def test_store_lists_preserve_limits_order_migration_and_future_records(self):
+    def test_store_lists_preserve_limits_order_and_reject_noncurrent_records(self):
         self.page.goto(self.reader_url().split('?')[0])
         result = self.page.evaluate('''async () => {
           const store=VoiceOfMLReaderStore;
@@ -302,14 +299,15 @@ class ReaderRefactorTest(unittest.TestCase):
           await store.put({url:'book-c',lastReadAt:30});
           await store.put({url:'book-c',lastReadAt:1});
           const db=await new Promise((resolve,reject)=>{
-            const request=indexedDB.open(store.DB_NAME,2);
+            const request=indexedDB.open(store.DB_NAME,store.DB_VERSION);
             request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
           });
           await new Promise((resolve,reject)=>{
             const tx=db.transaction('bookmarks','readwrite'), bookmarks=tx.objectStore('bookmarks');
             for(const entry of [
-              {id:'z',url:'book-a',createdAt:1}, {id:'a',url:'book-a',createdAt:3},
-              {id:'b',url:'book-b',createdAt:2}, {id:'bad',url:42,createdAt:4},
+              {id:'z',url:'book-a',createdAt:1,schemaVersion:1}, {id:'a',url:'book-a',createdAt:3,schemaVersion:1},
+              {id:'b',url:'book-b',createdAt:2,schemaVersion:1}, {id:'bad',url:42,createdAt:4},
+              {id:'legacy',url:'book-a',createdAt:6},
               {id:'future',url:'book-a',createdAt:5,schemaVersion:2}
             ]) bookmarks.put(entry);
             tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);
@@ -324,12 +322,12 @@ class ReaderRefactorTest(unittest.TestCase):
           });
           db.close();await store.removeBookmark('a');
           return {history,empty,all,one,remaining:(await store.listBookmarks('book-a')).map(entry=>entry.id),
-            migrated:raw.filter(entry=>['z','a','b'].includes(entry.id)).every(entry=>entry.schemaVersion===1),
-            future:raw.some(entry=>entry.id==='future' && entry.schemaVersion===2),
+            current:raw.every(entry=>entry.schemaVersion===1),
+            legacy:raw.some(entry=>entry.id==='legacy'),
             corruptRemoved:!raw.some(entry=>entry.id==='bad')};
         }''')
         self.assertEqual(result, dict(history=['book-c', 'book-b'], empty=0, all=['a', 'b', 'z'],
-                                      one=['a', 'z'], remaining=['z'], migrated=True, future=True, corruptRemoved=True))
+                                      one=['a', 'z'], remaining=['z'], current=True, legacy=False, corruptRemoved=True))
 
     def test_cross_book_bookmark_restores_selected_position_and_rejects_mismatch(self):
         self.serve("start\n" + "ordinary text\n" * 3000)

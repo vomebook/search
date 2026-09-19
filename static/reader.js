@@ -3361,15 +3361,6 @@ async function restoreFormat(mode, entry, generation = beginReaderNavigation()) 
     if (mode === "epub-chapters") {
       if (Number.isInteger(entry.chapterIndex)) {
         if (!(await restoreChapterPosition(entry, generation))) return false;
-      } else if (Number.isInteger(entry.foliateSection)) {
-        // Chapter manifests use one-based spine indexes; migrate positions
-        // saved before this book switched from Foliate to chapter loading.
-        const migrated = {
-          ...entry,
-          chapterIndex: entry.foliateSection + 1,
-          chapterOffset: entry.foliateOffset
-        };
-        if (!(await restoreChapterPosition(migrated, generation))) return false;
       } else if (!(await restoreProgressState(entry, generation))) return false;
     } else if (mode === "foliate" && Number.isInteger(entry.foliateSection)) {
       if (!(await restoreFoliateBookmarkPosition(entry, generation))) return false;

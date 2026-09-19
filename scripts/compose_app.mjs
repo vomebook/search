@@ -1,12 +1,20 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
-// Keep the classic-script globals while making cached old HTML safe with a new app.
-process.stdout.write("if (!globalThis.VoiceOfMLReaderResources) {\n" +
-  readFileSync("static/reader-resources.js", "utf8") + "\n}\n" +
-  "if (!globalThis.VoiceOfMLReader?.pdfPageSource || !globalThis.VoiceOfMLReader?.txtRelativePath) {\n" +
-  readFileSync("static/reader-contract.js", "utf8") + "\n}\n" +
-  "if (!globalThis.VoiceOfMLReaderNavigation) {\n" +
-  readFileSync("static/reader-navigation.js", "utf8") + "\n}\n" +
-  readFileSync("static/search-session.js", "utf8") + "\n" +
-  readFileSync("static/download-controller.js", "utf8") + "\n" +
-  readFileSync("static/app.js", "utf8"));
+// One ordered dependency list owns the production app and its shell scripts.
+// Keep classic-script globals for the host; each dependency owns its own scope.
+export const APP_DEPENDENCIES = Object.freeze([
+  "reader-resources.js", "reader-contract.js", "reader-navigation.js",
+  "search-session.js", "download-controller.js"
+]);
+
+export function stripBundledScripts(html) {
+  return html.replace(/<script\s+src="(?:\/?(?:search\/)?static\/)([^"/]+)"\s*>\s*<\/script>\s*/g,
+    (tag, filename) => APP_DEPENDENCIES.includes(filename) ? "" : tag);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  process.stdout.write([...APP_DEPENDENCIES, "app.js"]
+    .map(file => readFileSync("static/" + file, "utf8")).join("\n;\n"));
+}
