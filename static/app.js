@@ -223,21 +223,9 @@ function getReaderFolderUrl(rec) {
   var repo = String(rec.Repo || "").split("/").pop();
   if (!repo) return "";
   var folder = Array.isArray(rec.Folder) ? rec.Folder.join("/") : "";
-  var sp = new URLSearchParams();
+  var sp = buildSearchURLParams({ includeQuery: false, displaySizes: true });
   var activeQuery = (DOM.searchInput ? DOM.searchInput.value : STATE.query).trim();
   if (activeQuery) sp.set("q", activeQuery);
-  if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-  if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
-  if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
-  if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-  if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (!STATE.exact) sp.set("exact", "0");
-  if (!STATE.useLocalMode) sp.set("local", "0");
-  if (!STATE.recordHistory) sp.set("history", "0");
-  if (!STATE.useMirrorLinks) sp.set("mirror", "0");
-  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-  if (STATE.rightSidebarOpen) sp.set("filters", "1");
-  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   if (folder) sp.append("folder_self", folder);
   var target = new URL("/search/", location.origin);
   target.hash = "#/" + repo + (sp.toString() ? "?" + sp.toString() : "");
@@ -249,8 +237,7 @@ function getReaderLink(rec, returnUrl) {
   const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl, FolderUrl: getReaderFolderUrl(rec) });
   if (rec.HasTxt && String(rec.Extension || "").toLowerCase() !== "txt") {
     const relPath = buildRecordRelativePath(rec);
-    const stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
-    readerRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt";
+    readerRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath));
   }
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
   try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", fallback: readerRecord.ReaderFallback || "" }; sessionStorage.setItem("reader-source:" + readerId, JSON.stringify(sourceData)); sessionStorage.setItem("reader-resolve:" + readerId, JSON.stringify(sourceData)); } } catch (_) {}
@@ -495,12 +482,8 @@ function warmReaderIntent(rawUrl) {
     sourceUrl = readerUrl.searchParams.get("url") || "";
     readerId = readerUrl.searchParams.get("id") || "";
   } catch (_) { return; }
-  var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader-request-manager.js", "/search/static/reader-chapter-repository.js", "/search/static/reader-scroll-anchor.js", "/search/static/reader-section-virtualizer.js", "/search/static/reader-runtime.js", "/search/static/reader-format-adapters.js", "/search/static/reader-security.js", "/search/static/reader.js"];
-  var engineAssets = extension === "pdf"
-    ? ["/search/static/vendor/pdf.min.f80490490320.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.8ab0e5e30031.mjs"]
-    : extension === "epub" ? ["/search/static/foliate-reader/view.js?reader-v1"]
-    : extension === "docx" ? ["/search/static/vendor/jszip.min.7f839b2d4688.js", "/search/static/vendor/docx-preview.min.051ef503f267.js"]
-     : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.b147274a9ce2.js", "/search/static/vendor/purify.min.f263b05369e0.js"] : [];
+  var shellAssets = VoiceOfMLReaderResources.shellAssets("/search/static/");
+  var engineAssets = VoiceOfMLReaderResources.engineAssets(extension, "/search/static/", "?reader-v1");
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
@@ -4227,7 +4210,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         }
         var assetPath = ppath ? ppath + "/" + getBrowserFileName(ff) : getBrowserFileName(ff);
         var browserRecord = { File: ff.name, Extension: ff.ext, Link: fileLink, ReturnUrl: location.href };
-        if (ff.hasTxt && String(ff.ext || "").toLowerCase() !== "txt") { var relPath = (ppath ? ppath + "/" : "") + ff.name; var stem = ff.ext ? relPath.replace(new RegExp("\\." + ff.ext + "$", "i"), "") : relPath; browserRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt"; }
+        if (ff.hasTxt && String(ff.ext || "").toLowerCase() !== "txt") { var relPath = (ppath ? ppath + "/" : "") + getBrowserFileName(ff); browserRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath)); }
         browserRecord = applyReaderAsset(browserRecord, currentRepo, assetPath, fileLink);
         var readerLink = isReadableRecord(browserRecord) ? VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html") : "";
         if (readerLink) {
