@@ -112,11 +112,15 @@ function normalizeSourceUrl(url) {
 }
 const params = new URLSearchParams(location.search);
 const readerId = params.get("id") || "";
+const legacyReaderTitle = /^[0-9a-f]{16}$/i.test(readerId) ? params.get("title") || "" : "";
 let localReaderData = null;
 try {
   localReaderData = JSON.parse(sessionStorage.getItem(`reader-source:${readerId}`) || "null");
   if (localReaderData) sessionStorage.removeItem(`reader-source:${readerId}`);
 } catch (_) {}
+// Old asset IDs can belong to several source records. Resolve the title hint
+// afresh instead of trusting session metadata keyed only by the shared asset.
+if (legacyReaderTitle) localReaderData = null;
 let sourceUrl = normalizeSourceUrl(
   params.get("url") || (!readerId && localReaderData && localReaderData.url) || ""
 );
@@ -146,8 +150,10 @@ if (localReaderData) {
 try {
   const cached = sessionStorage.getItem(`reader-resolve:${readerId}`);
   if (cached) {
-    cachedReaderData = JSON.parse(cached);
-    resolvedReaderData = cachedReaderData;
+    if (!legacyReaderTitle) {
+      cachedReaderData = JSON.parse(cached);
+      resolvedReaderData = cachedReaderData;
+    }
     sessionStorage.removeItem(`reader-resolve:${readerId}`);
   }
 } catch (_) {}
@@ -194,7 +200,9 @@ function setReaderStage(stage) {
   return readerRuntime.setStage(stage);
 }
 async function resolveReaderId(id) {
-  const endpoint = `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`;
+  const endpoint =
+    `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}` +
+    (legacyReaderTitle ? `&title=${encodeURIComponent(legacyReaderTitle)}` : "");
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await readerRequestManager.request(endpoint, READER_PROXY_TIMEOUT_MS);
     if (response.ok) return response.json();
@@ -2159,6 +2167,9 @@ const EPUB_HTML_TAGS = new Set(
     ","
   )
 );
+const EPUB_HTML_VOID_TAGS = new Set(
+  "area,base,br,col,embed,hr,img,input,link,meta,param,source,track,wbr".split(",")
+);
 
 function normalizeEpubDocument(doc) {
   // Legacy CHM conversions can use an XHTML prefix even in HTML content.
@@ -2166,13 +2177,22 @@ function normalizeEpubDocument(doc) {
     const tagName = String(element.tagName || "").toLowerCase();
     const localName = tagName.includes(":") ? tagName.slice(tagName.lastIndexOf(":") + 1) : tagName;
     if (tagName === localName || !EPUB_HTML_TAGS.has(localName)) continue;
-    const replacement = doc.createElement(localName);
+    const replacement = doc.createElementNS("http://www.w3.org/1999/xhtml", localName);
     for (const attribute of [...element.attributes]) {
       if (!attribute.name.toLowerCase().startsWith("xmlns:"))
         replacement.setAttribute(attribute.name, attribute.value);
     }
-    while (element.firstChild) replacement.appendChild(element.firstChild);
-    element.replaceWith(replacement);
+    // HTML parsing treats prefixed void tags as containers. Keep the following
+    // content as siblings: serializing real <br>/<hr>/<img> drops their children.
+    // Move the existing text nodes so Foliate's source/CFI mapping stays intact.
+    const fragment = doc.createDocumentFragment();
+    fragment.appendChild(replacement);
+    if (EPUB_HTML_VOID_TAGS.has(localName)) {
+      while (element.firstChild) fragment.appendChild(element.firstChild);
+    } else {
+      while (element.firstChild) replacement.appendChild(element.firstChild);
+    }
+    element.replaceWith(fragment);
   }
   return doc;
 }
@@ -3941,7 +3961,10 @@ async function createFoliateSection(section, index) {
   `;
   sectionBody.className = "reader-section-body";
   const body = epubContentBody(doc);
-  sectionBody.innerHTML = body ? body.innerHTML : "";
+  // Import sanitized nodes directly. Serializing and reparsing legacy nested
+  // anchors can drop stylesheet behavior and reorder footnotes/citations.
+  if (body)
+    sectionBody.append(...[...body.childNodes].map((node) => document.importNode(node, true)));
   article._resolveSearchAnchor = foliateSearchAnchor(source, sourceNodes, body, sectionBody);
   shadow.append(baseStyle, ...styles, sectionBody);
   await settleReaderImages(sectionBody);
