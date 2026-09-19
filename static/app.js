@@ -432,6 +432,7 @@ function navigateToReader(rawUrl, returnUrl) {
   var url;
   try { url = readerNavigation.prepare(syncReaderFolderFilter(rawUrl), returnUrl); }
   catch (_) { return false; }
+  if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
   openReaderOverlay(url);
   return true;
 }
@@ -599,6 +600,14 @@ function renderDownloadBatch() {
   panel.querySelector('[data-queue="cancel"]').hidden = batch.done || batch.cancelled;
   panel.querySelector('[data-queue="retry"]').hidden = !batch.done || !batch.failed.length;
   panel.querySelector('[data-queue="close"]').hidden = !batch.done;
+}
+
+function getSelectedFiles() {
+  return Object.keys(selectedIndices).map(Number).flatMap(index => {
+    const record = STATE.results[index];
+    if (!record) return [];
+    return [{ filename: record.File + (record.Extension ? "." + record.Extension : ""), link: getRecordLink(record) }];
+  });
 }
 
 function startDownloadBatch(items) {
@@ -1650,21 +1659,9 @@ const ROUTER = {
   },
   navigate: function(mode, repo, folder) {
     let hash = mode === "global" ? "#/" : "#/" + repo;
-    const sp = new URLSearchParams();
+    const sp = buildSearchURLParams({ includeQuery: false, displaySizes: true });
     if (mode !== "global" && folder !== undefined && folder !== null) sp.set("path", folder);
     else if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
-    if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-    if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-    if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
-    if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
-    if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (!STATE.exact) sp.set("exact", "0");
-    if (!STATE.useLocalMode) sp.set("local", "0");
-    if (!STATE.recordHistory) sp.set("history", "0");
-    if (!STATE.useMirrorLinks) sp.set("mirror", "0");
-    if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-    if (STATE.rightSidebarOpen) sp.set("filters", "1");
-    if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -1835,33 +1832,39 @@ const ROUTER = {
   },
 };
 
-function syncStateToURL() {
-  if (readerOverlay) return;
-  let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
+function buildSearchURLParams({ includeQuery = true, displaySizes = false } = {}) {
   const sp = new URLSearchParams();
-  if (STATE.query) sp.set("q", STATE.query);
-  if (STATE.mode === "global") {
-    STATE.filterRepos.forEach(function(r) {
-      sp.append("repo", r.split("/").pop());
-    });
-  }
+  if (includeQuery && STATE.query) sp.set("q", STATE.query);
   if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-   if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-  if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
-  if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
+  if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
+  const sizeValue = displaySizes ? fmtSizeUrl : value => value;
+  if (STATE.filterMinSize !== null) sp.set("min_size", sizeValue(STATE.filterMinSize));
+  if (STATE.filterMaxSize !== null) sp.set("max_size", sizeValue(STATE.filterMaxSize));
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (!STATE.exact) sp.set("exact", "0");
   if (!STATE.useLocalMode) sp.set("local", "0");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
+  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
+  if (STATE.rightSidebarOpen) sp.set("filters", "1");
+  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
+  return sp;
+}
+
+function syncStateToURL() {
+  if (readerOverlay) return;
+  let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
+  const sp = buildSearchURLParams();
+  if (STATE.mode === "global") {
+    STATE.filterRepos.forEach(function(r) {
+      sp.append("repo", r.split("/").pop());
+    });
+  }
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (STATE.mode !== "global") {
     STATE.filterFolderSelfs.forEach(function(folder) { sp.append("folder_self", folder); });
     STATE.filterFolderSubtrees.forEach(function(folder) { sp.append("folder_subtree", folder); });
   }
-  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-  if (STATE.rightSidebarOpen) sp.set("filters", "1");
-  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
   if (window.location.hash !== hash) {
@@ -1885,6 +1888,7 @@ let searchAbortController = null;
 let searchPrefetchAbortController = null;
 let searchRequestId = 0;
 let filterSearchTimer = null;
+let sizeFilterTimer = null;
 const FILTER_SEARCH_DEBOUNCE_MS = 200;
 let routeRenderId = 0;
 let apiAvailable = true;
@@ -2017,7 +2021,10 @@ function updateSearchPositionControls() {
 function cancelPendingSearchControls() {
   clearTimeout(searchTimer);
   clearTimeout(filterSearchTimer);
+  clearTimeout(sizeFilterTimer);
+  searchTimer = null;
   filterSearchTimer = null;
+  sizeFilterTimer = null;
 }
 
 function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
@@ -3215,16 +3222,26 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   return localDataPromise;
 }
 
+function submitSearchQuery(query, { restore = false, record = false, refreshHistory = false, clearResults = false, blur = false, updateInput = restore } = {}) {
+  cancelPendingSearchControls();
+  saveSearchViewSnapshot();
+  if (updateInput) DOM.searchInput.value = query;
+  STATE.query = query;
+  STATE.page = 1;
+  if (clearResults) { STATE.results = []; keyboardResultIndex = -1; }
+  if (record) addHistoryItem(query);
+  if (refreshHistory) renderDropdown();
+  if (restore) syncStateToURL();
+  const result = doSearch(false, false, restore);
+  if (blur) DOM.searchInput.blur();
+  return result;
+}
+
 function debouncedSearch() {
   if (searchComposing) return;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
-    saveSearchViewSnapshot();
-    STATE.query = DOM.searchInput.value.trim();
-    STATE.page = 1;
-    addHistoryItem(STATE.query);
-    renderDropdown();
-    doSearch();
+    submitSearchQuery(DOM.searchInput.value.trim(), { record: true, refreshHistory: true });
   }, 100);
 }
 
@@ -4033,15 +4050,43 @@ function setSearchVisualLoading(loading) {
   updateStatusBar();
 }
 
-function doFilterSearch() {
+function prepareFilterChange(clearResults) {
+  cancelPendingSearchControls();
+  saveSearchViewSnapshot();
+  STATE.page = 1;
+  if (clearResults) STATE.results = [];
+}
+
+function doFilterSearch(clearResults = false) {
+  prepareFilterChange(clearResults);
   return doSearch(false, false, true);
 }
 
-function scheduleFilterSearch() {
-  saveSearchViewSnapshot();
+function sizeInputToBytes(input, unitSelect) {
+  const value = parseFloat(input.value);
+  if (isNaN(value) || value < 0) return null;
+  const factor = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824 }[unitSelect.value] || 1;
+  return Math.round(value * factor);
+}
+
+function setupSizeFilterControls() {
+  const schedule = () => {
+    clearTimeout(sizeFilterTimer);
+    sizeFilterTimer = setTimeout(() => {
+      sizeFilterTimer = null;
+      STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
+      STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
+      doFilterSearch(true);
+    }, 500);
+  };
+  [DOM.filterMinSize, DOM.filterMaxSize].forEach(input => input.addEventListener("input", schedule));
+  [DOM.filterMinUnit, DOM.filterMaxUnit].forEach(select => select.addEventListener("change", schedule));
+}
+
+function scheduleFilterSearch(clearResults = false) {
+  prepareFilterChange(clearResults);
   cancelPositionRestore();
   resetPagingRecovery();
-  clearTimeout(filterSearchTimer);
   if (searchAbortController) searchAbortController.abort();
   cancelSearchPrefetch();
   searchId++;
@@ -4165,7 +4210,6 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         browserRecord = applyReaderAsset(browserRecord, currentRepo, assetPath, fileLink);
         var readerLink = isReadableRecord(browserRecord) ? VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html") : "";
         if (readerLink) {
-          if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
           navigateToReader(readerLink);
           return;
         }
@@ -4344,10 +4388,8 @@ async function renderRepoFilter(routeId) {
   }
   renderCheckboxList(DOM.filterRepoList, items, STATE.filterRepos, function(vals) {
     STATE.filterRepos = vals;
-    STATE.page = 1;
-    STATE.results = [];
     updateFilterCancelButtons();
-    scheduleFilterSearch();
+    scheduleFilterSearch(true);
   });
 }
 
@@ -4418,7 +4460,6 @@ async function renderExtensionFilter(routeId) {
   }
   renderExtensionTree(DOM.filterExtList, items, rest, STATE.filterExtensions, function(vals) {
     STATE.filterExtensions = vals;
-    STATE.page = 1;
     saveStoredExtensionFilters();
     updateFilterCancelButtons();
     scheduleFilterSearch();
@@ -4754,7 +4795,6 @@ function persistFolderSelection(subtreeSet, selfSet) {
   subtreeSet.forEach(function(path) { if (path && !merged.includes(path)) merged.push(path); });
   STATE.filterFolders = merged;
   saveStoredFolderFilters(STATE.repo);
-  STATE.page = 1;
   updateFilterCancelButtons();
   scheduleFilterSearch();
 }
@@ -4975,7 +5015,6 @@ function openReaderRecord(rec, returnUrl) {
   if (!rec || location.href !== returnUrl) return false;
   const url = getReaderLink(rec, returnUrl);
   if (!url) return false;
-  if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
   return navigateToReader(url, returnUrl);
 }
 
@@ -5124,6 +5163,12 @@ function maybeLoadNextPage(bottomOnly = false, retry = false) {
   }
 }
 
+function consumeDeferredSearchAppend() {
+  if (!STATE._deferredAppendWhileDragging) return false;
+  STATE._deferredAppendWhileDragging = false;
+  return consumeCachedAppendPage();
+}
+
 function recoverScrollState() {
   cancelQuickScroll();
   expireSearchRequests();
@@ -5135,10 +5180,7 @@ function recoverScrollState() {
     scrollLoadTimer = null;
   }
   VSCROLL.isDraggingThumb = false;
-  if (STATE._deferredAppendWhileDragging) {
-    STATE._deferredAppendWhileDragging = false;
-    if (consumeCachedAppendPage()) return;
-  }
+  if (consumeDeferredSearchAppend()) return;
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
   renderVisible();
@@ -5170,10 +5212,7 @@ function scheduleScrollLoad(delay) {
   scrollLoadTimer = setTimeout(function() {
     scrollLoadTimer = null;
     if (VSCROLL.isDraggingThumb) return;
-    if (STATE._deferredAppendWhileDragging) {
-      STATE._deferredAppendWhileDragging = false;
-      if (consumeCachedAppendPage()) return;
-    }
+    if (consumeDeferredSearchAppend()) return;
     maybeLoadNextPage();
   }, delay);
 }
@@ -5266,19 +5305,19 @@ function setupQuickScroll() {
   }
   function onMouseMove(e) {
     if (!VSCROLL.isDraggingThumb) return;
-    const delta = e.clientY - startY;
-    const ratio = delta / dragRange;
-    queueResultScrollTop(startST + ratio * maxScrollTop);
+    moveDrag(e.clientY);
+  }
+  function moveDrag(clientY) {
+    queueResultScrollTop(startST + (clientY - startY) / dragRange * maxScrollTop);
+  }
+  function completeDrag() {
+    finishDrag();
+    if (!consumeDeferredSearchAppend()) maybeLoadNextPage();
   }
   function onMouseUp() {
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
-    finishDrag();
-    if (STATE._deferredAppendWhileDragging) {
-      STATE._deferredAppendWhileDragging = false;
-      if (consumeCachedAppendPage()) return;
-    }
-    maybeLoadNextPage();
+    completeDrag();
   }
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
     beginDrag(e.clientY); e.preventDefault(); e.stopPropagation();
@@ -5288,20 +5327,13 @@ function setupQuickScroll() {
   function onTouchMove(e) {
     if (!VSCROLL.isDraggingThumb) return;
     e.preventDefault();
-    const delta = e.touches[0].clientY - startY;
-    const ratio = delta / dragRange;
-    queueResultScrollTop(startST + ratio * maxScrollTop);
+    moveDrag(e.touches[0].clientY);
   }
   function onTouchEnd() {
     document.removeEventListener("touchmove", onTouchMove);
     document.removeEventListener("touchend", onTouchEnd);
     document.removeEventListener("touchcancel", onTouchCancel);
-    finishDrag();
-    if (STATE._deferredAppendWhileDragging) {
-      STATE._deferredAppendWhileDragging = false;
-      if (consumeCachedAppendPage()) return;
-    }
-    maybeLoadNextPage();
+    completeDrag();
   }
   function onTouchCancel() {
     cancelQuickScroll();
@@ -5465,11 +5497,7 @@ function setupKeyboard() {
         return;
       }
       if (DOM.searchInput.value) {
-        DOM.searchInput.value = "";
-        STATE.query = "";
-        STATE.page = 1;
-        STATE.results = [];
-        doSearch();
+        submitSearchQuery("", { clearResults: true, updateInput: true });
         return;
       }
       DOM.searchInput.blur();
@@ -5502,14 +5530,7 @@ function setupKeyboard() {
     if (e.isComposing || searchComposing || e.keyCode === 229) return;
     if (e.key === "Enter") {
       e.preventDefault();
-      saveSearchViewSnapshot();
-      STATE.query = DOM.searchInput.value.trim();
-      STATE.page = 1;
-      STATE.results = [];
-      keyboardResultIndex = -1;
-      addHistoryItem(STATE.query);
-      doSearch();
-      DOM.searchInput.blur();
+      submitSearchQuery(DOM.searchInput.value.trim(), { record: true, clearResults: true, blur: true });
     }
   });
 }
@@ -5524,12 +5545,10 @@ function clearAllFilters() {
   saveStoredExtensionFilters();
   STATE.filterMinSize = null;
   STATE.filterMaxSize = null;
-  STATE.page = 1;
-  STATE.results = [];
   DOM.filterMinSize.value = "";
   DOM.filterMaxSize.value = "";
   renderFilters(routeRenderId);
-  doFilterSearch();
+  doFilterSearch(true);
   showToast("已清空所有筛选条件");
   syncStateToURL();
 }
@@ -5557,7 +5576,6 @@ function setupResultDelegation() {
         return;
       }
       if (action === "read") {
-        if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
         navigateToReader(actionBtn.dataset.readerUrl);
         return;
       }
@@ -5573,20 +5591,7 @@ function setupResultDelegation() {
       const frepo = folderLink.dataset.repo;
       if (frepo && STATE.mode === "global") {
         let hash = "#/" + frepo;
-        const sp = new URLSearchParams();
-        if (STATE.query) sp.set("q", STATE.query);
-        if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-        if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
-        if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
-        if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-        if (!STATE.searchFolders) sp.set("search_folders", "false");
-        if (!STATE.exact) sp.set("exact", "0");
-        if (!STATE.useLocalMode) sp.set("local", "0");
-        if (!STATE.recordHistory) sp.set("history", "0");
-        if (!STATE.useMirrorLinks) sp.set("mirror", "0");
-        if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-        if (STATE.rightSidebarOpen) sp.set("filters", "1");
-        if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
+        const sp = buildSearchURLParams({ displaySizes: true });
         if (folder) sp.append("folder_self", folder);
         const qs = sp.toString();
         window.location.hash = qs ? hash + "?" + qs : hash;
@@ -5595,10 +5600,8 @@ function setupResultDelegation() {
         STATE.filterFolderSubtrees = [];
         STATE.filterFolderSelfs = folder ? [folder] : [];
         saveStoredFolderFilters(STATE.repo);
-        STATE.page = 1;
-        STATE.results = [];
         renderFilters(routeRenderId);
-        doFilterSearch();
+        doFilterSearch(true);
       }
       return;
     }
@@ -5670,14 +5673,8 @@ async function init() {
     if (delBtn) { removeHistoryItem(delBtn.dataset.del); return; }
     var item = e.target.closest(".history-item");
     if (item) {
-      saveSearchViewSnapshot();
-      DOM.searchInput.value = item.dataset.query;
-      STATE.query = item.dataset.query;
-      STATE.page = 1;
-      syncStateToURL();
-      doSearch(false, false, true);
+      submitSearchQuery(item.dataset.query, { restore: true, blur: true });
       hideDropdown();
-      DOM.searchInput.blur();
       return;
     }
   });
@@ -5710,39 +5707,15 @@ async function init() {
     lastSelectedIndex = idx;
     updateSelectionUI();
   });
-  var getSelectedLinks = function(copyable) {
-    var links = [];
-    var indices = Object.keys(selectedIndices).map(Number);
-    for (var li = 0; li < indices.length; li++) {
-      var rec = STATE.results[indices[li]];
-      if (rec) {
-        var link = getRecordLink(rec);
-        links.push(copyable ? getCopyableLink(link) : link);
-      }
-    }
-    return links;
-  };
-  var getSelectedFilenames = function() {
-    var names = [];
-    var indices = Object.keys(selectedIndices).map(Number);
-    for (var ni = 0; ni < indices.length; ni++) {
-      var rec = STATE.results[indices[ni]];
-      if (rec) names.push(rec.File + (rec.Extension ? "." + rec.Extension : ""));
-    }
-    return names;
-  };
   if (DOM.multiCopyLinks) DOM.multiCopyLinks.addEventListener("click", function() {
-    var links = getSelectedLinks(true);
+    const links = getSelectedFiles().map(item => getCopyableLink(item.link));
     if (links.length === 0) { showToast("未选中任何文件"); return; }
     navigator.clipboard.writeText(links.join("\n")).then(function() {
       showToast("已复制 " + links.length + " 条链接");
     }).catch(function() { showToast("复制失败"); });
   });
   if (DOM.multiBatchDownload) DOM.multiBatchDownload.addEventListener("click", function() {
-    var links = getSelectedLinks(false);
-    var names = getSelectedFilenames();
-    if (links.length === 0) { showToast("未选中任何文件"); return; }
-    startDownloadBatch(links.map((link, index) => ({ filename: names[index], link })));
+    startDownloadBatch(getSelectedFiles());
   });
   if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
     selectedIndices = {};
@@ -5772,11 +5745,9 @@ async function init() {
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
   DOM.repoFilterCancel.addEventListener("click", function() {
     STATE.filterRepos = [];
-    STATE.page = 1;
-    STATE.results = [];
     updateFilterCancelButtons();
     renderRepoFilter(routeRenderId);
-    scheduleFilterSearch();
+    scheduleFilterSearch(true);
   });
   DOM.folderFilterCancel.addEventListener("click", function() {
     persistFolderSelection(new Set(), new Set());
@@ -5784,32 +5755,25 @@ async function init() {
   });
   DOM.extFilterCancel.addEventListener("click", function() {
     STATE.filterExtensions = [];
-    STATE.page = 1;
-    STATE.results = [];
     saveStoredExtensionFilters();
     updateFilterCancelButtons();
     renderExtensionFilter(routeRenderId);
-    scheduleFilterSearch();
+    scheduleFilterSearch(true);
   });
   DOM.searchFoldersToggle.addEventListener("change", function() {
     STATE.searchFolders = DOM.searchFoldersToggle.checked;
     clearResultTemplateCache();
-    STATE.page = 1;
-    STATE.results = [];
-    doFilterSearch();
+    doFilterSearch(true);
   });
   DOM.exactSearchToggle.addEventListener("change", function() {
     STATE.exact = DOM.exactSearchToggle.checked;
-    STATE.page = 1;
-    STATE.results = [];
-    doFilterSearch();
+    doFilterSearch(true);
   });
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
       setExactSearchSectionVisible(false, true);
-      STATE.page = 1;
-      STATE.results = [];
+      prepareFilterChange(true);
       DOM.resultsList.innerHTML = "";
       DOM.emptyState.style.display = "none";
       updateStatusBar();
@@ -5826,16 +5790,12 @@ async function init() {
     STATE.useLocalMode = DOM.localModeToggle.checked;
     setExactSearchSectionVisible(!STATE.useLocalMode, true);
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
-    STATE.page = 1;
-    STATE.results = [];
-    doFilterSearch();
+    doFilterSearch(true);
     syncStateToURL();
   });
   DOM.sortSelect.addEventListener("change", function() {
     STATE.sort = DOM.sortSelect.value;
-    STATE.page = 1;
-    STATE.results = [];
-    doFilterSearch();
+    doFilterSearch(true);
     syncStateToURL();
   });
   DOM.overlay.addEventListener("click", function() {
@@ -5847,35 +5807,11 @@ async function init() {
   DOM.randomBookBtn.addEventListener("click", randomBook);
   if (DOM.randomTxtBtn) DOM.randomTxtBtn.addEventListener("click", randomTxt);
   DOM.emptyRandomBtn.addEventListener("click", randomTxt);
-  var sizeTimer_local;
-  var sizeInputToBytes = function(input, unitSelect) {
-    var val = parseFloat(input.value);
-    if (isNaN(val) || val < 0) return null;
-    var unit = unitSelect.value;
-    if (unit === "KB") val *= 1024;
-    else if (unit === "MB") val *= 1048576;
-    else if (unit === "GB") val *= 1073741824;
-    return Math.round(val);
-  };
-  var applySizeFilter = function() {
-    clearTimeout(sizeTimer_local);
-    sizeTimer_local = setTimeout(function() {
-      STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
-      STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
-      STATE.page = 1;
-      STATE.results = [];
-      doFilterSearch();
-    }, 500);
-  };
-  DOM.filterMinSize.addEventListener("input", applySizeFilter);
-  DOM.filterMaxSize.addEventListener("input", applySizeFilter);
-  DOM.filterMinUnit.addEventListener("change", applySizeFilter);
-  DOM.filterMaxUnit.addEventListener("change", applySizeFilter);
+  setupSizeFilterControls();
   DOM.extSelectAll.addEventListener("click", function() {
     var allExtensions = STATE.extensionList.slice();
     var selected = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtensions.length > 0 && allExtensions.every(function(extension) { return selected.has(extension); }) ? [] : allExtensions;
-    STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
     scheduleFilterSearch();
@@ -5884,7 +5820,6 @@ async function init() {
     var allExtNames = STATE.extensionList.slice();
     var currentSet = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
-    STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
     scheduleFilterSearch();
