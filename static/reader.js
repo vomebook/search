@@ -204,7 +204,7 @@ async function resolveReaderId(id) {
   throw new Error("Reader ID resolution failed");
 }
 function classifyReaderError(error, fallback = "READER_PARSE") {
-  if (error?.code === "READER_ENGINE_NETWORK") return error.code;
+  if (["READER_ENGINE_NETWORK", "READER_RESTORE"].includes(error?.code)) return error.code;
   const value = `${error?.name || ""} ${error?.message || error || ""}`;
   if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK";
   if (
@@ -1920,6 +1920,7 @@ window.addEventListener("message", (event) => {
     event.source === window.parent &&
     event.data?.type === "voice-reader-abort"
   ) {
+    saveProgress();
     disposeReader();
     return;
   }
@@ -2285,7 +2286,7 @@ function fail(message, code = "READER_PARSE") {
   const visibleMessage = `${message} [${readerLifecycle.stage}]`;
   content.innerHTML = `<div class="reader-error"></div>`;
   content.querySelector(".reader-error").textContent = visibleMessage;
-  if (code === "READER_ENGINE_NETWORK") {
+  if (["READER_ENGINE_NETWORK", "READER_RESTORE"].includes(code)) {
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "text-button";
@@ -3341,17 +3342,28 @@ async function restoreChapterPosition(entry, generation) {
 }
 async function restoreFormat(mode, entry, generation = beginReaderNavigation()) {
   try {
-    if (!entry || !isReaderGenerationCurrent("navigation", generation)) return;
-    if (mode === "epub-chapters" && Number.isInteger(entry.chapterIndex)) {
-      if (!(await restoreChapterPosition(entry, generation))) return;
+    if (!entry || !isReaderGenerationCurrent("navigation", generation)) return false;
+    if (mode === "epub-chapters") {
+      if (Number.isInteger(entry.chapterIndex)) {
+        if (!(await restoreChapterPosition(entry, generation))) return false;
+      } else if (Number.isInteger(entry.foliateSection)) {
+        // Chapter manifests use one-based spine indexes; migrate positions
+        // saved before this book switched from Foliate to chapter loading.
+        const migrated = {
+          ...entry,
+          chapterIndex: entry.foliateSection + 1,
+          chapterOffset: entry.foliateOffset
+        };
+        if (!(await restoreChapterPosition(migrated, generation))) return false;
+      } else if (!(await restoreProgressState(entry, generation))) return false;
     } else if (mode === "foliate" && Number.isInteger(entry.foliateSection)) {
-      if (!(await restoreFoliateBookmarkPosition(entry, generation))) return;
+      if (!(await restoreFoliateBookmarkPosition(entry, generation))) return false;
     } else if (documentState.pageCount && entry.page) {
       if (
         !(await goToPage(entry.page, generation)) ||
         !isReaderGenerationCurrent("navigation", generation)
       )
-        return;
+        return false;
       const shell = content.querySelector(
         `.reader-page[data-page="${documentState.page}"], .reader-docx-page[data-page="${documentState.page}"]`
       );
@@ -3359,11 +3371,20 @@ async function restoreFormat(mode, entry, generation = beginReaderNavigation()) 
         viewport.scrollTop = shell.offsetTop + entry.pageOffset;
       updateProgressTools();
       scheduleSave();
-    } else await restoreProgressState(entry, generation);
-    if (isReaderGenerationCurrent("navigation", generation)) consumeBookmarkHandoff(entry);
+    } else if (!(await restoreProgressState(entry, generation))) return false;
+    if (!isReaderGenerationCurrent("navigation", generation)) return false;
+    consumeBookmarkHandoff(entry);
+    return true;
   } catch (error) {
     reportNavigationError(error, generation);
+    return false;
   }
+}
+async function restoreInitialPosition(entry, generation) {
+  if (!entry || !isReaderGenerationCurrent("navigation", generation)) return;
+  const restored = await formatAdapters.active.restore(entry, generation);
+  if (!restored && isReaderGenerationCurrent("navigation", generation))
+    throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。"), { code: "READER_RESTORE" });
 }
 function registerReaderFormatAdapters() {
   const formats = {
@@ -3502,7 +3523,7 @@ async function start() {
       updateDocumentState({ restoredEntry: restored });
       if (isReaderGenerationCurrent("navigation", generation)) {
         if (restored?.zoom) setZoom(restored.zoom, false);
-        await restoreFormat("foliate", restored, generation);
+        await restoreInitialPosition(restored, generation);
       }
       assertReaderActive();
       if (!setReaderPhase("ready")) return;
@@ -3522,10 +3543,9 @@ async function start() {
     assertReaderActive();
     loadingIndicator.remove();
     loadingStatus.hidden = true;
-    if (!setReaderPhase("ready")) return;
-    if (documentState.restoredEntry && isReaderGenerationCurrent("navigation", generation))
-      await formatAdapters.active.restore(documentState.restoredEntry, generation);
+    await restoreInitialPosition(documentState.restoredEntry, generation);
     assertReaderActive();
+    if (!setReaderPhase("ready")) return;
     updateDocumentState({ restorationReady: !restorationFailed });
     updateProgressTools();
     if (fullSearchInput.value.trim()) runFullSearch();
@@ -3533,7 +3553,7 @@ async function start() {
   } catch (error) {
     if (readerAbortController.signal.aborted || error?.name === "AbortError") return;
     console.error(error);
-    if (capability.mode === "epub-chapters" && validFallback(fallbackUrl)) {
+    if (error?.code !== "READER_RESTORE" && capability.mode === "epub-chapters" && validFallback(fallbackUrl)) {
       const target = new URL(location.href);
       target.searchParams.set("url", fallbackUrl);
       target.searchParams.set("ext", "pdf");
@@ -4143,7 +4163,7 @@ function captureProgressState() {
           : { scrollTop: viewport.scrollTop };
 }
 async function restoreProgressState(state, generation = beginReaderNavigation()) {
-  if (!state || !isReaderGenerationCurrent("navigation", generation)) return;
+  if (!state || !isReaderGenerationCurrent("navigation", generation)) return false;
   if (foliateContinuous && Number.isInteger(state.foliateSection))
     return restoreFoliateBookmarkPosition(state, generation);
   if (capability.mode === "epub-chapters" && Number.isInteger(state.chapterIndex))
@@ -4166,15 +4186,17 @@ async function restoreProgressState(state, generation = beginReaderNavigation())
           media.addEventListener("loadedmetadata", loaded, { once: true });
           media.addEventListener("error", failed, { once: true });
         });
-      if (!isReaderGenerationCurrent("navigation", generation)) return;
+      if (!isReaderGenerationCurrent("navigation", generation)) return false;
       media.currentTime = state.mediaTime;
     } else if (htmlFrame && htmlFrame.contentWindow && Number.isFinite(state.htmlScrollTop))
       htmlFrame.contentWindow.scrollTo(0, state.htmlScrollTop);
     else if (Number.isFinite(state.scrollTop)) viewport.scrollTop = state.scrollTop;
     updateProgressTools();
     scheduleSave();
+    return true;
   } catch (error) {
     reportNavigationError(error, generation);
+    return false;
   }
 }
 function flushEpubSeek() {
