@@ -43,6 +43,8 @@ function harness(options) {
           return Promise.resolve();
         },
         match(request) { return Promise.resolve(values.get(keyOf(request))); },
+        keys() { return Promise.resolve(Array.from(values.keys(), url => ({url}))); },
+        delete(request) { return Promise.resolve(values.delete(keyOf(request))); },
         put(request, value) {
           operations.put.push(keyOf(request));
           if (settings.put) return settings.put(request, value);
@@ -59,6 +61,7 @@ function harness(options) {
   };
   const fetchImpl = settings.fetch || ((request) => Promise.resolve(response(`network:${keyOf(request)}`)));
   const context = {
+    importScripts() {}, VoiceOfMLReaderResources: require('../static/reader-resources.js'),
     URL,
     caches,
     fetch(request) { operations.fetch.push(keyOf(request)); return fetchImpl(request); },
@@ -75,7 +78,7 @@ function harness(options) {
     },
   };
   vm.createContext(context);
-  vm.runInContext(source, context, { filename: "sw.js" });
+  vm.runInContext(settings.source || source, context, { filename: "sw.js" });
   return { listeners, stores, operations };
 }
 
@@ -112,6 +115,26 @@ function manifestsFetch(failPath) {
 test("registers install activate and fetch listeners", () => {
   const instance = harness();
   assert.deepStrictEqual(Object.keys(instance.listeners).sort(), ["activate", "fetch", "install"]);
+});
+test("bounds old hashed variants while preserving current assets and ordinary data", async () => {
+  for (const [text, prefix, cacheName] of [
+    [source, '/search/static/', CACHE_NAME]
+  ]) {
+    const paths = ['111111111111', '222222222222', '333333333333', '444444444444'].map(hash => prefix + 'app.' + hash + '.js');
+    const instance = harness({source: text.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([paths[0]]))});
+    const values = new Map(paths.map(path => ['https://example.test' + path, response('asset')]));
+    values.set('https://example.test/data.json', response('data'));
+    instance.stores.set(cacheName, values);
+    await lifecycle(instance.listeners.activate);
+    assert.ok(values.has('https://example.test' + paths[0]));
+    assert.ok(!values.has('https://example.test' + paths[1]));
+    assert.strictEqual(values.size, 4);
+    assert.ok(values.has('https://example.test/data.json'));
+    await dispatchFetch(instance, 'https://example.test' + prefix + 'app.555555555555.js');
+    await Promise.all(instance.operations.lifetimes);
+    assert.strictEqual(values.size, 4);
+    assert.ok(values.has('https://example.test' + paths[0]));
+  }
 });
 test("install precaches only the search shell and global data", async () => {
   const instance = harness({ fetch: manifestsFetch() });

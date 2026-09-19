@@ -5,7 +5,7 @@ const vm = require("vm");
 
 const sandbox = { self: {}, setTimeout, clearTimeout, requestAnimationFrame: (callback) => setTimeout(callback, 0), cancelAnimationFrame: clearTimeout };
 sandbox.self = sandbox;
-for (const file of ["reader-runtime.js", "reader-format-adapters.js"]) vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static", file), "utf8"), sandbox);
+for (const file of ["reader-contract.js", "reader-runtime.js", "reader-format-adapters.js"]) vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static", file), "utf8"), sandbox);
 
 async function main() {
   const events = [];

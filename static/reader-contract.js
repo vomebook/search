@@ -1,7 +1,8 @@
 (function (root) {
   "use strict";
+  if (root.VoiceOfMLReader?.pdfPageSource && root.VoiceOfMLReader?.txtRelativePath) return;
 
-  (function preloadPdfOpeningResources() {
+  function preloadPdfOpeningResources() {
     try {
       const params = new URLSearchParams(location.search);
       const id = params.get("id") || "";
@@ -18,30 +19,15 @@
       if (source.startsWith("/api/")) source = `https://voiceofml-search.hf.space${source}`;
       if (!source) return;
       const manifestUrl = new URL(source, location.origin);
-      const path = manifestUrl.searchParams.get("path") || "";
-      const bucket =
-        manifestUrl.origin === "https://voiceofml-search.hf.space" &&
-        manifestUrl.pathname === "/api/reader-bucket-resource" &&
-        /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/page-manifest\.json$/.test(path);
-      const direct =
-        ["huggingface.co", "hf-mirror.com"].includes(manifestUrl.hostname) &&
-        /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/page-manifest\.json$/.test(
-          manifestUrl.pathname
-        );
-      if (!bucket && !direct) return;
+      const sourceInfo = pdfPageSource(
+        manifestUrl.href,
+        location.origin,
+        "https://voiceofml-search.hf.space"
+      );
+      if (!sourceInfo) return;
       const security = root.VoiceOfMLReaderSecurity;
       if (!security) return;
-      const pageUrl = new URL(manifestUrl.href);
-      if (bucket)
-        pageUrl.searchParams.set(
-          "path",
-          path.replace(/\/page-manifest\.json$/, "/pages/page-000001.webp")
-        );
-      else
-        pageUrl.pathname = manifestUrl.pathname.replace(
-          /\/page-manifest\.json$/,
-          "/pages/page-000001.webp"
-        );
+      const pageUrl = new URL(sourceInfo.pageUrl(1));
       const controller = new AbortController(),
         timer = setTimeout(() => controller.abort(), 120000);
       let disposed = false;
@@ -90,7 +76,7 @@
       root.addEventListener?.("pagehide", onPageHide);
       root.__VOICE_PDF_PRELOAD__ = preload;
     } catch (_) {}
-  })();
+  }
 
   const ReaderMode = Object.freeze({
     UNSUPPORTED: 0,
@@ -192,6 +178,14 @@
       pagination: false,
       media: true
     },
+    unsupported: {
+      toc: false,
+      search: false,
+      zoom: false,
+      bookmarks: false,
+      pagination: false,
+      media: false
+    },
     video: {
       toc: false,
       search: false,
@@ -211,14 +205,7 @@
       readerMode: mode ? ReaderMode.ORIGINAL : ReaderMode.UNSUPPORTED,
       article: !!mode,
       features: Object.freeze({
-        ...(features[mode] || {
-          toc: false,
-          search: false,
-          zoom: false,
-          bookmarks: false,
-          pagination: false,
-          media: false
-        })
+        ...(features[mode] || features.unsupported)
       })
     });
   }
@@ -226,6 +213,113 @@
   function clampNumber(value, minimum, maximum, fallback) {
     const numeric = Math.round(Number(value));
     return Number.isFinite(numeric) ? Math.min(maximum, Math.max(minimum, numeric)) : fallback;
+  }
+
+  const assetRoot = String.raw`objects/[0-9a-f]{2}/[0-9a-f]{64}/`;
+  const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
+  const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.webp)`;
+  const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html)|book\.epub|audio\.mp3|video\.mp4)`;
+  const assetChapters = String.raw`(?:chapter-manifest\.json|epub-chapters/(?:chapter-manifest\.json|chapters/chapter-[0-9]{4}\.xhtml|resources/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))`;
+  const assetPrimaryPattern = new RegExp(
+    `^${assetRoot}${assetVersion}(?:${assetPages}|(?:[a-z0-9-]+/)?${assetDocument})$`
+  );
+  const assetSourcePattern = new RegExp(
+    `^(?:pdf_manifest\\.json|${assetRoot}${assetVersion}(?:${assetPages}|(?:[a-z0-9-]+/)?(?:${assetDocument}|${assetChapters})))$`
+  );
+  const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}${assetPages}$`);
+  const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/${assetPages}$`);
+  const assetBase = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/";
+  const assetModes = Object.freeze({
+    p: "pdf",
+    e: "epub",
+    d: "docx",
+    h: "html",
+    a: "audio",
+    v: "video"
+  });
+
+  function isBucketPath(path, versioned = false) {
+    return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path);
+  }
+
+  function isAssetSourcePath(path) {
+    const prefix = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\//.exec(path);
+    return !!prefix && assetSourcePattern.test(path.slice(prefix[0].length));
+  }
+
+  // One parser for opening preload, manifest validation and page navigation.
+  // Dataset assets may be unversioned; the Bucket API requires a version.
+  function pdfPageSource(raw, base, bucketOrigin) {
+    try {
+      const url = new URL(raw, base);
+      if (url.username || url.password || url.hash) return null;
+      const bucket = url.origin === bucketOrigin && url.pathname === "/api/reader-bucket-resource";
+      let path;
+      if (bucket) {
+        path = url.searchParams.get("path") || "";
+        if (!isBucketPath(path, true)) return null;
+      } else {
+        if (
+          url.protocol !== "https:" ||
+          !["huggingface.co", "hf-mirror.com"].includes(url.hostname) ||
+          url.search
+        )
+          return null;
+        const prefix = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\//.exec(url.pathname);
+        if (!prefix) return null;
+        path = decodeURIComponent(url.pathname.slice(prefix[0].length));
+        if (!isBucketPath(path)) return null;
+      }
+      if (!path.endsWith("/page-manifest.json")) return null;
+      const rootPath = path.slice(0, -"/page-manifest.json".length);
+      return {
+        root: rootPath,
+        pageUrl(page) {
+          if (!Number.isInteger(page) || page < 1 || page > 999999)
+            throw new Error("PDF_PAGE_INVALID");
+          const target = new URL(url.href);
+          const filename = `pages/page-${String(page).padStart(6, "0")}.webp`;
+          if (bucket) target.searchParams.set("path", `${rootPath}/${filename}`);
+          else target.pathname = target.pathname.replace(/page-manifest\.json$/, filename);
+          return target.href;
+        }
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function txtRelativePath(path) {
+    const value = String(path || "");
+    const dot = value.lastIndexOf(".");
+    return (dot > value.lastIndexOf("/") ? value.slice(0, dot) : value) + ".txt";
+  }
+
+  function assetFields(asset, bucketBase) {
+    const path = String(asset?.p || "");
+    const bucket = isBucketPath(path, true);
+    if (
+      !asset ||
+      asset.s !== 2 ||
+      !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
+      !assetPrimaryPattern.test(path) ||
+      (bucket && asset.b !== "vomebook/pdf-pages")
+    )
+      return null;
+    const nativeExtension =
+      /(?:^|\/)document\.(epub|mobi|azw|azw3|fb2)$/i.exec(path)?.[1]?.toLowerCase() || "epub";
+    const extension =
+      asset.m === "e"
+        ? nativeExtension
+        : asset.m === "p" && path.endsWith("page-manifest.json")
+          ? "pdf-pages"
+          : assetModes[asset.m];
+    return {
+      ReaderLink: bucket ? `${bucketBase}?path=${encodeURIComponent(path)}` : assetBase + path,
+      ReaderExtension: asset.c ? "epub-chapters" : extension,
+      ReaderChapterManifest: asset.c ? assetBase + asset.c : "",
+      ReaderFallback: asset.f ? assetBase + asset.f : ""
+    };
   }
 
   function readerUrl(record, basePath) {
@@ -298,6 +392,13 @@
     capability,
     features,
     clampNumber,
+    assetFields,
+    isAssetSourcePath,
+    isBucketPath,
+    pdfPageSource,
+    txtRelativePath,
+    shortSourceId,
     readerUrl
   });
+  preloadPdfOpeningResources();
 })(typeof self !== "undefined" ? self : window);

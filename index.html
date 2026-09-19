@@ -114,10 +114,6 @@ if (!document.hidden && navigator.onLine) {
       </div>
       <div class="status-right">
         <button id="clear-filters-btn" class="text-btn" style="display:none">清空筛选</button>
-        <span id="search-position-status" hidden>
-          <button id="retry-position-btn" class="text-btn" type="button" hidden>重试恢复</button>
-          <button id="cancel-position-btn" class="text-btn" type="button">取消恢复</button>
-        </span>
         <div class="sort-group">
           <span class="sort-label">排序:</span>
           <select id="sort-select" class="sort-select">
@@ -159,6 +155,9 @@ if (!document.hidden && navigator.onLine) {
       <span class="result-position-actions">
         <button id="restart-position-btn" class="text-btn" type="button" hidden>回到顶部</button>
         <button id="return-to-position-btn" class="text-btn" type="button" hidden>回到原位置</button>
+        <span id="search-position-status" hidden>
+          <button id="retry-position-btn" class="text-btn" type="button" hidden>重试恢复</button>
+        </span>
       </span>
     </div>
     <div id="scroll-track" class="scroll-track">
@@ -288,6 +287,7 @@ if ("serviceWorker" in navigator) {
 }
 </script>
 
+<script src="static/reader-resources.js"></script>
 <script src="static/reader-contract.js"></script>
 <script src="static/reader-navigation.js"></script>
 <script src="static/search-session.js"></script>

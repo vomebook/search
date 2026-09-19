@@ -1,0 +1,14 @@
+{
+  "ids": [
+    ["", "0b5y91sr433b7"],
+    ["https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/book29.txt", "0ym7e7wbcxau0"],
+    ["书/😀.epub", "1tgzoefbsl8ia"],
+    ["https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/a%20b.txt", "1ckyy8f8m7pim"]
+  ],
+  "ocr": [
+    [{"Folder": ["edition.v2"], "File": "scan", "Extension": ""}, "edition.v2/scan.txt"],
+    [{"Folder": ["edition.v2"], "File": "book.v1", "Extension": "pdf"}, "edition.v2/book.v1.txt"],
+    [{"Folder": [], "File": "scan", "Extension": "PDF"}, "scan.txt"],
+    [{"Folder": ["中文", "a.b"], "File": "无后缀", "Extension": ""}, "中文/a.b/无后缀.txt"]
+  ]
+}

@@ -15,9 +15,7 @@ const readerHtml = fs.readFileSync("static/reader.html", "utf8");
 const workflow = fs.readFileSync(".github/workflows/static.yml", "utf8");
 
 test("Reader-Assets preserves native Foliate extensions from asset filenames", () => {
-  assert.match(app, /document\\\.\(\?:pdf\|epub\|mobi\|azw\|azw3\|fb2\)/);
-  assert.match(app, /assetExtension/);
-  assert.match(app, /e: assetExtension/);
+  assert.match(app, /VoiceOfMLReader\.assetFields\(asset, API_BASE/);
 });
 test("legacy URL and sidebar field compatibility are retired", () => {
   assert.doesNotMatch(app, /route\.params\.folder\b|legacyFolders/);
@@ -88,17 +86,10 @@ test("static header logo stays inside the Pages search prefix before startup", (
 });
 
 test("reader intent prefetches the shell and format engines", () => {
-  assert.match(app, /var shellAssets = \["\/search\/static\/reader\.css"/);
-  assert.match(app, /\/search\/static\/reader-chapter-repository\.js/);
-  assert.match(app, /\/search\/static\/reader-scroll-anchor\.js/);
-  assert.match(app, /\/search\/static\/reader-section-virtualizer\.js/);
-  assert.match(sw, /\/search\/static\/reader-chapter-repository\.js/);
-  assert.match(sw, /\/search\/static\/reader-scroll-anchor\.js/);
-  assert.match(sw, /\/search\/static\/reader-section-virtualizer\.js/);
-  assert.match(workflow, /static\/reader-chapter-repository\.js/);
-  assert.match(workflow, /static\/reader-scroll-anchor\.js/);
-  assert.match(workflow, /static\/reader-section-virtualizer\.js/);
-  assert.match(app, /extension === "docx" \? \["\/search\/static\/vendor\/jszip\.min\.7f839b2d4688\.js"/);
+  assertCode(app, 'VoiceOfMLReaderResources.shellAssets("/search/static/")');
+  assertCode(app, 'VoiceOfMLReaderResources.engineAssets(extension, "/search/static/", "?reader-v1")');
+  assertCode(sw, 'VoiceOfMLReaderResources.runtimePaths("/search/static/")');
+  assert.ok(workflow.includes('.buildFiles("github")'));
   assert.match(app, /var warmedReaderSources = new Set\(\)/);
   assert.match(app, /warmedReaderSources\.size >= 8/);
   assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
@@ -118,7 +109,7 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(reader, /VoiceOfMLReaderStore\.subscribe/);
   assert.match(reader, /VoiceOfMLReaderStore\.dispose/);
   assert.match(reader, /VoiceOfMLReaderSecurity\.readBytes/);
-  assert.match(fs.readFileSync("sw.js", "utf8"), /reader-security\.js/);
+  assert.ok(require('../static/reader-resources.js').runtimePaths('/search/static/').includes('/search/static/reader-security.js'));
   assert.match(fs.readFileSync("static/reader-store.js", "utf8"), /function dispose\(\)/);
 });
 test("desktop random actions match their labels and empty-state behavior", () => {
@@ -273,7 +264,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /OcrUrl/);
   assert.match(app, /api\/random-reader/);
   assert.doesNotMatch(app, /TXT_BASE/);
-  assert.match(reader, /\/search\/static\/vendor\/pdf\.min\.f80490490320\.mjs/);
+  assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/")');
   assert.match(reader, /const PDFJS_WASM_URL = "\/search\/static\/vendor\/wasm\/"/);
   assert.match(reader, /wasmUrl: PDFJS_WASM_URL/);
   assert.match(reader, /\/search\/static\/foliate-reader\/view\.js/);
@@ -285,7 +276,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /foliate-view/);
   assert.match(reader, /foliate-continuous/);
   assert.doesNotMatch(reader, /renderFoliateClean|foliate-reader\/reader\.html/);
-  assert.match(reader, /\/search\/static\/vendor\/purify\.min\.f263b05369e0\.js/);
+  assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("purify", "/search/static/")');
   assert.doesNotMatch(reader, /cdn\.jsdelivr\.net/);
   assert.match(reader, /IntersectionObserver/);
   assert.match(reader, /Map\.prototype\.getOrInsertComputed/);
@@ -293,7 +284,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   const workerWrapper = fs.readFileSync("static/pdf-worker-wrapper.mjs", "utf8");
   assert.match(workerWrapper, /Map\.prototype\.getOrInsertComputed/);
   assert.match(workerWrapper, /Math\.sumPrecise/);
-  assert.match(workerWrapper, /import\("\.\/vendor\/pdf\.worker\.min\.8ab0e5e30031\.mjs"\)/);
+  assertCode(workerWrapper, 'import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "./"))');
   assert.match(workerWrapper, /pendingMessages/);
   assert.match(reader, /document\.createElement\("canvas"\)/);
   assert.doesNotMatch(reader, /previewUrls/);
@@ -326,8 +317,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'docx: [loadDocxDocument, renderDocx]');
   assert.match(reader, /docx\.renderAsync/);
   assert.match(reader, /renderAltChunks: false/);
-  assert.match(reader, /jszip\.min\.7f839b2d4688\.js/);
-  assert.match(reader, /docx-preview\.min\.051ef503f267\.js/);
+  assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/")');
+  assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/")');
   assert.match(app, /&& !rec\.ReaderLink\) return false/);
   assert.match(reader, /if \(extension === "docx"\) return readerAsset/);
   assert.match(reader, /function fetchReaderResponse\(\)/);
@@ -353,7 +344,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'if (Array.isArray(manifest.toc) && manifest.toc.length) setToc(manifest.toc.map');
   assert.match(reader, /tab\.hidden = !navigationState\.tocEntries\.length/);
   assert.match(reader, /PDF_MANIFEST_INVALID/);
-  assert.match(app, /page-manifest\.json/);
+   assert.match(contract, /page-manifest\.json/);
   assert.match(app, /reader_assets\.json\.gz/);
   assert.match(app, /fetchReaderAssetMap\(\)/);
   assert.match(app, /readerAssetsRetryAt = Date\.now\(\) \+ 5000/);
@@ -455,7 +446,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.doesNotMatch(reader, /content\.style\.width/);
   assert.match(readerHtml, /Content-Security-Policy/);
   assert.match(readerHtml, /script-src 'self'/);
-  const vendorScript = fs.readFileSync("scripts/copy_reader_vendor.mjs", "utf8");
+  const vendorScript = fs.readFileSync("scripts/copy_reader_vendor.mjs", "utf8") + fs.readFileSync("static/reader-resources.js", "utf8");
   assert.match(vendorScript, /pdfjs-dist@6\.3\.289/);
   assert.match(vendorScript, /standard_fonts\//);
   assert.match(vendorScript, /cmaps\//);
@@ -468,7 +459,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   for (const path of ["pdf.min.mjs", "pdf.worker.min.mjs", "marked.min.js", "purify.min.js"]) assert.ok(!sw.includes("static/vendor/" + path));
   assert.match(sw, /url\.pathname === "\/search\/static\/reader\.html"/);
   assert.match(sw, /READER_RUNTIME_PATHS\.has\(url\.pathname\)/);
-  assert.match(sw, /"\/search\/static\/pdf-worker-wrapper\.mjs"/);
+  assertCode(sw, 'VoiceOfMLReaderResources.runtimePaths("/search/static/")');
   assert.match(sw, /readerNavigation = event\.request\.mode === "navigate" && url\.pathname === "\/search\/static\/reader\.html"/);
   assert.match(sw, /cacheKey = readerNavigation \? "\/search\/static\/reader\.html" : event\.request/);
   assert.match(sw, /fetch\(event\.request\)[\s\S]*cache\.put\(cacheKey/);
@@ -515,11 +506,10 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(workflow, /node-version: '22'/);
   assert.match(workflow, /node scripts\/compose_app\.mjs/);
   assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify/);
-  assert.match(workflow, /esbuild@0\.28\.2 static\/reader\.js --minify/);
+  assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" --minify'));
   assert.match(workflow, /node scripts\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/copy_reader_vendor\.mjs _site\/static\/vendor/);
-  assert.match(workflow, /esbuild@0\.28\.2 static\/index-worker\.js --minify/);
-  assert.match(workflow, /esbuild@0\.28\.2 static\/style\.css --minify/);
+  assert.ok(workflow.includes('.buildFiles("github")'));
   assert.match(workflow, /esbuild@0\.28\.2 sw\.js --minify/);
   assert.match(workflow, /uses: actions\/upload-pages-artifact@v5\s*\n\s*with:\s*[\s\S]*?path: '_site'/);
 });
