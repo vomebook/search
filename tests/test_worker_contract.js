@@ -99,6 +99,15 @@ async function names(params) {
 test("registers one versioned message protocol listener", () => {
   assert.strictEqual(typeof makeWorker().listeners.message, "function");
 });
+
+test("native Foliate books are eligible for repository-scoped random reading", async () => {
+  for (const extension of ["mobi", "azw", "azw3", "fb2", "fbz"]) {
+    const { worker, metadata } = await loaded([{ ...records[0], Extension: extension }]);
+    assert.strictEqual(metadata.reader.count, 1);
+    const record = await worker.request("random-record", { repo: "Repo/A", readerOnly: true });
+    assert.strictEqual(record.record.Extension, extension);
+  }
+});
 function scheduledWorker(options = {}) {
   const tasks = new Map();
   let nextId = 0;

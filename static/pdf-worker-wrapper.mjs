@@ -19,11 +19,12 @@ if (!Math.sumPrecise) {
   };
 }
 
+import "./reader-resources.js";
 const pendingMessages = [];
 const bufferMessage = event => pendingMessages.push(event);
 self.addEventListener("message", bufferMessage);
 
-import("./vendor/pdf.worker.min.8ab0e5e30031.mjs").then(() => {
+import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "./")).then(() => {
   self.removeEventListener("message", bufferMessage);
   for (const event of pendingMessages) self.dispatchEvent(new MessageEvent("message", { data: event.data }));
 });

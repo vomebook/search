@@ -114,6 +114,37 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(after["total"], before["total"])
         self.assertEqual(after["count"], before["count"])
 
+    def test_nonempty_local_startup_waits_for_worker_and_keeps_pages_local(self):
+        with self.server_state.lock:
+            self.server_state.delays["/search/data/search_data.json.gz"] = 1.0
+        self.load("#/?q=手机")
+        self.page.wait_for_function("STATE.dataLoaded && !STATE.isLoading && STATE._loadedPage === 1", timeout=30000)
+        self.assertFalse(any(item.get("q") == "手机" for item in self.search_requests))
+        self.assertTrue(self.page.evaluate("STATE.useLocalMode"))
+        self.assertEqual(self.page.evaluate("STATE._resultBackend"), "local")
+        expected = self.page.evaluate("async () => (await doSearchLocal({q:'手机', exact:STATE.exact, searchFolders:STATE.searchFolders, page:1, pageSize:STATE.pageSize})).results.map(getResultStableId)")
+        self.assertEqual(self.page.evaluate("STATE.results.map(getResultStableId)"), expected)
+        self.page.evaluate("maybeLoadNextPage = () => {}; STATE.pageSize = 2; doSearch()")
+        self.page.wait_for_function("STATE._loadedPage === 1 && !STATE.isLoading")
+        expected = self.page.evaluate("async () => (await doSearchLocal({q:'手机', exact:STATE.exact, searchFolders:STATE.searchFolders, page:1, pageSize:500})).results.map(getResultStableId)")
+        self.page.evaluate("STATE.useLocalMode = false; STATE.page = 2; doSearch(true)")
+        self.page.wait_for_function("STATE._loadedPage >= 2 && !STATE.isLoading")
+        actual = self.page.evaluate("STATE.results.map(getResultStableId)")
+        self.assertEqual(actual, expected[:len(actual)])
+        self.assertFalse(any(item.get("q") == "手机" for item in self.search_requests))
+
+    def test_api_pagination_stays_on_api_after_local_corpus_is_ready(self):
+        self.search_response_override = {"page": 1, "page_size": 100, "total": 200,
+                                         "results": [result(f"API-{i}") for i in range(100)]}
+        self.load("#/?q=pin-test&local=0")
+        self.page.wait_for_function("STATE._loadedPage === 1 && !STATE.isLoading")
+        self.page.evaluate("async () => { await ensureLocalDataLoaded(false, true); STATE.useLocalMode = true; cancelSearchPrefetch(); STATE._pageCache = {}; searchResponseCache.clear(); }")
+        self.search_response_override = {"page": 2, "page_size": 100, "total": 200,
+                                         "results": [result(f"API-{i}") for i in range(100, 200)]}
+        self.page.evaluate("STATE.page = 2; doSearch(true)")
+        self.page.wait_for_function("STATE._loadedPage === 2 && !STATE.isLoading")
+        self.assertEqual(self.page.evaluate("STATE.results.map(r => r.File)"), [f"API-{i}" for i in range(200)])
+
     def test_stalled_page_two_prefetch_does_not_block_local_corpus_loading(self):
         self.page.add_init_script(
             """(() => {

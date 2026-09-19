@@ -89,13 +89,13 @@ class PositionControlTests(unittest.TestCase):
         self.page.evaluate('STATE.isMobile=true;applyMobileMode();failPosition=true')
         self.input_position(95001)
         self.page.wait_for_function('positionRestore?.failed')
-        self.assertTrue(self.page.locator('#status-bar #retry-position-btn').is_visible())
-        self.assertTrue(self.page.locator('#status-bar #cancel-position-btn').is_visible())
+        self.assertTrue(self.page.locator('#load-info .result-position-actions #retry-position-btn').is_visible())
+        self.assertTrue(self.page.locator('#cancel-position-btn').is_hidden())
         self.assertTrue(self.page.locator('#restart-position-btn').is_hidden())
         self.assertEqual(self.page.locator('#results-container').evaluate('(e)=>getComputedStyle(e).visibility'), 'visible')
         self.assertGreater(self.page.locator('.result-item').count(), 0)
-        self.assertTrue(self.page.locator('#search-position-status').evaluate('''el=>{
-          const box=el.getBoundingClientRect(),bar=document.getElementById('status-bar').getBoundingClientRect();
+        self.assertTrue(self.page.locator('#retry-position-btn').evaluate('''el=>{
+          const box=el.getBoundingClientRect(),bar=document.getElementById('load-info').getBoundingClientRect();
           return box.left>=bar.left && box.right<=bar.right && box.bottom<=bar.bottom;
         }'''))
         self.page.evaluate('failPosition=false')
@@ -103,11 +103,12 @@ class PositionControlTests(unittest.TestCase):
         self.wait_position(95000)
         self.assertTrue(self.page.locator('#search-position-status').is_hidden())
 
-    def test_cancel_stalled_jump_keeps_new_top_after_late_response(self):
+    def test_new_search_cancels_stalled_jump_and_keeps_top_after_late_response(self):
         self.page.evaluate('blockPosition=true')
         self.input_position(95001)
         self.page.wait_for_function('!!window.releasePosition')
-        self.page.locator('#cancel-position-btn').click()
+        self.assertTrue(self.page.locator('#cancel-position-btn').is_hidden())
+        self.page.locator('#search-input').press('Enter')
         self.page.wait_for_function('!STATE.isLoading && !positionRestore')
         self.page.evaluate('blockPosition=false;releasePosition()')
         self.page.wait_for_timeout(100)
@@ -155,6 +156,22 @@ class PositionControlTests(unittest.TestCase):
         self.page.locator('#search-input').press('Enter')
         self.page.wait_for_function('!STATE.isLoading && !positionRestore')
         self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
+
+    def test_pending_size_filter_cannot_interrupt_return(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        self.page.locator('#restart-position-btn').click()
+        self.wait_position(0)
+        self.page.evaluate('''()=>{
+          DOM.filterMinSize.value='7';
+          DOM.filterMinSize.dispatchEvent(new Event('input',{bubbles:true}));
+          DOM.returnToPositionBtn.click();
+        }''')
+        self.wait_position(95000)
+        self.page.wait_for_timeout(600)
+        self.wait_position(95000)
+        self.assertIsNone(self.page.evaluate('STATE.filterMinSize'))
+        self.assertIsNone(self.page.evaluate('sizeFilterTimer'))
 
     def test_reload_without_viewport_starts_at_top_with_return_button(self):
         self.input_position(95001)
@@ -340,6 +357,22 @@ class PositionControlTests(unittest.TestCase):
             self.assert_footer_alignment()
             if width < 460:
                 self.assertTrue(self.page.locator('#restart-position-btn').evaluate('e=>e.getBoundingClientRect().right<=document.querySelector(".result-position-count").getBoundingClientRect().left'))
+
+    def test_top_controls_update_without_waiting_for_animation_frame(self):
+        self.input_position(51)
+        self.wait_position(50)
+        self.assertTrue(self.page.evaluate('''()=>{
+          document.dispatchEvent(new Event('visibilitychange'));
+          setResultScrollTop(0);
+          return DOM.backToTopBtn.hidden;
+        }'''))
+        self.assertTrue(self.page.evaluate('''()=>{
+          setResultScrollTop(getVirtualOffset(50));renderVisible();
+          scrollTicking=true;
+          DOM.resultsContainer.scrollTop=0;
+          DOM.resultsContainer.dispatchEvent(new Event('scroll'));
+          return DOM.backToTopBtn.hidden;
+        }'''))
 
     def test_top_control_stays_after_long_scroll_and_hides_only_at_top(self):
         self.input_position(95001)

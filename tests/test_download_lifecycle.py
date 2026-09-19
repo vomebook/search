@@ -44,6 +44,43 @@ class DownloadLifecycleTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('checkCalls'), 1)
         self.assertEqual(self.page.locator('[data-action="download"]').first.text_content(), '下载')
 
+    def test_cancelled_batch_preserves_independent_shared_download(self):
+        result = self.page.evaluate('''async () => {
+          const native=window.fetch; let calls=0, launches=0, transport, release;
+          window.fetch=(url, options)=>String(url).includes('/api/download/check')
+            ? (calls++, transport=options.signal, new Promise(resolve=>release=()=>resolve(new Response('{"ok":true}'))))
+            : native(url, options);
+          window.triggerDownload=()=>launches++;
+          const batch={cancelled:false,abortController:new AbortController()};
+          const first=downloadFile('shared.txt','shared',{batch,quiet:true});
+          await Promise.resolve();
+          const second=downloadFile('shared.txt','shared',{quiet:true});
+          batch.cancelled=true;batch.abortController.abort();
+          const cancelled=await first, aborted=transport.aborted;
+          release();const started=await second;
+          return {cancelled,aborted,started,calls,launches};
+        }''')
+        self.assertEqual(result, dict(cancelled=False, aborted=False, started=True, calls=1, launches=1))
+
+    def test_check_cancellation_is_per_subscriber_and_retry_survives_late_body(self):
+        result = self.page.evaluate('''async () => {
+          const native=window.fetch;const requests=[];
+          window.fetch=(url,options)=>String(url).includes('/api/download/check')
+            ? new Promise(resolve=>requests.push({signal:options.signal,release:()=>resolve(new Response('{"ok":true}'))}))
+            : native(url,options);
+          const owner=new AbortController();
+          const first=checkDownload('shared',false,owner.signal), second=checkDownload('shared');
+          owner.abort(); const cancelled=await first, sharedAborted=requests[0].signal.aborted;
+          requests[0].release(); const kept=await second;
+          const alone=new AbortController();
+          const old=checkDownload('retry',false,alone.signal);alone.abort();await old;
+          const aborted=requests[1].signal.aborted, retry=checkDownload('retry');
+          requests[1].release();requests[2].release();const recovered=await retry;
+          await checkDownload('retry');
+          return {cancelled,sharedAborted,kept,aborted,recovered,calls:requests.length};
+        }''')
+        self.assertEqual(result, dict(cancelled=False, sharedAborted=False, kept=True, aborted=True, recovered=True, calls=3))
+
     def test_checks_are_bounded_expire_and_failures_retry(self):
         result = self.page.evaluate('''async () => {
           const native=window.fetch; const calls={}; window.triggerDownload=()=>{};
@@ -63,6 +100,29 @@ class DownloadLifecycleTests(unittest.TestCase):
           return {size,expiredCalls:calls.cache69,failedCalls:calls.bad,first,second};
         }''')
         self.assertEqual(result, dict(size=64, expiredCalls=2, failedCalls=2, first=False, second=True))
+
+    def test_multi_actions_keep_sparse_selection_names_and_links_paired(self):
+        result = self.page.evaluate('''async () => {
+          cancelSearchPrefetch();
+          const source='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/';
+          STATE.results=[{File:'first',Extension:'txt',Link:source+'first.txt'},null,
+            {File:'last',Extension:'pdf',Link:source+'last.pdf'}];
+          selectedIndices={2:true,1:true,0:true};
+          STATE.useMirrorLinks=false;
+          let copied,items;
+          navigator.clipboard.writeText=async text=>{copied=text;};
+          startDownloadBatch=value=>{items=value;};
+          DOM.multiCopyLinks.click();
+          DOM.multiBatchDownload.click();
+          STATE.results=[];selectedIndices={};
+          await Promise.resolve();
+          return {copied,items};
+        }''')
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/'
+        self.assertEqual(result, dict(
+            copied=source+'first.txt\n'+source+'last.pdf',
+            items=[dict(filename='first.txt', link=source+'first.txt'),
+                   dict(filename='last.pdf', link=source+'last.pdf')]))
 
     def test_batch_limits_checks_and_retries_only_failures(self):
         self.page.evaluate('''() => {

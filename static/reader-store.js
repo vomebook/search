@@ -1,22 +1,22 @@
 (function (root) {
   "use strict";
-  const DB_NAME = "voiceofml-reader",
-    STORE_NAME = "entries",
-    BOOKMARK_STORE_NAME = "bookmarks",
-    MAX_ENTRIES = 200,
-    SCHEMA_VERSION = 1;
+  const DB_NAME = "voiceofml-reader";
+  const STORE_NAME = "entries";
+  const BOOKMARK_STORE_NAME = "bookmarks";
+  const MAX_ENTRIES = 200;
+  const SCHEMA_VERSION = 1;
   let databasePromise = null;
-  const subscribers = new Set(),
-    storeChannel =
-      typeof root.BroadcastChannel === "function"
-        ? new root.BroadcastChannel("voiceofml-reader-store-v1")
-        : null;
+  const subscribers = new Set();
+  const storeChannel =
+    typeof root.BroadcastChannel === "function"
+      ? new root.BroadcastChannel("voiceofml-reader-store-v1")
+      : null;
   let disposed = false;
-  storeChannel &&
-    (storeChannel.onmessage = (event) => {
+  if (storeChannel)
+    storeChannel.onmessage = (event) => {
       if (disposed) return;
       for (const listener of subscribers) listener({ ...event.data, remote: true });
-    });
+    };
   function notify(change) {
     if (disposed) return;
     try {
@@ -39,6 +39,7 @@
       storeChannel?.close?.();
     } catch (_) {}
   }
+
   function openDatabase() {
     if (databasePromise) return databasePromise;
     const opening = new Promise((resolve, reject) => {
@@ -79,6 +80,7 @@
     databasePromise = opening;
     return databasePromise;
   }
+
   async function transaction(mode, callback) {
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
@@ -89,6 +91,7 @@
       tx.onabort = () => reject(tx.error);
     });
   }
+
   function hasFutureSchema(entry) {
     return Number(entry?.schemaVersion) > SCHEMA_VERSION;
   }
@@ -124,8 +127,8 @@
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
       const tx = database.transaction(STORE_NAME, "readwrite"),
-        store = tx.objectStore(STORE_NAME),
-        request = store.get(url);
+        store = tx.objectStore(STORE_NAME);
+      const request = store.get(url);
       request.onsuccess = () => {
         const raw = request.result || null,
           entry = normalizeHistoryEntry(raw);
@@ -140,14 +143,15 @@
       request.onerror = () => reject(request.error);
     });
   }
+
   async function put(entry) {
     entry = normalizeHistoryEntry(entry);
     if (!entry) throw new TypeError("Invalid reader history entry");
     const database = await openDatabase();
     await new Promise((resolve, reject) => {
-      const tx = database.transaction(STORE_NAME, "readwrite"),
-        store = tx.objectStore(STORE_NAME),
-        existing = store.get(entry.url);
+      const tx = database.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      const existing = store.get(entry.url);
       existing.onsuccess = () => {
         if (existing.result) {
           if (Number(existing.result.lastReadAt) > Number(entry.lastReadAt)) return;
@@ -175,6 +179,7 @@
       tx.onabort = () => reject(tx.error);
     });
   }
+
   async function listEntries(
     storeName,
     indexName,
@@ -183,10 +188,10 @@
   ) {
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
-      const entries = [],
-        tx = database.transaction(storeName, "readwrite"),
-        store = tx.objectStore(storeName),
-        request = store.index(indexName).openCursor(query, direction);
+      const entries = [];
+      const tx = database.transaction(storeName, "readwrite"),
+        store = tx.objectStore(storeName);
+      const request = store.index(indexName).openCursor(query, direction);
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor || entries.length >= limit) return resolve(entries);
@@ -200,12 +205,14 @@
       request.onerror = () => reject(request.error);
     });
   }
+
   function list(limit = MAX_ENTRIES) {
     return listEntries(STORE_NAME, "lastReadAt", normalizeHistoryEntry, {
       direction: "prev",
       limit
     });
   }
+
   async function remove(url) {
     await transaction("readwrite", (store) => store.delete(url));
     notify({ type: "history-remove", url });

@@ -190,18 +190,8 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-   var assetPath = String(asset && asset.p || ""), bucketPage = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)$/.test(assetPath);
-   if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[0-9a-f]{16}\/)?(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)|(?:[a-z0-9-]+\/)?(document\.(?:pdf|epub|mobi|azw|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4))$/.test(assetPath) || (bucketPage && asset.b !== "vomebook/pdf-pages")) return record;
-    var assetExtension = /(?:^|\/)document\.(epub|mobi|azw|azw3|fb2)$/i.exec(assetPath)?.[1]?.toLowerCase() || "epub";
-    var bucketAsset = bucketPage && asset.b === "vomebook/pdf-pages", readerExtensions = { p: asset.p.endsWith("page-manifest.json") ? "pdf-pages" : "pdf", e: assetExtension, d: "docx", h: "html", a: "audio", v: "video" };
-   var chapterBundle = !!asset.c;
-   return Object.assign({}, record, {
-      ReaderLink: bucketAsset ? "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + encodeURIComponent(asset.p) : "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
-      ReaderExtension: chapterBundle ? "epub-chapters" : readerExtensions[asset.m],
-      ReaderChapterManifest: chapterBundle ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.c : "",
-     ReaderFallback: asset.f ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.f : "",
-     DownloadLink: originalLink,
-   });
+  var fields = VoiceOfMLReader.assetFields(asset, API_BASE + "/api/reader-bucket-resource");
+  return fields ? Object.assign({}, record, fields, { DownloadLink: originalLink }) : record;
 }
 
 function getConvertedReaderRecords(repo) {
@@ -233,25 +223,61 @@ function getReaderFolderUrl(rec) {
   var repo = String(rec.Repo || "").split("/").pop();
   if (!repo) return "";
   var folder = Array.isArray(rec.Folder) ? rec.Folder.join("/") : "";
-  var sp = new URLSearchParams();
+  var sp = buildSearchURLParams({ includeQuery: false, displaySizes: true });
   var activeQuery = (DOM.searchInput ? DOM.searchInput.value : STATE.query).trim();
   if (activeQuery) sp.set("q", activeQuery);
-  if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-  if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
-  if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
-  if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-  if (!STATE.searchFolders) sp.set("search_folders", "false");
-  if (!STATE.exact) sp.set("exact", "0");
-  if (!STATE.useLocalMode) sp.set("local", "0");
-  if (!STATE.recordHistory) sp.set("history", "0");
-  if (!STATE.useMirrorLinks) sp.set("mirror", "0");
-  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-  if (STATE.rightSidebarOpen) sp.set("filters", "1");
-  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   if (folder) sp.append("folder_self", folder);
   var target = new URL("/search/", location.origin);
   target.hash = "#/" + repo + (sp.toString() ? "?" + sp.toString() : "");
   return target.href;
+}
+
+// Session handoff metadata is expendable; keep recent books within a fixed budget.
+const readerSessionEntries = new Map();
+let readerSessionInitialized = false;
+function cacheReaderMetadata(id, data, source = false) {
+  if (!id) return;
+  const keys = [`reader-source:${id}`, `reader-resolve:${id}`];
+  const remove = (bookId) => {
+    sessionStorage.removeItem(`reader-source:${bookId}`);
+    sessionStorage.removeItem(`reader-resolve:${bookId}`);
+    readerSessionEntries.delete(bookId);
+  };
+  try {
+    if (!readerSessionInitialized) {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        const match = /^reader-(?:source|resolve):(.+)$/.exec(key);
+        if (match) readerSessionEntries.set(match[1], (readerSessionEntries.get(match[1]) || 0) +
+          2 * (key.length + (sessionStorage.getItem(key) || "").length));
+      }
+      readerSessionInitialized = true;
+    }
+    const encoded = JSON.stringify(data);
+    const values = [source ? encoded : sessionStorage.getItem(keys[0]), encoded];
+    const bytes = values.reduce((sum, value, i) => sum + (value ? 2 * (keys[i].length + value.length) : 0), 0);
+    readerSessionEntries.delete(id);
+    readerSessionEntries.set(id, bytes);
+    let total = [...readerSessionEntries.values()].reduce((sum, size) => sum + size, 0);
+    while (readerSessionEntries.size > 128 || total > 512 * 1024) {
+      const oldest = readerSessionEntries.keys().next().value;
+      total -= readerSessionEntries.get(oldest);
+      remove(oldest);
+    }
+    if (!readerSessionEntries.has(id)) return;
+    for (;;) {
+      try {
+        if (source) sessionStorage.setItem(keys[0], encoded);
+        sessionStorage.setItem(keys[1], encoded);
+        return;
+      } catch (_) {
+        // A smaller browser quota or other session data may require more eviction.
+        const oldest = readerSessionEntries.keys().next().value;
+        remove(oldest);
+        if (oldest === id) return;
+      }
+    }
+  } catch (_) { /* Storage can be disabled; Reader can still resolve through the API. */ }
 }
 
 function getReaderLink(rec, returnUrl) {
@@ -259,11 +285,10 @@ function getReaderLink(rec, returnUrl) {
   const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl, FolderUrl: getReaderFolderUrl(rec) });
   if (rec.HasTxt && String(rec.Extension || "").toLowerCase() !== "txt") {
     const relPath = buildRecordRelativePath(rec);
-    const stem = relPath.indexOf(".") >= 0 ? relPath.substring(0, relPath.lastIndexOf(".")) : relPath;
-    readerRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt";
+    readerRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath));
   }
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
-  try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", fallback: readerRecord.ReaderFallback || "" }; sessionStorage.setItem("reader-source:" + readerId, JSON.stringify(sourceData)); sessionStorage.setItem("reader-resolve:" + readerId, JSON.stringify(sourceData)); } } catch (_) {}
+  try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", fallback: readerRecord.ReaderFallback || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
   return readerUrl;
 }
 
@@ -432,6 +457,7 @@ function navigateToReader(rawUrl, returnUrl) {
   var url;
   try { url = readerNavigation.prepare(syncReaderFolderFilter(rawUrl), returnUrl); }
   catch (_) { return false; }
+  if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
   openReaderOverlay(url);
   return true;
 }
@@ -490,7 +516,7 @@ function startReaderSourceWarmup(base, readerId, sourceUrl) {
       const data = readerId ? await response.json() : null;
       if (readerId && (!data || typeof data.url !== "string" || !data.url)) throw new Error("Invalid reader metadata");
       if (readerWarmupPending !== task || controller.signal.aborted) return;
-      if (readerId) sessionStorage.setItem("reader-resolve:" + readerId, JSON.stringify(data));
+      if (readerId) cacheReaderMetadata(readerId, data);
       finish(true);
     } catch (_) { finish(false); }
   })();
@@ -504,12 +530,8 @@ function warmReaderIntent(rawUrl) {
     sourceUrl = readerUrl.searchParams.get("url") || "";
     readerId = readerUrl.searchParams.get("id") || "";
   } catch (_) { return; }
-  var shellAssets = ["/search/static/reader.css", "/search/static/reader-contract.js", "/search/static/reader-store.js", "/search/static/reader-request-manager.js", "/search/static/reader-chapter-repository.js", "/search/static/reader-scroll-anchor.js", "/search/static/reader-section-virtualizer.js", "/search/static/reader-runtime.js", "/search/static/reader-format-adapters.js", "/search/static/reader-security.js", "/search/static/reader.js"];
-  var engineAssets = extension === "pdf"
-    ? ["/search/static/vendor/pdf.min.f80490490320.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.8ab0e5e30031.mjs"]
-    : extension === "epub" ? ["/search/static/foliate-reader/view.js?reader-v1"]
-    : extension === "docx" ? ["/search/static/vendor/jszip.min.7f839b2d4688.js", "/search/static/vendor/docx-preview.min.051ef503f267.js"]
-     : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.b147274a9ce2.js", "/search/static/vendor/purify.min.f263b05369e0.js"] : [];
+  var shellAssets = VoiceOfMLReaderResources.shellAssets("/search/static/");
+  var engineAssets = VoiceOfMLReaderResources.engineAssets(extension, "/search/static/", "?reader-v1");
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
@@ -559,6 +581,7 @@ const downloadController = VoiceOfMLDownloadController.createDownloadController(
   buildDownloadUrl,
   triggerDownload: url => triggerDownload(url),
   showToast,
+  isSpeculativeAllowed: () => !document.hidden && navigator.onLine,
   isBatchActive: () => !!(downloadBatch && !downloadBatch.done),
   timeout: DOWNLOAD_CHECK_TIMEOUT,
 });
@@ -589,7 +612,11 @@ function renderDownloadBatch() {
     panel.innerHTML = '<span role="status" aria-live="polite"></span><button type="button" data-queue="cancel">取消待下载</button><button type="button" data-queue="retry">重试失败项</button><button type="button" data-queue="close">关闭</button>';
     panel.addEventListener("click", event => {
       const action = event.target.dataset.queue;
-      if (action === "cancel") { downloadBatch.cancelled = true; renderDownloadBatch(); }
+      if (action === "cancel") {
+        downloadBatch.cancelled = true;
+        downloadBatch.abortController?.abort();
+        renderDownloadBatch();
+      }
       if (action === "retry" && downloadBatch.done) startDownloadBatch(downloadBatch.failed);
       if (action === "close" && downloadBatch.done) { panel.remove(); downloadBatch = null; }
     });
@@ -601,11 +628,22 @@ function renderDownloadBatch() {
   panel.querySelector('[data-queue="close"]').hidden = !batch.done;
 }
 
+function getSelectedFiles() {
+  return Object.keys(selectedIndices).map(Number).flatMap(index => {
+    const record = STATE.results[index];
+    if (!record) return [];
+    return [{ filename: record.File + (record.Extension ? "." + record.Extension : ""), link: getRecordLink(record) }];
+  });
+}
+
 function startDownloadBatch(items) {
   if (downloadBatch && !downloadBatch.done) { showToast("已有批量任务，请先完成或取消"); return; }
   items = Array.from(new Map(items.filter(item => item.link).map(item => [item.link, item])).values());
   if (!items.length) { showToast("未选中任何文件"); return; }
-  const batch = { items, next: 0, started: 0, failed: [], cancelled: false, done: false };
+  const batch = {
+    items, next: 0, started: 0, failed: [], cancelled: false, done: false,
+    abortController: new AbortController(),
+  };
   downloadBatch = batch;
   renderDownloadBatch();
   Promise.all([runDownloadBatchWorker(batch), runDownloadBatchWorker(batch)]).then(() => {
@@ -966,13 +1004,15 @@ async function doSearchLocal(params) {
 function isValidSearchResponse(data, expectedPage, expectedPageSize) {
   return !!data
     && Array.isArray(data.results)
+    && data.results.length <= expectedPageSize
     && data.results.every(function(item) { return !!item && typeof item === "object" && !Array.isArray(item); })
     && Number.isSafeInteger(data.total)
     && data.total >= 0
     && Number.isInteger(data.page)
     && data.page === expectedPage
     && Number.isInteger(data.page_size)
-    && data.page_size === expectedPageSize;
+    && data.page_size === expectedPageSize
+    && (data.results.length > 0 || (expectedPage - 1) * expectedPageSize >= data.total);
 }
 
 // One entry owns its network request, deadline and cancellation subscriptions.
@@ -1059,6 +1099,7 @@ async function doSearchAPI(params, append, requestId) {
 }
 
 function appendSearchResults(page, results = STATE._pageCache[page]) {
+  if (!STATE._resultBackend) STATE._resultBackend = "api";
   STATE.results = STATE.results.concat(results);
   delete STATE._pageCache[page];
   STATE._loadedPage = page;
@@ -1165,7 +1206,7 @@ function prefetchNextPage() {
   }
   if (!STATE._loadedPage) return Promise.resolve();
   if (!apiAvailable) return Promise.resolve();
-  if (STATE.useLocalMode && STATE.dataLoaded) return Promise.resolve();
+  if (STATE._resultBackend === "local" || (STATE.useLocalMode && STATE.dataLoaded && STATE._resultBackend !== "api")) return Promise.resolve();
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
   return prefetchSearchPages(getSearchApiBase(), buildCurrentSearchBody(1));
 }
@@ -1650,21 +1691,9 @@ const ROUTER = {
   },
   navigate: function(mode, repo, folder) {
     let hash = mode === "global" ? "#/" : "#/" + repo;
-    const sp = new URLSearchParams();
+    const sp = buildSearchURLParams({ includeQuery: false, displaySizes: true });
     if (mode !== "global" && folder !== undefined && folder !== null) sp.set("path", folder);
     else if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
-    if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-    if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-    if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
-    if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
-    if (!STATE.searchFolders) sp.set("search_folders", "false");
-    if (!STATE.exact) sp.set("exact", "0");
-    if (!STATE.useLocalMode) sp.set("local", "0");
-    if (!STATE.recordHistory) sp.set("history", "0");
-    if (!STATE.useMirrorLinks) sp.set("mirror", "0");
-    if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-    if (STATE.rightSidebarOpen) sp.set("filters", "1");
-    if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -1835,33 +1864,39 @@ const ROUTER = {
   },
 };
 
-function syncStateToURL() {
-  if (readerOverlay) return;
-  let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
+function buildSearchURLParams({ includeQuery = true, displaySizes = false } = {}) {
   const sp = new URLSearchParams();
-  if (STATE.query) sp.set("q", STATE.query);
-  if (STATE.mode === "global") {
-    STATE.filterRepos.forEach(function(r) {
-      sp.append("repo", r.split("/").pop());
-    });
-  }
+  if (includeQuery && STATE.query) sp.set("q", STATE.query);
   if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-   if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-  if (STATE.filterMinSize !== null) sp.set("min_size", STATE.filterMinSize);
-  if (STATE.filterMaxSize !== null) sp.set("max_size", STATE.filterMaxSize);
+  if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
+  const sizeValue = displaySizes ? fmtSizeUrl : value => value;
+  if (STATE.filterMinSize !== null) sp.set("min_size", sizeValue(STATE.filterMinSize));
+  if (STATE.filterMaxSize !== null) sp.set("max_size", sizeValue(STATE.filterMaxSize));
   if (!STATE.searchFolders) sp.set("search_folders", "false");
   if (!STATE.exact) sp.set("exact", "0");
   if (!STATE.useLocalMode) sp.set("local", "0");
   if (!STATE.recordHistory) sp.set("history", "0");
   if (!STATE.useMirrorLinks) sp.set("mirror", "0");
+  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
+  if (STATE.rightSidebarOpen) sp.set("filters", "1");
+  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
+  return sp;
+}
+
+function syncStateToURL() {
+  if (readerOverlay) return;
+  let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
+  const sp = buildSearchURLParams();
+  if (STATE.mode === "global") {
+    STATE.filterRepos.forEach(function(r) {
+      sp.append("repo", r.split("/").pop());
+    });
+  }
   if (STATE.mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
   if (STATE.mode !== "global") {
     STATE.filterFolderSelfs.forEach(function(folder) { sp.append("folder_self", folder); });
     STATE.filterFolderSubtrees.forEach(function(folder) { sp.append("folder_subtree", folder); });
   }
-  if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-  if (STATE.rightSidebarOpen) sp.set("filters", "1");
-  if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
   if (window.location.hash !== hash) {
@@ -1885,6 +1920,7 @@ let searchAbortController = null;
 let searchPrefetchAbortController = null;
 let searchRequestId = 0;
 let filterSearchTimer = null;
+let sizeFilterTimer = null;
 const FILTER_SEARCH_DEBOUNCE_MS = 200;
 let routeRenderId = 0;
 let apiAvailable = true;
@@ -2012,12 +2048,16 @@ function updateSearchPositionControls() {
   if (DOM.returnToPositionBtn) DOM.returnToPositionBtn.hidden = !returnPositionTarget || !!positionRestore;
   if (DOM.backToTopBtn) DOM.backToTopBtn.hidden = !STATE.results.length || getResultScrollTop() <= 0;
   if (DOM.positionRestoreStatus) DOM.positionRestoreStatus.hidden = !positionRestore;
+  if (DOM.cancelPositionBtn) DOM.cancelPositionBtn.hidden = true;
 }
 
 function cancelPendingSearchControls() {
   clearTimeout(searchTimer);
   clearTimeout(filterSearchTimer);
+  clearTimeout(sizeFilterTimer);
+  searchTimer = null;
   filterSearchTimer = null;
+  sizeFilterTimer = null;
 }
 
 function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
@@ -2081,6 +2121,9 @@ function jumpToSearchResult(value) {
 }
 
 function setupSearchPositionControls() {
+  // Also relocate the control when an existing client still has the older shell.
+  const positionActions = DOM.returnToPositionBtn?.parentElement;
+  if (positionActions && DOM.positionRestoreStatus) positionActions.append(DOM.positionRestoreStatus);
   for (const type of ["wheel", "touchstart", "touchmove", "pointerdown"]) {
     DOM.resultsContainer.addEventListener(type, notePositionScrollIntent, { passive: true });
     DOM.scrollTrack.addEventListener(type, notePositionScrollIntent, { passive: true });
@@ -2365,6 +2408,7 @@ function rememberDisplayedSearchView() {
     && previous.length === STATE.results.length && previous.total === STATE.total
     && previous.loadedPage === STATE._loadedPage && previous.pageCache === STATE._pageCache && previous.window === resultWindow;
   displayedSearchView = { key: getSearchViewKey(), results: STATE.results,
+    resultBackend: STATE._resultBackend,
     total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache,
     length: STATE.results.length, window: resultWindow, revision: unchanged ? previous.revision : ++displayedViewRevision };
 }
@@ -2897,6 +2941,7 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
     page: view.loadedPage,
     loadedPage: view.loadedPage,
     pageCache: cloneSearchPageCache(view.pageCache),
+    resultBackend: view.resultBackend,
     hasMore: view.results.length < view.total,
     window: view.window ? { generation: view.window.generation, pages: [...view.window.pages], count: view.window.count } : null,
     estimatedHeight: VSCROLL.estimatedHeight,
@@ -2935,6 +2980,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   STATE.page = snapshot.page;
   STATE._loadedPage = snapshot.loadedPage;
   STATE._pageCache = cloneSearchPageCache(snapshot.pageCache);
+  STATE._resultBackend = snapshot.resultBackend || null;
   STATE.hasMore = snapshot.hasMore;
   if (snapshot.window) resultWindow = { ...snapshot.window, key, total: snapshot.total, query: JSON.parse(key),
     pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
@@ -3060,6 +3106,7 @@ function applyInitialSearchPayload(data) {
   STATE.page = 1;
   STATE.results = data.results.slice();
   STATE._initialActive = true;
+  STATE._resultBackend = null;
   STATE._loadedPage = 1;
   STATE._pageCache = {};
   STATE._pendingPage = 0;
@@ -3215,16 +3262,26 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   return localDataPromise;
 }
 
+function submitSearchQuery(query, { restore = false, record = false, refreshHistory = false, clearResults = false, blur = false, updateInput = restore } = {}) {
+  cancelPendingSearchControls();
+  saveSearchViewSnapshot();
+  if (updateInput) DOM.searchInput.value = query;
+  STATE.query = query;
+  STATE.page = 1;
+  if (clearResults) { STATE.results = []; keyboardResultIndex = -1; }
+  if (record) addHistoryItem(query);
+  if (refreshHistory) renderDropdown();
+  if (restore) syncStateToURL();
+  const result = doSearch(false, false, restore);
+  if (blur) DOM.searchInput.blur();
+  return result;
+}
+
 function debouncedSearch() {
   if (searchComposing) return;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
-    saveSearchViewSnapshot();
-    STATE.query = DOM.searchInput.value.trim();
-    STATE.page = 1;
-    addHistoryItem(STATE.query);
-    renderDropdown();
-    doSearch();
+    submitSearchQuery(DOM.searchInput.value.trim(), { record: true, refreshHistory: true });
   }, 100);
 }
 
@@ -3304,6 +3361,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     searchRequestId++;
     STATE._pageCache = {};
     STATE._loadedPage = 0;
+    STATE._resultBackend = null;
     STATE._pendingPage = 0;
     STATE._deferredAppendWhileDragging = false;
     if (scrollLoadTimer) {
@@ -3315,26 +3373,31 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     }
   }
   const continueInitialViaApi = !!(append && STATE._initialActive && !STATE.dataLoaded && apiAvailable && folderMatchMode !== "mixed");
-  const shouldUseLocalSearch = !continueInitialViaApi && (STATE.useLocalMode || folderMatchMode === "mixed");
+  const continueApi = append && STATE._resultBackend === "api";
+  const shouldUseLocalSearch = (append && STATE._resultBackend === "local") ||
+    (!continueApi && !continueInitialViaApi && (STATE.useLocalMode || folderMatchMode === "mixed"));
   if (shouldUseLocalSearch) {
     if (!STATE.dataLoaded) {
-      if (STATE.useLocalMode && folderMatchMode !== "mixed" && apiAvailable) {
-        ensureLocalDataLoaded(false, true);
-      } else {
+      ensureLocalDataLoaded(false, false).then(ok => {
+        if (id !== searchId) return;
         STATE.isLoading = false;
-        setSearchVisualLoading(false);
-        ensureLocalDataLoaded(true, false);
-        if (folderMatchMode === "mixed" && !STATE.useLocalMode) {
-          showToast("正在加载目录筛选数据...");
-        }
-        return;
-      }
+        if (ok) doSearch(append);
+        else if (!append && folderMatchMode !== "mixed") doSearch();
+        else finishPagingAttempt(false, new Error("LOCAL_UNAVAILABLE"));
+      });
+      return;
     } else {
+      if (STATE._resultBackend !== "local") {
+        cancelSearchPrefetch();
+        STATE._pageCache = {};
+      }
+      STATE._resultBackend = "local";
       doSearchFallbackLocal(params, append, id);
       return;
     }
   }
   if (apiAvailable) {
+    STATE._resultBackend = "api";
     if (append && STATE._pendingPage === STATE.page) {
       STATE.isLoading = false;
       return;
@@ -3385,6 +3448,12 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     });
     return;
   }
+  if (continueApi) {
+    STATE.isLoading = false;
+    STATE.page = STATE._loadedPage;
+    finishPagingAttempt(false, new Error("API_UNAVAILABLE"));
+    return;
+  }
   if (!STATE.dataLoaded) {
     STATE.isLoading = false;
     setSearchVisualLoading(false);
@@ -3395,6 +3464,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     showToast("数据加载中，请稍后...");
     return;
   }
+  STATE._resultBackend = "local";
   doSearchFallbackLocal(params, append, id);
 }
 
@@ -3433,7 +3503,10 @@ function doSearchFallbackLocal(params, append, id) {
       console.error("Local Worker search failed:", err);
       if (id !== searchId) return;
       pagingError = err;
-      if (append) STATE.page = Math.max(1, STATE._loadedPage);
+      if (append) {
+        STATE.page = Math.max(1, STATE._loadedPage);
+        return;
+      }
       STATE.dataLoaded = false;
       if (params.folderMatchMode === "mixed") {
         showToast("本地目录筛选不可用，请刷新后重试");
@@ -3654,11 +3727,13 @@ function setResultScrollTop(value) {
     // Native scrolling rounds subpixels. Round toward the requested row so
     // an exact boundary cannot land on the previous record after restoration.
     DOM.resultsContainer.scrollTop = Math.ceil(physical);
+    updateCurrentResultPosition();
     return;
   }
   resultScrollTarget = target;
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
   try { renderVisible(); } finally { resultScrollTarget = null; }
+  updateCurrentResultPosition();
 }
 
 function layoutResultScrollSegment(topH, endH, totalH, logicalTop) {
@@ -4033,15 +4108,43 @@ function setSearchVisualLoading(loading) {
   updateStatusBar();
 }
 
-function doFilterSearch() {
+function prepareFilterChange(clearResults) {
+  cancelPendingSearchControls();
+  saveSearchViewSnapshot();
+  STATE.page = 1;
+  if (clearResults) STATE.results = [];
+}
+
+function doFilterSearch(clearResults = false) {
+  prepareFilterChange(clearResults);
   return doSearch(false, false, true);
 }
 
-function scheduleFilterSearch() {
-  saveSearchViewSnapshot();
+function sizeInputToBytes(input, unitSelect) {
+  const value = parseFloat(input.value);
+  if (isNaN(value) || value < 0) return null;
+  const factor = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824 }[unitSelect.value] || 1;
+  return Math.round(value * factor);
+}
+
+function setupSizeFilterControls() {
+  const schedule = () => {
+    clearTimeout(sizeFilterTimer);
+    sizeFilterTimer = setTimeout(() => {
+      sizeFilterTimer = null;
+      STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
+      STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
+      doFilterSearch(true);
+    }, 500);
+  };
+  [DOM.filterMinSize, DOM.filterMaxSize].forEach(input => input.addEventListener("input", schedule));
+  [DOM.filterMinUnit, DOM.filterMaxUnit].forEach(select => select.addEventListener("change", schedule));
+}
+
+function scheduleFilterSearch(clearResults = false) {
+  prepareFilterChange(clearResults);
   cancelPositionRestore();
   resetPagingRecovery();
-  clearTimeout(filterSearchTimer);
   if (searchAbortController) searchAbortController.abort();
   cancelSearchPrefetch();
   searchId++;
@@ -4161,11 +4264,10 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         }
         var assetPath = ppath ? ppath + "/" + getBrowserFileName(ff) : getBrowserFileName(ff);
         var browserRecord = { File: ff.name, Extension: ff.ext, Link: fileLink, ReturnUrl: location.href };
-        if (ff.hasTxt && String(ff.ext || "").toLowerCase() !== "txt") { var relPath = (ppath ? ppath + "/" : "") + ff.name; var stem = ff.ext ? relPath.replace(new RegExp("\\." + ff.ext + "$", "i"), "") : relPath; browserRecord.OcrUrl = "https://voiceofml-search.hf.space/txt/" + encodeRecordPath(stem) + ".txt"; }
+        if (ff.hasTxt && String(ff.ext || "").toLowerCase() !== "txt") { var relPath = (ppath ? ppath + "/" : "") + getBrowserFileName(ff); browserRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath)); }
         browserRecord = applyReaderAsset(browserRecord, currentRepo, assetPath, fileLink);
         var readerLink = isReadableRecord(browserRecord) ? VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html") : "";
         if (readerLink) {
-          if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
           navigateToReader(readerLink);
           return;
         }
@@ -4344,10 +4446,8 @@ async function renderRepoFilter(routeId) {
   }
   renderCheckboxList(DOM.filterRepoList, items, STATE.filterRepos, function(vals) {
     STATE.filterRepos = vals;
-    STATE.page = 1;
-    STATE.results = [];
     updateFilterCancelButtons();
-    scheduleFilterSearch();
+    scheduleFilterSearch(true);
   });
 }
 
@@ -4418,7 +4518,6 @@ async function renderExtensionFilter(routeId) {
   }
   renderExtensionTree(DOM.filterExtList, items, rest, STATE.filterExtensions, function(vals) {
     STATE.filterExtensions = vals;
-    STATE.page = 1;
     saveStoredExtensionFilters();
     updateFilterCancelButtons();
     scheduleFilterSearch();
@@ -4754,7 +4853,6 @@ function persistFolderSelection(subtreeSet, selfSet) {
   subtreeSet.forEach(function(path) { if (path && !merged.includes(path)) merged.push(path); });
   STATE.filterFolders = merged;
   saveStoredFolderFilters(STATE.repo);
-  STATE.page = 1;
   updateFilterCancelButtons();
   scheduleFilterSearch();
 }
@@ -4975,7 +5073,6 @@ function openReaderRecord(rec, returnUrl) {
   if (!rec || location.href !== returnUrl) return false;
   const url = getReaderLink(rec, returnUrl);
   if (!url) return false;
-  if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
   return navigateToReader(url, returnUrl);
 }
 
@@ -5124,6 +5221,12 @@ function maybeLoadNextPage(bottomOnly = false, retry = false) {
   }
 }
 
+function consumeDeferredSearchAppend() {
+  if (!STATE._deferredAppendWhileDragging) return false;
+  STATE._deferredAppendWhileDragging = false;
+  return consumeCachedAppendPage();
+}
+
 function recoverScrollState() {
   cancelQuickScroll();
   expireSearchRequests();
@@ -5135,10 +5238,7 @@ function recoverScrollState() {
     scrollLoadTimer = null;
   }
   VSCROLL.isDraggingThumb = false;
-  if (STATE._deferredAppendWhileDragging) {
-    STATE._deferredAppendWhileDragging = false;
-    if (consumeCachedAppendPage()) return;
-  }
+  if (consumeDeferredSearchAppend()) return;
   VSCROLL.renderStart = -1;
   VSCROLL.renderEnd = -1;
   renderVisible();
@@ -5170,10 +5270,7 @@ function scheduleScrollLoad(delay) {
   scrollLoadTimer = setTimeout(function() {
     scrollLoadTimer = null;
     if (VSCROLL.isDraggingThumb) return;
-    if (STATE._deferredAppendWhileDragging) {
-      STATE._deferredAppendWhileDragging = false;
-      if (consumeCachedAppendPage()) return;
-    }
+    if (consumeDeferredSearchAppend()) return;
     maybeLoadNextPage();
   }, delay);
 }
@@ -5193,6 +5290,7 @@ function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("touchend", retryBottomPage, { passive: true });
   DOM.resultsContainer.addEventListener("scrollend", () => scheduleBottomLoad(), { passive: true });
   DOM.resultsContainer.addEventListener("scroll", () => {
+    updateCurrentResultPosition();
     if (readerReturnScrollState && !readerReturnRestoreActive) { readerReturnRestoreGeneration++; readerReturnScrollState = null; }
     if (!VSCROLL.isDraggingThumb) ensureVirtualViewportCovered();
     if (!scrollTicking) {
@@ -5266,19 +5364,19 @@ function setupQuickScroll() {
   }
   function onMouseMove(e) {
     if (!VSCROLL.isDraggingThumb) return;
-    const delta = e.clientY - startY;
-    const ratio = delta / dragRange;
-    queueResultScrollTop(startST + ratio * maxScrollTop);
+    moveDrag(e.clientY);
+  }
+  function moveDrag(clientY) {
+    queueResultScrollTop(startST + (clientY - startY) / dragRange * maxScrollTop);
+  }
+  function completeDrag() {
+    finishDrag();
+    if (!consumeDeferredSearchAppend()) maybeLoadNextPage();
   }
   function onMouseUp() {
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
-    finishDrag();
-    if (STATE._deferredAppendWhileDragging) {
-      STATE._deferredAppendWhileDragging = false;
-      if (consumeCachedAppendPage()) return;
-    }
-    maybeLoadNextPage();
+    completeDrag();
   }
   DOM.scrollThumb.addEventListener("mousedown", (e) => {
     beginDrag(e.clientY); e.preventDefault(); e.stopPropagation();
@@ -5288,20 +5386,13 @@ function setupQuickScroll() {
   function onTouchMove(e) {
     if (!VSCROLL.isDraggingThumb) return;
     e.preventDefault();
-    const delta = e.touches[0].clientY - startY;
-    const ratio = delta / dragRange;
-    queueResultScrollTop(startST + ratio * maxScrollTop);
+    moveDrag(e.touches[0].clientY);
   }
   function onTouchEnd() {
     document.removeEventListener("touchmove", onTouchMove);
     document.removeEventListener("touchend", onTouchEnd);
     document.removeEventListener("touchcancel", onTouchCancel);
-    finishDrag();
-    if (STATE._deferredAppendWhileDragging) {
-      STATE._deferredAppendWhileDragging = false;
-      if (consumeCachedAppendPage()) return;
-    }
-    maybeLoadNextPage();
+    completeDrag();
   }
   function onTouchCancel() {
     cancelQuickScroll();
@@ -5465,11 +5556,7 @@ function setupKeyboard() {
         return;
       }
       if (DOM.searchInput.value) {
-        DOM.searchInput.value = "";
-        STATE.query = "";
-        STATE.page = 1;
-        STATE.results = [];
-        doSearch();
+        submitSearchQuery("", { clearResults: true, updateInput: true });
         return;
       }
       DOM.searchInput.blur();
@@ -5502,14 +5589,7 @@ function setupKeyboard() {
     if (e.isComposing || searchComposing || e.keyCode === 229) return;
     if (e.key === "Enter") {
       e.preventDefault();
-      saveSearchViewSnapshot();
-      STATE.query = DOM.searchInput.value.trim();
-      STATE.page = 1;
-      STATE.results = [];
-      keyboardResultIndex = -1;
-      addHistoryItem(STATE.query);
-      doSearch();
-      DOM.searchInput.blur();
+      submitSearchQuery(DOM.searchInput.value.trim(), { record: true, clearResults: true, blur: true });
     }
   });
 }
@@ -5524,12 +5604,10 @@ function clearAllFilters() {
   saveStoredExtensionFilters();
   STATE.filterMinSize = null;
   STATE.filterMaxSize = null;
-  STATE.page = 1;
-  STATE.results = [];
   DOM.filterMinSize.value = "";
   DOM.filterMaxSize.value = "";
   renderFilters(routeRenderId);
-  doFilterSearch();
+  doFilterSearch(true);
   showToast("已清空所有筛选条件");
   syncStateToURL();
 }
@@ -5557,7 +5635,9 @@ function setupResultDelegation() {
         return;
       }
       if (action === "read") {
-        if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
+        const record = resultRowRecords.get(actionBtn.closest(".result-item"));
+        if (record) actionBtn.dataset.readerUrl = getReaderLink(applyReaderAsset(
+          record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record)));
         navigateToReader(actionBtn.dataset.readerUrl);
         return;
       }
@@ -5573,20 +5653,7 @@ function setupResultDelegation() {
       const frepo = folderLink.dataset.repo;
       if (frepo && STATE.mode === "global") {
         let hash = "#/" + frepo;
-        const sp = new URLSearchParams();
-        if (STATE.query) sp.set("q", STATE.query);
-        if (STATE.sort !== "relevance") sp.set("sort", STATE.sort);
-        if (STATE.filterMinSize !== null) sp.set("min_size", fmtSizeUrl(STATE.filterMinSize));
-        if (STATE.filterMaxSize !== null) sp.set("max_size", fmtSizeUrl(STATE.filterMaxSize));
-        if (STATE.filterExtensions.length > 0) sp.set("ext", STATE.filterExtensions.join(","));
-        if (!STATE.searchFolders) sp.set("search_folders", "false");
-        if (!STATE.exact) sp.set("exact", "0");
-        if (!STATE.useLocalMode) sp.set("local", "0");
-        if (!STATE.recordHistory) sp.set("history", "0");
-        if (!STATE.useMirrorLinks) sp.set("mirror", "0");
-        if (!STATE.leftSidebarOpen) sp.set("sidebar", "0");
-        if (STATE.rightSidebarOpen) sp.set("filters", "1");
-        if (DOM.leftSidebar.classList.contains("expanded-wide")) sp.set("wide", "1");
+        const sp = buildSearchURLParams({ displaySizes: true });
         if (folder) sp.append("folder_self", folder);
         const qs = sp.toString();
         window.location.hash = qs ? hash + "?" + qs : hash;
@@ -5595,10 +5662,8 @@ function setupResultDelegation() {
         STATE.filterFolderSubtrees = [];
         STATE.filterFolderSelfs = folder ? [folder] : [];
         saveStoredFolderFilters(STATE.repo);
-        STATE.page = 1;
-        STATE.results = [];
         renderFilters(routeRenderId);
-        doFilterSearch();
+        doFilterSearch(true);
       }
       return;
     }
@@ -5670,14 +5735,8 @@ async function init() {
     if (delBtn) { removeHistoryItem(delBtn.dataset.del); return; }
     var item = e.target.closest(".history-item");
     if (item) {
-      saveSearchViewSnapshot();
-      DOM.searchInput.value = item.dataset.query;
-      STATE.query = item.dataset.query;
-      STATE.page = 1;
-      syncStateToURL();
-      doSearch(false, false, true);
+      submitSearchQuery(item.dataset.query, { restore: true, blur: true });
       hideDropdown();
-      DOM.searchInput.blur();
       return;
     }
   });
@@ -5710,39 +5769,15 @@ async function init() {
     lastSelectedIndex = idx;
     updateSelectionUI();
   });
-  var getSelectedLinks = function(copyable) {
-    var links = [];
-    var indices = Object.keys(selectedIndices).map(Number);
-    for (var li = 0; li < indices.length; li++) {
-      var rec = STATE.results[indices[li]];
-      if (rec) {
-        var link = getRecordLink(rec);
-        links.push(copyable ? getCopyableLink(link) : link);
-      }
-    }
-    return links;
-  };
-  var getSelectedFilenames = function() {
-    var names = [];
-    var indices = Object.keys(selectedIndices).map(Number);
-    for (var ni = 0; ni < indices.length; ni++) {
-      var rec = STATE.results[indices[ni]];
-      if (rec) names.push(rec.File + (rec.Extension ? "." + rec.Extension : ""));
-    }
-    return names;
-  };
   if (DOM.multiCopyLinks) DOM.multiCopyLinks.addEventListener("click", function() {
-    var links = getSelectedLinks(true);
+    const links = getSelectedFiles().map(item => getCopyableLink(item.link));
     if (links.length === 0) { showToast("未选中任何文件"); return; }
     navigator.clipboard.writeText(links.join("\n")).then(function() {
       showToast("已复制 " + links.length + " 条链接");
     }).catch(function() { showToast("复制失败"); });
   });
   if (DOM.multiBatchDownload) DOM.multiBatchDownload.addEventListener("click", function() {
-    var links = getSelectedLinks(false);
-    var names = getSelectedFilenames();
-    if (links.length === 0) { showToast("未选中任何文件"); return; }
-    startDownloadBatch(links.map((link, index) => ({ filename: names[index], link })));
+    startDownloadBatch(getSelectedFiles());
   });
   if (DOM.multiDeselect) DOM.multiDeselect.addEventListener("click", function() {
     selectedIndices = {};
@@ -5772,11 +5807,9 @@ async function init() {
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
   DOM.repoFilterCancel.addEventListener("click", function() {
     STATE.filterRepos = [];
-    STATE.page = 1;
-    STATE.results = [];
     updateFilterCancelButtons();
     renderRepoFilter(routeRenderId);
-    scheduleFilterSearch();
+    scheduleFilterSearch(true);
   });
   DOM.folderFilterCancel.addEventListener("click", function() {
     persistFolderSelection(new Set(), new Set());
@@ -5784,32 +5817,25 @@ async function init() {
   });
   DOM.extFilterCancel.addEventListener("click", function() {
     STATE.filterExtensions = [];
-    STATE.page = 1;
-    STATE.results = [];
     saveStoredExtensionFilters();
     updateFilterCancelButtons();
     renderExtensionFilter(routeRenderId);
-    scheduleFilterSearch();
+    scheduleFilterSearch(true);
   });
   DOM.searchFoldersToggle.addEventListener("change", function() {
     STATE.searchFolders = DOM.searchFoldersToggle.checked;
     clearResultTemplateCache();
-    STATE.page = 1;
-    STATE.results = [];
-    doFilterSearch();
+    doFilterSearch(true);
   });
   DOM.exactSearchToggle.addEventListener("change", function() {
     STATE.exact = DOM.exactSearchToggle.checked;
-    STATE.page = 1;
-    STATE.results = [];
-    doFilterSearch();
+    doFilterSearch(true);
   });
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
       setExactSearchSectionVisible(false, true);
-      STATE.page = 1;
-      STATE.results = [];
+      prepareFilterChange(true);
       DOM.resultsList.innerHTML = "";
       DOM.emptyState.style.display = "none";
       updateStatusBar();
@@ -5826,16 +5852,12 @@ async function init() {
     STATE.useLocalMode = DOM.localModeToggle.checked;
     setExactSearchSectionVisible(!STATE.useLocalMode, true);
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
-    STATE.page = 1;
-    STATE.results = [];
-    doFilterSearch();
+    doFilterSearch(true);
     syncStateToURL();
   });
   DOM.sortSelect.addEventListener("change", function() {
     STATE.sort = DOM.sortSelect.value;
-    STATE.page = 1;
-    STATE.results = [];
-    doFilterSearch();
+    doFilterSearch(true);
     syncStateToURL();
   });
   DOM.overlay.addEventListener("click", function() {
@@ -5847,35 +5869,11 @@ async function init() {
   DOM.randomBookBtn.addEventListener("click", randomBook);
   if (DOM.randomTxtBtn) DOM.randomTxtBtn.addEventListener("click", randomTxt);
   DOM.emptyRandomBtn.addEventListener("click", randomTxt);
-  var sizeTimer_local;
-  var sizeInputToBytes = function(input, unitSelect) {
-    var val = parseFloat(input.value);
-    if (isNaN(val) || val < 0) return null;
-    var unit = unitSelect.value;
-    if (unit === "KB") val *= 1024;
-    else if (unit === "MB") val *= 1048576;
-    else if (unit === "GB") val *= 1073741824;
-    return Math.round(val);
-  };
-  var applySizeFilter = function() {
-    clearTimeout(sizeTimer_local);
-    sizeTimer_local = setTimeout(function() {
-      STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
-      STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
-      STATE.page = 1;
-      STATE.results = [];
-      doFilterSearch();
-    }, 500);
-  };
-  DOM.filterMinSize.addEventListener("input", applySizeFilter);
-  DOM.filterMaxSize.addEventListener("input", applySizeFilter);
-  DOM.filterMinUnit.addEventListener("change", applySizeFilter);
-  DOM.filterMaxUnit.addEventListener("change", applySizeFilter);
+  setupSizeFilterControls();
   DOM.extSelectAll.addEventListener("click", function() {
     var allExtensions = STATE.extensionList.slice();
     var selected = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtensions.length > 0 && allExtensions.every(function(extension) { return selected.has(extension); }) ? [] : allExtensions;
-    STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
     scheduleFilterSearch();
@@ -5884,7 +5882,6 @@ async function init() {
     var allExtNames = STATE.extensionList.slice();
     var currentSet = new Set(STATE.filterExtensions);
     STATE.filterExtensions = allExtNames.filter(function(e) { return !currentSet.has(e); });
-    STATE.page = 1;
     saveStoredExtensionFilters();
     renderExtensionFilter(routeRenderId);
     scheduleFilterSearch();
