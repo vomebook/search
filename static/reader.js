@@ -2629,7 +2629,7 @@ function renderPdfShell(shell, force = false, priority = false) {
 
 async function renderPdfText(page, shell) {
   if (shell.dataset.textReady === "1") return;
-  const layer = shell.querySelector(".reader-pdf-text");
+    const layer = shell.querySelector(".reader-pdf-text");
   if (!layer || typeof page.getTextContent !== "function") return;
   try {
     const text = await awaitReader(page.getTextContent());
@@ -2648,6 +2648,7 @@ async function renderPdfText(page, shell) {
         };
       });
     layer.textContent = "";
+    const fragment = document.createDocumentFragment();
     let positioned = false;
     for (const item of text.items) {
       const span = layer.ownerDocument.createElement("span");
@@ -2663,8 +2664,9 @@ async function renderPdfText(page, shell) {
         span.style.top = `${(point[1] / Math.max(1, pdfViewport.height)) * 100}%`;
         span.style.fontSize = `${(fontHeight / Math.max(1, pdfViewport.height)) * 100}%`;
       } else span.style.position = "static";
-      layer.appendChild(span);
+      fragment.appendChild(span);
     }
+    layer.appendChild(fragment);
     if (!positioned)
       layer.textContent =
         text.items
