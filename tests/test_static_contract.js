@@ -25,6 +25,10 @@ test("main thread retains stale-search and cancellation controls", () => {
   assert.match(app, /searchRequestId/);
   assert.match(app, /AbortController/);
 });
+test("Worker URL is relative so the static build can hash it", () => {
+  assert.match(app, /new Worker\("\.\/index-worker\.js"\)/);
+  assert.doesNotMatch(app, /new Worker\("static\/index-worker\.js"\)/);
+});
 test("section filter cancel buttons clear only their selected state", () => {
   for (const id of ["repo-filter-cancel", "folder-filter-cancel", "ext-filter-cancel"]) {
     assert.match(html, new RegExp(`id="${id}"[^>]*hidden>取消<`));
