@@ -1,3 +1,5 @@
+import "/search/static/reader-resources.js";
+import "/search/static/reader-contract.js";
 import "/search/static/reader-request-manager.js";
 import "/search/static/reader-chapter-repository.js";
 import "/search/static/reader-scroll-anchor.js";
@@ -7,15 +9,15 @@ import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
 import { populatePdfTextLayer } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
-const PDFJS_URL = "/search/static/vendor/pdf.min.f80490490320.mjs";
+const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
 const PDFJS_WASM_URL = "/search/static/vendor/wasm/";
 const PDFJS_CMAP_URL = "/search/static/vendor/cmaps/";
 const PDFJS_STANDARD_FONT_URL = "/search/static/vendor/standard_fonts/";
-const MARKED_URL = "/search/static/vendor/marked.min.b147274a9ce2.js";
-const PURIFY_URL = "/search/static/vendor/purify.min.f263b05369e0.js";
-const JSZIP_URL = "/search/static/vendor/jszip.min.7f839b2d4688.js";
-const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.051ef503f267.js";
+const MARKED_URL = VoiceOfMLReaderResources.vendorUrl("marked", "/search/static/");
+const PURIFY_URL = VoiceOfMLReaderResources.vendorUrl("purify", "/search/static/");
+const JSZIP_URL = VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/");
+const DOCX_PREVIEW_URL = VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/");
 const READER_PROXY_TIMEOUT_MS = 120000;
 const readerRequestManager = VoiceOfMLReaderRequests.createReaderRequestManager();
 const readerRuntime = VoiceOfMLReaderRuntime.createReaderRuntime();
@@ -351,7 +353,10 @@ let chapterSearchConfiguration = null;
 let chapterSearchModulePromise = null;
 let chapterSearchClient = null;
 let chapterSearchPage = null;
-trackReaderResource(() => { chapterSearchClient?.dispose(); chapterSearchClient = null; });
+trackReaderResource(() => {
+  chapterSearchClient?.dispose();
+  chapterSearchClient = null;
+});
 let folderNavigationTarget = null;
 let bookmarkInvoker = null;
 const bookmarkInertSiblings = new Map();
@@ -988,10 +993,7 @@ function renderVirtualToc() {
   if (!state) return;
   const height = Math.max(320, state.panelView.clientHeight),
     start = Math.max(0, Math.floor(state.panelView.scrollTop / TOC_VIRTUAL_ROW_HEIGHT) - 12),
-    end = Math.min(
-      state.entries.length,
-      start + Math.ceil(height / TOC_VIRTUAL_ROW_HEIGHT) + 24
-    ),
+    end = Math.min(state.entries.length, start + Math.ceil(height / TOC_VIRTUAL_ROW_HEIGHT) + 24),
     fragment = document.createDocumentFragment();
   state.list.replaceChildren();
   for (let index = start; index < end; index++) {
@@ -1120,7 +1122,10 @@ function refreshFoliateWindow() {
     ".foliate-continuous article.foliate-section-placeholder[data-section]"
   )) {
     const rect = placeholder.getBoundingClientRect();
-    if (rect.bottom > viewportRect.top - FOLIATE_PREFETCH_MARGIN && rect.top < viewportRect.bottom + FOLIATE_PREFETCH_MARGIN)
+    if (
+      rect.bottom > viewportRect.top - FOLIATE_PREFETCH_MARGIN &&
+      rect.top < viewportRect.bottom + FOLIATE_PREFETCH_MARGIN
+    )
       foliateChapterRepository.load(Number(placeholder.dataset.section)).catch(() => {});
   }
 }
@@ -2104,21 +2109,9 @@ function fetchReaderResponse() {
 }
 function preloadPdfFirstPage() {
   try {
-    const manifestUrl = new URL(sourceUrl, location.href);
-    let pageUrl;
-    if (manifestUrl.pathname === "/api/reader-bucket-resource") {
-      const path = manifestUrl.searchParams.get("path") || "";
-      if (!path.endsWith("/page-manifest.json")) return;
-      pageUrl = new URL(manifestUrl.href);
-      pageUrl.searchParams.set(
-        "path",
-        path.replace(/\/page-manifest\.json$/, "/pages/page-000001.webp")
-      );
-    } else if (manifestUrl.pathname.endsWith("/page-manifest.json")) {
-      pageUrl = new URL(
-        manifestUrl.href.replace(/\/page-manifest\.json(?:\?.*)?$/, "/pages/page-000001.webp")
-      );
-    } else return;
+    const source = pdfManifestSource();
+    if (!source) return;
+    const pageUrl = new URL(source.pageUrl(1));
     const early = window.__VOICE_PDF_PRELOAD__;
     if (early?.image && early.pageUrl === pageUrl.href) pdfFirstPagePreload = early.image;
     else if (!navigator.connection?.saveData) {
@@ -2129,23 +2122,12 @@ function preloadPdfFirstPage() {
     }
   } catch (_) {}
 }
-function pdfManifestRootPath() {
-  try {
-    const url = new URL(sourceUrl, location.href);
-    const path =
-      url.pathname === "/api/reader-bucket-resource"
-        ? url.searchParams.get("path") || ""
-        : decodeURIComponent(url.pathname).replace(
-            /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\//,
-            ""
-          );
-    const match = path.match(
-      /^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16})\/page-manifest\.json$/
-    );
-    return match?.[1] || "";
-  } catch (_) {
-    return "";
-  }
+function pdfManifestSource() {
+  return VoiceOfMLReader.pdfPageSource(
+    sourceUrl,
+    location.href,
+    "https://voiceofml-search.hf.space"
+  );
 }
 function pdfPageEntry(page) {
   if (!pdfPageManifest || page < 1 || page > pdfPageManifest.pageCount) return null;
@@ -2313,20 +2295,10 @@ async function renderPdfPages(prepared) {
     )
   );
   assertReaderActive();
-  const entries = null;
-  const rootMatch = pdfManifestRootPath()?.match(/^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16})$/);
+  const source = pdfManifestSource();
   const totalPages = manifest.page_count;
-  if (
-    !rootMatch ||
-    (entries &&
-      entries.some(
-        (item, index) =>
-          item.page !== index + 1 ||
-          !new RegExp(`^${rootMatch[1]}/pages/page-[0-9]{6}\\.webp$`).test(item.path)
-      ))
-  )
-    throw new Error("PDF_MANIFEST_INVALID");
-  pdfPageManifest = { entries, root: rootMatch[1], pageCount: totalPages };
+  if (!source) throw new Error("PDF_MANIFEST_INVALID");
+  pdfPageManifest = { ...source, pageCount: totalPages };
   updateDocumentState({ pageCount: totalPages });
   pageInput.max = String(totalPages);
   document.querySelector("#page-total").textContent = `/ ${totalPages}`;
@@ -2511,16 +2483,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
         image.decoding = "async";
         shell.appendChild(image);
       }
-      const target = sourceUrl.includes("/api/reader-bucket-resource?")
-        ? new URL(
-            "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" +
-              encodeURIComponent(entry.path),
-            location.origin
-          ).href
-        : new URL(
-            "/datasets/vomebook/Reader-Assets/resolve/main/" + entry.path,
-            "https://huggingface.co"
-          ).href;
+      const target = pdfPageManifest.pageUrl(entry.page);
       await new Promise((resolve, reject) => {
         let settled = false,
           timeout = 0,
@@ -3044,12 +3007,19 @@ async function renderChapterManifest(prepared) {
   const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
   if (!manifestBase) throw new Error("EPUB_INVALID_MANIFEST_PATH");
   const searchIndex = manifest.search_index;
-  chapterSearchConfiguration = searchIndex?.path === "epub-search-index.json.gz" &&
-    Number.isSafeInteger(searchIndex.bytes) && searchIndex.bytes > 0 &&
+  chapterSearchConfiguration =
+    searchIndex?.path === "epub-search-index.json.gz" &&
+    Number.isSafeInteger(searchIndex.bytes) &&
+    searchIndex.bytes > 0 &&
     /^[0-9a-f]{64}$/.test(searchIndex.sha256 || "")
-    ? { chapters: manifest.chapters, index: { ...searchIndex,
-        url: readerContentUrl(new URL(searchIndex.path, manifestBase).href) } }
-    : null;
+      ? {
+          chapters: manifest.chapters,
+          index: {
+            ...searchIndex,
+            url: readerContentUrl(new URL(searchIndex.path, manifestBase).href)
+          }
+        }
+      : null;
   const chapterUrl = (chapter) => trustedChapterUrl(chapter.path, manifestBase);
   const resourceUrl = (raw, base, attribute) => {
     const value = String(raw || "").trim();
@@ -3164,7 +3134,9 @@ async function renderChapterManifest(prepared) {
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
     let id = fragment.replace(/^#/, "");
-    try { id = decodeURIComponent(id); } catch (_) {}
+    try {
+      id = decodeURIComponent(id);
+    } catch (_) {}
     const anchor = id && node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`);
     (anchor || node).scrollIntoView({ block: "start" });
     updateProgressTools();
@@ -3174,18 +3146,30 @@ async function renderChapterManifest(prepared) {
   frame.addEventListener("click", async (event) => {
     const link = event.target.closest?.("a[href]");
     const article = link?.closest(".reader-epub-chapter");
-    if (!article || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    const current = manifest.chapters.find(item => item.index === Number(article.dataset.chapter));
+    if (
+      !article ||
+      event.button !== 0 ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.altKey
+    )
+      return;
+    const current = manifest.chapters.find(
+      (item) => item.index === Number(article.dataset.chapter)
+    );
     const target = new URL(link.getAttribute("href"), chapterUrl(current));
     const fragment = target.hash;
     target.hash = "";
-    const chapter = manifest.chapters.find(item => chapterUrl(item) === target.href);
+    const chapter = manifest.chapters.find((item) => chapterUrl(item) === target.href);
     if (!chapter) return;
     event.preventDefault();
     const generation = beginReaderNavigation();
     try {
       await activateChapter(chapter, generation, fragment);
-    } catch (error) { reportNavigationError(error, generation); }
+    } catch (error) {
+      reportNavigationError(error, generation);
+    }
   });
   const prefetchChapters = (startIndex) => {
     const tasks = manifest.chapters
@@ -3401,7 +3385,9 @@ async function restoreInitialPosition(entry, generation) {
   if (!entry || !isReaderGenerationCurrent("navigation", generation)) return;
   const restored = await formatAdapters.active.restore(entry, generation);
   if (!restored && isReaderGenerationCurrent("navigation", generation))
-    throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。"), { code: "READER_RESTORE" });
+    throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。"), {
+      code: "READER_RESTORE"
+    });
 }
 function registerReaderFormatAdapters() {
   const formats = {
@@ -3454,21 +3440,18 @@ function renderMedia(mode) {
     });
   mediaElement = media;
   let sourceRetried = false;
-  media.addEventListener(
-    "error",
-    () => {
-      if (readerAbortController.signal.aborted) return;
-      if (!sourceRetried && sourceUrl !== contentUrl && validSource(sourceUrl)) {
-        sourceRetried = true;
-        media._readerSourceRetry = true;
-        media.src = sourceUrl;
-        media.load();
-        return;
-      }
-      media._readerSourceRetry = false;
-      fail("媒体加载失败，请检查网络后重试，或下载原文件。", "READER_MEDIA");
+  media.addEventListener("error", () => {
+    if (readerAbortController.signal.aborted) return;
+    if (!sourceRetried && sourceUrl !== contentUrl && validSource(sourceUrl)) {
+      sourceRetried = true;
+      media._readerSourceRetry = true;
+      media.src = sourceUrl;
+      media.load();
+      return;
     }
-  );
+    media._readerSourceRetry = false;
+    fail("媒体加载失败，请检查网络后重试，或下载原文件。", "READER_MEDIA");
+  });
   media.src = contentUrl;
   content.appendChild(media);
   status.textContent = mode === "audio" ? "音频" : "视频";
@@ -3581,7 +3564,11 @@ async function start() {
   } catch (error) {
     if (readerAbortController.signal.aborted || error?.name === "AbortError") return;
     console.error(error);
-    if (error?.code !== "READER_RESTORE" && capability.mode === "epub-chapters" && validFallback(fallbackUrl)) {
+    if (
+      error?.code !== "READER_RESTORE" &&
+      capability.mode === "epub-chapters" &&
+      validFallback(fallbackUrl)
+    ) {
       const target = new URL(location.href);
       target.searchParams.set("url", fallbackUrl);
       target.searchParams.set("ext", "pdf");
@@ -3654,22 +3641,32 @@ async function loadPdfEngine() {
     const url = attempt ? `${PDFJS_URL}?reader-module-retry=${attempt}` : PDFJS_URL;
     let timer;
     try {
-      const pdfjs = await awaitReader(Promise.race([
-        import(url),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new DOMException("PDF engine timeout", "TimeoutError")), 20000);
-        })
-      ]));
+      const pdfjs = await awaitReader(
+        Promise.race([
+          import(url),
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new DOMException("PDF engine timeout", "TimeoutError")),
+              20000
+            );
+          })
+        ])
+      );
       assertReaderActive();
       return pdfjs;
     } catch (error) {
       assertReaderActive();
-      const networkFailure = error?.name === "TimeoutError" ||
-        /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(error?.message || "");
+      const networkFailure =
+        error?.name === "TimeoutError" ||
+        /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(
+          error?.message || ""
+        );
       if (!networkFailure) throw error;
       if (attempt === 2)
-        throw Object.assign(new Error("PDF 阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
-          { code: "READER_ENGINE_NETWORK", cause: error });
+        throw Object.assign(
+          new Error("PDF 阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
+          { code: "READER_ENGINE_NETWORK", cause: error }
+        );
     } finally {
       clearTimeout(timer);
     }
@@ -3965,7 +3962,10 @@ function setupFoliateWindow(stream, sections) {
               .catch(() => {});
             return;
           }
-          const prefetchLoads = Array.from({ length: FOLIATE_PREFETCH_SECTIONS + 1 }, (_, offset) => index + offset)
+          const prefetchLoads = Array.from(
+            { length: FOLIATE_PREFETCH_SECTIONS + 1 },
+            (_, offset) => index + offset
+          )
             .filter((prefetch) => sections[prefetch])
             .map((prefetch) => foliateChapterRepository.load(prefetch));
           if (prefetchLoads.length)
@@ -4009,7 +4009,10 @@ function setupFoliateWindow(stream, sections) {
     canVirtualize: (article) => {
       const rect = article.getBoundingClientRect(),
         viewportRect = viewport.getBoundingClientRect();
-      return rect.bottom < viewportRect.top - FOLIATE_PREFETCH_MARGIN || rect.top > viewportRect.bottom + FOLIATE_PREFETCH_MARGIN;
+      return (
+        rect.bottom < viewportRect.top - FOLIATE_PREFETCH_MARGIN ||
+        rect.top > viewportRect.bottom + FOLIATE_PREFETCH_MARGIN
+      );
     },
     virtualize: (article, index, height) => {
       const placeholder = document.createElement("article");
@@ -4209,7 +4212,9 @@ async function restoreProgressState(state, generation = beginReaderNavigation())
             else resolve();
           };
           const loaded = () => finish(),
-            failed = () => { if (!media._readerSourceRetry) finish(new Error("Media metadata unavailable")); };
+            failed = () => {
+              if (!media._readerSourceRetry) finish(new Error("Media metadata unavailable"));
+            };
           const untrack = trackReaderResource(() => finish(readerAbortError()));
           media.addEventListener("loadedmetadata", loaded, { once: true });
           media.addEventListener("error", failed);
@@ -4327,7 +4332,8 @@ const fullSearchInput = fullSearchView.querySelector("#full-search-input"),
 const chapterSearchPagination = document.createElement("div");
 chapterSearchPagination.className = "full-search-pagination";
 chapterSearchPagination.hidden = true;
-chapterSearchPagination.innerHTML = '<button id="full-search-page-prev" type="button">上一页</button><label>第 <input id="full-search-page" type="number" min="1" value="1" aria-label="搜索结果页码"> 页 <span id="full-search-pages"></span></label><button id="full-search-page-next" type="button">下一页</button>';
+chapterSearchPagination.innerHTML =
+  '<button id="full-search-page-prev" type="button">上一页</button><label>第 <input id="full-search-page" type="number" min="1" value="1" aria-label="搜索结果页码"> 页 <span id="full-search-pages"></span></label><button id="full-search-page-next" type="button">下一页</button>';
 fullSearchResultsNode.before(chapterSearchPagination);
 const fullSearchCancel = document.createElement("button");
 fullSearchCancel.type = "button";
@@ -4355,34 +4361,53 @@ fullSearchCancel.addEventListener("click", () => {
   fullSearchRetry.hidden = false;
   fullSearchStatus.textContent = "搜索已取消";
 });
-chapterSearchPagination.querySelector("#full-search-page-prev").addEventListener("click", () =>
-  loadChapterSearchPage(chapterSearchPage.offset - chapterSearchPage.pageSize));
-chapterSearchPagination.querySelector("#full-search-page-next").addEventListener("click", () =>
-  loadChapterSearchPage(chapterSearchPage.offset + chapterSearchPage.pageSize));
-chapterSearchPagination.querySelector("#full-search-page").addEventListener("change", event => {
+chapterSearchPagination
+  .querySelector("#full-search-page-prev")
+  .addEventListener("click", () =>
+    loadChapterSearchPage(chapterSearchPage.offset - chapterSearchPage.pageSize)
+  );
+chapterSearchPagination
+  .querySelector("#full-search-page-next")
+  .addEventListener("click", () =>
+    loadChapterSearchPage(chapterSearchPage.offset + chapterSearchPage.pageSize)
+  );
+chapterSearchPagination.querySelector("#full-search-page").addEventListener("change", (event) => {
   if (!chapterSearchPage || !Number.isFinite(event.target.valueAsNumber)) return;
   loadChapterSearchPage((event.target.valueAsNumber - 1) * chapterSearchPage.pageSize);
 });
 // Full-text search: format matching, result presentation, and navigation.
 function chapterSearchModule() {
   if (!chapterSearchModulePromise)
-    chapterSearchModulePromise = import("/search/static/reader-chapter-search.mjs")
-      .catch(error => { chapterSearchModulePromise = null; throw error; });
+    chapterSearchModulePromise = import("/search/static/reader-chapter-search.mjs").catch(
+      (error) => {
+        chapterSearchModulePromise = null;
+        throw error;
+      }
+    );
   return chapterSearchModulePromise;
 }
 async function searchChapterBook(query, generation) {
   if (!chapterSearchConfiguration) throw new Error("本书暂无完整全文搜索索引");
   const module = await chapterSearchModule();
   if (!isReaderGenerationCurrent("search", generation)) return;
-  if (chapterSearchClient?.failed) { chapterSearchClient.dispose(); chapterSearchClient = null; }
-  if (!chapterSearchClient) chapterSearchClient = module.createChapterSearch(chapterSearchConfiguration);
+  if (chapterSearchClient?.failed) {
+    chapterSearchClient.dispose();
+    chapterSearchClient = null;
+  }
+  if (!chapterSearchClient)
+    chapterSearchClient = module.createChapterSearch(chapterSearchConfiguration);
   const page = await chapterSearchClient.search(query);
   if (isReaderGenerationCurrent("search", generation)) applyChapterSearchPage(page);
 }
 function applyChapterSearchPage(page) {
   chapterSearchPage = page;
-  updateSearchState({ results: page.results.map(result => ({ ...result,
-    activate: generation => navigateChapterSearchResult(result, generation) })), index: -1 });
+  updateSearchState({
+    results: page.results.map((result) => ({
+      ...result,
+      activate: (generation) => navigateChapterSearchResult(result, generation)
+    })),
+    index: -1
+  });
 }
 async function navigateChapterSearchResult(result, generation) {
   const article = await chapterManifestLoader?.(result.chapterIndex);
@@ -4391,8 +4416,10 @@ async function navigateChapterSearchResult(result, generation) {
   if (!isReaderGenerationCurrent("navigation", generation)) return false;
   clearFullSearchMarks();
   const mapping = module.chapterTextMap([article._chapterSearchHead, article]);
-  const match = result.snippet.text.slice(result.snippet.matchStart,
-    result.snippet.matchStart + result.snippet.matchLength);
+  const match = result.snippet.text.slice(
+    result.snippet.matchStart,
+    result.snippet.matchStart + result.snippet.matchLength
+  );
   let start = result.start;
   if (mapping.text.slice(start, start + result.length) !== match) {
     const found = mapping.text.indexOf(result.snippet.text);
@@ -4403,8 +4430,13 @@ async function navigateChapterSearchResult(result, generation) {
   const parts = mapping.parts(start, start + result.length, article);
   const [mark] = highlightTextParts(parts);
   (mark || article).scrollIntoView({ block: "center" });
-  const tocIndex = navigationState.tocEntries.findIndex(entry => entry.chapterIndex === result.chapterIndex);
-  if (tocIndex >= 0) { updateNavigationState({ currentChapterIndex: tocIndex }); updateTocCurrentMark(); }
+  const tocIndex = navigationState.tocEntries.findIndex(
+    (entry) => entry.chapterIndex === result.chapterIndex
+  );
+  if (tocIndex >= 0) {
+    updateNavigationState({ currentChapterIndex: tocIndex });
+    updateTocCurrentMark();
+  }
   updateProgressTools();
   scheduleSave();
   return true;
@@ -4419,7 +4451,8 @@ function updateChapterSearchPagination() {
   input.max = String(Math.max(1, pages));
   chapterSearchPagination.querySelector("#full-search-pages").textContent = `/ ${pages}`;
   chapterSearchPagination.querySelector("#full-search-page-prev").disabled = page.offset === 0;
-  chapterSearchPagination.querySelector("#full-search-page-next").disabled = page.offset + page.pageSize >= page.total;
+  chapterSearchPagination.querySelector("#full-search-page-next").disabled =
+    page.offset + page.pageSize >= page.total;
 }
 async function loadChapterSearchPage(offset, selectLast = null) {
   if (!chapterSearchPage || !chapterSearchClient) return;
@@ -4434,7 +4467,8 @@ async function loadChapterSearchPage(offset, selectLast = null) {
     applyChapterSearchPage(page);
     renderFullSearchResults();
     fullSearchStatus.textContent = `${page.total} 个结果`;
-    if (selectLast !== null) await activateFullSearchResult(selectLast ? page.results.length - 1 : 0, false);
+    if (selectLast !== null)
+      await activateFullSearchResult(selectLast ? page.results.length - 1 : 0, false);
   } catch (error) {
     if (isReaderGenerationCurrent("search", generation)) {
       fullSearchStatus.textContent = error.message || "搜索结果加载失败";
@@ -4724,8 +4758,7 @@ async function runFullSearch() {
       publishSearchResults(generation, await fullSearchPdfMatches(query, generation));
     else if (capability.mode === "foliate")
       publishSearchResults(generation, await fullSearchFoliateMatches(query, generation));
-    else if (capability.mode === "epub-chapters")
-      await searchChapterBook(query, generation);
+    else if (capability.mode === "epub-chapters") await searchChapterBook(query, generation);
     else if (["text", "markdown", "docx"].includes(capability.mode))
       publishSearchResults(
         generation,
@@ -4747,10 +4780,12 @@ async function runFullSearch() {
     if (!isReaderGenerationCurrent("search", generation)) return;
     renderFullSearchResults();
     fullSearchStatus.textContent = chapterSearchPage
-      ? (chapterSearchPage.total ? `${chapterSearchPage.total} 个结果` : "未找到正文匹配")
+      ? chapterSearchPage.total
+        ? `${chapterSearchPage.total} 个结果`
+        : "未找到正文匹配"
       : searchState.results.length
-      ? `${searchState.results.length}${searchState.results.length === 100 ? "+" : ""} 个结果`
-      : "未找到正文匹配";
+        ? `${searchState.results.length}${searchState.results.length === 100 ? "+" : ""} 个结果`
+        : "未找到正文匹配";
   } catch (error) {
     if (isReaderGenerationCurrent("search", generation)) {
       fullSearchStatus.textContent = error.message || "正文搜索不可用";
@@ -4791,10 +4826,18 @@ function moveFullSearch(step) {
   if (chapterSearchPage?.total) {
     const page = chapterSearchPage;
     const next = searchState.index < 0 ? (step > 0 ? 0 : -1) : searchState.index + step;
-    if (next < 0) return loadChapterSearchPage(page.offset ? page.offset - page.pageSize
-      : Math.floor((page.total - 1) / page.pageSize) * page.pageSize, true);
-    if (next >= searchState.results.length) return loadChapterSearchPage(
-      page.offset + page.pageSize < page.total ? page.offset + page.pageSize : 0, false);
+    if (next < 0)
+      return loadChapterSearchPage(
+        page.offset
+          ? page.offset - page.pageSize
+          : Math.floor((page.total - 1) / page.pageSize) * page.pageSize,
+        true
+      );
+    if (next >= searchState.results.length)
+      return loadChapterSearchPage(
+        page.offset + page.pageSize < page.total ? page.offset + page.pageSize : 0,
+        false
+      );
     return activateFullSearchResult(next, false);
   }
   if (searchState.results.length)

@@ -1,3 +1,4 @@
+importScripts("/search/static/reader-resources.js");
 const CACHE_NAME = "vomebook-search-v1.0.0";
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 let cachePruning = Promise.resolve();
@@ -24,6 +25,7 @@ function pruneHashedAssets(cache) {
 const PRECACHE_URLS = [
   "/search/",
   "/search/static/style.css",
+  "/search/static/reader-resources.js",
   "/search/static/reader-contract.js",
   "/search/static/reader-navigation.js",
   "/search/static/app.js",
@@ -39,23 +41,7 @@ const PRECACHE_URLS = [
   "/search/icons/icon-192.png",
   "/search/icons/icon-512.png"
 ];
-const READER_RUNTIME_PATHS = new Set([
-  "/search/static/reader-chapter-search.mjs",
-  "/search/static/reader-chapter-search-worker.mjs",
-  "/search/static/reader-navigation.js",
-  "/search/static/reader-contract.js",
-  "/search/static/reader-store.js",
-  "/search/static/reader-request-manager.js",
-  "/search/static/reader-chapter-repository.js",
-  "/search/static/reader-scroll-anchor.js",
-  "/search/static/reader-section-virtualizer.js",
-  "/search/static/reader-runtime.js",
-  "/search/static/reader-format-adapters.js",
-  "/search/static/reader-security.js",
-  "/search/static/reader.css",
-  "/search/static/reader.js",
-  "/search/static/pdf-worker-wrapper.mjs"
-]);
+const READER_RUNTIME_PATHS = new Set(VoiceOfMLReaderResources.runtimePaths("/search/static/"));
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

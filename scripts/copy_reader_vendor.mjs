@@ -3,6 +3,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { get } from "node:https";
 import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { createRequire } from "node:module";
+const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 
 const output = process.argv[2] || "static/vendor";
 mkdirSync(output, { recursive: true });
@@ -40,9 +42,9 @@ async function downloadWithRetry(url) {
 }
 
 async function main() {
-  const pdfArchive = await downloadWithRetry("https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.3.289.tgz");
+  const pdfArchive = await downloadWithRetry(resources.pdfArchive.url);
 const pdfArchiveHash = createHash("sha256").update(pdfArchive).digest("hex");
-  if (pdfArchiveHash !== "06f25e887adc6489f04c9fcb14198c77e4e5623a59a0bba5c4cea5838a4f1241") throw new Error(`pdfjs-dist archive SHA-256 ${pdfArchiveHash} does not match`);
+if (pdfArchiveHash !== resources.pdfArchive.sha256) throw new Error(`pdfjs-dist archive SHA-256 ${pdfArchiveHash} does not match`);
 const tar = gunzipSync(pdfArchive);
 for (let offset = 0; offset + 512 <= tar.length;) {
   const header = tar.subarray(offset, offset + 512), name = header.subarray(0, 100).toString().replace(/\0.*$/, "");
@@ -56,20 +58,12 @@ for (let offset = 0; offset + 512 <= tar.length;) {
   }
   offset += 512 + Math.ceil(size / 512) * 512;
 }
-for (const [url, target, expected] of [
-  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs", "pdf.min.mjs", "f80490490320511e5df18c580b9edd6b5db8058dceebaf6f161992e0a964b9e2"],
-  ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs", "pdf.worker.min.mjs", "8ab0e5e30031b4a06ecfddd5ae9562f0227f830ee7ec9ed1a968b134243d2386"],
-  ["https://cdn.jsdelivr.net/npm/marked@18.0.13/lib/marked.umd.js", "marked.min.js", "b147274a9ce27d17276587167e49483d719f6893eeca3a3667a59797661d3556"],
-  ["https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js", "purify.min.js", "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5"],
-  ["https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js", "jszip.min.js", "7f839b2d4688b845c105ebf5d2f9803075f91ea0fe72bdaac176c3a04dd3d2c1"],
-  ["https://cdn.jsdelivr.net/npm/docx-preview@0.4.0/dist/docx-preview.min.js", "docx-preview.min.js", "051ef503f2677d53159a388b7384e950eda41ea4e47a103e5e36f124d7faea40"],
-]) {
+for (const {url, file: target, sha256: expected, path} of Object.values(resources.vendors)) {
   const bytes = await downloadWithRetry(url);
   const actual = createHash("sha256").update(bytes).digest("hex");
   if (actual !== expected) throw new Error(`${url}: SHA-256 ${actual} does not match ${expected}`);
   mkdirSync(dirname(join(output, target)), { recursive: true });
-  const dot = target.lastIndexOf(".");
-  const versioned = `${target.slice(0, dot)}.${actual.slice(0, 12)}${target.slice(dot)}`;
+  const versioned = path.slice("vendor/".length);
   mkdirSync(dirname(join(output, versioned)), { recursive: true });
   writeFileSync(join(output, versioned), bytes);
 }
