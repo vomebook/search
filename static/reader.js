@@ -1964,17 +1964,12 @@ function validSource(raw) {
     if (
       url.origin === "https://voiceofml-search.hf.space" &&
       url.pathname === "/api/reader-bucket-resource" &&
-      /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?\/(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)$/.test(
-        bucketPath
-      )
+      VoiceOfMLReader.isBucketPath(bucketPath)
     )
       return true;
     if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname))
       return false;
-    const readerAsset =
-      /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(?:pdf_manifest\.json|objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[a-z0-9-]+\/)?(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp|chapter-manifest\.json|document\.(?:pdf|epub|mobi|azw|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4|epub-chapters\/(?:chapter-manifest\.json|chapters\/chapter-[0-9]{4}\.xhtml|resources\/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))))$/.test(
-        url.pathname
-      );
+    const readerAsset = VoiceOfMLReader.isAssetSourcePath(url.pathname);
     if (extension === "docx") return readerAsset;
     return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset;
   } catch (_) {
@@ -3100,13 +3095,7 @@ async function renderChapterManifest(prepared) {
         label: item.title || `章节 ${item.index}`,
         chapterIndex: item.index,
         depth: 0,
-        activate: async (generation) => {
-          await fetchChapter(item);
-          if (!isReaderGenerationCurrent("navigation", generation)) return false;
-          const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${item.index}"]`);
-          if (node) node.scrollIntoView({ block: "start" });
-          scheduleSave();
-        }
+        activate: (generation) => activateChapter(item, generation)
       }))
     );
   const fetchChapter = async (chapter) => {
@@ -3170,6 +3159,34 @@ async function renderChapterManifest(prepared) {
     pending.set(chapter.index, task);
     return task;
   };
+  const activateChapter = async (chapter, generation, fragment = "") => {
+    await fetchChapter(chapter);
+    if (!isReaderGenerationCurrent("navigation", generation)) return false;
+    const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
+    let id = fragment.replace(/^#/, "");
+    try { id = decodeURIComponent(id); } catch (_) {}
+    const anchor = id && node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`);
+    (anchor || node).scrollIntoView({ block: "start" });
+    updateProgressTools();
+    scheduleSave();
+    return true;
+  };
+  frame.addEventListener("click", async (event) => {
+    const link = event.target.closest?.("a[href]");
+    const article = link?.closest(".reader-epub-chapter");
+    if (!article || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const current = manifest.chapters.find(item => item.index === Number(article.dataset.chapter));
+    const target = new URL(link.getAttribute("href"), chapterUrl(current));
+    const fragment = target.hash;
+    target.hash = "";
+    const chapter = manifest.chapters.find(item => chapterUrl(item) === target.href);
+    if (!chapter) return;
+    event.preventDefault();
+    const generation = beginReaderNavigation();
+    try {
+      await activateChapter(chapter, generation, fragment);
+    } catch (error) { reportNavigationError(error, generation); }
+  });
   const prefetchChapters = (startIndex) => {
     const tasks = manifest.chapters
       .slice(startIndex, startIndex + chapterPrefetchCount)
@@ -3436,10 +3453,21 @@ function renderMedia(mode) {
       saveProgress();
     });
   mediaElement = media;
+  let sourceRetried = false;
   media.addEventListener(
     "error",
-    () => fail("媒体加载失败，请检查网络后重试，或下载原文件。", "READER_MEDIA"),
-    { once: true }
+    () => {
+      if (readerAbortController.signal.aborted) return;
+      if (!sourceRetried && sourceUrl !== contentUrl && validSource(sourceUrl)) {
+        sourceRetried = true;
+        media._readerSourceRetry = true;
+        media.src = sourceUrl;
+        media.load();
+        return;
+      }
+      media._readerSourceRetry = false;
+      fail("媒体加载失败，请检查网络后重试，或下载原文件。", "READER_MEDIA");
+    }
   );
   media.src = contentUrl;
   content.appendChild(media);
@@ -4181,10 +4209,10 @@ async function restoreProgressState(state, generation = beginReaderNavigation())
             else resolve();
           };
           const loaded = () => finish(),
-            failed = () => finish(new Error("Media metadata unavailable"));
+            failed = () => { if (!media._readerSourceRetry) finish(new Error("Media metadata unavailable")); };
           const untrack = trackReaderResource(() => finish(readerAbortError()));
           media.addEventListener("loadedmetadata", loaded, { once: true });
-          media.addEventListener("error", failed, { once: true });
+          media.addEventListener("error", failed);
         });
       if (!isReaderGenerationCurrent("navigation", generation)) return false;
       media.currentTime = state.mediaTime;
