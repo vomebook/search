@@ -1047,7 +1047,15 @@ ${doc.querySelector('parsererror').innerText}`)
     async loadDocument(item) {
         const url = await this.#loader.loadItem(item)
         const response = await fetch(url)
-        return this.parser.parseFromString(await response.text(), MIME.HTML)
+        const text = await response.text()
+        // CHM conversions may serialize XHTML with a namespace prefix. HTML
+        // parsing nests their self-closing anchors and void tags, then repairs
+        // that invalid tree by moving footnotes. Preserve the original XML tree.
+        if (item.mediaType === MIME.XHTML || /<[A-Za-z_][\w.-]*:html\b/.test(text)) {
+            const xml = this.parser.parseFromString(text, MIME.XHTML)
+            if (!xml.querySelector('parsererror')) return xml
+        }
+        return this.parser.parseFromString(text, MIME.HTML)
     }
     getMediaOverlay() {
         return new MediaOverlay(this, this.#loadXML.bind(this))
