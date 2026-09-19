@@ -96,9 +96,45 @@ function couldBeFuzzy(token, word, maxDist) {
   return true;
 }
 
-function wildcardPatternToRegExp(pattern) {
-  const escaped = String(pattern || "").replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "i");
+function compileWildcardMatcher(pattern) {
+  const tokens = String(pattern || "").replace(/\*+/g, "*").split("");
+  const literals = tokens.map(char => char === "*" || char === "?" ? null
+    : new RegExp("^" + char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i"));
+  const masks = new Map();
+  function literalMask(char) {
+    let mask = masks.get(char);
+    if (!mask) {
+      mask = literals.map(regex => regex && regex.test(char));
+      if (masks.size >= 512) masks.clear();
+      masks.set(char, mask);
+    }
+    return mask;
+  }
+  return { test(text) {
+    // Substring glob matching in O(pattern length * text length), without
+    // backtracking. Iterate UTF-16 units to retain the former non-u regex rules.
+    let previous = new Uint8Array(tokens.length + 1);
+    let current = new Uint8Array(tokens.length + 1);
+    previous[0] = 1;
+    for (let j = 0; j < tokens.length && tokens[j] === "*"; j++) previous[j + 1] = 1;
+    if (previous[tokens.length]) return true;
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const dot = char !== "\n" && char !== "\r" && char !== "\u2028" && char !== "\u2029";
+      const mask = literalMask(char);
+      current[0] = 1;
+      for (let j = 0; j < tokens.length; j++) {
+        if (tokens[j] === "*") {
+          current[j + 1] = current[j] || (dot && previous[j + 1]);
+        } else {
+          current[j + 1] = previous[j] && (tokens[j] === "?" ? dot : mask[j]);
+        }
+      }
+      if (current[tokens.length]) return true;
+      [previous, current] = [current, previous];
+    }
+    return false;
+  }};
 }
 
 function literalSearch(query) {
@@ -498,7 +534,7 @@ function searchLocal(params) {
     matched = recordIndices.slice();
   } else if (params.exact || literalSearch(query)) {
     const wildcard = query.includes("*") || query.includes("?");
-    const pattern = wildcard ? wildcardPatternToRegExp(query) : null;
+    const pattern = wildcard ? compileWildcardMatcher(query) : null;
     const lower = query.toLowerCase();
     for (let i = 0; i < records.length; i++) {
       const record = records[i] || {};
