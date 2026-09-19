@@ -228,6 +228,43 @@
     return Number.isFinite(numeric) ? Math.min(maximum, Math.max(minimum, numeric)) : fallback;
   }
 
+  const assetRoot = String.raw`objects/[0-9a-f]{2}/[0-9a-f]{64}/`;
+  const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
+  const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.webp)`;
+  const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html)|book\.epub|audio\.mp3|video\.mp4)`;
+  const assetChapters = String.raw`(?:chapter-manifest\.json|epub-chapters/(?:chapter-manifest\.json|chapters/chapter-[0-9]{4}\.xhtml|resources/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))`;
+  const assetPrimaryPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|(?:[a-z0-9-]+/)?${assetDocument})$`);
+  const assetSourcePattern = new RegExp(`^(?:pdf_manifest\\.json|${assetRoot}${assetVersion}(?:${assetPages}|(?:[a-z0-9-]+/)?(?:${assetDocument}|${assetChapters})))$`);
+  const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}${assetPages}$`);
+  const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/${assetPages}$`);
+  const assetBase = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/";
+  const assetModes = Object.freeze({ p: "pdf", e: "epub", d: "docx", h: "html", a: "audio", v: "video" });
+
+  function isBucketPath(path, versioned = false) {
+    return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path);
+  }
+
+  function isAssetSourcePath(path) {
+    const prefix = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\//.exec(path);
+    return !!prefix && assetSourcePattern.test(path.slice(prefix[0].length));
+  }
+
+  function assetFields(asset, bucketBase) {
+    const path = String(asset?.p || "");
+    const bucket = isBucketPath(path, true);
+    if (!asset || asset.s !== 2 || !Object.prototype.hasOwnProperty.call(assetModes, asset.m) || !assetPrimaryPattern.test(path) ||
+        (bucket && asset.b !== "vomebook/pdf-pages")) return null;
+    const nativeExtension = /(?:^|\/)document\.(epub|mobi|azw|azw3|fb2)$/i.exec(path)?.[1]?.toLowerCase() || "epub";
+    const extension = asset.m === "e" ? nativeExtension
+      : asset.m === "p" && path.endsWith("page-manifest.json") ? "pdf-pages" : assetModes[asset.m];
+    return {
+      ReaderLink: bucket ? `${bucketBase}?path=${encodeURIComponent(path)}` : assetBase + path,
+      ReaderExtension: asset.c ? "epub-chapters" : extension,
+      ReaderChapterManifest: asset.c ? assetBase + asset.c : "",
+      ReaderFallback: asset.f ? assetBase + asset.f : ""
+    };
+  }
+
   function readerUrl(record, basePath) {
     const source = record && (record.ReaderLink || record.readerLink || record.Link || record.link);
     const readerExtension =
@@ -298,6 +335,9 @@
     capability,
     features,
     clampNumber,
+    assetFields,
+    isAssetSourcePath,
+    isBucketPath,
     readerUrl
   });
 })(typeof self !== "undefined" ? self : window);

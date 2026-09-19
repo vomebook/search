@@ -190,18 +190,8 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-   var assetPath = String(asset && asset.p || ""), bucketPage = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)$/.test(assetPath);
-   if (!asset || asset.s !== 2 || ["p", "e", "d", "h", "a", "v"].indexOf(asset.m) < 0 || !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[0-9a-f]{16}\/)?(?:page-manifest\.json|pages\/page-[0-9]{6}\.webp)|(?:[a-z0-9-]+\/)?(document\.(?:pdf|epub|mobi|azw|azw3|fb2)|book\.epub|document\.docx|document\.html|audio\.mp3|video\.mp4))$/.test(assetPath) || (bucketPage && asset.b !== "vomebook/pdf-pages")) return record;
-    var assetExtension = /(?:^|\/)document\.(epub|mobi|azw|azw3|fb2)$/i.exec(assetPath)?.[1]?.toLowerCase() || "epub";
-    var bucketAsset = bucketPage && asset.b === "vomebook/pdf-pages", readerExtensions = { p: asset.p.endsWith("page-manifest.json") ? "pdf-pages" : "pdf", e: assetExtension, d: "docx", h: "html", a: "audio", v: "video" };
-   var chapterBundle = !!asset.c;
-   return Object.assign({}, record, {
-      ReaderLink: bucketAsset ? "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + encodeURIComponent(asset.p) : "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.p,
-      ReaderExtension: chapterBundle ? "epub-chapters" : readerExtensions[asset.m],
-      ReaderChapterManifest: chapterBundle ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.c : "",
-     ReaderFallback: asset.f ? "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + asset.f : "",
-     DownloadLink: originalLink,
-   });
+  var fields = VoiceOfMLReader.assetFields(asset, API_BASE + "/api/reader-bucket-resource");
+  return fields ? Object.assign({}, record, fields, { DownloadLink: originalLink }) : record;
 }
 
 function getConvertedReaderRecords(repo) {
@@ -1078,6 +1068,7 @@ async function doSearchAPI(params, append, requestId) {
 }
 
 function appendSearchResults(page, results = STATE._pageCache[page]) {
+  if (!STATE._resultBackend) STATE._resultBackend = "api";
   STATE.results = STATE.results.concat(results);
   delete STATE._pageCache[page];
   STATE._loadedPage = page;
@@ -1184,7 +1175,7 @@ function prefetchNextPage() {
   }
   if (!STATE._loadedPage) return Promise.resolve();
   if (!apiAvailable) return Promise.resolve();
-  if (STATE.useLocalMode && STATE.dataLoaded) return Promise.resolve();
+  if (STATE._resultBackend === "local" || (STATE.useLocalMode && STATE.dataLoaded && STATE._resultBackend !== "api")) return Promise.resolve();
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
   return prefetchSearchPages(getSearchApiBase(), buildCurrentSearchBody(1));
 }
@@ -2382,6 +2373,7 @@ function rememberDisplayedSearchView() {
     && previous.length === STATE.results.length && previous.total === STATE.total
     && previous.loadedPage === STATE._loadedPage && previous.pageCache === STATE._pageCache && previous.window === resultWindow;
   displayedSearchView = { key: getSearchViewKey(), results: STATE.results,
+    resultBackend: STATE._resultBackend,
     total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache,
     length: STATE.results.length, window: resultWindow, revision: unchanged ? previous.revision : ++displayedViewRevision };
 }
@@ -2914,6 +2906,7 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
     page: view.loadedPage,
     loadedPage: view.loadedPage,
     pageCache: cloneSearchPageCache(view.pageCache),
+    resultBackend: view.resultBackend,
     hasMore: view.results.length < view.total,
     window: view.window ? { generation: view.window.generation, pages: [...view.window.pages], count: view.window.count } : null,
     estimatedHeight: VSCROLL.estimatedHeight,
@@ -2952,6 +2945,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   STATE.page = snapshot.page;
   STATE._loadedPage = snapshot.loadedPage;
   STATE._pageCache = cloneSearchPageCache(snapshot.pageCache);
+  STATE._resultBackend = snapshot.resultBackend || null;
   STATE.hasMore = snapshot.hasMore;
   if (snapshot.window) resultWindow = { ...snapshot.window, key, total: snapshot.total, query: JSON.parse(key),
     pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
@@ -3077,6 +3071,7 @@ function applyInitialSearchPayload(data) {
   STATE.page = 1;
   STATE.results = data.results.slice();
   STATE._initialActive = true;
+  STATE._resultBackend = null;
   STATE._loadedPage = 1;
   STATE._pageCache = {};
   STATE._pendingPage = 0;
@@ -3331,6 +3326,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     searchRequestId++;
     STATE._pageCache = {};
     STATE._loadedPage = 0;
+    STATE._resultBackend = null;
     STATE._pendingPage = 0;
     STATE._deferredAppendWhileDragging = false;
     if (scrollLoadTimer) {
@@ -3342,26 +3338,31 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     }
   }
   const continueInitialViaApi = !!(append && STATE._initialActive && !STATE.dataLoaded && apiAvailable && folderMatchMode !== "mixed");
-  const shouldUseLocalSearch = !continueInitialViaApi && (STATE.useLocalMode || folderMatchMode === "mixed");
+  const continueApi = append && STATE._resultBackend === "api";
+  const shouldUseLocalSearch = (append && STATE._resultBackend === "local") ||
+    (!continueApi && !continueInitialViaApi && (STATE.useLocalMode || folderMatchMode === "mixed"));
   if (shouldUseLocalSearch) {
     if (!STATE.dataLoaded) {
-      if (STATE.useLocalMode && folderMatchMode !== "mixed" && apiAvailable) {
-        ensureLocalDataLoaded(false, true);
-      } else {
+      ensureLocalDataLoaded(false, false).then(ok => {
+        if (id !== searchId) return;
         STATE.isLoading = false;
-        setSearchVisualLoading(false);
-        ensureLocalDataLoaded(true, false);
-        if (folderMatchMode === "mixed" && !STATE.useLocalMode) {
-          showToast("正在加载目录筛选数据...");
-        }
-        return;
-      }
+        if (ok) doSearch(append);
+        else if (!append && folderMatchMode !== "mixed") doSearch();
+        else finishPagingAttempt(false, new Error("LOCAL_UNAVAILABLE"));
+      });
+      return;
     } else {
+      if (STATE._resultBackend !== "local") {
+        cancelSearchPrefetch();
+        STATE._pageCache = {};
+      }
+      STATE._resultBackend = "local";
       doSearchFallbackLocal(params, append, id);
       return;
     }
   }
   if (apiAvailable) {
+    STATE._resultBackend = "api";
     if (append && STATE._pendingPage === STATE.page) {
       STATE.isLoading = false;
       return;
@@ -3412,6 +3413,12 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     });
     return;
   }
+  if (continueApi) {
+    STATE.isLoading = false;
+    STATE.page = STATE._loadedPage;
+    finishPagingAttempt(false, new Error("API_UNAVAILABLE"));
+    return;
+  }
   if (!STATE.dataLoaded) {
     STATE.isLoading = false;
     setSearchVisualLoading(false);
@@ -3422,6 +3429,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     showToast("数据加载中，请稍后...");
     return;
   }
+  STATE._resultBackend = "local";
   doSearchFallbackLocal(params, append, id);
 }
 
@@ -3460,7 +3468,10 @@ function doSearchFallbackLocal(params, append, id) {
       console.error("Local Worker search failed:", err);
       if (id !== searchId) return;
       pagingError = err;
-      if (append) STATE.page = Math.max(1, STATE._loadedPage);
+      if (append) {
+        STATE.page = Math.max(1, STATE._loadedPage);
+        return;
+      }
       STATE.dataLoaded = false;
       if (params.folderMatchMode === "mixed") {
         showToast("本地目录筛选不可用，请刷新后重试");
