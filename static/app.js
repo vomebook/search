@@ -6,6 +6,7 @@ const WORKER_PROTOCOL_VERSION = 1;
 const WORKER_REQUEST_TIMEOUT = 10000;
 const WORKER_LOAD_TIMEOUT = 60000;
 const APPEND_REQUEST_TIMEOUT = 5000;
+const DOWNLOAD_CHECK_TIMEOUT = 8000;
 const pendingSearchPages = new Map();
 let pagingCheckTimer = null;
 let pagingFailures = 0;
@@ -507,8 +508,8 @@ function warmReaderIntent(rawUrl) {
   var engineAssets = extension === "pdf"
     ? ["/search/static/vendor/pdf.min.f80490490320.mjs", "/search/static/pdf-worker-wrapper.mjs", "/search/static/vendor/pdf.worker.min.8ab0e5e30031.mjs"]
     : extension === "epub" ? ["/search/static/foliate-reader/view.js?reader-v1"]
-    : extension === "docx" ? ["/search/static/vendor/jszip.min.acc7e41455a8.js", "/search/static/vendor/docx-preview.min.051ef503f267.js"]
-     : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.69451c8541c9.js", "/search/static/vendor/purify.min.c2f26ea4fc0d.js"] : [];
+    : extension === "docx" ? ["/search/static/vendor/jszip.min.7f839b2d4688.js", "/search/static/vendor/docx-preview.min.051ef503f267.js"]
+     : ["md", "markdown", "html", "htm"].indexOf(extension) >= 0 ? ["/search/static/vendor/marked.min.b147274a9ce2.js", "/search/static/vendor/purify.min.f263b05369e0.js"] : [];
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
@@ -552,109 +553,29 @@ function triggerDownload(url) {
   setTimeout(() => iframe.remove(), 60000);
 }
 
-const downloadChecks = new Map();
-const downloadCheckQueue = [];
-const pendingDownloads = new Map();
-let activeDownloadChecks = 0;
-let downloadLaunchTail = Promise.resolve();
-let lastDownloadLaunch = 0;
 let downloadBatch = null;
-
-function checkDownload(link, speculative = false) {
-  const now = Date.now();
-  downloadChecks.forEach((entry, key) => {
-    if (entry.expires && entry.expires <= now) downloadChecks.delete(key);
-  });
-  const existing = downloadChecks.get(link);
-  if (existing) return existing.promise;
-  // Intent warming is opportunistic; actual clicks always get queued.
-  if (speculative && (activeDownloadChecks || downloadCheckQueue.length || downloadBatch && !downloadBatch.done)) return Promise.resolve(false);
-  let resolve;
-  const entry = { promise: new Promise(done => { resolve = done; }), expires: 0 };
-  downloadChecks.set(link, entry);
-  downloadCheckQueue.push({ link, entry, resolve });
-  pumpDownloadChecks();
-  return entry.promise;
-}
-
-async function runDownloadCheck({ link, entry, resolve }) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DOWNLOAD_CHECK_TIMEOUT);
-  try {
-    const response = await fetch(API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""), { signal: controller.signal });
-    const data = await response.json();
-    if (!response.ok || data.ok !== true) throw new Error(data.error || "下载检查失败，请重试");
-    entry.expires = Date.now() + 30000;
-    // Bound successful checks independently of pending, user-requested work.
-    const cached = Array.from(downloadChecks).filter(([, value]) => value.expires);
-    while (cached.length > 64) downloadChecks.delete(cached.shift()[0]);
-    resolve(true);
-  } catch (error) {
-    downloadChecks.delete(link);
-    resolve(error.name === "AbortError" ? "下载检查超时，请重试" : error.message || "下载失败，请稍后重试");
-  } finally {
-    clearTimeout(timer);
-    activeDownloadChecks--;
-    pumpDownloadChecks();
-  }
-}
-
-function pumpDownloadChecks() {
-  while (activeDownloadChecks < 2 && downloadCheckQueue.length) {
-    activeDownloadChecks++;
-    runDownloadCheck(downloadCheckQueue.shift());
-  }
-}
-
-function scheduleDownloadLaunch(filename, link, cancelled) {
-  // Only the head of the handoff queue owns a pacing timer.
-  const launch = downloadLaunchTail.then(async () => {
-    if (cancelled()) return false;
-    const delay = Math.max(0, 300 - (Date.now() - lastDownloadLaunch));
-    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-    if (cancelled()) return false;
-    triggerDownload(buildDownloadUrl(filename, link));
-    lastDownloadLaunch = Date.now();
-    return true;
-  });
-  downloadLaunchTail = launch.catch(() => {});
-  return launch;
-}
-
-function downloadFile(filename, link, options = {}) {
-  if (options.batch && options.batch.cancelled) return Promise.resolve(false);
-  if (pendingDownloads.has(link)) return pendingDownloads.get(link);
-  const button = options.button;
-  const label = button && button.textContent;
-  if (button) { button.textContent = "准备中…"; button.setAttribute("aria-busy", "true"); }
-  if (!options.quiet) showToast("正在准备下载…");
-  const cancelled = () => options.batch && options.batch.cancelled;
-  const task = (async () => {
-    try {
-      if (cancelled()) return false;
-      const checked = options.skipCheck ? true : await checkDownload(link);
-      if (cancelled()) return false;
-      if (checked !== true) {
-        if (!options.quiet) showToast(checked || "下载检查失败，请重试", 3500);
-        return false;
-      }
-      const started = await scheduleDownloadLaunch(filename, link, cancelled);
-      if (started && !options.quiet) showToast("已发起下载，请在浏览器下载列表查看");
-      return started;
-    } catch (_) {
-      if (!options.quiet) showToast("下载失败，请稍后重试", 3500);
-      return false;
-    } finally {
-      pendingDownloads.delete(link);
-      if (button && button.textContent === "准备中…") {
-        button.textContent = label;
-        button.removeAttribute("aria-busy");
-      }
-    }
-  })();
-  pendingDownloads.set(link, task);
-  return task;
-}
+const downloadController = VoiceOfMLDownloadController.createDownloadController({
+  buildCheckUrl: link => API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""),
+  buildDownloadUrl,
+  triggerDownload: url => triggerDownload(url),
+  showToast,
+  isBatchActive: () => !!(downloadBatch && !downloadBatch.done),
+  timeout: DOWNLOAD_CHECK_TIMEOUT,
+});
+const {
+  downloadChecks,
+  downloadCheckQueue,
+  pendingDownloads,
+  checkDownload,
+  runDownloadCheck,
+  pumpDownloadChecks,
+  scheduleDownloadLaunch,
+  downloadFile,
+} = downloadController;
+Object.defineProperty(globalThis, "activeDownloadChecks", {
+  configurable: true,
+  get: () => downloadController.activeDownloadChecks,
+});
 
 function renderDownloadBatch() {
   const batch = downloadBatch;
@@ -1534,52 +1455,19 @@ const STATE = {
   _deferredAppendWhileDragging: false,
 };
 
-const SEARCH_SESSION_DB = "voiceofml-search-state";
-function openSearchSessionDB() {
-  return new Promise(function(resolve, reject) {
-    if (!window.indexedDB) return reject(new Error("IndexedDB unavailable"));
-    var request = indexedDB.open(SEARCH_SESSION_DB, 1);
-    request.onupgradeneeded = function() {
-      if (!request.result.objectStoreNames.contains("session")) request.result.createObjectStore("session");
-    };
-    request.onsuccess = function() { resolve(request.result); };
-    request.onerror = function() { reject(request.error); };
-  });
-}
-
-async function persistSearchSession() {
-  if (location.pathname !== "/search/" || location.hash.indexOf("#/" ) !== 0) return;
-  try {
-    var db = await openSearchSessionDB();
-    var transaction = db.transaction("session", "readwrite");
-    transaction.objectStore("session").put({ version: 1, url: location.href, updatedAt: Date.now() }, "last-search");
-    await new Promise(function(resolve, reject) {
-      transaction.oncomplete = resolve;
-      transaction.onerror = function() { reject(transaction.error); };
-      transaction.onabort = function() { reject(transaction.error); };
-    });
-    db.close();
-  } catch (_) {}
-}
-
-async function restoreSearchSession() {
-  if (location.pathname !== "/search/" || location.search || location.hash) return false;
-  try {
-    var db = await openSearchSessionDB();
-    var transaction = db.transaction("session", "readonly");
-    var request = transaction.objectStore("session").get("last-search");
-    var saved = await new Promise(function(resolve, reject) {
-      request.onsuccess = function() { resolve(request.result); };
-      request.onerror = function() { reject(request.error); };
-    });
-    db.close();
-    if (!saved || saved.version !== 1 || typeof saved.url !== "string") return false;
-    var target = new URL(saved.url);
-    if (target.origin !== location.origin || target.pathname !== "/search/" || target.hash.indexOf("#/") !== 0) return false;
-    history.replaceState(null, "", target.href);
-    return true;
-  } catch (_) { return false; }
-}
+const {
+  openSearchSessionDB,
+  persistSearchSession,
+  restoreSearchSession,
+} = VoiceOfMLSearchSession.createSearchSession({
+  canPersist: () => location.pathname === "/search/" && location.hash.indexOf("#/") === 0,
+  canRestore: target => {
+    if (!target) return location.pathname === "/search/" && !location.search && !location.hash;
+    return target.origin === location.origin
+      && target.pathname === "/search/"
+      && target.hash.indexOf("#/") === 0;
+  },
+});
 
 const VSCROLL = {
   viewKey: "",
@@ -1669,6 +1557,10 @@ function cacheDOM() {
   DOM.historyToggle = $("#history-toggle");
   DOM.historyDropdown = $("#search-history-dropdown");
   DOM.returnToPositionBtn = $("#return-to-position-btn");
+  DOM.backToTopBtn = $("#restart-position-btn");
+  DOM.retryPositionBtn = $("#retry-position-btn");
+  DOM.cancelPositionBtn = $("#cancel-position-btn");
+  DOM.positionRestoreStatus = $("#search-position-status");
   DOM.multiToggleLabel = $("#multi-toggle-label");
   DOM.multiSelectToggle = $("#multi-select-toggle");
   DOM.multiActionBar = $("#multi-action-bar");
@@ -2007,7 +1899,6 @@ const SEARCH_CACHE_MAX = 60;
 const searchResponseCache = new Map();
 const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();
-const DOWNLOAD_CHECK_TIMEOUT = 8000;
 let randomTxtStatusId = 0;
 
 function noteApiSuccess() {
@@ -2096,33 +1987,132 @@ let returnPositionTarget = null;
 let positionControlScroll = null;
 let positionEntryId = 0;
 
+function getReturnPositionTarget(key = getSearchViewKey()) {
+  return returnPositionTarget?.key === key ? returnPositionTarget : null;
+}
+
+function setReturnPositionTarget(position = null) {
+  // Pin a copy so ordinary position saves cannot move the offered destination.
+  returnPositionTarget = position ? { ...position } : null;
+}
+
 function resetPositionControlScroll() {
   positionControlScroll = { key: getSearchViewKey(), last: getResultScrollTop(), distance: 0, until: 0 };
 }
 
-function keepPositionAfterStartOver(key) {
-  const saved = searchPositions.get(key);
-  if (!validSearchPosition(saved) || (saved.index <= 0 && saved.offset <= 0)) return;
-  returnPositionTarget = { ...saved };
-  resetPositionControlScroll();
-  updateReturnPositionButton();
-}
-
-function prepareReturnPosition(key, offer = true) {
+function prepareReturnPosition(key) {
   resetPositionControlScroll();
   const saved = searchPositions.get(key);
-  returnPositionTarget = offer && validSearchPosition(saved) && (saved.index > 0 || saved.offset > 0)
-    ? {...saved} : null;
-  updateReturnPositionButton();
+  setReturnPositionTarget(validSearchPosition(saved) && (saved.index > 0 || saved.offset > 0) ? saved : null);
+  updateSearchPositionControls();
 }
 
-function updateReturnPositionButton() {
-  if (returnPositionTarget?.key !== getSearchViewKey()) returnPositionTarget = null;
+function updateSearchPositionControls() {
+  if (!getReturnPositionTarget()) setReturnPositionTarget();
   if (DOM.returnToPositionBtn) DOM.returnToPositionBtn.hidden = !returnPositionTarget || !!positionRestore;
-  const restart = document.getElementById("restart-position-btn");
-  if (restart) restart.hidden = !STATE.results.length || getResultScrollTop() <= 0;
-  const status = document.getElementById("search-position-status");
-  if (status) status.hidden = !positionRestore;
+  if (DOM.backToTopBtn) DOM.backToTopBtn.hidden = !STATE.results.length || getResultScrollTop() <= 0;
+  if (DOM.positionRestoreStatus) DOM.positionRestoreStatus.hidden = !positionRestore;
+}
+
+function cancelPendingSearchControls() {
+  clearTimeout(searchTimer);
+  clearTimeout(filterSearchTimer);
+  filterSearchTimer = null;
+}
+
+function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
+  cancelPendingSearchControls();
+  // A deliberate trip to the top captures the currently displayed position.
+  // During restoration (or when already at the top), retain the existing target.
+  if (fromStart && !positionRestore && getResultScrollTop() > 0) setReturnPositionTarget();
+  saveSearchViewSnapshot();
+  const key = getSearchViewKey();
+  if (fromStart) saveSearchPosition();
+  cancelPositionRestore();
+  prepareReturnPosition(key);
+  if (!restorePosition) return false;
+  setReturnPositionTarget();
+  return restoreSearchViewSnapshot(key);
+}
+
+function returnToSavedPosition() {
+  const position = getReturnPositionTarget();
+  if (position) return tryRestoreSearchPosition(position.key, { position });
+  return false;
+}
+
+function backToSearchTop() {
+  return doSearch(false, true);
+}
+
+function notePositionScrollIntent(event) {
+  if (event.type === "keydown" && (event.isComposing || event.defaultPrevented ||
+      !["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key) ||
+      event.target.closest("input, textarea, select, button, a, [contenteditable]"))) return;
+  if (!positionControlScroll || positionControlScroll.key !== getSearchViewKey()) resetPositionControlScroll();
+  positionControlScroll.until = Date.now() + 1500;
+}
+
+function updateReturnPositionOnScroll() {
+  const progress = positionControlScroll;
+  if (progress?.key !== getSearchViewKey()) return;
+  const top = getResultScrollTop();
+  if (Date.now() <= progress.until) progress.distance += Math.abs(top - progress.last);
+  progress.last = top;
+  if (!positionRestore && progress.distance > Math.max(1200, DOM.resultsContainer.clientHeight * 2)) {
+    setReturnPositionTarget();
+    updateSearchPositionControls();
+  }
+}
+
+function jumpToSearchResult(value) {
+  if (!/^\d+$/.test(value)) { updateCurrentResultPosition(); return; }
+  const requested = Number(value);
+  if (!Number.isSafeInteger(requested) || requested < 1 || !STATE.total) { updateCurrentResultPosition(); return; }
+  const index = Math.min(STATE.total - 1, Math.floor(requested) - 1);
+  const key = getSearchViewKey();
+  setReturnPositionTarget();
+  if (!positionRestore && !resultWindow?.invalid && STATE.results[index]) setResultScrollTop(getVirtualOffset(index));
+  else tryRestoreSearchPosition(key, { viewport: null, position: {
+    version: 1, key, index, offset: 0, anchorId: "",
+    loadedPage: Math.floor(index / STATE.pageSize) + 1, savedAt: Date.now()
+  }});
+  updateCurrentResultPosition();
+}
+
+function setupSearchPositionControls() {
+  for (const type of ["wheel", "touchstart", "touchmove", "pointerdown"]) {
+    DOM.resultsContainer.addEventListener(type, notePositionScrollIntent, { passive: true });
+    DOM.scrollTrack.addEventListener(type, notePositionScrollIntent, { passive: true });
+  }
+  document.addEventListener("keydown", notePositionScrollIntent);
+  DOM.resultsContainer.addEventListener("scroll", updateReturnPositionOnScroll, { passive: true });
+  DOM.returnToPositionBtn?.addEventListener("click", returnToSavedPosition);
+  DOM.backToTopBtn.addEventListener("click", backToSearchTop);
+  DOM.retryPositionBtn.addEventListener("click", () => tryRestoreSearchPosition(getSearchViewKey()));
+  DOM.cancelPositionBtn?.addEventListener("click", backToSearchTop);
+
+  let edit = null;
+  DOM.currentResultPosition?.addEventListener("focus", event => {
+    edit = { key: getSearchViewKey(), value: event.target.value };
+    event.target.select();
+  });
+  DOM.currentResultPosition?.addEventListener("keydown", event => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === "Enter" || event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") edit = null;
+      event.target.blur();
+    }
+  });
+  DOM.currentResultPosition?.addEventListener("blur", event => {
+    const previous = edit;
+    edit = null;
+    if (previous && previous.key === getSearchViewKey() && previous.value !== event.target.value)
+      jumpToSearchResult(event.target.value.trim());
+    else updateCurrentResultPosition();
+  });
 }
 let lastPositionPruneAt = 0;
 let displayedViewRevision = 0;
@@ -2382,7 +2372,8 @@ function rememberDisplayedSearchView() {
 function saveSearchPosition() {
   clearTimeout(positionSaveTimer);
   const view = displayedSearchView;
-  if (returnPositionTarget?.key === view?.key) return returnPositionTarget;
+  const target = view && getReturnPositionTarget(view.key);
+  if (target) return target;
   if (!view || positionRestore || readerOverlay || !view.results.length || !VSCROLL.heights.length) return null;
   if (STATE.results !== view.results || (STATE.isLoading && view.key !== getSearchViewKey())) return searchPositions.get(view.key) || null;
   const index = Math.min(findVirtualIndex(getResultScrollTop()), view.results.length - 1);
@@ -2421,29 +2412,7 @@ function saveSearchPosition() {
 }
 
 function setupSearchPositionSaving() {
-  const scrollIntent = event => {
-    if (event.type === "keydown" && (event.isComposing || event.defaultPrevented ||
-        !["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key) ||
-        event.target.closest("input, textarea, select, button, a, [contenteditable]"))) return;
-    if (!positionControlScroll || positionControlScroll.key !== getSearchViewKey()) resetPositionControlScroll();
-    positionControlScroll.until = Date.now() + 1500;
-  };
-  for (const type of ["wheel", "touchstart", "touchmove", "pointerdown"]) {
-    DOM.resultsContainer.addEventListener(type, scrollIntent, { passive: true });
-    DOM.scrollTrack.addEventListener(type, scrollIntent, { passive: true });
-  }
-  document.addEventListener("keydown", scrollIntent);
   DOM.resultsContainer.addEventListener("scroll", () => {
-    const progress = positionControlScroll;
-    if (progress?.key === getSearchViewKey()) {
-      const top = getResultScrollTop();
-      if (Date.now() <= progress.until) progress.distance += Math.abs(top - progress.last);
-      progress.last = top;
-      if (!positionRestore && progress.distance > Math.max(1200, DOM.resultsContainer.clientHeight * 2)) {
-        returnPositionTarget = null;
-        updateReturnPositionButton();
-      }
-    }
     if (positionRestore || STATE.isLoading || displayedSearchView?.key !== getSearchViewKey()) return;
     clearTimeout(positionSaveTimer);
     positionSaveTimer = setTimeout(saveSearchPosition, 250);
@@ -2460,11 +2429,9 @@ function setupSearchPositionSaving() {
 }
 
 function showPositionRestoreStatus(message, retry = false) {
-  const status = document.getElementById("search-position-status");
-  status.hidden = !message;
-  document.getElementById("retry-position-btn").hidden = !retry;
-  status.title = retry ? message : "";
-  updateReturnPositionButton();
+  DOM.retryPositionBtn.hidden = !retry;
+  DOM.positionRestoreStatus.title = retry ? message : "";
+  updateSearchPositionControls();
 }
 
 function cancelPositionRestore() {
@@ -2483,12 +2450,10 @@ function tryRestoreSearchPosition(key, options = {}) {
   const previous = positionRestore?.key === key && positionRestore.failed && !options.position ? positionRestore : null;
   let position = options.position || previous?.position || searchPositions.get(key);
   if (!validSearchPosition(position)) return false;
-  clearTimeout(searchTimer);
-  clearTimeout(filterSearchTimer);
-  filterSearchTimer = null;
+  cancelPendingSearchControls();
   if (!options.position && positionRestore?.key === key && !positionRestore.failed) return true;
   cancelPositionRestore();
-  returnPositionTarget = null;
+  setReturnPositionTarget();
   searchAbortController?.abort();
   cancelSearchPrefetch();
   searchId++;
@@ -2903,7 +2868,7 @@ function cloneSearchPageCache(cache) {
 function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const view = displayedSearchView;
   // Browsing from the top must not overwrite the snapshot offered by Return.
-  if (returnPositionTarget?.key === key) return searchViewSnapshots.get(key) || null;
+  if (getReturnPositionTarget(key)) return searchViewSnapshots.get(key) || null;
   if (!DOM.resultsContainer || !view || positionRestore || key !== view.key || view.loadedPage < 1) return null;
   const position = saveSearchPosition();
   const existing = searchViewSnapshots.get(key);
@@ -2959,9 +2924,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   const snapshot = searchViewSnapshots.get(key);
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
   if (!preserveRestore) cancelPositionRestore();
-  clearTimeout(filterSearchTimer);
-  filterSearchTimer = null;
-  clearTimeout(searchTimer);
+  cancelPendingSearchControls();
   if (searchAbortController) searchAbortController.abort();
   cancelSearchPrefetch();
   searchAbortController = new AbortController();
@@ -3155,10 +3118,10 @@ async function searchWithInitialFallback() {
   const key = getSearchViewKey(), entry = positionEntryId;
   prepareReturnPosition(key);
   if (searchViewSnapshots.has(key)) {
-    returnPositionTarget = null;
+    setReturnPositionTarget();
     return restoreSearchViewSnapshot(key);
   }
-  const position = returnPositionTarget;
+  const position = getReturnPositionTarget(key);
   const viewport = position ? await readSearchViewport(key) : null;
   if (entry !== positionEntryId || key !== getSearchViewKey()) return false;
   if (validSearchViewport(viewport, position)) return tryRestoreSearchPosition(key, {position, viewport});
@@ -3292,22 +3255,7 @@ function clearResultsSkeleton() {
 
 function doSearch(append, fromStart = false, restorePosition = false) {
   if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
-  if (!append) {
-    clearTimeout(searchTimer);
-    clearTimeout(filterSearchTimer);
-    filterSearchTimer = null;
-    if (fromStart && !positionRestore && getResultScrollTop() > 0) returnPositionTarget = null;
-    saveSearchViewSnapshot();
-    const previousKey = getSearchViewKey();
-    if (fromStart) saveSearchPosition();
-    cancelPositionRestore();
-    prepareReturnPosition(previousKey, !fromStart);
-    if (fromStart) keepPositionAfterStartOver(previousKey);
-    if (restorePosition) {
-      returnPositionTarget = null;
-      if (restoreSearchViewSnapshot(getSearchViewKey())) return;
-    }
-  }
+  if (!append && prepareSearchPositionNavigation({ fromStart, restorePosition })) return;
   if (append && STATE.isLoading) return;
   if (append && !STATE._loadedPage) append = false;
   if (!append) STATE.page = 1;
@@ -4115,7 +4063,7 @@ function updateCurrentResultPosition() {
     const index = findVirtualIndex(getResultScrollTop());
     if (document.activeElement !== label) label.value = index + 1;
   }
-  updateReturnPositionButton();
+  updateSearchPositionControls();
 }
 
 function updateLoadInfo() {
@@ -5666,6 +5614,7 @@ function setupResultDelegation() {
 async function init() {
   cacheDOM();
   await initSearchPositions();
+  setupSearchPositionControls();
   setupSearchPositionSaving();
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   STATE.sessionRestored = await restoreSearchSession();
@@ -5678,41 +5627,6 @@ async function init() {
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
   DOM.searchInput.addEventListener("input", debouncedSearch);
-  let positionEdit = null;
-  const jumpToResult = value => {
-    if (!/^\d+$/.test(value)) { updateCurrentResultPosition(); return; }
-    const requested = Number(value);
-    if (!Number.isSafeInteger(requested) || requested < 1 || !STATE.total) { updateCurrentResultPosition(); return; }
-    const index = Math.min(STATE.total - 1, Math.floor(requested) - 1);
-    returnPositionTarget = null;
-    if (!positionRestore && !resultWindow?.invalid && STATE.results[index]) setResultScrollTop(getVirtualOffset(index));
-    else tryRestoreSearchPosition(getSearchViewKey(), {viewport: null, position: {
-      version: 1, key: getSearchViewKey(), index, offset: 0, anchorId: "",
-      loadedPage: Math.floor(index / STATE.pageSize) + 1, savedAt: Date.now()
-    }});
-    updateCurrentResultPosition();
-  };
-  DOM.currentResultPosition?.addEventListener("focus", e => { positionEdit = {key: getSearchViewKey(), value: e.target.value}; e.target.select(); });
-  DOM.currentResultPosition?.addEventListener("keydown", e => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === "Enter" || e.key === "Escape") {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") positionEdit = null;
-      e.target.blur();
-    }
-  });
-  DOM.currentResultPosition?.addEventListener("blur", e => {
-    const edit = positionEdit; positionEdit = null;
-    if (edit && edit.key === getSearchViewKey() && edit.value !== e.target.value) jumpToResult(e.target.value.trim());
-    else updateCurrentResultPosition();
-  });
-  DOM.returnToPositionBtn?.addEventListener("click", () => {
-    const position = returnPositionTarget;
-    if (position?.key === getSearchViewKey()) tryRestoreSearchPosition(position.key, {position});
-  });
-  document.getElementById("retry-position-btn").addEventListener("click", () => tryRestoreSearchPosition(getSearchViewKey()));
-  document.getElementById("restart-position-btn").addEventListener("click", () => doSearch(false, true));
-  document.getElementById("cancel-position-btn")?.addEventListener("click", () => doSearch(false, true));
   DOM.searchInput.addEventListener("compositionstart", function() {
     searchComposing = true;
     clearTimeout(composeSafetyTimer);
