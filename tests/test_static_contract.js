@@ -206,8 +206,8 @@ test("Worker retains tokenizer and fuzzy edit distance", () => {
   assert.match(worker, /function tokenize/);
   assert.match(worker, /function editDistance/);
 });
-test("Worker retains wildcard conversion", () => {
-  assert.match(worker, /function wildcardPatternToRegExp/);
+test("Worker retains bounded wildcard matching", () => {
+  assert.match(worker, /function compileWildcardMatcher/);
 });
 test("Worker exclusively owns compact corpus loading and derived search indexes", () => {
   assert.match(worker, /fetchGzipJSON/);
@@ -397,7 +397,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /FolderUrl: getReaderFolderUrl\(rec\)/);
   assert.match(reader, /status\.hidden = true/);
   assertCode(reader, 'location.assign(folderNavigationTarget.href)');
-  assert.match(readerStore, /indexedDB\.open\(DB_NAME, 2\)/);
+  assert.match(readerStore, /indexedDB\.open\(DB_NAME, DB_VERSION\)/);
+  assert.match(readerStore, /DB_VERSION = 3/);
   assert.match(readerStore, /BOOKMARK_STORE_NAME = "bookmarks"/);
   assert.match(readerStore, /SCHEMA_VERSION = 1/);
   assert.match(readerStore, /normalizeHistoryEntry/);
@@ -461,7 +462,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(sw, /READER_RUNTIME_PATHS\.has\(url\.pathname\)/);
   assertCode(sw, 'VoiceOfMLReaderResources.runtimePaths("/search/static/")');
   assert.match(sw, /readerNavigation = event\.request\.mode === "navigate" && url\.pathname === "\/search\/static\/reader\.html"/);
-  assert.match(sw, /cacheKey = readerNavigation \? "\/search\/static\/reader\.html" : event\.request/);
+  assert.match(sw, /cacheKey = readerNavigation \? "\/search\/static\/reader\.html" : searchNavigation \? "\/search\/" : event\.request/);
   assert.match(sw, /fetch\(event\.request\)[\s\S]*cache\.put\(cacheKey/);
 });
 test("mobile shell hides sidebars before application startup", () => {
@@ -505,7 +506,7 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.doesNotMatch(workflow, /node tests\//);
   assert.match(workflow, /node-version: '22'/);
   assert.match(workflow, /node scripts\/compose_app\.mjs/);
-  assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify/);
+  assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify --target=es2020/);
   assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" --minify'));
   assert.match(workflow, /node scripts\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/copy_reader_vendor\.mjs _site\/static\/vendor/);

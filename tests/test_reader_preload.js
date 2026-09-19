@@ -49,7 +49,7 @@ function loadPreload({ chunks = [], header, security = true, blockRead = false, 
     };
   }
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-contract.js"), "utf8"), sandbox);
-  return { preload: sandbox.__VOICE_PDF_PRELOAD__, contract: sandbox.VoiceOfMLReader, timers, listeners, state, reading };
+  return { sandbox, preload: sandbox.__VOICE_PDF_PRELOAD__, contract: sandbox.VoiceOfMLReader, timers, listeners, state, reading };
 }
 
 async function main() {
@@ -70,6 +70,11 @@ async function main() {
   await relative.preload.manifest;
 
   const image = loadPreload({ chunks: [Buffer.from("ok")], saveData: false });
+  image.sandbox.VoiceOfMLReader = { pdfPageSource() {}, txtRelativePath() {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-contract.js"), "utf8"), image.sandbox);
+  assert.strictEqual(typeof image.sandbox.VoiceOfMLReader.assetFields, "function");
+  assert.strictEqual(image.sandbox.__VOICE_PDF_PRELOAD__, image.preload);
+  assert.strictEqual(image.state.fetches, 1);
   assert.strictEqual(image.state.imageSrcs.length, 1);
   const imageRequest = image.preload.manifest;
   image.preload.dispose();

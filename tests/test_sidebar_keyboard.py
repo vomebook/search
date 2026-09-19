@@ -21,6 +21,33 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(self.fixture.errors, [])
         self.fixture.tearDown()
 
+    def test_result_repository_is_text_in_attributes_and_labels(self):
+        result = self.page.evaluate('''() => {
+          const repo = 'x"><img src=x onerror="window.injected=true">';
+          const row = document.createElement('div');
+          row.innerHTML = buildResultHTML({Repo:repo, File:'book', Extension:'txt', Folder:['docs'], Size:1}, 0);
+          DOM.resultsList.append(row);
+          return {images:row.querySelectorAll('img').length,
+            attributes:Array.from(row.querySelectorAll('[data-repo]'), node=>node.dataset.repo),
+            label:row.querySelector('.result-repo-tag').textContent, repo};
+        }''')
+        self.assertEqual(result['images'], 0)
+        self.assertEqual(result['attributes'], [result['repo']] * 3)
+        self.assertEqual(result['label'], result['repo'])
+
+    def test_navigation_preserves_zero_and_exact_byte_size_limits(self):
+        result = self.page.evaluate('''() => {
+          ROUTER.apply=()=>{};
+          STATE.filterMaxSize=0;STATE.filterMinSize=null;
+          ROUTER.navigate('repo','Test');
+          const max=new URLSearchParams(location.hash.split('?')[1]).get('max_size');
+          const sizes=[0,1,1024,1025,1048577,1073741825];
+          return {max, parsed:parseSizeStr(max), display:bytesToDisplay(0),
+            roundtrips:sizes.map(size=>parseSizeStr(fmtSizeUrl(size)))};
+        }''')
+        self.assertEqual(result, dict(max='0B', parsed=0, display=dict(value='0',unit='B'),
+                                     roundtrips=[0,1,1024,1025,1048577,1073741825]))
+
     def test_navigation_and_folder_click_preserve_common_url_options(self):
         result = self.page.evaluate('''() => {
           ROUTER.apply=()=>{};

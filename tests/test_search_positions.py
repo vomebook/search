@@ -47,6 +47,26 @@ class SearchPositionTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('pagingRequests.slice(0,2)'), [1, 2])
         self.assertGreaterEqual(self.page.evaluate('STATE.results.length'), 200)
 
+    def test_old_database_is_reset_without_importing_legacy_positions(self):
+        self.page.goto(self.fixture.origin + '/search/manifest.json')
+        self.page.evaluate('''async saved => {
+          await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase('voice-search-positions');r.onsuccess=resolve;r.onerror=()=>reject(r.error);});
+          await new Promise((resolve,reject)=>{
+            const r=indexedDB.open('voice-search-positions',3);
+            r.onupgradeneeded=()=>{for(const name of ['positions','viewports','recent-pages']) r.result.createObjectStore(name,{keyPath:'key'});};
+            r.onsuccess=()=>{const db=r.result,tx=db.transaction('positions','readwrite');tx.objectStore('positions').put(saved);tx.oncomplete=()=>{db.close();resolve();};};
+            r.onerror=()=>reject(r.error);
+          });
+        }''', self.saved)
+        self.page.goto(self.fixture.origin + '/search/#/?q=paging-original&local=0')
+        self.page.wait_for_function('searchPositionDB?.version === 4 && !STATE.isLoading')
+        self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 0)
+        self.page.evaluate('setResultScrollTop(getVirtualOffset(25)+10);saveSearchPosition()')
+        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index === 25')
+        self.saved = self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.page.reload(wait_until='domcontentloaded')
+        self.assert_position()
+
     def test_evicted_results_after_filters_and_repo_round_trip(self):
         for ext in ['pdf', 'epub', 'txt']:
             self.page.evaluate('ext=>{STATE.filterExtensions=[ext]; scheduleFilterSearch()}', ext)

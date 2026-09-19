@@ -1,6 +1,5 @@
 // Shared download admission and paced browser handoff controller.
-if (!globalThis.VoiceOfMLDownloadController) {
-  globalThis.VoiceOfMLDownloadController = (() => {
+(function (root) {
     function createDownloadController({
       buildCheckUrl,
       buildDownloadUrl,
@@ -175,6 +174,5 @@ if (!globalThis.VoiceOfMLDownloadController) {
       };
     }
 
-    return { createDownloadController };
-  })();
-}
+    root.VoiceOfMLDownloadController = { createDownloadController };
+})(typeof self !== "undefined" ? self : globalThis);

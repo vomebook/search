@@ -25,23 +25,27 @@ class ReaderNavigationHostTests(unittest.TestCase):
         self.assertEqual(self.fixture.errors, [])
         self.fixture.tearDown()
 
-    def test_composed_app_starts_with_legacy_html_without_navigation_script(self):
+    def test_bundled_shell_starts_without_separate_dependency_scripts(self):
         root = Path(__file__).resolve().parents[1]
-        legacy = subprocess.check_output(['git', '-c', f'safe.directory={root}', 'show', '888265a:index.html'], cwd=root)
-        app = subprocess.check_output(['node', 'scripts/compose_app.mjs'], cwd=root)
-        old_contract = subprocess.check_output(['git', '-c', f'safe.directory={root}', 'show', 'HEAD:static/reader-contract.js'], cwd=root)
+        shell = subprocess.check_output(['node', '--input-type=module', '-e', '''
+import {readFileSync} from 'node:fs';
+import {stripBundledScripts} from './scripts/compose_app.mjs';
+process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
+'''], cwd=root)
+        bundle = subprocess.check_output(['node', 'scripts/compose_app.mjs'], cwd=root)
         with self.fixture.browser.new_context(service_workers='block') as context:
             page = context.new_page()
             page.on('pageerror', lambda error: self.fixture.errors.append(str(error)))
             page.add_init_script(paging.FETCH_SCRIPT)
             page.route('**/api/**', lambda route: route.fulfill(content_type='application/json', body='[]'))
-            page.route('**/static/app.js', lambda route: route.fulfill(content_type='text/javascript', body=app))
-            page.route('**/static/reader-contract.js', lambda route: route.fulfill(content_type='text/javascript', body=old_contract))
-            page.route(self.fixture.origin + '/search/', lambda route: route.fulfill(content_type='text/html', body=legacy))
+            page.route('https://vomebook-hitokoto.hf.space/**', lambda route: route.fulfill(body='{}'))
+            page.route('**/static/app.js', lambda route: route.fulfill(content_type='text/javascript', body=bundle))
+            page.route(self.fixture.origin + '/search/', lambda route: route.fulfill(content_type='text/html', body=shell))
             page.goto(self.fixture.origin + '/search/#/?q=paging&local=0', wait_until='domcontentloaded')
-            page.wait_for_function('typeof VoiceOfMLReaderNavigation === "object" && STATE.results.length > 0')
-            self.assertEqual(page.locator('script[src*="reader-navigation"]').count(), 0)
-            self.assertTrue(page.evaluate('typeof VoiceOfMLReader.assetFields === "function"'))
+            page.wait_for_function('STATE.results.length === 100 && !STATE.isLoading')
+            self.assertEqual(page.locator('script[src]').count(), 1)
+            self.assertTrue(page.evaluate('typeof VoiceOfMLSearchSession.createSearchSession === "function"'))
+            self.assertTrue(page.evaluate('typeof VoiceOfMLDownloadController.createDownloadController === "function"'))
             self.assertTrue(page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")'))
             self.assertTrue(page.evaluate('closeReaderOverlay()'))
 

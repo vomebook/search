@@ -2,21 +2,16 @@ importScripts("/search/static/reader-resources.js");
 const CACHE_NAME = "vomebook-search-v1.0.0";
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 let cachePruning = Promise.resolve();
-function pruneHashedAssets(cache) {
+function isRetiredAsset(pathname) {
+  return CURRENT_HASHED_ASSETS.length > 0 &&
+    (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/[^/]+\.(js|mjs|css)$/.test(pathname)) &&
+    !CURRENT_HASHED_ASSETS.includes(pathname);
+}
+function pruneHashedAssets(cache, resetShell = false) {
   cachePruning = cachePruning.catch(() => {}).then(async () => {
-    const groups = new Map();
-    const current = new Set(CURRENT_HASHED_ASSETS);
     for (const request of await cache.keys()) {
       const url = new URL(request.url);
-      const match = url.pathname.match(/^(.*)\.[0-9a-f]{12}\.(js|mjs|css)$/);
-      if (!match || current.has(url.pathname)) continue;
-      const key = match[1] + "." + match[2];
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(request);
-    }
-    // Retain two preceding variants for cached shells and already-open tabs.
-    for (const requests of groups.values()) {
-      for (const request of requests.slice(0, -2)) await cache.delete(request);
+      if (isRetiredAsset(url.pathname) || (resetShell && url.pathname === "/search/static/reader.html")) await cache.delete(request);
     }
   });
   return cachePruning;
@@ -46,9 +41,7 @@ const READER_RUNTIME_PATHS = new Set(VoiceOfMLReaderResources.runtimePaths("/sea
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_URLS).catch((err) => {
-        console.warn("[SW] precache partial failure:", err);
-      });
+      return cache.addAll(PRECACHE_URLS);
     }).then(() => self.skipWaiting())
   );
 });
@@ -58,7 +51,7 @@ self.addEventListener("activate", (event) => {
       return Promise.all(
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
       );
-    }).then(() => caches.open(CACHE_NAME).then(pruneHashedAssets).catch(() => {})).then(() => self.clients.claim())
+    }).then(() => caches.open(CACHE_NAME).then(cache => pruneHashedAssets(cache, true)).catch(() => {})).then(() => self.clients.claim())
   );
 });
 self.addEventListener("fetch", (event) => {
@@ -66,9 +59,12 @@ self.addEventListener("fetch", (event) => {
   if (url.hostname !== self.location.hostname || (event.request.method || "GET") !== "GET") {
     return;
   }
+  // Retired URLs must reach the server; never return or repopulate old cache entries.
+  if (isRetiredAsset(url.pathname)) return;
   const readerNavigation = event.request.mode === "navigate" && url.pathname === "/search/static/reader.html";
-  const networkFirst = readerNavigation || READER_RUNTIME_PATHS.has(url.pathname);
-  const cacheKey = readerNavigation ? "/search/static/reader.html" : event.request;
+  const searchNavigation = event.request.mode === "navigate" && ["/search/", "/search/index.html"].includes(url.pathname);
+  const networkFirst = searchNavigation || readerNavigation || READER_RUNTIME_PATHS.has(url.pathname);
+  const cacheKey = readerNavigation ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
   const cachePromise = caches.open(CACHE_NAME).catch(() => null);
   const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey) : undefined).catch(() => undefined);
   // Content-addressed assets never need a revalidation request on cache hits.

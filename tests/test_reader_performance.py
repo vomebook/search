@@ -1442,7 +1442,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertAlmostEqual(page.locator("#chapter-10").evaluate("element => element.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top"), 8, delta=3)
         context.close()
 
-    def test_reader_store_migrates_history_and_keeps_bookmarks_when_cleared(self):
+    def test_reader_store_resets_old_history_and_keeps_current_bookmarks(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
         page.goto(f"{self.origin}/search/static/reader.html", wait_until="domcontentloaded")
@@ -1462,14 +1462,15 @@ class ReaderPerformanceTest(unittest.TestCase):
         result = page.evaluate("""async (url) => {
           const legacy = await VoiceOfMLReaderStore.get('legacy');
           await VoiceOfMLReaderStore.putBookmark({id: url + '\\0page:1', url, label: '第 1 页', createdAt: 1});
-          await new Promise((resolve, reject) => { const request = indexedDB.open('voiceofml-reader', 2); request.onerror = () => reject(request.error); request.onsuccess = () => { const db = request.result, tx = db.transaction(['entries', 'bookmarks'], 'readwrite'); tx.objectStore('entries').put({url: 42, lastReadAt: 2}); tx.objectStore('entries').put({url: 'future', lastReadAt: 3, schemaVersion: 2}); tx.objectStore('bookmarks').put({id: 42, url, createdAt: 2}); tx.objectStore('bookmarks').put({id: 'future', url, createdAt: 3, schemaVersion: 2}); tx.oncomplete = () => { db.close(); resolve(); }; }; });
           const historyBeforeClear = await VoiceOfMLReaderStore.list();
           const bookmarkEntries = await VoiceOfMLReaderStore.listBookmarks(url);
-          const raw = await new Promise((resolve, reject) => { const request = indexedDB.open('voiceofml-reader', 2); request.onerror = () => reject(request.error); request.onsuccess = () => { const db = request.result, tx = db.transaction(['entries', 'bookmarks'], 'readonly'), historyRequest = tx.objectStore('entries').getAll(), bookmarkRequest = tx.objectStore('bookmarks').getAll(); tx.oncomplete = () => { const value = {history: historyRequest.result, bookmarks: bookmarkRequest.result}; db.close(); resolve(value); }; }; });
           await VoiceOfMLReaderStore.clearHistory();
-          return {legacy: !!legacy, legacySchema: legacy.schemaVersion, schema: VoiceOfMLReaderStore.SCHEMA_VERSION, validHistory: historyBeforeClear.every(entry => typeof entry.url === 'string' && entry.schemaVersion === 1), corruptDeleted: !raw.history.some(entry => typeof entry.url !== 'string') && !raw.bookmarks.some(entry => typeof entry.id !== 'string'), futureKept: raw.history.some(entry => entry.schemaVersion === 2) && raw.bookmarks.some(entry => entry.schemaVersion === 2), history: (await VoiceOfMLReaderStore.list()).length, bookmarks: bookmarkEntries.length, bookmarkSchema: bookmarkEntries[0].schemaVersion};
+          return {legacy: !!legacy, schema: VoiceOfMLReaderStore.SCHEMA_VERSION,
+            validHistory: historyBeforeClear.every(entry => typeof entry.url === 'string' && entry.schemaVersion === 1),
+            history: (await VoiceOfMLReaderStore.list()).length, bookmarks: (await VoiceOfMLReaderStore.listBookmarks(url)).length,
+            bookmarkSchema: bookmarkEntries[0].schemaVersion};
         }""", source)
-        self.assertEqual(result, {"legacy": True, "legacySchema": 1, "schema": 1, "validHistory": True, "corruptDeleted": True, "futureKept": True, "history": 0, "bookmarks": 1, "bookmarkSchema": 1})
+        self.assertEqual(result, {"legacy": False, "schema": 1, "validHistory": True, "history": 0, "bookmarks": 1, "bookmarkSchema": 1})
         context.close()
 
     def test_mobile_pdf_rendering_uses_one_slot_and_seven_canvases(self):

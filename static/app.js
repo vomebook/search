@@ -2363,14 +2363,12 @@ async function initSearchPositions() {
   await new Promise(resolve => {
     const timer = setTimeout(resolve, 1500);
     try {
-      const request = indexedDB.open("voice-search-positions", 3);
+      const request = indexedDB.open("voice-search-positions", 4);
       request.onupgradeneeded = () => {
-        for (const name of ["positions", "viewports"]) if (!request.result.objectStoreNames.contains(name)) {
-          const store = request.result.createObjectStore(name, { keyPath: "key" });
-          store.createIndex("savedAt", "savedAt");
-        }
-        if (!request.result.objectStoreNames.contains("recent-pages")) {
-          const store = request.result.createObjectStore("recent-pages", {keyPath: "id"});
+        const db = request.result;
+        for (const name of Array.from(db.objectStoreNames)) db.deleteObjectStore(name);
+        for (const name of ["positions", "viewports", "recent-pages"]) {
+          const store = db.createObjectStore(name, {keyPath: name === "recent-pages" ? "id" : "key"});
           store.createIndex("savedAt", "savedAt");
         }
       };

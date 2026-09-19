@@ -100,6 +100,28 @@ test("registers one versioned message protocol listener", () => {
   assert.strictEqual(typeof makeWorker().listeners.message, "function");
 });
 
+test("bounded wildcards preserve regex case, UTF-16 and line-terminator semantics", () => {
+  const { context } = makeWorker();
+  const alphabet = ["a", "A", "?", "*", "\n", "\r", "\u2028", "\u2029", ".", "[", "İ", "ı", "ſ", "K", "Σ", "σ", "ς", "ß", "😀"];
+  let seed = 17;
+  const random = n => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % n; };
+  const string = n => Array.from({length: random(n)}, () => alphabet[random(alphabet.length)]).join("");
+  const pairs = alphabet.flatMap(text => alphabet.map(pattern => [text, pattern]));
+  for (let i = 0; i < 1500; i++) pairs.push([string(20), string(7) + "*"]);
+  for (const [text, pattern] of pairs) {
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    const expected = new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "i").test(text);
+    assert.strictEqual(context.compileWildcardMatcher(pattern).test(text), expected, JSON.stringify([text, pattern]));
+  }
+  vm.runInContext('if (compileWildcardMatcher("*a".repeat(100)+"b").test("a".repeat(120))) throw new Error("bad match");', context, {timeout: 1000});
+});
+
+test("wildcard search returns complete IDs for repeated-star patterns", async () => {
+  const {worker} = await loaded([{...records[0], File: "a".repeat(120)}, {...records[1], File: "b"}]);
+  assert.deepStrictEqual((await worker.request("local-search", {q:"*a".repeat(10)+"a", exact:true})).records.map(r=>r.File), ["a".repeat(120)]);
+  assert.strictEqual((await worker.request("local-search", {q:"*a".repeat(10)+"b", exact:true})).total, 0);
+});
+
 test("native Foliate books are eligible for repository-scoped random reading", async () => {
   for (const extension of ["mobi", "azw", "azw3", "fb2", "fbz"]) {
     const { worker, metadata } = await loaded([{ ...records[0], Extension: extension }]);
@@ -209,7 +231,7 @@ test("directory indexes reuse only their repository and are bounded and replaced
 test("cached pages bypass matching and locate anchors in the complete filtered order", async () => {
   const { worker } = await loaded();
   const first = await worker.request("local-search", {q: "alpha", exact: false, pageSize: 1});
-  vm.runInContext('wildcardPatternToRegExp = () => { throw new Error("unexpected scan"); }; literalSearch = () => { throw new Error("unexpected scan"); };', worker.context);
+  vm.runInContext('compileWildcardMatcher = () => { throw new Error("unexpected scan"); }; literalSearch = () => { throw new Error("unexpected scan"); };', worker.context);
   const later = await worker.request("local-search", {q: "alpha", exact: false, pageSize: 1, page: 2,
     anchorId: "Repo/A\0docs/child/beta alpha.pdf"});
   assert.strictEqual(later.anchor_index, 1);

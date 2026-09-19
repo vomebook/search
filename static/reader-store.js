@@ -5,6 +5,7 @@
   const BOOKMARK_STORE_NAME = "bookmarks";
   const MAX_ENTRIES = 200;
   const SCHEMA_VERSION = 1;
+  const DB_VERSION = 3;
   let databasePromise = null;
   const subscribers = new Set();
   const storeChannel =
@@ -43,18 +44,15 @@
   function openDatabase() {
     if (databasePromise) return databasePromise;
     const opening = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, 2);
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = () => {
         const database = request.result;
-        if (!database.objectStoreNames.contains(STORE_NAME)) {
-          const store = database.createObjectStore(STORE_NAME, { keyPath: "url" });
-          store.createIndex("lastReadAt", "lastReadAt");
-        }
-        if (!database.objectStoreNames.contains(BOOKMARK_STORE_NAME)) {
-          const bookmarks = database.createObjectStore(BOOKMARK_STORE_NAME, { keyPath: "id" });
-          bookmarks.createIndex("url", "url");
-          bookmarks.createIndex("createdAt", "createdAt");
-        }
+        for (const name of Array.from(database.objectStoreNames)) database.deleteObjectStore(name);
+        const store = database.createObjectStore(STORE_NAME, { keyPath: "url" });
+        store.createIndex("lastReadAt", "lastReadAt");
+        const bookmarks = database.createObjectStore(BOOKMARK_STORE_NAME, { keyPath: "id" });
+        bookmarks.createIndex("url", "url");
+        bookmarks.createIndex("createdAt", "createdAt");
       };
       request.onsuccess = () => {
         const database = request.result;
@@ -92,11 +90,8 @@
     });
   }
 
-  function hasFutureSchema(entry) {
-    return Number(entry?.schemaVersion) > SCHEMA_VERSION;
-  }
   function normalizeHistoryEntry(entry) {
-    if (!entry || hasFutureSchema(entry) || typeof entry.url !== "string" || !entry.url)
+    if (!entry || typeof entry.url !== "string" || !entry.url)
       return null;
     return {
       ...entry,
@@ -109,7 +104,6 @@
   function normalizeBookmarkEntry(entry) {
     if (
       !entry ||
-      hasFutureSchema(entry) ||
       typeof entry.id !== "string" ||
       !entry.id ||
       typeof entry.url !== "string" ||
@@ -131,12 +125,11 @@
       const request = store.get(url);
       request.onsuccess = () => {
         const raw = request.result || null,
-          entry = normalizeHistoryEntry(raw);
-        if (raw && !entry && !hasFutureSchema(raw)) {
+          entry = raw?.schemaVersion === SCHEMA_VERSION ? normalizeHistoryEntry(raw) : null;
+        if (raw && !entry) {
           store.delete(url);
           resolve(null);
         } else {
-          if (entry && raw.schemaVersion !== SCHEMA_VERSION) store.put(entry);
           resolve(entry);
         }
       };
@@ -195,11 +188,10 @@
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor || entries.length >= limit) return resolve(entries);
-        const entry = normalize(cursor.value);
+        const entry = cursor.value.schemaVersion === SCHEMA_VERSION ? normalize(cursor.value) : null;
         if (entry) {
           entries.push(entry);
-          if (cursor.value.schemaVersion !== SCHEMA_VERSION) cursor.update(entry);
-        } else if (!hasFutureSchema(cursor.value)) cursor.delete();
+        } else cursor.delete();
         cursor.continue();
       };
       request.onerror = () => reject(request.error);
@@ -262,6 +254,7 @@
   }
   root.VoiceOfMLReaderStore = Object.freeze({
     DB_NAME,
+    DB_VERSION,
     MAX_ENTRIES,
     SCHEMA_VERSION,
     get,
