@@ -560,6 +560,7 @@ const downloadController = VoiceOfMLDownloadController.createDownloadController(
   buildDownloadUrl,
   triggerDownload: url => triggerDownload(url),
   showToast,
+  isSpeculativeAllowed: () => !document.hidden && navigator.onLine,
   isBatchActive: () => !!(downloadBatch && !downloadBatch.done),
   timeout: DOWNLOAD_CHECK_TIMEOUT,
 });
@@ -590,7 +591,11 @@ function renderDownloadBatch() {
     panel.innerHTML = '<span role="status" aria-live="polite"></span><button type="button" data-queue="cancel">取消待下载</button><button type="button" data-queue="retry">重试失败项</button><button type="button" data-queue="close">关闭</button>';
     panel.addEventListener("click", event => {
       const action = event.target.dataset.queue;
-      if (action === "cancel") { downloadBatch.cancelled = true; renderDownloadBatch(); }
+      if (action === "cancel") {
+        downloadBatch.cancelled = true;
+        downloadBatch.abortController?.abort();
+        renderDownloadBatch();
+      }
       if (action === "retry" && downloadBatch.done) startDownloadBatch(downloadBatch.failed);
       if (action === "close" && downloadBatch.done) { panel.remove(); downloadBatch = null; }
     });
@@ -614,7 +619,10 @@ function startDownloadBatch(items) {
   if (downloadBatch && !downloadBatch.done) { showToast("已有批量任务，请先完成或取消"); return; }
   items = Array.from(new Map(items.filter(item => item.link).map(item => [item.link, item])).values());
   if (!items.length) { showToast("未选中任何文件"); return; }
-  const batch = { items, next: 0, started: 0, failed: [], cancelled: false, done: false };
+  const batch = {
+    items, next: 0, started: 0, failed: [], cancelled: false, done: false,
+    abortController: new AbortController(),
+  };
   downloadBatch = batch;
   renderDownloadBatch();
   Promise.all([runDownloadBatchWorker(batch), runDownloadBatchWorker(batch)]).then(() => {
@@ -975,13 +983,15 @@ async function doSearchLocal(params) {
 function isValidSearchResponse(data, expectedPage, expectedPageSize) {
   return !!data
     && Array.isArray(data.results)
+    && data.results.length <= expectedPageSize
     && data.results.every(function(item) { return !!item && typeof item === "object" && !Array.isArray(item); })
     && Number.isSafeInteger(data.total)
     && data.total >= 0
     && Number.isInteger(data.page)
     && data.page === expectedPage
     && Number.isInteger(data.page_size)
-    && data.page_size === expectedPageSize;
+    && data.page_size === expectedPageSize
+    && (data.results.length > 0 || (expectedPage - 1) * expectedPageSize >= data.total);
 }
 
 // One entry owns its network request, deadline and cancellation subscriptions.
