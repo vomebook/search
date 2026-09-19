@@ -80,9 +80,9 @@ async function request(url, options = {}) {
     assert.strictEqual(response.statusCode, 200, asset);
     assert.ok(response.body.length > 0, `${asset}: empty response`);
     if (/app\.[0-9a-f]{12}\.js$/.test(asset)) {
-      const worker = response.body.toString('utf8').match(/\/search\/static\/index-worker\.[0-9a-f]{12}\.js/);
+      const worker = response.body.toString('utf8').match(/(?:\/search\/)?static\/index-worker\.[0-9a-f]{12}\.js/);
       assert.ok(worker, 'app must pin its Worker');
-      assert.strictEqual((await request(BASE_URL + worker[0])).statusCode, 200);
+      assert.strictEqual((await request(new URL(worker[0], BASE_URL + '/search/').href)).statusCode, 200);
     }
   }
   for (const area of ["initial", "sidebar"]) {
