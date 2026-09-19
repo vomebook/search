@@ -44,17 +44,20 @@ jobs:
           node scripts/copy_reader_vendor.mjs _site/static/vendor
           node scripts/compose_app.mjs > "$RUNNER_TEMP/app-composed.js"
           npx --yes esbuild@0.28.2 "$RUNNER_TEMP/app-composed.js" --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
-          npx --yes esbuild@0.28.2 static/reader-contract.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-contract.js
-          npx --yes esbuild@0.28.2 static/reader-navigation.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-navigation.js
-          npx --yes esbuild@0.28.2 static/reader-store.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-store.js
+           npx --yes esbuild@0.28.2 static/reader-contract.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-contract.js
+           npx --yes esbuild@0.28.2 static/reader-navigation.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-navigation.js
+           npx --yes esbuild@0.28.2 static/search-session.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/search-session.js
+           npx --yes esbuild@0.28.2 static/download-controller.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/download-controller.js
+           npx --yes esbuild@0.28.2 static/reader-store.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-store.js
           npx --yes esbuild@0.28.2 static/reader-request-manager.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-request-manager.js
           npx --yes esbuild@0.28.2 static/reader-chapter-repository.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-chapter-repository.js
           npx --yes esbuild@0.28.2 static/reader-scroll-anchor.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-scroll-anchor.js
           npx --yes esbuild@0.28.2 static/reader-section-virtualizer.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-section-virtualizer.js
           npx --yes esbuild@0.28.2 static/reader-runtime.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-runtime.js
-          npx --yes esbuild@0.28.2 static/reader-format-adapters.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-format-adapters.js
-          npx --yes esbuild@0.28.2 static/reader-security.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-security.js
-          npx --yes esbuild@0.28.2 static/reader.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader.js
+           npx --yes esbuild@0.28.2 static/reader-format-adapters.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-format-adapters.js
+           npx --yes esbuild@0.28.2 static/reader-security.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-security.js
+           npx --yes esbuild@0.28.2 static/reader-pdf-text.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader-pdf-text.js
+           npx --yes esbuild@0.28.2 static/reader.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/reader.js
           npx --yes esbuild@0.28.2 static/reader-chapter-search.mjs static/reader-chapter-search-worker.mjs --minify --target=es2019 --charset=utf8 --legal-comments=none --outdir=_site/static --out-extension:.js=.mjs
           npx --yes esbuild@0.28.2 static/index-worker.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/static/index-worker.js
           npx --yes esbuild@0.28.2 static/style.css --minify --outfile=_site/static/style.css

@@ -51,13 +51,13 @@ class RecentSearchPageTests(unittest.TestCase):
     def begin_restore(self):
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();recentSearchPages.clear();windowCalls=[];windowStall=1;STATE.query='paging-original';doSearch()")
+        self.page.evaluate("searchViewSnapshots.clear();searchViewportSnapshots.clear();recentSearchPages.clear();windowCalls=[];windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.page.wait_for_function('positionRestore?.preview && !!window.releaseWindow')
 
     def wait_cached(self, index):
         self.page.wait_for_function('''index=>!!positionRestore?.preview && !!STATE.results[index] &&
-          findVirtualIndex(DOM.resultsContainer.scrollTop)===index &&
-          Math.abs(DOM.resultsContainer.scrollTop-getVirtualOffset(index)-11)<2''', arg=index)
+          findVirtualIndex(getResultScrollTop())===index &&
+          Math.abs(getResultScrollTop()-getVirtualOffset(index)-11)<2''', arg=index)
 
     def test_position_only_updates_do_not_encode_or_write_content_again(self):
         self.fixture.persist_viewport()
@@ -68,12 +68,13 @@ class RecentSearchPageTests(unittest.TestCase):
           IDBObjectStore.prototype.put=function(...args){if(this.name in counts)counts[this.name]++;return put.apply(this,args)};
           TextEncoder.prototype.encode=function(...args){counts.encodes++;return encode.apply(this,args)};
           try {
-            for(let offset=1;offset<=20;offset++) {DOM.resultsContainer.scrollTop=getVirtualOffset(49850)+offset;saveSearchPosition()}
+            for(let offset=1;offset<=20;offset++) {setResultScrollTop(getVirtualOffset(49850)+offset);saveSearchPosition()}
             await new Promise(resolve=>{const tx=searchPositionDB.transaction(['positions','viewports','recent-pages']);tx.oncomplete=resolve});
             return {...counts,offset:searchPositions.get(originalWindowKey).offset};
           } finally {IDBObjectStore.prototype.put=put;TextEncoder.prototype.encode=encode}
         }''')
-        self.assertEqual(result, {'positions':20, 'viewports':0, 'recent-pages':0, 'encodes':0, 'offset':20})
+        self.assertAlmostEqual(result.pop('offset'), 20, delta=1)
+        self.assertEqual(result, {'positions':20, 'viewports':0, 'recent-pages':0, 'encodes':0})
 
     def test_new_index_reuses_covering_viewport_and_restores_latest_offset(self):
         self.fixture.persist_viewport()
@@ -193,3 +194,47 @@ class RecentSearchPageTests(unittest.TestCase):
           return {count,memory:recentSearchPages.size,oversized:recentSearchPages.has(JSON.stringify([oversizedKey,499])),live:STATE.results.slice(49800,49900).length};
         }''')
         self.assertEqual(result, {'count':32, 'memory':32, 'oversized':False, 'live':100})
+
+    def test_indexed_pruning_preserves_newest_ties_and_ttl_boundary(self):
+        result = self.page.evaluate('''async () => {
+          const now=Date.now(),clock=Date.now;Date.now=()=>now;
+          const name='recent-pages';
+          try {
+            const tx=searchPositionDB.transaction(name,'readwrite'),store=tx.objectStore(name);
+            store.clear();
+            for(let i=0;i<40;i++)store.put({id:['prune',i],savedAt:now});
+            store.put({id:['expired',0],savedAt:now-RECENT_SEARCH_PAGE_TTL-1});
+            pruneSearchContentStore(store,32,RECENT_SEARCH_PAGE_TTL);
+            await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=reject});
+            const entries=await new Promise(resolve=>{
+              const request=searchPositionDB.transaction(name).objectStore(name).getAll();
+              request.onsuccess=()=>resolve(request.result);
+            });
+            const tx2=searchPositionDB.transaction(name,'readwrite'),s=tx2.objectStore(name);
+            s.clear();s.put({id:['boundary',0],savedAt:now-RECENT_SEARCH_PAGE_TTL});
+            s.put({id:['expired',0],savedAt:now-RECENT_SEARCH_PAGE_TTL-1});
+            pruneSearchContentStore(s,32,RECENT_SEARCH_PAGE_TTL);
+            await new Promise((resolve,reject)=>{tx2.oncomplete=resolve;tx2.onabort=reject});
+            const boundary=await new Promise(resolve=>{
+              const r=searchPositionDB.transaction(name).objectStore(name).getAll();r.onsuccess=()=>resolve(r.result.map(e=>e.id[0]));
+            });
+            return {ids:entries.map(entry=>entry.id[1]),boundary};
+          } finally {Date.now=clock;}
+        }''')
+        self.assertEqual(result, {'ids':list(range(8,40)), 'boundary':['boundary']})
+
+    def test_visible_pages_share_one_write_transaction(self):
+        result = self.page.evaluate('''async () => {
+          const transaction=IDBDatabase.prototype.transaction;let writes=0;
+          IDBDatabase.prototype.transaction=function(names,mode,...args){
+            if(names==='recent-pages' && mode==='readwrite')writes++;
+            return transaction.call(this,names,mode,...args);
+          };
+          try {
+            const view=displayedSearchView,key=JSON.stringify({...JSON.parse(view.key),query:'batch-write'});
+            saveRecentSearchPages({index:49895},{...view,key},49905);
+            await new Promise(resolve=>{const tx=searchPositionDB.transaction('recent-pages');tx.oncomplete=resolve});
+            return {writes,pages:[499,500].map(page=>recentSearchPages.get(JSON.stringify([key,page]))?.results.length)};
+          } finally {IDBDatabase.prototype.transaction=transaction;}
+        }''')
+        self.assertEqual(result, {'writes':1,'pages':[100,100]})

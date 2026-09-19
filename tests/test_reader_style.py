@@ -10,6 +10,7 @@ from tests.test_reader_performance import (
     STORE_SCRIPT,
     PlaywrightError,
     epub_with_navigation,
+    minimal_docx,
     sync_playwright,
     zip_bytes,
 )
@@ -93,6 +94,55 @@ class ReaderStyleTests(unittest.TestCase):
         """)
         for selector in (".reader-error", ".epub-frame .reader-markdown", ".reader-markdown a"):
             self.assert_contrast(selector)
+
+    def open_theme_fixture(self, extension, data):
+        self.page.route("**/api/reader-content**", lambda route: route.fulfill(body=data))
+        source = urllib.parse.quote(
+            f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{'a' * 64}/docx-native-v2/document.docx"
+            if extension == "docx" else "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/theme.epub", safe=""
+        )
+        self.page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext={extension}&title=Theme")
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+
+    def check_document_theme_round_trip(self, selector):
+        target = self.page.locator(selector).first
+        initial = target.bounding_box()
+        for theme in ("dark", "light", "dark"):
+            if self.page.locator("html").get_attribute("data-theme") != theme:
+                self.page.locator("#history").click()
+                self.page.locator("#theme-toggle").click()
+                self.page.locator("#history").click()
+                self.settle()
+            colors = target.evaluate("e=>[getComputedStyle(e).color,getComputedStyle(e).backgroundColor]")
+            self.assertEqual(colors, ["rgb(231, 233, 235)", "rgba(0, 0, 0, 0)"] if theme == "dark"
+                             else ["rgb(0, 0, 0)", "rgb(255, 255, 255)"])
+            self.assertEqual(target.bounding_box(), initial)
+
+    def test_docx_shaded_runs_and_paragraphs_follow_theme(self):
+        with zipfile.ZipFile(io.BytesIO(minimal_docx())) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        files["word/document.xml"] = files["word/document.xml"].decode().replace(
+            "<w:p><w:r>", '<w:p><w:pPr><w:shd w:fill="FFFFFF"/></w:pPr><w:r>'
+            '<w:rPr><w:color w:val="000000"/><w:shd w:fill="FFFFFF"/></w:rPr>'
+        )
+        self.open_theme_fixture("docx", zip_bytes(files))
+        self.check_document_theme_round_trip(".reader-docx p span")
+        self.assertEqual(self.page.locator(".reader-docx p").first.evaluate(
+            "e=>getComputedStyle(e).backgroundColor"), "rgba(0, 0, 0, 0)")
+
+    def test_epub_legacy_font_colors_and_shading_follow_shadow_theme(self):
+        with zipfile.ZipFile(io.BytesIO(epub_with_navigation())) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        files["OEBPS/nav.xhtml"] = files["OEBPS/nav.xhtml"].decode().replace(
+            "</body>", '<p style="background-color:white"><font color="black" id="night-text" '
+            'style="background-color:white">Night text</font></p>'
+            '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">'
+            '<rect id="night-art" width="16" height="16" fill="red"/></svg></body>'
+        )
+        self.open_theme_fixture("epub", zip_bytes(files))
+        self.check_document_theme_round_trip("#night-text")
+        self.assertEqual(self.page.locator("#night-art").evaluate("e=>getComputedStyle(e).fill"), "rgb(255, 0, 0)")
+        self.assertEqual(self.page.locator("#night-art").evaluate("e=>getComputedStyle(e.ownerSVGElement).filter"), "none")
 
     def test_numeric_controls_have_visible_keyboard_focus_in_both_themes(self):
         self.page.locator(".page-controls").evaluate("element => element.hidden = false")

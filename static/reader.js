@@ -5,15 +5,16 @@ import "/search/static/reader-section-virtualizer.js";
 import "/search/static/reader-runtime.js";
 import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
+import { populatePdfTextLayer } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
 const PDFJS_URL = "/search/static/vendor/pdf.min.f80490490320.mjs";
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
 const PDFJS_WASM_URL = "/search/static/vendor/wasm/";
 const PDFJS_CMAP_URL = "/search/static/vendor/cmaps/";
 const PDFJS_STANDARD_FONT_URL = "/search/static/vendor/standard_fonts/";
-const MARKED_URL = "/search/static/vendor/marked.min.69451c8541c9.js";
-const PURIFY_URL = "/search/static/vendor/purify.min.c2f26ea4fc0d.js";
-const JSZIP_URL = "/search/static/vendor/jszip.min.acc7e41455a8.js";
+const MARKED_URL = "/search/static/vendor/marked.min.b147274a9ce2.js";
+const PURIFY_URL = "/search/static/vendor/purify.min.f263b05369e0.js";
+const JSZIP_URL = "/search/static/vendor/jszip.min.7f839b2d4688.js";
 const DOCX_PREVIEW_URL = "/search/static/vendor/docx-preview.min.051ef503f267.js";
 const READER_PROXY_TIMEOUT_MS = 120000;
 const readerRequestManager = VoiceOfMLReaderRequests.createReaderRequestManager();
@@ -593,6 +594,8 @@ function applyReaderTheme(theme, persist = true, animate = true) {
   readerThemeToggle.setAttribute("aria-pressed", String(readerTheme === "light"));
   const docxBody = content.querySelector(".docx-body");
   if (docxBody) docxBody.classList.toggle("reader-document-dark", readerTheme === "dark");
+  for (const article of content.querySelectorAll(".foliate-continuous > article"))
+    article.classList.toggle("reader-document-dark", readerTheme === "dark");
   if (persist) localStorage.setItem("theme", readerTheme);
   foliateScrollAnchors.restore(anchor);
 }
@@ -2645,31 +2648,7 @@ async function renderPdfText(page, shell) {
           y: point ? Math.max(0, Math.min(1, point[1] / Math.max(1, pdfViewport.height))) : 0
         };
       });
-    layer.textContent = "";
-    let positioned = false;
-    for (const item of text.items) {
-      const span = layer.ownerDocument.createElement("span");
-      span.textContent = item.str + (item.hasEOL ? "\n" : " ");
-      const point =
-        item.transform && pdfViewport.convertToViewportPoint
-          ? pdfViewport.convertToViewportPoint(item.transform[4], item.transform[5])
-          : null;
-      if (point) {
-        positioned = true;
-        const fontHeight = Math.hypot(item.transform[2] || 0, item.transform[3] || 0) || 12;
-        span.style.left = `${(point[0] / Math.max(1, pdfViewport.width)) * 100}%`;
-        span.style.top = `${(point[1] / Math.max(1, pdfViewport.height)) * 100}%`;
-        span.style.fontSize = `${(fontHeight / Math.max(1, pdfViewport.height)) * 100}%`;
-      } else span.style.position = "static";
-      layer.appendChild(span);
-    }
-    if (!positioned)
-      layer.textContent =
-        text.items
-          .map((item) => item.str + (item.hasEOL ? "\n" : " "))
-          .join("")
-          .trim() || "此页没有可提取文本";
-    else if (!layer.textContent.trim()) layer.textContent = "此页没有可提取文本";
+    populatePdfTextLayer(layer, text.items, pdfViewport);
     shell.dataset.textReady = "1";
     highlightPdfText(shell);
   } catch (error) {
@@ -3896,9 +3875,18 @@ async function createFoliateSection(section, index) {
     * { box-sizing: border-box; }
     .reader-section-body { display: block; color: inherit; line-height: inherit; }
     .reader-section-body > :first-child { margin-top: 0 !important; }
+    :host(.reader-document-dark) .reader-section-body,
+    :host(.reader-document-dark) .reader-section-body :where(:not(svg, svg *, img, canvas, video, audio, math, math *)) {
+      color: inherit !important;
+      background-color: transparent !important;
+      border-color: #4a5056 !important;
+      text-shadow: none !important;
+    }
     a { color: var(--reader-book-link) !important; }
+    :host(.reader-document-dark) .reader-section-body a { color: var(--reader-book-link) !important; }
     img, svg, video { max-width: 100%; height: auto; }
     mark.full-search-highlight { background: #ffd54f; color: #111; }
+    :host(.reader-document-dark) .reader-section-body mark.full-search-highlight { background: #ffd54f !important; color: #111 !important; }
     @media (prefers-contrast: more) {
       .reader-section-body a[href] { text-decoration: underline !important; }
       .reader-section-body mark.full-search-highlight { outline: 2px solid currentColor; }
@@ -3911,6 +3899,7 @@ async function createFoliateSection(section, index) {
   shadow.append(baseStyle, ...styles, sectionBody);
   await settleReaderImages(sectionBody);
   assertReaderActive();
+  article.classList.toggle("reader-document-dark", readerTheme === "dark");
   return article;
 }
 function setupFoliateWindow(stream, sections) {

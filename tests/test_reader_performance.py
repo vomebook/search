@@ -588,10 +588,10 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page = context.new_page()
                 page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 if extension == "md":
-                    page.route("**/static/vendor/marked.min.69451c8541c9.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
-                    page.route("**/static/vendor/purify.min.c2f26ea4fc0d.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
+                    page.route("**/static/vendor/marked.min.b147274a9ce2.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
+                    page.route("**/static/vendor/purify.min.f263b05369e0.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
                 if extension == "docx":
-                    page.route("**/static/vendor/jszip.min.acc7e41455a8.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=JSZIP_SCRIPT))
+                    page.route("**/static/vendor/jszip.min.7f839b2d4688.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=JSZIP_SCRIPT))
                     page.route("**/static/vendor/docx-preview.min.051ef503f267.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=DOCX_SCRIPT))
                 page.route("**/api/reader-content**", lambda route, _request, content_type=content_type, body=body: route.fulfill(status=200, content_type=content_type, body=body))
                 source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/matrix.{extension}"
@@ -1014,7 +1014,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(extension=extension):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844}); page = context.new_page()
                 page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-                page.route("**/static/vendor/jszip.min.acc7e41455a8.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.JSZip=function(){window.__archiveParserStarted=true};"))
+                page.route("**/static/vendor/jszip.min.7f839b2d4688.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.JSZip=function(){window.__archiveParserStarted=true};"))
                 page.route("**/static/vendor/docx-preview.min.051ef503f267.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.docx={renderAsync(){window.__archiveParserStarted=true}};"))
                 page.route("**/static/foliate-reader/view.js*", lambda route: route.fulfill(status=200, content_type="text/javascript", body="customElements.define('foliate-view', class extends HTMLElement { open() { window.__archiveParserStarted=true; throw new Error('parser must not start'); } });"))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/octet-stream", body=payload))
@@ -1053,8 +1053,8 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page = context.new_page()
                 page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 if extension == "md":
-                    page.route("**/static/vendor/marked.min.69451c8541c9.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.marked={parse:()=>'<h1>Markdown one</h1><p style=\"height:1000px\"></p><h2>Markdown two</h2>'};"))
-                    page.route("**/static/vendor/purify.min.c2f26ea4fc0d.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
+                    page.route("**/static/vendor/marked.min.b147274a9ce2.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.marked={parse:()=>'<h1>Markdown one</h1><p style=\"height:1000px\"></p><h2>Markdown two</h2>'};"))
+                    page.route("**/static/vendor/purify.min.f263b05369e0.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route, _request, body=body: route.fulfill(status=200, content_type="text/html" if extension == "html" else "text/markdown", body=body))
                 source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/toc.{extension}"
                 page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=TOC", wait_until="domcontentloaded")
@@ -1632,8 +1632,8 @@ class ReaderPerformanceTest(unittest.TestCase):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844})
                 page = context.new_page()
                 page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-                page.route("**/static/vendor/marked.min.69451c8541c9.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
-                page.route("**/static/vendor/purify.min.c2f26ea4fc0d.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
+                page.route("**/static/vendor/marked.min.b147274a9ce2.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
+                page.route("**/static/vendor/purify.min.f263b05369e0.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/markdown", body=b"# Markdown readable"))
                 source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/readme.{extension}"
                 page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=Markdown", wait_until="domcontentloaded")
@@ -1730,9 +1730,9 @@ class ReaderPerformanceTest(unittest.TestCase):
                     return fulfill
 
                 page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-                page.route("**/static/vendor/marked.min.69451c8541c9.js", timed("marked", "text/javascript", MARKED_SCRIPT))
-                page.route("**/static/vendor/purify.min.c2f26ea4fc0d.js", timed("purify", "text/javascript", PURIFY_SCRIPT))
-                page.route("**/static/vendor/jszip.min.acc7e41455a8.js", timed("jszip", "text/javascript", JSZIP_SCRIPT))
+                page.route("**/static/vendor/marked.min.b147274a9ce2.js", timed("marked", "text/javascript", MARKED_SCRIPT))
+                page.route("**/static/vendor/purify.min.f263b05369e0.js", timed("purify", "text/javascript", PURIFY_SCRIPT))
+                page.route("**/static/vendor/jszip.min.7f839b2d4688.js", timed("jszip", "text/javascript", JSZIP_SCRIPT))
                 page.route("**/static/vendor/epub.min.06eae1574510.js", timed("epub", "text/javascript", EPUB_SCRIPT))
                 page.route("**/static/vendor/docx-preview.min.051ef503f267.js", timed("docx", "text/javascript", DOCX_SCRIPT))
                 content_type = "image/png" if extension == "png" else "application/octet-stream"
@@ -1765,9 +1765,9 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_cold_cache_first_read_with_real_format_engines(self):
         cases = [
             ("txt", b"Cold TXT readable", "text/plain", "已加载", ".reader-text", []),
-            ("md", b"# Cold Markdown", "text/markdown", "已加载", ".reader-markdown", ["marked.min.69451c8541c9.js", "purify.min.c2f26ea4fc0d.js"]),
+             ("md", b"# Cold Markdown", "text/markdown", "已加载", ".reader-markdown", ["marked.min.b147274a9ce2.js", "purify.min.f263b05369e0.js"]),
             ("pdf", minimal_pdf(), "application/pdf", "1 页", ".reader-page canvas.ready", ["pdf.min.f80490490320.mjs", "pdf.worker.min.8ab0e5e30031.mjs"]),
-            ("docx", minimal_docx(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "1 页", ".docx-body", ["jszip.min.acc7e41455a8.js", "docx-preview.min.051ef503f267.js"]),
+             ("docx", minimal_docx(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "1 页", ".docx-body", ["jszip.min.7f839b2d4688.js", "docx-preview.min.051ef503f267.js"]),
             ("png", PNG_BYTES, "image/png", "图片", ".reader-image", []),
         ]
         results = []
@@ -1848,9 +1848,9 @@ class ReaderPerformanceTest(unittest.TestCase):
                 context = self.browser.new_context(viewport={"width": 1440, "height": 900})
                 page = context.new_page()
                 page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-                page.route("**/static/vendor/marked.min.69451c8541c9.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
-                page.route("**/static/vendor/purify.min.c2f26ea4fc0d.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
-                page.route("**/static/vendor/jszip.min.acc7e41455a8.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=JSZIP_SCRIPT))
+                page.route("**/static/vendor/marked.min.b147274a9ce2.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
+                page.route("**/static/vendor/purify.min.f263b05369e0.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
+                page.route("**/static/vendor/jszip.min.7f839b2d4688.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=JSZIP_SCRIPT))
                 page.route("**/static/vendor/epub.min.06eae1574510.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=EPUB_SCRIPT))
                 page.route("**/static/vendor/docx-preview.min.051ef503f267.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=DOCX_SCRIPT))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.abort("connectionreset"))

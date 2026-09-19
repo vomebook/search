@@ -1055,17 +1055,24 @@ body {
   background: #181b1e !important;
   color: #e7e9eb !important;
 }
-.docx-body.reader-document-dark
-  .reader-docx
-  :is(p, div, span, li, td, th, blockquote, pre, code, h1, h2, h3, h4, h5, h6) {
+.docx-body.reader-document-dark .reader-docx :where(:not(svg, svg *, img, canvas, video, audio, math, math *)),
+:root[data-theme="dark"] .reader-epub-chapter :where(:not(svg, svg *, img, canvas, video, audio, math, math *)) {
   color: inherit !important;
+  background-color: transparent !important;
   border-color: #4a5056 !important;
+  text-shadow: none !important;
 }
 .docx-body.reader-document-dark .reader-docx :is(table, pre, code, blockquote) {
   background-color: #202428 !important;
 }
-.docx-body.reader-document-dark .reader-docx a {
+.docx-body.reader-document-dark .reader-docx a,
+:root[data-theme="dark"] .reader-epub-chapter a {
   color: #8ab4e8 !important;
+}
+:root[data-theme="dark"] .reader-epub-chapter mark.full-search-highlight,
+.docx-body.reader-document-dark .reader-docx mark.full-search-highlight {
+  background: #ffd54f !important;
+  color: #111 !important;
 }
 /* Light theme: retain the dark palette above and override matching surfaces. */
 :root[data-theme="light"] {
