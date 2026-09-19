@@ -655,6 +655,7 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
 }
 
 .main-content {
+  container-type: inline-size;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1043,18 +1044,44 @@ body:not(.mobile) .result-meta { grid-column: 3 / 5; grid-row: 3; margin-top: 0;
 }
 
 .load-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-auto-rows: minmax(32px, auto);
+  align-items: center;
+  gap: 4px;
   text-align: center;
-  padding: 12px;
+  padding: 6px 8px;
   font-size: 12px;
   color: var(--on-surface-variant);
   border-top: 1px solid var(--outline-variant);
   flex-shrink: 0;
   position: relative;
 }
+.result-position-count { grid-column: 2; grid-row: 1; white-space: nowrap; }
+.result-position-actions { grid-column: 3; grid-row: 1; justify-self: end; display: inline-flex; align-items: center; gap: 4px; }
+.result-position-actions .text-btn { min-height: 32px; padding: 4px; font-size: 12px; white-space: nowrap; }
+.result-position-actions .text-btn[hidden] { display: none; }
+
+@container (max-width: 460px) {
+  .result-position-actions:has(#restart-position-btn:not([hidden])):has(#return-to-position-btn:not([hidden])) {
+    display: contents;
+  }
+  .result-position-actions #restart-position-btn { grid-column: 1; grid-row: 1; justify-self: start; }
+  .result-position-actions #return-to-position-btn { grid-column: 3; grid-row: 1; justify-self: end; }
+}
+@container (max-width: 319px) {
+  .result-position-actions:has(button:not([hidden])) { display: contents; }
+  .result-position-actions #restart-position-btn,
+  .result-position-actions #return-to-position-btn { grid-row: 2; }
+}
+
 .current-result-position { width: calc(var(--position-width, 1ch) + 6px); box-sizing: border-box; margin: 0; padding: 2px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; text-align: center; font: inherit; font-variant-numeric: tabular-nums; }
 .current-result-position:focus { outline: 1px solid var(--primary); background: var(--surface); color: var(--on-surface); }
 
 .mobile-selected-count {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
   display: none;
   color: var(--on-surface-variant);
   white-space: nowrap;
@@ -1066,10 +1093,8 @@ body.mobile .load-info {
 }
 
 body.mobile .mobile-selected-count {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+  grid-column: 1 / -1;
+  grid-row: 2;
 }
 
 .scroll-track {
