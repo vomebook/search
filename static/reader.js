@@ -112,15 +112,11 @@ function normalizeSourceUrl(url) {
 }
 const params = new URLSearchParams(location.search);
 const readerId = params.get("id") || "";
-const legacyReaderTitle = /^[0-9a-f]{16}$/i.test(readerId) ? params.get("title") || "" : "";
 let localReaderData = null;
 try {
   localReaderData = JSON.parse(sessionStorage.getItem(`reader-source:${readerId}`) || "null");
   if (localReaderData) sessionStorage.removeItem(`reader-source:${readerId}`);
 } catch (_) {}
-// Old asset IDs can belong to several source records. Resolve the title hint
-// afresh instead of trusting session metadata keyed only by the shared asset.
-if (legacyReaderTitle) localReaderData = null;
 let sourceUrl = normalizeSourceUrl(
   params.get("url") || (!readerId && localReaderData && localReaderData.url) || ""
 );
@@ -150,10 +146,8 @@ if (localReaderData) {
 try {
   const cached = sessionStorage.getItem(`reader-resolve:${readerId}`);
   if (cached) {
-    if (!legacyReaderTitle) {
-      cachedReaderData = JSON.parse(cached);
-      resolvedReaderData = cachedReaderData;
-    }
+    cachedReaderData = JSON.parse(cached);
+    resolvedReaderData = cachedReaderData;
     sessionStorage.removeItem(`reader-resolve:${readerId}`);
   }
 } catch (_) {}
@@ -200,9 +194,7 @@ function setReaderStage(stage) {
   return readerRuntime.setStage(stage);
 }
 async function resolveReaderId(id) {
-  const endpoint =
-    `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}` +
-    (legacyReaderTitle ? `&title=${encodeURIComponent(legacyReaderTitle)}` : "");
+  const endpoint = `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`;
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await readerRequestManager.request(endpoint, READER_PROXY_TIMEOUT_MS);
     if (response.ok) return response.json();

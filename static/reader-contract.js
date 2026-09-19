@@ -328,19 +328,11 @@
       record &&
       (record.ReaderExtension || record.readerExtension || record.Extension || record.extension);
     if (!source || capability(readerExtension).readerMode === ReaderMode.UNSUPPORTED) return "";
-    const assetMatch = source.match(
-      /(?:^|[\/=])objects\/[0-9a-f]{2}\/([0-9a-f]{16})[0-9a-f]{48}(?:\/[0-9a-f]{16})?\//i
-    );
     const originalSource =
       record.DownloadLink || record.downloadLink || record.Link || record.link || "";
-    // Shared assets identify bytes; the original source identifies the selected record.
-    const shortId = assetMatch
-      ? /^https:\/\/huggingface\.co\/datasets\/VoiceOfML\//.test(originalSource)
-        ? shortSourceId(originalSource)
-        : assetMatch[1]
-      : /^https:\/\/huggingface\.co\/datasets\//i.test(source)
-        ? shortSourceId(source)
-        : "";
+    const shortId = /^https:\/\/huggingface\.co\/datasets\/VoiceOfML\//.test(originalSource)
+      ? shortSourceId(originalSource)
+      : "";
     const title =
       (record.File || record.name || "") +
       (record.Extension || record.extension ? "." + (record.Extension || record.extension) : "");

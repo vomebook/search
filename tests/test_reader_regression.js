@@ -79,8 +79,9 @@ const pageAssetUrl = sandbox.self.VoiceOfMLReader.readerUrl({
   ReaderLink: 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a'.repeat(64) + '/1234567890abcdef/page-manifest.json',
   ReaderExtension: 'pdf-pages', Extension: 'mobi', File: '原始书名',
 })
-assert.strictEqual(new URL(`https://example.test${pageAssetUrl}`).searchParams.get('id'), 'aaaaaaaaaaaaaaaa')
-assert.strictEqual(new URL(`https://example.test${pageAssetUrl}`).searchParams.get('ext'), 'pdf-pages')
+const pageAssetParams = new URL(`https://example.test${pageAssetUrl}`).searchParams
+assert.strictEqual(pageAssetParams.get('url'), 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a'.repeat(64) + '/1234567890abcdef/page-manifest.json')
+assert.strictEqual(pageAssetParams.get('ext'), 'pdf-pages')
 const sharedAssetSource = 'https://huggingface.co/datasets/VoiceOfML/Teachers/resolve/main/books/shared.mobi'
 const sharedAssetUrl = sandbox.self.VoiceOfMLReader.readerUrl({
   ReaderLink: 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a'.repeat(64) + '/document.epub',
