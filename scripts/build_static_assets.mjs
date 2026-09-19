@@ -15,7 +15,7 @@ for (const filename of [
   "reader-contract.js", "reader-navigation.js", "reader-store.js",
   "reader-request-manager.js", "reader-chapter-repository.js", "reader-scroll-anchor.js",
   "reader-section-virtualizer.js", "reader-runtime.js", "reader-format-adapters.js",
-  "reader-security.js", "pdf-worker-wrapper.mjs", "reader.css", "style.css", "reader.js", "app.js"
+  "reader-security.js", "reader-pdf-text.js", "pdf-worker-wrapper.mjs", "reader.css", "style.css", "reader.js", "app.js"
 ]) {
   const source = join(root, "static", filename);
   const content = rewrite(readFileSync(source, "utf8"));
