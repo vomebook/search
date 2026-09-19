@@ -59,9 +59,9 @@ for (let offset = 0; offset + 512 <= tar.length;) {
 for (const [url, target, expected] of [
   ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs", "pdf.min.mjs", "f80490490320511e5df18c580b9edd6b5db8058dceebaf6f161992e0a964b9e2"],
   ["https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs", "pdf.worker.min.mjs", "8ab0e5e30031b4a06ecfddd5ae9562f0227f830ee7ec9ed1a968b134243d2386"],
-  ["https://cdn.jsdelivr.net/npm/marked@18.0.11/lib/marked.umd.js", "marked.min.js", "69451c8541c9c1e7a4bf3ffc6f73c4d89633de92bfbe3e484dfe182ef8091f88"],
-  ["https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.min.js", "purify.min.js", "c2f26ea4fc0d88141c9aa430eb515ac86fce59418ceebd85fa475b87a8d6c3e6"],
-  ["https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js", "jszip.min.js", "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"],
+  ["https://cdn.jsdelivr.net/npm/marked@18.0.13/lib/marked.umd.js", "marked.min.js", "b147274a9ce27d17276587167e49483d719f6893eeca3a3667a59797661d3556"],
+  ["https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js", "purify.min.js", "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5"],
+  ["https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js", "jszip.min.js", "7f839b2d4688b845c105ebf5d2f9803075f91ea0fe72bdaac176c3a04dd3d2c1"],
   ["https://cdn.jsdelivr.net/npm/docx-preview@0.4.0/dist/docx-preview.min.js", "docx-preview.min.js", "051ef503f2677d53159a388b7384e950eda41ea4e47a103e5e36f124d7faea40"],
 ]) {
   const bytes = await downloadWithRetry(url);

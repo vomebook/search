@@ -98,7 +98,7 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(workflow, /static\/reader-chapter-repository\.js/);
   assert.match(workflow, /static\/reader-scroll-anchor\.js/);
   assert.match(workflow, /static\/reader-section-virtualizer\.js/);
-  assert.match(app, /extension === "docx" \? \["\/search\/static\/vendor\/jszip\.min\.acc7e41455a8\.js"/);
+  assert.match(app, /extension === "docx" \? \["\/search\/static\/vendor\/jszip\.min\.7f839b2d4688\.js"/);
   assert.match(app, /var warmedReaderSources = new Set\(\)/);
   assert.match(app, /warmedReaderSources\.size >= 8/);
   assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
@@ -285,7 +285,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /foliate-view/);
   assert.match(reader, /foliate-continuous/);
   assert.doesNotMatch(reader, /renderFoliateClean|foliate-reader\/reader\.html/);
-  assert.match(reader, /\/search\/static\/vendor\/purify\.min\.c2f26ea4fc0d\.js/);
+  assert.match(reader, /\/search\/static\/vendor\/purify\.min\.f263b05369e0\.js/);
   assert.doesNotMatch(reader, /cdn\.jsdelivr\.net/);
   assert.match(reader, /IntersectionObserver/);
   assert.match(reader, /Map\.prototype\.getOrInsertComputed/);
@@ -326,7 +326,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'docx: [loadDocxDocument, renderDocx]');
   assert.match(reader, /docx\.renderAsync/);
   assert.match(reader, /renderAltChunks: false/);
-  assert.match(reader, /jszip\.min\.acc7e41455a8\.js/);
+  assert.match(reader, /jszip\.min\.7f839b2d4688\.js/);
   assert.match(reader, /docx-preview\.min\.051ef503f267\.js/);
   assert.match(app, /&& !rec\.ReaderLink\) return false/);
   assert.match(reader, /if \(extension === "docx"\) return readerAsset/);
@@ -462,8 +462,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(vendorScript, /relative\.startsWith\("wasm\/"\)/);
   assert.match(vendorScript, /06f25e887adc6489f04c9fcb14198c77e4e5623a59a0bba5c4cea5838a4f1241/);
   assert.match(vendorScript, /f80490490320511e5df18c580b9edd6b5db8058dceebaf6f161992e0a964b9e2/);
-  assert.match(vendorScript, /marked@18\.0\.11\/lib\/marked\.umd\.js/);
-  assert.match(vendorScript, /dompurify@3\.4\.14/);
+  assert.match(vendorScript, /marked@18\.0\.13\/lib\/marked\.umd\.js/);
+  assert.match(vendorScript, /dompurify@3\.4\.15/);
   assert.doesNotMatch(vendorScript, /writeFileSync\(join\(output, target\)\)/);
   for (const path of ["pdf.min.mjs", "pdf.worker.min.mjs", "marked.min.js", "purify.min.js"]) assert.ok(!sw.includes("static/vendor/" + path));
   assert.match(sw, /url\.pathname === "\/search\/static\/reader\.html"/);

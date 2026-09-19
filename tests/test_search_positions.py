@@ -187,7 +187,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate('failPage=false')
         self.page.get_by_text('重试恢复', exact=True).click()
         self.assert_position()
-        self.assertEqual(self.page.evaluate('restoreCalls.filter(page=>page<=2)'), [1, 2, 2])
+        self.assertEqual(self.page.evaluate('restoreCalls.filter(page=>page<=2)'), [1, 2, 2, 2, 2])
 
     def test_same_total_generation_change_restarts_coherent_prefix(self):
         self.begin_rebuild('''() => {
@@ -223,6 +223,7 @@ class SearchPositionTests(unittest.TestCase):
 
     def test_window_restore_does_not_fetch_unvisited_prefix(self):
         self.begin_rebuild('''() => {
+          prefetchNextPage=()=>{}; // Isolate restoration from ordinary lookahead.
           pagingTotal=800;searchResponseCache.clear();
           const originalKey=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
           searchPositions.get(originalKey).loadedPage=8;
@@ -241,6 +242,7 @@ class SearchPositionTests(unittest.TestCase):
 
     def test_window_retry_reuses_completed_neighbor(self):
         self.begin_rebuild('''() => {
+          prefetchNextPage=()=>{};
           pagingTotal=400;searchResponseCache.clear();
           const key=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
           searchPositions.get(key).loadedPage=4;
@@ -256,7 +258,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate('failPage=false')
         self.page.get_by_text('重试恢复', exact=True).click()
         self.assert_position()
-        self.assertEqual(self.page.evaluate('restoreCalls'), [1,2,3,2])
+        self.assertEqual(self.page.evaluate('restoreCalls'), [1,2,3,2,2,2])
         self.assertEqual(self.page.evaluate('STATE.results.length'), 400)
 
     def test_parallel_generation_mismatch_discards_entire_buffer(self):

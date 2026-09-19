@@ -90,7 +90,8 @@ class PositionControlTests(unittest.TestCase):
         self.input_position(95001)
         self.page.wait_for_function('positionRestore?.failed')
         self.assertTrue(self.page.locator('#status-bar #retry-position-btn').is_visible())
-        self.assertTrue(self.page.locator('#status-bar #restart-position-btn').is_visible())
+        self.assertTrue(self.page.locator('#status-bar #cancel-position-btn').is_visible())
+        self.assertTrue(self.page.locator('#restart-position-btn').is_hidden())
         self.assertEqual(self.page.locator('#results-container').evaluate('(e)=>getComputedStyle(e).visibility'), 'visible')
         self.assertGreater(self.page.locator('.result-item').count(), 0)
         self.assertTrue(self.page.locator('#search-position-status').evaluate('''el=>{
@@ -106,7 +107,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.evaluate('blockPosition=true')
         self.input_position(95001)
         self.page.wait_for_function('!!window.releasePosition')
-        self.page.locator('#restart-position-btn').click()
+        self.page.locator('#cancel-position-btn').click()
         self.page.wait_for_function('!STATE.isLoading && !positionRestore')
         self.page.evaluate('blockPosition=false;releasePosition()')
         self.page.wait_for_timeout(100)
@@ -120,16 +121,23 @@ class PositionControlTests(unittest.TestCase):
         self.page.evaluate('doSearch()')
         self.page.wait_for_function('!STATE.isLoading && !positionRestore')
         self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
-        self.assertTrue(self.page.locator('#status-bar #return-to-position-btn').is_visible())
+        self.assertTrue(self.page.locator('#load-info #return-to-position-btn').is_visible())
         self.page.evaluate('saveSearchPosition()')
         self.assertEqual(self.page.evaluate('searchPositions.get(getSearchViewKey()).index'), 95000)
         self.page.locator('#return-to-position-btn').click()
         self.wait_position(95000)
         self.page.evaluate('doSearch()')
         self.page.wait_for_function('!STATE.isLoading && !positionRestore')
-        self.page.evaluate('DOM.resultsContainer.scrollTop=300')
+        self.page.evaluate('setResultScrollTop(300)')
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.locator('#return-to-position-btn').is_visible())
+        self.page.locator('#results-container').hover()
+        self.page.mouse.wheel(0, 400)
+        self.page.wait_for_timeout(150)
+        self.assertTrue(self.page.locator('#return-to-position-btn').is_visible())
+        self.page.mouse.wheel(0, 1600)
         self.page.wait_for_function('returnPositionTarget===null')
-        self.page.evaluate('DOM.resultsContainer.scrollTop=0')
+        self.page.evaluate('setResultScrollTop(0)')
         self.assertTrue(self.page.locator('#return-to-position-btn').is_hidden())
 
     def test_query_switch_and_history_restore_do_not_leave_stale_intent(self):
@@ -271,4 +279,80 @@ class PositionControlTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 95000)
         self.assertEqual(self.page.locator('#results-container').evaluate('(e)=>getComputedStyle(e).visibility'), 'visible')
         self.assertEqual(self.page.evaluate('STATE.results[95000].File'), 'paging-95000')
-        self.assertTrue(self.page.locator('#status-bar #restart-position-btn').is_visible())
+        self.assertTrue(self.page.locator('#load-info #restart-position-btn').is_visible())
+
+    def test_footer_controls_keep_layout_and_latest_return_target(self):
+        for width in [1280, 390, 320]:
+            with self.subTest(width=width):
+                self.page.set_viewport_size({'width': width, 'height': 844})
+                self.page.evaluate('STATE.isMobile=innerWidth<600;applyMobileMode();setResultScrollTop(0);updateLoadInfo()')
+                self.assertTrue(self.page.locator('#restart-position-btn').is_hidden())
+                before = self.page.locator('#load-info').bounding_box()
+                self.input_position(51)
+                self.wait_position(50)
+                self.assertTrue(self.page.locator('#load-info #restart-position-btn').is_visible())
+                self.page.locator('#restart-position-btn').click()
+                self.wait_position(0)
+                self.assertTrue(self.page.locator('#restart-position-btn').is_hidden())
+                self.assertTrue(self.page.locator('#load-info #return-to-position-btn').is_visible())
+                after = self.page.locator('#load-info').bounding_box()
+                self.assertEqual(before['height'], after['height'])
+                self.assert_footer_alignment()
+                self.assertTrue(self.page.locator('.result-position-actions').evaluate('''e=>{
+                  const a=e.getBoundingClientRect(), b=document.querySelector('.result-position-count').getBoundingClientRect();
+                  return a.right<=innerWidth && a.left>=0 && (a.left>=b.right || a.top>=b.bottom);
+                }'''))
+                self.page.locator('#return-to-position-btn').click()
+                self.wait_position(50)
+                self.page.evaluate('setResultScrollTop(getVirtualOffset(60));renderVisible()')
+                self.page.locator('#restart-position-btn').click()
+                self.wait_position(0)
+                self.assertEqual(self.page.evaluate('returnPositionTarget.index'), 60)
+                self.page.locator('#return-to-position-btn').click()
+                self.wait_position(60)
+
+    def assert_footer_alignment(self):
+        result = self.page.locator('#load-info').evaluate('''bar=>{
+          const box=bar.getBoundingClientRect(), count=bar.querySelector('.result-position-count').getBoundingClientRect();
+          const buttons=[...bar.querySelectorAll('.result-position-actions button')];
+          const visible=buttons.filter(b=>!b.hidden).map(b=>b.getBoundingClientRect());
+          return {center:Math.abs(count.left+count.width/2-box.left-box.width/2),
+            hiddenWidths:buttons.filter(b=>b.hidden).map(b=>b.getBoundingClientRect().width),
+            right:Math.max(...visible.map(b=>b.right)),edge:box.right-8,
+            overlap:visible.some(b=>b.left<count.right && b.right>count.left && b.top<count.bottom && b.bottom>count.top)};
+        }''')
+        self.assertLessEqual(result['center'], 1)
+        self.assertFalse(result['overlap'])
+        self.assertTrue(all(width == 0 for width in result['hiddenWidths']))
+        self.assertAlmostEqual(result['right'], result['edge'], delta=1)
+
+    def test_both_footer_buttons_use_left_and_right_on_narrow_screens(self):
+        for width in [1280, 390, 320]:
+            self.page.set_viewport_size({'width': width, 'height': 844})
+            self.page.evaluate('STATE.isMobile=innerWidth<600;applyMobileMode()')
+            self.input_position(51)
+            self.wait_position(50)
+            self.page.locator('#restart-position-btn').click()
+            self.wait_position(0)
+            self.page.evaluate('setResultScrollTop(40);renderVisible();updateLoadInfo()')
+            self.assertTrue(self.page.locator('#restart-position-btn').is_visible())
+            self.assertTrue(self.page.locator('#return-to-position-btn').is_visible())
+            self.assert_footer_alignment()
+            if width < 460:
+                self.assertTrue(self.page.locator('#restart-position-btn').evaluate('e=>e.getBoundingClientRect().right<=document.querySelector(".result-position-count").getBoundingClientRect().left'))
+
+    def test_top_control_stays_after_long_scroll_and_hides_only_at_top(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        button = self.page.locator('#restart-position-btn')
+        self.assertTrue(button.is_visible())
+        self.page.evaluate('recoverScrollState(); renderVisible(); updateLoadInfo()')
+        self.page.wait_for_timeout(350)
+        self.assertTrue(button.is_visible())
+        self.page.locator('#results-container').hover()
+        self.page.mouse.wheel(0, 2000)
+        self.page.wait_for_timeout(200)
+        self.assertTrue(button.is_visible())
+        self.page.evaluate('setResultScrollTop(0)')
+        self.page.wait_for_function('document.getElementById("restart-position-btn").hidden')
+        self.assertTrue(button.is_hidden())
