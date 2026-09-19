@@ -410,6 +410,17 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertEqual(first_page.locator("canvas").get_attribute("aria-hidden"), "true")
         self.assertEqual(first_page.locator(".reader-pdf-text").text_content(), "Accessible PDF text")
 
+    def test_scanned_pdf_bookmark_has_empty_excerpt(self):
+        self.page.route('**/static/vendor/pdf.min.f80490490320.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=PDF_MODULE.replace("[{ str: 'Accessible PDF text', hasEOL: false }]", '[]')))
+        self.open_reader()
+        self.page.wait_for_function("document.querySelector('.reader-pdf-text')?.textContent.includes('此页没有可提取文本')")
+        self.page.locator('#bookmark-ribbon').click()
+        self.assertEqual(self.page.locator('#bookmark-excerpt-input').input_value(), '')
+        self.page.locator('#bookmark-add').click()
+        self.page.wait_for_function('window.__readerBookmarks.length === 1')
+        self.assertEqual(self.page.evaluate('window.__readerBookmarks[0].excerpt'), '')
+
     def test_reader_panel_bookmark_search_and_theme(self):
         self.page.add_init_script("window.__pdfOutlineEnabled = true")
         self.open_reader()
@@ -1114,10 +1125,14 @@ class ReaderPerformanceTest(unittest.TestCase):
         image = self.page.locator(".reader-epub-chapter[data-chapter='1'] img")
         image.wait_for()
         self.assertIn("/resources/cover.svg", image.get_attribute("src") or "")
-        self.page.locator(".reader-chapter-sentinel[data-chapter='2']").scroll_into_view_if_needed()
+        # The first six following chapters are now prefetched. A successful
+        # preload removes its sentinel before this assertion can observe it.
         self.page.locator(".reader-epub-chapter[data-chapter='2']").wait_for()
         self.page.locator("#history").click(); self.page.locator("#toc-list .panel-item-main").nth(2).click()
         self.page.locator(".reader-epub-chapter[data-chapter='3']").wait_for()
+        self.assertEqual(self.page.locator(".reader-epub-chapter").evaluate_all(
+            "nodes => nodes.map(node => Number(node.dataset.chapter))"), [1, 2, 3])
+        self.assertEqual(len(requests), 3)
 
     def test_foliate_normalizes_legacy_chm_markup_and_keeps_resources(self):
         self.page.unroute("https://voiceofml-search.hf.space/api/reader-content**")
@@ -1138,6 +1153,7 @@ class ReaderPerformanceTest(unittest.TestCase):
 
     def test_foliate_navigation_path_dark_links_and_unique_sections(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        self.addCleanup(context.close)
         page = context.new_page()
         page.add_init_script("localStorage.setItem('theme', 'dark')")
         page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
@@ -1150,9 +1166,17 @@ class ReaderPerformanceTest(unittest.TestCase):
         link.wait_for(state="attached")
         self.assertIsNotNone(page.locator(".foliate-continuous article[data-section='0']").evaluate("article => article.shadowRoot"))
         title_display = page.locator("#title").evaluate("element => getComputedStyle(element).display")
-        page.locator(".foliate-continuous article[data-section='0']").evaluate("article => { const style = document.createElement('style'); style.textContent = '#title{display:none!important} a{color:rgb(1,2,3)!important}'; article.shadowRoot.appendChild(style); }")
+        page.locator(".foliate-continuous article[data-section='0']").evaluate("article => { const style = document.createElement('style'); style.textContent = '#title{display:none!important} a{color:rgb(1,2,3)!important;border-top-style:dotted}'; article.shadowRoot.appendChild(style); }")
         self.assertEqual(page.locator("#title").evaluate("element => getComputedStyle(element).display"), title_display)
-        self.assertEqual(link.evaluate("element => getComputedStyle(element).color"), "rgb(1, 2, 3)")
+        self.assertEqual(link.evaluate("element => getComputedStyle(element).borderTopStyle"), "dotted")
+        self.assertEqual(link.evaluate("element => getComputedStyle(element).color"), "rgb(138, 180, 232)")
+        page.locator("#history").click()
+        for theme, color in (("light", "rgb(1, 2, 3)"), ("dark", "rgb(138, 180, 232)")):
+            page.locator("#theme-toggle").click()
+            page.wait_for_function("() => !document.documentElement.classList.contains('theme-transition')")
+            self.assertEqual(page.locator("html").get_attribute("data-theme"), theme)
+            self.assertEqual(link.evaluate("element => getComputedStyle(element).color"), color)
+        page.locator("#history").click()
         self.assertEqual(page.locator("#reader-path").text_content(), "Test/books")
         self.assertIsNone(page.locator("#reader-path").get_attribute("hidden"))
         initial_url = page.url

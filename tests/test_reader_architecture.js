@@ -68,7 +68,8 @@ const metadataApplication = codePattern('applyReaderMetadata(resolvedReaderData)
 assert.ok(viewportDeclaration && metadataApplication && viewportDeclaration.index < metadataApplication.index)
 assertCode(reader, 'formatAdapters.active.open()')
 assertCode(reader, 'await formatAdapters.active.render(prepared)')
-assertCode(reader, 'await formatAdapters.active.restore(documentState.restoredEntry, generation)')
+assertCode(reader, 'await restoreInitialPosition(documentState.restoredEntry, generation)')
+assertCode(reader, 'await formatAdapters.active.restore(entry, generation)')
 assert.strictEqual((reader.match(/function loadPdfDocument\(\)/g) || []).length, 1)
 for (const renderer of ['renderImageDocument', 'renderMedia']) assert.strictEqual((reader.match(new RegExp(`function ${renderer}\\s*\\(`,'g')) || []).length, 1)
 for (const renderer of ['renderTextDocument', 'renderMarkdownDocument']) assert.strictEqual((reader.match(new RegExp(`function ${renderer}\\(`,'g')) || []).length, 1)
@@ -129,9 +130,11 @@ assert.match(css, /min-height:\s*0\s*!important;\s*height:\s*auto\s*!important;/
 assert.strictEqual(view.includes('.find(x => x.index = resolved.index)'), false)
 assert.strictEqual(view.includes('.find(x => x.index === resolved.index)'), true)
 const vm = require('vm')
-function loadExports(file, name) { const sandbox = { self: {} }; sandbox.self = sandbox; vm.runInNewContext(fs.readFileSync(path.join(root, 'static', file), 'utf8'), sandbox); return sandbox[name]; }
+const sandbox = { self: {} }; sandbox.self = sandbox;
+function loadExports(file, name) { vm.runInNewContext(fs.readFileSync(path.join(root, 'static', file), 'utf8'), sandbox); return sandbox[name]; }
 const contractFeatures = loadExports('reader-contract.js', 'VoiceOfMLReader').features
 const runtimeMatrix = loadExports('reader-runtime.js', 'VoiceOfMLReaderRuntime').FEATURE_MATRIX
+assert.strictEqual(runtimeMatrix, contractFeatures)
 for (const mode of Object.keys(contractFeatures)) assert.strictEqual(JSON.stringify(runtimeMatrix[mode]), JSON.stringify(contractFeatures[mode]), mode)
 assert.strictEqual(JSON.stringify(runtimeMatrix.unsupported), JSON.stringify({ toc: false, search: false, zoom: false, bookmarks: false, pagination: false, media: false }))
 // Evaluate the owning registry with identifiable loaders/renderers, so comments or

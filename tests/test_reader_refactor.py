@@ -7,6 +7,7 @@ import json
 import unittest
 import urllib.parse
 import zipfile
+import wave
 
 from tests import test_reader_performance as support
 
@@ -63,6 +64,69 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill(query)
         self.page.wait_for_function("() => /个结果|未找到/.test(document.querySelector('#full-search-status').textContent)")
+
+    def test_pdf_page_sources_preserve_version_and_navigate(self):
+        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3}
+        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
+        self.serve(json.dumps(manifest), "application/json")
+        self.page.route("**/page-manifest.json", lambda route: route.fulfill(json=manifest))
+        self.page.route("**/pages/page-*.webp", lambda route: route.fulfill(
+            content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1]))
+        for version in ("", "/1234567890abcdef"):
+            with self.subTest(version=version):
+                source = root + version
+                self.open(self.reader_url("pdf-pages", url=source + "/page-manifest.json"))
+                self.page.locator(".reader-page img.ready").first.wait_for()
+                self.page.locator("#page-number").fill("3")
+                self.page.locator("#page-number").dispatch_event("change")
+                image = self.page.locator('.reader-page[data-page="3"] img.ready')
+                image.wait_for()
+                self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
+                self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
+
+    def test_media_proxy_failure_retries_original_once(self):
+        buffer = io.BytesIO()
+        with wave.open(buffer, 'wb') as audio:
+            audio.setparams((1, 2, 8000, 8000, 'NONE', 'not compressed'))
+            audio.writeframes(b'\0\0' * 8000)
+        requests = []
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(status=503, body='unavailable'))
+        def original(route):
+            requests.append(route.request.url)
+            data = buffer.getvalue()
+            start = int(route.request.headers.get('range', 'bytes=0-').split('=')[1].split('-')[0])
+            route.fulfill(status=206, content_type='audio/wav', body=data[start:],
+                          headers={'Accept-Ranges': 'bytes', 'Content-Range': f'bytes {start}-{len(data)-1}/{len(data)}'})
+        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav', original)
+        self.open(self.reader_url('wav'))
+        self.page.wait_for_function("() => document.querySelector('audio').readyState >= 1")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(self.page.locator('audio').evaluate('node => node.duration'), 1)
+        self.page.evaluate("async () => { const media = document.querySelector('audio'); media.currentTime = 0.5; await VoiceOfMLReaderStore.put({url: media.src, mediaTime: 0.5}); }")
+        self.page.reload()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('audio').currentTime === 0.5")
+        self.assertEqual(len(requests), 2)
+        self.page.locator('audio').evaluate("node => node.dispatchEvent(new Event('error'))")
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'failed'")
+        self.assertEqual(len(requests), 2)
+
+    def test_chapter_links_load_target_without_leaving_reader(self):
+        base = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'b' * 64 + '/epub-chapters/'
+        bodies = {i: f'<h1>Chapter {i}</h1><p id="target" style="height:12000px">正文</p>' for i in range(1, 13)}
+        bodies[1] = '<a href="chapter-0012.xhtml#target">跨章节跳转</a>' + bodies[1]
+        manifest = dict(version=1, kind='epub-chapters', chapters=[dict(index=i, path=f'chapters/chapter-{i:04d}.xhtml', title=str(i), bytes=len(bodies[i].encode())) for i in bodies])
+        def serve(route):
+            url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['url'][0]
+            body = json.dumps(manifest) if url.endswith('chapter-manifest.json') else bodies[int(url.rsplit('-', 1)[1].split('.')[0])]
+            route.fulfill(content_type='application/json' if url.endswith('.json') else 'application/xhtml+xml', body=body)
+        self.page.route('**/api/reader-content**', serve)
+        self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
+        before = self.page.url
+        self.page.get_by_text('跨章节跳转', exact=True).click()
+        self.page.wait_for_function("() => !!document.querySelector('.reader-epub-chapter[data-chapter=\"12\"] #target')")
+        self.page.wait_for_function("() => document.querySelector('#viewport').scrollTop > 1000")
+        self.assertEqual(self.page.url, before)
+        self.assertLess(abs(self.page.locator('.reader-epub-chapter[data-chapter="12"] #target').evaluate("node => node.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top")), 5)
 
     def wait_for_store(self, predicate, arg=None):
         self.page.evaluate("""async arg => {
@@ -171,6 +235,63 @@ class ReaderRefactorTest(unittest.TestCase):
             route.fulfill(content_type='application/gzip', body=packed)
         self.assertEqual(self.page.locator('.full-search-result').count(), 1)
         self.assertEqual(sum('epub-search-index' in url for url in requests), 2)
+
+    def test_failed_chapter_restoration_preserves_saved_position(self):
+        requests, base = self.serve_chapter_search()
+        source = base + "chapter-manifest.json"
+        self.page.evaluate("""async source => {
+          window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:false}));
+          await new Promise(resolve => setTimeout(resolve, 0));
+          await VoiceOfMLReaderStore.put({url:source, title:'Saved chapter',
+            chapterIndex:12, chapterOffset:345, lastReadAt:Date.now()+1});
+        }""", source)
+        self.context.route("**/api/reader-content**chapter-0012.xhtml*",
+                           lambda route: route.fulfill(status=503, body="temporary"))
+        self.page.reload()
+        self.page.wait_for_timeout(1200)
+        saved = self.page.evaluate("source => VoiceOfMLReaderStore.get(source)", source)
+        self.assertEqual(saved["chapterIndex"], 12)
+        self.assertEqual(saved["chapterOffset"], 345)
+        self.assertEqual(self.page.locator("#content").get_attribute("data-error-code"), "READER_RESTORE")
+        self.assertTrue(self.page.get_by_role("button", name="重试加载").is_visible())
+        self.context.unroute("**/api/reader-content**chapter-0012.xhtml*")
+        self.page.get_by_role("button", name="重试加载").click()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.wait_for_store("async source => (await VoiceOfMLReaderStore.get(source))?.chapterIndex === 12", source)
+        offset = self.page.locator('.reader-epub-chapter[data-chapter="12"]').evaluate(
+            "node => document.querySelector('#viewport').getBoundingClientRect().top + 8 - node.getBoundingClientRect().top")
+        self.assertAlmostEqual(offset, 345, delta=3)
+
+    def test_chapter_manifest_migrates_position_saved_by_foliate(self):
+        _, base = self.serve_chapter_search()
+        source = base + "chapter-manifest.json"
+        self.page.evaluate("""async source => {
+          window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:false}));
+          await new Promise(resolve => setTimeout(resolve, 0));
+          await VoiceOfMLReaderStore.put({url:source, title:'Old EPUB position',
+            foliateSection:10, foliateOffset:275, lastReadAt:Date.now()+1});
+        }""", source)
+        self.page.reload()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        offset = self.page.locator('.reader-epub-chapter[data-chapter="11"]').evaluate(
+            "node => document.querySelector('#viewport').getBoundingClientRect().top + 8 - node.getBoundingClientRect().top")
+        self.assertAlmostEqual(offset, 275, delta=3)
+        self.wait_for_store("async source => (await VoiceOfMLReaderStore.get(source))?.chapterIndex === 11", source)
+
+    def test_parent_abort_saves_last_position_before_disposal(self):
+        self.serve("reading\n" * 3000)
+        self.open(self.reader_url())
+        self.page.wait_for_timeout(650)
+        self.page.evaluate("""() => {
+          const viewport=document.querySelector('#viewport');
+          viewport.scrollTop=900;viewport.dispatchEvent(new Event('scroll'));
+          window.dispatchEvent(new MessageEvent('message', {origin:location.origin,
+            source:window.parent,data:{type:'voice-reader-abort'}}));
+        }""")
+        source = urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.url).query)["url"][0]
+        self.page.wait_for_timeout(100)
+        saved = self.page.evaluate("source => VoiceOfMLReaderStore.get(source)", source)
+        self.assertEqual(saved["scrollTop"], 900)
 
     def test_store_lists_preserve_limits_order_migration_and_future_records(self):
         self.page.goto(self.reader_url().split('?')[0])

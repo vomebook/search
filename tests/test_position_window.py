@@ -288,7 +288,19 @@ class PositionWindowTests(unittest.TestCase):
         self.page.get_by_text('重试恢复', exact=True).wait_for()
         self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 49850)
         self.assertEqual(self.page.evaluate('getComputedStyle(DOM.resultsContainer).visibility'), 'visible')
-        self.page.locator('#search-position-status #cancel-position-btn, #search-position-status #restart-position-btn').click()
+        for width in [1280, 390, 320]:
+            self.page.set_viewport_size({'width': width, 'height': 844})
+            self.page.evaluate('STATE.isMobile=innerWidth<600;applyMobileMode()')
+            self.assertTrue(self.page.locator('#load-info #retry-position-btn').is_visible())
+            self.assertTrue(self.page.locator('#retry-position-btn').evaluate('''button=>{
+              const retry=button.getBoundingClientRect(),top=document.getElementById('restart-position-btn').getBoundingClientRect();
+              const count=document.querySelector('.result-position-count').getBoundingClientRect();
+              const bar=document.getElementById('load-info').getBoundingClientRect();
+              return [retry,top].every(box=>box.left>=bar.left && box.right<=bar.right &&
+                box.top>=bar.top && box.bottom<=bar.bottom &&
+                !(box.left<count.right && box.right>count.left && box.top<count.bottom && box.bottom>count.top));
+            }'''))
+        self.page.locator('#restart-position-btn').click()
         self.page.wait_for_function('!positionRestore && !STATE.isLoading && !resultWindow')
 
     def test_saved_viewport_is_bounded_and_not_used_for_another_anchor(self):

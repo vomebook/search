@@ -21,6 +21,30 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(self.fixture.errors, [])
         self.fixture.tearDown()
 
+    def test_navigation_and_folder_click_preserve_common_url_options(self):
+        result = self.page.evaluate('''() => {
+          ROUTER.apply=()=>{};
+          Object.assign(STATE,{mode:'global',query:'phone',filterRepos:['VoiceOfML/Test'],
+            filterExtensions:['txt','pdf'],filterMinSize:1024,filterMaxSize:2097152,
+            sort:'name',searchFolders:false,exact:false,useLocalMode:false,
+            recordHistory:false,useMirrorLinks:false,browserPath:'',
+            leftSidebarOpen:false,rightSidebarOpen:true});
+          DOM.sortSelect.value='name';DOM.leftSidebar.classList.add('expanded-wide');
+          const params=()=>Object.fromEntries(new URLSearchParams(location.hash.split('?')[1]));
+          syncStateToURL();const synced=params();
+          ROUTER.navigate('repo','Test');const navigated=params();
+          const link=document.createElement('button');link.className='path-folder';
+          link.dataset.folder='docs/中文';link.dataset.repo='Test';
+          DOM.resultsList.append(link);link.click();
+          return {synced,navigated,folder:params()};
+        }''')
+        common = dict(ext='txt,pdf',sort='name',search_folders='false',exact='0',
+                      local='0',history='0',mirror='0',sidebar='0',filters='1',wide='1')
+        self.assertEqual(result, dict(
+            synced=dict(common,q='phone',repo='Test',min_size='1024',max_size='2097152'),
+            navigated=dict(common,min_size='1KB',max_size='2MB'),
+            folder=dict(common,q='phone',min_size='1KB',max_size='2MB',folder_self='docs/中文')))
+
     def test_collapsed_tree_avoids_hidden_dom_and_keeps_selection(self):
         result = self.page.evaluate('''() => {
           STATE.folderTree=[{name:'root',path:'root',count:1000,selfCount:0,children:
