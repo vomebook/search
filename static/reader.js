@@ -2629,7 +2629,7 @@ function renderPdfShell(shell, force = false, priority = false) {
 
 async function renderPdfText(page, shell) {
   if (shell.dataset.textReady === "1") return;
-    const layer = shell.querySelector(".reader-pdf-text");
+  const layer = shell.querySelector(".reader-pdf-text");
   if (!layer || typeof page.getTextContent !== "function") return;
   try {
     const text = await awaitReader(page.getTextContent());
