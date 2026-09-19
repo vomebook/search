@@ -1135,6 +1135,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertEqual(len(requests), 3)
 
     def test_foliate_normalizes_legacy_chm_markup_and_keeps_resources(self):
+        self.page.add_init_script("localStorage.setItem('theme', 'light')")
         self.page.unroute("https://voiceofml-search.hf.space/api/reader-content**")
         self.page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
             status=200, content_type="application/epub+zip", body=epub_with_legacy_chm_markup(),

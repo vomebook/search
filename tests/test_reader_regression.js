@@ -81,6 +81,15 @@ const pageAssetUrl = sandbox.self.VoiceOfMLReader.readerUrl({
 })
 assert.strictEqual(new URL(`https://example.test${pageAssetUrl}`).searchParams.get('id'), 'aaaaaaaaaaaaaaaa')
 assert.strictEqual(new URL(`https://example.test${pageAssetUrl}`).searchParams.get('ext'), 'pdf-pages')
+const sharedAssetSource = 'https://huggingface.co/datasets/VoiceOfML/Teachers/resolve/main/books/shared.mobi'
+const sharedAssetUrl = sandbox.self.VoiceOfMLReader.readerUrl({
+  ReaderLink: 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a'.repeat(64) + '/document.epub',
+  Link: sharedAssetSource,
+  File: '选中的原书', Extension: 'mobi', ReaderExtension: 'epub',
+})
+const sharedAssetParams = new URL(`https://example.test${sharedAssetUrl}`).searchParams
+assert.strictEqual(sharedAssetParams.get('id'), sandbox.self.VoiceOfMLReader.shortSourceId(sharedAssetSource))
+assert.notStrictEqual(sharedAssetParams.get('id'), 'aaaaaaaaaaaaaaaa')
 const normalizedUrl = sandbox.self.VoiceOfMLReader.readerUrl({ Link: 'https://download.example.test/book.TXT', File: '书名', Extension: 'TXT', ReaderExtension: 'TXT' }, '/static/reader.html')
 const normalizedParams = new URL(`https://example.test${normalizedUrl}`).searchParams
 assert.strictEqual(normalizedParams.get('ext'), 'TXT')
