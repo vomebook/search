@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
+const resources = createRequire(import.meta.url)(
+  path.join(process.cwd(), "static/reader-resources.js")
+);
 
 const args = Object.fromEntries(
   process.argv
@@ -13,25 +17,7 @@ const args = Object.fromEntries(
       []
     )
 );
-const required = [
-  "reader.html",
-  "reader.css",
-  "reader.js",
-  "reader-chapter-search.mjs",
-  "reader-chapter-search-worker.mjs",
-  "reader-contract.js",
-  "reader-navigation.js",
-  "reader-store.js",
-  "reader-request-manager.js",
-  "reader-chapter-repository.js",
-  "reader-scroll-anchor.js",
-  "reader-section-virtualizer.js",
-  "reader-runtime.js",
-  "reader-format-adapters.js",
-  "reader-security.js",
-  "pdf-worker-wrapper.mjs",
-  "foliate-reader/view.js"
-];
+const required = ["reader.html", ...resources.readerFiles, "foliate-reader/view.js"];
 // Source smoke assertions, not a substitute for runtime behavior tests.
 const behavioral = [
   /\bVoiceOfMLReaderRuntime\s*\.\s*createReaderRuntime\s*\(/,
@@ -54,13 +40,25 @@ function staticRoot(root, artifact) {
 
 function checkBehavior(root) {
   const reader = fs.readFileSync(path.join(root, "static/reader.js"), "utf8");
+  for (const [, dependency] of reader.matchAll(/(?:\/static\/)([^/"']+\.(?:js|mjs))/g)) {
+    assert(
+      resources.readerFiles.includes(dependency),
+      `Reader dependency missing from inventory: ${dependency}`
+    );
+  }
   for (const marker of behavioral) {
     assert(marker.test(reader), `missing Reader source behavior in ${root}: ${marker}`);
   }
 }
 
-function checkAssets(output) {
-  const files = new Set(required);
+function checkAssets(output, hashed = false) {
+  for (const vendor of Object.values(resources.vendors)) {
+    assert(
+      hash(path.join(output, vendor.path)) === vendor.sha256,
+      `vendor integrity mismatch: ${vendor.path}`
+    );
+  }
+  const files = new Set([...required, "app.js"]);
   for (const file of files) {
     const target = path.join(output, file);
     assert(fs.existsSync(target) && fs.statSync(target).isFile(), `missing Reader asset: ${file}`);
@@ -90,6 +88,9 @@ function checkAssets(output) {
           `empty or invalid Reader asset directory: ${url}`
         );
       } else {
+        if (hashed && resources.buildFiles("github").includes(relative)) {
+          throw new Error(`unversioned build dependency in ${file}: ${url}`);
+        }
         files.add(relative);
       }
     }
@@ -115,13 +116,34 @@ function checkProject(root, artifact) {
     );
   }
   checkBehavior(root);
-  checkAssets(staticRoot(root, artifact));
+  const output = staticRoot(root, artifact);
+  checkAssets(output, !!artifact);
+  if (artifact) {
+    const app = fs.readFileSync(path.join(output, "app.js"), "utf8");
+    const swPath = fs.existsSync(path.join(output, "sw.js"))
+      ? path.join(output, "sw.js")
+      : path.join(output, "../sw.js");
+    const sw = fs.readFileSync(swPath, "utf8");
+    assert(
+      !/VoiceOfMLReaderResources\.(?:shellAssets|engineAssets)\(/.test(app),
+      "unexpanded Reader warming inventory"
+    );
+    assert(
+      !/VoiceOfMLReaderResources\.runtimePaths\(/.test(sw),
+      "unexpanded Reader cache inventory"
+    );
+  }
   const manifest = required.map((file) => `${file}:${hash(path.join(source, file))}`).join("\n");
   return crypto.createHash("sha256").update(manifest).digest("hex");
 }
 
 function crossCheck(githubRoot, hfRoot) {
   const exact = [
+    "reader-resources.js",
+    "reader-store.js",
+    "reader-pdf-text.js",
+    "search-session.js",
+    "download-controller.js",
     "reader-navigation.js",
     "reader.css",
     "reader-request-manager.js",
@@ -139,7 +161,20 @@ function crossCheck(githubRoot, hfRoot) {
       `cross-project drift: ${file}`
     );
   }
+  for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "check_reader_release.mjs"]) {
+    assert(
+      hash(path.join(githubRoot, "scripts", file)) === hash(path.join(hfRoot, "scripts", file)),
+      `cross-project drift: scripts/${file}`
+    );
+  }
   for (const root of [githubRoot, hfRoot]) checkBehavior(root);
+  const vectors = "tests/reader-contract-vectors.json";
+  if (fs.existsSync(path.join(githubRoot, vectors)) && fs.existsSync(path.join(hfRoot, vectors))) {
+    assert(
+      hash(path.join(githubRoot, vectors)) === hash(path.join(hfRoot, vectors)),
+      "cross-project drift: Reader contract vectors"
+    );
+  }
 }
 
 try {
