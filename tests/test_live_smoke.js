@@ -72,10 +72,18 @@ async function request(url, options = {}) {
   const html = page.body.toString("utf8");
   assert.match(html, /VoiceOfML Search|search\/static\/app\.js/);
 
-  for (const asset of ["static/style.css", "static/app.js", "static/index-worker.js", "sw.js", "manifest.json"]) {
-    const response = await request(`${BASE_URL}/search/${asset}`);
+  const assets = [...html.matchAll(/(?:src|href)="([^"]+\.[0-9a-f]{12}\.(?:js|css))"/g)].map(match => match[1]);
+  assert.ok(assets.some(url => /app\.[0-9a-f]{12}\.js$/.test(url)));
+  for (const asset of [...assets, 'sw.js', 'manifest.json']) {
+    const url = new URL(asset, BASE_URL + '/search/').href;
+    const response = await request(url);
     assert.strictEqual(response.statusCode, 200, asset);
     assert.ok(response.body.length > 0, `${asset}: empty response`);
+    if (/app\.[0-9a-f]{12}\.js$/.test(asset)) {
+      const worker = response.body.toString('utf8').match(/\/search\/static\/index-worker\.[0-9a-f]{12}\.js/);
+      assert.ok(worker, 'app must pin its Worker');
+      assert.strictEqual((await request(BASE_URL + worker[0])).statusCode, 200);
+    }
   }
   for (const area of ["initial", "sidebar"]) {
     const response = await request(`${BASE_URL}/search/data/${area}/manifest.json`);

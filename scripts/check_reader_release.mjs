@@ -58,7 +58,7 @@ function checkAssets(output, hashed = false) {
       `vendor integrity mismatch: ${vendor.path}`
     );
   }
-  const files = new Set([...required, "app.js"]);
+  const files = new Set([...required, "app.js"].map(file => hashed ? currentAsset(output, file) : file));
   for (const file of files) {
     const target = path.join(output, file);
     assert(fs.existsSync(target) && fs.statSync(target).isFile(), `missing Reader asset: ${file}`);
@@ -106,6 +106,16 @@ function checkAssets(output, hashed = false) {
   }
 }
 
+function currentAsset(output, filename) {
+  if (!resources.buildFiles("github").includes(filename)) return filename;
+  assert(!fs.existsSync(path.join(output, filename)), `obsolete asset alias: ${filename}`);
+  const extension = path.extname(filename), stem = filename.slice(0, -extension.length);
+  const matches = fs.readdirSync(output).filter(file => file.startsWith(stem + ".") &&
+    file.endsWith(extension) && /^[0-9a-f]{12}$/.test(file.slice(stem.length + 1, -extension.length)));
+  assert(matches.length === 1, `expected one current asset: ${filename}`);
+  return matches[0];
+}
+
 function checkProject(root, artifact) {
   const source = path.join(root, "static");
   for (const file of required) {
@@ -119,7 +129,15 @@ function checkProject(root, artifact) {
   const output = staticRoot(root, artifact);
   checkAssets(output, !!artifact);
   if (artifact) {
-    const app = fs.readFileSync(path.join(output, "app.js"), "utf8");
+    const project = fs.existsSync(path.join(root, "index.html")) ? "github" : "hf";
+    for (const file of resources.buildFiles(project)) currentAsset(output, file);
+    const shellPath = fs.existsSync(path.join(output, "index.html"))
+      ? path.join(output, "index.html") : path.join(output, "../index.html");
+    const shell = fs.readFileSync(shellPath, "utf8");
+    const scripts = [...shell.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map(match => match[1]);
+    assert(scripts.length === 1 && /\/app\.[0-9a-f]{12}\.js$/.test(scripts[0]),
+      "search shell must load one hashed app bundle");
+    const app = fs.readFileSync(path.join(output, currentAsset(output, "app.js")), "utf8");
     const swPath = fs.existsSync(path.join(output, "sw.js"))
       ? path.join(output, "sw.js")
       : path.join(output, "../sw.js");

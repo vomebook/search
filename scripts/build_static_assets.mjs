@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { renameSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { createRequire } from "node:module";
+import { stripBundledScripts } from "./compose_app.mjs";
 const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 
 const root = process.env.STATIC_OUTPUT_DIR || "_site";
@@ -16,7 +17,7 @@ const rewrite = text => {
   return text;
 };
 // Dependencies precede their consumers so a build pins the entire app/Worker
-// pair and Reader module graph. Unversioned copies support already-open shells.
+// pair and Reader module graph. Publish only the current content-addressed files.
 for (const filename of resources.buildFiles("github")) {
   const source = join(root, "static", filename);
   const content = rewrite(readFileSync(source, "utf8"));
@@ -26,13 +27,15 @@ for (const filename of resources.buildFiles("github")) {
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
   const extension = extname(filename);
   const versioned = `${filename.slice(0, -extension.length)}.${hash}${extension}`;
-  copyFileSync(source, join(root, "static", versioned));
+  renameSync(source, join(root, "static", versioned));
   replacements.set(`static/${filename}`, `static/${versioned}`);
   replacements.set(`./${filename}`, `./${versioned}`);
 }
 for (const filename of ["index.html", "static/reader.html", "sw.js"]) {
   const target = join(root, filename);
-  let content = rewrite(readFileSync(target, "utf8"));
+  let content = readFileSync(target, "utf8");
+  if (filename === "index.html") content = stripBundledScripts(content);
+  content = rewrite(content);
   if (filename === "sw.js") content = content.replace(/CURRENT_HASHED_ASSETS\s*=\s*\[\]/,
     "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].filter(url => url.startsWith("static/")).map(url => "/search/" + url).concat([...currentVendorAssets])));
   writeFileSync(target, content);

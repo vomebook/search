@@ -1,8 +1,8 @@
 (function (root) {
   "use strict";
-  if (root.VoiceOfMLReader?.pdfPageSource && root.VoiceOfMLReader?.txtRelativePath) return;
-
   function preloadPdfOpeningResources() {
+    // Classic-script and module consumers share the same in-flight preload.
+    if (root.__VOICE_PDF_PRELOAD__) return;
     try {
       const params = new URLSearchParams(location.search);
       const id = params.get("id") || "";

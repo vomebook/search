@@ -17,7 +17,7 @@ FETCH_SCRIPT = r"""(() => {
     window.pagingRequests.push(body.page);
     const response = (stale = false) => new Response(JSON.stringify({
       page: body.page, page_size: body.page_size, total: window.pagingTotal,
-      results: Array.from({length: Math.min(body.page_size, Math.max(0, window.pagingTotal - (body.page - 1) * body.page_size))}, (_, offset) => {
+       results: Array.from({length: body.page === 2 && window.pagingMode === 'short' ? 1 : Math.min(body.page_size, Math.max(0, window.pagingTotal - (body.page - 1) * body.page_size))}, (_, offset) => {
         const id = (body.page - 1) * body.page_size + offset;
         return {ID: String(id), Repo: 'VoiceOfML/Test', File: (stale ? 'stale-' : 'paging-') + id,
           Extension: 'txt', Folder: [], Size: id + 1, HasTxt: false};
@@ -120,6 +120,17 @@ class PagingRecoveryTests(unittest.TestCase):
         self.page.locator('#paging-status').click()
         self.page.wait_for_function('STATE._loadedPage === 2 && !STATE.isLoading')
         self.assertEqual(self.page.evaluate('STATE.results.map(record => record.ID)'), [str(i) for i in range(200)])
+        self.assertEqual(self.errors, [])
+
+    def test_truncated_nonempty_page_is_rejected_and_retry_preserves_all_ids(self):
+        self.reach_bottom()
+        self.expire_pending('short')
+        self.page.wait_for_function('pagingFailures === 2 && !STATE.isLoading')
+        self.assertEqual(self.page.evaluate('[STATE._loadedPage,STATE.results.length,STATE.total]'), [1,100,301])
+        self.page.evaluate("pagingMode='normal'")
+        self.page.locator('#paging-status').click()
+        self.page.wait_for_function('STATE._loadedPage === 2 && !STATE.isLoading')
+        self.assertEqual(self.page.evaluate('STATE.results.map(record=>record.ID)'), [str(i) for i in range(200)])
         self.assertEqual(self.errors, [])
 
     def test_touch_at_bottom_retries_without_scroll_position_change(self):
