@@ -2627,6 +2627,33 @@ function renderPdfShell(shell, force = false, priority = false) {
   return task;
 }
 
+function populatePdfTextLayer(layer, items, pdfViewport) {
+  const fragment = layer.ownerDocument.createDocumentFragment();
+  let positioned = false;
+  let plainText = "";
+  for (const item of items) {
+    const span = layer.ownerDocument.createElement("span");
+    const value = item.str + (item.hasEOL ? "\n" : " ");
+    span.textContent = value;
+    plainText += value;
+    const point = item.transform && pdfViewport.convertToViewportPoint
+      ? pdfViewport.convertToViewportPoint(item.transform[4], item.transform[5])
+      : null;
+    if (point) {
+      positioned = true;
+      const fontHeight = Math.hypot(item.transform[2] || 0, item.transform[3] || 0) || 12;
+      span.style.left = `${(point[0] / Math.max(1, pdfViewport.width)) * 100}%`;
+      span.style.top = `${(point[1] / Math.max(1, pdfViewport.height)) * 100}%`;
+      span.style.fontSize = `${(fontHeight / Math.max(1, pdfViewport.height)) * 100}%`;
+    } else span.style.position = "static";
+    fragment.appendChild(span);
+  }
+  if (positioned) {
+    layer.replaceChildren(fragment);
+    if (!layer.textContent.trim()) layer.textContent = "此页没有可提取文本";
+  } else layer.textContent = plainText.trim() || "此页没有可提取文本";
+}
+
 async function renderPdfText(page, shell) {
   if (shell.dataset.textReady === "1") return;
   const layer = shell.querySelector(".reader-pdf-text");
@@ -2647,33 +2674,7 @@ async function renderPdfText(page, shell) {
           y: point ? Math.max(0, Math.min(1, point[1] / Math.max(1, pdfViewport.height))) : 0
         };
       });
-    layer.textContent = "";
-    const fragment = document.createDocumentFragment();
-    let positioned = false;
-    for (const item of text.items) {
-      const span = layer.ownerDocument.createElement("span");
-      span.textContent = item.str + (item.hasEOL ? "\n" : " ");
-      const point =
-        item.transform && pdfViewport.convertToViewportPoint
-          ? pdfViewport.convertToViewportPoint(item.transform[4], item.transform[5])
-          : null;
-      if (point) {
-        positioned = true;
-        const fontHeight = Math.hypot(item.transform[2] || 0, item.transform[3] || 0) || 12;
-        span.style.left = `${(point[0] / Math.max(1, pdfViewport.width)) * 100}%`;
-        span.style.top = `${(point[1] / Math.max(1, pdfViewport.height)) * 100}%`;
-        span.style.fontSize = `${(fontHeight / Math.max(1, pdfViewport.height)) * 100}%`;
-      } else span.style.position = "static";
-      fragment.appendChild(span);
-    }
-    layer.appendChild(fragment);
-    if (!positioned)
-      layer.textContent =
-        text.items
-          .map((item) => item.str + (item.hasEOL ? "\n" : " "))
-          .join("")
-          .trim() || "此页没有可提取文本";
-    else if (!layer.textContent.trim()) layer.textContent = "此页没有可提取文本";
+    populatePdfTextLayer(layer, text.items, pdfViewport);
     shell.dataset.textReady = "1";
     highlightPdfText(shell);
   } catch (error) {

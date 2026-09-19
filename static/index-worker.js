@@ -362,37 +362,48 @@ function buildFulltext() {
   advanceFulltext(records.length, Infinity);
 }
 
-function applyFilters(indices, params) {
+function buildFilterSets(params) {
   const repos = params.repos || null;
   const extensions = params.extensions || null;
-  const repoSet = repos && repos.length ? new Set(repos) : null;
-  const folders = params.folders || null;
-  const extensionSet = extensions && extensions.length
-    ? new Set(extensions.map((extension) => String(extension || "").toLowerCase()))
-    : null;
-  const selfFolders = new Set((params.folderSelfs || []).map(cleanPath).filter((path) => typeof path === "string"));
-  const subtreeFolders = new Set((params.folderSubtrees || []).map(cleanPath).filter((path) => typeof path === "string"));
+  return {
+    repoSet: repos && repos.length ? new Set(repos) : null,
+    extensionSet: extensions && extensions.length
+      ? new Set(extensions.map((extension) => String(extension || "").toLowerCase()))
+      : null,
+    folders: params.folders && params.folders.length
+      ? params.folders.map(cleanPath)
+      : null,
+    selfFolders: new Set((params.folderSelfs || []).map(cleanPath).filter((path) => typeof path === "string")),
+    subtreeFolders: new Set((params.folderSubtrees || []).map(cleanPath).filter((path) => typeof path === "string")),
+  };
+}
+
+function matchesFolderFilters(recordFolders, folderPath, params, filters) {
+  if (params.folderMatchMode === "mixed") {
+    let matched = filters.selfFolders.has(folderPath);
+    for (let depth = 1; !matched && depth <= recordFolders.length; depth++)
+      matched = filters.subtreeFolders.has(recordFolders.slice(0, depth).join("/"));
+    return !(filters.selfFolders.size || filters.subtreeFolders.size) || matched;
+  }
+  if (!filters.folders?.length) return true;
+  for (const folder of filters.folders) {
+    if (params.folderMatchMode === "exact" && folderPath === folder) return true;
+    if (params.folderMatchMode !== "exact" && (!folder
+        ? recordFolders.length === 0
+        : folderPath === folder || folderPath.indexOf(folder + "/") === 0)) return true;
+  }
+  return false;
+}
+
+function applyFilters(indices, params) {
+  const filters = buildFilterSets(params);
   return indices.filter((index) => {
     const record = records[index] || {};
-    if (repoSet && !repoSet.has(record.Repo)) return false;
-    if (extensionSet && !extensionSet.has(String(record.Extension || "").toLowerCase())) return false;
+    if (filters.repoSet && !filters.repoSet.has(record.Repo)) return false;
+    if (filters.extensionSet && !filters.extensionSet.has(String(record.Extension || "").toLowerCase())) return false;
     const recordFolders = Array.isArray(record.Folder) ? record.Folder : [];
     const folderPath = recordFolders.join("/");
-    if (params.folderMatchMode === "mixed") {
-      let matched = selfFolders.has(folderPath);
-      for (let depth = 1; !matched && depth <= recordFolders.length; depth++) matched = subtreeFolders.has(recordFolders.slice(0, depth).join("/"));
-      if ((selfFolders.size || subtreeFolders.size) && !matched) return false;
-    } else if (folders && folders.length) {
-      let matched = false;
-      for (const folder of folders) {
-        const clean = cleanPath(folder);
-        if (params.folderMatchMode === "exact") matched = folderPath === clean;
-        else if (!clean) matched = recordFolders.length === 0;
-        else matched = folderPath === clean || folderPath.indexOf(clean + "/") === 0;
-        if (matched) break;
-      }
-      if (!matched) return false;
-    }
+    if (!matchesFolderFilters(recordFolders, folderPath, params, filters)) return false;
     if (typeof record.Size === "number" && record.Size > 0) {
       if (params.minSize !== null && record.Size < params.minSize) return false;
       if (params.maxSize !== null && record.Size > params.maxSize) return false;
@@ -403,6 +414,21 @@ function applyFilters(indices, params) {
 
 function cleanPath(path) {
   return String(path || "").replace(/^\/+|\/+$/g, "");
+}
+
+function intersectCandidateLists(candidateLists) {
+  if (!candidateLists.length) return [];
+  const ordered = candidateLists[0];
+  let probe = ordered;
+  for (const candidates of candidateLists) if (candidates.length < probe.length) probe = candidates;
+  const matched = new Set(probe);
+  for (const candidates of candidateLists) {
+    if (candidates === probe) continue;
+    const allowed = new Set(candidates);
+    for (const index of matched) if (!allowed.has(index)) matched.delete(index);
+    if (!matched.size) break;
+  }
+  return ordered.filter((index) => matched.has(index));
 }
 
 function emptySearchOrder(params) {
@@ -503,20 +529,7 @@ function searchLocal(params) {
       }
       tokenCandidates.push(candidates);
     }
-    if (tokenCandidates.length) {
-      // Probe the smallest posting list, then emit in the first token's
-      // original order so relevance ties retain their previous stability.
-      let probe = tokenCandidates[0];
-      for (const candidates of tokenCandidates) if (candidates.length < probe.length) probe = candidates;
-      const candidateSet = new Set(probe);
-      for (const candidates of tokenCandidates) {
-        if (candidates === probe) continue;
-        const allowed = new Set(candidates);
-        for (const index of candidateSet) if (!allowed.has(index)) candidateSet.delete(index);
-        if (!candidateSet.size) break;
-      }
-      matched = tokenCandidates[0].filter((index) => candidateSet.has(index));
-    } else matched = [];
+    matched = intersectCandidateLists(tokenCandidates);
   }
   const filtered = applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
