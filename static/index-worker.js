@@ -365,6 +365,7 @@ function buildFulltext() {
 function applyFilters(indices, params) {
   const repos = params.repos || null;
   const extensions = params.extensions || null;
+  const repoSet = repos && repos.length ? new Set(repos) : null;
   const folders = params.folders || null;
   const extensionSet = extensions && extensions.length
     ? new Set(extensions.map((extension) => String(extension || "").toLowerCase()))
@@ -373,7 +374,7 @@ function applyFilters(indices, params) {
   const subtreeFolders = new Set((params.folderSubtrees || []).map(cleanPath).filter((path) => typeof path === "string"));
   return indices.filter((index) => {
     const record = records[index] || {};
-    if (repos && repos.length && !repos.includes(record.Repo)) return false;
+    if (repoSet && !repoSet.has(record.Repo)) return false;
     if (extensionSet && !extensionSet.has(String(record.Extension || "").toLowerCase())) return false;
     const recordFolders = Array.isArray(record.Folder) ? record.Folder : [];
     const folderPath = recordFolders.join("/");
@@ -484,7 +485,7 @@ function searchLocal(params) {
     buildFulltext();
     const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
     const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
-    let tokenMatches = null;
+    const tokenCandidates = [];
     for (const token of tokenize(query)) {
       let candidates = activeIndex[token] || [];
       if (!candidates.length) {
@@ -496,11 +497,26 @@ function searchLocal(params) {
         }
         candidates = Array.from(new Set(fuzzy));
       }
-      const candidateSet = new Set(candidates);
-      tokenMatches = tokenMatches === null ? candidates.slice() : tokenMatches.filter((index) => candidateSet.has(index));
-      if (!tokenMatches.length) break;
+      if (!candidates.length) {
+        tokenCandidates.length = 0;
+        break;
+      }
+      tokenCandidates.push(candidates);
     }
-    matched = tokenMatches || [];
+    if (tokenCandidates.length) {
+      // Probe the smallest posting list, then emit in the first token's
+      // original order so relevance ties retain their previous stability.
+      let probe = tokenCandidates[0];
+      for (const candidates of tokenCandidates) if (candidates.length < probe.length) probe = candidates;
+      const candidateSet = new Set(probe);
+      for (const candidates of tokenCandidates) {
+        if (candidates === probe) continue;
+        const allowed = new Set(candidates);
+        for (const index of candidateSet) if (!allowed.has(index)) candidateSet.delete(index);
+        if (!candidateSet.size) break;
+      }
+      matched = tokenCandidates[0].filter((index) => candidateSet.has(index));
+    } else matched = [];
   }
   const filtered = applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
