@@ -4,6 +4,7 @@ import { extname, join } from "node:path";
 
 const root = process.env.STATIC_OUTPUT_DIR || "_site";
 const replacements = new Map();
+const currentVendorAssets = new Set();
 const rewrite = text => {
   for (const [original, versioned] of replacements) text = text.split(original).join(versioned);
   return text;
@@ -19,6 +20,8 @@ for (const filename of [
 ]) {
   const source = join(root, "static", filename);
   const content = rewrite(readFileSync(source, "utf8"));
+  for (const match of content.matchAll(/(?:\/(?:search\/)?static\/|\.\/)vendor\/([A-Za-z0-9._-]+\.[0-9a-f]{12}\.(?:js|mjs|css))/g))
+    currentVendorAssets.add("/search/static/vendor/" + match[1]);
   writeFileSync(source, content);
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
   const extension = extname(filename);
@@ -28,5 +31,8 @@ for (const filename of [
 }
 for (const filename of ["index.html", "static/reader.html", "sw.js"]) {
   const target = join(root, filename);
-  writeFileSync(target, rewrite(readFileSync(target, "utf8")));
+  let content = rewrite(readFileSync(target, "utf8"));
+  if (filename === "sw.js") content = content.replace(/CURRENT_HASHED_ASSETS\s*=\s*\[\]/,
+    "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].map(url => "/search/" + url).concat([...currentVendorAssets])));
+  writeFileSync(target, content);
 }
