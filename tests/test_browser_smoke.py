@@ -271,6 +271,8 @@ class BrowserBehaviorTest(unittest.TestCase):
 
     def test_sidebar_header_back_and_expanded_global_state(self):
         self.load()
+        heights = self.page.evaluate("[document.querySelector('.sidebar-header').getBoundingClientRect().height, document.querySelector('.status-bar').getBoundingClientRect().height]")
+        self.assertEqual(heights[0], heights[1])
         self.page.locator("#sidebar-content .repo-list-item").first.wait_for(state="visible")
         self.page.locator("#sidebar-content .repo-list-item").first.click()
         self.page.locator("#sidebar-back-btn").wait_for(state="visible")
