@@ -551,6 +551,26 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator(".reader-chapter-next").click()
         self.page.wait_for_function("() => document.querySelectorAll('.toc-item')[3].classList.contains('is-current')")
 
+    def test_discourse_html_extracts_posts_without_forum_shell(self):
+        html = """<!doctype html><html><head><title>论坛标题</title></head><body>
+        <header class="d-header">论坛顶部</header>
+        <div id="topic-title"><a class="fancy-title">论坛标题</a></div>
+        <div class="topic-timeline">时间线</div>
+        <div class="post-stream">
+          <article class="topic-post"><div class="cooked"><p>第一段正文</p><s>删除的文字</s></div></article>
+          <article class="topic-post"><div class="cooked"><p>第二段正文</p></div></article>
+        </div>
+        <div class="suggested-topics">推荐主题</div>
+        </body></html>"""
+        self.serve(html, "text/html")
+        self.open(self.reader_url("html", name="forum"))
+        frame = self.page.frame_locator(".html-frame")
+        self.assertEqual(frame.locator(".reader-forum-post").count(), 2)
+        self.assertIn("第一段正文", frame.locator("body").inner_text())
+        self.assertIn("第二段正文", frame.locator("body").inner_text())
+        self.assertEqual(frame.locator("s").inner_text(), "删除的文字")
+        self.assertEqual(frame.locator(".d-header, .topic-timeline, .suggested-topics").count(), 0)
+
     def test_html_keyboard_turns_use_iframe_and_reduced_motion(self):
         self.context.clear_permissions()
         self.page.emulate_media(reduced_motion="reduce")
