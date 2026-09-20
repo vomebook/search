@@ -94,8 +94,25 @@ if (!document.hidden && navigator.onLine) {
 
   <aside id="left-sidebar" class="sidebar left-sidebar">
     <div class="sidebar-header">
-      <span id="sidebar-title">仓库列表</span>
-      <button id="sidebar-expand-btn" class="icon-btn-sm" title="展开/收起侧边栏" style="display:none">↔</button>
+      <div class="sidebar-context">
+        <button id="sidebar-back-btn" class="icon-btn-sm" type="button" aria-label="返回上一页" title="返回上一页" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span id="sidebar-title">仓库列表</span>
+        <span id="sidebar-count" class="sidebar-count"></span>
+      </div>
+      <div class="sidebar-header-actions">
+        <label id="sidebar-sort-group" class="sidebar-sort-group" title="仓库排序">
+          <span class="sidebar-sort-label">排序</span>
+          <select id="sidebar-sort-select" class="sidebar-sort-select" aria-label="仓库排序">
+            <option value="name">名称</option>
+            <option value="count">文件数</option>
+          </select>
+        </label>
+        <button id="sidebar-expand-btn" class="icon-btn-sm sidebar-expand-btn" type="button" aria-label="展开侧边栏" title="展开侧边栏" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="8 4 16 12 8 20"/><polyline points="16 4 24 12 16 20"/></svg>
+        </button>
+      </div>
     </div>
     <div id="sidebar-content" class="sidebar-content">
       <div class="sidebar-loading">加载中...</div>

@@ -66,6 +66,7 @@ const ICONS = {
 let extensionCounts = {};
 let repoExtensionCounts = {};
 let repoList = [];
+let sidebarRepoItems = [];
 let extensionList = [];
 let txtMetadata = { available: false, count: 0, byRepo: {} };
 let readerMetadata = { available: false, count: 0, byRepo: {} };
@@ -857,6 +858,7 @@ async function loadData() {
   try {
     const metadata = await corpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
     repoList = Array.isArray(metadata.repos) ? metadata.repos : [];
+    updateSidebarHeader();
     extensionCounts = {};
     for (const item of metadata.extensions || []) extensionCounts[item.name] = item.count || 0;
     repoExtensionCounts = metadata.extensionsByRepo || {};
@@ -1454,6 +1456,7 @@ const STATE = {
   repoFull: null,
   query: "",
   sort: "relevance",
+  sidebarSort: "name",
   page: 1,
   pageSize: 100,
   total: 0,
@@ -1547,7 +1550,11 @@ function cacheDOM() {
   DOM.rightSidebar = $("#right-sidebar");
   DOM.sidebarContent = $("#sidebar-content");
   DOM.sidebarTitle = $("#sidebar-title");
+  DOM.sidebarCount = $("#sidebar-count");
+  DOM.sidebarBackBtn = $("#sidebar-back-btn");
   DOM.sidebarExpandBtn = $("#sidebar-expand-btn");
+  DOM.sidebarSortGroup = $("#sidebar-sort-group");
+  DOM.sidebarSortSelect = $("#sidebar-sort-select");
   DOM.resultsList = $("#results-list");
   DOM.resultsContainer = $("#results-container");
   DOM.emptyState = $("#empty-state");
@@ -1661,6 +1668,60 @@ function highlightText(text, query) {
 }
 
 let routeInitialized = false;
+let hasAppRouteHistory = false;
+let lastObservedHash = window.location.hash;
+
+function updateSidebarExpandButton() {
+  if (!DOM.sidebarExpandBtn || !DOM.leftSidebar) return;
+  const expanded = DOM.leftSidebar.classList.contains("expanded-wide");
+  const visible = !STATE.isMobile && (STATE.mode === "repo" || expanded);
+  DOM.sidebarExpandBtn.style.display = visible ? "" : "none";
+  DOM.sidebarExpandBtn.classList.toggle("expanded", expanded);
+  DOM.sidebarExpandBtn.setAttribute("aria-label", expanded ? "收起侧边栏" : "展开侧边栏");
+  DOM.sidebarExpandBtn.title = expanded ? "收起侧边栏" : "展开侧边栏";
+}
+
+function getSidebarRepos() {
+  return sidebarRepoItems.length ? sidebarRepoItems : repoList;
+}
+
+function sortSidebarRepos(repos) {
+  return repos.slice().sort(function(a, b) {
+    if (STATE.sidebarSort === "count") {
+      return Number(b.count || 0) - Number(a.count || 0)
+        || String(a.name || "").localeCompare(String(b.name || ""), "zh");
+    }
+    return String(a.name || "").localeCompare(String(b.name || ""), "zh");
+  });
+}
+
+function updateSidebarHeader() {
+  if (!DOM.sidebarTitle) return;
+  const global = STATE.mode === "global";
+  const repos = getSidebarRepos();
+  DOM.sidebarTitle.textContent = global ? "仓库列表" : (STATE.repo || "仓库");
+  if (DOM.sidebarBackBtn) DOM.sidebarBackBtn.hidden = global;
+  if (DOM.sidebarSortGroup) DOM.sidebarSortGroup.hidden = !global;
+  if (DOM.sidebarSortSelect) DOM.sidebarSortSelect.value = STATE.sidebarSort;
+  if (DOM.sidebarCount) {
+    if (global) {
+      DOM.sidebarCount.textContent = repos.length ? repos.length.toLocaleString() + " 个仓库" : "";
+    } else {
+      const fullRepo = STATE.repoFull || "";
+      const repo = repos.find(function(item) { return item.name === fullRepo; });
+      DOM.sidebarCount.textContent = repo && Number.isFinite(Number(repo.count))
+        ? Number(repo.count).toLocaleString() + " 个文件"
+        : "";
+    }
+  }
+  updateSidebarExpandButton();
+}
+
+function returnFromSidebar() {
+  if (hasAppRouteHistory && history.length > 1) history.back();
+  else ROUTER.navigate("global");
+}
+
 const ROUTER = {
   parse: function() {
     const hash = window.location.hash.replace(/^#/, "");
@@ -1687,8 +1748,8 @@ const ROUTER = {
   navigate: function(mode, repo, folder) {
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = buildSearchURLParams({ includeQuery: false, displaySizes: true });
-    if (mode !== "global" && folder !== undefined && folder !== null) sp.set("path", folder);
-    else if (mode !== "global" && STATE.browserPath) sp.set("path", STATE.browserPath);
+    if (mode !== "global" && folder) sp.set("path", folder);
+    else if (mode !== "global" && folder === undefined && STATE.browserPath) sp.set("path", STATE.browserPath);
     const qs = sp.toString();
     if (qs) hash += "?" + qs;
     if (mode === "global") STATE.browserPath = "";
@@ -1698,6 +1759,7 @@ const ROUTER = {
     const route = this.parse();
     const prevMode = STATE.mode;
     const prevRepo = STATE.repo;
+    const wasSidebarExpanded = DOM.leftSidebar && DOM.leftSidebar.classList.contains("expanded-wide");
     saveSearchViewSnapshot();
     cancelPositionRestore();
     STATE.mode = route.mode;
@@ -1713,8 +1775,6 @@ const ROUTER = {
       STATE.filterFolderSelfs = [];
       STATE.folderTreeCollapsed = {};
       folderContentsCache.clear();
-      DOM.leftSidebar.classList.remove("expanded-wide");
-      if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
     }
     if (route.params.q !== undefined) {
       STATE.query = route.params.q;
@@ -1807,20 +1867,19 @@ const ROUTER = {
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
     if (DOM.mirrorLinksToggle) DOM.mirrorLinksToggle.checked = STATE.useMirrorLinks;
-    STATE.leftSidebarOpen = route.params.sidebar !== "0";
+    const keepMobileSidebarOpen = STATE.isMobile && STATE.leftSidebarOpen
+      && prevMode === "repo" && route.mode === "global" && route.params.sidebar === "0";
+    STATE.leftSidebarOpen = keepMobileSidebarOpen || route.params.sidebar !== "0";
     STATE.rightSidebarOpen = route.params.filters === "1";
     updateSidebarVisibility();
-    DOM.leftSidebar.classList.toggle("expanded-wide", route.params.wide === "1");
-    if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = route.params.wide === "1" ? "→" : "↔";
+    const keepSidebarExpanded = route.params.wide === "1"
+      || (prevMode !== STATE.mode && wasSidebarExpanded);
+    DOM.leftSidebar.classList.toggle("expanded-wide", keepSidebarExpanded);
     this.updateUI();
     updateRandomTxtVisibility();
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       this.onModeChanged();
-      if (route.params.wide === "1") {
-        DOM.leftSidebar.classList.add("expanded-wide");
-        if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "→";
-        syncStateToURL();
-      }
+      if (wasSidebarExpanded && !route.params.wide) syncStateToURL();
     } else {
       const routeId = ++routeRenderId;
       searchWithInitialFallback();
@@ -1838,15 +1897,11 @@ const ROUTER = {
     } else {
       DOM.headerTitle.textContent = STATE.repo;
       DOM.searchInput.placeholder = "搜索 " + STATE.repo + "...";
-      DOM.sidebarTitle.textContent = STATE.repo;
     }
+    updateSidebarHeader();
   },
   onModeChanged: function() {
-    if (DOM.sidebarExpandBtn) {
-      DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
-    }
-    DOM.leftSidebar.classList.remove("expanded-wide");
-    if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.textContent = "↔";
+    updateSidebarHeader();
     if (!STATE.isMobile && STATE.results.length === 0 && STATE.filterExtensions.length === 0) {
       DOM.resultsList.innerHTML = "";
       DOM.emptyState.style.display = "none";
@@ -4183,9 +4238,10 @@ function renderSidebar(routeId) {
 }
 
 function renderRepoListItems(repos) {
+  const ordered = sortSidebarRepos(repos);
   var html = "";
-  for (var i = 0; i < repos.length; i++) {
-    var repo = repos[i];
+  for (var i = 0; i < ordered.length; i++) {
+    var repo = ordered[i];
     var short = repo.name.split("/").pop();
     html += '<div class="repo-list-item" data-repo="' + escapeHTML(short) + '">';
     html += '<svg class="repo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
@@ -4194,6 +4250,7 @@ function renderRepoListItems(repos) {
     html += '</div>';
   }
   DOM.sidebarContent.innerHTML = html;
+  updateSidebarHeader();
 }
 
 async function renderRepoList(routeId) {
@@ -4204,6 +4261,7 @@ async function renderRepoList(routeId) {
     var initial = await loadSidebarInitial(null);
     if (initial && Array.isArray(initial.repos) && initial.repos.length) {
       if (routeId && routeId !== routeRenderId) return;
+      sidebarRepoItems = initial.repos.slice();
       renderRepoListItems(initial.repos);
       repos = initial.repos;
     }
@@ -4214,9 +4272,12 @@ async function renderRepoList(routeId) {
   }
   if (routeId && routeId !== routeRenderId) return;
   if (!repos || !Array.isArray(repos) || repos.length === 0) {
+    sidebarRepoItems = [];
     DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
+    updateSidebarHeader();
     return;
   }
+  sidebarRepoItems = repos.slice();
   renderRepoListItems(repos);
 }
 
@@ -4227,7 +4288,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var div = document.createElement("div");
     div.className = "browser-item";
     div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
-    div.addEventListener("click", (function(fp) { return function() { renderBrowser(fp, ++routeRenderId); }; })(f.path));
+    div.addEventListener("click", (function(fp) { return function() { ROUTER.navigate("repo", STATE.repo, fp); }; })(f.path));
     list.appendChild(div);
   }
   for (var k = 0; k < (data.files || []).length; k++) {
@@ -4273,34 +4334,32 @@ function renderBrowserListItems(list, data, currentRepo, path) {
   }
 }
 
+function createSidebarBreadcrumb(path) {
+  const breadcrumb = document.createElement("div");
+  breadcrumb.className = "sidebar-breadcrumb";
+  breadcrumb.setAttribute("aria-label", "当前路径");
+  const parts = path ? path.split("/") : [];
+  breadcrumb.innerHTML = '<span class="crumb-item' + (!path ? ' current' : '') + '" data-path="">根目录</span>';
+  for (let i = 0; i < parts.length; i++) {
+    const partPath = parts.slice(0, i + 1).join("/");
+    breadcrumb.innerHTML += '<span class="crumb-sep">/</span>';
+    breadcrumb.innerHTML += '<span class="crumb-item' + (i === parts.length - 1 ? ' current' : '') + '" data-path="' + escapeHTML(partPath) + '">' + escapeHTML(parts[i]) + '</span>';
+  }
+  breadcrumb.querySelectorAll(".crumb-item").forEach(function(item) {
+    item.addEventListener("click", function() {
+      if (!item.classList.contains("current")) ROUTER.navigate("repo", STATE.repo, item.dataset.path);
+    });
+  });
+  return breadcrumb;
+}
+
 async function renderBrowser(path, routeId) {
   if (routeId && routeId !== routeRenderId) return;
   STATE.browserPath = path;
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
   var currentRepo = STATE.repoFull;
-  const backBtn = document.createElement("div");
-  backBtn.className = "back-to-global";
-  backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回全局搜索';
-  backBtn.addEventListener("click", function() { ROUTER.navigate("global"); });
-  DOM.sidebarContent.appendChild(backBtn);
-  if (path) {
-    const bc = document.createElement("div");
-    bc.className = "sidebar-breadcrumb";
-    const parts = path.split("/");
-    bc.innerHTML = '<span class="crumb-item" data-path="">根目录</span>';
-    for (var p = 0; p < parts.length; p++) {
-      var pp = parts.slice(0, p + 1).join("/");
-      bc.innerHTML += '<span class="crumb-sep">/</span>';
-      bc.innerHTML += '<span class="crumb-item' + (p === parts.length - 1 ? ' current' : '') + '" data-path="' + escapeHTML(pp) + '">' + escapeHTML(parts[p]) + '</span>';
-    }
-    bc.querySelectorAll(".crumb-item").forEach(function(el) {
-      el.addEventListener("click", function() {
-        if (!el.classList.contains("current")) renderBrowser(el.dataset.path, ++routeRenderId);
-      });
-    });
-    DOM.sidebarContent.appendChild(bc);
-  }
+  DOM.sidebarContent.appendChild(createSidebarBreadcrumb(path));
   const list = document.createElement("div");
   list.className = "browser-list";
   list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
@@ -5474,7 +5533,7 @@ function applyMobileMode() {
   }
   updateSidebarVisibility();
   document.documentElement.classList.remove("mobile-boot");
-  if (DOM.sidebarExpandBtn) DOM.sidebarExpandBtn.style.display = (STATE.mode === "repo" && !STATE.isMobile) ? "" : "none";
+  updateSidebarHeader();
   updateSelectionUI();
   requestAnimationFrame(updateScrollTrack);
 }
@@ -5485,8 +5544,8 @@ function toggleLeftSidebar() {
   STATE.leftSidebarOpen = !STATE.leftSidebarOpen;
   if (!STATE.leftSidebarOpen) {
     DOM.leftSidebar.classList.remove("expanded-wide");
-    DOM.sidebarExpandBtn.textContent = "↔";
   }
+  updateSidebarHeader();
   syncStateToURL();
   if (STATE.isMobile && STATE.leftSidebarOpen && STATE.rightSidebarOpen) STATE.rightSidebarOpen = false;
   updateSidebarVisibility();
@@ -5671,6 +5730,7 @@ function setupResultDelegation() {
 
 async function init() {
   cacheDOM();
+  STATE.sidebarSort = localStorage.getItem("sidebarSort") === "count" ? "count" : "name";
   await initSearchPositions();
   setupSearchPositionControls();
   setupSearchPositionSaving();
@@ -5792,8 +5852,14 @@ async function init() {
   });
   DOM.sidebarExpandBtn.addEventListener("click", function() {
     DOM.leftSidebar.classList.toggle("expanded-wide");
-    DOM.sidebarExpandBtn.textContent = DOM.leftSidebar.classList.contains("expanded-wide") ? "→" : "↔";
+    updateSidebarHeader();
     syncStateToURL();
+  });
+  DOM.sidebarBackBtn.addEventListener("click", returnFromSidebar);
+  DOM.sidebarSortSelect.addEventListener("change", function() {
+    STATE.sidebarSort = DOM.sidebarSortSelect.value === "count" ? "count" : "name";
+    localStorage.setItem("sidebarSort", STATE.sidebarSort);
+    if (STATE.mode === "global" && sidebarRepoItems.length) renderRepoListItems(sidebarRepoItems);
   });
   DOM.themeBtn.addEventListener("click", toggleTheme);
   DOM.mobileToggleBtn.addEventListener("click", toggleMobile);
@@ -5921,6 +5987,8 @@ async function init() {
   window.addEventListener("popstate", function(event) { restoreReaderOverlay(event.state); });
   window.addEventListener("hashchange", function() {
     if (readerOverlay) return;
+    if (window.location.hash !== lastObservedHash) hasAppRouteHistory = true;
+    lastObservedHash = window.location.hash;
     ROUTER.apply();
   });
   window.addEventListener("resize", function() {
