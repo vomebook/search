@@ -227,6 +227,14 @@
       declaredBytes += size;
     }
     if (declaredBytes > LIMITS.chapterTotalBytes) throw error("READER_RESOURCE_LIMIT");
+    if (manifest.toc !== undefined) {
+      if (!Array.isArray(manifest.toc)) throw error("EPUB_INVALID");
+      for (const item of manifest.toc)
+        if (!item || typeof item.title !== "string" || !item.title.trim() ||
+            !Number.isInteger(item.chapter) || item.chapter < 1 || item.chapter > manifest.chapters.length ||
+            !Number.isInteger(item.depth) || item.depth < 0 || item.depth > 64 ||
+            typeof item.fragment !== "string") throw error("EPUB_INVALID");
+    }
     return manifest;
   }
   function validatePdfPageManifest(manifest) {
