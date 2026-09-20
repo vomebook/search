@@ -263,11 +263,39 @@ class BrowserBehaviorTest(unittest.TestCase):
         try:
             started = time.perf_counter()
             self.load("#/VOMEBOOK")
-            self.page.locator("#left-sidebar .back-to-global").wait_for(timeout=1000)
+            self.page.locator("#sidebar-back-btn").wait_for(state="visible", timeout=1000)
             self.assertLess(time.perf_counter() - started, 2)
             self.assertEqual(self.page_errors, [])
         finally:
             self.server_state.delays.pop(asset_path, None)
+
+    def test_sidebar_header_back_sort_and_expanded_global_state(self):
+        self.load()
+        self.page.locator("#sidebar-sort-select").select_option("count")
+        self.assertEqual(self.page.evaluate("STATE.sidebarSort"), "count")
+        self.page.locator("#sidebar-content .repo-list-item").first.wait_for(state="visible")
+        self.page.locator("#sidebar-content .repo-list-item").first.click()
+        self.page.locator("#sidebar-back-btn").wait_for(state="visible")
+        self.assertEqual(self.page.locator("#sidebar-title").inner_text(), "VOMEBOOK")
+        self.assertTrue(self.page.locator("#sidebar-sort-group").is_hidden())
+        self.assertEqual(self.page.locator(".sidebar-breadcrumb").inner_text(), "根目录")
+
+        self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK', 'docs')")
+        self.page.wait_for_function("STATE.browserPath === 'docs'")
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("STATE.browserPath === ''")
+        self.assertEqual(self.page.locator(".sidebar-breadcrumb").inner_text(), "根目录")
+
+        self.page.locator("#sidebar-expand-btn").click()
+        self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('expanded-wide')"))
+        self.page.locator("#sidebar-back-btn").click()
+        self.page.wait_for_function("STATE.mode === 'global'")
+        self.assertTrue(self.page.locator("#sidebar-sort-group").is_visible())
+        self.assertTrue(self.page.locator("#sidebar-expand-btn").is_visible())
+        self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('expanded-wide')"))
+        self.page.locator("#sidebar-expand-btn").click()
+        self.assertFalse(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('expanded-wide')"))
+        self.assertEqual(self.page_errors, [])
 
     def test_local_search_updates_hash_and_visible_results(self):
         self.load()
@@ -621,6 +649,24 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertTrue(self.page.locator("#right-sidebar").evaluate("el => el.classList.contains('open')"))
         self.page.locator("#overlay").dispatch_event("click")
         self.assertFalse(self.page.locator("#right-sidebar").evaluate("el => el.classList.contains('open')"))
+        self.assertEqual(self.page_errors, [])
+
+    def test_mobile_sidebar_history_back_keeps_the_drawer_open(self):
+        self.context.close()
+        self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
+        self.page = self.context.new_page()
+        self.page_errors = []
+        self.page.on("pageerror", lambda error: self.page_errors.append(str(error)))
+        self.install_routes(self.page)
+        self.load("#/?sidebar=0")
+        self.page.locator("#hamburger-btn").click()
+        self.page.locator("#sidebar-content .repo-list-item").first.wait_for(state="visible")
+        self.page.locator("#sidebar-content .repo-list-item").first.click()
+        self.page.wait_for_function("STATE.mode === 'repo'")
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("STATE.mode === 'global'")
+        self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('open')"))
+        self.assertTrue(self.page.locator("#overlay").evaluate("el => el.classList.contains('open')"))
         self.assertEqual(self.page_errors, [])
 
     def test_ime_defers_search_then_api_mode_uses_mocked_search(self):
