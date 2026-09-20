@@ -724,8 +724,27 @@ class MOBI6 {
         // because only then can they be referenced in the DOM
         // NOTE: must be built BEFORE getGuide()/createDocument() so that sections
         // cached during init() already have anchor elements inserted.
-        this.#fileposList = [...new Set(
-            Array.from(str.matchAll(fileposRegex), m => m[1]))]
+        let ncx
+        try {
+            ncx = await this.mobi.getNCX()
+        } catch (e) {
+            console.warn(e)
+        }
+        const offsets = []
+        const mapNCX = items => items?.map(({ label, offset, children }) => {
+            if (!Number.isSafeInteger(offset) || offset < 0 || offset >= totalLength)
+                throw new Error('Invalid MOBI navigation offset')
+            offsets.push(String(offset))
+            return { label: unescapeHTML(label), href: `filepos:${offset}`,
+                subitems: mapNCX(children) }
+        })
+        try {
+            this.toc = mapNCX(ncx)
+        } catch (e) {
+            console.warn(e)
+        }
+        this.#fileposList = [...new Set([
+            ...Array.from(str.matchAll(fileposRegex), m => m[1]), ...offsets])]
             .map(filepos => ({ filepos, number: Number(filepos) }))
             .sort((a, b) => a.number - b.number)
 
@@ -733,7 +752,7 @@ class MOBI6 {
             this.landmarks = await this.getGuide()
             const tocHref = this.landmarks
                 .find(({ type }) => type?.includes('toc'))?.href
-            if (tocHref) {
+            if (tocHref && !this.toc?.length) {
                 const { index } = this.resolveHref(tocHref)
                 const doc = await this.sections[index].createDocument()
                 let lastItem
