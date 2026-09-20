@@ -486,9 +486,10 @@ body.light .header-logo-icon-light {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  height: 38px;
+  min-height: 38px;
+  padding: 4px 12px;
   font-size: 12px;
-  min-height: 42px;
   font-weight: 600;
   color: var(--on-surface-variant);
   text-transform: uppercase;
