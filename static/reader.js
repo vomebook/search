@@ -1241,15 +1241,23 @@ function currentReaderUrl() {
   return url;
 }
 async function loadReaderRestoration() {
+  const currentEntry = (entry) => {
+    if (
+      capability.mode === "epub-chapters" &&
+      /-epub-chapters-v5\//.test(chapterManifestUrl || sourceUrl) &&
+      entry?.chapterManifest !== (chapterManifestUrl || sourceUrl)
+    ) return null;
+    return entry;
+  };
   try {
     const bookmarkId = params.get("bookmark"),
       bookmarkSource = params.get("bookmark_source");
     if (bookmarkId && bookmarkSource === sourceUrl) {
       const entries = await VoiceOfMLReaderStore.listBookmarks(sourceUrl);
       const bookmark = entries.find((entry) => entry.id === bookmarkId && entry.url === sourceUrl);
-      if (bookmark) return bookmark;
+      if (bookmark) return currentEntry(bookmark);
     }
-    return await VoiceOfMLReaderStore.get(sourceUrl);
+    return currentEntry(await VoiceOfMLReaderStore.get(sourceUrl));
   } catch (_) {
     restorationFailed = true;
     return null;
@@ -2155,7 +2163,7 @@ function trimPdfManifestImages(protectedShell) {
   }
 }
 const EPUB_HTML_TAGS = new Set(
-  "a,abbr,address,area,article,aside,audio,b,base,bdi,bdo,blockquote,body,br,button,canvas,caption,cite,code,col,colgroup,data,datalist,dd,del,details,dfn,dialog,div,dl,dt,em,fieldset,figcaption,figure,footer,form,h1,h2,h3,h4,h5,h6,head,header,hgroup,hr,html,i,iframe,img,input,ins,kbd,label,legend,li,link,main,map,mark,menu,meta,meter,nav,noscript,object,ol,optgroup,option,output,p,picture,pre,progress,q,rp,rt,ruby,s,samp,script,search,section,select,slot,small,source,span,strong,style,sub,summary,sup,table,tbody,td,template,textarea,tfoot,th,thead,time,title,tr,track,u,ul,var,video,wbr".split(
+  "a,abbr,address,area,article,aside,audio,b,base,bdi,bdo,blockquote,body,br,button,canvas,caption,cite,code,col,colgroup,data,datalist,dd,del,details,dfn,dialog,div,dl,dt,em,fieldset,figcaption,figure,footer,form,h1,h2,h3,h4,h5,h6,head,header,hgroup,hr,html,i,iframe,img,input,ins,kbd,label,legend,li,link,main,map,mark,menu,meta,meter,nav,noscript,object,ol,optgroup,option,output,p,picture,pre,progress,q,rb,rp,rt,rtc,ruby,s,samp,script,search,section,select,slot,small,source,span,strong,style,sub,summary,sup,table,tbody,td,template,textarea,tfoot,th,thead,time,title,tr,track,u,ul,var,video,wbr".split(
     ","
   )
 );
@@ -3113,6 +3121,7 @@ async function renderChapterManifest(prepared) {
         const article = document.createElement("article");
         article.className = "reader-markdown reader-epub-chapter";
         article.dataset.chapter = String(chapter.index);
+        if (doc.body?.id) article.id = doc.body.id;
         article.innerHTML = doc.body ? doc.body.innerHTML : "";
         // The generated text index includes head text (e.g. the chapter title).
         article._chapterSearchHead = doc.head ? document.importNode(doc.head, true) : null;
@@ -3151,7 +3160,11 @@ async function renderChapterManifest(prepared) {
     try {
       id = decodeURIComponent(id);
     } catch (_) {}
-    const anchor = id && node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`);
+    const anchor =
+      id &&
+      (node.id === id
+        ? node
+        : node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`));
     (anchor || node).scrollIntoView({ block: "start" });
     updateProgressTools();
     scheduleSave();
@@ -3176,7 +3189,21 @@ async function renderChapterManifest(prepared) {
     const fragment = target.hash;
     target.hash = "";
     const chapter = manifest.chapters.find((item) => chapterUrl(item) === target.href);
-    if (!chapter) return;
+    if (!chapter) {
+      // A stale or missing book document must not navigate out to an asset 404.
+      if (/\.(?:xhtml?|html?)$/i.test(target.pathname)) {
+        event.preventDefault();
+        let message = link.nextElementSibling;
+        if (!message?.classList.contains("reader-chapter-link-error")) {
+          message = document.createElement("span");
+          message.className = "reader-chapter-link-error";
+          message.setAttribute("role", "status");
+          message.textContent = "（无法定位此书内链接）";
+          link.after(message);
+        }
+      }
+      return;
+    }
     event.preventDefault();
     const generation = beginReaderNavigation();
     try {
@@ -3337,11 +3364,16 @@ function captureChapterPosition() {
   return chapter
     ? {
         chapterIndex: Number(chapter.dataset.chapter),
+        chapterManifest: chapterManifestUrl || sourceUrl,
         chapterOffset: marker - chapter.getBoundingClientRect().top
       }
     : null;
 }
 async function restoreChapterPosition(entry, generation) {
+  if (
+    /-epub-chapters-v5\//.test(chapterManifestUrl || sourceUrl) &&
+    entry.chapterManifest !== (chapterManifestUrl || sourceUrl)
+  ) return false;
   if (!chapterManifestLoader || !Number.isInteger(entry.chapterIndex)) return false;
   const chapter = await chapterManifestLoader(entry.chapterIndex);
   if (!chapter?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;

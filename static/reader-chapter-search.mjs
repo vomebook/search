@@ -58,7 +58,7 @@ export function chapterTextMap(roots) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const node = walker.currentNode;
-      if (node.parentElement?.closest("script,style,noscript")) continue;
+      if (node.parentElement?.closest("script,style,noscript,.reader-chapter-link-error")) continue;
       if (length) pendingSpace = { node: null, start: 0, end: 0 };
       const pattern = /&(?:#[xX][0-9a-fA-F]+;?|#\d+;?|[a-zA-Z][a-zA-Z0-9]+;?)|[\s\u0085\u001c-\u001f]+|[^&\s\u0085\u001c-\u001f]+|&/gu;
       for (const match of node.data.matchAll(pattern)) {
