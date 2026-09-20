@@ -1662,8 +1662,9 @@ function highlightText(text, query) {
 }
 
 let routeInitialized = false;
-let hasAppRouteHistory = false;
-let lastObservedHash = window.location.hash;
+let sidebarBackGuardActive = false;
+let sidebarBackGuardRoute = "";
+let sidebarBackGuardRelease = null;
 
 function updateSidebarExpandButton() {
   if (!DOM.sidebarExpandBtn || !DOM.leftSidebar) return;
@@ -1683,9 +1684,60 @@ function updateSidebarHeader() {
   updateSidebarExpandButton();
 }
 
+function ensureSidebarBackGuard() {
+  if (!STATE.isMobile || !STATE.leftSidebarOpen) return;
+  const route = location.href;
+  if (sidebarBackGuardActive && sidebarBackGuardRoute === route) return;
+  history.pushState({ voiceSidebarGuard: true }, "", route);
+  sidebarBackGuardActive = true;
+  sidebarBackGuardRoute = route;
+}
+
+function releaseSidebarBackGuard(onReleased) {
+  if (!sidebarBackGuardActive) {
+    onReleased();
+    return;
+  }
+  sidebarBackGuardActive = false;
+  sidebarBackGuardRoute = "";
+  sidebarBackGuardRelease = onReleased;
+  history.back();
+}
+
+function navigateSidebarParent() {
+  if (STATE.mode !== "repo") return ROUTER.navigate("global");
+  const parts = String(STATE.browserPath || "").split("/").filter(Boolean);
+  const parent = parts.slice(0, -1).join("/");
+  ROUTER.navigate(parts.length ? "repo" : "global", STATE.repo, parent);
+}
+
 function returnFromSidebar() {
-  if (hasAppRouteHistory && history.length > 1) history.back();
-  else ROUTER.navigate("global");
+  releaseSidebarBackGuard(navigateSidebarParent);
+}
+
+function closeLeftSidebar() {
+  releaseSidebarBackGuard(function() {
+    STATE.leftSidebarOpen = false;
+    DOM.leftSidebar.classList.remove("expanded-wide");
+    updateSidebarVisibility();
+    syncStateToURL();
+  });
+}
+
+function handleSidebarBackNavigation() {
+  if (sidebarBackGuardRelease) {
+    const release = sidebarBackGuardRelease;
+    sidebarBackGuardRelease = null;
+    release();
+    return true;
+  }
+  if (!STATE.isMobile || !STATE.leftSidebarOpen || !sidebarBackGuardActive) return false;
+  if (location.href !== sidebarBackGuardRoute) return false;
+  sidebarBackGuardActive = false;
+  sidebarBackGuardRoute = "";
+  if (STATE.mode === "repo") navigateSidebarParent();
+  else closeLeftSidebar();
+  return true;
 }
 
 const ROUTER = {
@@ -1916,7 +1968,9 @@ function syncStateToURL() {
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
   if (window.location.hash !== hash) {
-    history.replaceState(null, "", hash);
+    const state = history.state && history.state.voiceSidebarGuard ? history.state : null;
+    history.replaceState(state, "", hash);
+    if (state && sidebarBackGuardActive) sidebarBackGuardRoute = location.href;
   }
   persistSearchSession();
 }
@@ -5503,14 +5557,16 @@ function applyMobileMode() {
 function autoDetectMobile() { return window.innerWidth <= 768; }
 
 function toggleLeftSidebar() {
-  STATE.leftSidebarOpen = !STATE.leftSidebarOpen;
-  if (!STATE.leftSidebarOpen) {
-    DOM.leftSidebar.classList.remove("expanded-wide");
+  if (STATE.leftSidebarOpen) {
+    closeLeftSidebar();
+    return;
   }
-  updateSidebarHeader();
-  syncStateToURL();
+  STATE.leftSidebarOpen = true;
   if (STATE.isMobile && STATE.leftSidebarOpen && STATE.rightSidebarOpen) STATE.rightSidebarOpen = false;
   updateSidebarVisibility();
+  updateSidebarHeader();
+  syncStateToURL();
+  ensureSidebarBackGuard();
 }
 
 function toggleRightSidebar() {
@@ -5876,7 +5932,7 @@ async function init() {
     syncStateToURL();
   });
   DOM.overlay.addEventListener("click", function() {
-    STATE.leftSidebarOpen = false;
+    if (STATE.leftSidebarOpen) closeLeftSidebar();
     STATE.rightSidebarOpen = false;
     updateSidebarVisibility();
     syncStateToURL();
@@ -5940,11 +5996,15 @@ async function init() {
   setupResultDelegation();
   setupDownloadIntentWarming();
   window.addEventListener("message", handleReaderMessage);
-  window.addEventListener("popstate", function(event) { restoreReaderOverlay(event.state); });
+  window.addEventListener("popstate", function(event) {
+    if (readerOverlay) {
+      restoreReaderOverlay(event.state);
+      return;
+    }
+    if (handleSidebarBackNavigation()) return;
+  });
   window.addEventListener("hashchange", function() {
     if (readerOverlay) return;
-    if (window.location.hash !== lastObservedHash) hasAppRouteHistory = true;
-    lastObservedHash = window.location.hash;
     ROUTER.apply();
   });
   window.addEventListener("resize", function() {

@@ -281,7 +281,7 @@ class BrowserBehaviorTest(unittest.TestCase):
 
         self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK', 'docs')")
         self.page.wait_for_function("STATE.browserPath === 'docs'")
-        self.page.evaluate("history.back()")
+        self.page.locator("#sidebar-back-btn").click()
         self.page.wait_for_function("STATE.browserPath === ''")
         self.assertEqual(self.page.locator(".sidebar-breadcrumb").inner_text(), "根目录")
 
@@ -665,6 +665,30 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.wait_for_function("STATE.mode === 'global'")
         self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('open')"))
         self.assertTrue(self.page.locator("#overlay").evaluate("el => el.classList.contains('open')"))
+        self.assertEqual(self.page_errors, [])
+
+    def test_mobile_sidebar_back_returns_by_directory_level(self):
+        self.context.close()
+        self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
+        self.page = self.context.new_page()
+        self.page_errors = []
+        self.page.on("pageerror", lambda error: self.page_errors.append(str(error)))
+        self.install_routes(self.page)
+        self.load("#/?sidebar=0")
+        self.page.locator("#hamburger-btn").click()
+        self.page.locator("#sidebar-content .repo-list-item").first.wait_for(state="visible")
+        self.page.locator("#sidebar-content .repo-list-item").first.click()
+        self.page.wait_for_function("STATE.mode === 'repo' && STATE.browserPath === ''")
+        self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK', 'docs')")
+        self.page.wait_for_function("STATE.browserPath === 'docs'")
+        self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK', 'docs/part')")
+        self.page.wait_for_function("STATE.browserPath === 'docs/part'")
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("STATE.browserPath === 'docs'")
+        self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('open')"))
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("STATE.browserPath === ''")
+        self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('open')"))
         self.assertEqual(self.page_errors, [])
 
     def test_ime_defers_search_then_api_mode_uses_mocked_search(self):
