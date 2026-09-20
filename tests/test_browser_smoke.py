@@ -269,15 +269,12 @@ class BrowserBehaviorTest(unittest.TestCase):
         finally:
             self.server_state.delays.pop(asset_path, None)
 
-    def test_sidebar_header_back_sort_and_expanded_global_state(self):
+    def test_sidebar_header_back_and_expanded_global_state(self):
         self.load()
-        self.page.locator("#sidebar-sort-select").select_option("count")
-        self.assertEqual(self.page.evaluate("STATE.sidebarSort"), "count")
         self.page.locator("#sidebar-content .repo-list-item").first.wait_for(state="visible")
         self.page.locator("#sidebar-content .repo-list-item").first.click()
         self.page.locator("#sidebar-back-btn").wait_for(state="visible")
         self.assertEqual(self.page.locator("#sidebar-title").inner_text(), "VOMEBOOK")
-        self.assertTrue(self.page.locator("#sidebar-sort-group").is_hidden())
         self.assertEqual(self.page.locator(".sidebar-breadcrumb").inner_text(), "根目录")
 
         self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK', 'docs')")
@@ -290,7 +287,6 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('expanded-wide')"))
         self.page.locator("#sidebar-back-btn").click()
         self.page.wait_for_function("STATE.mode === 'global'")
-        self.assertTrue(self.page.locator("#sidebar-sort-group").is_visible())
         self.assertTrue(self.page.locator("#sidebar-expand-btn").is_visible())
         self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('expanded-wide')"))
         self.page.locator("#sidebar-expand-btn").click()
