@@ -630,6 +630,20 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertNotIn("folder_self=", self.page.evaluate("location.hash"))
         self.assertEqual(self.page_errors, [])
 
+    def test_result_folder_filter_does_not_survive_repository_mode_round_trip(self):
+        self.load()
+        self.page.evaluate("""() => {
+          location.hash = '#/VOMEBOOK?folder_self=docs';
+          ROUTER.apply();
+        }""")
+        self.page.wait_for_function("STATE.mode === 'repo' && STATE.filterFolderSelfs.includes('docs')")
+        self.page.evaluate("ROUTER.navigate('global')")
+        self.page.wait_for_function("STATE.mode === 'global' && STATE.filterFolderSelfs.length === 0")
+        self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK')")
+        self.page.wait_for_function("STATE.mode === 'repo' && STATE.filterFolderSelfs.length === 0")
+        self.assertIsNone(self.page.evaluate("sessionStorage.getItem('voml_folder_filter:VOMEBOOK')"))
+        self.assertEqual(self.page_errors, [])
+
     def test_mobile_drawers_are_mutually_exclusive_and_overlay_closes_them(self):
         self.context.close()
         self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)

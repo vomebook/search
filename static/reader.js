@@ -438,7 +438,7 @@ function foliateSectionQuery(article, selector) {
 function foliateSectionCandidates() {
   return [
     ...content.querySelectorAll(
-      ".foliate-continuous > article[data-section]:not(.foliate-section-placeholder)"
+      ".foliate-continuous > article[data-section]:not(.foliate-section-placeholder), .reader-epub-chapter"
     )
   ].flatMap((article) => [
     article,
@@ -969,6 +969,7 @@ async function navigateTocEntry(index) {
 function createTocRow(entry, index) {
   const row = document.createElement("div");
   row.className = "panel-item toc-item";
+  row.dataset.tocIndex = String(index);
   row.style.setProperty("--toc-depth", String(entry.depth || 0));
   const link = document.createElement("div");
   link.className = "panel-item-main";
@@ -1065,13 +1066,14 @@ function updateTocCurrentMark() {
   const rows = [...document.querySelectorAll("#toc-list .toc-item")];
   if (documentState.pageCount > 1 && documentState.page > 0) {
     let pageIndex = -1;
-    for (const [index, row] of rows.entries()) {
-      const match = row.textContent.match(/第\s*(\d+)\s*页/u);
+    for (const [index, entry] of navigationState.tocEntries.entries()) {
+      const match = entry.label.match(/第\s*(\d+)\s*页/u);
       if (match && Number(match[1]) <= documentState.page) pageIndex = index;
     }
     if (pageIndex >= 0) updateNavigationState({ currentChapterIndex: pageIndex });
   }
-  for (const [index, row] of rows.entries()) {
+  for (const row of rows) {
+    const index = Number(row.dataset.tocIndex);
     let mark = row.querySelector(".toc-current-mark");
     if (!mark) {
       mark = document.createElement("span");
@@ -1099,6 +1101,14 @@ function syncFoliateScrollLocation() {
   for (const [index, entry] of navigationState.tocEntries.entries()) {
     if (entry.sectionIndex !== sectionIndex) continue;
     let position = sectionNode.getBoundingClientRect().top;
+    if (entry.anchor) {
+      const root = foliateSectionRoot(sectionNode);
+      const anchor = entry.anchor({
+        getElementById: (id) => root.querySelector(`[id="${CSS.escape(id)}"]`),
+        querySelector: (selector) => root.querySelector(selector)
+      });
+      if (anchor) position = anchor.getBoundingClientRect().top;
+    }
     if (entry.fragment) {
       const anchor = foliateSectionQuery(
         sectionNode,
@@ -3115,7 +3125,8 @@ async function renderChapterManifest(prepared) {
     const next = [...frame.querySelectorAll(".reader-epub-chapter")].find(
       (node) => Number(node.dataset.chapter) > Number(article.dataset.chapter)
     );
-    frame.insertBefore(article, next || null);
+    foliateScrollAnchors.preserve(() => frame.insertBefore(article, next || null));
+    foliateScrollAnchors.observe(article);
     return article;
   };
   const ensureSentinel = (chapter) => {
@@ -3140,13 +3151,19 @@ async function renderChapterManifest(prepared) {
     chapterManifestObserver.observe(marker);
     return marker;
   };
+  const chapterTarget = (article, fragment) =>
+    !fragment || article.id === fragment ? article :
+      article.querySelector(`[id="${CSS.escape(fragment)}"], [name="${CSS.escape(fragment)}"]`);
   const setChapterToc = () =>
     setToc(
-      manifest.chapters.map((item) => ({
-        label: item.title || `章节 ${item.index}`,
-        chapterIndex: item.index,
-        depth: 0,
-        activate: (generation) => activateChapter(item, generation)
+      (manifest.toc ?? manifest.chapters.map((item) => ({
+        title: item.title || `章节 ${item.index}`, chapter: item.index, depth: 0, fragment: ""
+      }))).map((item) => ({
+        label: item.title,
+        chapterIndex: item.chapter,
+        fragment: item.fragment,
+        depth: item.depth,
+        activate: (generation) => activateChapter(manifest.chapters[item.chapter - 1], generation, item.fragment)
       }))
     );
   const fetchChapter = async (chapter) => {
@@ -3194,10 +3211,9 @@ async function renderChapterManifest(prepared) {
         insertChapter(article);
         loaded.add(chapter.index);
         inserted = true;
-        const entry = navigationState.tocEntries.find(
-          (entry) => entry.chapterIndex === chapter.index
-        );
-        if (entry) entry.target = article;
+        for (const entry of navigationState.tocEntries)
+          if (entry.chapterIndex === chapter.index)
+            entry.target = chapterTarget(article, entry.fragment);
         const next = manifest.chapters.find((item) => item.index === chapter.index + 1);
         if (next) ensureSentinel(next);
       } catch (error) {
@@ -3219,12 +3235,12 @@ async function renderChapterManifest(prepared) {
     try {
       id = decodeURIComponent(id);
     } catch (_) {}
-    const anchor =
-      id &&
-      (node.id === id
-        ? node
-        : node.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`));
-    (anchor || node).scrollIntoView({ block: "start" });
+    const anchor = chapterTarget(node, id);
+    if (!anchor) throw new Error("EPUB_MISSING_ANCHOR");
+    foliateScrollAnchors.invalidate();
+    anchor.scrollIntoView({ block: "start" });
+    foliateScrollAnchors.remember();
+    syncHeadingLocation();
     updateProgressTools();
     scheduleSave();
     return true;
@@ -4172,6 +4188,7 @@ async function foliateTocEntries(view, sections) {
         const target = await view.book.resolveHref(entry.href),
           section = target && view.book.sections[target.index];
         entry.sectionIndex = section ? sections.indexOf(section) : -1;
+        entry.anchor = typeof target?.anchor === "function" ? target.anchor : null;
         const fragment = entry.href.split("#")[1] || "";
         entry.fragment = fragment ? decodeURIComponent(fragment) : "";
       } catch (_) {

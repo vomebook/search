@@ -723,7 +723,6 @@ function parseSizeStr(str) {
 }
 var HISTORY_KEY = "voml_search_history";
 var HISTORY_MAX = 20;
-var FOLDER_FILTER_STORAGE_PREFIX = "voml_folder_filter:";
 var EXT_FILTER_STORAGE_KEY = "voml_ext_filter:global";
 
 function getHistory() {
@@ -738,25 +737,10 @@ function saveHistory(list) {
   } catch (e) {}
 }
 
-function folderFilterStorageKey(repo) {
-  return FOLDER_FILTER_STORAGE_PREFIX + (repo || "global");
-}
-
 function mergeFolderFilters(selfs, subtrees) {
   return (selfs || []).concat((subtrees || []).filter(function(path) {
     return (selfs || []).indexOf(path) < 0;
   }));
-}
-
-function loadStoredFolderFilters(repo) {
-  try {
-    var data = JSON.parse(sessionStorage.getItem(folderFilterStorageKey(repo)) || "{}");
-    var selfs = Array.isArray(data.selfs) ? data.selfs.filter(function(path) { return typeof path === "string"; }) : [];
-    var subtrees = Array.isArray(data.subtrees) ? data.subtrees.filter(function(path) { return typeof path === "string"; }) : [];
-    return { selfs: selfs, subtrees: subtrees, folders: mergeFolderFilters(selfs, subtrees) };
-  } catch (e) {
-    return { selfs: [], subtrees: [], folders: [] };
-  }
 }
 
 function loadStoredExtensionFilters() {
@@ -766,19 +750,6 @@ function loadStoredExtensionFilters() {
   } catch (e) {
     return [];
   }
-}
-
-function saveStoredFolderFilters(repo) {
-  if (!repo) return;
-  var selfs = (STATE.filterFolderSelfs || []).filter(function(path) { return typeof path === "string"; });
-  var subtrees = (STATE.filterFolderSubtrees || []).filter(function(path) { return typeof path === "string"; });
-  try {
-    if (!selfs.length && !subtrees.length) {
-      sessionStorage.removeItem(folderFilterStorageKey(repo));
-    } else {
-      sessionStorage.setItem(folderFilterStorageKey(repo), JSON.stringify({ selfs: selfs, subtrees: subtrees }));
-    }
-  } catch (e) {}
 }
 
 function saveStoredExtensionFilters() {
@@ -1832,12 +1803,6 @@ const ROUTER = {
         STATE.filterFolderSelfs = urlSelfs;
         STATE.filterFolderSubtrees = urlSubtrees;
         STATE.filterFolders = mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees);
-        saveStoredFolderFilters(STATE.repo);
-      } else if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
-        var storedFolders = loadStoredFolderFilters(STATE.repo);
-        STATE.filterFolderSelfs = storedFolders.selfs;
-        STATE.filterFolderSubtrees = storedFolders.subtrees;
-        STATE.filterFolders = storedFolders.folders;
       } else {
         STATE.filterFolderSelfs = [];
         STATE.filterFolderSubtrees = [];
@@ -4920,7 +4885,6 @@ function persistFolderSelection(subtreeSet, selfSet) {
   selfSet.forEach(function(path) { if (!merged.includes(path)) merged.push(path); });
   subtreeSet.forEach(function(path) { if (path && !merged.includes(path)) merged.push(path); });
   STATE.filterFolders = merged;
-  saveStoredFolderFilters(STATE.repo);
   updateFilterCancelButtons();
   scheduleFilterSearch();
 }
@@ -5670,7 +5634,6 @@ function clearAllFilters() {
   STATE.filterFolders = [];
   STATE.filterFolderSubtrees = [];
   STATE.filterFolderSelfs = [];
-  saveStoredFolderFilters(STATE.repo);
   saveStoredExtensionFilters();
   STATE.filterMinSize = null;
   STATE.filterMaxSize = null;
@@ -5731,7 +5694,6 @@ function setupResultDelegation() {
         STATE.filterFolders = folder ? [folder] : [];
         STATE.filterFolderSubtrees = [];
         STATE.filterFolderSelfs = folder ? [folder] : [];
-        saveStoredFolderFilters(STATE.repo);
         renderFilters(routeRenderId);
         doFilterSearch(true);
       }
@@ -5997,7 +5959,7 @@ async function init() {
   setupDownloadIntentWarming();
   window.addEventListener("message", handleReaderMessage);
   window.addEventListener("popstate", function(event) {
-    if (readerOverlay) {
+    if (readerOverlay || event.state?.voiceReaderOverlay) {
       restoreReaderOverlay(event.state);
       return;
     }
