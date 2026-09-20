@@ -2738,6 +2738,11 @@ async function renderText(markdown, prepared) {
   status.textContent = "已加载";
 }
 // HTML documents retain an isolated, script-free scroll window.
+const HTML_FRAME_STYLE =
+  '<meta name="color-scheme" content="only light"><style>:root{color-scheme:only light!important;background:#fff!important}html,body{min-height:100%;background:#fff!important;color:#111!important}</style>';
+const DISCOURSE_POST_SELECTOR = ".topic-post .cooked";
+const DISCOURSE_TITLE_SELECTOR = "#topic-title .fancy-title, .topic-link, title";
+
 function sanitizeOfflineHtml(text) {
   const clean = DOMPurify.sanitize(text, {
     USE_PROFILES: { html: true },
@@ -2755,6 +2760,62 @@ function sanitizeOfflineHtml(text) {
     element.setAttribute("style", stripUrls(element.getAttribute("style")));
   return template.innerHTML;
 }
+
+function buildDiscourseDocument(text) {
+  try {
+    const source = new DOMParser().parseFromString(text, "text/html");
+    const posts = [...source.querySelectorAll(DISCOURSE_POST_SELECTOR)];
+    if (!source.querySelector(".post-stream") || !posts.length) return null;
+    const article = source.createElement("article");
+    article.className = "reader-forum-document";
+    const titleNode = source.querySelector(DISCOURSE_TITLE_SELECTOR);
+    const title = titleNode?.textContent?.trim();
+    if (title) {
+      const heading = source.createElement("h1");
+      heading.textContent = title;
+      article.appendChild(heading);
+    }
+    posts.forEach((post, index) => {
+      const section = source.createElement("section");
+      section.className = "reader-forum-post";
+      section.dataset.post = String(index + 1);
+      section.innerHTML = post.innerHTML;
+      article.appendChild(section);
+    });
+    return article.outerHTML;
+  } catch (_) {
+    return null;
+  }
+}
+
+function prepareHtmlDocument(text) {
+  const discourse = buildDiscourseDocument(text);
+  return {
+    html: sanitizeOfflineHtml(discourse || text),
+    discourse: !!discourse
+  };
+}
+
+function buildHtmlFrameSource(documentData) {
+  return documentData.html + HTML_FRAME_STYLE + (documentData.discourse ? DISCOURSE_HTML_STYLE : "");
+}
+
+const DISCOURSE_HTML_STYLE = `<style>
+html,body{min-height:100%;margin:0;background:#fff;color:#202124}
+body{box-sizing:border-box;padding:clamp(18px,4vw,48px);font:16px/1.8 system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;overflow-wrap:anywhere}
+.reader-forum-document{max-width:900px;margin:0 auto}
+.reader-forum-document>h1{margin:0 0 1.8em;padding:0 0 .7em;border-bottom:1px solid #d9dde3;font-size:clamp(1.5rem,3vw,2.25rem);line-height:1.35}
+.reader-forum-post{margin:0 0 2.5em;padding:0 0 2em;border-bottom:1px solid #e1e5ea}
+.reader-forum-post:last-child{margin-bottom:0;border-bottom:0}
+.reader-forum-post p{margin:.8em 0}
+.reader-forum-post a{color:#185abc}
+.reader-forum-post img,.reader-forum-post svg,.reader-forum-post video{max-width:100%;height:auto}
+.reader-forum-post table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse}
+.reader-forum-post blockquote{margin:1em 0;padding:.5em 1em;border-left:3px solid #c5ccd6;background:#f6f8fa}
+.reader-forum-post pre{max-width:100%;overflow:auto;white-space:pre-wrap}
+@media(max-width:600px){body{padding:16px 14px}.reader-forum-document>h1{font-size:1.5rem}}
+</style>`;
+
 async function renderHtml(prepared) {
   const response = await prepared.response;
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2762,7 +2823,7 @@ async function renderHtml(prepared) {
   const text = new TextDecoder(detectHtmlEncoding(bytes, documentState.title)).decode(bytes);
   await prepared.engine;
   assertReaderActive();
-  const clean = sanitizeOfflineHtml(text);
+  const documentData = prepareHtmlDocument(text);
   const frame = document.createElement("iframe");
   htmlFrame = frame;
   frame.className = "html-frame";
@@ -2796,9 +2857,7 @@ async function renderHtml(prepared) {
     });
     frame.addEventListener("load", loaded, { once: true });
   });
-  frame.srcdoc =
-    clean +
-    '<meta name="color-scheme" content="only light"><style>:root{color-scheme:only light!important;background:#fff!important}html,body{min-height:100%;background:#fff!important;color:#111!important}</style>';
+  frame.srcdoc = buildHtmlFrameSource(documentData);
   content.appendChild(frame);
   await frameLoaded;
   status.textContent = "HTML";
