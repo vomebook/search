@@ -66,7 +66,6 @@ const ICONS = {
 let extensionCounts = {};
 let repoExtensionCounts = {};
 let repoList = [];
-let sidebarRepoItems = [];
 let extensionList = [];
 let txtMetadata = { available: false, count: 0, byRepo: {} };
 let readerMetadata = { available: false, count: 0, byRepo: {} };
@@ -858,7 +857,6 @@ async function loadData() {
   try {
     const metadata = await corpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
     repoList = Array.isArray(metadata.repos) ? metadata.repos : [];
-    updateSidebarHeader();
     extensionCounts = {};
     for (const item of metadata.extensions || []) extensionCounts[item.name] = item.count || 0;
     repoExtensionCounts = metadata.extensionsByRepo || {};
@@ -1456,7 +1454,6 @@ const STATE = {
   repoFull: null,
   query: "",
   sort: "relevance",
-  sidebarSort: "name",
   page: 1,
   pageSize: 100,
   total: 0,
@@ -1550,11 +1547,8 @@ function cacheDOM() {
   DOM.rightSidebar = $("#right-sidebar");
   DOM.sidebarContent = $("#sidebar-content");
   DOM.sidebarTitle = $("#sidebar-title");
-  DOM.sidebarCount = $("#sidebar-count");
   DOM.sidebarBackBtn = $("#sidebar-back-btn");
   DOM.sidebarExpandBtn = $("#sidebar-expand-btn");
-  DOM.sidebarSortGroup = $("#sidebar-sort-group");
-  DOM.sidebarSortSelect = $("#sidebar-sort-select");
   DOM.resultsList = $("#results-list");
   DOM.resultsContainer = $("#results-container");
   DOM.emptyState = $("#empty-state");
@@ -1681,39 +1675,11 @@ function updateSidebarExpandButton() {
   DOM.sidebarExpandBtn.title = expanded ? "收起侧边栏" : "展开侧边栏";
 }
 
-function getSidebarRepos() {
-  return sidebarRepoItems.length ? sidebarRepoItems : repoList;
-}
-
-function sortSidebarRepos(repos) {
-  return repos.slice().sort(function(a, b) {
-    if (STATE.sidebarSort === "count") {
-      return Number(b.count || 0) - Number(a.count || 0)
-        || String(a.name || "").localeCompare(String(b.name || ""), "zh");
-    }
-    return String(a.name || "").localeCompare(String(b.name || ""), "zh");
-  });
-}
-
 function updateSidebarHeader() {
   if (!DOM.sidebarTitle) return;
   const global = STATE.mode === "global";
-  const repos = getSidebarRepos();
   DOM.sidebarTitle.textContent = global ? "仓库列表" : (STATE.repo || "仓库");
   if (DOM.sidebarBackBtn) DOM.sidebarBackBtn.hidden = global;
-  if (DOM.sidebarSortGroup) DOM.sidebarSortGroup.hidden = !global;
-  if (DOM.sidebarSortSelect) DOM.sidebarSortSelect.value = STATE.sidebarSort;
-  if (DOM.sidebarCount) {
-    if (global) {
-      DOM.sidebarCount.textContent = repos.length ? repos.length.toLocaleString() + " 个仓库" : "";
-    } else {
-      const fullRepo = STATE.repoFull || "";
-      const repo = repos.find(function(item) { return item.name === fullRepo; });
-      DOM.sidebarCount.textContent = repo && Number.isFinite(Number(repo.count))
-        ? Number(repo.count).toLocaleString() + " 个文件"
-        : "";
-    }
-  }
   updateSidebarExpandButton();
 }
 
@@ -4238,10 +4204,9 @@ function renderSidebar(routeId) {
 }
 
 function renderRepoListItems(repos) {
-  const ordered = sortSidebarRepos(repos);
   var html = "";
-  for (var i = 0; i < ordered.length; i++) {
-    var repo = ordered[i];
+  for (var i = 0; i < repos.length; i++) {
+    var repo = repos[i];
     var short = repo.name.split("/").pop();
     html += '<div class="repo-list-item" data-repo="' + escapeHTML(short) + '">';
     html += '<svg class="repo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
@@ -4261,7 +4226,6 @@ async function renderRepoList(routeId) {
     var initial = await loadSidebarInitial(null);
     if (initial && Array.isArray(initial.repos) && initial.repos.length) {
       if (routeId && routeId !== routeRenderId) return;
-      sidebarRepoItems = initial.repos.slice();
       renderRepoListItems(initial.repos);
       repos = initial.repos;
     }
@@ -4272,12 +4236,10 @@ async function renderRepoList(routeId) {
   }
   if (routeId && routeId !== routeRenderId) return;
   if (!repos || !Array.isArray(repos) || repos.length === 0) {
-    sidebarRepoItems = [];
     DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
     updateSidebarHeader();
     return;
   }
-  sidebarRepoItems = repos.slice();
   renderRepoListItems(repos);
 }
 
@@ -5730,7 +5692,6 @@ function setupResultDelegation() {
 
 async function init() {
   cacheDOM();
-  STATE.sidebarSort = localStorage.getItem("sidebarSort") === "count" ? "count" : "name";
   await initSearchPositions();
   setupSearchPositionControls();
   setupSearchPositionSaving();
@@ -5856,11 +5817,6 @@ async function init() {
     syncStateToURL();
   });
   DOM.sidebarBackBtn.addEventListener("click", returnFromSidebar);
-  DOM.sidebarSortSelect.addEventListener("change", function() {
-    STATE.sidebarSort = DOM.sidebarSortSelect.value === "count" ? "count" : "name";
-    localStorage.setItem("sidebarSort", STATE.sidebarSort);
-    if (STATE.mode === "global" && sidebarRepoItems.length) renderRepoListItems(sidebarRepoItems);
-  });
   DOM.themeBtn.addEventListener("click", toggleTheme);
   DOM.mobileToggleBtn.addEventListener("click", toggleMobile);
   DOM.clearFiltersBtn.addEventListener("click", clearAllFilters);
