@@ -1037,7 +1037,8 @@ function setToc(entries) {
   tocVirtualState?.destroy();
   tocVirtualState = null;
   previousList.replaceWith(list);
-  if (normalizedEntries.length > TOC_VIRTUALIZATION_THRESHOLD) {
+  const virtualizationThreshold = chapterManifestUrl ? 2000 : TOC_VIRTUALIZATION_THRESHOLD;
+  if (normalizedEntries.length > virtualizationThreshold) {
     const panelView = list.parentElement;
     list.classList.add("toc-list-virtualized");
     list.style.height = `${normalizedEntries.length * TOC_VIRTUAL_ROW_HEIGHT}px`;
