@@ -98,7 +98,7 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
   assertCode(reader, 'if (!fallback) { fallback = true; image.src = sourceUrl; } else finish(new Error("image load failed"))');
   assert.match(reader, /image\.src = contentUrl/);
-  assert.match(reader, /disableStream: false/);
+  assert.match(reader, /disableStream: true/);
   assert.match(reader, /capability = readerRuntime\.negotiate\(VoiceOfMLReader\.capability\(extension\)\)/);
   assert.match(reader, /resolved\.extension[\s\S]*content\.dataset\.mode = capability\.mode/);
   const imageRule = readerCss.match(/\.reader-content\[data-mode="pdf-pages"\]\s+\.reader-page\s*>\s*img\s*\{([^}]+)\}/);
