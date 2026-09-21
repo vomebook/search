@@ -49,6 +49,7 @@ function stopReaderWork() {
   readerResources.clear();
 }
 readerRuntime.track(stopReaderWork);
+trackReaderResource(() => window.__VOICE_READER_RESOLVE__?.dispose());
 function awaitReader(promise) {
   return new Promise((resolve, reject) => {
     const signal = readerAbortController.signal,
@@ -138,6 +139,8 @@ let resolvedReaderData = localReaderData;
 let cachedReaderData = null;
 let pdfFirstPagePreload = null;
 let pdfEnginePreload = null;
+let pdfWorker = null;
+let releasePdfWorker = null;
 if (localReaderData) {
   if (localReaderData.title) params.set("title", localReaderData.title);
   if (localReaderData.extension) params.set("ext", localReaderData.extension);
@@ -197,6 +200,19 @@ function setReaderStage(stage) {
 async function resolveReaderId(id) {
   const endpoint = `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`;
   for (let attempt = 0; attempt < 2; attempt++) {
+    const early = window.__VOICE_READER_RESOLVE__;
+    if (!attempt && early?.id === id) {
+      window.__VOICE_READER_RESOLVE__ = null;
+      const untrack = trackReaderResource(early.dispose);
+      let result;
+      try { result = await awaitReader(early.promise); }
+      finally { untrack(); early.dispose(); }
+      if (result.ok) return result.data;
+      if (![408, 429, 500, 502, 503, 504].includes(result.status))
+        throw new Error(`HTTP ${result.status}`);
+      await waitForReader(350);
+      continue;
+    }
     const response = await readerRequestManager.request(endpoint, READER_PROXY_TIMEOUT_MS);
     if (response.ok) return response.json();
     if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt)
@@ -3626,6 +3642,7 @@ async function resolveReaderSource() {
   )
     extension = "pdf-pages";
   capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
+  if (capability.mode !== "pdf") releasePdfWorker?.();
   readerRuntime.update("source", {
     url: sourceUrl,
     contentUrl,
@@ -3778,8 +3795,46 @@ function loadPdfWithTimeout(pdfjs, options) {
   });
 }
 function preloadPdfEngine() {
-  if (!pdfEnginePreload) pdfEnginePreload = loadPdfEngine();
+  if (!pdfEnginePreload) pdfEnginePreload = loadPdfEngine().then(preparePdfWorker);
   return pdfEnginePreload;
+}
+async function preparePdfWorker(pdfjs) {
+  assertReaderActive();
+  if (capability.mode !== "pdf") return pdfjs;
+  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  const worker = new pdfjs.PDFWorker();
+  pdfWorker = worker;
+  let timer, destroyed = false;
+  const destroy = () => {
+    if (destroyed) return;
+    destroyed = true;
+    clearTimeout(timer);
+    worker.destroy();
+    if (pdfWorker === worker) {
+      pdfWorker = null;
+      releasePdfWorker = null;
+    }
+  };
+  releasePdfWorker = destroy;
+  const untrack = trackReaderResource(destroy);
+  try {
+    await awaitReader(Promise.race([
+      worker.promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("PDF worker timeout")), 20000);
+      })
+    ]));
+    assertReaderActive();
+    return pdfjs;
+  } catch (error) {
+    untrack();
+    destroy();
+    assertReaderActive();
+    throw Object.assign(new Error("PDF 阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
+      { code: "READER_ENGINE_NETWORK", cause: error });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 async function loadPdfEngine() {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -3823,11 +3878,12 @@ async function loadPdfEngine() {
   }
 }
 function loadPdfDocument() {
-  return (pdfEnginePreload || loadPdfEngine()).then((pdfjs) => {
+  return preloadPdfEngine().then((pdfjs) => {
     assertReaderActive();
     pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
     const options = (url) => ({
       url,
+      worker: pdfWorker,
       // Bound demand reads for original and converted PDFs alike. Streaming
       // otherwise keeps the full download running alongside these ranges.
       rangeChunkSize: 262144,

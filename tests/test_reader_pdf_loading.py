@@ -63,8 +63,13 @@ class PdfLoadingTests(unittest.TestCase):
     def test_pdf_engine_loads_while_id_resolution_is_pending(self):
         pending = []
         self.page.route('**/api/reader-resolve?**', lambda route: pending.append(route))
-        self.page.goto(self.origin + '/search/static/reader.html?id=398vk0yyy8m29&ext=pdf', wait_until='domcontentloaded')
-        self.page.wait_for_function("() => performance.getEntriesByType('resource').some(x => x.name.includes('/vendor/pdf.min.'))")
+        with self.page.expect_worker() as opened:
+            self.page.goto(self.origin + '/search/static/reader.html?id=398vk0yyy8m29&ext=pdf', wait_until='domcontentloaded')
+        opened.value.evaluate('''() => new Promise((resolve, reject) => {
+          const deadline = setTimeout(() => reject(Error('Worker did not initialize')), 5000);
+          const check = () => globalThis.pdfjsWorker ? (clearTimeout(deadline), resolve(true)) : setTimeout(check, 10);
+          check();
+        })''')
         self.assertEqual(len(pending), 1)
         self.assertEqual(self.documents, [])
         pending[0].fulfill(content_type='application/json', body=json.dumps({
@@ -72,6 +77,44 @@ class PdfLoadingTests(unittest.TestCase):
         }))
         self.ready()
         self.assertEqual(len(self.modules), 1)
+        self.assertEqual(len(self.page.workers), 1)
+        self.assertEqual(len(pending), 1)
+
+    def test_early_resolve_runs_before_main_module_and_retries_transient_http_once(self):
+        held, lookups = [], []
+        self.page.route('**/static/reader.js*', lambda route: held.append(route))
+        def lookup(route):
+            lookups.append(route)
+            if len(lookups) == 1:
+                route.fulfill(status=503, body='try again')
+            else:
+                route.fulfill(content_type='application/json', body=json.dumps({
+                    'url': SOURCE, 'download': SOURCE, 'extension': 'pdf',
+                }))
+        self.page.route('**/api/reader-resolve?**', lookup)
+        self.page.goto(self.origin + '/search/static/reader.html?id=398vk0yyy8m29&ext=pdf', wait_until='commit')
+        self.page.wait_for_function('() => !!window.__VOICE_READER_RESOLVE__')
+        self.assertEqual(self.page.evaluate('() => window.__VOICE_READER_RESOLVE__.promise.then(x => x.status)'), 503)
+        self.assertEqual(self.documents, [])
+        self.page.unroute('**/static/reader.js*')
+        for route in held: route.continue_()
+        self.ready()
+        self.assertEqual(len(lookups), 2)
+
+    def test_disposal_terminates_prepared_worker_and_pending_resolve(self):
+        self.page.add_init_script('''window.__lookupAborted = false;
+          const nativeFetch = window.fetch;
+          window.fetch = (url, options) => String(url).includes('/api/reader-resolve?')
+            ? new Promise((resolve, reject) => options.signal.addEventListener('abort', () => {
+                window.__lookupAborted = true; reject(new DOMException('closed', 'AbortError'));
+              }, {once:true})) : nativeFetch(url, options);''')
+        with self.page.expect_worker() as opened:
+            self.page.goto(self.origin + '/search/static/reader.html?id=398vk0yyy8m29&ext=pdf', wait_until='domcontentloaded')
+        with opened.value.expect_event('close'):
+            self.page.evaluate("() => window.dispatchEvent(new Event('pagehide'))")
+        self.assertTrue(self.page.evaluate('() => window.__lookupAborted'))
+        self.assertEqual(self.documents, [])
+        self.assertEqual(self.errors, [])
 
     def test_first_connection_failure_recovers_with_real_pdf_engine(self):
         def serve(route):
