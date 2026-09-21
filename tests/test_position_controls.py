@@ -358,6 +358,29 @@ class PositionControlTests(unittest.TestCase):
             if width < 460:
                 self.assertTrue(self.page.locator('#restart-position-btn').evaluate('e=>e.getBoundingClientRect().right<=document.querySelector(".result-position-count").getBoundingClientRect().left'))
 
+    def test_back_to_top_does_not_flash_beside_return_button(self):
+        self.input_position(51)
+        self.wait_position(50)
+        self.page.evaluate('''()=>{
+          window.positionButtonStates=[];
+          const capture=()=>positionButtonStates.push({
+            top:DOM.backToTopBtn.hidden,
+            returnButton:DOM.returnToPositionBtn.hidden,
+          });
+          window.positionButtonObserver=new MutationObserver(capture);
+          for(const button of [DOM.backToTopBtn,DOM.returnToPositionBtn])
+            positionButtonObserver.observe(button,{attributes:true,attributeFilter:['hidden']});
+          capture();
+        }''')
+        self.page.locator('#restart-position-btn').click()
+        self.wait_position(0)
+        self.page.wait_for_timeout(50)
+        states = self.page.evaluate('''()=>{
+          positionButtonObserver.disconnect();
+          return positionButtonStates;
+        }''')
+        self.assertFalse(any(not state['top'] and not state['returnButton'] for state in states))
+
     def test_top_controls_update_without_waiting_for_animation_frame(self):
         self.input_position(51)
         self.wait_position(50)
