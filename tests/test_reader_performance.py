@@ -232,6 +232,8 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertEqual(self.page.locator(".reader-text").text_content(), "Metadata readable")
         self.assertEqual(self.page.locator("#title").text_content(), "Metadata title.txt")
         self.assertEqual(self.page.locator("#reader-path").text_content(), "Test/Folder")
+        self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "prepare")
+        self.page.locator("html[data-reader-phase='ready']").wait_for(state="attached")
         self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "ready")
         self.assertEqual(errors, [])
 
