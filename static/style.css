@@ -287,8 +287,9 @@ body.light .header-logo-icon-light {
   background: transparent;
   min-width: 0;
 }
-/* Override the browser's inline hiding when the search field is empty. */
-.search-input::-webkit-search-cancel-button { opacity: 1 !important; pointer-events: auto !important; cursor: pointer; }
+/* Keep the native clear control available only for a non-empty query. */
+.search-input::-webkit-search-cancel-button { opacity: 0 !important; pointer-events: none !important; cursor: default; }
+.search-box.has-query .search-input::-webkit-search-cancel-button { opacity: 1 !important; pointer-events: auto !important; cursor: pointer; }
 
 .search-input::placeholder {
   color: var(--on-surface-variant);

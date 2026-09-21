@@ -309,6 +309,19 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertFalse(any("/api/search" in request[1] for request in self.api_requests))
         self.assertEqual(self.page_errors, [])
 
+    def test_search_clear_control_tracks_query_state(self):
+        self.load()
+        search = self.page.locator("#search-input")
+        self.assertEqual(search.get_attribute("data-has-query"), "false")
+        self.assertFalse(self.page.locator("#search-box").evaluate("el => el.classList.contains('has-query')"))
+        search.fill("目录")
+        self.page.wait_for_function("document.getElementById('search-input').dataset.hasQuery === 'true'")
+        self.assertTrue(self.page.locator("#search-box").evaluate("el => el.classList.contains('has-query')"))
+        search.fill("")
+        self.page.wait_for_function("document.getElementById('search-input').dataset.hasQuery === 'false'")
+        self.assertFalse(self.page.locator("#search-box").evaluate("el => el.classList.contains('has-query')"))
+        self.assertEqual(self.page_errors, [])
+
     def test_virtual_scroll_settles_after_jumps_and_preserves_append(self):
         self.load()
         result = self.page.evaluate("""async () => {

@@ -139,6 +139,12 @@ test("fresh first-page results use bounded entrance motion", () => {
   assert.strictEqual(/transform: translateY\(3px\)/.test(css), false);
   assert.match(css, /prefers-reduced-motion/);
 });
+test("search clear control follows the query state", () => {
+  assert.match(app, /function syncSearchInputState\(\)/);
+  assert.match(app, /DOM\.searchBox\?\.classList\.toggle\("has-query", hasQuery\)/);
+  assert.match(css, /\.search-input::\-webkit-search-cancel-button \{ opacity: 0 !important; pointer-events: none !important;/);
+  assert.match(css, /\.search-box\.has-query \.search-input::\-webkit-search-cancel-button \{ opacity: 1 !important; pointer-events: auto !important;/);
+});
 test("result actions use equal desktop heights and compact mobile column", () => {
   assert.doesNotMatch(app, /class="result-summary"/);
   assert.match(app, /class="result-title"[\s\S]*class="result-path"[\s\S]*class="result-meta"/);

@@ -1505,6 +1505,7 @@ const DOM = {};
 function cacheDOM() {
   DOM.headerTitle = $("#header-title");
   DOM.headerLogo = $("#header-logo");
+  DOM.searchBox = $("#search-box");
   DOM.searchInput = $("#search-input");
   DOM.hamburgerBtn = $("#hamburger-btn");
   DOM.settingsBtn = $("#settings-btn");
@@ -1577,6 +1578,19 @@ function cacheDOM() {
   DOM.multiSelectAll = $("#multi-select-all");
   DOM.multiSelectedCount = $("#multi-selected-count");
   DOM.multiDeselect = $("#multi-deselect");
+}
+
+function syncSearchInputState() {
+  if (!DOM.searchInput) return;
+  const hasQuery = !!DOM.searchInput.value.trim();
+  DOM.searchInput.dataset.hasQuery = hasQuery ? "true" : "false";
+  DOM.searchBox?.classList.toggle("has-query", hasQuery);
+}
+
+function setSearchInputValue(value) {
+  if (!DOM.searchInput) return;
+  DOM.searchInput.value = value || "";
+  syncSearchInputState();
 }
 
 const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -1767,10 +1781,10 @@ const ROUTER = {
     }
     if (route.params.q !== undefined) {
       STATE.query = route.params.q;
-      DOM.searchInput.value = STATE.query;
+      setSearchInputValue(STATE.query);
     } else {
       STATE.query = "";
-      DOM.searchInput.value = "";
+      setSearchInputValue("");
     }
     if (route.params.repo) {
       STATE.filterRepos = (Array.isArray(route.params.repo) ? route.params.repo : [route.params.repo])
@@ -2071,11 +2085,11 @@ function resetPositionControlScroll() {
   positionControlScroll = { key: getSearchViewKey(), last: getResultScrollTop(), distance: 0, until: 0 };
 }
 
-function prepareReturnPosition(key) {
+function prepareReturnPosition(key, updateControls = true) {
   resetPositionControlScroll();
   const saved = searchPositions.get(key);
   setReturnPositionTarget(validSearchPosition(saved) && (saved.index > 0 || saved.offset > 0) ? saved : null);
-  updateSearchPositionControls();
+  if (updateControls) updateSearchPositionControls();
 }
 
 function updateSearchPositionControls() {
@@ -2104,7 +2118,7 @@ function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
   const key = getSearchViewKey();
   if (fromStart) saveSearchPosition();
   cancelPositionRestore();
-  prepareReturnPosition(key);
+  prepareReturnPosition(key, !fromStart);
   if (!restorePosition) return false;
   setReturnPositionTarget();
   return restoreSearchViewSnapshot(key);
@@ -3298,7 +3312,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
 function submitSearchQuery(query, { restore = false, record = false, refreshHistory = false, clearResults = false, blur = false, updateInput = restore } = {}) {
   cancelPendingSearchControls();
   saveSearchViewSnapshot();
-  if (updateInput) DOM.searchInput.value = query;
+  if (updateInput) setSearchInputValue(query);
   STATE.query = query;
   STATE.page = 1;
   if (clearResults) { STATE.results = []; keyboardResultIndex = -1; }
@@ -5710,6 +5724,7 @@ function setupResultDelegation() {
 
 async function init() {
   cacheDOM();
+  syncSearchInputState();
   await initSearchPositions();
   setupSearchPositionControls();
   setupSearchPositionSaving();
@@ -5723,7 +5738,10 @@ async function init() {
   else if (savedMobile === "desktop") STATE.isMobile = false;
   else STATE.isMobile = autoDetectMobile();
   applyMobileMode();
-  DOM.searchInput.addEventListener("input", debouncedSearch);
+  DOM.searchInput.addEventListener("input", () => {
+    syncSearchInputState();
+    debouncedSearch();
+  });
   DOM.searchInput.addEventListener("compositionstart", function() {
     searchComposing = true;
     clearTimeout(composeSafetyTimer);
