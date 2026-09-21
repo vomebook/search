@@ -141,10 +141,10 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_chapter_toc_preserves_fragments_depth_and_virtual_current_mark(self):
         base = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'b' * 64 + '/epub-chapters/'
-        body = '<h1>第一卷</h1>' + ''.join(f'<h2 id="day-{i}">日记 {i}</h2><p style="height:100px">正文 {i}</p>' for i in range(700))
+        body = '<h1>第一卷</h1>' + ''.join(f'<h2 id="day-{i}">日记 {i}</h2><p style="height:100px">正文 {i}</p>' for i in range(1100))
         manifest = dict(version=1, kind='epub-chapters',
                         chapters=[dict(index=1, path='chapters/chapter-0001.xhtml', title='文件标题', bytes=len(body.encode()))],
-                        toc=[dict(title=f'日记 {i}', chapter=1, fragment=f'day-{i}', depth=1) for i in range(700)])
+                        toc=[dict(title=f'日记 {i}', chapter=1, fragment=f'day-{i}', depth=1) for i in range(1100)])
         self.page.route('**/api/reader-content**', lambda route: route.fulfill(
             content_type='application/json' if 'chapter-manifest.json' in route.request.url else 'text/html',
             body=json.dumps(manifest) if 'chapter-manifest.json' in route.request.url else body))
