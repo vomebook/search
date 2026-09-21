@@ -8,6 +8,38 @@
       content="default-src 'self'; base-uri 'self' blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob: https:; media-src 'self' https://voiceofml-search.hf.space https://hf-mirror.com https://huggingface.co https://*.hf.co https://*.huggingface.co; connect-src 'self' blob: https://huggingface.co https://voiceofml-search.hf.space https://hf-mirror.com; frame-src 'self' blob:;"
     />
     <title>VoiceOfML Reader</title>
+    <script>
+      // Start source lookup before the Reader module graph loads; consume it once.
+      (() => {
+        const params = new URLSearchParams(location.search), id = params.get("id");
+        if (params.get("url") || !/^[a-z0-9]{13}$/.test(id || "")) return;
+        try {
+          if (JSON.parse(sessionStorage.getItem(`reader-resolve:${id}`) || "null")?.url) return;
+        } catch (_) {}
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 120000);
+        const dispose = () => {
+          clearTimeout(timer);
+          controller.abort();
+          removeEventListener("pagehide", onPageHide);
+        };
+        const onPageHide = (event) => { if (!event.persisted) dispose(); };
+        addEventListener("pagehide", onPageHide);
+        const promise = fetch(`https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`, {
+          signal: controller.signal
+        }).then(async (response) => {
+          const data = response.ok ? await response.json() : null;
+          if (!response.ok) await response.body?.cancel();
+          return { ok: response.ok, status: response.status, data };
+        }).finally(() => {
+          clearTimeout(timer);
+          removeEventListener("pagehide", onPageHide);
+        });
+        promise.catch(() => {});
+        window.__VOICE_READER_RESOLVE__ = { id, promise, dispose };
+      })();
+    </script>
+    <link rel="modulepreload" href="/search/static/reader.js?reader-v3" />
     <style>
       #loading-status {
         display: none !important;

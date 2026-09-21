@@ -22,6 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE_URL = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/performance.pdf"
 PDF_MODULE = """
 export const GlobalWorkerOptions = {};
+export class PDFWorker { promise = Promise.resolve(); destroy() {} }
 const wait = () => new Promise((resolve) => setTimeout(resolve, 15));
 export function getDocument() {
   const page = {
