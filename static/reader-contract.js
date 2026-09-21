@@ -374,9 +374,23 @@
       params.set("folder_url", record.FolderUrl || record.folderUrl);
     return (basePath || "/search/static/reader.html") + "?" + params.toString();
   }
+  function canonicalSourceUrl(value) {
+    // Normalize path bytes, not decoded URLs: %2F must remain distinct from /,
+    // and %2528 must never become %28. Query/fragment delimiters stay intact.
+    return value.replace(/^(https:\/\/huggingface\.co\/datasets\/VoiceOfML\/)([^?#]*)/, (_, prefix, path) =>
+      prefix + path.replace(/%[0-9a-fA-F]{2}|[^A-Za-z0-9._~/-]/gu, (token) => {
+        if (/^%[0-9a-f]{2}$/i.test(token)) {
+          const char = String.fromCharCode(parseInt(token.slice(1), 16));
+          return /^[A-Za-z0-9._~-]$/.test(char) ? char : token.toUpperCase();
+        }
+        return encodeURIComponent(token).replace(/[!'()*]/g, (char) =>
+          "%" + char.charCodeAt(0).toString(16).toUpperCase());
+      })
+    );
+  }
   function shortSourceId(value) {
     let hash = 1469598103934665603n;
-    for (const byte of new TextEncoder().encode(value)) {
+    for (const byte of new TextEncoder().encode(canonicalSourceUrl(value))) {
       hash ^= BigInt(byte);
       hash = BigInt.asUintN(64, hash * 1099511628211n);
     }
@@ -394,6 +408,7 @@
     isBucketPath,
     pdfPageSource,
     txtRelativePath,
+    canonicalSourceUrl,
     shortSourceId,
     readerUrl
   });

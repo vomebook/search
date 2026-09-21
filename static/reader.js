@@ -137,6 +137,7 @@ if (
 let resolvedReaderData = localReaderData;
 let cachedReaderData = null;
 let pdfFirstPagePreload = null;
+let pdfEnginePreload = null;
 if (localReaderData) {
   if (localReaderData.title) params.set("title", localReaderData.title);
   if (localReaderData.extension) params.set("ext", localReaderData.extension);
@@ -3636,6 +3637,8 @@ async function resolveReaderSource() {
 }
 async function start() {
   const generation = readerRuntime.currentGeneration("navigation");
+  // Resolve the original source and import its known engine concurrently.
+  if (extension === "pdf" || /\.pdf(?:$|[?#])/i.test(sourceUrl)) preloadPdfEngine().catch(() => {});
   await resolveReaderSource();
   assertReaderActive();
   if (readerId && /\/calibre-chm-epub-[^/]+\/document\.epub(?:$|\?)/i.test(sourceUrl)) {
@@ -3774,6 +3777,10 @@ function loadPdfWithTimeout(pdfjs, options) {
     return loadPdfTaskWithTimeout(pdfjs, options, sourceUrl);
   });
 }
+function preloadPdfEngine() {
+  if (!pdfEnginePreload) pdfEnginePreload = loadPdfEngine();
+  return pdfEnginePreload;
+}
 async function loadPdfEngine() {
   for (let attempt = 0; attempt < 3; attempt++) {
     assertReaderActive();
@@ -3816,14 +3823,16 @@ async function loadPdfEngine() {
   }
 }
 function loadPdfDocument() {
-  return loadPdfEngine().then((pdfjs) => {
+  return (pdfEnginePreload || loadPdfEngine()).then((pdfjs) => {
     assertReaderActive();
     pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
     const options = (url) => ({
       url,
-      rangeChunkSize: 1048576,
+      // Bound demand reads for original and converted PDFs alike. Streaming
+      // otherwise keeps the full download running alongside these ranges.
+      rangeChunkSize: 262144,
       disableAutoFetch: true,
-      disableStream: false,
+      disableStream: true,
       wasmUrl: PDFJS_WASM_URL,
       cMapUrl: PDFJS_CMAP_URL,
       cMapPacked: true,
