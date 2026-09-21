@@ -3670,8 +3670,10 @@ async function start() {
     if (capability.mode === "foliate") {
       setReaderStage("foliate");
       foliateContinuous = true;
-      const [restored] = await awaitReader(Promise.all([loadReaderRestoration(), renderFoliate()]));
+      const restorationPromise = loadReaderRestoration();
+      await awaitReader(renderFoliate());
       assertReaderActive();
+      const restored = await awaitReader(restorationPromise);
       updateDocumentState({ restoredEntry: restored });
       if (isReaderGenerationCurrent("navigation", generation)) {
         if (restored?.zoom) setZoom(restored.zoom, false);
@@ -3684,17 +3686,17 @@ async function start() {
       return;
     }
     setReaderStage("prepare");
-    const [restored, prepared] = await awaitReader(
-      Promise.all([loadReaderRestoration(), formatAdapters.active.open()])
-    );
+    const restorationPromise = loadReaderRestoration();
+    const prepared = await awaitReader(formatAdapters.active.open());
     assertReaderActive();
-    updateDocumentState({ restoredEntry: restored });
-    if (isReaderGenerationCurrent("navigation", generation) && documentState.restoredEntry?.zoom)
-      setZoom(documentState.restoredEntry.zoom, false);
     await formatAdapters.active.render(prepared);
     assertReaderActive();
     loadingIndicator.remove();
     loadingStatus.hidden = true;
+    const restored = await awaitReader(restorationPromise);
+    updateDocumentState({ restoredEntry: restored });
+    if (isReaderGenerationCurrent("navigation", generation) && documentState.restoredEntry?.zoom)
+      setZoom(documentState.restoredEntry.zoom, false);
     await restoreInitialPosition(documentState.restoredEntry, generation);
     assertReaderActive();
     if (!setReaderPhase("ready")) return;
