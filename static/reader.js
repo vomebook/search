@@ -934,11 +934,23 @@ function headingTocEntries(root) {
 }
 function syncHeadingLocation() {
   const marker = htmlFrame ? 8 : viewport.getBoundingClientRect().top + 8;
-  let current = -1;
+  let current = -1,
+    currentPosition = -Infinity,
+    first = -1,
+    firstPosition = Infinity;
   for (const [index, entry] of navigationState.tocEntries.entries()) {
     if (!entry.target?.isConnected) continue;
-    if (entry.target.getBoundingClientRect().top <= marker || current < 0) current = index;
+    const position = entry.target.getBoundingClientRect().top;
+    if (position <= marker && (position > currentPosition || (position === currentPosition && index > current))) {
+      current = index;
+      currentPosition = position;
+    }
+    if (position > marker && position < firstPosition) {
+      first = index;
+      firstPosition = position;
+    }
   }
+  if (current < 0) current = first;
   if (current >= 0 && current !== navigationState.currentChapterIndex) {
     updateNavigationState({ currentChapterIndex: current });
     updateTocCurrentMark();
@@ -1099,6 +1111,7 @@ function syncFoliateScrollLocation() {
     }
   if (!sectionNode) return;
   let best = -1;
+  let bestPosition = -Infinity;
   for (const [index, entry] of navigationState.tocEntries.entries()) {
     if (entry.sectionIndex !== sectionIndex) continue;
     let position = sectionNode.getBoundingClientRect().top;
@@ -1117,7 +1130,21 @@ function syncFoliateScrollLocation() {
       );
       if (anchor) position = anchor.getBoundingClientRect().top;
     }
-    if (position <= top || best < 0) best = index;
+    if (position <= top && (position > bestPosition || (position === bestPosition && index > best))) {
+      best = index;
+      bestPosition = position;
+    }
+  }
+  if (best < 0) {
+    let firstPosition = Infinity;
+    for (const [index, entry] of navigationState.tocEntries.entries()) {
+      if (entry.sectionIndex !== sectionIndex) continue;
+      const position = entry.target?.getBoundingClientRect?.().top;
+      if (Number.isFinite(position) && position < firstPosition) {
+        best = index;
+        firstPosition = position;
+      }
+    }
   }
   if (best >= 0 && best !== navigationState.currentChapterIndex) {
     updateNavigationState({ currentChapterIndex: best });
