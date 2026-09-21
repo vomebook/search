@@ -879,6 +879,7 @@ function setReaderPanelOpen(open, restoreFocus = false) {
     void panel.offsetWidth;
     panel.classList.add("is-open");
     selectPanel(mediaElement ? "media" : "toc");
+    updateTocCurrentMark();
     return;
   }
   panel.classList.remove("is-open");
