@@ -5,6 +5,24 @@
     ["书/😀.epub", "1tgzoefbsl8ia"],
     ["https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/a%20b.txt", "1ckyy8f8m7pim"]
   ],
+  "canonicalPaths": [
+    ["Kſ.pdf", "%E2%84%AA%C5%BF.pdf"],
+    ["a (1)!'*.pdf", "a%20%281%29%21%27%2A.pdf"],
+    ["a%20%281%29%21%27%2a.pdf", "a%20%281%29%21%27%2A.pdf"],
+    ["中文/😀.pdf", "%E4%B8%AD%E6%96%87/%F0%9F%98%80.pdf"],
+    ["%e4%b8%ad%e6%96%87/%f0%9f%98%80.pdf", "%E4%B8%AD%E6%96%87/%F0%9F%98%80.pdf"],
+    ["%41%7a%30%2d%2e%5f%7e.pdf", "Az0-._~.pdf"],
+    ["a%2fb.pdf", "a%2Fb.pdf"],
+    ["a/b.pdf", "a/b.pdf"],
+    ["a%2528.pdf", "a%2528.pdf"],
+    ["100% done%.pdf", "100%25%20done%25.pdf"],
+    ["a+b;:@=&.pdf", "a%2Bb%3B%3A%40%3D%26.pdf"],
+    ["a%23%3f.pdf?download=true#page=2", "a%23%3F.pdf?download=true#page=2"]
+  ],
+  "reportedBook": {
+    "path": "马列之声ebook小组第九批成果集成(2018.9.1)/马列之声ebook小组第九批成果集成(2018.9.1)part 1a/2018.8 part 1/20世纪的社会主义 刘俊奇著 2007.09_c__.pdf",
+    "id": "398vk0yyy8m29"
+  },
   "ocr": [
     [{"Folder": ["edition.v2"], "File": "scan", "Extension": ""}, "edition.v2/scan.txt"],
     [{"Folder": ["edition.v2"], "File": "book.v1", "Extension": "pdf"}, "edition.v2/book.v1.txt"],

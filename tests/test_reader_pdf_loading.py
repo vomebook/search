@@ -1,5 +1,6 @@
 """Actual module imports and PDF.js with cold cache and transport faults."""
 import contextlib
+import json
 import unittest
 import urllib.parse
 from unittest.mock import patch
@@ -58,6 +59,19 @@ class PdfLoadingTests(unittest.TestCase):
         self.ready()
         self.assertEqual(len(self.modules), 1)
         self.assertNotIn('reader-module-retry', self.modules[0])
+
+    def test_pdf_engine_loads_while_id_resolution_is_pending(self):
+        pending = []
+        self.page.route('**/api/reader-resolve?**', lambda route: pending.append(route))
+        self.page.goto(self.origin + '/search/static/reader.html?id=398vk0yyy8m29&ext=pdf', wait_until='domcontentloaded')
+        self.page.wait_for_function("() => performance.getEntriesByType('resource').some(x => x.name.includes('/vendor/pdf.min.'))")
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(self.documents, [])
+        pending[0].fulfill(content_type='application/json', body=json.dumps({
+            'url': SOURCE, 'download': SOURCE, 'extension': 'pdf',
+        }))
+        self.ready()
+        self.assertEqual(len(self.modules), 1)
 
     def test_first_connection_failure_recovers_with_real_pdf_engine(self):
         def serve(route):

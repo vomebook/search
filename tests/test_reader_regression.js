@@ -14,6 +14,19 @@ vm.runInNewContext(contract, sandbox)
 const assets = sandbox.self.VoiceOfMLReader
 const vectors = require('./reader-contract-vectors.json')
 for (const [value, expected] of vectors.ids) assert.strictEqual(assets.shortSourceId(value), expected)
+const idPrefix = 'https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/'
+for (const [value, expected] of vectors.canonicalPaths) {
+  assert.strictEqual(assets.canonicalSourceUrl(idPrefix + value), idPrefix + expected)
+  assert.strictEqual(assets.canonicalSourceUrl(idPrefix + expected), idPrefix + expected)
+  assert.strictEqual(assets.shortSourceId(idPrefix + value), assets.shortSourceId(idPrefix + expected))
+}
+for (const bookPath of [vectors.reportedBook.path, vectors.reportedBook.path.split('/').map(encodeURIComponent).join('/')]) {
+  const link = idPrefix + bookPath
+  assert.strictEqual(assets.shortSourceId(link), vectors.reportedBook.id)
+  assert.strictEqual(new URL(assets.readerUrl({ Link: link, Extension: 'pdf' }), 'https://site.test').searchParams.get('id'), vectors.reportedBook.id)
+}
+assert.notStrictEqual(assets.shortSourceId(idPrefix + 'a%2Fb.pdf'), assets.shortSourceId(idPrefix + 'a/b.pdf'))
+assert.notStrictEqual(assets.shortSourceId(idPrefix + 'a%2528.pdf'), assets.shortSourceId(idPrefix + 'a%28.pdf'))
 for (const [record, expected] of vectors.ocr) {
   const relative = [...record.Folder, record.File + (record.Extension ? '.' + record.Extension : '')].join('/')
   assert.strictEqual(assets.txtRelativePath(relative), expected)
