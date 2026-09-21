@@ -3821,7 +3821,7 @@ function loadPdfDocument() {
       url,
       rangeChunkSize: 1048576,
       disableAutoFetch: true,
-      disableStream: true,
+      disableStream: false,
       wasmUrl: PDFJS_WASM_URL,
       cMapUrl: PDFJS_CMAP_URL,
       cMapPacked: true,

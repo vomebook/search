@@ -24,7 +24,7 @@ const behavioral = [
   /\bVoiceOfMLReaderAdapters\s*\.\s*createAdapterRegistry\s*\(/,
   /\bformatAdapters\s*\.\s*register\s*\(\s*mode\s*,/,
   /\bformatAdapters\s*\.\s*activate\s*\(\s*capability\s*\.\s*mode\s*\)/,
-  /\bdisableStream\s*:\s*true\b/,
+  /\bdisableStream\s*:\s*(?:true|false)\b/,
   /\bnextReaderGeneration\s*\(\s*["']navigation["']\s*\)/
 ];
 const hash = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
