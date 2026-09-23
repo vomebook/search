@@ -865,7 +865,7 @@ body {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  pointer-events: none;
+  pointer-events: auto;
   white-space: pre;
   border: 0;
   color: transparent;
@@ -875,6 +875,8 @@ body {
   color: transparent;
   white-space: pre;
   transform-origin: left bottom;
+  user-select: text;
+  cursor: text;
 }
 .reader-pdf-text span.full-search-highlight {
   color: #1d2023;

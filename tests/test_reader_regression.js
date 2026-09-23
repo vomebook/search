@@ -57,6 +57,13 @@ for (const url of ['https://evil.test' + sourcePrefix + bucket, 'https://api.tes
 assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket}, '/api/reader-bucket-resource'), null)
 assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource').ReaderLink,
   '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
+const optimized = assetRoot + 'pdf-range-v1-document/document.pdf'
+const optimizedFields = assets.assetFields(
+  {s: 2, m: 'p', p: optimized, b: 'vomebook/pdf-optimized'},
+  '/api/reader-bucket-resource'
+)
+assert.strictEqual(optimizedFields.ReaderLink,
+  '/api/reader-bucket-resource?bucket=vomebook%2Fpdf-optimized&path=' + encodeURIComponent(optimized))
 assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + 'pdf_manifest.json'), true)
 assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + assetRoot + 'epub-chapters/chapters/chapter-0012.xhtml'), true)
 for (const path of [assetRoot + '../linearized.pdf', assetRoot + 'private.json', 'objects/invalid/document.pdf']) {
