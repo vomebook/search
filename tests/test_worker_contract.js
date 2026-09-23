@@ -384,7 +384,7 @@ test("main-thread root select-all represents and persists direct root files with
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set([""])).full, true);
   assert.match(app, /if \(node\.hasDirectFiles\) selfSet\.add\(node\.path\)/);
   assert.match(app, /selfSet\.forEach\(function\(path\) \{ if \(!merged\.includes\(path\)\) merged\.push\(path\); \}\)/);
-  assert.match(app, /var selfs = \(STATE\.filterFolderSelfs \|\| \[\]\)\.filter\(function\(path\) \{ return typeof path === "string"; \}\)/);
+  assert.match(app, /function getFolderSelfSet\(\) \{\s*return new Set\(STATE\.filterFolderSelfs \|\| \[\]\);/);
   assert.match(app, /if \(node\.hasDirectFiles\) selfPaths\.push\(node\.path\)/);
 });
 

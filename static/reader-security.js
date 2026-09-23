@@ -265,6 +265,52 @@
     }
     return manifest;
   }
+  const PDF_OCR_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz)$/;
+  const PDF_OCR_MANIFEST_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr-manifest\.json$/;
+  const PDF_OCR_PAGE_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?pages\/page-[0-9]{6}\.(?:webp|jxl)$/;
+  const PDF_OCR_ROOT = /^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16})?)/;
+  function validatePdfOcrManifest(manifest) {
+    if (!manifest || manifest.version !== 1 || manifest.kind !== "pdf-ocr" ||
+        !Number.isInteger(manifest.page_count) || manifest.page_count < 1 ||
+        manifest.page_count > LIMITS.pdfPages || !Array.isArray(manifest.pages) ||
+        manifest.pages.length !== manifest.page_count)
+      throw error("PDF_OCR_MANIFEST_INVALID");
+    let root = "";
+    for (const [index, page] of manifest.pages.entries()) {
+      const expected = String(index + 1).padStart(6, "0");
+      const pageRoot = typeof page?.o === "string" ? PDF_OCR_ROOT.exec(page.o)?.[1] || "" : "";
+      if (!page || page.p !== index + 1 || !PDF_OCR_PATH.test(page.o) ||
+          page.o !== `${pageRoot}/ocr/page-${expected}.json.gz` ||
+          (page.w !== undefined && (typeof page.w !== "string" || !PDF_OCR_PAGE_PATH.test(page.w) ||
+            page.w !== `${pageRoot}/pages/page-${expected}.webp`)) ||
+          (page.j !== undefined && (typeof page.j !== "string" || !PDF_OCR_PAGE_PATH.test(page.j) ||
+            page.j !== `${pageRoot}/pages/page-${expected}.jxl`)) ||
+          (root && root !== pageRoot))
+        throw error("PDF_OCR_MANIFEST_INVALID");
+      root = pageRoot;
+    }
+    if (!manifest.book_text || typeof manifest.book_text.path !== "string" ||
+        !PDF_OCR_PATH.test(manifest.book_text.path) || manifest.book_text.path !== `${root}/ocr/book-text.json.gz` ||
+        (manifest.page_manifest !== undefined &&
+          (!manifest.page_manifest || typeof manifest.page_manifest.path !== "string" ||
+           !PDF_OCR_MANIFEST_PATH.test(manifest.page_manifest.path.replace("page-manifest.json", "ocr-manifest.json")))))
+      throw error("PDF_OCR_MANIFEST_INVALID");
+    return manifest;
+  }
+  function validatePdfOcrPage(payload, pageNumber) {
+    if (!payload || payload.version !== 1 || payload.kind !== "pdf-ocr-page" ||
+        payload.page !== pageNumber || !Array.isArray(payload.blocks) || payload.blocks.length > 10000 ||
+        !Number.isFinite(Number(payload.width)) || !Number.isFinite(Number(payload.height)))
+      throw error("PDF_OCR_PAGE_INVALID");
+    for (const block of payload.blocks) {
+      const box = block?.b;
+      if (!block || typeof block.t !== "string" || block.t.length > 4096 ||
+          !Array.isArray(box) || box.length !== 4 || box.some((value) => !Number.isFinite(Number(value))) ||
+          box[0] < 0 || box[1] < 0 || box[2] > 1 || box[3] > 1 || box[2] < box[0] || box[3] < box[1])
+        throw error("PDF_OCR_PAGE_INVALID");
+    }
+    return payload;
+  }
   function isZipContainer(extension, bytes) {
     return (
       ["epub", "fbz"].includes(String(extension || "").toLowerCase()) ||
@@ -280,6 +326,8 @@
     inspectZip,
     validateChapterManifest,
     validatePdfPageManifest,
+    validatePdfOcrManifest,
+    validatePdfOcrPage,
     isZipContainer
   });
 })(typeof self !== "undefined" ? self : globalThis);

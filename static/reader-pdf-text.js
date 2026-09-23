@@ -24,3 +24,22 @@ export function populatePdfTextLayer(layer, items, pdfViewport) {
     if (!layer.textContent.trim()) layer.textContent = "此页没有可提取文本";
   } else layer.textContent = plainText.trim() || "此页没有可提取文本";
 }
+
+export function populateOcrTextLayer(layer, blocks) {
+  const fragment = layer.ownerDocument.createDocumentFragment();
+  for (const block of blocks || []) {
+    const text = String(block?.t || "");
+    const box = Array.isArray(block?.b) ? block.b : [];
+    if (!text || box.length !== 4) continue;
+    const span = layer.ownerDocument.createElement("span");
+    span.textContent = text;
+    span.dataset.ocrText = text;
+    span.style.left = `${Math.max(0, Math.min(1, Number(box[0]) || 0)) * 100}%`;
+    span.style.top = `${Math.max(0, Math.min(1, Number(box[1]) || 0)) * 100}%`;
+    span.style.width = `${Math.max(0, Math.min(1, Number(box[2]) - Number(box[0])) * 100)}%`;
+    span.style.height = `${Math.max(0.5, Math.min(1, Number(box[3]) - Number(box[1])) * 100)}%`;
+    span.style.fontSize = `${Math.max(8, Math.min(72, Math.abs(Number(box[3]) - Number(box[1])) * 100))}%`;
+    fragment.appendChild(span);
+  }
+  layer.replaceChildren(fragment);
+}
