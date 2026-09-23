@@ -217,16 +217,19 @@
 
   const assetRoot = String.raw`objects/[0-9a-f]{2}/[0-9a-f]{64}/`;
   const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
-  const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.webp)`;
+  const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.(?:webp|jxl))`;
+  const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
   const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html)|book\.epub|audio\.mp3|video\.mp4)`;
   const assetChapters = String.raw`(?:chapter-manifest\.json|epub-chapters/(?:chapter-manifest\.json|chapters/chapter-[0-9]{4}\.xhtml|resources/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))`;
   const assetPrimaryPattern = new RegExp(
     `^${assetRoot}${assetVersion}(?:${assetPages}|(?:[a-z0-9-]+/)?${assetDocument})$`
   );
   const assetSourcePattern = new RegExp(
-    `^(?:pdf_manifest\\.json|${assetRoot}${assetVersion}(?:${assetPages}|(?:[a-z0-9-]+/)?(?:${assetDocument}|${assetChapters})))$`
+    `^(?:pdf_manifest\\.json|${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr}|(?:[a-z0-9-]+/)?(?:${assetDocument}|${assetChapters})))$`
   );
-  const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}${assetPages}$`);
+  const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
+  const optimizedBucket = "vomebook/pdf-optimized";
+  const optimizedPathPattern = new RegExp(`^${assetRoot}(?:[a-z0-9-]+/)?document\\.pdf$`);
   const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/${assetPages}$`);
   const assetBase = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/";
   const assetModes = Object.freeze({
@@ -238,7 +241,8 @@
     v: "video"
   });
 
-  function isBucketPath(path, versioned = false) {
+  function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages") {
+    if (bucket === optimizedBucket) return optimizedPathPattern.test(path);
     return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path);
   }
 
@@ -272,16 +276,21 @@
       }
       if (!path.endsWith("/page-manifest.json")) return null;
       const rootPath = path.slice(0, -"/page-manifest.json".length);
+      const pathPrefix = bucket ? "" : url.pathname.slice(0, -path.length);
       return {
         root: rootPath,
+        assetUrl(relativePath) {
+          const target = new URL(url.href);
+          if (bucket) target.searchParams.set("path", relativePath);
+          else target.pathname = `${pathPrefix}${relativePath}`;
+          return target.href;
+        },
         pageUrl(page) {
           if (!Number.isInteger(page) || page < 1 || page > 999999)
             throw new Error("PDF_PAGE_INVALID");
           const target = new URL(url.href);
           const filename = `pages/page-${String(page).padStart(6, "0")}.webp`;
-          if (bucket) target.searchParams.set("path", `${rootPath}/${filename}`);
-          else target.pathname = target.pathname.replace(/page-manifest\.json$/, filename);
-          return target.href;
+          return this.assetUrl(`${rootPath}/${filename}`);
         }
       };
     } catch (_) {
@@ -297,13 +306,21 @@
 
   function assetFields(asset, bucketBase) {
     const path = String(asset?.p || "");
-    const bucket = isBucketPath(path, true);
+    const ocrPath = String(asset?.o || "");
+    const ocrBucket = asset?.b === "vomebook/pdf-pages" || asset?.ob === "vomebook/pdf-pages";
+    const ocrUrl = ocrPath.endsWith("/ocr-manifest.json") && ocrBucket && isBucketPath(ocrPath, true)
+      ? `${bucketBase}?path=${encodeURIComponent(ocrPath)}`
+      : "";
+    if (asset?.s === 3 && ocrUrl)
+      return { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") };
+    const bucketName = String(asset?.b || "vomebook/pdf-pages");
+    const bucket = isBucketPath(path, true, bucketName);
     if (
       !asset ||
       asset.s !== 2 ||
       !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
       !assetPrimaryPattern.test(path) ||
-      (bucket && asset.b !== "vomebook/pdf-pages")
+      (bucket && !["vomebook/pdf-pages", optimizedBucket].includes(asset?.b))
     )
       return null;
     const nativeExtension =
@@ -315,10 +332,14 @@
           ? "pdf-pages"
           : assetModes[asset.m];
     return {
-      ReaderLink: bucket ? `${bucketBase}?path=${encodeURIComponent(path)}` : assetBase + path,
+      ReaderLink: bucket
+        ? `${bucketBase}?${asset.b === optimizedBucket ? `bucket=${encodeURIComponent(asset.b)}&` : ""}path=${encodeURIComponent(path)}`
+        : assetBase + path,
       ReaderExtension: asset.c ? "epub-chapters" : extension,
       ReaderChapterManifest: asset.c ? assetBase + asset.c : "",
-      ReaderFallback: asset.f ? assetBase + asset.f : ""
+      ReaderFallback: asset.f ? assetBase + asset.f : "",
+      ReaderOcrManifest: ocrUrl || (ocrPath.endsWith("/ocr-manifest.json") ? assetBase + ocrPath : ""),
+      ReaderOcrMode: String(asset.om || "")
     };
   }
 
@@ -345,6 +366,8 @@
       params.set("download", record.DownloadLink || record.downloadLink);
     if (!shortId && (record.OcrUrl || record.ocrUrl))
       params.set("ocr", record.OcrUrl || record.ocrUrl);
+    if (!shortId && (record.ReaderOcrManifest || record.readerOcrManifest))
+      params.set("ocr_manifest", record.ReaderOcrManifest || record.readerOcrManifest);
     if (!shortId && (record.ReaderFallback || record.readerFallback))
       params.set("fallback", record.ReaderFallback || record.readerFallback);
     if (

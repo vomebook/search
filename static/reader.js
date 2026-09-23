@@ -7,7 +7,7 @@ import "/search/static/reader-section-virtualizer.js";
 import "/search/static/reader-runtime.js";
 import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
-import { populatePdfTextLayer } from "/search/static/reader-pdf-text.js";
+import { populatePdfTextLayer, populateOcrTextLayer } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
@@ -301,6 +301,10 @@ updateDocumentState({
 });
 function applyReaderMetadata(data) {
   if (data) resolvedReaderData = { ...(resolvedReaderData || {}), ...data };
+  if (data?.ReaderOcrManifest || data?.ocr_manifest) {
+    ocrManifestUrl = data.ReaderOcrManifest || data.ocr_manifest;
+    params.set("ocr_manifest", ocrManifestUrl);
+  }
   readerRuntime.update("source", { metadata: resolvedReaderData });
   const title = String(resolvedReaderData?.title || params.get("title") || sourceName).trim();
   const suffix = String(
@@ -316,6 +320,7 @@ function applyReaderMetadata(data) {
 }
 let fallbackUrl = params.get("fallback") || "";
 const ocrUrl = params.get("ocr") || "";
+let ocrManifestUrl = params.get("ocr_manifest") || "";
 function normalizeReaderReturnUrl(rawUrl) {
   try {
     const target = new URL(rawUrl || "/search/", location.origin);
@@ -379,11 +384,16 @@ let bookmarkInvoker = null;
 const bookmarkInertSiblings = new Map();
 let pdfDocument = null;
 let pdfPageManifest = null;
+let pdfOcrManifest = null;
+let pdfOcrManifestPromise = null;
 let pdfActiveRenders = 0;
 let pdfShellsReady = Promise.resolve();
 const pdfRenderWaiters = [];
+let pdfActiveTextLoads = 0;
+const pdfTextWaiters = [];
 trackReaderResource(() => {
   for (const waiter of pdfRenderWaiters.splice(0)) waiter.reject(readerAbortError());
+  for (const waiter of pdfTextWaiters.splice(0)) waiter.reject(readerAbortError());
 });
 let epubRendition = null;
 let epubBook = null;
@@ -2032,10 +2042,11 @@ function validSource(raw) {
   try {
     const url = new URL(raw);
     const bucketPath = url.searchParams.get("path") || "";
+    const bucketName = url.searchParams.get("bucket") || "vomebook/pdf-pages";
     if (
       url.origin === "https://voiceofml-search.hf.space" &&
       url.pathname === "/api/reader-bucket-resource" &&
-      VoiceOfMLReader.isBucketPath(bucketPath)
+      VoiceOfMLReader.isBucketPath(bucketPath, true, bucketName)
     )
       return true;
     if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname))
@@ -2197,12 +2208,61 @@ function pdfManifestSource() {
 }
 function pdfPageEntry(page) {
   if (!pdfPageManifest || page < 1 || page > pdfPageManifest.pageCount) return null;
-  return (
+  const pageEntry = (
     pdfPageManifest.entries?.[page - 1] || {
       page,
       path: `${pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.webp`
     }
   );
+  const ocrEntry = pdfOcrManifest?.pages?.[page - 1];
+  return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
+}
+
+async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes) {
+  const response = await fetchReaderUrl(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  let bytes = await VoiceOfMLReaderSecurity.readBytes(response, limit);
+  if (/\.gz$/i.test(url)) {
+    if (typeof DecompressionStream !== "function") throw new Error("PDF_OCR_GZIP_UNSUPPORTED");
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    bytes = await VoiceOfMLReaderSecurity.readBytes(new Response(stream), limit);
+  }
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+async function loadPdfOcrManifest() {
+  if (pdfOcrManifest) return pdfOcrManifest;
+  if (!ocrManifestUrl) return null;
+  if (!pdfOcrManifestPromise) {
+    pdfOcrManifestPromise = readPdfOcrJson(ocrManifestUrl, VoiceOfMLReaderSecurity.LIMITS.manifestBytes).then((manifest) => {
+      pdfOcrManifest = VoiceOfMLReaderSecurity.validatePdfOcrManifest(manifest);
+      return pdfOcrManifest;
+    });
+  }
+  try { return await pdfOcrManifestPromise; }
+  catch (error) { pdfOcrManifestPromise = null; throw error; }
+}
+
+async function renderPdfOcrText(shell, entry) {
+  if (shell.dataset.textReady === "1" || !entry?.o || !pdfPageManifest) return;
+  const layer = shell.querySelector(".reader-pdf-text");
+  if (!layer) return;
+  await acquirePdfTextSlot(shell.dataset.renderVisible === "1");
+  try {
+    const payload = await readPdfOcrJson(pdfPageManifest.assetUrl(entry.o));
+    assertReaderActive();
+    VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, Number(shell.dataset.page));
+    populateOcrTextLayer(layer, payload.blocks);
+    shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
+    shell.dataset.textReady = "1";
+    highlightPdfText(shell);
+  } catch (error) {
+    if (!readerAbortController.signal.aborted)
+      console.warn(`PDF page ${shell.dataset.page} OCR text failed`, error);
+  } finally {
+    releasePdfTextSlot();
+  }
+}
 }
 function trimPdfManifestImages(protectedShell) {
   const images = [...content.querySelectorAll('.reader-page[data-render-state="rendered"]')];
@@ -2215,6 +2275,10 @@ function trimPdfManifestImages(protectedShell) {
   );
   for (const shell of images.slice(25)) {
     shell.querySelector("img")?.remove();
+    const textLayer = shell.querySelector(".reader-pdf-text");
+    if (textLayer) textLayer.replaceChildren();
+    shell._bookmarkTextItems = [];
+    shell.dataset.textReady = "0";
     shell.dataset.renderState = "idle";
   }
 }
@@ -2377,6 +2441,7 @@ async function renderPdfPages(prepared) {
   const totalPages = manifest.page_count;
   if (!source) throw new Error("PDF_MANIFEST_INVALID");
   pdfPageManifest = { ...source, pageCount: totalPages };
+  if (ocrManifestUrl) loadPdfOcrManifest().catch(() => {});
   updateDocumentState({ pageCount: totalPages });
   pageInput.max = String(totalPages);
   document.querySelector("#page-total").textContent = `/ ${totalPages}`;
@@ -2392,7 +2457,10 @@ async function renderPdfPages(prepared) {
   const observer = new IntersectionObserver(
     (items) => {
       if (readerAbortController.signal.aborted) return;
-      for (const entry of items) if (entry.isIntersecting) renderPdfInBackground(entry.target);
+      for (const entry of items) if (entry.isIntersecting) {
+        entry.target.dataset.renderVisible = isPdfPageVisible(entry.target) ? "1" : "0";
+        renderPdfInBackground(entry.target);
+      }
     },
     { root: viewport, rootMargin: "1200px 0px" }
   );
@@ -2436,7 +2504,7 @@ async function renderPdf(prepared) {
     (entries) =>
       entries.forEach((entry) => {
         if (readerAbortController.signal.aborted) return;
-        entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0";
+        entry.target.dataset.renderVisible = entry.isIntersecting && isPdfPageVisible(entry.target) ? "1" : "0";
         if (entry.isIntersecting) renderPdfInBackground(entry.target);
       }),
     { root: document.querySelector("#viewport"), rootMargin: "1200px 0px" }
@@ -2512,7 +2580,12 @@ async function renderPdf(prepared) {
   assertReaderActive();
 }
 
-function renderPdfInBackground(shell, force = false) {
+function isPdfPageVisible(shell) {
+  const pageRect = shell?.getBoundingClientRect?.();
+  const viewportRect = viewport?.getBoundingClientRect?.();
+  return !!pageRect && !!viewportRect && pageRect.bottom > viewportRect.top && pageRect.top < viewportRect.bottom;
+}
+function renderPdfInBackground(shell, force = false, priority = isPdfPageVisible(shell)) {
   if (readerAbortController.signal.aborted) return;
   if (shell._backgroundRender) {
     if (force) shell.dataset.pendingRerender = "1";
@@ -2520,8 +2593,8 @@ function renderPdfInBackground(shell, force = false) {
   }
   const task =
     capability.mode === "pdf-pages"
-      ? renderPdfManifestShell(shell, force, true)
-      : renderPdfShell(shell, force);
+      ? renderPdfManifestShell(shell, force, priority)
+      : renderPdfShell(shell, force, priority);
   shell._backgroundRender = task;
   task
     .catch((error) => {
@@ -2561,9 +2634,13 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
         image.decoding = "async";
         shell.appendChild(image);
       }
-      const target = pdfPageManifest.pageUrl(entry.page);
-      await new Promise((resolve, reject) => {
-        let settled = false,
+       const fallbackPath = entry.w || `${pdfPageManifest.root}/pages/page-${String(entry.page).padStart(6, "0")}.webp`;
+       const targets = [...new Set([entry.j, fallbackPath].filter(Boolean))].map((path) =>
+         pdfPageManifest.assetUrl(path)
+       );
+       await new Promise((resolve, reject) => {
+         let settled = false,
+           targetIndex = 0,
           timeout = 0,
           untrack = () => {};
         const finish = (error) => {
@@ -2583,13 +2660,23 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
           () => finish(new Error("PDF page image timeout")),
           READER_PROXY_TIMEOUT_MS
         );
-        image.onload = () => finish();
-        image.onerror = () => finish(new Error(`PDF page ${entry.page} image failed`));
-        if (image.src !== target) image.src = target;
-        if (image.complete && image.naturalWidth) finish();
+         image.onload = () => finish();
+         image.onerror = () => {
+           if (targetIndex + 1 < targets.length) {
+             targetIndex += 1;
+             image.src = targets[targetIndex];
+           } else finish(new Error(`PDF page ${entry.page} image failed`));
+         };
+         if (!targets.length) return finish(new Error(`PDF page ${entry.page} image missing`));
+         if (image.src !== targets[targetIndex]) image.src = targets[targetIndex];
+         if (image.complete && image.naturalWidth) finish();
       });
       assertReaderActive();
       shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
+      const loadText = pdfOcrManifestPromise
+        ? pdfOcrManifestPromise.then(() => renderPdfOcrText(shell, pdfPageEntry(Number(shell.dataset.page))))
+        : renderPdfOcrText(shell, pdfPageEntry(Number(shell.dataset.page)));
+      loadText.catch(() => {});
       image.classList.add("ready");
       shell.dataset.renderState = "rendered";
       shell.dataset.renderUsedAt = String(Date.now());
@@ -2696,8 +2783,17 @@ async function renderPdfText(page, shell) {
 function highlightPdfText(shell, query = searchState.query) {
   if (!shell || readerAbortController.signal.aborted || !query) return;
   const pattern = new RegExp(fullSearchEscape(query), "iu");
-  for (const span of shell.querySelectorAll(".reader-pdf-text span"))
-    if (pattern.test(span.textContent) && !span.classList.contains("full-search-highlight")) {
+  const spans = [...shell.querySelectorAll(".reader-pdf-text span")];
+  let text = "";
+  const ranges = spans.map((span) => {
+    const start = text.length;
+    text += `${span.textContent || ""} `;
+    return { span, start, end: text.length };
+  });
+  const hit = text.search(pattern);
+  for (const { span, start, end } of ranges)
+    if (!span.classList.contains("full-search-highlight") &&
+        ((hit >= 0 && end > hit && start < hit + query.length) || pattern.test(span.textContent))) {
       span.classList.add("full-search-highlight");
       fullSearchActiveMarks.push(span);
     }
@@ -2726,6 +2822,31 @@ function releasePdfRenderSlot() {
   pdfActiveRenders = Math.max(0, pdfActiveRenders - 1);
   if (readerAbortController.signal.aborted) return;
   const waiter = pdfRenderWaiters.shift();
+  if (waiter) waiter.resolve();
+}
+function acquirePdfTextSlot(priority = false) {
+  if (readerAbortController.signal.aborted) return Promise.reject(readerAbortError());
+  const limit = matchMedia("(max-width: 700px)").matches ? 1 : 2;
+  if (pdfActiveTextLoads < limit) {
+    pdfActiveTextLoads++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const waiter = {
+      resolve: () => {
+        pdfActiveTextLoads++;
+        resolve();
+      },
+      reject
+    };
+    if (priority) pdfTextWaiters.unshift(waiter);
+    else pdfTextWaiters.push(waiter);
+  });
+}
+function releasePdfTextSlot() {
+  pdfActiveTextLoads = Math.max(0, pdfActiveTextLoads - 1);
+  if (readerAbortController.signal.aborted) return;
+  const waiter = pdfTextWaiters.shift();
   if (waiter) waiter.resolve();
 }
 function trimPdfCanvases(protectedShell) {
@@ -2759,6 +2880,10 @@ function trimPdfCanvases(protectedShell) {
     canvas.width = 0;
     canvas.height = 0;
     canvas.classList.remove("ready");
+    const textLayer = shell.querySelector(".reader-pdf-text");
+    if (textLayer) textLayer.replaceChildren();
+    shell._bookmarkTextItems = [];
+    shell.dataset.textReady = "0";
     shell.dataset.renderState = "idle";
   }
 }
@@ -3434,6 +3559,8 @@ function disposeFormatResources(mode) {
   if (["pdf", "pdf-pages"].includes(mode)) {
     pdfDocument = null;
     pdfPageManifest = null;
+    pdfOcrManifest = null;
+    pdfOcrManifestPromise = null;
     pdfFirstPagePreload?.removeAttribute("src");
     pdfFirstPagePreload = null;
     for (const canvas of content.querySelectorAll(".reader-page canvas")) {
@@ -4897,6 +5024,47 @@ async function navigateFoliateSearchResult(result, generation) {
   updateProgressTools();
   scheduleSave();
 }
+async function fullSearchPdfPageMatches(query, generation) {
+  const manifest = await loadPdfOcrManifest();
+  if (!manifest?.book_text?.path || !pdfPageManifest) return [];
+  const book = await readPdfOcrJson(pdfPageManifest.assetUrl(manifest.book_text.path), VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes);
+  const output = [], pattern = new RegExp(fullSearchEscape(query), "giu");
+  for (const page of book.pages || []) {
+    if (!isReaderGenerationCurrent("search", generation)) return [];
+    const text = String(page.text || "");
+    for (const match of text.matchAll(pattern)) {
+      if (output.length >= 100) break;
+      output.push({
+        location: `第 ${page.page} 页`,
+        snippet: fullSearchSnippet(text, match.index, match[0].length),
+        activate: (navigationGeneration) => goToPage(page.page, navigationGeneration)
+      });
+    }
+    if (output.length >= 100) break;
+  }
+  return output;
+}
+
+async function fullSearchPdfApiMatches(query, generation) {
+  if (!readerId) throw new Error("PDF_OCR_API_ID_MISSING");
+  const url = `https://voiceofml-search.hf.space/api/reader-ocr-search?id=${encodeURIComponent(readerId)}&q=${encodeURIComponent(query)}&page=1&page_size=100`;
+  const response = await fetchWithReaderTimeout(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json();
+  if (!payload || payload.version !== 1 || !Array.isArray(payload.results))
+    throw new Error("PDF_OCR_API_INVALID");
+  return payload.results.map((item) => {
+    const text = String(item.snippet || "");
+    const start = Math.max(0, Number(item.snippet_start) || 0);
+    const length = Math.max(0, Number(item.length) || query.length);
+    return {
+      location: `第 ${item.page} 页`,
+      snippet: fullSearchSnippet(text, start, length),
+      activate: (navigationGeneration) => goToPage(item.page, navigationGeneration)
+    };
+  });
+}
+
 async function fullSearchPdfMatches(query, generation) {
   const pdf = pdfDocument,
     output = [],
@@ -4966,7 +5134,14 @@ async function runFullSearch() {
   }
   fullSearchStatus.textContent = "正在搜索正文…";
   try {
-    if (capability.mode === "pdf")
+    if (capability.mode === "pdf-pages") {
+      try {
+        publishSearchResults(generation, await fullSearchPdfApiMatches(query, generation));
+      } catch (error) {
+        publishSearchResults(generation, await fullSearchPdfPageMatches(query, generation));
+      }
+    }
+    else if (capability.mode === "pdf")
       publishSearchResults(generation, await fullSearchPdfMatches(query, generation));
     else if (capability.mode === "foliate")
       publishSearchResults(generation, await fullSearchFoliateMatches(query, generation));
