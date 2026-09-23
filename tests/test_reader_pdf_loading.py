@@ -9,7 +9,7 @@ from tests.browser_support import local_server
 from tests.browser_support import SearchHandler
 from tests.test_reader_performance import sync_playwright, PlaywrightError, minimal_pdf
 
-MODULE = '**/static/vendor/pdf.min.f80490490320.mjs*'
+MODULE = '**/static/vendor/pdf.min.*.mjs*'
 SOURCE = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/cold-retry.pdf'
 
 
