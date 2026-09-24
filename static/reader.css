@@ -634,6 +634,10 @@ body {
 .toc-item .panel-item-main {
   user-select: text;
 }
+.toc-group .panel-item-main {
+  font-weight: 600;
+  cursor: default;
+}
 .toc-current-mark {
   color: #8ab4f8;
   font-weight: 700;

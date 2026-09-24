@@ -2218,11 +2218,22 @@ function pdfPageEntry(page) {
   return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
 }
 
-async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes) {
+function pdfOcrSource() {
+  return VoiceOfMLReader.pdfPageSource(ocrManifestUrl, location.href,
+    "https://voiceofml-search.hf.space", "ocr-manifest.json");
+}
+async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0) {
   const response = await fetchReaderUrl(url);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   let bytes = await VoiceOfMLReaderSecurity.readBytes(response, limit);
-  if (/\.gz$/i.test(url)) {
+  if (size && bytes.byteLength !== size) throw new Error("PDF_OCR_SIZE_MISMATCH");
+  if (digest) {
+    const actual = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+      .map((value) => value.toString(16).padStart(2, "0")).join("");
+    if (actual !== digest) throw new Error("PDF_OCR_HASH_MISMATCH");
+  }
+  const parsed = new URL(url, location.href);
+  if (/\.gz$/i.test(parsed.searchParams.get("path") || parsed.pathname)) {
     if (typeof DecompressionStream !== "function") throw new Error("PDF_OCR_GZIP_UNSUPPORTED");
     const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
     bytes = await VoiceOfMLReaderSecurity.readBytes(new Response(stream), limit);
@@ -2234,7 +2245,10 @@ async function loadPdfOcrManifest() {
   if (pdfOcrManifest) return pdfOcrManifest;
   if (!ocrManifestUrl) return null;
   if (!pdfOcrManifestPromise) {
+    if (!pdfOcrSource()) throw new Error("PDF_OCR_SOURCE_INVALID");
     pdfOcrManifestPromise = readPdfOcrJson(ocrManifestUrl, VoiceOfMLReaderSecurity.LIMITS.manifestBytes).then((manifest) => {
+      assertReaderActive();
+      if (manifest.page_count !== documentState.pageCount) throw new Error("PDF_OCR_PAGE_COUNT_MISMATCH");
       pdfOcrManifest = VoiceOfMLReaderSecurity.validatePdfOcrManifest(manifest);
       return pdfOcrManifest;
     });
@@ -2245,12 +2259,18 @@ async function loadPdfOcrManifest() {
 
 async function renderPdfOcrText(shell, entry) {
   if (shell.dataset.textReady === "1" || !entry?.o || !pdfPageManifest) return;
+  if (shell._ocrPromise) return shell._ocrPromise;
   const layer = shell.querySelector(".reader-pdf-text");
   if (!layer) return;
-  await acquirePdfTextSlot(shell.dataset.renderVisible === "1");
+  const epoch = shell._textEpoch || 0;
+  const task = (async () => {
+  await acquirePdfTextSlot(isPdfPageVisible(shell));
   try {
-    const payload = await readPdfOcrJson(pdfPageManifest.assetUrl(entry.o));
+    if (epoch !== (shell._textEpoch || 0)) return;
+    const payload = await readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
+      VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob);
     assertReaderActive();
+    if (epoch !== (shell._textEpoch || 0)) return;
     VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, Number(shell.dataset.page));
     populateOcrTextLayer(layer, payload.blocks);
     shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
@@ -2262,7 +2282,9 @@ async function renderPdfOcrText(shell, entry) {
   } finally {
     releasePdfTextSlot();
   }
-}
+  })().finally(() => { if (shell._ocrPromise === task) delete shell._ocrPromise; });
+  shell._ocrPromise = task;
+  return task;
 }
 function trimPdfManifestImages(protectedShell) {
   const images = [...content.querySelectorAll('.reader-page[data-render-state="rendered"]')];
@@ -2274,11 +2296,14 @@ function trimPdfManifestImages(protectedShell) {
         Math.abs(Number(b.dataset.page) - documentState.page)
   );
   for (const shell of images.slice(25)) {
+    shell._textEpoch = (shell._textEpoch || 0) + 1;
+    delete shell._ocrPromise;
     shell.querySelector("img")?.remove();
     const textLayer = shell.querySelector(".reader-pdf-text");
     if (textLayer) textLayer.replaceChildren();
     shell._bookmarkTextItems = [];
     shell.dataset.textReady = "0";
+    fullSearchActiveMarks = fullSearchActiveMarks.filter((mark) => mark.isConnected);
     shell.dataset.renderState = "idle";
   }
 }
@@ -2473,6 +2498,11 @@ async function renderPdfPages(prepared) {
     shell.tabIndex = 0;
     shell.setAttribute("role", "region");
     shell.setAttribute("aria-label", `第 ${page} 页`);
+    const textLayer = document.createElement("div");
+    textLayer.className = "reader-pdf-text";
+    textLayer.setAttribute("role", "document");
+    textLayer.setAttribute("aria-label", `第 ${page} 页正文`);
+    shell.appendChild(textLayer);
     if (
       page === 1 &&
       pdfFirstPagePreload &&
@@ -2634,10 +2664,8 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
         image.decoding = "async";
         shell.appendChild(image);
       }
-       const fallbackPath = entry.w || `${pdfPageManifest.root}/pages/page-${String(entry.page).padStart(6, "0")}.webp`;
-       const targets = [...new Set([entry.j, fallbackPath].filter(Boolean))].map((path) =>
-         pdfPageManifest.assetUrl(path)
-       );
+       const targets = [...new Set([entry.j, entry.w, `${pdfPageManifest.root}/pages/page-${String(entry.page).padStart(6, "0")}.webp`].filter(Boolean))]
+         .map((path) => pdfPageManifest.assetUrl(path));
        await new Promise((resolve, reject) => {
          let settled = false,
            targetIndex = 0,
@@ -5027,7 +5055,8 @@ async function navigateFoliateSearchResult(result, generation) {
 async function fullSearchPdfPageMatches(query, generation) {
   const manifest = await loadPdfOcrManifest();
   if (!manifest?.book_text?.path || !pdfPageManifest) return [];
-  const book = await readPdfOcrJson(pdfPageManifest.assetUrl(manifest.book_text.path), VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes);
+  const book = await readPdfOcrJson(pdfOcrSource().assetUrl(manifest.book_text.path),
+    VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes, manifest.book_text.sha256, manifest.book_text.bytes);
   const output = [], pattern = new RegExp(fullSearchEscape(query), "giu");
   for (const page of book.pages || []) {
     if (!isReaderGenerationCurrent("search", generation)) return [];
