@@ -268,7 +268,7 @@
   const PDF_OCR_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz)$/;
   const PDF_OCR_MANIFEST_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr-manifest\.json$/;
   const PDF_OCR_PAGE_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?pages\/page-[0-9]{6}\.(?:webp|jxl)$/;
-  const PDF_OCR_ROOT = /^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16})?)/;
+  const PDF_OCR_ROOT = /^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?)/;
   function validatePdfOcrManifest(manifest) {
     if (!manifest || manifest.version !== 1 || manifest.kind !== "pdf-ocr" ||
         !Number.isInteger(manifest.page_count) || manifest.page_count < 1 ||
@@ -282,9 +282,11 @@
       if (!page || page.p !== index + 1 || !PDF_OCR_PATH.test(page.o) ||
           page.o !== `${pageRoot}/ocr/page-${expected}.json.gz` ||
           (page.w !== undefined && (typeof page.w !== "string" || !PDF_OCR_PAGE_PATH.test(page.w) ||
-            page.w !== `${pageRoot}/pages/page-${expected}.webp`)) ||
+            !page.w.endsWith(`/pages/page-${expected}.webp`) ||
+            !page.w.startsWith(`${pageRoot}/pages/`))) ||
           (page.j !== undefined && (typeof page.j !== "string" || !PDF_OCR_PAGE_PATH.test(page.j) ||
-            page.j !== `${pageRoot}/pages/page-${expected}.jxl`)) ||
+            !page.j.endsWith(`/pages/page-${expected}.jxl`) ||
+            !page.j.startsWith(`${pageRoot}/pages/`))) ||
           (root && root !== pageRoot))
         throw error("PDF_OCR_MANIFEST_INVALID");
       root = pageRoot;
@@ -293,7 +295,7 @@
         !PDF_OCR_PATH.test(manifest.book_text.path) || manifest.book_text.path !== `${root}/ocr/book-text.json.gz` ||
         (manifest.page_manifest !== undefined &&
           (!manifest.page_manifest || typeof manifest.page_manifest.path !== "string" ||
-           !PDF_OCR_MANIFEST_PATH.test(manifest.page_manifest.path.replace("page-manifest.json", "ocr-manifest.json")))))
+           manifest.page_manifest.path !== `${root}/page-manifest.json`)))
       throw error("PDF_OCR_MANIFEST_INVALID");
     return manifest;
   }

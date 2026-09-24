@@ -230,7 +230,7 @@
   const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
   const optimizedBucket = "vomebook/pdf-optimized";
   const optimizedPathPattern = new RegExp(`^${assetRoot}(?:[a-z0-9-]+/)?document\\.pdf$`);
-  const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/${assetPages}$`);
+  const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:${assetPages}|${assetOcr})$`);
   const assetBase = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/";
   const assetModes = Object.freeze({
     p: "pdf",
@@ -253,13 +253,15 @@
 
   // One parser for opening preload, manifest validation and page navigation.
   // Dataset assets may be unversioned; the Bucket API requires a version.
-  function pdfPageSource(raw, base, bucketOrigin) {
+  function pdfPageSource(raw, base, bucketOrigin, filename = "page-manifest.json") {
     try {
       const url = new URL(raw, base);
       if (url.username || url.password || url.hash) return null;
       const bucket = url.origin === bucketOrigin && url.pathname === "/api/reader-bucket-resource";
       let path;
       if (bucket) {
+        if (url.searchParams.getAll("path").length !== 1 ||
+            [...url.searchParams.keys()].some((key) => key !== "path")) return null;
         path = url.searchParams.get("path") || "";
         if (!isBucketPath(path, true)) return null;
       } else {
@@ -274,12 +276,16 @@
         path = decodeURIComponent(url.pathname.slice(prefix[0].length));
         if (!isBucketPath(path)) return null;
       }
-      if (!path.endsWith("/page-manifest.json")) return null;
-      const rootPath = path.slice(0, -"/page-manifest.json".length);
+      if (!["page-manifest.json", "ocr-manifest.json"].includes(filename) ||
+          !path.endsWith(`/${filename}`)) return null;
+      const rootPath = path.slice(0, -filename.length - 1);
       const pathPrefix = bucket ? "" : url.pathname.slice(0, -path.length);
       return {
         root: rootPath,
         assetUrl(relativePath) {
+          if (!isBucketPath(relativePath, bucket) ||
+              !relativePath.startsWith(rootPath.split("/").slice(0, 3).join("/") + "/"))
+            throw new Error("PDF_ASSET_INVALID");
           const target = new URL(url.href);
           if (bucket) target.searchParams.set("path", relativePath);
           else target.pathname = `${pathPrefix}${relativePath}`;
@@ -288,7 +294,6 @@
         pageUrl(page) {
           if (!Number.isInteger(page) || page < 1 || page > 999999)
             throw new Error("PDF_PAGE_INVALID");
-          const target = new URL(url.href);
           const filename = `pages/page-${String(page).padStart(6, "0")}.webp`;
           return this.assetUrl(`${rootPath}/${filename}`);
         }
