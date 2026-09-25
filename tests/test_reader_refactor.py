@@ -4,6 +4,7 @@ import io
 import gzip
 import hashlib
 import json
+import time
 import unittest
 import urllib.parse
 import zipfile
@@ -83,6 +84,25 @@ class ReaderRefactorTest(unittest.TestCase):
                 image.wait_for()
                 self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
                 self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
+
+    def test_download_waits_for_reader_ready_then_uses_attachment(self):
+        pending_content = []
+        def slow_content(route):
+            pending_content.append(route)
+        self.page.route("https://voiceofml-search.hf.space/api/reader-content**", slow_content)
+        self.page.route("https://voiceofml-search.hf.space/api/download/check**", lambda route: route.fulfill(
+            content_type="application/json", body=json.dumps({"ok": True})))
+        self.page.route("https://voiceofml-search.hf.space/api/download?**", lambda route: route.fulfill(
+            content_type="application/octet-stream", body=b"download",
+            headers={"Content-Disposition": "attachment; filename*=UTF-8''refactor.txt"}))
+        self.page.goto(self.reader_url("txt"), wait_until="domcontentloaded")
+        self.page.locator("#download").click()
+        self.assertEqual(self.page.locator("#status").text_content(), "正在准备原文件，请稍候")
+        pending_content[0].fulfill(content_type="text/plain", body="Reader download")
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        with self.page.expect_download() as event:
+            self.page.locator("#download").click()
+        self.assertEqual(event.value.suggested_filename, "refactor.txt")
 
     def test_media_proxy_failure_retries_original_once(self):
         buffer = io.BytesIO()
