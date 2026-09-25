@@ -96,18 +96,37 @@ def _select_samples():
     ready = [v for v in manifest.get("files", {}).values() if v.get("status") == "ready" and v.get("path") and v.get("sha256")]
     wanted = {"pdf": ("pdf",), "epub": ("epub",), "mobi": ("mobi",), "azw3": ("azw3",), "fb2": ("fb2",), "docx": ("docx", "doc"), "html": ("html", "htm")}
     selected = {}
+
+    def reader_extension(item, fallback):
+        mode = str(item.get("reader_mode") or "").lower()
+        return {"audio": "mp3", "video": "mp4", "docx": "docx"}.get(
+            mode, item.get("source_extension", fallback)
+        )
+
     for name, extensions in wanted.items():
         candidates = [v for v in ready if v.get("source_extension", "").lower() in extensions]
         if name == "pdf":
             candidates = [v for v in candidates if v.get("reader_mode") == "pdf"] or candidates
         if candidates:
             item = candidates[0]
-            selected[name] = (name, f"{root}/{item['path']}", item.get("source_extension", name), item.get("reader_mode", name), None)
+            selected[name] = (
+                name,
+                f"{root}/{item['path']}",
+                reader_extension(item, name),
+                item.get("reader_mode", name),
+                None,
+            )
     for mode in ("audio", "video"):
         candidates = [v for v in ready if v.get("reader_mode") == mode or (mode == "audio" and v.get("source_extension", "").lower() == "mp3")]
         if candidates:
             item = candidates[0]
-            selected[mode] = (mode, f"{root}/{item['path']}", item.get("source_extension", mode), mode, False)
+            selected[mode] = (
+                mode,
+                f"{root}/{item['path']}",
+                reader_extension(item, mode),
+                mode,
+                False,
+            )
     page = manifest.get("pdf_manifest")
     page_path = page.get("path") if isinstance(page, dict) else KNOWN_PDF_PAGES_PATH
     page_url = f"https://voiceofml-search.hf.space/api/reader-bucket-resource?path={urllib.parse.quote(page_path, safe='')}"
