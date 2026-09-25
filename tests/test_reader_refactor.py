@@ -85,7 +85,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
                 self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
 
-    def test_download_waits_for_reader_ready_then_uses_attachment(self):
+    def test_download_during_prepare_does_not_interrupt_reader(self):
         pending_content = []
         checks = []
         downloads = []
@@ -108,10 +108,9 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#download').hasAttribute('href')")
         self.assertNotEqual(self.page.locator("html").get_attribute("data-reader-phase"), "ready")
         self.page.locator("#download").click()
-        self.page.wait_for_timeout(200)
-        self.assertEqual(checks, [])
+        self.page.wait_for_function("() => document.querySelector('#download-feedback').textContent === '下载检查失败，请重试'")
+        self.assertEqual(len(checks), 1)
         self.assertEqual(downloads, [])
-        self.assertEqual(self.page.locator("#download-feedback").text_content(), "正在准备原文件，请稍候")
         self.assertNotIn("原文件", self.page.locator("#status").text_content())
         self.page.set_viewport_size({"width": 390, "height": 844})
         self.assertTrue(self.page.locator("#download-feedback").evaluate("""node => {
@@ -119,17 +118,63 @@ class ReaderRefactorTest(unittest.TestCase):
             const button = document.querySelector('#download').getBoundingClientRect();
             return message.left >= 0 && message.right <= innerWidth && message.top >= button.bottom;
         }"""))
-        pending_content[0].fulfill(content_type="text/plain", body="Reader download")
-        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-        self.assertTrue(self.page.locator("#download-feedback").is_hidden())
-        self.page.locator("#download").click()
-        self.page.wait_for_function("() => document.querySelector('#download-feedback').textContent === '下载检查失败，请重试'")
-        self.assertEqual(downloads, [])
         with self.page.expect_download() as event:
             self.page.locator("#download").click()
         self.assertEqual(event.value.suggested_filename, "refactor.txt")
+        self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "prepare")
         self.assertEqual(len(checks), 2)
         self.assertEqual(len(downloads), 1)
+        pending_content[0].fulfill(content_type="text/plain", body="Reader download")
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertIn("Reader download", self.page.locator("#content").text_content())
+
+    def test_id_only_download_joins_reader_resolution(self):
+        resolved = []
+        content = []
+        checks = []
+        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/shared.txt"
+        self.page.route("https://voiceofml-search.hf.space/api/reader-resolve?**", lambda route: resolved.append(route))
+        self.page.route("https://voiceofml-search.hf.space/api/reader-content?**", lambda route: content.append(route))
+        self.page.route("https://voiceofml-search.hf.space/api/download/check?**", lambda route: (
+            checks.append(route.request.url), route.fulfill(json={"ok": True}, headers={"Access-Control-Allow-Origin": "*"})))
+        self.page.route("https://voiceofml-search.hf.space/api/download?**", lambda route: route.fulfill(
+            body=b"original", headers={"Content-Disposition": "attachment; filename=shared.txt"}))
+        self.page.goto(self.origin + "/search/static/reader.html?id=" + "a" * 13 + "&ext=txt", wait_until="domcontentloaded")
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'resolve'")
+        self.page.locator("#download").click()
+        self.page.locator("#download").click()
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(checks, [])
+        with self.page.expect_download() as event:
+            resolved[0].fulfill(json={"url": source, "download": source, "title": "shared", "extension": "txt"},
+                                headers={"Access-Control-Allow-Origin": "*"})
+        self.assertEqual(event.value.suggested_filename, "shared.txt")
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "prepare")
+        content[0].fulfill(body="Resolved text", headers={"Access-Control-Allow-Origin": "*"})
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+
+    def test_pdf_can_finish_preparing_after_download_starts(self):
+        pending_content = []
+        self.page.route("https://voiceofml-search.hf.space/api/reader-content**",
+                        lambda route: pending_content.append(route))
+        self.page.route("https://voiceofml-search.hf.space/api/download/check**",
+                        lambda route: route.fulfill(json={"ok": True}, headers={"Access-Control-Allow-Origin": "*"}))
+        self.page.route("https://voiceofml-search.hf.space/api/download?**", lambda route: route.fulfill(
+            content_type="application/octet-stream", body=b"original",
+            headers={"Content-Disposition": "attachment; filename=book.pdf"}))
+        self.page.goto(self.reader_url("pdf"), wait_until="domcontentloaded")
+        self.page.wait_for_function("() => document.querySelector('#download').hasAttribute('href')")
+        with self.page.expect_download() as event:
+            self.page.locator("#download").click()
+        self.assertEqual(event.value.suggested_filename, "book.pdf")
+        self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "prepare")
+        self.page.wait_for_timeout(200)
+        self.assertTrue(pending_content)
+        pending_content[0].fulfill(content_type="application/pdf", body=support.minimal_pdf(),
+                                   headers={"Access-Control-Allow-Origin": "*"})
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(state="attached")
 
     def test_failed_reader_still_allows_original_download(self):
         checks = []

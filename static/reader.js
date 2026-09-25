@@ -116,27 +116,29 @@ function readerDownloadUrl(filename, link) {
 async function startReaderDownload(event) {
   event.preventDefault();
   const button = event.currentTarget;
-  if (!readerDownloadReady && !(readerDownloadSourceResolved && readerLifecycle.phase === "failed")) {
-    showDownloadFeedback("正在准备原文件，请稍候");
-    return;
-  }
   if (button.hasAttribute("aria-busy")) return;
-  showDownloadFeedback("");
-  const filename = documentState.title || "file";
-  const checkUrl = readerDownloadApiUrl(`/api/download/check?link=${encodeURIComponent(downloadUrl || "")}`);
+  showDownloadFeedback("正在准备下载…", 0);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
+  let timer;
   button.setAttribute("aria-busy", "true");
   try {
+    // ID-only links share the Reader's in-flight resolution, not its render phase.
+    if (!downloadUrl) await readerSourcePromise;
+    if (!downloadUrl) throw new Error("无法获取原文件地址");
+    const filename = documentState.title || "file";
+    const checkUrl = readerDownloadApiUrl(`/api/download/check?link=${encodeURIComponent(downloadUrl)}`);
+    timer = setTimeout(() => controller.abort(), 8000);
     const response = await fetch(checkUrl, { signal: controller.signal, cache: "no-store" });
     const result = await response.json().catch(() => null);
     if (!response.ok || result?.ok !== true) throw new Error(result?.error || "下载检查失败，请重试");
+    if (readerLifecycle.disposed) return;
     const frame = document.createElement("iframe");
     frame.hidden = true;
     frame.setAttribute("aria-hidden", "true");
     frame.src = readerDownloadUrl(filename, downloadUrl);
     document.body.appendChild(frame);
     setTimeout(() => frame.remove(), 60000);
+    showDownloadFeedback("已发起下载");
   } catch (error) {
     if (!readerLifecycle.disposed) {
       showDownloadFeedback(error?.name === "AbortError" ? "下载检查超时，请重试" : (error.message || "下载失败，请重试"));
@@ -302,14 +304,13 @@ const status = document.querySelector("#status");
 const loadingStatus = document.querySelector("#loading-status");
 const downloadButton = document.querySelector("#download");
 const downloadFeedback = document.querySelector("#download-feedback");
-let readerDownloadReady = false;
-let readerDownloadSourceResolved = false;
+let readerSourcePromise = null;
 let downloadFeedbackTimer = 0;
-function showDownloadFeedback(message) {
+function showDownloadFeedback(message, duration = 4000) {
   clearTimeout(downloadFeedbackTimer);
   downloadFeedback.textContent = message;
   downloadFeedback.hidden = !message;
-  if (message) downloadFeedbackTimer = setTimeout(() => showDownloadFeedback(""), 4000);
+  if (message && duration) downloadFeedbackTimer = setTimeout(() => showDownloadFeedback(""), duration);
 }
 downloadButton.addEventListener("click", startReaderDownload);
 loadingStatus.textContent = "";
@@ -3880,7 +3881,8 @@ async function start() {
   const generation = readerRuntime.currentGeneration("navigation");
   // Resolve the original source and import its known engine concurrently.
   if (extension === "pdf" || /\.pdf(?:$|[?#])/i.test(sourceUrl)) preloadPdfEngine().catch(() => {});
-  await resolveReaderSource();
+  readerSourcePromise = resolveReaderSource();
+  await readerSourcePromise;
   assertReaderActive();
   if (readerId && /\/calibre-chm-epub-[^/]+\/document\.epub(?:$|\?)/i.test(sourceUrl)) {
     extension = "epub";
@@ -3890,7 +3892,6 @@ async function start() {
     document.querySelector(".page-controls").hidden = true;
   }
   syncCapabilityControls();
-  readerDownloadSourceResolved = true;
   downloadButton.href = readerDownloadUrl(documentState.title, downloadUrl);
   if (
     (!validSource(sourceUrl) && !validSource(chapterManifestUrl) && !readerId) ||
@@ -3925,8 +3926,6 @@ async function start() {
       }
       assertReaderActive();
       if (!setReaderPhase("ready")) return;
-      readerDownloadReady = true;
-      showDownloadFeedback("");
       updateDocumentState({ restorationReady: !restorationFailed });
       scheduleSave();
       return;
@@ -3946,8 +3945,6 @@ async function start() {
     await restoreInitialPosition(documentState.restoredEntry, generation);
     assertReaderActive();
     if (!setReaderPhase("ready")) return;
-    readerDownloadReady = true;
-    showDownloadFeedback("");
     updateDocumentState({ restorationReady: !restorationFailed });
     updateProgressTools();
     if (fullSearchInput.value.trim()) runFullSearch();
