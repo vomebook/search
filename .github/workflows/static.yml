@@ -35,6 +35,13 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: '22'
+      - name: Validate source JavaScript syntax
+        run: |
+          node --check static/app.js
+          node --check static/index-worker.js
+          node --check static/reader.js
+          node --check static/reader-pdf-text.js
+          node --check sw.js
       - name: Build static site
         run: |
           mkdir -p _site/static
