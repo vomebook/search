@@ -8,7 +8,7 @@ import "/search/static/reader-runtime.js";
 import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
 import { validateBookText, searchBookText, createBookTextCache, paintTextHit } from "/search/static/reader-book-text.js";
-import { populatePdfTextLayer, populateOcrTextLayer } from "/search/static/reader-pdf-text.js";
+import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
@@ -116,7 +116,7 @@ function readerDownloadUrl(filename, link) {
 async function startReaderDownload(event) {
   event.preventDefault();
   const button = event.currentTarget;
-  if (!readerDownloadReady) {
+  if (!readerDownloadReady && !(readerDownloadSourceResolved && readerLifecycle.phase === "failed")) {
     showDownloadFeedback("正在准备原文件，请稍候");
     return;
   }
@@ -138,7 +138,7 @@ async function startReaderDownload(event) {
     document.body.appendChild(frame);
     setTimeout(() => frame.remove(), 60000);
   } catch (error) {
-    if (!readerAbortController.signal.aborted) {
+    if (!readerLifecycle.disposed) {
       showDownloadFeedback(error?.name === "AbortError" ? "下载检查超时，请重试" : (error.message || "下载失败，请重试"));
     }
   } finally {
@@ -303,6 +303,7 @@ const loadingStatus = document.querySelector("#loading-status");
 const downloadButton = document.querySelector("#download");
 const downloadFeedback = document.querySelector("#download-feedback");
 let readerDownloadReady = false;
+let readerDownloadSourceResolved = false;
 let downloadFeedbackTimer = 0;
 function showDownloadFeedback(message) {
   clearTimeout(downloadFeedbackTimer);
@@ -438,6 +439,7 @@ let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
 let pdfSearchPageLoader = null;
+let pdfSearchInProgress = false;
 const pdfBookTextCache = createBookTextCache(async () => {
   const manifest = await loadPdfOcrManifest();
   if (!manifest?.book_text?.path) throw new Error("本书集中全文尚未生成");
@@ -2860,7 +2862,7 @@ async function renderPdfText(page, shell) {
           y: point ? Math.max(0, Math.min(1, point[1] / Math.max(1, pdfViewport.height))) : 0
         };
       });
-    populatePdfTextLayer(layer, text.items, pdfViewport);
+    populatePdfTextLayer(layer, text.items, pdfViewport, text.styles);
     shell.dataset.textReady = "1";
     highlightPdfText(shell);
   } catch (error) {
@@ -2870,21 +2872,27 @@ async function renderPdfText(page, shell) {
 }
 function highlightPdfText(shell, query = searchState.query) {
   if (!shell || readerAbortController.signal.aborted || !query) return;
-  const pattern = new RegExp(fullSearchEscape(query), "iu");
-  const spans = [...shell.querySelectorAll(".reader-pdf-text-run")];
-  let text = "";
-  const ranges = spans.map((span) => {
-    const start = text.length;
-    text += `${span.textContent || ""} `;
-    return { span, start, end: text.length };
-  });
-  const hit = text.search(pattern);
-  for (const { span, start, end } of ranges)
-    if (!span.classList.contains("full-search-highlight") &&
-        ((hit >= 0 && end > hit && start < hit + query.length) || pattern.test(span.textContent))) {
-      span.classList.add("full-search-highlight");
-      fullSearchActiveMarks.push(span);
-    }
+  const layer = shell.querySelector(".reader-pdf-text");
+  if (!layer || layer.querySelector("mark")) return;
+  const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT), runs = [];
+  let raw = "";
+  while (walker.nextNode()) {
+    const node = walker.currentNode, start = raw.length;
+    raw += node.data;
+    runs.push({ node, start, end: raw.length });
+  }
+  const mapping = pdfSearchText(raw);
+  const hits = [];
+  for (const hit of mapping.text.matchAll(new RegExp(fullSearchEscape(pdfSearchText(query).text), "giu"))) {
+    hits.push(hit);
+    if (hits.length === 100) break;
+  }
+  for (const hit of hits.reverse()) {
+    const start = mapping.offsets[hit.index], end = mapping.offsets[hit.index + hit[0].length - 1] + 1;
+    highlightTextParts(runs.filter((run) => run.end > start && run.start < end).map((run) => ({
+      node: run.node, start: Math.max(start, run.start) - run.start, end: Math.min(end, run.end) - run.start
+    })));
+  }
 }
 
 function acquirePdfRenderSlot(priority = false) {
@@ -3882,6 +3890,8 @@ async function start() {
     document.querySelector(".page-controls").hidden = true;
   }
   syncCapabilityControls();
+  readerDownloadSourceResolved = true;
+  downloadButton.href = readerDownloadUrl(documentState.title, downloadUrl);
   if (
     (!validSource(sourceUrl) && !validSource(chapterManifestUrl) && !readerId) ||
     capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED
@@ -3889,7 +3899,6 @@ async function start() {
     return fail("此文件暂不支持在线阅读，请下载原文件。", "READER_UNSUPPORTED");
   formatAdapters.activate(capability.mode);
   applyReaderMetadata(resolvedReaderData);
-  downloadButton.href = readerDownloadUrl(documentState.title, downloadUrl);
   if (validOcr(ocrUrl)) {
     const ocr = document.querySelector("#ocr") || document.createElement("a");
     ocr.id = "ocr";
@@ -4785,6 +4794,7 @@ fullSearchCancel.addEventListener("click", () => {
   nextReaderGeneration("search");
   beginReaderNavigation();
   chapterSearchClient?.cancel();
+  pdfSearchInProgress = false;
   chapterSearchPage = null;
   updateSearchState({ results: [], index: -1 });
   renderFullSearchResults();
@@ -4881,12 +4891,14 @@ function updateChapterSearchPagination() {
   input.value = String(Math.floor(page.offset / page.pageSize) + 1);
   input.max = String(Math.max(1, pages));
   chapterSearchPagination.querySelector("#full-search-pages").textContent = `/ ${pages}`;
-  chapterSearchPagination.querySelector("#full-search-page-prev").disabled = page.offset === 0;
+  chapterSearchPagination.querySelector("#full-search-page-prev").disabled =
+    pdfSearchInProgress || page.offset === 0;
   chapterSearchPagination.querySelector("#full-search-page-next").disabled =
-    page.offset + page.pageSize >= page.total;
+    pdfSearchInProgress || page.offset + page.pageSize >= page.total;
+  input.disabled = pdfSearchInProgress;
 }
 async function loadChapterSearchPage(offset, selectLast = null) {
-  if (!chapterSearchPage || (!chapterSearchClient && !pdfSearchPageLoader)) return;
+  if (pdfSearchInProgress || !chapterSearchPage || (!chapterSearchClient && !pdfSearchPageLoader)) return;
   const generation = nextReaderGeneration("search");
   beginReaderNavigation();
   fullSearchCancel.hidden = false;
@@ -5145,6 +5157,70 @@ async function searchConcentratedPdf(query, generation) {
   chapterSearchPage = pdfSearchPageLoader(0);
   return chapterSearchPage.results;
 }
+function makePdfSearchPageLoader(groups, total, pattern) {
+  return (requestedOffset) => {
+    const pageSize = 50, results = [];
+    const offset = Math.max(0, Math.min(Math.floor(Math.max(0, total - 1) / pageSize) * pageSize, requestedOffset));
+    let skipped = 0;
+    for (const group of groups) {
+      if (skipped + group.count <= offset) {
+        skipped += group.count;
+        continue;
+      }
+      for (const match of group.text.matchAll(pattern)) {
+        if (skipped++ < offset) continue;
+        results.push({
+          location: `第 ${group.page} 页`,
+          snippet: fullSearchSnippet(group.text, match.index, match[0].length),
+          activate: (navigationGeneration) => goToPage(group.page, navigationGeneration)
+        });
+        if (results.length === pageSize) break;
+      }
+      if (results.length === pageSize) break;
+    }
+    return { total, offset, pageSize, results };
+  };
+}
+function publishPdfSearchProgress(generation, groups, total, pattern, scanned, pages) {
+  if (!isReaderGenerationCurrent("search", generation)) return false;
+  pdfSearchPageLoader = makePdfSearchPageLoader(groups, total, pattern);
+  chapterSearchPage = pdfSearchPageLoader(0);
+  updateSearchState({ results: chapterSearchPage.results, index: -1 });
+  renderFullSearchResults();
+  fullSearchStatus.textContent = total
+    ? `${total} 个结果（正在搜索… ${scanned} / ${pages} 页）`
+    : `正在搜索正文… ${scanned} / ${pages} 页，暂未找到匹配`;
+  return true;
+}
+async function fullSearchPdfMatches(query, generation) {
+  const pdf = pdfDocument, groups = [],
+    pattern = new RegExp(fullSearchEscape(pdfSearchText(query).text), "giu");
+  if (!pdf) return [];
+  let total = 0, hasText = false;
+  for (let page = 1; page <= pdf.numPages; page++) {
+    if (!isReaderGenerationCurrent("search", generation)) return [];
+    const pdfPage = await awaitReader(pdf.getPage(page));
+    if (!isReaderGenerationCurrent("search", generation)) return [];
+    const textContent = await awaitReader(pdfPage.getTextContent());
+    if (!isReaderGenerationCurrent("search", generation)) return [];
+    const text = pdfSearchText(pdfTextContent(textContent.items)).text;
+    hasText ||= !!text.trim();
+    let count = 0;
+    for (const match of text.matchAll(pattern)) count++;
+    if (count) {
+      groups.push({ page, text, count });
+      total += count;
+      highlightPdfText(content.querySelector(`.reader-page[data-page="${page}"]`), query);
+    }
+    if (page === 1 || page % 8 === 0 || page === pdf.numPages) {
+      if (!publishPdfSearchProgress(generation, groups, total, pattern, page, pdf.numPages)) return [];
+      await waitForReader(0, true);
+    }
+  }
+  if (!hasText) throw new Error("此 PDF 尚无可搜索文字层，需要完成 OCR 后才能搜索正文");
+  publishPdfSearchProgress(generation, groups, total, pattern, pdf.numPages, pdf.numPages);
+  return chapterSearchPage.results;
+}
 function renderFullSearchResults() {
   updateChapterSearchPagination();
   fullSearchResultsNode.textContent = "";
@@ -5172,6 +5248,7 @@ async function runFullSearch() {
   chapterSearchPage = null;
   updateChapterSearchPagination();
   pdfSearchPageLoader = null;
+  pdfSearchInProgress = capability.mode === "pdf" && !ocrManifestUrl && !!query;
   fullSearchRetry.hidden = true;
   fullSearchCancel.hidden = !["epub-chapters", "pdf", "pdf-pages"].includes(capability.mode) || !query;
   fullSearchResultsNode.textContent = "";
@@ -5185,7 +5262,10 @@ async function runFullSearch() {
   }
   fullSearchStatus.textContent = "正在搜索正文…";
   try {
-    if (["pdf", "pdf-pages"].includes(capability.mode)) {
+    if (capability.mode === "pdf" && !ocrManifestUrl) {
+      await fullSearchPdfMatches(query, generation);
+    }
+    else if (["pdf", "pdf-pages"].includes(capability.mode)) {
       publishSearchResults(generation, await searchConcentratedPdf(query, generation));
     }
     else if (capability.mode === "foliate")
@@ -5210,6 +5290,7 @@ async function runFullSearch() {
       );
     else throw new Error("此格式没有可搜索文本");
     if (!isReaderGenerationCurrent("search", generation)) return;
+    pdfSearchInProgress = false;
     renderFullSearchResults();
     fullSearchStatus.textContent = chapterSearchPage
       ? chapterSearchPage.total
@@ -5220,10 +5301,15 @@ async function runFullSearch() {
         : "未找到正文匹配";
   } catch (error) {
     if (isReaderGenerationCurrent("search", generation)) {
+      pdfSearchInProgress = false;
       fullSearchStatus.textContent = error.message || "正文搜索不可用";
       fullSearchRetry.hidden = !["epub-chapters", "pdf", "pdf-pages"].includes(capability.mode);
     }
   } finally {
+    if (isReaderGenerationCurrent("search", generation)) {
+      pdfSearchInProgress = false;
+      updateChapterSearchPagination();
+    }
     if (isReaderGenerationCurrent("search", generation)) fullSearchCancel.hidden = true;
     if (isReaderGenerationCurrent("search", generation))
       fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => {
@@ -5284,6 +5370,7 @@ function toggleFullSearch() {
     beginReaderNavigation();
     nextReaderGeneration("search");
     chapterSearchClient?.cancel();
+    pdfSearchInProgress = false;
     chapterSearchPage = null;
     fullSearchCancel.hidden = true;
     fullSearchRetry.hidden = true;
