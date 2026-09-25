@@ -107,6 +107,40 @@ if (!Math.sumPrecise) {
 function readerContentUrl(url) {
   return `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url)}`;
 }
+function readerDownloadApiUrl(path) {
+  return `https://voiceofml-search.hf.space${path}`;
+}
+function readerDownloadUrl(filename, link) {
+  return readerDownloadApiUrl(`/api/download?file=${encodeURIComponent(filename || "file")}&link=${encodeURIComponent(link || "")}`);
+}
+async function startReaderDownload(event) {
+  event.preventDefault();
+  const button = event.currentTarget;
+  const filename = documentState.title || "file";
+  const checkUrl = readerDownloadApiUrl(`/api/download/check?link=${encodeURIComponent(downloadUrl || "")}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  button.setAttribute("aria-busy", "true");
+  try {
+    const response = await fetch(checkUrl, { signal: controller.signal, cache: "no-store" });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || result?.ok !== true) throw new Error(result?.error || "下载检查失败，请重试");
+    const frame = document.createElement("iframe");
+    frame.hidden = true;
+    frame.setAttribute("aria-hidden", "true");
+    frame.src = readerDownloadUrl(filename, downloadUrl);
+    document.body.appendChild(frame);
+    setTimeout(() => frame.remove(), 60000);
+  } catch (error) {
+    if (!readerAbortController.signal.aborted) {
+      status.hidden = false;
+      status.textContent = error?.name === "AbortError" ? "下载检查超时，请重试" : (error.message || "下载失败，请重试");
+    }
+  } finally {
+    clearTimeout(timer);
+    button.removeAttribute("aria-busy");
+  }
+}
 function normalizeSourceUrl(url) {
   return url.startsWith("/api/reader-bucket-resource?")
     ? new URL(url, "https://voiceofml-search.hf.space").href
@@ -3839,8 +3873,9 @@ async function start() {
     return fail("此文件暂不支持在线阅读，请下载原文件。", "READER_UNSUPPORTED");
   formatAdapters.activate(capability.mode);
   applyReaderMetadata(resolvedReaderData);
-  document.querySelector("#download").href =
-    `https://voiceofml-search.hf.space/api/download?file=${encodeURIComponent(documentState.title)}&link=${encodeURIComponent(downloadUrl)}`;
+  const downloadButton = document.querySelector("#download");
+  downloadButton.href = readerDownloadUrl(documentState.title, downloadUrl);
+  downloadButton.addEventListener("click", startReaderDownload);
   if (validOcr(ocrUrl)) {
     const ocr = document.querySelector("#ocr") || document.createElement("a");
     ocr.id = "ocr";
