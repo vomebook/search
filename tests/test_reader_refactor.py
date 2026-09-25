@@ -176,6 +176,41 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
         self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(state="attached")
 
+    def test_pdf_retries_transient_proxy_failure_while_download_starts(self):
+        requests = []
+        direct = []
+        def reader_content(route):
+            requests.append(route)
+            if len(requests) > 1:
+                route.fulfill(content_type="application/pdf", body=support.minimal_pdf(),
+                              headers={"Access-Control-Allow-Origin": "*"})
+        self.page.route("https://voiceofml-search.hf.space/api/reader-content**", reader_content)
+        self.page.route("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.pdf",
+                        lambda route: (direct.append(route.request.url), route.abort()))
+        self.page.route("https://voiceofml-search.hf.space/api/download/check**",
+                        lambda route: route.fulfill(json={"ok": True}, headers={"Access-Control-Allow-Origin": "*"}))
+        self.page.route("https://voiceofml-search.hf.space/api/download?**", lambda route: route.fulfill(
+            body=b"original", headers={"Content-Disposition": "attachment; filename=refactor.pdf"}))
+        for fault in ("http", "transport"):
+            with self.subTest(fault=fault):
+                requests.clear()
+                with self.page.expect_request("https://voiceofml-search.hf.space/api/reader-content**"):
+                    self.page.goto(self.reader_url("pdf"), wait_until="domcontentloaded")
+                self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'prepare'")
+                with self.page.expect_download() as event:
+                    self.page.locator("#download").click()
+                self.assertEqual(event.value.suggested_filename, "refactor.pdf")
+                self.page.wait_for_function("() => document.querySelector('#download-feedback').textContent === '已发起下载'")
+                self.assertEqual(len(requests), 1)
+                if fault == "http":
+                    requests[0].fulfill(status=503, body="temporary", headers={"Access-Control-Allow-Origin": "*"})
+                else:
+                    requests[0].abort("failed")
+                self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+                self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(state="attached")
+                self.assertEqual(len(requests), 2)
+                self.assertEqual(direct, [])
+
     def test_failed_reader_still_allows_original_download(self):
         checks = []
         def check(route):
