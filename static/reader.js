@@ -736,6 +736,7 @@ document.querySelector("#back").addEventListener("click", async () => {
   } catch (_) {}
   location.assign("/search/");
 });
+let zoomChangedByUser = false;
 function setZoom(percent, persist = true) {
   const anchor = foliateScrollAnchors.capture();
   const normalized = VoiceOfMLReader.clampNumber(percent, 25, 400, 100);
@@ -751,7 +752,10 @@ function setZoom(percent, persist = true) {
   if (capability.mode === "foliate")
     content.style.setProperty("--reader-zoom", String(documentState.zoom));
   viewport.scrollLeft = horizontalCenter * viewport.scrollWidth - viewport.clientWidth / 2;
-  localStorage.setItem("reader-zoom", String(normalized));
+  if (persist) {
+    zoomChangedByUser = true;
+    localStorage.setItem("reader-zoom", String(normalized));
+  }
   foliateScrollAnchors.restore(anchor);
   if (persist) scheduleSave();
 }
@@ -959,6 +963,12 @@ function filterPanel(view) {
   }
 }
 let panelAnimationTimer = 0;
+let readerUiHistoryState = "base";
+function notifyReaderUiState(state) {
+  readerUiHistoryState = state;
+  if (window.parent !== window)
+    window.parent.postMessage({ type: "voice-reader-ui-state", state }, location.origin);
+}
 function setReaderPanelOpen(open, restoreFocus = false) {
   readerRuntime.update("panel", { open });
   const panel = document.querySelector("#history-panel");
@@ -970,12 +980,14 @@ function setReaderPanelOpen(open, restoreFocus = false) {
     panel.classList.add("is-open");
     selectPanel(mediaElement ? "media" : "toc");
     updateTocCurrentMark();
+    notifyReaderUiState("panel");
     return;
   }
   panel.classList.remove("is-open");
   panelAnimationTimer = setTimeout(() => {
     if (!panel.classList.contains("is-open")) panel.hidden = true;
   }, 250);
+  notifyReaderUiState("base");
   if (restoreFocus) document.querySelector("#history").focus({ preventScroll: true });
 }
 function setPanelSearchOpen(button, open) {
@@ -1005,6 +1017,8 @@ function selectPanel(name) {
   }
   for (const view of document.querySelectorAll(".reader-panel-view"))
     view.hidden = view.dataset.panelView !== name;
+  if (name === "full-search") notifyReaderUiState("full-search");
+  else if (panelState.open) notifyReaderUiState("panel");
   if (name === "bookmarks") renderBookmarks();
   if (name === "history") renderHistory();
   if (name === "media" && mediaElement)
@@ -3794,6 +3808,12 @@ async function restoreInitialPosition(entry, generation) {
       code: "READER_RESTORE"
     });
 }
+async function applyInitialRestoration(entry, generation) {
+  updateDocumentState({ restoredEntry: entry });
+  if (entry?.zoom && !zoomChangedByUser && isReaderGenerationCurrent("navigation", generation))
+    setZoom(entry.zoom, false);
+  await restoreInitialPosition(entry, generation);
+}
 function registerReaderFormatAdapters() {
   const formats = {
     "pdf-pages": [
@@ -3941,11 +3961,7 @@ async function start() {
       await awaitReader(renderFoliate());
       assertReaderActive();
       const restored = await awaitReader(restorationPromise);
-      updateDocumentState({ restoredEntry: restored });
-      if (isReaderGenerationCurrent("navigation", generation)) {
-        if (restored?.zoom) setZoom(restored.zoom, false);
-        await restoreInitialPosition(restored, generation);
-      }
+      await applyInitialRestoration(restored, generation);
       assertReaderActive();
       if (!setReaderPhase("ready")) return;
       updateDocumentState({ restorationReady: !restorationFailed });
@@ -3961,10 +3977,7 @@ async function start() {
     loadingIndicator.remove();
     loadingStatus.hidden = true;
     const restored = await awaitReader(restorationPromise);
-    updateDocumentState({ restoredEntry: restored });
-    if (isReaderGenerationCurrent("navigation", generation) && documentState.restoredEntry?.zoom)
-      setZoom(documentState.restoredEntry.zoom, false);
-    await restoreInitialPosition(documentState.restoredEntry, generation);
+    await applyInitialRestoration(restored, generation);
     assertReaderActive();
     if (!setReaderPhase("ready")) return;
     updateDocumentState({ restorationReady: !restorationFailed });
