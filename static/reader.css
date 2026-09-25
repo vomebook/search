@@ -835,6 +835,7 @@ body {
 }
 .reader-page {
   position: relative;
+  container-type: size;
   margin: 0 auto 18px;
   background: white;
   box-shadow: 0 2px 14px #0008;
@@ -866,7 +867,6 @@ body {
   opacity: 1;
 }
 .reader-pdf-text {
-  container-type: size;
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -874,34 +874,21 @@ body {
   white-space: pre;
   border: 0;
   color: transparent;
-  font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
-  font-weight: 400;
-  font-size: 1cqh;
-  user-select: text;
-  -webkit-user-select: text;
-}
-.reader-pdf-text-block {
-  position: absolute;
-  display: block;
-  overflow: visible;
-  color: transparent;
-  white-space: pre;
+  z-index: 1;
   line-height: 1;
-  user-select: text;
-  -webkit-user-select: text;
-  pointer-events: auto;
+  text-size-adjust: none;
+  -webkit-text-size-adjust: none;
 }
-.reader-pdf-text-fallback {
-  position: static;
+.reader-pdf-text-position {
+  position: absolute;
+  --reader-pdf-font-ratio: 1;
+  font-size: calc(var(--reader-pdf-font-ratio) * 100cqw);
+  transform-origin: left top;
 }
 .reader-pdf-text-run {
-  position: relative;
   display: inline-block;
   color: transparent;
   white-space: pre;
-  font-size: calc(var(--reader-pdf-font-ratio, 1) * 100cqh);
-  line-height: 1;
-  transform: scaleX(var(--reader-pdf-run-scale-x, 1));
   transform-origin: left top;
   user-select: text;
   -webkit-user-select: text;
@@ -909,13 +896,20 @@ body {
 }
 .reader-pdf-text-run::selection {
   color: transparent;
-  background: rgb(83 128 202 / 42%);
+  background: #4285f466;
 }
 .reader-pdf-text-run.full-search-highlight {
-  color: #1d2023;
-  background: rgb(240 199 94 / 88%);
-  border-radius: 0.12em;
-  box-shadow: 0 0 0 1px rgb(135 94 18 / 24%);
+  color: transparent;
+  background: #f0c75e88;
+}
+.reader-pdf-text ::selection,
+.reader-pdf-text-run::selection {
+  color: transparent;
+  background: #4285f466;
+}
+.reader-pdf-text mark.full-search-highlight {
+  color: transparent;
+  background: #f0c75e88;
 }
 .reader-image {
   display: block;
@@ -1306,7 +1300,7 @@ body {
   .foliate-continuous a[href]:not([href^="http:"]):not([href^="https:"]) {
     text-decoration: underline !important;
   }
-  .reader-pdf-text-run.full-search-highlight,
+  .reader-pdf-text span.full-search-highlight,
   .search-match {
     outline: 2px solid currentColor;
   }
