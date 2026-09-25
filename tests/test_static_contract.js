@@ -112,6 +112,17 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(reader, /VoiceOfMLReaderStore\.subscribe/);
   assert.match(reader, /VoiceOfMLReaderStore\.dispose/);
   assert.match(reader, /VoiceOfMLReaderSecurity\.readBytes/);
+  const pdfText = fs.readFileSync("static/reader-pdf-text.js", "utf8");
+  assert.match(pdfText, /reader-pdf-text-block/);
+  assert.match(pdfText, /reader-pdf-text-run/);
+  assert.match(pdfText, /normalizeBox/);
+  assert.match(pdfText, /measureRunScale/);
+  assert.match(pdfText, /--reader-pdf-run-scale-x/);
+  assert.doesNotMatch(pdfText, /fontSize = `\$\{\(fontHeight \/ Math\.max\(1, pdfViewport\.height\)\) \* 100\}%`/);
+  assert.match(readerCss, /container-type:\s*size/);
+  assert.match(readerCss, /font-size:\s*calc\(var\(--reader-pdf-font-ratio/);
+  assert.match(readerCss, /\.reader-pdf-text-run::selection/);
+  assert.match(readerCss, /\.reader-pdf-text-run\.full-search-highlight/);
   assert.ok(require('../static/reader-resources.js').runtimePaths('/search/static/').includes('/search/static/reader-security.js'));
   assert.match(fs.readFileSync("static/reader-store.js", "utf8"), /function dispose\(\)/);
 });
@@ -514,6 +525,7 @@ test("deployment workflow uses official checkout configure upload and deploy act
 test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.doesNotMatch(workflow, /node tests\//);
   assert.match(workflow, /node-version: '22'/);
+  assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader-pdf-text\.js/);
   assert.match(workflow, /node scripts\/compose_app\.mjs/);
   assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify --target=es2020/);
   assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" --minify'));
