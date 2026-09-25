@@ -116,6 +116,12 @@ function readerDownloadUrl(filename, link) {
 async function startReaderDownload(event) {
   event.preventDefault();
   const button = event.currentTarget;
+  if (!readerDownloadReady) {
+    showDownloadFeedback("正在准备原文件，请稍候");
+    return;
+  }
+  if (button.hasAttribute("aria-busy")) return;
+  showDownloadFeedback("");
   const filename = documentState.title || "file";
   const checkUrl = readerDownloadApiUrl(`/api/download/check?link=${encodeURIComponent(downloadUrl || "")}`);
   const controller = new AbortController();
@@ -133,8 +139,7 @@ async function startReaderDownload(event) {
     setTimeout(() => frame.remove(), 60000);
   } catch (error) {
     if (!readerAbortController.signal.aborted) {
-      status.hidden = false;
-      status.textContent = error?.name === "AbortError" ? "下载检查超时，请重试" : (error.message || "下载失败，请重试");
+      showDownloadFeedback(error?.name === "AbortError" ? "下载检查超时，请重试" : (error.message || "下载失败，请重试"));
     }
   } finally {
     clearTimeout(timer);
@@ -296,13 +301,16 @@ content.dataset.mode = capability.mode || "unsupported";
 const status = document.querySelector("#status");
 const loadingStatus = document.querySelector("#loading-status");
 const downloadButton = document.querySelector("#download");
+const downloadFeedback = document.querySelector("#download-feedback");
 let readerDownloadReady = false;
-downloadButton.addEventListener("click", (event) => {
-  if (readerDownloadReady) return;
-  event.preventDefault();
-  status.hidden = false;
-  status.textContent = "正在准备原文件，请稍候";
-});
+let downloadFeedbackTimer = 0;
+function showDownloadFeedback(message) {
+  clearTimeout(downloadFeedbackTimer);
+  downloadFeedback.textContent = message;
+  downloadFeedback.hidden = !message;
+  if (message) downloadFeedbackTimer = setTimeout(() => showDownloadFeedback(""), 4000);
+}
+downloadButton.addEventListener("click", startReaderDownload);
 loadingStatus.textContent = "";
 const sourceName = (() => {
   try {
@@ -3882,7 +3890,6 @@ async function start() {
   formatAdapters.activate(capability.mode);
   applyReaderMetadata(resolvedReaderData);
   downloadButton.href = readerDownloadUrl(documentState.title, downloadUrl);
-  downloadButton.addEventListener("click", startReaderDownload);
   if (validOcr(ocrUrl)) {
     const ocr = document.querySelector("#ocr") || document.createElement("a");
     ocr.id = "ocr";
@@ -3910,6 +3917,7 @@ async function start() {
       assertReaderActive();
       if (!setReaderPhase("ready")) return;
       readerDownloadReady = true;
+      showDownloadFeedback("");
       updateDocumentState({ restorationReady: !restorationFailed });
       scheduleSave();
       return;
@@ -3930,6 +3938,7 @@ async function start() {
     assertReaderActive();
     if (!setReaderPhase("ready")) return;
     readerDownloadReady = true;
+    showDownloadFeedback("");
     updateDocumentState({ restorationReady: !restorationFailed });
     updateProgressTools();
     if (fullSearchInput.value.trim()) runFullSearch();

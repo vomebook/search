@@ -87,22 +87,49 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_download_waits_for_reader_ready_then_uses_attachment(self):
         pending_content = []
+        checks = []
+        downloads = []
         def slow_content(route):
             pending_content.append(route)
+        def check_download(route):
+            checks.append(route.request.url)
+            if len(checks) == 1:
+                route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "下载检查失败，请重试"}))
+            else:
+                route.fulfill(content_type="application/json", body=json.dumps({"ok": True}))
+        def serve_download(route):
+            downloads.append(route.request.url)
+            route.fulfill(content_type="application/octet-stream", body=b"download",
+                          headers={"Content-Disposition": "attachment; filename*=UTF-8''refactor.txt"})
         self.page.route("https://voiceofml-search.hf.space/api/reader-content**", slow_content)
-        self.page.route("https://voiceofml-search.hf.space/api/download/check**", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"ok": True})))
-        self.page.route("https://voiceofml-search.hf.space/api/download?**", lambda route: route.fulfill(
-            content_type="application/octet-stream", body=b"download",
-            headers={"Content-Disposition": "attachment; filename*=UTF-8''refactor.txt"}))
+        self.page.route("https://voiceofml-search.hf.space/api/download/check**", check_download)
+        self.page.route("https://voiceofml-search.hf.space/api/download?**", serve_download)
         self.page.goto(self.reader_url("txt"), wait_until="domcontentloaded")
+        self.page.wait_for_function("() => document.querySelector('#download').hasAttribute('href')")
+        self.assertNotEqual(self.page.locator("html").get_attribute("data-reader-phase"), "ready")
         self.page.locator("#download").click()
-        self.assertEqual(self.page.locator("#status").text_content(), "正在准备原文件，请稍候")
+        self.page.wait_for_timeout(200)
+        self.assertEqual(checks, [])
+        self.assertEqual(downloads, [])
+        self.assertEqual(self.page.locator("#download-feedback").text_content(), "正在准备原文件，请稍候")
+        self.assertNotIn("原文件", self.page.locator("#status").text_content())
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.assertTrue(self.page.locator("#download-feedback").evaluate("""node => {
+            const message = node.getBoundingClientRect();
+            const button = document.querySelector('#download').getBoundingClientRect();
+            return message.left >= 0 && message.right <= innerWidth && message.top >= button.bottom;
+        }"""))
         pending_content[0].fulfill(content_type="text/plain", body="Reader download")
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertTrue(self.page.locator("#download-feedback").is_hidden())
+        self.page.locator("#download").click()
+        self.page.wait_for_function("() => document.querySelector('#download-feedback').textContent === '下载检查失败，请重试'")
+        self.assertEqual(downloads, [])
         with self.page.expect_download() as event:
             self.page.locator("#download").click()
         self.assertEqual(event.value.suggested_filename, "refactor.txt")
+        self.assertEqual(len(checks), 2)
+        self.assertEqual(len(downloads), 1)
 
     def test_media_proxy_failure_retries_original_once(self):
         buffer = io.BytesIO()
