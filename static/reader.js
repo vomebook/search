@@ -2226,14 +2226,36 @@ function loadScript(url) {
 function fetchWithReaderTimeout(url, timeoutMs = READER_PROXY_TIMEOUT_MS) {
   return readerRequestManager.request(url, timeoutMs);
 }
+function retryableReaderProxyError(error) {
+  return [408, 429, 500, 502, 503, 504].includes(error?.status) ||
+    ["TypeError", "TimeoutError"].includes(error?.name) ||
+    /failed to fetch|network|timeout|HTTP\s*(?:408|429|5\d\d)|server response\s*\((?:408|429|5\d\d)\)/i.test(error?.message || "");
+}
+async function retryReaderProxy(open) {
+  for (let attempt = 0; ; attempt++) {
+    assertReaderActive();
+    try {
+      return await open();
+    } catch (error) {
+      if (attempt >= 2 || !retryableReaderProxyError(error)) throw error;
+      await waitForReader(350 * (attempt + 1));
+    }
+  }
+}
 function fetchReaderUrl(rawUrl) {
   if (String(rawUrl).includes("/api/reader-bucket-resource?"))
     return fetchWithReaderTimeout(rawUrl);
   const proxyUrl = readerContentUrl(rawUrl);
-  return fetchWithReaderTimeout(proxyUrl).then(
-    (response) => (response.ok ? response : fetchWithReaderTimeout(rawUrl)),
-    () => fetchWithReaderTimeout(rawUrl)
-  );
+  return retryReaderProxy(async () => {
+    const response = await fetchWithReaderTimeout(proxyUrl);
+    if (response.ok) return response;
+    await response.body?.cancel();
+    throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
+  }).catch((error) => {
+    assertReaderActive();
+    if (retryableReaderProxyError(error)) throw error;
+    return fetchWithReaderTimeout(rawUrl);
+  });
 }
 function fetchReaderResponse() {
   const early = window.__VOICE_PDF_PRELOAD__;
@@ -4013,9 +4035,10 @@ function loadPdfTaskWithTimeout(pdfjs, options, url) {
   });
 }
 function loadPdfWithTimeout(pdfjs, options) {
-  return loadPdfTaskWithTimeout(pdfjs, options, contentUrl).catch((error) => {
+  return retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, contentUrl)).catch((error) => {
     assertReaderActive();
     if (error && error.name === "AbortError") throw error;
+    if (retryableReaderProxyError(error)) throw error;
     return loadPdfTaskWithTimeout(pdfjs, options, sourceUrl);
   });
 }
