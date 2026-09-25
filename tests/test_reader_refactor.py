@@ -60,6 +60,54 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.goto(url)
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
 
+    def test_zoom_changed_during_preparation_survives_late_restoration(self):
+        store = support.STORE_SCRIPT.replace(
+            "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
+            "get: () => new Promise(resolve => { window.__releaseRestore = () => resolve({url: location.href, page: 1, zoom: 220}); }),",
+        )
+        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(
+            content_type="text/javascript", body=store))
+        self.page.route("**/api/reader-content**", lambda route: route.fulfill(
+            content_type="application/pdf", body=support.minimal_pdf(),
+            headers={"Access-Control-Allow-Origin": "*"}))
+        self.page.goto(self.reader_url("pdf"), wait_until="domcontentloaded")
+        self.page.wait_for_function("() => !!window.__releaseRestore && !!document.querySelector('.reader-page canvas.ready')")
+        self.page.locator("#zoom-in").click(click_count=3)
+        self.assertEqual(self.page.locator("#zoom").input_value(), "130")
+        self.page.evaluate("window.__releaseRestore()")
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(self.page.locator("#zoom").input_value(), "130")
+        self.assertEqual(self.page.locator("#content").evaluate(
+            "node => node.style.getPropertyValue('--reader-zoom')"), "1.3")
+        self.assertEqual(self.page.evaluate("localStorage.getItem('reader-zoom')"), "130")
+        self.page.wait_for_function("() => window.__savedReaderProgress?.zoom === 130")
+
+    def test_book_restoration_does_not_change_new_books_global_zoom(self):
+        store = support.STORE_SCRIPT.replace(
+            "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
+            "get: (url) => Promise.resolve(url.includes('refactor.pdf') ? {url, page: 1, zoom: 175} : null),",
+        )
+        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(
+            content_type="text/javascript", body=store))
+        self.page.route("**/api/reader-content**", lambda route: route.fulfill(
+            content_type="application/pdf", body=support.minimal_pdf(),
+            headers={"Access-Control-Allow-Origin": "*"}))
+        self.page.goto(self.reader_url("pdf"))
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.page.locator("#zoom").fill("125")
+        self.page.locator("#zoom").press("Enter")
+        self.page.reload()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(self.page.locator("#zoom").input_value(), "175")
+        self.assertEqual(self.page.locator("#content").evaluate(
+            "node => node.style.getPropertyValue('--reader-zoom')"), "1.75")
+        self.assertEqual(self.page.evaluate("localStorage.getItem('reader-zoom')"), "125")
+        self.page.goto(self.reader_url("pdf", "another"))
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(self.page.locator("#zoom").input_value(), "125")
+        self.assertEqual(self.page.locator("#content").evaluate(
+            "node => node.style.getPropertyValue('--reader-zoom')"), "1.25")
+
     def search(self, query):
         self.page.locator("#history").click()
         self.page.locator("#full-search-toggle").click()
