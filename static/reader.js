@@ -3881,7 +3881,6 @@ async function start() {
     return fail("此文件暂不支持在线阅读，请下载原文件。", "READER_UNSUPPORTED");
   formatAdapters.activate(capability.mode);
   applyReaderMetadata(resolvedReaderData);
-  readerDownloadReady = true;
   downloadButton.href = readerDownloadUrl(documentState.title, downloadUrl);
   downloadButton.addEventListener("click", startReaderDownload);
   if (validOcr(ocrUrl)) {
@@ -3910,6 +3909,7 @@ async function start() {
       }
       assertReaderActive();
       if (!setReaderPhase("ready")) return;
+      readerDownloadReady = true;
       updateDocumentState({ restorationReady: !restorationFailed });
       scheduleSave();
       return;
@@ -3929,6 +3929,7 @@ async function start() {
     await restoreInitialPosition(documentState.restoredEntry, generation);
     assertReaderActive();
     if (!setReaderPhase("ready")) return;
+    readerDownloadReady = true;
     updateDocumentState({ restorationReady: !restorationFailed });
     updateProgressTools();
     if (fullSearchInput.value.trim()) runFullSearch();
