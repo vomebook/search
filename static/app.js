@@ -223,9 +223,7 @@ function getReaderFolderUrl(rec) {
   var repo = String(rec.Repo || "").split("/").pop();
   if (!repo) return "";
   var folder = Array.isArray(rec.Folder) ? rec.Folder.join("/") : "";
-  var sp = buildSearchURLParams({ includeQuery: false, displaySizes: true });
-  var activeQuery = (DOM.searchInput ? DOM.searchInput.value : STATE.query).trim();
-  if (activeQuery) sp.set("q", activeQuery);
+  var sp = currentReaderSearchParams();
   if (folder) sp.append("folder_self", folder);
   var target = new URL("/search/", location.origin);
   target.hash = "#/" + repo + (sp.toString() ? "?" + sp.toString() : "");
@@ -298,17 +296,25 @@ function syncReaderFolderFilter(rawUrl) {
     var folderRaw = readerUrl.searchParams.get("folder_url");
     if (!folderRaw) return readerUrl.href;
     var folderUrl = new URL(folderRaw, location.origin);
-    var hashParts = folderUrl.hash.split("?", 2);
-    var inHash = hashParts.length > 1;
-     var folderParams = inHash ? new URLSearchParams(hashParts[1]) : folderUrl.searchParams;
-     folderParams.delete("q");
-    folderParams.delete("ext");
-    if (STATE.filterExtensions.length > 0) folderParams.set("ext", STATE.filterExtensions.join(","));
-    if (inHash) folderUrl.hash = hashParts[0] + (folderParams.toString() ? "?" + folderParams.toString() : "");
-    else folderUrl.search = folderParams.toString();
-    readerUrl.searchParams.set("folder_url", folderUrl.href);
+    var mergedFolderUrl = readerNavigation.mergeSearchParams(folderUrl, currentReaderSearchParams(), {
+      hashRoute: true,
+      keys: READER_RETURN_SEARCH_KEYS
+    });
+    readerUrl.searchParams.set("folder_url", mergedFolderUrl.href);
     return readerUrl.href;
   } catch (_) { return rawUrl; }
+}
+
+const READER_RETURN_SEARCH_KEYS = Object.freeze([
+  "q", "min_size", "max_size", "ext", "history", "mirror", "sort",
+  "search_folders", "exact", "local", "sidebar", "filters", "wide"
+]);
+
+function currentReaderSearchParams() {
+  const params = buildSearchURLParams({ includeQuery: false, displaySizes: true });
+  const query = (DOM.searchInput ? DOM.searchInput.value : STATE.query).trim();
+  if (query) params.set("q", query);
+  return params;
 }
 
 function normalizeReaderReturnUrl(rawUrl) {
@@ -442,12 +448,12 @@ function handleReaderMessage(event) {
   try {
     var target = new URL(message.url, location.origin);
     if (target.origin !== location.origin || target.pathname !== "/search/") return;
-    var activeQuery = (DOM.searchInput ? DOM.searchInput.value : STATE.query).trim();
-    var hashParts = target.hash.split("?", 2), folderParams = new URLSearchParams(hashParts[1] || "");
-    if (activeQuery) folderParams.set("q", activeQuery); else folderParams.delete("q");
-    target.hash = hashParts[0] + (folderParams.toString() ? "?" + folderParams.toString() : "");
+    var mergedTarget = readerNavigation.mergeSearchParams(target, currentReaderSearchParams(), {
+      hashRoute: true,
+      keys: READER_RETURN_SEARCH_KEYS
+    });
     closeReaderOverlay();
-    history.replaceState(null, "", target.href);
+    history.replaceState(null, "", mergedTarget.href);
     ROUTER.apply();
   } catch (_) {}
 }
