@@ -31,7 +31,6 @@ function pattern(query) {
 }
 
 export function hitBoxes(page, start, length) {
-  const codePoints = Array.from(page.text);
   const begin = Array.from(page.text.slice(0, start)).length;
   const end = begin + Array.from(page.text.slice(start, start + length)).length;
   return (page.text_spans || []).filter(s => s.end > begin && s.start < end)
