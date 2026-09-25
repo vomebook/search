@@ -7,6 +7,7 @@ import "/search/static/reader-section-virtualizer.js";
 import "/search/static/reader-runtime.js";
 import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
+import { validateBookText, searchBookText, createBookTextCache, paintTextHit } from "/search/static/reader-book-text.js";
 import { populatePdfTextLayer, populateOcrTextLayer } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
@@ -386,6 +387,15 @@ let pdfDocument = null;
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
+let pdfSearchPageLoader = null;
+const pdfBookTextCache = createBookTextCache(async () => {
+  const manifest = await loadPdfOcrManifest();
+  if (!manifest?.book_text?.path) throw new Error("本书集中全文尚未生成");
+  const book = await readPdfOcrJson(pdfOcrSource().assetUrl(manifest.book_text.path),
+    VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes, manifest.book_text.sha256, manifest.book_text.bytes);
+  return validateBookText(book, documentState.pageCount, manifest.source_sha256);
+});
+trackReaderResource(() => pdfBookTextCache.clear());
 let pdfActiveRenders = 0;
 let pdfShellsReady = Promise.resolve();
 const pdfRenderWaiters = [];
@@ -3589,6 +3599,7 @@ function disposeFormatResources(mode) {
     pdfPageManifest = null;
     pdfOcrManifest = null;
     pdfOcrManifestPromise = null;
+    pdfBookTextCache.clear();
     pdfFirstPagePreload?.removeAttribute("src");
     pdfFirstPagePreload = null;
     for (const canvas of content.querySelectorAll(".reader-page canvas")) {
@@ -4822,16 +4833,19 @@ function updateChapterSearchPagination() {
     page.offset + page.pageSize >= page.total;
 }
 async function loadChapterSearchPage(offset, selectLast = null) {
-  if (!chapterSearchPage || !chapterSearchClient) return;
+  if (!chapterSearchPage || (!chapterSearchClient && !pdfSearchPageLoader)) return;
   const generation = nextReaderGeneration("search");
   beginReaderNavigation();
   fullSearchCancel.hidden = false;
   fullSearchRetry.hidden = true;
   fullSearchStatus.textContent = "正在加载搜索结果…";
   try {
-    const page = await chapterSearchClient.page(offset);
+    const page = await (pdfSearchPageLoader ? pdfSearchPageLoader(offset) : chapterSearchClient.page(offset));
     if (!isReaderGenerationCurrent("search", generation)) return;
-    applyChapterSearchPage(page);
+    if (pdfSearchPageLoader) {
+      chapterSearchPage = page;
+      updateSearchState({ results: page.results, index: -1 });
+    } else applyChapterSearchPage(page);
     renderFullSearchResults();
     fullSearchStatus.textContent = `${page.total} 个结果`;
     if (selectLast !== null)
@@ -4875,6 +4889,7 @@ function fullSearchEscape(value) {
 }
 let fullSearchActiveMarks = [];
 function clearFullSearchMarks() {
+  content.querySelectorAll(".reader-text-hit-box").forEach((node) => node.remove());
   for (const mark of fullSearchActiveMarks) {
     if (mark.tagName === "MARK") mark.replaceWith(mark.textContent);
     else mark.classList.remove("full-search-highlight");
@@ -5052,77 +5067,30 @@ async function navigateFoliateSearchResult(result, generation) {
   updateProgressTools();
   scheduleSave();
 }
-async function fullSearchPdfPageMatches(query, generation) {
-  const manifest = await loadPdfOcrManifest();
-  if (!manifest?.book_text?.path || !pdfPageManifest) return [];
-  const book = await readPdfOcrJson(pdfOcrSource().assetUrl(manifest.book_text.path),
-    VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes, manifest.book_text.sha256, manifest.book_text.bytes);
-  const output = [], pattern = new RegExp(fullSearchEscape(query), "giu");
-  for (const page of book.pages || []) {
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    const text = String(page.text || "");
-    for (const match of text.matchAll(pattern)) {
-      if (output.length >= 100) break;
-      output.push({
-        location: `第 ${page.page} 页`,
-        snippet: fullSearchSnippet(text, match.index, match[0].length),
-        activate: (navigationGeneration) => goToPage(page.page, navigationGeneration)
-      });
-    }
-    if (output.length >= 100) break;
-  }
-  return output;
-}
-
-async function fullSearchPdfApiMatches(query, generation) {
-  if (!readerId) throw new Error("PDF_OCR_API_ID_MISSING");
-  const url = `https://voiceofml-search.hf.space/api/reader-ocr-search?id=${encodeURIComponent(readerId)}&q=${encodeURIComponent(query)}&page=1&page_size=100`;
-  const response = await fetchWithReaderTimeout(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const payload = await response.json();
-  if (!payload || payload.version !== 1 || !Array.isArray(payload.results))
-    throw new Error("PDF_OCR_API_INVALID");
-  return payload.results.map((item) => {
-    const text = String(item.snippet || "");
-    const start = Math.max(0, Number(item.snippet_start) || 0);
-    const length = Math.max(0, Number(item.length) || query.length);
-    return {
-      location: `第 ${item.page} 页`,
-      snippet: fullSearchSnippet(text, start, length),
-      activate: (navigationGeneration) => goToPage(item.page, navigationGeneration)
-    };
+async function searchConcentratedPdf(query, generation) {
+  const book = await pdfBookTextCache.get();
+  const index = await searchBookText(book, query, {
+    current: () => isReaderGenerationCurrent("search", generation),
+    yieldTask: () => waitForReader(0)
   });
-}
-
-async function fullSearchPdfMatches(query, generation) {
-  const pdf = pdfDocument,
-    output = [],
-    pattern = new RegExp(fullSearchEscape(query), "giu");
-  if (!pdf) return output;
-  for (let page = 1; page <= pdf.numPages && output.length < 100; page++) {
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    const pdfPage = await awaitReader(pdf.getPage(page));
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    const textContent = await awaitReader(pdfPage.getTextContent());
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    const text = textContent.items
-      .map((item) => item.str + (item.hasEOL ? "\n" : " "))
-      .join("")
-      .trim();
-    let matched = false;
-    for (const match of text.matchAll(pattern)) {
-      if (output.length >= 100) break;
-      matched = true;
-      output.push({
-        location: `第 ${page} 页`,
-        snippet: fullSearchSnippet(text, match.index, match[0].length),
-        activate: (navigationGeneration) => goToPage(page, navigationGeneration)
-      });
-    }
-    if (matched)
-      highlightPdfText(content.querySelector(`.reader-page[data-page="${page}"]`), query);
-  }
-  return output;
+  pdfSearchPageLoader = (offset) => {
+    const page = index.page(offset);
+    return { ...page, results: page.results.map(hit => ({
+      ...hit, location: `第 ${hit.page} 页`, activate: async nav => {
+        if (!await goToPage(hit.page, nav) || !isReaderGenerationCurrent("navigation", nav))
+          return false;
+        content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
+        const shell = content.querySelector(`.reader-page[data-page="${hit.page}"]`);
+        if (shell && hit.boxes.length) {
+          paintTextHit(shell, hit.boxes);
+          shell.querySelector(".reader-text-hit-box")?.scrollIntoView({ block: "center" });
+        }
+        return true;
+      }
+    })) };
+  };
+  chapterSearchPage = pdfSearchPageLoader(0);
+  return chapterSearchPage.results;
 }
 function renderFullSearchResults() {
   updateChapterSearchPagination();
@@ -5150,8 +5118,9 @@ async function runFullSearch() {
   updateSearchState({ query, results: [], index: -1 });
   chapterSearchPage = null;
   updateChapterSearchPagination();
+  pdfSearchPageLoader = null;
   fullSearchRetry.hidden = true;
-  fullSearchCancel.hidden = capability.mode !== "epub-chapters" || !query;
+  fullSearchCancel.hidden = !["epub-chapters", "pdf", "pdf-pages"].includes(capability.mode) || !query;
   fullSearchResultsNode.textContent = "";
   fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => {
     button.disabled = true;
@@ -5163,15 +5132,9 @@ async function runFullSearch() {
   }
   fullSearchStatus.textContent = "正在搜索正文…";
   try {
-    if (capability.mode === "pdf-pages") {
-      try {
-        publishSearchResults(generation, await fullSearchPdfApiMatches(query, generation));
-      } catch (error) {
-        publishSearchResults(generation, await fullSearchPdfPageMatches(query, generation));
-      }
+    if (["pdf", "pdf-pages"].includes(capability.mode)) {
+      publishSearchResults(generation, await searchConcentratedPdf(query, generation));
     }
-    else if (capability.mode === "pdf")
-      publishSearchResults(generation, await fullSearchPdfMatches(query, generation));
     else if (capability.mode === "foliate")
       publishSearchResults(generation, await fullSearchFoliateMatches(query, generation));
     else if (capability.mode === "epub-chapters") await searchChapterBook(query, generation);
@@ -5205,7 +5168,7 @@ async function runFullSearch() {
   } catch (error) {
     if (isReaderGenerationCurrent("search", generation)) {
       fullSearchStatus.textContent = error.message || "正文搜索不可用";
-      fullSearchRetry.hidden = capability.mode !== "epub-chapters";
+      fullSearchRetry.hidden = !["epub-chapters", "pdf", "pdf-pages"].includes(capability.mode);
     }
   } finally {
     if (isReaderGenerationCurrent("search", generation)) fullSearchCancel.hidden = true;

@@ -269,8 +269,13 @@
   const PDF_OCR_MANIFEST_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr-manifest\.json$/;
   const PDF_OCR_PAGE_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?pages\/page-[0-9]{6}\.(?:webp|jxl)$/;
   const PDF_OCR_ROOT = /^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?)/;
+  function pdfSourceRoot(path) {
+    return typeof path === "string" ? path.split("/").slice(0, 3).join("/") : "";
+  }
   function validatePdfOcrManifest(manifest) {
     if (!manifest || manifest.version !== 1 || manifest.kind !== "pdf-ocr" ||
+        manifest.complete !== true || !/^[0-9a-f]{64}$/.test(manifest.source_sha256 || "") ||
+        !String(manifest.profile || "").includes("-layout-v1-") ||
         !Number.isInteger(manifest.page_count) || manifest.page_count < 1 ||
         manifest.page_count > LIMITS.pdfPages || !Array.isArray(manifest.pages) ||
         manifest.pages.length !== manifest.page_count)
@@ -283,19 +288,24 @@
           page.o !== `${pageRoot}/ocr/page-${expected}.json.gz` ||
           (page.w !== undefined && (typeof page.w !== "string" || !PDF_OCR_PAGE_PATH.test(page.w) ||
             !page.w.endsWith(`/pages/page-${expected}.webp`) ||
-            !page.w.startsWith(`${pageRoot}/pages/`))) ||
+            pdfSourceRoot(page.w) !== pdfSourceRoot(pageRoot))) ||
           (page.j !== undefined && (typeof page.j !== "string" || !PDF_OCR_PAGE_PATH.test(page.j) ||
             !page.j.endsWith(`/pages/page-${expected}.jxl`) ||
-            !page.j.startsWith(`${pageRoot}/pages/`))) ||
-          (root && root !== pageRoot))
+            pdfSourceRoot(page.j) !== pdfSourceRoot(pageRoot))) ||
+          pdfSourceRoot(pageRoot) !== `objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}` ||
+          (root && pdfSourceRoot(root) !== pdfSourceRoot(pageRoot)))
         throw error("PDF_OCR_MANIFEST_INVALID");
       root = pageRoot;
     }
     if (!manifest.book_text || typeof manifest.book_text.path !== "string" ||
-        !PDF_OCR_PATH.test(manifest.book_text.path) || manifest.book_text.path !== `${root}/ocr/book-text.json.gz` ||
+        !PDF_OCR_PATH.test(manifest.book_text.path) || !manifest.book_text.path.endsWith('/ocr/book-text.json.gz') ||
+        pdfSourceRoot(manifest.book_text.path) !== pdfSourceRoot(root) ||
+        !/^[0-9a-f]{64}$/.test(manifest.book_text.sha256 || "") ||
+        !Number.isSafeInteger(manifest.book_text.bytes) || manifest.book_text.bytes < 1 ||
         (manifest.page_manifest !== undefined &&
           (!manifest.page_manifest || typeof manifest.page_manifest.path !== "string" ||
-           manifest.page_manifest.path !== `${root}/page-manifest.json`)))
+            !/^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?page-manifest\.json$/.test(manifest.page_manifest.path) ||
+            pdfSourceRoot(manifest.page_manifest.path) !== pdfSourceRoot(root))))
       throw error("PDF_OCR_MANIFEST_INVALID");
     return manifest;
   }
