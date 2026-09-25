@@ -11,6 +11,19 @@
         throw new Error("Invalid reader destination");
       return url;
     }
+    function mergeSearchParams(rawTarget, source, { hashRoute = false, keys = [] } = {}) {
+      const target = new URL(rawTarget, location.origin);
+      const sourceParams = source instanceof URLSearchParams ? source : new URLSearchParams(source || "");
+      const hashParts = hashRoute ? target.hash.split("?", 2) : null;
+      const params = hashRoute ? new URLSearchParams(hashParts[1] || "") : target.searchParams;
+      for (const key of keys) {
+        params.delete(key);
+        for (const value of sourceParams.getAll(key)) params.append(key, value);
+      }
+      if (hashRoute)
+        target.hash = hashParts[0] + (params.toString() ? `?${params.toString()}` : "");
+      return target;
+    }
     function saved() {
       try {
         return JSON.parse(sessionStorage.getItem(sessionKey) || "null");
@@ -134,6 +147,7 @@
     }
     return Object.freeze({
       parse,
+      mergeSearchParams,
       saved,
       clear,
       prepare,

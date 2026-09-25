@@ -115,6 +115,33 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
         self.assertEqual(params['local'], '0')
         self.assertEqual(params['q'], 'current query')
 
+    def test_reader_folder_return_merges_current_filters_into_pages_hash(self):
+        result = self.page.evaluate('''() => {
+          STATE.query=''; STATE.filterExtensions=['pdf','txt'];
+          STATE.filterMinSize=2048; STATE.filterMaxSize=8192;
+          STATE.searchFolders=false; STATE.exact=false; STATE.useLocalMode=false;
+          STATE.recordHistory=false; STATE.useMirrorLinks=false; STATE.sort='size';
+          DOM.searchInput.value='current query';
+          let target=new URL('/search/#/Test?folder_self=docs&ext=stale&q=stale',location.origin);
+          target=readerNavigation.mergeSearchParams(target,currentReaderSearchParams(),{
+            hashRoute:true,keys:READER_RETURN_SEARCH_KEYS
+          });
+          return {route:target.hash.split('?')[0],params:Object.fromEntries(new URLSearchParams(target.hash.split('?')[1]))};
+        }''')
+        self.assertEqual(result['route'], '#/Test')
+        params = result['params']
+        self.assertEqual(params['folder_self'], 'docs')
+        self.assertEqual(params['q'], 'current query')
+        self.assertEqual(params['ext'], 'pdf,txt')
+        self.assertEqual(params['min_size'], '2KB')
+        self.assertEqual(params['max_size'], '8KB')
+        self.assertEqual(params['sort'], 'size')
+        self.assertEqual(params['search_folders'], 'false')
+        self.assertEqual(params['exact'], '0')
+        self.assertEqual(params['local'], '0')
+        self.assertEqual(params['history'], '0')
+        self.assertEqual(params['mirror'], '0')
+
     def test_untrusted_and_stale_messages_cannot_change_active_reader(self):
         result = self.page.evaluate('''() => {
           const readerPath=new URL(document.querySelector('script[src*="reader-navigation.js"]').src).pathname.replace('reader-navigation.js','reader.html');
