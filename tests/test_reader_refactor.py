@@ -131,6 +131,109 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(len(checks), 2)
         self.assertEqual(len(downloads), 1)
 
+    def test_failed_reader_still_allows_original_download(self):
+        checks = []
+        def check(route):
+            checks.append(route.request.url)
+            if len(checks) == 1:
+                route.fulfill(status=503, json={"error": "暂时无法检查下载"})
+            else:
+                route.fulfill(json={"ok": True})
+        self.page.route("https://voiceofml-search.hf.space/api/download/check**", check)
+        self.page.route("https://voiceofml-search.hf.space/api/download?**", lambda route: route.fulfill(
+            body=b"original", headers={"Content-Disposition": "attachment; filename=original.xyz"}))
+        self.page.goto(self.reader_url("xyz"))
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'failed'")
+        self.assertIn("请下载原文件", self.page.locator(".reader-error").text_content())
+        self.page.locator("#download").click()
+        self.page.wait_for_function("() => document.querySelector('#download-feedback').textContent === '暂时无法检查下载'")
+        with self.page.expect_download() as event:
+            self.page.locator("#download").click()
+        self.assertEqual(event.value.suggested_filename, "original.xyz")
+        self.assertEqual(len(checks), 2)
+
+    def test_native_pdf_text_search_without_ocr_index(self):
+        module = support.PDF_MODULE.replace("numPages: 30", "numPages: 3").replace(
+            "return { width: 600 * scale, height: 800 * scale };",
+            "return { width: 600 * scale, height: 800 * scale, scale, transform: [scale,0,0,-scale,0,800*scale], convertToViewportPoint:(x,y)=>[x*scale,(800-y)*scale] };")
+        module = module.replace("getTextContent() { return Promise.resolve",
+                                "async getTextContent() { await new Promise(resolve => setTimeout(resolve, 150)); return Promise.resolve")
+        items = [dict(str=s, transform=[20, 0, 0, 20, x, 700], width=60, height=20, fontName="f")
+                 for s, x in [("毛 ", 50), ("泽", 110), (" 东", 170), ("手。机", 230)]]
+        items += [dict(str="毛 泽 东", transform=[20, 0, 0, 20, 50, 650-i*10],
+                       width=80, height=20, fontName="f", hasEOL=True) for i in range(40)]
+        text = json.dumps(dict(items=items, styles={"f": dict(fontFamily="sans-serif", ascent=0.8)}), ensure_ascii=False)
+        module = module.replace("{ items: [{ str: 'Accessible PDF text', hasEOL: false }] }", text)
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(content_type="text/javascript", body=module))
+        self.open(self.reader_url("pdf"))
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-input").fill("毛泽东")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('正在搜索') && document.querySelectorAll('.full-search-result').length > 0")
+        self.assertTrue(self.page.locator("#full-search-page-next").is_disabled())
+        self.assertTrue(self.page.locator("#full-search-page").is_disabled())
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '123 个结果'")
+        self.assertFalse(self.page.locator("#full-search-page-next").is_disabled())
+        self.assertEqual(self.page.locator(".full-search-result").count(), 50)
+        self.assertEqual(self.page.locator('.reader-page[data-page="1"] mark').first.text_content(), '毛 ')
+        self.page.locator("#full-search-page-next").click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-page').value === '2'")
+        self.page.locator("#full-search-page-next").click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-page').value === '3'")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 23)
+        self.page.locator("#full-search-input").fill("手机")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
+
+    def test_pdf_with_unavailable_ocr_index_does_not_fall_back(self):
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=support.PDF_MODULE))
+        manifest = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=objects/aa/" + "a" * 64 + "/" + "b" * 16 + "/ocr-manifest.json"
+        self.page.route("**/api/reader-bucket-resource**", lambda route: route.fulfill(
+            status=503, body="unavailable", headers={"Access-Control-Allow-Origin": "*"}))
+        self.open(self.reader_url("pdf", ocr_manifest=manifest))
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-input").fill("Accessible")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('503')")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 0)
+
+    def test_pdf_with_valid_ocr_index_searches_index_not_native_text(self):
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 1")))
+        root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
+        manifest_path = root + "/ocr-manifest.json"
+        book_path = root + "/ocr/book-text.json.gz"
+        text = "索引独有文字"
+        book = gzip.compress(json.dumps({"version": 2, "kind": "pdf-book-text", "complete": True,
+            "offset_unit": "unicode-codepoint", "source_sha256": "a" * 64,
+            "page_count": 1, "pages": [{"page": 1, "text": text,
+                "layout": {"offset_unit": "unicode-codepoint"},
+                "text_spans": [{"start": 0, "end": len(text), "box": [0.1, 0.2, 0.4, 0.3]}]}]}).encode())
+        manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
+            "source_sha256": "a" * 64, "profile": "test-layout-v1-index",
+            "page_count": 1, "pages": [{"p": 1, "o": root + "/ocr/page-000001.json.gz"}],
+            "book_text": {"path": book_path, "bytes": len(book), "sha256": hashlib.sha256(book).hexdigest()}}
+        requests = []
+        def resource(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            requests.append(path)
+            headers = {"Access-Control-Allow-Origin": "*"}
+            if path == manifest_path:
+                route.fulfill(json=manifest, headers=headers)
+            elif path == book_path:
+                route.fulfill(content_type="application/gzip", body=book, headers=headers)
+            else:
+                route.fulfill(status=404, headers=headers)
+        self.page.route("**/api/reader-bucket-resource**", resource)
+        manifest_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + manifest_path
+        self.open(self.reader_url("pdf", ocr_manifest=manifest_url))
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-input").fill("索引独有")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 1)
+        self.assertEqual(requests, [manifest_path, book_path])
+
     def test_media_proxy_failure_retries_original_once(self):
         buffer = io.BytesIO()
         with wave.open(buffer, 'wb') as audio:
