@@ -70,9 +70,27 @@ body {
   outline: none;
 }
 .reader-actions {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
+}
+#download-feedback:not([hidden]) {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 12;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 20px));
+  padding: 8px 10px;
+  border: 1px solid #555f66;
+  border-radius: 4px;
+  background: #25292d;
+  color: #eceff1;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: normal;
+  box-shadow: 0 4px 12px #0008;
 }
 .control-group {
   display: inline-flex;
