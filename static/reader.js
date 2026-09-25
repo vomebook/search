@@ -295,6 +295,14 @@ content.appendChild(loadingIndicator);
 content.dataset.mode = capability.mode || "unsupported";
 const status = document.querySelector("#status");
 const loadingStatus = document.querySelector("#loading-status");
+const downloadButton = document.querySelector("#download");
+let readerDownloadReady = false;
+downloadButton.addEventListener("click", (event) => {
+  if (readerDownloadReady) return;
+  event.preventDefault();
+  status.hidden = false;
+  status.textContent = "正在准备原文件，请稍候";
+});
 loadingStatus.textContent = "";
 const sourceName = (() => {
   try {
@@ -3873,7 +3881,7 @@ async function start() {
     return fail("此文件暂不支持在线阅读，请下载原文件。", "READER_UNSUPPORTED");
   formatAdapters.activate(capability.mode);
   applyReaderMetadata(resolvedReaderData);
-  const downloadButton = document.querySelector("#download");
+  readerDownloadReady = true;
   downloadButton.href = readerDownloadUrl(documentState.title, downloadUrl);
   downloadButton.addEventListener("click", startReaderDownload);
   if (validOcr(ocrUrl)) {
