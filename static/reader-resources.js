@@ -62,6 +62,7 @@
     "reader-format-adapters.js",
     "reader-security.js",
     "reader-pdf-text.js",
+    "reader-book-text.js",
     "pdf-worker-wrapper.mjs",
     "reader.css",
     "reader.js"
