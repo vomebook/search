@@ -2811,7 +2811,7 @@ async function renderPdfText(page, shell) {
 function highlightPdfText(shell, query = searchState.query) {
   if (!shell || readerAbortController.signal.aborted || !query) return;
   const pattern = new RegExp(fullSearchEscape(query), "iu");
-  const spans = [...shell.querySelectorAll(".reader-pdf-text span")];
+  const spans = [...shell.querySelectorAll(".reader-pdf-text-run")];
   let text = "";
   const ranges = spans.map((span) => {
     const start = text.length;
