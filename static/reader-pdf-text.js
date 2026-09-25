@@ -1,131 +1,115 @@
-const MISSING_TEXT = "此页没有可提取文本";
-
-function clampUnit(value) {
-  return Math.max(0, Math.min(1, Number.isFinite(Number(value)) ? Number(value) : 0));
+// PDF.js already emits word spaces. Adding a space after every item breaks
+// Chinese words and words split across fonts. Keep the source's explicit spaces.
+export function pdfTextContent(items) {
+  return items.filter((item) => typeof item.str === "string")
+    .map((item) => item.str + (item.hasEOL ? "\n" : "")).join("");
 }
 
-function normalizeBox(box) {
-  if (!Array.isArray(box) || box.length !== 4) return null;
-  const x0 = clampUnit(box[0]);
-  const y0 = clampUnit(box[1]);
-  const x1 = clampUnit(box[2]);
-  const y1 = clampUnit(box[3]);
-  const left = Math.min(x0, x1);
-  const top = Math.min(y0, y1);
-  const right = Math.max(x0, x1);
-  const bottom = Math.max(y0, y1);
-  if (right <= left || bottom <= top) return null;
-  return { left, top, width: right - left, height: bottom - top };
+// Embedded OCR often spaces individual Han characters, including vertical text.
+// Keep punctuation and Latin word boundaries, and map hits back to source offsets.
+export function pdfSearchText(raw) {
+  const removed = /(?<=\p{Script=Han})\s+(?=\p{Script=Han})/gu;
+  const offsets = [], chunks = [];
+  let start = 0;
+  for (const match of raw.matchAll(removed)) {
+    chunks.push(raw.slice(start, match.index));
+    for (let i = start; i < match.index; i++) offsets.push(i);
+    start = match.index + match[0].length;
+  }
+  chunks.push(raw.slice(start));
+  for (let i = start; i < raw.length; i++) offsets.push(i);
+  return { text: chunks.join(""), offsets };
 }
 
-function measureRunScale(layer, text, fontRatio, widthRatio) {
-  const height = layer.clientHeight || layer.getBoundingClientRect?.().height || 0;
-  const fontSize = Math.max(1, height * fontRatio);
-  const width = Math.max(
-    1,
-    (layer.clientWidth || layer.getBoundingClientRect?.().width || 0) * widthRatio
-  );
-  const canvas =
-    layer._readerPdfMeasureCanvas ||
-    (layer._readerPdfMeasureCanvas = layer.ownerDocument.createElement("canvas"));
-  const context = canvas.getContext("2d");
-  if (!context || !text) return 1;
-  context.font = `${fontSize}px "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", "SimSun", serif`;
-  const measured = context.measureText(text.replace(/\n/g, " ")).width;
-  return measured > 0 ? Math.max(0.2, Math.min(4, width / measured)) : 1;
-}
-
-function appendTextRun(layer, fragment, text, box, fontRatio, className = "") {
-  const block = layer.ownerDocument.createElement("span");
-  block.className = `reader-pdf-text-block${className ? ` ${className}` : ""}`;
-  block.style.left = `${box.left * 100}%`;
-  block.style.top = `${box.top * 100}%`;
-  block.style.width = `${box.width * 100}%`;
-  block.style.height = `${box.height * 100}%`;
-  block.style.setProperty("--reader-pdf-font-ratio", String(fontRatio));
-  block.style.setProperty(
-    "--reader-pdf-run-scale-x",
-    String(measureRunScale(layer, text, fontRatio, box.width))
-  );
-
+function textRun(layer, text) {
   const run = layer.ownerDocument.createElement("span");
   run.className = "reader-pdf-text-run";
   run.textContent = text;
-  block.appendChild(run);
-  fragment.appendChild(block);
   return run;
 }
 
-function appendFallbackRun(layer, fragment, text) {
-  const block = layer.ownerDocument.createElement("span");
-  block.className = "reader-pdf-text-block reader-pdf-text-fallback";
-  const run = layer.ownerDocument.createElement("span");
-  run.className = "reader-pdf-text-run";
-  run.textContent = text;
-  block.appendChild(run);
-  fragment.appendChild(block);
+const measurements = new WeakMap();
+function normalizeBox(value) {
+  return Math.max(0, Math.min(1, Number(value) || 0));
 }
-
-function replaceLayer(layer, fragment, plainText) {
-  if (fragment.childNodes.length) layer.replaceChildren(fragment);
-  else layer.textContent = plainText.trim() || MISSING_TEXT;
+function measureRunScale(context, text, family, targetWidth) {
+  context.font = `100px ${family}`;
+  const measured = context.measureText(text).width / 100;
+  return measured > 0 && targetWidth > 0 ? targetWidth / measured : 1;
 }
-
-export function populatePdfTextLayer(layer, items, pdfViewport) {
-  const fragment = layer.ownerDocument.createDocumentFragment();
-  let positioned = false;
-  let plainText = "";
-  let fallbackText = "";
-  const pageWidth = Math.max(1, pdfViewport?.width || 0);
-  const pageHeight = Math.max(1, pdfViewport?.height || 0);
-
-  for (const item of items || []) {
-    const text = String(item?.str || "");
-    const value = text + (item?.hasEOL ? "\n" : " ");
-    plainText += value;
-    if (!text) continue;
-    if (!item?.transform || typeof pdfViewport?.convertToViewportPoint !== "function") {
-      fallbackText += value;
-      continue;
-    }
-
-    const point = pdfViewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-    const fontHeight = Math.hypot(item.transform[2] || 0, item.transform[3] || 0) || 12;
-    const box = {
-      left: clampUnit(point[0] / pageWidth),
-      top: clampUnit((point[1] - fontHeight) / pageHeight),
-      width: clampUnit((Number(item.width) || fontHeight * text.length) / pageWidth),
-      height: clampUnit(fontHeight / pageHeight)
-    };
-    if (!box.width || !box.height) {
-      fallbackText += value;
-      continue;
-    }
-    positioned = true;
-    appendTextRun(layer, fragment, value, box, box.height * 0.92);
+function positionedRun(layer, text, x, y, height, width, family, angle = 0, vertical = false) {
+  const box = layer.ownerDocument.createElement("span");
+  box.className = "reader-pdf-text-position reader-pdf-text-block";
+  box.style.left = `${x * 100}%`;
+  box.style.top = `${y * 100}%`;
+  // cqw uses the page width, so text scales with zoom and responsive layout.
+  box.style.fontSize = `${height * 100}cqw`;
+  box.style.fontFamily = family;
+  if (angle) box.style.transform = `rotate(${angle}rad)`;
+  const run = textRun(layer, text);
+  let context = measurements.get(layer.ownerDocument);
+  if (!context) {
+    context = layer.ownerDocument.createElement("canvas").getContext("2d");
+    measurements.set(layer.ownerDocument, context);
   }
+  if (vertical) {
+    run.style.writingMode = "vertical-rl";
+    run.style.textOrientation = "upright";
+    // Upright vertical layout advances one em for spaces as well as Han glyphs.
+    const measured = Array.from(text).length;
+    if (width > 0 && measured) run.style.transform = `scaleY(${width / (height * measured)})`;
+  } else {
+    const scaleX = measureRunScale(context, text, family, width / height);
+    run.style.setProperty("--reader-pdf-run-scale-x", String(scaleX));
+    run.style.transform = "scaleX(var(--reader-pdf-run-scale-x))";
+  }
+  box.appendChild(run);
+  return box;
+}
 
-  if (positioned) {
-    if (fallbackText) appendFallbackRun(layer, fragment, fallbackText);
-    replaceLayer(layer, fragment, plainText);
-  } else layer.textContent = plainText.trim() || MISSING_TEXT;
+export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
+  const fragment = layer.ownerDocument.createDocumentFragment();
+  const w = Math.max(1, viewport.width), h = Math.max(1, viewport.height);
+  for (const item of items) {
+    if (typeof item.str !== "string") continue;
+    if (item.str) {
+      const t = item.transform, v = viewport.transform;
+      const point = t && viewport.convertToViewportPoint?.(t[4], t[5]);
+      if (point && t.every(Number.isFinite)) {
+        const style = styles[item.fontName] || {};
+        const family = style.fontFamily || "sans-serif";
+        const vertical = style.vertical || item.dir === "ttb";
+        const scale = viewport.scale || 1;
+        const height = Math.hypot(t[2], t[3]) * scale || 12;
+        const angle = v ? Math.atan2(v[1] * t[0] + v[3] * t[1], v[0] * t[0] + v[2] * t[1]) : 0;
+        const ascent = height * (Number.isFinite(style.ascent) ? style.ascent : 0.8);
+        const x = vertical ? point[0] - height / 2 : point[0] + ascent * Math.sin(angle);
+        const y = vertical ? point[1] : point[1] - ascent * Math.cos(angle);
+        fragment.appendChild(positionedRun(layer, item.str, x / w, y / h, height / w,
+          (vertical ? item.height : item.width) * scale / w, family, angle, vertical));
+      } else {
+        // Text without coordinates remains accessible, but never forms a visible
+        // second text panel beneath the page image.
+        fragment.appendChild(textRun(layer, item.str));
+      }
+    }
+    if (item.hasEOL) fragment.appendChild(layer.ownerDocument.createTextNode("\n"));
+  }
+  layer.replaceChildren(fragment);
 }
 
 export function populateOcrTextLayer(layer, blocks) {
   const fragment = layer.ownerDocument.createDocumentFragment();
+  const ratio = layer.parentElement.getBoundingClientRect();
   for (const block of blocks || []) {
-    const text = String(block?.t || "");
-    const box = normalizeBox(block?.b);
-    if (!text || !box) continue;
-    const run = appendTextRun(
-      layer,
-      fragment,
-      text,
-      box,
-      box.height * 0.92,
-      "reader-pdf-ocr-block"
-    );
-    run.dataset.ocrText = text;
+    const text = String(block?.t || ""), b = block?.b;
+    if (!text || !Array.isArray(b) || b.length !== 4 || !b.every(Number.isFinite)) continue;
+    const [x1, y1, x2, y2] = b.map(normalizeBox);
+    const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
+    if (!width || !height) continue;
+    fragment.appendChild(positionedRun(layer, text, Math.min(x1, x2), Math.min(y1, y2),
+      height * ratio.height / Math.max(1, ratio.width), width, "sans-serif"));
+    fragment.appendChild(layer.ownerDocument.createTextNode("\n"));
   }
-  replaceLayer(layer, fragment, "");
+  layer.replaceChildren(fragment);
 }

@@ -719,7 +719,7 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_github_bucket_source_uses_external_content_download_and_ocr(self):
         source = "/api/reader-bucket-resource?" + urllib.parse.urlencode({
-            "path": "objects/aa/" + "a" * 64 + "/pages/page-000001.webp"
+            "path": "objects/aa/" + "a" * 64 + "/0123456789abcdef/pages/page-000001.webp"
         })
         external = "https://voiceofml-search.hf.space"
         requests = []
