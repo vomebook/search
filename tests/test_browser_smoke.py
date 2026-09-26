@@ -657,6 +657,42 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertNotIn("folder_self=", self.page.evaluate("location.hash"))
         self.assertEqual(self.page_errors, [])
 
+    def test_local_directory_skips_slow_remote_api(self):
+        self.load("#/VOMEBOOK")
+        self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
+        path = self.page.evaluate("""async () => {
+            const root = await getFolderContents(STATE.repoFull, '');
+            return root.folders[0].path;
+        }""")
+        pending = []
+        self.page.route("https://voiceofml-search.hf.space/api/folders/VOMEBOOK/contents**", lambda route: pending.append(route))
+        self.page.evaluate("path => ROUTER.navigate('repo', STATE.repo, path)", path)
+        self.page.wait_for_function("""path => STATE.browserPath === path &&
+            !document.querySelector('.browser-list .sidebar-loading')""", arg=path, timeout=5000)
+        expected = self.page.evaluate("path => getFolderContents(STATE.repoFull, path)", path)
+        self.assertEqual(self.page.locator(".browser-list .browser-item").count(),
+                         len(expected["folders"]) + len(expected["files"]))
+        self.assertEqual(pending, [])
+        self.assertEqual(self.page_errors, [])
+
+    def test_directory_falls_back_to_api_when_local_worker_fails(self):
+        self.load("#/VOMEBOOK")
+        self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
+        self.page.evaluate("""() => {
+            apiAvailable = true;
+            getFolderContents = () => Promise.reject(new Error('Worker unavailable'));
+        }""")
+        requests = []
+        self.page.route("https://voiceofml-search.hf.space/api/folders/VOMEBOOK/contents?path=remote-only",
+            lambda route: (requests.append(route.request.url), route.fulfill(status=200,
+                content_type="application/json", body=json.dumps({
+                    "folders": [], "files": [{"name": "remote.txt", "ext": "txt", "size": 100}]
+                }))))
+        self.page.evaluate("ROUTER.navigate('repo', STATE.repo, 'remote-only')")
+        self.page.locator('.browser-list .browser-name').filter(has_text="remote.txt").wait_for(timeout=5000)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(self.page_errors, [])
+
     def test_large_directory_navigation_keeps_search_and_filter_tree(self):
         self.load("#/VOMEBOOK?filters=1")
         self.page.wait_for_function("() => STATE.mode === 'repo' && STATE.dataLoaded && !!STATE.folderTree", timeout=30000)
