@@ -5210,7 +5210,7 @@ async function loadChapterSearchPage(offset, selectLast = null) {
   failedSearchPage = null;
   const generation = nextReaderGeneration("search");
   beginReaderNavigation();
-  fullSearchCancel.hidden = false;
+  if (!["foliate", "epub-chapters"].includes(capability.mode)) fullSearchCancel.hidden = false;
   fullSearchRetry.hidden = true;
   fullSearchStatus.textContent = `${chapterSearchPage.total} 个结果`;
   try {

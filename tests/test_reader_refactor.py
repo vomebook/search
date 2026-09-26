@@ -599,6 +599,16 @@ class ReaderRefactorTest(unittest.TestCase):
         self.search("needle")
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "210 个结果")
         self.assertEqual(self.page.locator(".full-search-result").count(), 50)
+        self.assertTrue(self.page.locator("#full-search-cancel").is_hidden())
+        self.page.evaluate("""() => {
+          window.__cancelPagingChanges = [];
+          const cancel = document.querySelector('#full-search-cancel');
+          new MutationObserver(() => {
+            __cancelPagingChanges.push(cancel.hidden);
+          }).observe(document.querySelector('#full-search-cancel'), {
+            attributes: true, attributeFilter: ['hidden']
+          });
+        }""")
         self.page.evaluate("""() => {
           const status = document.querySelector('#full-search-status');
           window.__pagingStatuses = [status.textContent];
@@ -609,13 +619,27 @@ class ReaderRefactorTest(unittest.TestCase):
             window.__pagingStatuses.push(status.textContent);
           });
           window.__pagingObserver.observe(status, {childList: true});
+          const view = document.querySelector('foliate-view');
+          const original = view.search.bind(view);
+          view.search = async function* (options) {
+            if (options.index != null && !window.__heldResultPage) {
+              window.__heldResultPage = true;
+              await new Promise(resolve => { window.__releaseResultPage = resolve; });
+            }
+            yield* original(options);
+          };
         }""")
         self.page.locator("#full-search-page-next").click()
+        self.page.wait_for_function("() => !!window.__releaseResultPage")
+        self.assertTrue(self.page.locator("#full-search-cancel").is_hidden())
+        self.page.evaluate("window.__releaseResultPage()")
         self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '51.'")
         self.page.locator("#full-search-page").fill("3")
         self.page.locator("#full-search-page").dispatch_event("change")
         self.page.wait_for_function("() => document.querySelector('#full-search-page').value === '3' && document.querySelector('.full-search-result .full-search-rank')?.textContent === '101.'")
         self.assertIn("needle 2-30", self.page.locator(".full-search-result").first.text_content())
+        self.assertTrue(self.page.locator("#full-search-cancel").is_hidden())
+        self.assertNotIn(False, self.page.evaluate("__cancelPagingChanges"))
         statuses = self.page.evaluate("() => { window.__pagingObserver.disconnect(); return window.__pagingStatuses; }")
         self.assertEqual(set(statuses), {"210 个结果"})
         self.page.locator(".full-search-result").first.click()
@@ -827,12 +851,24 @@ class ReaderRefactorTest(unittest.TestCase):
         self.search('needle')
         self.assertEqual(self.page.locator('#full-search-status').text_content(), '155 个结果')
         self.assertEqual(self.page.locator('.full-search-result').count(), 50)
+        self.assertTrue(self.page.locator('#full-search-cancel').is_hidden())
+        self.page.evaluate("""() => {
+          window.__cancelPagingChanges = [];
+          const cancel = document.querySelector('#full-search-cancel');
+          new MutationObserver(() => {
+            __cancelPagingChanges.push(cancel.hidden);
+          }).observe(document.querySelector('#full-search-cancel'), {
+            attributes: true, attributeFilter: ['hidden']
+          });
+        }""")
         self.assertNotIn(base + 'chapters/chapter-0012.xhtml', requests)
         field = self.page.locator('#full-search-page')
         field.fill('4')
         field.press('Enter')
         field.blur()
         self.page.wait_for_function("() => document.querySelectorAll('.full-search-result').length === 5")
+        self.assertTrue(self.page.locator('#full-search-cancel').is_hidden())
+        self.assertNotIn(False, self.page.evaluate("__cancelPagingChanges"))
         self.page.locator('.full-search-result').last.click()
         self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter mark')?.parentElement.textContent === '第154处needle结束'")
         self.page.locator('#history').click()
