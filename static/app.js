@@ -278,7 +278,7 @@ function cacheReaderMetadata(id, data, source = false) {
   } catch (_) { /* Storage can be disabled; Reader can still resolve through the API. */ }
 }
 
-function getReaderLink(rec, returnUrl) {
+function getReaderLink(rec, returnUrl, cacheMetadata = true) {
   returnUrl = returnUrl || location.href;
   const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl, FolderUrl: getReaderFolderUrl(rec) });
   if (rec.HasTxt && String(rec.Extension || "").toLowerCase() !== "txt") {
@@ -286,7 +286,7 @@ function getReaderLink(rec, returnUrl) {
     readerRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath));
   }
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
-  try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", fallback: readerRecord.ReaderFallback || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
+  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", fallback: readerRecord.ReaderFallback || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
   return readerUrl;
 }
 
@@ -568,6 +568,10 @@ function setupReaderIntentWarming() {
 function isReadableRecord(rec) {
   if (String(rec && (rec.ReaderExtension || rec.Extension) || "").toLowerCase() === "docx" && !rec.ReaderLink) return false;
   return VoiceOfMLReader.capability(rec && (rec.ReaderExtension || rec.Extension)).article;
+}
+
+function isDefaultReadableRecord(rec) {
+  return VoiceOfMLReader.capability(rec && rec.Extension).article;
 }
 
 function getRecordPath(rec) {
@@ -1507,6 +1511,7 @@ const VSCROLL = {
   lastScrollTop: 0,
   lastScrollTime: 0,
   scrollVelocity: 0,
+  scrollDirection: 1,
 };
 let pendingResultEntrance = false;
 
@@ -2863,9 +2868,26 @@ function ensureResultWindowPages(start, end) {
     if (positionRestore.preview) for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadCachedPreviewPage(resultWindow, page);
     return;
   }
-  for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadResultWindowPage(page);
-  const visiblePage = Math.floor(findVirtualIndex(getResultScrollTop()) / size) + 1;
-  loadResultWindowPage(visiblePage + 1); loadResultWindowPage(visiblePage - 1);
+  const scrollTop = getResultScrollTop();
+  const viewEnd = scrollTop + DOM.resultsContainer.clientHeight;
+  const visibleFirst = Math.floor(findVirtualIndex(scrollTop) / size) + 1;
+  const visibleLast = Math.floor(findVirtualIndex(viewEnd) / size) + 1;
+  const first = Math.floor(start / size) + 1;
+  const last = Math.ceil(end / size);
+  const pages = new Set();
+  const add = page => {
+    if (page >= 1 && page <= Math.ceil(resultWindow.total / size)) pages.add(page);
+  };
+  // Demand the page under the viewport before the surrounding overscan. A
+  // large fling must never spend all three request slots on pages already
+  // behind the user's current position.
+  for (let page = visibleFirst; page <= visibleLast; page++) add(page);
+  const direction = VSCROLL.scrollDirection || 1;
+  for (let distance = 1; distance <= 4; distance++) {
+    add(direction > 0 ? visibleLast + distance : visibleFirst - distance);
+  }
+  for (let page = first; page <= last; page++) add(page);
+  pages.forEach(page => loadResultWindowPage(page));
   prefetchNextPage();
 }
 
@@ -3669,6 +3691,9 @@ function buildResultHTML(rec, idx) {
   const sizeStr = formatSize(rec.Size);
   const recordLink = getRecordLink(rec);
   const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
+  const readerActionRecord = isReadableRecord(readerRecord) ? readerRecord
+    : (isDefaultReadableRecord(rec) ? rec : null);
+  const readerActionUrl = readerActionRecord ? getReaderLink(readerActionRecord, undefined, false) : "";
   const breadcrumb = (rec.Folder || []).map((f, j) => {
     const accum = (rec.Folder || []).slice(0, j + 1).join("/");
     const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
@@ -3693,7 +3718,7 @@ function buildResultHTML(rec, idx) {
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(recordLink)) + '">复制链接</button>' +
       '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(recordLink) + '">下载</button>' +
       '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
-      (isReadableRecord(readerRecord) ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(getReaderLink(readerRecord)) + '">' + (["audio", "video"].indexOf(VoiceOfMLReader.capability(readerRecord.ReaderExtension || readerRecord.Extension).mode) >= 0 ? "在线播放" : "在线阅读") + '</button>' : '') +
+      (readerActionUrl ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(readerActionUrl) + '">' + (["audio", "video"].indexOf(VoiceOfMLReader.capability(readerActionRecord.ReaderExtension || readerActionRecord.Extension).mode) >= 0 ? "在线播放" : "在线阅读") + '</button>' : '') +
     '</div>'
   );
 }
@@ -3704,15 +3729,19 @@ function refreshResultReaderActions() {
     const index = Number(row.dataset.index), record = STATE.results[index];
     if (!record) continue;
     const readerRecord = applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record));
-    if (!isReadableRecord(readerRecord)) continue;
     let button = row.querySelector('[data-action="read"]');
+    if (!isReadableRecord(readerRecord) && !isDefaultReadableRecord(record)) {
+      if (button) { button.remove(); VSCROLL.measuredRowKeys[index] = null; }
+      continue;
+    }
+    const actionRecord = isReadableRecord(readerRecord) ? readerRecord : record;
     if (!button) {
       button = document.createElement("button"); button.className = "result-action-btn"; button.dataset.action = "read";
       row.querySelector(".result-actions").appendChild(button);
       VSCROLL.measuredRowKeys[index] = null;
     }
-    button.dataset.readerUrl = getReaderLink(readerRecord);
-    const label = ["audio", "video"].includes(VoiceOfMLReader.capability(readerRecord.ReaderExtension || readerRecord.Extension).mode) ? "在线播放" : "在线阅读";
+    button.dataset.readerUrl = getReaderLink(actionRecord);
+    const label = ["audio", "video"].includes(VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读";
     if (button.textContent !== label) { button.textContent = label; VSCROLL.measuredRowKeys[index] = null; }
   }
   VSCROLL.measuredWindowKey = "";
@@ -3882,6 +3911,7 @@ function renderVisible() {
   const velocityOverscanPx = extraScreens * viewH;
   ensureHeightTree();
   const scrollingDown = scrollTop >= VSCROLL.lastScrollTop;
+  VSCROLL.scrollDirection = scrollingDown ? 1 : -1;
   VSCROLL.lastScrollTop = scrollTop;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
@@ -4001,6 +4031,7 @@ function resetVirtualScrollState() {
   VSCROLL.lastScrollTop = 0;
   VSCROLL.lastScrollTime = 0;
   VSCROLL.scrollVelocity = 0;
+  VSCROLL.scrollDirection = 1;
   VSCROLL.estimateMeasurementKey = "";
   clearResultTemplateCache();
   updateScrollTrack();
@@ -4072,6 +4103,13 @@ function refreshVirtualAfterAppend(updateView = true) {
   const logicalTop = getResultScrollTop(), previousOrigin = resultScrollOrigin;
   layoutResultScrollSegment(topH, endH, totalH, logicalTop);
   if (previousOrigin !== resultScrollOrigin) DOM.resultsContainer.scrollTop = logicalTop - resultScrollOrigin;
+  if (updateView) {
+    // A newly appended page can arrive between scroll events. Rebuild the
+    // bounded window now so the next frame cannot expose the old DOM tail.
+    VSCROLL.renderStart = -1;
+    VSCROLL.renderEnd = -1;
+    renderVisible();
+  }
 }
 
 function ensureVirtualViewportCovered() {
@@ -5416,13 +5454,16 @@ function setupQuickScroll() {
   }
   function finishDrag() {
     if (dragFrame) cancelAnimationFrame(dragFrame);
+    const requestedScrollTop = pendingScrollTop;
     applyPendingScrollTop();
+    const finalScrollTop = requestedScrollTop === null ? getResultScrollTop() : requestedScrollTop;
+    VSCROLL.renderStart = -1;
+    VSCROLL.renderEnd = -1;
+    setResultScrollTop(finalScrollTop);
+    renderVisible();
     VSCROLL.isDraggingThumb = false;
     VSCROLL.dragMetrics = null;
     DOM.resultsList.style.minHeight = "";
-    VSCROLL.renderStart = -1;
-    VSCROLL.renderEnd = -1;
-    renderVisible();
     updateScrollTrack();
   }
   function onMouseMove(e) {
