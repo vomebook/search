@@ -455,7 +455,8 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
             content_type='text/javascript', body=PDF_MODULE.replace("[{ str: 'Accessible PDF text', hasEOL: false }]", '[]')))
         self.open_reader()
-        self.page.wait_for_function("document.querySelector('.reader-pdf-text')?.textContent.includes('此页没有可提取文本')")
+        self.page.locator('.reader-page[data-page="1"][data-text-ready="1"]').wait_for()
+        self.assertEqual(self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content(), '')
         self.page.locator('#bookmark-ribbon').click()
         self.assertEqual(self.page.locator('#bookmark-excerpt-input').input_value(), '')
         self.page.locator('#bookmark-add').click()
@@ -674,6 +675,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         page = context.new_page()
         page.route("**/api/reader-content**", lambda route: route.fulfill(status=200, content_type="video/mp4", body=b"invalid video fixture"))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/broken.mp4"
+        page.route(source, lambda route: route.abort())
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=mp4&title=Broken", wait_until="domcontentloaded")
         page.locator(".reader-error").wait_for(timeout=10000)
         self.assertIn("媒体加载失败", page.locator(".reader-error").text_content())
@@ -689,6 +691,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page = context.new_page()
                 page.route("**/api/reader-content**", lambda route: route.fulfill(status=200, content_type="video/mp4", body=b"invalid video fixture"))
                 source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/broken.{extension}"
+                page.route(source, lambda route: route.abort())
                 page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=Broken", wait_until="domcontentloaded")
                 page.locator(".reader-error").wait_for(timeout=10000)
                 self.assertEqual(page.locator("#status").text_content(), "无法打开")
@@ -1923,7 +1926,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page.route("**/static/vendor/jszip.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=JSZIP_SCRIPT))
                 page.route("**/static/vendor/epub.min.06eae1574510.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=EPUB_SCRIPT))
                 page.route("**/static/vendor/docx-preview.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=DOCX_SCRIPT))
-                page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.abort("connectionreset"))
+                page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=403, body="forbidden", headers={"Access-Control-Allow-Origin": "*"}))
                 if extension == "docx":
                     digest = "a" * 64
                     source = f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{digest}/docx-native-v1/document.docx"

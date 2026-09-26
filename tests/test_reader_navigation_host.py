@@ -78,9 +78,10 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
 
     def test_click_replenishes_evicted_reader_metadata(self):
         result = self.page.evaluate('''() => {
-          const button=DOM.resultsList.querySelector('[data-action="read"]');
-          const id=new URL(button.dataset.readerUrl,location.origin).searchParams.get('id');
-          const expected=JSON.parse(sessionStorage.getItem('reader-source:'+id));
+           const button=DOM.resultsList.querySelector('[data-action="read"]');
+           const id=new URL(button.dataset.readerUrl,location.origin).searchParams.get('id');
+           getReaderLink(STATE.results[Number(button.closest('.result-item').dataset.index)]);
+           const expected=JSON.parse(sessionStorage.getItem('reader-source:'+id));
           for(let i=0;i<200;i++) cacheReaderMetadata('other-'+i,{url:'other'},true);
           const evicted=!sessionStorage.getItem('reader-source:'+id);
           let captured;
