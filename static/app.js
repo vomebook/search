@@ -3737,12 +3737,13 @@ function refreshResultReaderActions() {
     const index = Number(row.dataset.index), record = STATE.results[index];
     if (!record) continue;
     const readerRecord = applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record));
+    const readerReady = isReadableRecord(readerRecord);
     let button = row.querySelector('[data-action="read"]');
-    if (!isReadableRecord(readerRecord) && !isDefaultReadableRecord(record)) {
+    if (!readerReady && !isDefaultReadableRecord(record)) {
       if (button) { button.remove(); VSCROLL.measuredRowKeys[index] = null; }
       continue;
     }
-    const actionRecord = isReadableRecord(readerRecord) ? readerRecord : record;
+    const actionRecord = readerReady ? readerRecord : record;
     if (!button) {
       button = document.createElement("button"); button.className = "result-action-btn"; button.dataset.action = "read";
       row.querySelector(".result-actions").appendChild(button);
