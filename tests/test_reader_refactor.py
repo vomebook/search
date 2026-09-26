@@ -438,6 +438,25 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertTrue(self.page.locator("#full-search-input").is_visible())
         self.assertTrue(self.page.locator("#history-panel").evaluate("node => node.classList.contains('is-open')"))
 
+    def test_unresolvable_foliate_result_keeps_search_open_for_retry(self):
+        self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
+        self.open(self.reader_url("epub"))
+        self.search("正文")
+        self.page.evaluate("""() => {
+          const view = document.querySelector('foliate-view');
+          window.__resolveSearchResult = view.resolveNavigation.bind(view);
+          view.resolveNavigation = async () => null;
+        }""")
+        self.page.locator(".full-search-result").first.click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '搜索结果定位失败，请重试'")
+        self.assertTrue(self.page.locator("#history-panel").evaluate("node => node.classList.contains('is-open')"))
+        self.assertEqual(self.page.locator(".foliate-continuous mark.full-search-highlight").count(), 0)
+        self.page.evaluate("document.querySelector('foliate-view').resolveNavigation = window.__resolveSearchResult")
+        self.page.locator(".full-search-result").first.click()
+        self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "3 个结果")
+        self.assertEqual(self.page.locator(".foliate-continuous mark.full-search-highlight").count(), 1)
+
     def test_foliate_many_hits_paginate_and_cancel(self):
         with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(3))) as archive:
             files = {name: archive.read(name) for name in archive.namelist()}
@@ -1061,6 +1080,27 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertTrue(self.page.locator(".full-search-pagination").is_hidden())
         self.assertTrue(self.page.locator("#full-search-next").is_disabled())
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+
+    def test_pending_text_result_cannot_highlight_after_new_search(self):
+        def hold_activation(route):
+            response = route.fetch()
+            needle = "const currentNodes = await fullSearchTextNodes(root, searchGeneration);"
+            script = response.text()
+            self.assertIn(needle, script)
+            route.fulfill(response=response, body=script.replace(needle,
+                "await new Promise(resolve => { window.__releaseActivation = resolve; }); " +
+                needle + " window.__activationSettled = true;"))
+        self.page.route("**/static/reader.js?*", hold_activation)
+        self.serve("oldword " * 70 + "freshword")
+        self.open(self.reader_url())
+        self.search("oldword")
+        self.page.locator(".full-search-result").first.click()
+        self.page.wait_for_function("() => !!window.__releaseActivation")
+        self.page.locator("#full-search-input").fill("freshword")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.page.evaluate("window.__releaseActivation()")
+        self.page.wait_for_function("() => window.__activationSettled")
+        self.assertEqual(self.page.locator("#content mark.full-search-highlight").all_text_contents(), ["freshword"])
 
     def test_search_scans_beyond_20000_nodes_and_cancels_old_query(self):
         self.serve("<main>" + "<span>ordinary </span>" * 21000 + "<p>unique-tail</p></main>", "text/html")
