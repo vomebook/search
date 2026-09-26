@@ -2789,12 +2789,10 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
         image.decoding = "async";
         shell.appendChild(image);
       }
-       const targets = [...new Set([entry.j, entry.w, `${pdfPageManifest.root}/pages/page-${String(entry.page).padStart(6, "0")}.webp`].filter(Boolean))]
-         .map((path) => pdfPageManifest.assetUrl(path));
+      const target = pdfPageManifest.pageUrl(entry.page);
        await new Promise((resolve, reject) => {
          let settled = false,
-           targetIndex = 0,
-          timeout = 0,
+           timeout = 0,
           untrack = () => {};
         const finish = (error) => {
           if (settled) return;
@@ -2814,14 +2812,8 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
           READER_PROXY_TIMEOUT_MS
         );
          image.onload = () => finish();
-         image.onerror = () => {
-           if (targetIndex + 1 < targets.length) {
-             targetIndex += 1;
-             image.src = targets[targetIndex];
-           } else finish(new Error(`PDF page ${entry.page} image failed`));
-         };
-         if (!targets.length) return finish(new Error(`PDF page ${entry.page} image missing`));
-         if (image.src !== targets[targetIndex]) image.src = targets[targetIndex];
+         image.onerror = () => finish(new Error(`PDF page ${entry.page} image failed`));
+         if (image.src !== target) image.src = target;
          if (image.complete && image.naturalWidth) finish();
       });
       assertReaderActive();
