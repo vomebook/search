@@ -428,6 +428,8 @@ let chapterSearchConfiguration = null;
 let chapterSearchModulePromise = null;
 let chapterSearchClient = null;
 let chapterSearchPage = null;
+let chapterSearchInProgress = false;
+let fullSearchComplete = false;
 trackReaderResource(() => {
   chapterSearchClient?.dispose();
   chapterSearchClient = null;
@@ -728,8 +730,8 @@ document.querySelector("#back").addEventListener("click", async () => {
     const target = new URL(normalizeReaderReturnUrl(returnUrl), location.origin);
     if (target.origin === location.origin) {
       if (returnNeedsReload) location.replace(target.href);
-      else if (canReturnWithHistory && history.length > 1) {
-        history.back();
+      else if (canReturnWithHistory && history.length > 2) {
+        history.go(-2);
       } else location.assign(target.href);
       return;
     }
@@ -964,6 +966,22 @@ function filterPanel(view) {
 }
 let panelAnimationTimer = 0;
 let readerUiHistoryState = "base";
+if (window.parent === window) {
+  history.replaceState({ ...history.state, voiceReaderBase: true }, "", location.href);
+  history.pushState({ voiceReaderGuard: true }, "", location.href);
+  window.addEventListener("popstate", (event) => {
+    if (!event.state?.voiceReaderBase || readerLifecycle.disposed) return;
+    if (document.querySelector("#history-panel").classList.contains("is-open") && !fullSearchView.hidden)
+      closeFullSearchView();
+    else if (document.querySelector("#history-panel").classList.contains("is-open"))
+      setReaderPanelOpen(false, true);
+    else {
+      history.back();
+      return;
+    }
+    history.pushState({ voiceReaderGuard: true }, "", location.href);
+  });
+}
 function notifyReaderUiState(state) {
   readerUiHistoryState = state;
   if (window.parent !== window)
@@ -978,9 +996,9 @@ function setReaderPanelOpen(open, restoreFocus = false) {
     panel.hidden = false;
     void panel.offsetWidth;
     panel.classList.add("is-open");
-    selectPanel(mediaElement ? "media" : "toc");
+    selectPanel(panelState.selected === "full-search" ? "full-search" : mediaElement ? "media" : "toc");
     updateTocCurrentMark();
-    notifyReaderUiState("panel");
+    notifyReaderUiState(panelState.selected === "full-search" ? "full-search" : "panel");
     return;
   }
   panel.classList.remove("is-open");
@@ -2089,6 +2107,11 @@ window.addEventListener("message", (event) => {
     event.data.type === "voice-reader-theme-state"
   )
     applyReaderTheme(event.data.theme, false);
+  if (event.origin === location.origin && event.source === window.parent &&
+      event.data?.type === "voice-reader-system-back") {
+    if (readerUiHistoryState === "full-search") closeFullSearchView();
+    else if (readerUiHistoryState === "panel") setReaderPanelOpen(false, true);
+  }
 });
 document
   .querySelector("#history")
@@ -4801,7 +4824,17 @@ fullSearchButton.setAttribute("aria-label", "全文搜索");
 fullSearchButton.hidden = !capability.features.search;
 const fullSearchInput = fullSearchView.querySelector("#full-search-input"),
   fullSearchStatus = fullSearchView.querySelector("#full-search-status"),
-  fullSearchResultsNode = fullSearchView.querySelector("#full-search-results");
+  fullSearchResultsNode = fullSearchView.querySelector("#full-search-results"),
+  fullSearchClear = fullSearchView.querySelector("#full-search-clear");
+let fullSearchInputTimer = 0;
+fullSearchClear.hidden = true;
+function updateFullSearchButton(open) {
+  fullSearchButton.textContent = open ? "关闭全文搜索" : "全文搜索";
+  fullSearchButton.setAttribute("aria-label", fullSearchButton.textContent);
+}
+function updateFullSearchClear() {
+  fullSearchClear.hidden = !fullSearchInput.value;
+}
 const chapterSearchPagination = document.createElement("div");
 chapterSearchPagination.className = "full-search-pagination";
 chapterSearchPagination.hidden = true;
@@ -4828,6 +4861,7 @@ fullSearchCancel.addEventListener("click", () => {
   beginReaderNavigation();
   chapterSearchClient?.cancel();
   pdfSearchInProgress = false;
+  chapterSearchInProgress = false;
   chapterSearchPage = null;
   updateSearchState({ results: [], index: -1 });
   renderFullSearchResults();
@@ -4870,7 +4904,14 @@ async function searchChapterBook(query, generation) {
   }
   if (!chapterSearchClient)
     chapterSearchClient = module.createChapterSearch(chapterSearchConfiguration);
-  const page = await chapterSearchClient.search(query);
+  const page = await chapterSearchClient.search(query, partial => {
+    if (!isReaderGenerationCurrent("search", generation)) return;
+    applyChapterSearchPage(partial);
+    renderFullSearchResults();
+    fullSearchStatus.textContent = partial.total
+      ? `${partial.total} 个结果（正在搜索… ${partial.scanned} / ${partial.chapters} 章）`
+      : `正在搜索正文… ${partial.scanned} / ${partial.chapters} 章`;
+  });
   if (isReaderGenerationCurrent("search", generation)) applyChapterSearchPage(page);
 }
 function applyChapterSearchPage(page) {
@@ -4925,13 +4966,14 @@ function updateChapterSearchPagination() {
   input.max = String(Math.max(1, pages));
   chapterSearchPagination.querySelector("#full-search-pages").textContent = `/ ${pages}`;
   chapterSearchPagination.querySelector("#full-search-page-prev").disabled =
-    pdfSearchInProgress || page.offset === 0;
+    pdfSearchInProgress || chapterSearchInProgress || page.offset === 0;
   chapterSearchPagination.querySelector("#full-search-page-next").disabled =
-    pdfSearchInProgress || page.offset + page.pageSize >= page.total;
-  input.disabled = pdfSearchInProgress;
+    pdfSearchInProgress || chapterSearchInProgress || page.offset + page.pageSize >= page.total;
+  input.disabled = pdfSearchInProgress || chapterSearchInProgress;
 }
 async function loadChapterSearchPage(offset, selectLast = null) {
-  if (pdfSearchInProgress || !chapterSearchPage || (!chapterSearchClient && !pdfSearchPageLoader)) return;
+  if (pdfSearchInProgress || chapterSearchInProgress || !chapterSearchPage ||
+      (!chapterSearchClient && !pdfSearchPageLoader)) return;
   const generation = nextReaderGeneration("search");
   beginReaderNavigation();
   fullSearchCancel.hidden = false;
@@ -4960,6 +5002,14 @@ async function loadChapterSearchPage(offset, selectLast = null) {
 async function fullSearchFoliateMatches(query, generation) {
   const results = [];
   if (!epubRendition?.search) return results;
+  pdfSearchPageLoader = (requestedOffset) => {
+    const pageSize = 50;
+    const offset = Math.max(0, Math.min(
+      Math.floor(Math.max(0, results.length - 1) / pageSize) * pageSize,
+      Math.floor(requestedOffset / pageSize) * pageSize
+    ));
+    return { total: results.length, offset, pageSize, results: results.slice(offset, offset + pageSize) };
+  };
   for await (const group of epubRendition.search({ query })) {
     if (!isReaderGenerationCurrent("search", generation)) return [];
     let occurrence = 0;
@@ -4977,10 +5027,23 @@ async function fullSearchFoliateMatches(query, generation) {
           suffix: ""
         }
       });
-      if (results.length === 100) return results;
+      if (results.length === 1 || results.length % 50 === 0) {
+        chapterSearchPage = pdfSearchPageLoader(0);
+        updateSearchState({ results: chapterSearchPage.results, index: -1 });
+        renderFullSearchResults();
+        fullSearchStatus.textContent = `${results.length} 个结果（正在搜索…）`;
+        await waitForReader();
+        if (!isReaderGenerationCurrent("search", generation)) return [];
+      }
     }
+    chapterSearchPage = pdfSearchPageLoader(0);
+    updateSearchState({ results: chapterSearchPage.results, index: -1 });
+    renderFullSearchResults();
+    fullSearchStatus.textContent = `${results.length} 个结果（正在搜索…）`;
+    await waitForReader();
   }
-  return results;
+  chapterSearchPage = pdfSearchPageLoader(0);
+  return chapterSearchPage.results;
 }
 function fullSearchEscape(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -4988,15 +5051,16 @@ function fullSearchEscape(value) {
 let fullSearchActiveMarks = [];
 function clearFullSearchMarks() {
   content.querySelectorAll(".reader-text-hit-box").forEach((node) => node.remove());
+  const changedParents = new Set();
   for (const mark of fullSearchActiveMarks) {
-    if (mark.tagName === "MARK") mark.replaceWith(mark.textContent);
+    if (mark.tagName === "MARK") {
+      if (mark.parentNode) changedParents.add(mark.parentNode);
+      mark.replaceWith(mark.textContent);
+    }
     else mark.classList.remove("full-search-highlight");
   }
   fullSearchActiveMarks = [];
-  content.normalize();
-  htmlFrame?.contentDocument?.body?.normalize();
-  for (const article of content.querySelectorAll(".foliate-continuous article[data-section]"))
-    foliateSectionRoot(article).normalize();
+  for (const parent of changedParents) parent.normalize();
 }
 async function fullSearchTextNodes(root, generation) {
   const nodes = [],
@@ -5054,11 +5118,17 @@ function fullSearchSnippetDom(snippet) {
   if (snippet.suffix) node.append(snippet.suffix);
   return node;
 }
-function fullSearchLocation(node, fallback) {
+function fullSearchLocation(node, fallback, offset, total) {
   const page = node.parentElement && node.parentElement.closest("[data-page]");
-  return page ? `第 ${page.dataset.page} 页` : fallback;
+  if (page) return `第 ${page.dataset.page} 页`;
+  if (navigationState.tocEntries.length) {
+    const heading = [...navigationState.tocEntries].reverse().find(entry => entry.target &&
+      (entry.target === node.parentElement || !!(entry.target.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)));
+    if (heading) return heading.label;
+  }
+  return `正文 ${Math.min(100, Math.floor(offset / Math.max(1, total) * 100))}%`;
 }
-async function fullSearchDomMatches(root, fallback, query, generation) {
+async function fullSearchDomMatches(root, fallback, query, generation, progressive = false, occurrence = null) {
   root = foliateSectionRoot(root);
   const nodes = await fullSearchTextNodes(root, generation);
   if (!nodes || !isReaderGenerationCurrent("search", generation)) return [];
@@ -5074,46 +5144,117 @@ async function fullSearchDomMatches(root, fallback, query, generation) {
       if (!isReaderGenerationCurrent("search", generation)) return [];
     }
   }
-  const text = chunks.join(""),
-    matches = [],
-    output = [];
-  // Limit displayed results, not the searched nodes; scan long text in chunks
-  // with enough overlap to retain matches across each chunk boundary.
-  let nextStart = 0;
-  for (let start = 0; start < text.length && matches.length < 100; start += 65536) {
-    const pattern = new RegExp(fullSearchEscape(query), "giu");
-    const slice = text.slice(start, start + 65536 + query.length - 1);
-    pattern.lastIndex = Math.max(0, nextStart - start);
-    for (const match of slice.matchAll(pattern)) {
+  const text = chunks.join(""), groups = [], firstHits = [];
+  const navigationGeneration = readerRuntime.currentGeneration("navigation");
+  const patternText = fullSearchEscape(query);
+  let nextStart = 0, total = 0;
+  const locateIndex = (index) => {
+    let low = 0, high = offsets.length - 1;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (offsets[middle].end <= index) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
+  const partsFor = (start, end) => {
+    const parts = [];
+    for (let index = locateIndex(start); index < offsets.length && offsets[index].start < end; index++)
+      parts.push(offsets[index]);
+    return parts;
+  };
+  const matchesIn = function* (group) {
+    const re = new RegExp(patternText, "giu");
+    re.lastIndex = group.skip;
+    for (const match of group.text.matchAll(re)) {
       if (match.index >= 65536) break;
-      matches.push({ index: start + match.index, value: match[0] });
-      nextStart = start + match.index + match[0].length;
-      if (matches.length === 100) break;
+      yield { index: group.start + match.index, value: match[0] };
+    }
+  };
+  const resultFor = (match) => {
+    const part = offsets[locateIndex(match.index)];
+    return {
+      location: fullSearchLocation(part.node, fallback, match.index, text.length),
+      snippet: fullSearchSnippet(text, match.index, match.value.length),
+      async activate() {
+        clearFullSearchMarks();
+        const currentNodes = await fullSearchTextNodes(root, readerRuntime.currentGeneration("search"));
+        if (!currentNodes) return false;
+        let position = 0, parts = [];
+        const end = match.index + match.value.length;
+        for (const node of currentNodes) {
+          const nodeEnd = position + node.data.length;
+          if (nodeEnd > match.index && position < end)
+            parts.push({ node, start: Math.max(0, match.index - position), end: Math.min(node.data.length, end - position) });
+          position = nodeEnd;
+          if (position >= end) break;
+        }
+        if (parts.map(part => part.node.data.slice(part.start, part.end)).join("") !== match.value) return false;
+        const [target] = highlightTextParts(parts);
+        target?.scrollIntoView({ block: "center" });
+        return !!target;
+      }
+    };
+  };
+  const page = (requestedOffset) => {
+    const pageSize = 50, results = [];
+    const offset = Math.max(0, Math.min(Math.floor(Math.max(0, total - 1) / pageSize) * pageSize,
+      Math.floor(requestedOffset / pageSize) * pageSize));
+    let passed = 0;
+    for (const group of groups) {
+      if (passed + group.count <= offset) { passed += group.count; continue; }
+      for (const match of matchesIn(group)) {
+        if (passed++ < offset) continue;
+        results.push(resultFor(match));
+        if (results.length === pageSize) break;
+      }
+      if (results.length === pageSize) break;
+    }
+    return { total, offset, pageSize, results };
+  };
+  for (let start = 0; start < text.length; start += 65536) {
+    const group = { start, text: text.slice(start, start + 65536 + query.length - 1),
+      skip: Math.max(0, nextStart - start), count: 0 };
+    for (const match of matchesIn(group)) {
+      group.count++;
+      nextStart = match.index + match.value.length;
+      if (firstHits.length < 100) firstHits.push(match);
+    }
+    groups.push(group);
+    total += group.count;
+    if (progressive && (start === 0 || (group.count && total <= 50) || groups.length % 8 === 0)) {
+      pdfSearchPageLoader = page;
+      chapterSearchPage = page(0);
+      updateSearchState({ results: chapterSearchPage.results, index: -1 });
+      renderFullSearchResults();
+      fullSearchStatus.textContent = `${total} 个结果（正在搜索…）`;
     }
     await waitForReader();
     if (!isReaderGenerationCurrent("search", generation)) return [];
   }
-  for (const match of matches.reverse()) {
-    const end = match.index + match.value.length;
-    const parts = offsets.filter((part) => part.end > match.index && part.start < end);
-    const [target] = highlightTextParts(
-      parts.map((part) => ({
-        node: part.node,
-        start: Math.max(match.index, part.start) - part.start,
-        end: Math.min(end, part.end) - part.start
-      }))
-    );
-    output.unshift({
-      location: fullSearchLocation(parts[0].node, fallback),
-      snippet: fullSearchSnippet(text, match.index, match.value.length),
-      target,
-      activate: () => {
-        if (!target.isConnected) return false;
-        target.scrollIntoView({ block: "center" });
-      }
-    });
+  if (progressive) {
+    pdfSearchPageLoader = page;
+    chapterSearchPage = page(0);
   }
-  return output;
+  if (occurrence !== null) {
+    const matchedPage = page(occurrence);
+    const result = matchedPage.results[occurrence - matchedPage.offset];
+    if (!result || !await result.activate()) return [];
+    return [{ target: fullSearchActiveMarks[0] }];
+  }
+  const fallbackResults = progressive ? null : firstHits.map(resultFor);
+  if (navigationGeneration === readerRuntime.currentGeneration("navigation")) {
+    for (let i = firstHits.length - 1; i >= 0; i--) {
+      const match = firstHits[i], end = match.index + match.value.length;
+      const parts = partsFor(match.index, end);
+      if (!parts.length) continue;
+      const [target] = highlightTextParts(parts.map(part => ({ node: part.node,
+        start: Math.max(match.index, part.start) - part.start,
+        end: Math.min(end, part.end) - part.start })));
+      if (fallbackResults) fallbackResults[i].target = target;
+    }
+  }
+  return fallbackResults || page(0).results;
 }
 async function navigateFoliateSearchResult(result, generation) {
   const resolved = await epubRendition?.resolveNavigation?.(result.cfi);
@@ -5140,9 +5281,11 @@ async function navigateFoliateSearchResult(result, generation) {
       foliateSectionRoot(node),
       "电子书位置",
       searchState.query,
-      readerRuntime.currentGeneration("search")
+      readerRuntime.currentGeneration("search"),
+      false,
+      result.occurrence || 0
     );
-    target = matches[result.occurrence || 0]?.target;
+    target = matches[0]?.target;
   }
   if (!isReaderGenerationCurrent("navigation", generation) || !target) return false;
   const targetRect = target.getBoundingClientRect(),
@@ -5167,11 +5310,7 @@ async function navigateFoliateSearchResult(result, generation) {
 }
 async function searchConcentratedPdf(query, generation) {
   const book = await pdfBookTextCache.get();
-  const index = await searchBookText(book, query, {
-    current: () => isReaderGenerationCurrent("search", generation),
-    yieldTask: () => waitForReader(0)
-  });
-  pdfSearchPageLoader = (offset) => {
+  const install = (index) => { pdfSearchPageLoader = (offset) => {
     const page = index.page(offset);
     return { ...page, results: page.results.map(hit => ({
       ...hit, location: `第 ${hit.page} 页`, activate: async nav => {
@@ -5186,7 +5325,22 @@ async function searchConcentratedPdf(query, generation) {
         return true;
       }
     })) };
-  };
+  }; };
+  const index = await searchBookText(book, query, {
+    current: () => isReaderGenerationCurrent("search", generation),
+    yieldTask: () => waitForReader(0),
+    progress: async (partial, scanned, pages) => {
+      if (!isReaderGenerationCurrent("search", generation)) return;
+      install(partial);
+      chapterSearchPage = pdfSearchPageLoader(0);
+      updateSearchState({ results: chapterSearchPage.results, index: -1 });
+      renderFullSearchResults();
+      fullSearchStatus.textContent = partial.total
+        ? `${partial.total} 个结果（正在搜索… ${scanned} / ${pages} 页）`
+        : `正在搜索正文… ${scanned} / ${pages} 页`;
+    }
+  });
+  install(index);
   chapterSearchPage = pdfSearchPageLoader(0);
   return chapterSearchPage.results;
 }
@@ -5225,6 +5379,21 @@ function publishPdfSearchProgress(generation, groups, total, pattern, scanned, p
     : `正在搜索正文… ${scanned} / ${pages} 页，暂未找到匹配`;
   return true;
 }
+const pdfSearchTextCache = new Map();
+const PDF_SEARCH_TEXT_CACHE_BYTES = 8 * 1024 * 1024;
+let pdfSearchTextCacheBytes = 0;
+function cachePdfSearchText(page, text) {
+  const bytes = text.length * 2;
+  if (bytes > PDF_SEARCH_TEXT_CACHE_BYTES) return;
+  pdfSearchTextCache.set(page, text);
+  pdfSearchTextCacheBytes += bytes;
+  while (pdfSearchTextCacheBytes > PDF_SEARCH_TEXT_CACHE_BYTES) {
+    const oldest = pdfSearchTextCache.keys().next().value;
+    pdfSearchTextCacheBytes -= pdfSearchTextCache.get(oldest).length * 2;
+    pdfSearchTextCache.delete(oldest);
+  }
+}
+trackReaderResource(() => pdfSearchTextCache.clear());
 async function fullSearchPdfMatches(query, generation) {
   const pdf = pdfDocument, groups = [],
     pattern = new RegExp(fullSearchEscape(pdfSearchText(query).text), "giu");
@@ -5232,20 +5401,29 @@ async function fullSearchPdfMatches(query, generation) {
   let total = 0, hasText = false;
   for (let page = 1; page <= pdf.numPages; page++) {
     if (!isReaderGenerationCurrent("search", generation)) return [];
-    const pdfPage = await awaitReader(pdf.getPage(page));
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    const textContent = await awaitReader(pdfPage.getTextContent());
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    const text = pdfSearchText(pdfTextContent(textContent.items)).text;
+    let text = pdfSearchTextCache.get(page);
+    if (text === undefined) {
+      const pdfPage = await awaitReader(pdf.getPage(page));
+      if (!isReaderGenerationCurrent("search", generation)) return [];
+      const textContent = await awaitReader(pdfPage.getTextContent());
+      if (!isReaderGenerationCurrent("search", generation)) return [];
+      text = pdfSearchText(pdfTextContent(textContent.items)).text;
+      cachePdfSearchText(page, text);
+    }
     hasText ||= !!text.trim();
     let count = 0;
-    for (const match of text.matchAll(pattern)) count++;
+    for (const match of text.matchAll(pattern)) {
+      if (++count % 2048 === 0) {
+        await waitForReader();
+        if (!isReaderGenerationCurrent("search", generation)) return [];
+      }
+    }
     if (count) {
       groups.push({ page, text, count });
       total += count;
       highlightPdfText(content.querySelector(`.reader-page[data-page="${page}"]`), query);
     }
-    if (page === 1 || page % 8 === 0 || page === pdf.numPages) {
+    if (page === 1 || (count && total <= 50) || page % 8 === 0 || page === pdf.numPages) {
       if (!publishPdfSearchProgress(generation, groups, total, pattern, page, pdf.numPages)) return [];
       await waitForReader(0, true);
     }
@@ -5264,7 +5442,10 @@ function renderFullSearchResults() {
     row.className = "full-search-result";
     location.className = "full-search-location";
     location.textContent = result.location;
-    row.append(location, fullSearchSnippetDom(result.snippet));
+    const rank = document.createElement("span");
+    rank.className = "full-search-rank";
+    rank.textContent = `${(chapterSearchPage?.offset || 0) + index + 1}.`;
+    row.append(rank, location, fullSearchSnippetDom(result.snippet));
     row.addEventListener("click", () => activateFullSearchResult(index));
     fullSearchResultsNode.appendChild(row);
   }
@@ -5272,8 +5453,24 @@ function renderFullSearchResults() {
     button.disabled = !searchState.results.length;
   });
 }
+function closeFullSearchView() {
+  clearTimeout(fullSearchInputTimer);
+  fullSearchInputTimer = 0;
+  if (pdfSearchInProgress || chapterSearchInProgress) fullSearchComplete = false;
+  nextReaderGeneration("search");
+  if (chapterSearchInProgress) chapterSearchClient?.cancel();
+  pdfSearchInProgress = false;
+  chapterSearchInProgress = false;
+  fullSearchCancel.hidden = true;
+  fullSearchRetry.hidden = true;
+  selectPanel(mediaElement ? "media" : "toc");
+  updateFullSearchButton(false);
+}
 async function runFullSearch() {
+  clearTimeout(fullSearchInputTimer);
+  fullSearchInputTimer = 0;
   const query = fullSearchInput.value.trim();
+  fullSearchComplete = false;
   const generation = nextReaderGeneration("search");
   beginReaderNavigation();
   clearFullSearchMarks();
@@ -5281,7 +5478,8 @@ async function runFullSearch() {
   chapterSearchPage = null;
   updateChapterSearchPagination();
   pdfSearchPageLoader = null;
-  pdfSearchInProgress = capability.mode === "pdf" && !ocrManifestUrl && !!query;
+  pdfSearchInProgress = ["pdf", "pdf-pages", "foliate"].includes(capability.mode) && !!query;
+  chapterSearchInProgress = capability.mode === "epub-chapters" && !!query;
   fullSearchRetry.hidden = true;
   fullSearchCancel.hidden = !["epub-chapters", "pdf", "pdf-pages"].includes(capability.mode) || !query;
   fullSearchResultsNode.textContent = "";
@@ -5307,7 +5505,7 @@ async function runFullSearch() {
     else if (["text", "markdown", "docx"].includes(capability.mode))
       publishSearchResults(
         generation,
-        await fullSearchDomMatches(content, "阅读位置", query, generation)
+        await fullSearchDomMatches(content, "阅读位置", query, generation, true)
       );
     else if (capability.mode === "html")
       publishSearchResults(
@@ -5317,13 +5515,16 @@ async function runFullSearch() {
               htmlFrame.contentDocument.body,
               "HTML 阅读位置",
               query,
-              generation
+              generation,
+              true
             )
           : []
       );
     else throw new Error("此格式没有可搜索文本");
     if (!isReaderGenerationCurrent("search", generation)) return;
+    fullSearchComplete = true;
     pdfSearchInProgress = false;
+    chapterSearchInProgress = false;
     renderFullSearchResults();
     fullSearchStatus.textContent = chapterSearchPage
       ? chapterSearchPage.total
@@ -5335,12 +5536,14 @@ async function runFullSearch() {
   } catch (error) {
     if (isReaderGenerationCurrent("search", generation)) {
       pdfSearchInProgress = false;
+      chapterSearchInProgress = false;
       fullSearchStatus.textContent = error.message || "正文搜索不可用";
       fullSearchRetry.hidden = !["epub-chapters", "pdf", "pdf-pages"].includes(capability.mode);
     }
   } finally {
     if (isReaderGenerationCurrent("search", generation)) {
       pdfSearchInProgress = false;
+      chapterSearchInProgress = false;
       updateChapterSearchPagination();
     }
     if (isReaderGenerationCurrent("search", generation)) fullSearchCancel.hidden = true;
@@ -5400,31 +5603,34 @@ function moveFullSearch(step) {
 function toggleFullSearch() {
   const panel = document.querySelector("#history-panel");
   if (panel.classList.contains("is-open") && !fullSearchView.hidden) {
-    beginReaderNavigation();
-    nextReaderGeneration("search");
-    chapterSearchClient?.cancel();
-    pdfSearchInProgress = false;
-    chapterSearchPage = null;
-    fullSearchCancel.hidden = true;
-    fullSearchRetry.hidden = true;
-    clearFullSearchMarks();
-    updateSearchState({ results: [], index: -1 });
-    renderFullSearchResults();
-    selectPanel(navigationState.tocEntries.length ? "toc" : "bookmarks");
+    closeFullSearchView();
     return;
   }
   setReaderPanelOpen(true);
   selectPanel("full-search");
+  updateFullSearchButton(true);
+  updateFullSearchClear();
   fullSearchInput.focus();
-  runFullSearch();
+  if (searchState.query !== fullSearchInput.value.trim() || !fullSearchComplete) runFullSearch();
 }
 fullSearchButton.addEventListener("click", toggleFullSearch);
+function queueFullSearch() {
+  clearTimeout(fullSearchInputTimer);
+  nextReaderGeneration("search");
+  chapterSearchClient?.cancel();
+  fullSearchComplete = false;
+  fullSearchResultsNode.textContent = "";
+  fullSearchStatus.textContent = fullSearchInput.value.trim() ? "正在搜索正文…" : "输入关键词搜索正文";
+  fullSearchInputTimer = setTimeout(runFullSearch, 180);
+}
 fullSearchInput.addEventListener("input", (event) => {
-  if (!event.isComposing) runFullSearch();
+  updateFullSearchClear();
+  if (!event.isComposing) queueFullSearch();
 });
-fullSearchInput.addEventListener("compositionend", runFullSearch);
+fullSearchInput.addEventListener("compositionend", queueFullSearch);
 fullSearchView.querySelector("#full-search-clear").addEventListener("click", () => {
   fullSearchInput.value = "";
+  updateFullSearchClear();
   runFullSearch();
   fullSearchInput.focus();
 });

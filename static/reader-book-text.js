@@ -37,30 +37,16 @@ export function hitBoxes(page, start, length) {
     .map(s => ({ box: s.box, block: s.block, precision: s.precision || "block" }));
 }
 
-export async function searchBookText(book, query, { current = () => true, yieldTask = () => new Promise(r => setTimeout(r, 0)) } = {}) {
+export async function searchBookText(book, query, { current = () => true, yieldTask = () => new Promise(r => setTimeout(r, 0)), progress = null } = {}) {
   const counts = [], re = pattern(query);
   let total = 0;
   if (!query) return { total: 0, page: () => ({ total: 0, offset: 0, pageSize: 50, results: [] }) };
-  for (let index = 0; index < book.pages.length; index++) {
-    if (!current()) throw new DOMException("Search cancelled", "AbortError");
-    let count = 0;
-    for (const match of book.pages[index].text.matchAll(re)) {
-      count++;
-      if (count % 2048 === 0) {
-        await yieldTask();
-        if (!current()) throw new DOMException("Search cancelled", "AbortError");
-      }
-    }
-    counts.push(count);
-    total += count;
-    if (index % 16 === 0) await yieldTask();
-  }
-  return { total, page(offset = 0, pageSize = 50) {
+  const indexResult = { get total() { return total; }, page(offset = 0, pageSize = 50) {
     offset = Math.max(0, Math.min(Math.max(0, total - 1), Math.floor(offset)));
     offset = Math.floor(offset / pageSize) * pageSize;
     const results = [];
     let passed = 0;
-    for (let index = 0; index < book.pages.length && results.length < pageSize; index++) {
+    for (let index = 0; index < counts.length && results.length < pageSize; index++) {
       if (passed + counts[index] <= offset) { passed += counts[index]; continue; }
       const page = book.pages[index];
       for (const match of page.text.matchAll(re)) {
@@ -75,6 +61,23 @@ export async function searchBookText(book, query, { current = () => true, yieldT
     }
     return { total, offset, pageSize, results };
   } };
+  for (let index = 0; index < book.pages.length; index++) {
+    if (!current()) throw new DOMException("Search cancelled", "AbortError");
+    let count = 0;
+    for (const match of book.pages[index].text.matchAll(re)) {
+      count++;
+      if (count % 2048 === 0) {
+        await yieldTask();
+        if (!current()) throw new DOMException("Search cancelled", "AbortError");
+      }
+    }
+    counts.push(count);
+    total += count;
+    if (progress && (index === 0 || (count && total <= 50) || index % 16 === 15 || index === book.pages.length - 1))
+      await progress(indexResult, index + 1, book.pages.length);
+    if (index % 16 === 0) await yieldTask();
+  }
+  return indexResult;
 }
 
 export function createBookTextCache(load) {

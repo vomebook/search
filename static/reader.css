@@ -186,7 +186,8 @@ body {
 .reader-panel[hidden],
 .reader-panel-view[hidden],
 .panel-search[hidden],
-.panel-item[hidden] {
+.panel-item[hidden],
+#full-search-clear[hidden] {
   display: none;
 }
 .reader-panel > header {
@@ -420,7 +421,8 @@ body {
   background: transparent;
 }
 .full-search-result {
-  display: block;
+  display: grid;
+  grid-template-columns: 2.5em minmax(0, 1fr);
   width: 100%;
   padding: 10px 12px;
   border: 0;
@@ -429,6 +431,12 @@ body {
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+.full-search-rank {
+  grid-row: 1 / span 2;
+  color: #929aa1;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .full-search-result:hover,
 .full-search-result:focus-visible {
