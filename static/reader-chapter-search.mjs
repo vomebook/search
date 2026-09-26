@@ -7,6 +7,10 @@ export function createChapterSearch(configuration) {
   };
   worker.onmessage = ({ data }) => {
     if (!pending || pending.id !== data.id) return;
+    if (data.progress) {
+      pending.progress?.(data);
+      return;
+    }
     const task = pending;
     pending = null;
     if (data.error) task.reject(new Error(data.error));
@@ -19,19 +23,19 @@ export function createChapterSearch(configuration) {
     pending = null;
   };
   worker.postMessage({ type: "init", configuration });
-  function request(type, values) {
+  function request(type, values, progress = null) {
     if (disposed) return Promise.reject(new DOMException("Reader closed", "AbortError"));
     if (failure) return Promise.reject(failure);
     cancelPending();
     return new Promise((resolve, reject) => {
       const id = ++sequence;
-      pending = { id, resolve, reject };
+      pending = { id, resolve, reject, progress };
       worker.postMessage({ type, id, ...values });
     });
   }
   return {
     get failed() { return !!failure; },
-    search: query => request("search", { query }),
+    search: (query, progress) => request("search", { query }, progress),
     page: offset => request("page", { offset, session }),
     cancel() { cancelPending(); session = null; worker.postMessage({ type: "cancel" }); },
     dispose() { disposed = true; cancelPending(); worker.terminate(); }

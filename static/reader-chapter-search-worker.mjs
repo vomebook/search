@@ -75,7 +75,7 @@ export async function scanText(text, query, visit, current = () => true, yieldWo
   if (!current()) throw aborted();
 }
 
-export async function countMatches(chapters, query, current) {
+export async function countMatches(chapters, query, current, progress = null) {
   const counts = [];
   const yieldWork = cooperativeYield();
   let total = 0;
@@ -84,6 +84,9 @@ export async function countMatches(chapters, query, current) {
     await scanText(chapter.text, query, () => { count++; }, current, yieldWork);
     counts.push(count);
     total += count;
+    if (progress && (counts.length === 1 || (count && total <= PAGE_SIZE) ||
+        counts.length % 8 === 0 || counts.length === chapters.length))
+      await progress({ counts, total, scanned: counts.length });
   }
   return { counts, total };
 }
@@ -159,7 +162,13 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function") {
         if (loadController?.signal.aborted) await indexPromise.catch(() => {});
         const book = await loadIndex();
         if (!current()) return;
-        const counts = await countMatches(book, query, current);
+        const counts = await countMatches(book, query, current, async partial => {
+          if (!current()) return;
+          const results = await resultPage(book.slice(0, partial.scanned), query, partial.counts, 0, current);
+          if (current()) self.postMessage({ id: data.id, progress: true,
+            total: partial.total, scanned: partial.scanned, chapters: book.length,
+            offset: 0, pageSize: PAGE_SIZE, results });
+        });
         session = { ...counts, query, id: data.id };
       } else if (data.type === "page") {
         if (!session || data.session !== session.id) throw aborted();

@@ -326,6 +326,7 @@ function normalizeReaderReturnUrl(rawUrl) {
 }
 
 var readerOverlay = null;
+var readerUiState = "base";
 const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html");
 var readerReturnScrollState = null;
 var readerReturnSnapshot = null;
@@ -373,6 +374,7 @@ function restoreReaderReturnScroll() {
 }
 function closeReaderOverlay(restoreFocus, restoreScroll) {
   if (!readerOverlay) return false;
+  readerUiState = "base";
   const returnFocus = readerNavigation.unmount();
   readerOverlay = null;
   if (restoreScroll !== false) {
@@ -402,6 +404,7 @@ function openReaderOverlay(url, addHistory) {
     readerReturnSnapshot = saveSearchViewSnapshot(readerReturnScrollState && readerReturnScrollState.viewKey || getSearchViewKey());
   }
   readerOverlay = readerNavigation.mount(url);
+  readerUiState = "base";
   if (addHistory !== false) readerNavigation.remember(url, readerReturnScrollState);
 }
 
@@ -421,6 +424,7 @@ function handleReaderMessage(event) {
   if (!readerNavigation.accepts(event)) return;
   var message = event.data || {};
   if (message.type === "voice-reader-close") {
+    readerUiState = "base";
     try {
       var readerUrl = new URL(readerOverlay.src, location.origin);
       var returnUrl = readerUrl.searchParams.get("return");
@@ -435,6 +439,10 @@ function handleReaderMessage(event) {
       }
     } catch (_) {}
     history.back();
+    return;
+  }
+  if (message.type === "voice-reader-ui-state") {
+    if (["base", "panel", "full-search"].includes(message.state)) readerUiState = message.state;
     return;
   }
   if (message.type === "voice-reader-theme") {
@@ -6035,6 +6043,17 @@ async function init() {
   setupDownloadIntentWarming();
   window.addEventListener("message", handleReaderMessage);
   window.addEventListener("popstate", function(event) {
+    if (readerOverlay && readerUiState !== "base") {
+      try {
+        if (event.state?.voiceReaderOverlay) {
+          const returnUrl = new URL(readerOverlay.src).searchParams.get("return");
+          if (returnUrl) history.replaceState(null, "", returnUrl);
+        }
+        readerNavigation.remember(new URL(readerOverlay.src), readerReturnScrollState);
+        readerOverlay.contentWindow?.postMessage({ type: "voice-reader-system-back" }, location.origin);
+      } catch (_) {}
+      return;
+    }
     if (readerOverlay || event.state?.voiceReaderOverlay) {
       restoreReaderOverlay(event.state);
       return;

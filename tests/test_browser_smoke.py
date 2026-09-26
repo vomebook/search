@@ -97,6 +97,31 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertFalse(self.page.locator("body").evaluate("el => el.classList.contains('mobile')"))
         self.assertEqual(self.page_errors, [])
 
+    def test_system_back_steps_out_of_reader_search_and_panel(self):
+        self.page.route("https://voiceofml-search.hf.space/api/reader-content**",
+                        lambda route: route.fulfill(content_type="text/plain", body="find-me in the book",
+                                                  headers={"Access-Control-Allow-Origin": "*"}))
+        self.load()
+        url = "/search/static/reader.html?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2FVoiceOfML%2FTest%2Fresolve%2Fmain%2Fback.txt&ext=txt"
+        self.page.evaluate("url => navigateToReader(url)", url)
+        reader = self.page.frame_locator("iframe.reader-overlay")
+        reader.locator(".reader-text").wait_for()
+        reader.locator("#history").click()
+        reader.locator("#full-search-toggle").click()
+        reader.locator("#full-search-input").fill("find-me")
+        reader.locator(".full-search-result").wait_for()
+        self.page.wait_for_function("() => readerUiState === 'full-search'")
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("() => readerUiState === 'panel'")
+        self.assertEqual(self.page.locator("iframe.reader-overlay").count(), 1)
+        self.assertTrue(reader.locator("#full-search-view").is_hidden())
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("() => readerUiState === 'base'")
+        self.assertEqual(self.page.locator("iframe.reader-overlay").count(), 1)
+        self.page.evaluate("history.back()")
+        self.page.locator("iframe.reader-overlay").wait_for(state="detached")
+        self.assertEqual(self.page_errors, [])
+
     def test_global_filters_recover_from_unavailable_api_after_local_metadata_loads(self):
         self.page.unroute("https://voiceofml-search.hf.space/**")
         self.page.route("https://voiceofml-search.hf.space/**", lambda route: route.abort())

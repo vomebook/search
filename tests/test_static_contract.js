@@ -397,9 +397,9 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /new URL\(returnUrl, location\.origin\)/);
   assert.match(reader, /sessionStorage\.removeItem\(returnHistoryKey\)/);
   assert.match(reader, /canReturnWithHistory = !!returnHistoryKey && storedReturnUrl === target\.href/);
-  assert.match(reader, /if \(canReturnWithHistory && history\.length > 1\)[\s\S]*history\.back\(\)/);
+  assert.match(reader, /if \(canReturnWithHistory && history\.length > 2\)[\s\S]*history\.go\(-2\)/);
   assert.match(reader, /returnNeedsReload[\s\S]*location\.replace\(target\.href\)/);
-  assert.match(reader, /canReturnWithHistory && history\.length > 1/);
+  assert.match(reader, /canReturnWithHistory && history\.length > 2/);
   assert.match(reader, /location\.assign\("\/search\/"\)/);
   assert.match(app, /requestId !== randomReaderRequestId \|\| location\.href !== returnUrl/);
   assert.match(app, /rec\.ReaderExtension \|\| rec\.Extension/);

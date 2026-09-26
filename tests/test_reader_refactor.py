@@ -112,7 +112,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#history").click()
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill(query)
-        self.page.wait_for_function("() => /个结果|未找到/.test(document.querySelector('#full-search-status').textContent)")
+        self.page.wait_for_function("() => /^(?:\d+ 个结果|未找到正文匹配)$/.test(document.querySelector('#full-search-status').textContent)")
 
     def test_pdf_page_sources_preserve_version_and_navigate(self):
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3}
@@ -312,6 +312,23 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#full-search-input").fill("手机")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
 
+    def test_pdf_second_query_reuses_extracted_page_text(self):
+        module = support.PDF_MODULE.replace(
+            "getTextContent() { return Promise.resolve",
+            "getTextContent() { window.__pdfTextCalls = (window.__pdfTextCalls || 0) + 1; return Promise.resolve"
+        )
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=module))
+        self.open(self.reader_url("pdf"))
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-input").fill("Accessible")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '30 个结果'")
+        first = self.page.evaluate("window.__pdfTextCalls")
+        self.page.locator("#full-search-input").fill("PDF")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '30 个结果'")
+        self.assertEqual(self.page.evaluate("window.__pdfTextCalls"), first)
+
     def test_pdf_with_unavailable_ocr_index_does_not_fall_back(self):
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
             content_type="text/javascript", body=support.PDF_MODULE))
@@ -479,6 +496,20 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
         return requests, base
 
+    def test_chapter_search_emits_partial_results_before_exact_total(self):
+        self.serve_chapter_search()
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.evaluate("""() => {
+          window.__chapterStatuses = [];
+          new MutationObserver(() => __chapterStatuses.push(document.querySelector('#full-search-status').textContent))
+            .observe(document.querySelector('#full-search-status'), { childList: true, subtree: true });
+        }""")
+        self.page.locator("#full-search-input").fill("needle")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '155 个结果'")
+        self.assertTrue(any("155 个结果（正在搜索" in status for status in
+                            self.page.evaluate("window.__chapterStatuses")))
+
     def test_chapter_search_lazy_complete_pages_and_unloaded_highlight(self):
         requests, base = self.serve_chapter_search()
         self.assertFalse(any('epub-search-index' in url for url in requests))
@@ -494,7 +525,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator('.full-search-result').last.click()
         self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter mark')?.parentElement.textContent === '第154处needle结束'")
         self.page.locator('#history').click()
-        self.page.locator('#full-search-toggle').click()
+        self.assertFalse(self.page.locator('#full-search-view').is_hidden())
         self.page.locator('#full-search-input').fill('独特 词语')
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
         self.page.locator('.full-search-result').click()
@@ -806,16 +837,69 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertIsNone(self.page.evaluate("() => VoiceOfMLReaderStore.get(new URL(location.href).searchParams.get('url'))"))
         peer.close()
 
-    def test_search_reopen_rebuilds_live_targets(self):
+    def test_search_reopen_retains_live_targets(self):
         self.serve("prefix\n" * 500 + "needle" + "\nending" * 500)
         self.open(self.reader_url())
         self.search("needle")
         self.page.locator("#full-search-toggle").click()
-        self.assertEqual(self.page.locator("#content .full-search-highlight").count(), 0)
+        self.assertEqual(self.page.locator("#content .full-search-highlight").count(), 1)
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-results .full-search-result").click()
         self.page.wait_for_function("() => document.querySelector('#viewport').scrollTop > 1000")
         self.assertEqual(self.page.locator("#content .full-search-highlight").text_content(), "needle")
+
+    def test_search_reopen_keeps_results_and_clear_control_state(self):
+        self.serve("begin " + "middle " * 400 + "needle at the end")
+        self.open(self.reader_url())
+        self.page.locator("#history").click()
+        self.assertTrue(self.page.locator("#full-search-clear").is_hidden())
+        self.page.locator("#full-search-toggle").click()
+        self.assertEqual(self.page.locator("#full-search-toggle").text_content(), "关闭全文搜索")
+        self.page.locator("#full-search-input").fill("needle")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.assertEqual(self.page.locator(".full-search-rank").text_content(), "1.")
+        self.assertIn("正文 ", self.page.locator(".full-search-location").text_content())
+        self.assertTrue(self.page.locator("#full-search-clear").is_visible())
+        self.page.locator(".full-search-result").click()
+        self.page.locator("#history").click()
+        self.assertFalse(self.page.locator("#full-search-view").is_hidden())
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "1 个结果")
+        self.page.locator("#full-search-toggle").click()
+        self.assertEqual(self.page.locator("#full-search-toggle").text_content(), "全文搜索")
+        self.page.locator("#full-search-toggle").click()
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "1 个结果")
+        self.page.locator("#full-search-clear").click()
+        self.assertTrue(self.page.locator("#full-search-clear").is_hidden())
+
+    def test_top_level_system_back_steps_out_without_reopen_race(self):
+        self.serve("needle " * 300)
+        url = self.reader_url()
+        self.open(url)
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-input").fill("needle")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '300 个结果'")
+        self.page.locator(".full-search-result").first.click()
+        self.page.locator("#history").click()
+        self.page.wait_for_function("() => !document.querySelector('#full-search-view').hidden")
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("() => document.querySelector('#full-search-view').hidden && document.querySelector('#history-panel').classList.contains('is-open') && history.state.voiceReaderGuard")
+        self.assertEqual(self.page.url, url)
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open') && history.state.voiceReaderGuard")
+        self.assertEqual(self.page.url, url)
+
+    def test_text_search_publishes_partial_results_before_full_scan(self):
+        self.page.add_init_script("""const native = window.setTimeout.bind(window);
+          window.setTimeout = (fn, ms, ...args) => native(fn, ms === 0 ? 20 : ms, ...args);""")
+        self.serve("needle " + "x" * 600000 + " needle")
+        self.open(self.reader_url())
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-input").fill("needle")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('正在搜索') && document.querySelectorAll('.full-search-result').length === 1")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '2 个结果'")
+        self.assertEqual(self.page.locator(".full-search-rank").all_text_contents(), ["1.", "2."])
 
     def test_search_scans_beyond_20000_nodes_and_cancels_old_query(self):
         self.serve("<main>" + "<span>ordinary </span>" * 21000 + "<p>unique-tail</p></main>", "text/html")
@@ -829,15 +913,20 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
         self.assertEqual(self.page.frame_locator(".html-frame").locator(".full-search-highlight").all_text_contents(), ["unique-tail"])
 
-    def test_search_retains_matches_across_character_batches_and_result_cap(self):
+    def test_search_retains_matches_across_character_batches_and_pages_all_results(self):
         text = "x" * 65533 + "boundary-needle" + " y" * 100
         self.serve(text)
         self.open(self.reader_url())
         self.search("boundary-needle")
         self.assertEqual(self.page.locator(".full-search-result").count(), 1)
         self.page.locator("#full-search-input").fill("x")
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '100+ 个结果'")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '65533 个结果'")
         self.assertEqual(self.page.locator("#content mark").count(), 100)
+        self.page.locator("#full-search-page").fill("3")
+        self.page.locator("#full-search-page").press("Enter")
+        self.page.wait_for_function("() => document.querySelector('#full-search-page').value === '3' && document.querySelector('.full-search-rank')?.textContent === '101.'")
+        self.page.locator(".full-search-result").first.click()
+        self.assertEqual(self.page.locator("#content mark.full-search-highlight").all_text_contents(), ["x"])
 
     def test_html_preserves_css_prose_and_tracks_progress_and_headings(self):
         html = "<p>Examples: url(icon.png) and @import theme.css;</p>" + "".join(
@@ -1052,11 +1141,11 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator(".full-search-result").first.click()
         self.assertEqual(self.page.locator("#accent .full-search-highlight").text_content(), "caf\u00e9")
         self.page.locator("#history").click()
-        self.page.locator("#full-search-toggle").click()
+        self.assertFalse(self.page.locator("#full-search-view").is_hidden())
         self.page.locator(".full-search-result").nth(1).click()
         self.assertEqual(self.page.locator("#plain .full-search-highlight").text_content(), "cafe")
         self.page.locator("#history").click()
-        self.page.locator("#full-search-toggle").click()
+        self.assertFalse(self.page.locator("#full-search-view").is_hidden())
         self.page.locator("#full-search-input").fill("international")
         self.page.locator(".full-search-result").click()
         self.page.locator("#inline .full-search-highlight").first.wait_for()
