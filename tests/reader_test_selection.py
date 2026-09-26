@@ -35,6 +35,8 @@ CATEGORY_METHODS = {
         "test_cold_cache_first_read_with_real_format_engines",
     ),
     "conversions": (
+        "test_pdf_pages_stalled_early_manifest_uses_proxy",
+        "test_pdf_pages_progressive_prefetch_yields_to_jump",
         "test_converted_pdf_pages_reject_invalid_manifest_and_missing_first_page",
         "test_converted_pdf_pages_report_error_when_later_page_is_missing",
         "test_converted_pdf_pages_fit_wide_images_without_overlap",

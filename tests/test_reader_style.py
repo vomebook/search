@@ -74,6 +74,47 @@ class ReaderStyleTests(unittest.TestCase):
         }""")
         self.assertGreaterEqual(result["ratio"], 4.5, (selector, result))
 
+    def test_search_result_uses_full_width_five_line_excerpt(self):
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-input").fill("Reader")
+        row = self.page.locator(".full-search-result").first
+        row.wait_for()
+        page_input = self.page.locator("#full-search-page")
+        page_input.wait_for()
+        before = page_input.bounding_box()
+        self.assertEqual(page_input.evaluate("e => getComputedStyle(e).borderTopColor"), "rgba(0, 0, 0, 0)")
+        page_input.click()
+        self.assertEqual(page_input.evaluate("e => getComputedStyle(e).outlineStyle"), "solid")
+        self.assertEqual(page_input.bounding_box()["width"], before["width"])
+        page_input.press("Tab")
+        self.assertEqual(page_input.evaluate("e => getComputedStyle(e).outlineStyle"), "none")
+        for width in (1440, 390, 320):
+            self.page.set_viewport_size({"width": width, "height": 900})
+            for rank in ("1.", "123456."):
+                with self.subTest(width=width, rank=rank):
+                    metrics = row.evaluate("""(row, rank) => {
+                      const number = row.querySelector('.full-search-rank');
+                      const location = row.querySelector('.full-search-location');
+                      const snippet = row.querySelector('.full-search-snippet');
+                      number.textContent = rank;
+                      location.textContent = 'Chapter location '.repeat(12);
+                      snippet.textContent = 'Reader excerpt '.repeat(100);
+                      const n = number.getBoundingClientRect(), l = location.getBoundingClientRect();
+                      const s = snippet.getBoundingClientRect(), r = row.getBoundingClientRect();
+                      return {gap: l.left - n.right, indent: s.left - n.left,
+                        right: s.right - l.right, below: s.top >= l.bottom,
+                        lines: s.height / parseFloat(getComputedStyle(snippet).lineHeight),
+                        overflow: row.scrollWidth > row.clientWidth,
+                        fits: r.right <= innerWidth};
+                    }""", rank)
+                    self.assertAlmostEqual(metrics["gap"], 4, delta=1)
+                    self.assertAlmostEqual(metrics["indent"], 0, delta=1)
+                    self.assertAlmostEqual(metrics["right"], 0, delta=1)
+                    self.assertAlmostEqual(metrics["lines"], 5, delta=0.1)
+                    self.assertTrue(metrics["below"] and metrics["fits"], metrics)
+                    self.assertFalse(metrics["overflow"], metrics)
+
     def test_light_contrast_after_theme_transition(self):
         self.page.locator("#history").click()
         self.page.locator("#theme-toggle").click()
