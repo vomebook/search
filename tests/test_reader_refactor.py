@@ -329,6 +329,77 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '30 个结果'")
         self.assertEqual(self.page.evaluate("window.__pdfTextCalls"), first)
 
+    def test_pdf_search_reextracts_evicted_pages_and_cancels_stale_load(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nwindow.__dropPdfSearchCache = () => { pdfSearchTextCache.clear(); pdfSearchTextCacheBytes = 0; };\n")
+        self.page.route("**/static/reader.js?*", instrument)
+        module = support.PDF_MODULE.replace("numPages: 30", "numPages: 3").replace(
+            "getPage: () => Promise.resolve(page)", """getPage: (number) => Promise.resolve({ ...page,
+              getTextContent() {
+                window.__pdfTextCalls = (window.__pdfTextCalls || 0) + 1;
+                if (number === 1 && window.__holdPdfPage) {
+                  window.__holdPdfPage = false;
+                  return new Promise(resolve => { window.__releasePdfPage = () => resolve({ items: [{ str: 'needle '.repeat(60), hasEOL: false }] }); });
+                }
+                return Promise.resolve({ items: [{ str: 'needle '.repeat(60), hasEOL: false }] });
+              } })""")
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=module))
+        self.open(self.reader_url("pdf"))
+        self.search("needle")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "180 个结果")
+        self.page.evaluate("window.__dropPdfSearchCache()")
+        calls = self.page.evaluate("window.__pdfTextCalls")
+        self.page.locator("#full-search-page-next").click()
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '51.'")
+        self.assertGreater(self.page.evaluate("window.__pdfTextCalls"), calls)
+        self.page.locator("#full-search-page").fill("4")
+        self.page.locator("#full-search-page").dispatch_event("change")
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '151.'")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 30)
+        self.page.evaluate("() => { window.__dropPdfSearchCache(); window.__holdPdfPage = true; }")
+        self.page.locator("#full-search-page").fill("2")
+        self.page.locator("#full-search-page").dispatch_event("change")
+        self.page.wait_for_function("() => !!window.__releasePdfPage && document.querySelector('#full-search-status').textContent === '正在加载搜索结果…'")
+        self.page.locator("#full-search-cancel").click()
+        self.page.evaluate("window.__releasePdfPage()")
+        self.page.wait_for_timeout(100)
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "搜索已取消")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 0)
+
+    def test_foliate_dense_search_is_paged_and_cancelable(self):
+        with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(3))) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        for number in (1, 2, 3):
+            files[f'OEBPS/chapter-{number}.xhtml'] = (
+                '<html xmlns="http://www.w3.org/1999/xhtml"><body>' +
+                ''.join(f'<p>needle {number}-{hit}</p>' for hit in range(70)) +
+                '</body></html>'
+            ).encode()
+        self.serve(support.zip_bytes(files), "application/epub+zip")
+        self.open(self.reader_url("epub"))
+        self.search("needle")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "210 个结果")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 50)
+        self.page.locator("#full-search-page").fill("3")
+        self.page.locator("#full-search-page").dispatch_event("change")
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '101.'")
+        self.assertIn("needle 2-30", self.page.locator(".full-search-result").first.text_content())
+        self.page.locator("#full-search-input").fill("missing")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
+        self.page.evaluate("""() => {
+          for (const section of document.querySelector('foliate-view').book.sections) if (section.createDocument) {
+            const original = section.createDocument.bind(section);
+            section.createDocument = async () => { await new Promise(resolve => setTimeout(resolve, 200)); return original(); };
+          }
+        }""")
+        self.page.locator("#full-search-input").fill("needle")
+        self.page.locator("#full-search-cancel").click()
+        self.page.wait_for_timeout(700)
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "搜索已取消")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 0)
+
     def test_pdf_with_unavailable_ocr_index_does_not_fall_back(self):
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
             content_type="text/javascript", body=support.PDF_MODULE))
