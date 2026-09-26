@@ -639,6 +639,104 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(result["subtrees"], ["child"])
         self.assertEqual(self.page_errors, [])
 
+    def test_repository_directory_navigation_keeps_path_filters(self):
+        self.load("#/VOMEBOOK?folder_self=docs&folder_subtree=archive%2F2026")
+        self.page.wait_for_function("() => STATE.mode === 'repo' && STATE.filterFolderSelfs.includes('docs')")
+        for path in ("docs/nested", "docs", ""):
+            self.page.evaluate("path => ROUTER.navigate('repo', STATE.repo, path)", path)
+            self.page.wait_for_function("path => STATE.browserPath === path", arg=path)
+            params = self.page.evaluate("() => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1]))")
+            self.assertEqual(params.get("path", ""), path)
+            self.assertEqual(params.get("folder_self"), "docs")
+            self.assertEqual(params.get("folder_subtree"), "archive/2026")
+            self.assertEqual(self.page.evaluate("STATE.filterFolderSelfs"), ["docs"])
+            self.assertEqual(self.page.evaluate("STATE.filterFolderSubtrees"), ["archive/2026"])
+        self.page.evaluate("ROUTER.navigate('repo', 'MLMRL-Hub', '')")
+        self.page.wait_for_function("() => STATE.repo === 'MLMRL-Hub'")
+        self.assertEqual(self.page.evaluate("STATE.filterFolderSelfs"), [])
+        self.assertNotIn("folder_self=", self.page.evaluate("location.hash"))
+        self.assertEqual(self.page_errors, [])
+
+    def test_large_directory_navigation_keeps_search_and_filter_tree(self):
+        self.load("#/VOMEBOOK?filters=1")
+        self.page.wait_for_function("() => STATE.mode === 'repo' && STATE.dataLoaded && !!STATE.folderTree", timeout=30000)
+        self.page.locator("#filter-ext-list input").first.wait_for(state="attached")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("""() => {
+            const tree = Array.from({length: 600}, (_, i) => ({
+                name: `folder-${i}`, path: `folder-${i}`, count: 1,
+                hasDirectFiles: true, hasChildren: false, children: []
+            }));
+            STATE.folderTree = tree;
+            folderTreeCache.set(STATE.repoFull, tree);
+            renderFilterFolderTree();
+            window.__originalFilterRow = DOM.filterFolderTree.firstElementChild;
+            window.__filterRuns = 0;
+            window.__searchRuns = 0;
+            const render = renderFilters, search = searchWithInitialFallback;
+            renderFilters = (...args) => { window.__filterRuns++; return render(...args); };
+            searchWithInitialFallback = (...args) => { window.__searchRuns++; return search(...args); };
+            ROUTER.navigate('repo', STATE.repo, 'folder-300');
+        }""")
+        self.page.wait_for_function("() => STATE.browserPath === 'folder-300'")
+        self.assertTrue(self.page.evaluate("window.__originalFilterRow.isConnected"))
+        self.assertEqual(self.page.evaluate("[window.__searchRuns, window.__filterRuns]"), [0, 0])
+        self.page.evaluate("""() => {
+            const params = new URLSearchParams(location.hash.split('?')[1]);
+            params.set('q', 'different query');
+            location.hash = '#/VOMEBOOK?' + params;
+            ROUTER.apply();
+        }""")
+        self.assertFalse(self.page.evaluate("window.__originalFilterRow.isConnected"))
+        self.assertGreater(self.page.evaluate("window.__searchRuns"), 0)
+        self.assertGreater(self.page.evaluate("window.__filterRuns"), 0)
+        self.assertEqual(self.page_errors, [])
+
+    def test_large_browser_listing_keeps_all_rows_and_folder_navigation(self):
+        self.load("#/VOMEBOOK")
+        listing = self.page.evaluate("""() => {
+            const list = document.createElement('div');
+            list.className = 'browser-list';
+            DOM.sidebarContent.appendChild(list);
+            renderBrowserListItems(list, {
+                folders: [{name:'nested', path:'nested', count:1000}],
+                files: Array.from({length:1000}, (_, i) => ({
+                    name:`file-${i}.txt`, ext:'txt', size:100, hasTxt:true
+                }))
+            }, STATE.repoFull, '');
+            const result = {
+                count: list.children.length,
+                first: list.children[1]?.querySelector('.browser-name')?.textContent,
+                last: list.lastElementChild?.querySelector('.browser-name')?.textContent
+            };
+            list.firstElementChild.click();
+            return result;
+        }""")
+        self.assertEqual(listing, {"count": 1001, "first": "file-0.txt", "last": "file-999.txt"})
+        self.page.wait_for_function("() => STATE.browserPath === 'nested'")
+        self.assertEqual(self.page_errors, [])
+
+    def test_deselected_self_files_button_has_neutral_hover_border(self):
+        self.load("#/VOMEBOOK?filters=1")
+        self.page.wait_for_function("() => STATE.mode === 'repo'")
+        self.page.evaluate("""() => {
+            STATE.folderTree = [{name:'根', path:'', count:2, isRoot:true,
+                showSelfToggle:true, hasDirectFiles:true, hasChildren:true,
+                children:[{name:'docs', path:'docs', count:1, hasDirectFiles:true, hasChildren:false, children:[]}]}];
+            STATE.folderTreeCollapsed = {};
+            renderFilterFolderTree();
+        }""")
+        button = self.page.locator("#filter-folder-tree .folder-self-toggle")
+        button.click()
+        self.assertEqual(button.get_attribute("aria-pressed"), "true")
+        self.page.wait_for_timeout(220)
+        selected_border = button.evaluate("node => getComputedStyle(node).borderTopColor")
+        button.click()
+        self.assertEqual(button.get_attribute("aria-pressed"), "false")
+        self.page.wait_for_function("selected => getComputedStyle(document.querySelector('#filter-folder-tree .folder-self-toggle')).borderTopColor !== selected", arg=selected_border)
+        self.assertFalse(button.evaluate("node => node.classList.contains('active')"))
+        self.assertEqual(self.page_errors, [])
+
     def test_section_filter_cancel_buttons_follow_selected_state(self):
         self.load()
         self.page.locator("#settings-btn").click()
