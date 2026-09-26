@@ -428,6 +428,7 @@ let chapterSearchConfiguration = null;
 let chapterSearchModulePromise = null;
 let chapterSearchClient = null;
 let chapterSearchPage = null;
+let failedSearchPage = null;
 let chapterSearchInProgress = false;
 let fullSearchComplete = false;
 trackReaderResource(() => {
@@ -4857,7 +4858,15 @@ fullSearchRetry.className = "text-action";
 fullSearchRetry.textContent = "重试搜索";
 fullSearchRetry.hidden = true;
 fullSearchCancel.after(fullSearchRetry);
-fullSearchRetry.addEventListener("click", runFullSearch);
+fullSearchRetry.addEventListener("click", async () => {
+  const failed = failedSearchPage;
+  if (!failed || searchState.query !== failed.query) return runFullSearch();
+  if (chapterSearchClient?.failed) {
+    await runFullSearch();
+    if (!fullSearchComplete || searchState.query !== failed.query) return;
+  }
+  return loadChapterSearchPage(failed.offset, failed.selectLast);
+});
 fullSearchCancel.addEventListener("click", () => {
   nextReaderGeneration("search");
   beginReaderNavigation();
@@ -4865,12 +4874,14 @@ fullSearchCancel.addEventListener("click", () => {
   pdfSearchInProgress = false;
   chapterSearchInProgress = false;
   chapterSearchPage = null;
+  failedSearchPage = null;
   pdfSearchPageLoader = null;
   fullSearchComplete = false;
   updateSearchState({ results: [], index: -1 });
   renderFullSearchResults();
   fullSearchCancel.hidden = true;
   fullSearchRetry.hidden = false;
+  fullSearchRetry.textContent = "重试搜索";
   fullSearchStatus.textContent = "搜索已取消";
 });
 chapterSearchPagination
@@ -4989,6 +5000,7 @@ function updateChapterSearchPagination() {
 async function loadChapterSearchPage(offset, selectLast = null) {
   if (pdfSearchInProgress || chapterSearchInProgress || !chapterSearchPage ||
       (!chapterSearchClient && !pdfSearchPageLoader)) return;
+  failedSearchPage = null;
   const generation = nextReaderGeneration("search");
   beginReaderNavigation();
   fullSearchCancel.hidden = false;
@@ -5008,6 +5020,8 @@ async function loadChapterSearchPage(offset, selectLast = null) {
   } catch (error) {
     if (isReaderGenerationCurrent("search", generation)) {
       fullSearchStatus.textContent = error.message || "搜索结果加载失败";
+      failedSearchPage = { offset, selectLast, query: searchState.query };
+      fullSearchRetry.textContent = "重试本页";
       fullSearchRetry.hidden = false;
     }
   } finally {
@@ -5161,7 +5175,8 @@ function fullSearchLocation(node, fallback, offset, total) {
   }
   return `正文 ${Math.min(100, Math.floor(offset / Math.max(1, total) * 100))}%`;
 }
-async function fullSearchDomMatches(root, fallback, query, generation, progressive = false, occurrence = null) {
+async function fullSearchDomMatches(root, fallback, query, generation, progressive = false,
+                                    occurrence = null, navigationGeneration = readerRuntime.currentGeneration("navigation")) {
   root = foliateSectionRoot(root);
   const nodes = await fullSearchTextNodes(root, generation);
   if (!nodes || !isReaderGenerationCurrent("search", generation)) return [];
@@ -5178,7 +5193,6 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
     }
   }
   const text = chunks.join(""), groups = [], firstHits = [];
-  const navigationGeneration = readerRuntime.currentGeneration("navigation");
   const patternText = fullSearchEscape(query);
   let nextStart = 0, total = 0;
   const locateIndex = (index) => {
@@ -5210,6 +5224,7 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
       location: fullSearchLocation(part.node, fallback, match.index, text.length),
       snippet: fullSearchSnippet(text, match.index, match.value.length),
       async activate(navigationGeneration = readerRuntime.currentGeneration("navigation")) {
+        if (!isReaderGenerationCurrent("navigation", navigationGeneration)) return false;
         const searchGeneration = readerRuntime.currentGeneration("search");
         clearFullSearchMarks();
         const currentNodes = await fullSearchTextNodes(root, searchGeneration);
@@ -5271,9 +5286,10 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
     chapterSearchPage = page(0);
   }
   if (occurrence !== null) {
+    if (!isReaderGenerationCurrent("navigation", navigationGeneration)) return [];
     const matchedPage = page(occurrence);
     const result = matchedPage.results[occurrence - matchedPage.offset];
-    if (!result || !await result.activate()) return [];
+    if (!result || !await result.activate(navigationGeneration)) return [];
     return [{ target: fullSearchActiveMarks[0] }];
   }
   const fallbackResults = progressive ? null : firstHits.map(resultFor);
@@ -5317,7 +5333,8 @@ async function navigateFoliateSearchResult(result, generation) {
       searchState.query,
       readerRuntime.currentGeneration("search"),
       false,
-      result.occurrence || 0
+      result.occurrence || 0,
+      generation
     );
     target = matches[0]?.target;
   }
@@ -5540,6 +5557,7 @@ async function runFullSearch() {
   fullSearchInputTimer = 0;
   const query = fullSearchInput.value.trim();
   fullSearchComplete = false;
+  failedSearchPage = null;
   const generation = nextReaderGeneration("search");
   beginReaderNavigation();
   clearFullSearchMarks();
@@ -5550,6 +5568,7 @@ async function runFullSearch() {
   pdfSearchInProgress = ["pdf", "pdf-pages", "foliate"].includes(capability.mode) && !!query;
   chapterSearchInProgress = capability.mode === "epub-chapters" && !!query;
   fullSearchRetry.hidden = true;
+  fullSearchRetry.textContent = "重试搜索";
   fullSearchCancel.hidden = !["epub-chapters", "pdf", "pdf-pages", "foliate"].includes(capability.mode) || !query;
   fullSearchResultsNode.textContent = "";
   fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => {
@@ -5653,8 +5672,13 @@ async function activateFullSearchResult(index, closePanel = true) {
       setReaderPanelOpen(false, true);
     else if (!closePanel) fullSearchResultsNode.children[index]?.scrollIntoView({ block: "nearest" });
   } catch (error) {
-    if (capability.mode === "epub-chapters" && isReaderGenerationCurrent("navigation", generation))
-      fullSearchStatus.textContent = error.message || "搜索结果定位失败";
+    if (error?.name !== "AbortError" && isReaderGenerationCurrent("navigation", generation) &&
+        isReaderGenerationCurrent("search", searchGeneration) && searchState.results[index] === result) {
+      updateSearchState({ index: previousIndex });
+      fullSearchStatus.textContent = capability.mode === "epub-chapters"
+        ? error.message || "搜索结果定位失败，请重试"
+        : "搜索结果定位失败，请重试";
+    }
     reportNavigationError(error, generation);
   }
 }
@@ -5694,6 +5718,7 @@ function toggleFullSearch() {
   updateFullSearchClear();
   fullSearchInput.focus();
   if (searchState.query !== fullSearchInput.value.trim() || !fullSearchComplete) runFullSearch();
+  else if (failedSearchPage) fullSearchRetry.hidden = false;
 }
 fullSearchButton.addEventListener("click", toggleFullSearch);
 function queueFullSearch() {
@@ -5705,6 +5730,7 @@ function queueFullSearch() {
   pdfSearchInProgress = false;
   chapterSearchInProgress = false;
   chapterSearchPage = null;
+  failedSearchPage = null;
   pdfSearchPageLoader = null;
   updateSearchState({ results: [], index: -1 });
   renderFullSearchResults();
