@@ -965,6 +965,7 @@ function filterPanel(view) {
   }
 }
 let panelAnimationTimer = 0;
+let readerPanelInteractionSerial = 0;
 let readerUiHistoryState = "base";
 if (window.parent === window) {
   history.replaceState({ ...history.state, voiceReaderBase: true }, "", location.href);
@@ -993,6 +994,7 @@ function setReaderPanelOpen(open, restoreFocus = false) {
   clearTimeout(panelAnimationTimer);
   document.querySelector("#history").setAttribute("aria-expanded", String(open));
   if (open) {
+    readerPanelInteractionSerial++;
     panel.hidden = false;
     void panel.offsetWidth;
     panel.classList.add("is-open");
@@ -4883,9 +4885,20 @@ chapterSearchPagination
   );
 chapterSearchPagination.querySelector("#full-search-page").addEventListener("change", (event) => {
   if (!chapterSearchPage || !Number.isFinite(event.target.valueAsNumber)) return;
-  loadChapterSearchPage((event.target.valueAsNumber - 1) * chapterSearchPage.pageSize);
+  const page = Math.max(1, Math.min(
+    Math.ceil(chapterSearchPage.total / chapterSearchPage.pageSize),
+    Math.floor(event.target.valueAsNumber)
+  ));
+  const offset = (page - 1) * chapterSearchPage.pageSize;
+  if (offset !== chapterSearchPage.offset) loadChapterSearchPage(offset);
 });
 // Full-text search: format matching, result presentation, and navigation.
+function fullSearchPageOffset(total, requestedOffset, pageSize = 50) {
+  return Math.max(0, Math.min(
+    Math.floor(Math.max(0, total - 1) / pageSize),
+    Math.floor(requestedOffset / pageSize)
+  )) * pageSize;
+}
 function chapterSearchModule() {
   if (!chapterSearchModulePromise)
     chapterSearchModulePromise = import("/search/static/reader-chapter-search.mjs").catch(
@@ -5186,7 +5199,7 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
   const matchesIn = function* (group) {
     const re = new RegExp(patternText, "giu");
     re.lastIndex = group.skip;
-    for (const match of group.text.matchAll(re)) {
+    for (const match of text.slice(group.start, group.end).matchAll(re)) {
       if (match.index >= 65536) break;
       yield { index: group.start + match.index, value: match[0] };
     }
@@ -5218,8 +5231,7 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
   };
   const page = (requestedOffset) => {
     const pageSize = 50, results = [];
-    const offset = Math.max(0, Math.min(Math.floor(Math.max(0, total - 1) / pageSize) * pageSize,
-      Math.floor(requestedOffset / pageSize) * pageSize));
+    const offset = fullSearchPageOffset(total, requestedOffset, pageSize);
     let passed = 0;
     for (const group of groups) {
       if (passed + group.count <= offset) { passed += group.count; continue; }
@@ -5233,7 +5245,7 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
     return { total, offset, pageSize, results };
   };
   for (let start = 0; start < text.length; start += 65536) {
-    const group = { start, text: text.slice(start, start + 65536 + query.length - 1),
+    const group = { start, end: start + 65536 + query.length - 1,
       skip: Math.max(0, nextStart - start), count: 0 };
     for (const match of matchesIn(group)) {
       group.count++;
@@ -5368,7 +5380,7 @@ function makePdfSearchPageLoader(groups, total, pattern, firstPage) {
   const pdf = pdfDocument;
   return async (requestedOffset, generation = readerRuntime.currentGeneration("search")) => {
     const pageSize = 50, results = [];
-    const offset = Math.max(0, Math.min(Math.floor(Math.max(0, total - 1) / pageSize) * pageSize, requestedOffset));
+    const offset = fullSearchPageOffset(total, requestedOffset, pageSize);
     if (!offset) return { total, offset, pageSize, results: firstPage.slice() };
     let skipped = 0;
     for (const group of groups) {
@@ -5377,7 +5389,13 @@ function makePdfSearchPageLoader(groups, total, pattern, firstPage) {
         continue;
       }
       const text = await loadPdfSearchText(pdf, group.page, generation);
+      let examined = 0;
       for (const match of text.matchAll(pattern)) {
+        if (++examined % 2048 === 0) {
+          await waitForReader();
+          if (!isReaderGenerationCurrent("search", generation))
+            throw new DOMException("Search cancelled", "AbortError");
+        }
         if (skipped++ < offset) continue;
         results.push({
           location: `第 ${group.page} 页`,
@@ -5385,11 +5403,6 @@ function makePdfSearchPageLoader(groups, total, pattern, firstPage) {
           activate: (navigationGeneration) => goToPage(group.page, navigationGeneration)
         });
         if (results.length === pageSize) break;
-        if (skipped % 2048 === 0) {
-          await waitForReader();
-          if (!isReaderGenerationCurrent("search", generation))
-            throw new DOMException("Search cancelled", "AbortError");
-        }
       }
       if (results.length === pageSize) break;
     }
@@ -5609,6 +5622,8 @@ async function runFullSearch() {
 async function activateFullSearchResult(index, closePanel = true) {
   const result = searchState.results[index];
   if (!result) return;
+  const panelSerial = readerPanelInteractionSerial;
+  const searchGeneration = readerRuntime.currentGeneration("search");
   const generation = beginReaderNavigation();
   updateSearchState({ index });
   try {
@@ -5621,8 +5636,10 @@ async function activateFullSearchResult(index, closePanel = true) {
       searchState.results[index] !== result
     )
       return;
-    if (closePanel) setReaderPanelOpen(false, true);
-    else fullSearchResultsNode.children[index]?.scrollIntoView({ block: "nearest" });
+    if (closePanel && panelSerial === readerPanelInteractionSerial &&
+        isReaderGenerationCurrent("search", searchGeneration))
+      setReaderPanelOpen(false, true);
+    else if (!closePanel) fullSearchResultsNode.children[index]?.scrollIntoView({ block: "nearest" });
   } catch (error) {
     if (capability.mode === "epub-chapters" && isReaderGenerationCurrent("navigation", generation))
       fullSearchStatus.textContent = error.message || "搜索结果定位失败";
@@ -5670,9 +5687,17 @@ fullSearchButton.addEventListener("click", toggleFullSearch);
 function queueFullSearch() {
   clearTimeout(fullSearchInputTimer);
   nextReaderGeneration("search");
+  beginReaderNavigation();
   chapterSearchClient?.cancel();
   fullSearchComplete = false;
-  fullSearchResultsNode.textContent = "";
+  pdfSearchInProgress = false;
+  chapterSearchInProgress = false;
+  chapterSearchPage = null;
+  pdfSearchPageLoader = null;
+  updateSearchState({ results: [], index: -1 });
+  renderFullSearchResults();
+  fullSearchCancel.hidden = true;
+  fullSearchRetry.hidden = true;
   fullSearchStatus.textContent = fullSearchInput.value.trim() ? "正在搜索正文…" : "输入关键词搜索正文";
   fullSearchInputTimer = setTimeout(runFullSearch, 180);
 }
@@ -5680,6 +5705,7 @@ fullSearchInput.addEventListener("input", (event) => {
   updateFullSearchClear();
   if (!event.isComposing) queueFullSearch();
 });
+fullSearchInput.addEventListener("focus", () => { readerPanelInteractionSerial++; });
 fullSearchInput.addEventListener("compositionend", queueFullSearch);
 fullSearchView.querySelector("#full-search-clear").addEventListener("click", () => {
   fullSearchInput.value = "";

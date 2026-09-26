@@ -383,8 +383,60 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#full-search-page").fill("4")
         self.page.locator("#full-search-page").dispatch_event("change")
         self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '151.'")
-        self.page.locator(".full-search-result").first.dispatch_event("click")
+        self.page.locator(".full-search-result").first.click()
         self.page.wait_for_function("() => document.querySelector('#page-number').value === '3'")
+
+    def test_pdf_deep_result_page_can_cancel_while_skipping_hits(self):
+        def instrument(route):
+            response = route.fetch()
+            script = response.text().replace(
+                "function waitForReader(delay = 0, animationFrame = false) {",
+                """function waitForReader(delay = 0, animationFrame = false) {
+                  if (window.__holdSearchPage && delay === 0 && !animationFrame) {
+                    window.__holdSearchPage = false;
+                    return new Promise(resolve => { window.__releaseSearchPage = resolve; });
+                  }"""
+            )
+            route.fulfill(response=response, body=script)
+        self.page.route("**/static/reader.js?*", instrument)
+        module = support.PDF_MODULE.replace("numPages: 30", "numPages: 2").replace(
+            "getPage: () => Promise.resolve(page)", """getPage: () => Promise.resolve({ ...page,
+              getTextContent() { return Promise.resolve({ items: [{ str: 'needle '.repeat(6000), hasEOL: false }] }); } })""")
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=module))
+        self.open(self.reader_url("pdf"))
+        self.search("needle")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "12000 个结果")
+        self.page.evaluate("window.__holdSearchPage = true")
+        self.page.locator("#full-search-page").fill("200")
+        self.page.locator("#full-search-page").dispatch_event("change")
+        self.page.wait_for_function("() => !!window.__releaseSearchPage && document.querySelector('#full-search-status').textContent === '正在加载搜索结果…'")
+        self.page.locator("#full-search-cancel").click()
+        self.page.evaluate("window.__releaseSearchPage()")
+        self.page.wait_for_timeout(100)
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "搜索已取消")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 0)
+
+    def test_pending_foliate_result_does_not_close_reopened_search(self):
+        self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
+        self.open(self.reader_url("epub"))
+        self.search("正文")
+        self.page.evaluate("""() => {
+          const view = document.querySelector('foliate-view');
+          const original = view.resolveNavigation.bind(view);
+          view.resolveNavigation = cfi => new Promise(resolve => {
+            window.__releaseSearchNavigation = () => resolve(original(cfi));
+          });
+        }""")
+        self.page.locator(".full-search-result").first.click()
+        self.page.wait_for_function("() => !!window.__releaseSearchNavigation")
+        self.page.locator("#history").click()
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-input").focus()
+        self.page.evaluate("window.__releaseSearchNavigation()")
+        self.page.locator(".foliate-continuous mark.full-search-highlight").first.wait_for()
+        self.assertTrue(self.page.locator("#full-search-input").is_visible())
+        self.assertTrue(self.page.locator("#history-panel").evaluate("node => node.classList.contains('is-open')"))
 
     def test_foliate_many_hits_paginate_and_cancel(self):
         with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(3))) as archive:
@@ -405,8 +457,9 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-page').value === '3' && document.querySelector('.full-search-result .full-search-rank')?.textContent === '101.'")
         self.assertIn("needle 2-30", self.page.locator(".full-search-result").first.text_content())
         self.page.locator(".full-search-result").first.click()
-        if not self.page.locator("#full-search-input").is_visible():
-            self.page.locator("#history").click()
+        self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
+        self.page.locator("#history").click()
+        self.page.wait_for_function("() => document.querySelector('#history-panel').classList.contains('is-open') && !document.querySelector('#full-search-view').hidden")
         self.assertEqual(self.page.locator("#full-search-page").input_value(), "3")
         self.page.locator("#full-search-input").fill("missing")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
@@ -996,6 +1049,18 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('正在搜索') && document.querySelectorAll('.full-search-result').length === 1")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '2 个结果'")
         self.assertEqual(self.page.locator(".full-search-rank").all_text_contents(), ["1.", "2."])
+
+    def test_typing_new_full_search_disables_old_navigation_immediately(self):
+        self.serve("oldword " * 65 + "freshword")
+        self.open(self.reader_url())
+        self.search("oldword")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "65 个结果")
+        self.assertTrue(self.page.locator(".full-search-pagination").is_visible())
+        self.page.locator("#full-search-input").fill("freshword")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 0)
+        self.assertTrue(self.page.locator(".full-search-pagination").is_hidden())
+        self.assertTrue(self.page.locator("#full-search-next").is_disabled())
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
 
     def test_search_scans_beyond_20000_nodes_and_cancels_old_query(self):
         self.serve("<main>" + "<span>ordinary </span>" * 21000 + "<p>unique-tail</p></main>", "text/html")
