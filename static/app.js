@@ -473,12 +473,23 @@ function handleReaderMessage(event) {
 }
 
 function navigateToReader(rawUrl, returnUrl) {
-  returnUrl = normalizeReaderReturnUrl(returnUrl || location.href);
-  var url;
-  try { url = readerNavigation.prepare(syncReaderFolderFilter(rawUrl), returnUrl); }
+  var target;
+  try { target = readerNavigation.parse(syncReaderFolderFilter(rawUrl)); }
   catch (_) { return false; }
-  if (STATE.isMobile) { STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false; updateSidebarVisibility(); }
-  openReaderOverlay(url);
+  if (sidebarBackGuardRelease) return false;
+  function open() {
+    var url = readerNavigation.prepare(target.href, normalizeReaderReturnUrl(returnUrl || location.href));
+    openReaderOverlay(url);
+  }
+  if (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) {
+    STATE.leftSidebarOpen = false;
+    STATE.rightSidebarOpen = false;
+    updateSidebarVisibility();
+    releaseSidebarBackGuard(function() {
+      syncStateToURL();
+      open();
+    });
+  } else open();
   return true;
 }
 
@@ -1695,16 +1706,18 @@ function updateSidebarHeader() {
 }
 
 function ensureSidebarBackGuard() {
-  if (!STATE.isMobile || !STATE.leftSidebarOpen) return;
+  if (!STATE.isMobile || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen)) return;
   const route = location.href;
   if (sidebarBackGuardActive && sidebarBackGuardRoute === route) return;
-  history.pushState({ voiceSidebarGuard: true }, "", route);
+  history.pushState({ voiceSidebarGuard: true, voiceSidebarOverlay: true }, "", route);
   sidebarBackGuardActive = true;
   sidebarBackGuardRoute = route;
 }
 
 function releaseSidebarBackGuard(onReleased) {
-  if (!sidebarBackGuardActive) {
+  if (!sidebarBackGuardActive || !history.state?.voiceSidebarOverlay || sidebarBackGuardRoute !== location.href) {
+    sidebarBackGuardActive = false;
+    sidebarBackGuardRoute = "";
     onReleased();
     return;
   }
@@ -1734,6 +1747,12 @@ function closeLeftSidebar() {
   });
 }
 
+function closeRightSidebar() {
+  STATE.rightSidebarOpen = false;
+  updateSidebarVisibility();
+  releaseSidebarBackGuard(syncStateToURL);
+}
+
 function handleSidebarBackNavigation() {
   if (sidebarBackGuardRelease) {
     const release = sidebarBackGuardRelease;
@@ -1741,12 +1760,19 @@ function handleSidebarBackNavigation() {
     release();
     return true;
   }
-  if (!STATE.isMobile || !STATE.leftSidebarOpen || !sidebarBackGuardActive) return false;
-  if (location.href !== sidebarBackGuardRoute) return false;
+  if (!STATE.isMobile || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen) || !sidebarBackGuardActive) return false;
+  if (!STATE.rightSidebarOpen) {
+    const route = ROUTER.parse();
+    if (route.mode !== STATE.mode || route.repo !== STATE.repo ||
+        (route.params.path || "") !== (STATE.browserPath || "")) return false;
+  }
   sidebarBackGuardActive = false;
   sidebarBackGuardRoute = "";
-  if (STATE.mode === "repo") navigateSidebarParent();
-  else closeLeftSidebar();
+  if (STATE.rightSidebarOpen) {
+    closeRightSidebar();
+    return true;
+  }
+  closeLeftSidebar();
   return true;
 }
 
@@ -5615,10 +5641,12 @@ function toggleLeftSidebar() {
 }
 
 function toggleRightSidebar() {
-  STATE.rightSidebarOpen = !STATE.rightSidebarOpen;
+  if (STATE.rightSidebarOpen) return closeRightSidebar();
+  STATE.rightSidebarOpen = true;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
   syncStateToURL();
+  ensureSidebarBackGuard();
 }
 
 function updateSidebarVisibility() {
@@ -5664,12 +5692,8 @@ function setupKeyboard() {
       return;
     }
     if (e.key === "Escape") {
-      if (STATE.rightSidebarOpen || STATE.leftSidebarOpen) {
-        STATE.leftSidebarOpen = false;
-        STATE.rightSidebarOpen = false;
-        updateSidebarVisibility();
-        return;
-      }
+      if (STATE.rightSidebarOpen) { closeRightSidebar(); return; }
+      if (STATE.leftSidebarOpen) { closeLeftSidebar(); return; }
       if (DOM.searchInput.value) {
         submitSearchQuery("", { clearResults: true, updateInput: true });
         return;
@@ -5910,10 +5934,7 @@ async function init() {
   });
   DOM.hamburgerBtn.addEventListener("click", toggleLeftSidebar);
   DOM.settingsBtn.addEventListener("click", toggleRightSidebar);
-  DOM.closeFiltersBtn.addEventListener("click", function() {
-    STATE.rightSidebarOpen = false;
-    updateSidebarVisibility();
-  });
+  DOM.closeFiltersBtn.addEventListener("click", closeRightSidebar);
   DOM.sidebarExpandBtn.addEventListener("click", function() {
     DOM.leftSidebar.classList.toggle("expanded-wide");
     updateSidebarHeader();
@@ -5980,9 +6001,7 @@ async function init() {
   });
   DOM.overlay.addEventListener("click", function() {
     if (STATE.leftSidebarOpen) closeLeftSidebar();
-    STATE.rightSidebarOpen = false;
-    updateSidebarVisibility();
-    syncStateToURL();
+    else if (STATE.rightSidebarOpen) closeRightSidebar();
   });
   DOM.randomBookBtn.addEventListener("click", randomBook);
   if (DOM.randomTxtBtn) DOM.randomTxtBtn.addEventListener("click", randomTxt);
@@ -6059,6 +6078,10 @@ async function init() {
       restoreReaderOverlay(event.state);
       return;
     }
+    if (event.state?.voiceSidebarOverlay) {
+      sidebarBackGuardActive = true;
+      sidebarBackGuardRoute = location.href;
+    }
     if (handleSidebarBackNavigation()) return;
   });
   window.addEventListener("hashchange", function() {
@@ -6088,6 +6111,7 @@ async function init() {
   window.addEventListener("online", resumeResultRecovery);
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   ROUTER.apply();
+  ensureSidebarBackGuard();
   restoreReaderFromSession();
   loadReaderAssets().then(function() {
     refreshResultReaderActions();
