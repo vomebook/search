@@ -4466,16 +4466,35 @@ async function renderBrowser(path, routeId) {
   DOM.sidebarContent.appendChild(list);
   var data = null;
   var initialData = null;
+  if (STATE.useLocalMode && STATE.dataLoaded) {
+    try {
+      data = await getFolderContents(currentRepo, path);
+      if (routeId && routeId !== routeRenderId) return;
+      if (STATE.mode !== "repo" || STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
+    } catch (e) {}
+  }
   if (!path) {
-    var initial = await loadSidebarInitial(STATE.repo);
+    var initial = data ? null : await loadSidebarInitial(STATE.repo);
     if (initial && (!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.repo === currentRepo.split("/").pop() && STATE.browserPath === path) {
       renderBrowserListItems(list, initial, currentRepo, path);
       initialData = initial;
       data = initial;
     }
   }
-  if (folderContentsCache.has(STATE.repoFull + "|" + (path || ""))) {
+  if (!data && folderContentsCache.has(STATE.repoFull + "|" + (path || ""))) {
     data = folderContentsCache.get(STATE.repoFull + "|" + (path || ""));
+  }
+  if (!data && path && STATE.useLocalMode && !STATE.dataLoaded) {
+    const local = ensureLocalDataLoaded(false, true)
+      .then(ok => ok ? getFolderContents(currentRepo, path) : null).catch(() => null);
+    const remote = apiAvailable ? fetchFolderContents(STATE.repo, path) : Promise.resolve(null);
+    const first = await Promise.race([
+      local.then(result => ({ source: "local", result })),
+      remote.then(result => ({ source: "api", result }))
+    ]);
+    data = first.result || await (first.source === "local" ? remote : local);
+    if (routeId && routeId !== routeRenderId) return;
+    if (STATE.mode !== "repo" || STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
   }
   if (!data && apiAvailable) {
     try {
@@ -6131,9 +6150,7 @@ async function init() {
   loadReaderAssets().then(function() {
     refreshResultReaderActions();
     if (STATE.mode === "repo") {
-      const routeId = ++routeRenderId;
-      renderBrowser(STATE.browserPath || "", routeId);
-      renderFilters(routeId);
+      renderFilters(routeRenderId);
     }
   });
   setupHitokoto();
