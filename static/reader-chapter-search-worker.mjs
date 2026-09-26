@@ -76,19 +76,32 @@ export async function scanText(text, query, visit, current = () => true, yieldWo
 }
 
 export async function countMatches(chapters, query, current, progress = null) {
-  const counts = [];
+  const counts = [], firstPage = [];
   const yieldWork = cooperativeYield();
   let total = 0;
   for (const chapter of chapters) {
     let count = 0;
-    await scanText(chapter.text, query, () => { count++; }, current, yieldWork);
+    await scanText(chapter.text, query, (start, length) => {
+      count++;
+      if (firstPage.length < PAGE_SIZE) firstPage.push(searchResult(chapter, start, length));
+    }, current, yieldWork);
     counts.push(count);
     total += count;
     if (progress && (counts.length === 1 || (count && total <= PAGE_SIZE) ||
         counts.length % 8 === 0 || counts.length === chapters.length))
-      await progress({ counts, total, scanned: counts.length });
+      await progress({ counts, total, scanned: counts.length, firstPage });
   }
-  return { counts, total };
+  return { counts, total, firstPage };
+}
+
+function searchResult(chapter, start, length) {
+  const before = Math.max(0, start - 72), after = Math.min(chapter.text.length, start + length + 88);
+  return {
+    chapterIndex: chapter.index, start, length,
+    location: `第 ${chapter.index} 章 · ${chapter.title}`,
+    snippet: { text: chapter.text.slice(before, after), matchStart: start - before,
+      matchLength: length, prefix: before ? "…" : "", suffix: after < chapter.text.length ? "…" : "" }
+  };
 }
 
 export async function resultPage(chapters, query, counts, offset, current) {
@@ -101,13 +114,7 @@ export async function resultPage(chapters, query, counts, offset, current) {
     const chapter = chapters[i];
     await scanText(chapter.text, query, (start, length) => {
       if (skip) { skip--; return; }
-      const before = Math.max(0, start - 72), after = Math.min(chapter.text.length, start + length + 88);
-      results.push({
-        chapterIndex: chapter.index, start, length,
-        location: `第 ${chapter.index} 章 · ${chapter.title}`,
-        snippet: { text: chapter.text.slice(before, after), matchStart: start - before,
-          matchLength: length, prefix: before ? "…" : "", suffix: after < chapter.text.length ? "…" : "" }
-      });
+      results.push(searchResult(chapter, start, length));
       return results.length < PAGE_SIZE;
     }, current, yieldWork);
   }
@@ -164,10 +171,9 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function") {
         if (!current()) return;
         const counts = await countMatches(book, query, current, async partial => {
           if (!current()) return;
-          const results = await resultPage(book.slice(0, partial.scanned), query, partial.counts, 0, current);
           if (current()) self.postMessage({ id: data.id, progress: true,
             total: partial.total, scanned: partial.scanned, chapters: book.length,
-            offset: 0, pageSize: PAGE_SIZE, results });
+            offset: 0, pageSize: PAGE_SIZE, results: partial.firstPage.slice() });
         });
         session = { ...counts, query, id: data.id };
       } else if (data.type === "page") {
@@ -175,7 +181,7 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function") {
         offset = Math.max(0, Math.min(Math.floor(data.offset / PAGE_SIZE) * PAGE_SIZE,
           Math.max(0, Math.ceil(session.total / PAGE_SIZE) - 1) * PAGE_SIZE));
       } else return;
-      const result = await resultPage(chapters, session.query, session.counts, offset, current);
+      const result = offset ? await resultPage(chapters, session.query, session.counts, offset, current) : session.firstPage.slice();
       if (current()) self.postMessage({ id: data.id, session: session.id, total: session.total,
         offset, pageSize: PAGE_SIZE, results: result });
     } catch (error) {

@@ -33,33 +33,66 @@ function pattern(query) {
 export function hitBoxes(page, start, length) {
   const begin = Array.from(page.text.slice(0, start)).length;
   const end = begin + Array.from(page.text.slice(start, start + length)).length;
-  return (page.text_spans || []).filter(s => s.end > begin && s.start < end)
-    .map(s => ({ box: s.box, block: s.block, precision: s.precision || "block" }));
+  return hitBoxesAtOffsets(page, begin, end);
+}
+
+function hitBoxesAtOffsets(page, begin, end) {
+  const spans = page.text_spans || [], boxes = [];
+  let low = 0, high = spans.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (spans[mid].end <= begin) low = mid + 1;
+    else high = mid;
+  }
+  for (let index = low; index < spans.length && spans[index].start < end; index++) {
+    const span = spans[index];
+    boxes.push({ box: span.box, block: span.block, precision: span.precision || "block" });
+  }
+  return boxes;
 }
 
 export async function searchBookText(book, query, { current = () => true, yieldTask = () => new Promise(r => setTimeout(r, 0)), progress = null } = {}) {
   const counts = [], re = pattern(query);
   let total = 0;
   if (!query) return { total: 0, page: () => ({ total: 0, offset: 0, pageSize: 50, results: [] }) };
+  const pageCache = new Map();
   const indexResult = { get total() { return total; }, page(offset = 0, pageSize = 50) {
     offset = Math.max(0, Math.min(Math.max(0, total - 1), Math.floor(offset)));
     offset = Math.floor(offset / pageSize) * pageSize;
+    const key = `${offset}:${pageSize}`;
+    const cached = pageCache.get(key);
+    if (cached?.total === total) {
+      pageCache.delete(key);
+      pageCache.set(key, cached);
+      return cached;
+    }
     const results = [];
     let passed = 0;
     for (let index = 0; index < counts.length && results.length < pageSize; index++) {
       if (passed + counts[index] <= offset) { passed += counts[index]; continue; }
       const page = book.pages[index];
+      let previousUnitEnd = 0, previousPointEnd = 0;
       for (const match of page.text.matchAll(re)) {
         if (passed++ < offset) continue;
         const begin = Math.max(0, match.index - 72), end = Math.min(page.text.length, match.index + match[0].length + 88);
+        const pointStart = previousPointEnd + Array.from(page.text.slice(previousUnitEnd, match.index)).length;
+        const pointEnd = pointStart + Array.from(match[0]).length;
+        previousUnitEnd = match.index + match[0].length;
+        previousPointEnd = pointEnd;
         results.push({ page: page.page, start: match.index, length: match[0].length,
-          boxes: hitBoxes(page, match.index, match[0].length),
+          boxes: hitBoxesAtOffsets(page, pointStart, pointEnd),
           snippet: { text: page.text.slice(begin, end), matchStart: match.index - begin,
             matchLength: match[0].length, prefix: begin ? "…" : "", suffix: end < page.text.length ? "…" : "" } });
         if (results.length === pageSize) break;
       }
     }
-    return { total, offset, pageSize, results };
+    const page = { total, offset, pageSize, results };
+    if (pageSize <= 50) {
+      pageCache.delete(key);
+      pageCache.set(key, page);
+      if (pageCache.size > 4) pageCache.delete(pageCache.keys().next().value);
+    }
+    return page;
   } };
   for (let index = 0; index < book.pages.length; index++) {
     if (!current()) throw new DOMException("Search cancelled", "AbortError");
