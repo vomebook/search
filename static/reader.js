@@ -2846,10 +2846,10 @@ async function renderPdf(prepared) {
   content.appendChild(firstShell);
   await renderPdfShell(firstShell, false, true);
   pdfShellsReady = appendShellsBatched(createShell, pdf.numPages, 24);
-  await pdfShellsReady;
-  if (typeof pdf.getOutline === "function") {
+  const outlineReady = (async () => {
+    if (typeof pdf.getOutline !== "function") return;
     try {
-      const outline = await pdf.getOutline(),
+      const outline = await awaitReader(pdf.getOutline()),
         entries = [];
       const cleanLabel = (value) =>
         String(value || "未命名章节")
@@ -2876,12 +2876,14 @@ async function renderPdf(prepared) {
       };
       await append(outline);
       assertReaderActive();
-      setToc(entries);
+      if (entries.length) setToc(entries);
     } catch (error) {
       if (!readerAbortController.signal.aborted)
         console.warn("PDF outline could not be loaded", error);
     }
-  }
+  })();
+  outlineReady.catch(() => {});
+  await pdfShellsReady;
   assertReaderActive();
 }
 
@@ -5579,10 +5581,14 @@ async function navigateFoliateSearchResult(result, generation) {
 }
 async function searchConcentratedPdf(query, generation) {
   const book = await pdfBookTextCache.get();
+  let firstPageResults = [];
   const install = (index) => { pdfSearchPageLoader = (offset) => {
     const page = index.page(offset);
-    return { ...page, results: page.results.map(hit => ({
-      ...hit, location: `第 ${hit.page} 页`, activate: async nav => {
+    const results = page.results.map((hit, position) => {
+      const previous = page.offset === 0 ? firstPageResults[position] : null;
+      if (previous?.page === hit.page && previous.start === hit.start && previous.length === hit.length)
+        return previous;
+      return { ...hit, location: `第 ${hit.page} 页`, activate: async nav => {
         if (!await goToPage(hit.page, nav) || !isReaderGenerationCurrent("navigation", nav))
           return false;
         content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
@@ -5592,8 +5598,10 @@ async function searchConcentratedPdf(query, generation) {
           shell.querySelector(".reader-text-hit-box")?.scrollIntoView({ block: "center" });
         }
         return true;
-      }
-    })) };
+      } };
+    });
+    if (page.offset === 0) firstPageResults = results;
+    return { ...page, results };
   }; };
   const index = await searchBookText(book, query, {
     current: () => isReaderGenerationCurrent("search", generation),
