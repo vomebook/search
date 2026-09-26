@@ -548,6 +548,35 @@ export class View extends HTMLElement {
         const { query, index } = opts
         const matcher = searchMatcher(textWalker,
             { defaultLocale: this.language, ...opts })
+        if (opts.lean) {
+            const { sections } = this.book
+            const indices = index != null ? [index] : sections.map((_, i) => i)
+            const offset = Math.max(0, opts.offset || 0)
+            const limit = Math.max(0, Math.min(50, opts.limit ?? 50))
+            for (const sectionIndex of indices) {
+                if (opts.current?.() === false) return
+                const section = sections[sectionIndex]
+                if (!section?.createDocument) continue
+                const doc = await section.createDocument()
+                if (opts.current?.() === false) return
+                let count = 0
+                const subitems = []
+                for (const { range, excerpt } of matcher(doc, query)) {
+                    if (count >= offset && subitems.length < limit)
+                        subitems.push({ cfi: this.getCFI(sectionIndex, range), excerpt })
+                    count++
+                    if (count % 2048 === 0) {
+                        await new Promise(resolve => setTimeout(resolve, 0))
+                        if (opts.current?.() === false) return
+                    }
+                    if (index != null && subitems.length === limit) break
+                }
+                if (opts.current?.() === false) return
+                yield { index: sectionIndex, count, subitems,
+                    label: this.#tocProgress.getProgress(sectionIndex)?.label ?? '' }
+            }
+            return
+        }
         const iter = index != null
             ? this.#searchSection(matcher, query, index)
             : this.#searchBook(matcher, query)
