@@ -329,7 +329,16 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '30 个结果'")
         self.assertEqual(self.page.evaluate("window.__pdfTextCalls"), first)
 
-    def test_pdf_search_reextracts_evicted_pages_and_cancels_stale_load(self):
+    def test_pdf_search_cache_cleanup_resets_byte_budget(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nwindow.__pdfCacheProbe = () => { cachePdfSearchText(1, 'cached'); readerRuntime.dispose(); return [pdfSearchTextCache.size, pdfSearchTextCacheBytes]; };\n")
+        self.page.route("**/static/reader.js?*", instrument)
+        self.serve(support.minimal_pdf(), "application/pdf")
+        self.open(self.reader_url("pdf"))
+        self.assertEqual(self.page.evaluate("window.__pdfCacheProbe()"), [0, 0])
+
+    def test_pdf_search_pages_reextract_evicted_text_and_ignore_cancelled_load(self):
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + "\nwindow.__dropPdfSearchCache = () => { pdfSearchTextCache.clear(); pdfSearchTextCacheBytes = 0; };\n")
@@ -349,6 +358,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(self.reader_url("pdf"))
         self.search("needle")
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "180 个结果")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 50)
         self.page.evaluate("window.__dropPdfSearchCache()")
         calls = self.page.evaluate("window.__pdfTextCalls")
         self.page.locator("#full-search-page-next").click()
@@ -358,6 +368,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#full-search-page").dispatch_event("change")
         self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '151.'")
         self.assertEqual(self.page.locator(".full-search-result").count(), 30)
+        self.assertEqual(self.page.locator(".full-search-result").first.locator("small").text_content(), "第 3 页")
         self.page.evaluate("() => { window.__dropPdfSearchCache(); window.__holdPdfPage = true; }")
         self.page.locator("#full-search-page").fill("2")
         self.page.locator("#full-search-page").dispatch_event("change")
@@ -367,8 +378,15 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_timeout(100)
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "搜索已取消")
         self.assertEqual(self.page.locator(".full-search-result").count(), 0)
+        self.page.locator("#full-search-retry").click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '180 个结果'")
+        self.page.locator("#full-search-page").fill("4")
+        self.page.locator("#full-search-page").dispatch_event("change")
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '151.'")
+        self.page.locator(".full-search-result").first.dispatch_event("click")
+        self.page.wait_for_function("() => document.querySelector('#page-number').value === '3'")
 
-    def test_foliate_dense_search_is_paged_and_cancelable(self):
+    def test_foliate_many_hits_paginate_and_cancel(self):
         with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(3))) as archive:
             files = {name: archive.read(name) for name in archive.namelist()}
         for number in (1, 2, 3):
@@ -384,12 +402,17 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator(".full-search-result").count(), 50)
         self.page.locator("#full-search-page").fill("3")
         self.page.locator("#full-search-page").dispatch_event("change")
-        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '101.'")
+        self.page.wait_for_function("() => document.querySelector('#full-search-page').value === '3' && document.querySelector('.full-search-result .full-search-rank')?.textContent === '101.'")
         self.assertIn("needle 2-30", self.page.locator(".full-search-result").first.text_content())
+        self.page.locator(".full-search-result").first.click()
+        if not self.page.locator("#full-search-input").is_visible():
+            self.page.locator("#history").click()
+        self.assertEqual(self.page.locator("#full-search-page").input_value(), "3")
         self.page.locator("#full-search-input").fill("missing")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
         self.page.evaluate("""() => {
-          for (const section of document.querySelector('foliate-view').book.sections) if (section.createDocument) {
+          const sections = document.querySelector('foliate-view').book.sections;
+          for (const section of sections) if (section.createDocument) {
             const original = section.createDocument.bind(section);
             section.createDocument = async () => { await new Promise(resolve => setTimeout(resolve, 200)); return original(); };
           }
@@ -399,6 +422,8 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_timeout(700)
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "搜索已取消")
         self.assertEqual(self.page.locator(".full-search-result").count(), 0)
+        self.page.locator("#full-search-retry").click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '210 个结果'")
 
     def test_pdf_with_unavailable_ocr_index_does_not_fall_back(self):
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
