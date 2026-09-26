@@ -714,6 +714,52 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator(".full-search-result").count(), 1)
         self.assertEqual(requests, [manifest_path, book_path])
 
+    def test_pdf_ocr_progress_preserves_full_first_page_and_focus(self):
+        def pause_after_first_page(route):
+            response = route.fetch()
+            needle = "yieldTask: () => waitForReader(0),"
+            script = response.text()
+            self.assertIn(needle, script)
+            route.fulfill(response=response, body=script.replace(needle,
+                "yieldTask: () => window.__holdOcrScan ? new Promise(resolve => { "
+                "window.__releaseOcrScan = () => { window.__holdOcrScan = false; resolve(); }; "
+                "}) : waitForReader(0),"))
+        self.page.route("**/static/reader.js?*", pause_after_first_page)
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 3")))
+        root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
+        manifest_path = root + "/ocr-manifest.json"
+        book_path = root + "/ocr/book-text.json.gz"
+        texts = ["needle " * 60, "needle", "end"]
+        book = gzip.compress(json.dumps({"version": 2, "kind": "pdf-book-text", "complete": True,
+            "offset_unit": "unicode-codepoint", "source_sha256": "a" * 64, "page_count": 3,
+            "pages": [{"page": i + 1, "text": text, "layout": {"offset_unit": "unicode-codepoint"},
+                "text_spans": []} for i, text in enumerate(texts)]}).encode())
+        manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
+            "source_sha256": "a" * 64, "profile": "test-layout-v1-index", "page_count": 3,
+            "pages": [{"p": i + 1, "o": root + f"/ocr/page-{i + 1:06d}.json.gz"} for i in range(3)],
+            "book_text": {"path": book_path, "bytes": len(book), "sha256": hashlib.sha256(book).hexdigest()}}
+        def resource(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            headers = {"Access-Control-Allow-Origin": "*"}
+            if path == manifest_path:
+                route.fulfill(json=manifest, headers=headers)
+            elif path == book_path:
+                route.fulfill(content_type="application/gzip", body=book, headers=headers)
+            else:
+                route.fulfill(status=404, headers=headers)
+        self.page.route("**/api/reader-bucket-resource**", resource)
+        manifest_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + manifest_path
+        self.open(self.reader_url("pdf", ocr_manifest=manifest_url))
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.evaluate("window.__holdOcrScan = true")
+        self.page.locator("#full-search-input").fill("needle")
+        self.page.wait_for_function("() => !!window.__releaseOcrScan && document.querySelectorAll('.full-search-result').length === 50")
+        self.page.evaluate("() => { window.__firstOcrRow = document.querySelector('.full-search-result'); __firstOcrRow.focus(); window.__releaseOcrScan(); }")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '61 个结果'")
+        self.assertTrue(self.page.evaluate("() => document.querySelector('.full-search-result') === window.__firstOcrRow && document.activeElement === window.__firstOcrRow"))
+
     def test_media_proxy_failure_retries_original_once(self):
         buffer = io.BytesIO()
         with wave.open(buffer, 'wb') as audio:

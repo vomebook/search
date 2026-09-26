@@ -1176,6 +1176,18 @@ class ReaderPerformanceTest(unittest.TestCase):
                     page.wait_for_function("() => document.querySelector('#viewport').scrollTop > 0")
                 context.close()
 
+    def test_pdf_outline_does_not_delay_ready(self):
+        module = PDF_MODULE.replace("getOutline: () => Promise.resolve(window.__pdfOutlineEnabled ? [{title: '第一章', dest: [{}], items: []}] : null)",
+            "getOutline: () => new Promise(resolve => { window.__releaseOutline = () => resolve([{title: '第一章', dest: [{}], items: []}]); })")
+        self.page.unroute("**/static/vendor/pdf.min.*.mjs")
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(content_type="text/javascript", body=module))
+        self.open_reader()
+        self.page.locator("html[data-reader-phase='ready']").wait_for()
+        self.page.locator(".reader-page canvas.ready").first.wait_for()
+        self.assertEqual(self.page.locator("#toc-list .toc-item").count(), 0)
+        self.page.evaluate("window.__releaseOutline()")
+        self.page.locator("#toc-list .toc-item").first.wait_for(state="attached")
+
     def test_pdf_outline_click_navigates_to_declared_page(self):
         self.page.add_init_script("window.__pdfOutlineEnabled = true")
         module = PDF_MODULE.replace("[{title: '第一章', dest: [{}], items: []}]", "[{title: '第三章', dest: [{}], items: []}]").replace("getPageIndex: () => Promise.resolve(0)", "getPageIndex: () => Promise.resolve(2)")
