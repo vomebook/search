@@ -457,6 +457,39 @@ let pdfShellsReady = Promise.resolve();
 const pdfRenderWaiters = [];
 let pdfActiveTextLoads = 0;
 const pdfTextWaiters = [];
+let pdfUserHasScrolled = false;
+const pdfManifestPrefetches = new Map();
+const pdfManifestShells = [];
+const PDF_MANIFEST_PREFETCH_LIMIT = 8;
+let pdfManifestPrefetchTimer = 0;
+let pdfManifestPrefetchNext = 0;
+let pdfManifestPrefetchOrigin = 0;
+let pdfManifestPrefetchWrapped = false;
+let pdfManifestPrefetchActive = null;
+function stopPdfManifestPrefetch() {
+  clearTimeout(pdfManifestPrefetchTimer);
+  pdfManifestPrefetchTimer = 0;
+  const record = pdfManifestPrefetchActive;
+  if (!record) return;
+  pdfManifestPrefetchActive = null;
+  clearTimeout(record.timeout);
+  pdfManifestPrefetches.delete(record.url);
+  record.image.onload = record.image.onerror = null;
+  record.image.removeAttribute("src");
+}
+function clearPdfManifestPrefetches() {
+  stopPdfManifestPrefetch();
+  pdfManifestPrefetchNext = 0;
+  pdfManifestPrefetchOrigin = 0;
+  pdfManifestPrefetchWrapped = false;
+  pdfManifestShells.length = 0;
+  for (const { image } of pdfManifestPrefetches.values()) {
+    image.onload = image.onerror = null;
+    image.removeAttribute("src");
+  }
+  pdfManifestPrefetches.clear();
+}
+trackReaderResource(clearPdfManifestPrefetches);
 trackReaderResource(() => {
   for (const waiter of pdfRenderWaiters.splice(0)) waiter.reject(readerAbortError());
   for (const waiter of pdfTextWaiters.splice(0)) waiter.reject(readerAbortError());
@@ -474,6 +507,7 @@ let foliateContinuous = false,
 const FOLIATE_PREFETCH_SECTIONS = 6;
 const FOLIATE_PREFETCH_MARGIN = 4000;
 const FOLIATE_LOADED_SECTION_LIMIT = 12;
+const PDF_PREFETCH_MARGIN = 2400;
 const TOC_VIRTUALIZATION_THRESHOLD = 500;
 const TOC_VIRTUAL_ROW_HEIGHT = 40;
 let tocVirtualState = null;
@@ -2125,8 +2159,12 @@ document
   .querySelector("#history-close")
   .addEventListener("click", () => setReaderPanelOpen(false, true));
 viewport.addEventListener("scroll", handleReaderPositionChange, { passive: true });
+function notePdfScrollIntent() {
+  pdfUserHasScrolled = true;
+  beginReaderNavigation();
+}
 for (const type of ["wheel", "touchstart", "pointerdown"])
-  viewport.addEventListener(type, beginReaderNavigation, { passive: true });
+  viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
 window.addEventListener("pagehide", (event) => {
   saveProgress(event);
   if (!event.persisted) disposeReader();
@@ -2139,7 +2177,11 @@ window.addEventListener("pageshow", (event) => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") saveProgress();
+  if (document.hidden) stopPdfManifestPrefetch();
+  else queuePdfManifestPrefetch();
 });
+window.addEventListener("offline", stopPdfManifestPrefetch);
+window.addEventListener("online", () => queuePdfManifestPrefetch());
 
 function validSource(raw) {
   try {
@@ -2341,6 +2383,80 @@ function pdfPageEntry(page) {
   );
   const ocrEntry = pdfOcrManifest?.pages?.[page - 1];
   return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
+}
+function takePdfManifestPrefetch(target) {
+  const record = pdfManifestPrefetches.get(target);
+  if (!record) return null;
+  pdfManifestPrefetches.delete(target);
+  if (pdfManifestPrefetchActive === record) {
+    pdfManifestPrefetchActive = null;
+    clearTimeout(record.timeout);
+  }
+  record.image.onload = record.image.onerror = null;
+  return record.image;
+}
+function queuePdfManifestPrefetch(delay = 250) {
+  if (!pdfManifestPrefetchOrigin || navigator.connection?.saveData) return;
+  clearTimeout(pdfManifestPrefetchTimer);
+  pdfManifestPrefetchTimer = setTimeout(() => {
+    pdfManifestPrefetchTimer = 0;
+    if (readerAbortController.signal.aborted || document.hidden || !navigator.onLine || pdfManifestPrefetchActive ||
+        (pdfActiveRenders && content.querySelector('.reader-page[data-render-visible="1"][data-render-state="rendering"]'))) return;
+    while (true) {
+      if (pdfManifestPrefetchWrapped && pdfManifestPrefetchNext >= pdfManifestPrefetchOrigin) return;
+      if (pdfManifestPrefetchNext > documentState.pageCount) {
+        pdfManifestPrefetchNext = 1;
+        pdfManifestPrefetchWrapped = true;
+      }
+      const next = pdfManifestPrefetchNext++;
+      const shell = pdfManifestShells[next];
+      if (shell && ["rendering", "rendered"].includes(shell.dataset.renderState)) continue;
+      const url = pdfPageManifest.pageUrl(next);
+      if (pdfManifestPrefetches.has(url)) continue;
+      const image = new Image();
+      const record = { image, url, timeout: 0 };
+      image.decoding = "async";
+      image.fetchPriority = "low";
+      const finish = (failed) => {
+        if (pdfManifestPrefetchActive !== record) return;
+        clearTimeout(record.timeout);
+        pdfManifestPrefetchActive = null;
+        image.onload = image.onerror = null;
+        if (failed) {
+          pdfManifestPrefetches.delete(url);
+          image.removeAttribute("src");
+        }
+        queuePdfManifestPrefetch();
+      };
+      image.onload = () => finish(false);
+      image.onerror = () => finish(true);
+      pdfManifestPrefetches.set(url, record);
+      pdfManifestPrefetchActive = record;
+      record.timeout = setTimeout(() => finish(true), 15000);
+      image.src = url;
+      while (pdfManifestPrefetches.size > PDF_MANIFEST_PREFETCH_LIMIT) {
+        const oldest = pdfManifestPrefetches.keys().next().value;
+        if (oldest === url) break;
+        const stale = pdfManifestPrefetches.get(oldest);
+        pdfManifestPrefetches.delete(oldest);
+        stale.image.onload = stale.image.onerror = null;
+        stale.image.removeAttribute("src");
+      }
+      return;
+    }
+  }, delay);
+}
+function schedulePdfManifestPrefetch(page) {
+  if (capability.mode !== "pdf-pages" || !pdfPageManifest) return;
+  const origin = Math.max(1, Math.min(documentState.pageCount + 1, page + 1));
+  if (pdfManifestPrefetchOrigin === origin && pdfManifestPrefetchNext) {
+    if (!pdfManifestPrefetchActive && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
+    return;
+  }
+  stopPdfManifestPrefetch();
+  pdfManifestPrefetchOrigin = pdfManifestPrefetchNext = origin;
+  pdfManifestPrefetchWrapped = false;
+  queuePdfManifestPrefetch();
 }
 
 function pdfOcrSource() {
@@ -2612,14 +2728,32 @@ async function renderPdfPages(prepared) {
         renderPdfInBackground(entry.target);
       }
     },
-    { root: viewport, rootMargin: "1200px 0px" }
+    { root: viewport, rootMargin: `${PDF_PREFETCH_MARGIN}px 0px` }
   );
-  trackReaderResource(() => observer.disconnect());
+  const visibleObserver = new IntersectionObserver(
+    (items) => {
+      if (readerAbortController.signal.aborted) return;
+      for (const entry of items) {
+        entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0";
+        if (entry.isIntersecting) {
+          promotePdfRenderWaiter(entry.target);
+          if (pdfUserHasScrolled || entry.target.dataset.renderState !== "rendering")
+            renderPdfInBackground(entry.target, false, true);
+        }
+      }
+    },
+    { root: viewport, threshold: 0 }
+  );
+  trackReaderResource(() => {
+    observer.disconnect();
+    visibleObserver.disconnect();
+  });
   const createShell = (page) => {
     const shell = document.createElement("section");
     shell.className = "reader-page";
     shell.dataset.page = String(page);
     shell.style.aspectRatio = "1 / 1.414";
+    pdfManifestShells[page] = shell;
     shell.tabIndex = 0;
     shell.setAttribute("role", "region");
     shell.setAttribute("aria-label", `第 ${page} 页`);
@@ -2636,6 +2770,7 @@ async function renderPdfPages(prepared) {
       shell.appendChild(pdfFirstPagePreload);
     shell.addEventListener("focus", () => renderPdfInBackground(shell));
     observer.observe(shell);
+    visibleObserver.observe(shell);
     return shell;
   };
   const firstShell = createShell(1);
@@ -2662,7 +2797,20 @@ async function renderPdf(prepared) {
         entry.target.dataset.renderVisible = entry.isIntersecting && isPdfPageVisible(entry.target) ? "1" : "0";
         if (entry.isIntersecting) renderPdfInBackground(entry.target);
       }),
-    { root: document.querySelector("#viewport"), rootMargin: "1200px 0px" }
+    { root: document.querySelector("#viewport"), rootMargin: `${PDF_PREFETCH_MARGIN}px 0px` }
+  );
+  const visibleObserver = new IntersectionObserver(
+    (entries) =>
+      entries.forEach((entry) => {
+        if (readerAbortController.signal.aborted) return;
+        entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0";
+        if (entry.isIntersecting) {
+          promotePdfRenderWaiter(entry.target);
+          if (pdfUserHasScrolled || entry.target.dataset.renderState !== "rendering")
+            renderPdfInBackground(entry.target, false, true);
+        }
+      }),
+    { root: document.querySelector("#viewport"), threshold: 0 }
   );
   const pageObserver = new IntersectionObserver(() => scheduleMarkerSync(), {
     root: document.querySelector("#viewport"),
@@ -2670,6 +2818,7 @@ async function renderPdf(prepared) {
   });
   trackReaderResource(() => {
     observer.disconnect();
+    visibleObserver.disconnect();
     pageObserver.disconnect();
   });
   const createShell = (page) => {
@@ -2689,6 +2838,7 @@ async function renderPdf(prepared) {
     shell.append(canvas, textLayer);
     shell.addEventListener("focus", () => renderPdfInBackground(shell));
     observer.observe(shell);
+    visibleObserver.observe(shell);
     pageObserver.observe(shell);
     return shell;
   };
@@ -2742,7 +2892,27 @@ function isPdfPageVisible(shell) {
 }
 function renderPdfInBackground(shell, force = false, priority = isPdfPageVisible(shell)) {
   if (readerAbortController.signal.aborted) return;
+  if (priority) {
+    shell.dataset.renderPriority = "1";
+    promotePdfRenderWaiter(shell);
+    if (capability.mode === "pdf-pages") {
+      if (shell.dataset.renderState !== "rendered" && pdfManifestPrefetchActive &&
+          pdfManifestPrefetchActive.url !== pdfPageManifest?.pageUrl(Number(shell.dataset.page)))
+        stopPdfManifestPrefetch();
+      cancelSpeculativePdfRenders(shell);
+    }
+  }
   if (shell._backgroundRender) {
+    if (
+      pdfUserHasScrolled &&
+      priority &&
+      shell._renderStarted &&
+      shell._renderActivePriority !== "1" &&
+      shell._renderCancel
+    ) {
+      shell._restartRender = true;
+      shell._renderCancel();
+    }
     if (force) shell.dataset.pendingRerender = "1";
     return shell._backgroundRender;
   }
@@ -2767,6 +2937,10 @@ function renderPdfInBackground(shell, force = false, priority = isPdfPageVisible
     })
     .finally(() => {
       if (shell._backgroundRender === task) delete shell._backgroundRender;
+      if (shell._restartRender && shell.isConnected && !readerAbortController.signal.aborted) {
+        delete shell._restartRender;
+        Promise.resolve().then(() => renderPdfInBackground(shell, false, true));
+      }
     });
 }
 function renderPdfManifestShell(shell, force = false, priority = false) {
@@ -2774,38 +2948,47 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
   if (shell._renderPromise) return shell._renderPromise;
   if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
   shell.dataset.renderState = "rendering";
+  const renderController = new AbortController();
+  shell._renderCancel = () => renderController.abort();
+  shell._renderStarted = false;
+  shell._renderActivePriority = priority || shell.dataset.renderVisible === "1" ? "1" : "0";
   const task = (async () => {
     let acquired = false;
     try {
-      await acquirePdfRenderSlot(priority);
+      await acquirePdfRenderSlot(priority, shell);
       acquired = true;
+      shell._renderStarted = true;
       assertReaderActive();
       const entry = pdfPageEntry(Number(shell.dataset.page));
       if (!entry) throw new Error("PDF page entry missing");
+      const target = pdfPageManifest.pageUrl(entry.page);
       let image = shell.querySelector("img");
       if (!image) {
-        image = new Image();
+        image = takePdfManifestPrefetch(target) || new Image();
         image.alt = `第 ${entry.page} 页`;
         image.decoding = "async";
         shell.appendChild(image);
       }
-      const target = pdfPageManifest.pageUrl(entry.page);
+      image.fetchPriority = isPdfPageVisible(shell) ? "high" : "low";
        await new Promise((resolve, reject) => {
          let settled = false,
            timeout = 0,
-          untrack = () => {};
-        const finish = (error) => {
+           untrack = () => {};
+         const abort = () => finish(readerAbortError());
+         const finish = (error) => {
           if (settled) return;
           settled = true;
-          clearTimeout(timeout);
-          untrack();
-          image.onload = image.onerror = null;
+           clearTimeout(timeout);
+           untrack();
+           renderController.signal.removeEventListener("abort", abort);
+           image.onload = image.onerror = null;
           if (error) {
             image.removeAttribute("src");
             reject(error);
           } else resolve();
         };
         untrack = trackReaderResource(() => finish(readerAbortError()));
+        renderController.signal.addEventListener("abort", abort, { once: true });
         if (settled) return;
         timeout = setTimeout(
           () => finish(new Error("PDF page image timeout")),
@@ -2825,6 +3008,8 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       image.classList.add("ready");
       shell.dataset.renderState = "rendered";
       shell.dataset.renderUsedAt = String(Date.now());
+      if (isPdfPageVisible(shell) || !pdfManifestPrefetchOrigin) schedulePdfManifestPrefetch(entry.page);
+      else if (!pdfManifestPrefetchActive && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
       trimPdfManifestImages(shell);
       scheduleMarkerSync();
     } catch (error) {
@@ -2836,9 +3021,26 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
     }
   })().finally(() => {
     if (shell._renderPromise === task) delete shell._renderPromise;
+    if (shell._renderCancel) delete shell._renderCancel;
+    delete shell._renderStarted;
+    delete shell._renderActivePriority;
   });
   shell._renderPromise = task;
   return task;
+}
+function cancelSpeculativePdfRenders(protectedShell) {
+  if (!pdfUserHasScrolled) return;
+  for (const shell of content.querySelectorAll('.reader-page[data-render-state="rendering"]')) {
+    if (
+      shell === protectedShell ||
+      shell.dataset.renderVisible === "1" ||
+      isPdfPageVisible(shell) ||
+      !shell._renderStarted ||
+      shell._renderActivePriority === "1"
+    )
+      continue;
+    shell._renderCancel?.();
+  }
 }
 function renderPdfShell(shell, force = false, priority = false) {
   if (shell._renderPromise) {
@@ -2850,7 +3052,7 @@ function renderPdfShell(shell, force = false, priority = false) {
   const task = (async () => {
     let acquired = false;
     try {
-      await acquirePdfRenderSlot(priority);
+      await acquirePdfRenderSlot(priority, shell);
       acquired = true;
       assertReaderActive();
       const pdf = pdfDocument;
@@ -2950,7 +3152,12 @@ function highlightPdfText(shell, query = searchState.query) {
   }
 }
 
-function acquirePdfRenderSlot(priority = false) {
+function promotePdfRenderWaiter(shell) {
+  for (const waiter of pdfRenderWaiters) {
+    if (waiter.shell === shell) waiter.priority = true;
+  }
+}
+function acquirePdfRenderSlot(priority = false, shell = null) {
   if (readerAbortController.signal.aborted) return Promise.reject(readerAbortError());
   const limit = matchMedia("(max-width: 700px)").matches ? 1 : 2;
   if (pdfActiveRenders < limit) {
@@ -2959,6 +3166,8 @@ function acquirePdfRenderSlot(priority = false) {
   }
   return new Promise((resolve, reject) => {
     const waiter = {
+      shell,
+      priority,
       resolve: () => {
         pdfActiveRenders++;
         resolve();
@@ -2972,7 +3181,11 @@ function acquirePdfRenderSlot(priority = false) {
 function releasePdfRenderSlot() {
   pdfActiveRenders = Math.max(0, pdfActiveRenders - 1);
   if (readerAbortController.signal.aborted) return;
-  const waiter = pdfRenderWaiters.shift();
+  let index = pdfRenderWaiters.findIndex(
+    (waiter) => waiter.priority || (waiter.shell && isPdfPageVisible(waiter.shell))
+  );
+  if (index < 0) index = 0;
+  const waiter = pdfRenderWaiters.splice(index, 1)[0];
   if (waiter) waiter.resolve();
 }
 function acquirePdfTextSlot(priority = false) {
@@ -3712,6 +3925,7 @@ function disposeFormatResources(mode) {
     pdfPageManifest = null;
     pdfOcrManifest = null;
     pdfOcrManifestPromise = null;
+    clearPdfManifestPrefetches();
     pdfBookTextCache.clear();
     pdfFirstPagePreload?.removeAttribute("src");
     pdfFirstPagePreload = null;
@@ -4982,6 +5196,7 @@ function updateChapterSearchPagination() {
   const input = chapterSearchPagination.querySelector("#full-search-page");
   input.value = String(Math.floor(page.offset / page.pageSize) + 1);
   input.max = String(Math.max(1, pages));
+  input.style.setProperty("--page-width", `${input.max.length}ch`);
   chapterSearchPagination.querySelector("#full-search-pages").textContent = `/ ${pages}`;
   chapterSearchPagination.querySelector("#full-search-page-prev").disabled =
     pdfSearchInProgress || chapterSearchInProgress || page.offset === 0;
@@ -4997,7 +5212,7 @@ async function loadChapterSearchPage(offset, selectLast = null) {
   beginReaderNavigation();
   fullSearchCancel.hidden = false;
   fullSearchRetry.hidden = true;
-  fullSearchStatus.textContent = "正在加载搜索结果…";
+  fullSearchStatus.textContent = `${chapterSearchPage.total} 个结果`;
   try {
     const page = await (pdfSearchPageLoader ? pdfSearchPageLoader(offset, generation) : chapterSearchClient.page(offset));
     if (!isReaderGenerationCurrent("search", generation)) return;
@@ -5023,6 +5238,8 @@ async function loadChapterSearchPage(offset, selectLast = null) {
 async function fullSearchFoliateMatches(query, generation) {
   if (!epubRendition?.search) return [];
   const groups = [], firstPage = [];
+  // Cache only visited pages for this query; never retain every match in the book.
+  const cachedPages = new Map();
   let total = 0;
   const toResult = (item, label, occurrence) => {
     const excerpt = item.excerpt || { pre: "", match: query, post: "" };
@@ -5041,11 +5258,14 @@ async function fullSearchFoliateMatches(query, generation) {
   };
   pdfSearchPageLoader = async (requestedOffset, pageGeneration = readerRuntime.currentGeneration("search")) => {
     const pageSize = 50;
-    const offset = Math.max(0, Math.min(
-      Math.floor(Math.max(0, total - 1) / pageSize) * pageSize,
-      Math.floor(requestedOffset / pageSize) * pageSize
-    ));
+    const offset = fullSearchPageOffset(total, requestedOffset, pageSize);
     if (!offset) return { total, offset, pageSize, results: firstPage.slice() };
+    const cached = cachedPages.get(offset);
+    if (cached) {
+      cachedPages.delete(offset);
+      cachedPages.set(offset, cached);
+      return cached;
+    }
     const results = [];
     let passed = 0;
     for (const group of groups) {
@@ -5061,7 +5281,12 @@ async function fullSearchFoliateMatches(query, generation) {
       passed += group.count;
       if (results.length === pageSize) break;
     }
-    return { total, offset, pageSize, results };
+    const page = { total, offset, pageSize, results };
+    if (isReaderGenerationCurrent("search", pageGeneration) && JSON.stringify(page).length <= 128 * 1024) {
+      cachedPages.set(offset, page);
+      if (cachedPages.size > 4) cachedPages.delete(cachedPages.keys().next().value);
+    }
+    return page;
   };
   for await (const group of epubRendition.search({
     query, lean: true, limit: 50,
@@ -5510,9 +5735,19 @@ async function fullSearchPdfMatches(query, generation) {
   publishPdfSearchProgress(generation, groups, total, pattern, firstPage, pdf.numPages, pdf.numPages);
   return chapterSearchPage.results;
 }
+let fullSearchRenderedResults = [];
+let fullSearchRenderedOffset = -1;
 function renderFullSearchResults() {
   updateChapterSearchPagination();
-  fullSearchResultsNode.textContent = "";
+  fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => {
+    button.disabled = !searchState.results.length;
+  });
+  const offset = chapterSearchPage?.offset || 0;
+  if (fullSearchRenderedOffset === offset &&
+      fullSearchResultsNode.childElementCount === searchState.results.length &&
+      fullSearchRenderedResults.length === searchState.results.length &&
+      searchState.results.every((result, index) => result === fullSearchRenderedResults[index])) return;
+  const fragment = document.createDocumentFragment();
   for (const [index, result] of searchState.results.entries()) {
     const row = document.createElement("button"),
       location = document.createElement("small");
@@ -5522,14 +5757,14 @@ function renderFullSearchResults() {
     location.textContent = result.location;
     const rank = document.createElement("span");
     rank.className = "full-search-rank";
-    rank.textContent = `${(chapterSearchPage?.offset || 0) + index + 1}.`;
+    rank.textContent = `${offset + index + 1}.`;
     row.append(rank, location, fullSearchSnippetDom(result.snippet));
     row.addEventListener("click", () => activateFullSearchResult(index));
-    fullSearchResultsNode.appendChild(row);
+    fragment.appendChild(row);
   }
-  fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => {
-    button.disabled = !searchState.results.length;
-  });
+  fullSearchResultsNode.replaceChildren(fragment);
+  fullSearchRenderedResults = searchState.results.slice();
+  fullSearchRenderedOffset = offset;
 }
 function closeFullSearchView() {
   clearTimeout(fullSearchInputTimer);

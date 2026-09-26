@@ -755,6 +755,62 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertEqual(page.locator(".reader-page[data-page='4'] img.ready").count(), 0)
         context.close()
 
+    def test_pdf_pages_stalled_early_manifest_uses_proxy(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        source = root + "/page-manifest.json"
+        proxy = []
+        page.add_init_script(f"""(() => {{
+          const fetchOriginal = window.fetch.bind(window);
+          window.__earlyManifestAborted = false;
+          window.fetch = (url, options = {{}}) => String(url) === {json.dumps(source)}
+            ? new Promise((resolve, reject) => options.signal.addEventListener('abort', () => {{
+                window.__earlyManifestAborted = true;
+                reject(new DOMException('cancelled', 'AbortError'));
+              }}, {{once: true}}))
+            : fetchOriginal(url, options);
+        }})()""")
+        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: (proxy.append(route.request.url), route.fulfill(
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2}))))
+        page.route(f"{root}/pages/**", lambda route: route.fulfill(
+            content_type="image/webp", body=IMAGE_FIXTURES["webp"][1]))
+        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages", wait_until="domcontentloaded")
+        page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=8000)
+        self.assertTrue(page.evaluate('window.__earlyManifestAborted'))
+        self.assertTrue(proxy)
+
+    def test_pdf_pages_progressive_prefetch_yields_to_jump(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        source = root + "/page-manifest.json"
+        held, requested = [], []
+        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 40})))
+        def serve_page(route):
+            number = int(route.request.url.rsplit("page-", 1)[1].split(".", 1)[0])
+            requested.append(number)
+            if number == 12:
+                held.append(route)
+            else:
+                route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
+        page.route(f"{root}/pages/**", serve_page)
+        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages", wait_until="domcontentloaded")
+        page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=10000)
+        page.wait_for_timeout(2800)
+        self.assertIn(12, requested)
+        self.assertNotIn(13, requested)
+        with page.expect_response(lambda response: response.url.endswith("page-000035.webp"), timeout=12000):
+            page.locator('.reader-page[data-page="25"]').scroll_into_view_if_needed()
+            page.locator('.reader-page[data-page="25"] img.ready').wait_for(timeout=10000)
+            for route in held:
+                try: route.abort()
+                except PlaywrightError: pass
+        self.assertIn(35, requested)
+
     def test_converted_pdf_pages_fit_wide_images_without_overlap(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
