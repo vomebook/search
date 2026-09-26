@@ -417,6 +417,40 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "搜索已取消")
         self.assertEqual(self.page.locator(".full-search-result").count(), 0)
 
+    def test_failed_pdf_search_page_retry_keeps_target_page(self):
+        def instrument(route):
+            response = route.fetch()
+            needle = "async function loadPdfSearchText(pdf, page, generation) {"
+            script = response.text()
+            self.assertIn(needle, script)
+            route.fulfill(response=response, body=script.replace(needle, needle + """
+              if (page === 2 && window.__failSearchPage) {
+                window.__failSearchPage = false;
+                throw new Error('temporary page load');
+              }"""))
+        self.page.route("**/static/reader.js?*", instrument)
+        module = support.PDF_MODULE.replace("numPages: 30", "numPages: 3").replace(
+            "getPage: () => Promise.resolve(page)", """getPage: () => Promise.resolve({ ...page,
+              getTextContent() { return Promise.resolve({ items: [{ str: 'needle '.repeat(60), hasEOL: false }] }); } })""")
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=module))
+        self.open(self.reader_url("pdf"))
+        self.search("needle")
+        self.page.locator("#full-search-page-next").click()
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '51.'")
+        self.page.evaluate("window.__failSearchPage = true")
+        self.page.locator("#full-search-page-next").click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === 'temporary page load'")
+        self.assertEqual(self.page.locator("#full-search-retry").text_content(), "重试本页")
+        self.assertEqual(self.page.locator(".full-search-rank").first.text_content(), "51.")
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-toggle").click()
+        self.assertTrue(self.page.locator("#full-search-retry").is_visible())
+        self.page.locator("#full-search-retry").click()
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '101.'")
+        self.assertEqual(self.page.locator("#full-search-page").input_value(), "3")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "180 个结果")
+
     def test_pending_foliate_result_does_not_close_reopened_search(self):
         self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
         self.open(self.reader_url("epub"))
@@ -456,6 +490,53 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "3 个结果")
         self.assertEqual(self.page.locator(".foliate-continuous mark.full-search-highlight").count(), 1)
+
+    def test_foliate_navigation_exception_reports_failure_and_retries(self):
+        self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
+        self.open(self.reader_url("epub"))
+        self.search("正文")
+        self.page.evaluate("""() => {
+          const view = document.querySelector('foliate-view');
+          const original = view.resolveNavigation.bind(view);
+          view.resolveNavigation = async cfi => {
+            view.resolveNavigation = original;
+            throw new Error('temporary navigation failure');
+          };
+        }""")
+        self.page.locator(".full-search-result").first.click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '搜索结果定位失败，请重试'")
+        self.assertTrue(self.page.locator("#history-panel").evaluate("node => node.classList.contains('is-open')"))
+        self.page.locator(".full-search-result").first.click()
+        self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "3 个结果")
+
+    def test_stale_foliate_fallback_cannot_highlight_after_navigation(self):
+        def hold_fallback(route):
+            response = route.fetch()
+            needle = "const nodes = await fullSearchTextNodes(root, generation);"
+            script = response.text()
+            self.assertIn(needle, script)
+            script = script.replace(needle, """if (occurrence !== null && !window.__fallbackHeld) {
+              window.__fallbackHeld = true;
+              await new Promise(resolve => { window.__releaseFallback = resolve; });
+            } """ + needle)
+            route.fulfill(response=response, body=script.replace(
+                "target = matches[0]?.target;", "target = matches[0]?.target; window.__fallbackDone = true;"))
+        self.page.route("**/static/reader.js?*", hold_fallback)
+        self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
+        self.open(self.reader_url("epub"))
+        self.search("正文")
+        self.page.evaluate("""() => {
+          const view = document.querySelector('foliate-view');
+          const original = view.resolveNavigation.bind(view);
+          view.resolveNavigation = async cfi => ({ ...(await original(cfi)), anchor: null });
+        }""")
+        self.page.locator(".full-search-result").first.click()
+        self.page.wait_for_function("() => !!window.__releaseFallback")
+        self.page.evaluate("document.querySelector('#viewport').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))")
+        self.page.evaluate("window.__releaseFallback()")
+        self.page.wait_for_function("() => !!window.__fallbackDone")
+        self.assertEqual(self.page.locator(".foliate-continuous mark.full-search-highlight").count(), 0)
 
     def test_foliate_many_hits_paginate_and_cancel(self):
         with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(3))) as archive:
@@ -700,6 +781,26 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelectorAll('.reader-epub-chapter mark.full-search-highlight').length === 2")
         self.assertEqual(self.page.locator('.reader-epub-chapter mark').all_text_contents(), ['独特', '词语'])
         self.assertEqual(sum('epub-search-index' in url for url in requests), 1)
+
+    def test_failed_chapter_page_restarts_worker_and_restores_target_page(self):
+        def expose_worker_failure(route):
+            response = route.fetch()
+            needle = 'worker.postMessage({ type: "init", configuration });'
+            script = response.text()
+            self.assertIn(needle, script)
+            route.fulfill(response=response, body=script.replace(needle,
+                "window.__breakChapterWorker = () => worker.onerror({ preventDefault() {} }); " + needle))
+        self.page.route("**/static/reader-chapter-search.mjs*", expose_worker_failure)
+        self.serve_chapter_search()
+        self.search("needle")
+        self.page.evaluate("window.__breakChapterWorker()")
+        self.page.locator("#full-search-page").fill("3")
+        self.page.locator("#full-search-page").dispatch_event("change")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('全文搜索组件加载失败')")
+        self.page.locator("#full-search-retry").click()
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '101.'")
+        self.assertEqual(self.page.locator("#full-search-page").input_value(), "3")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "155 个结果")
 
     def test_chapter_search_retry_and_corrupt_index(self):
         def failure(route, attempt, packed):
