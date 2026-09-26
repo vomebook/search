@@ -115,6 +115,24 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
         self.assertEqual(params['local'], '0')
         self.assertEqual(params['q'], 'current query')
 
+    def test_reader_return_captures_cleared_query_before_search_finishes(self):
+        result = self.page.evaluate('''() => {
+          STATE.query = '旧查询'; DOM.searchInput.value = STATE.query; syncStateToURL();
+          const originalSearch = doSearch;
+          doSearch = () => new Promise(() => {});
+          try {
+            submitSearchQuery('', {clearResults: true, updateInput: true});
+            const current = location.href;
+            navigateToReader('/search/static/reader.html?ext=txt');
+            const saved = JSON.parse(sessionStorage.getItem('reader-navigation-current'));
+            history.back();
+            return {current, route: saved.returnScroll.route, reader: readerOverlay !== null};
+          } finally { doSearch = originalSearch; }
+        }''')
+        self.assertNotIn('q=%E6%97%A7%E6%9F%A5%E8%AF%A2', result['current'])
+        self.assertNotIn('q=%E6%97%A7%E6%9F%A5%E8%AF%A2', result['route'])
+        self.assertTrue(result['reader'])
+
     def test_reader_folder_return_merges_current_filters_into_pages_hash(self):
         result = self.page.evaluate('''() => {
           STATE.query=''; STATE.filterExtensions=['pdf','txt'];

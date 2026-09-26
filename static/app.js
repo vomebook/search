@@ -328,6 +328,7 @@ function normalizeReaderReturnUrl(rawUrl) {
 var readerOverlay = null;
 const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html");
 var readerReturnScrollState = null;
+var readerReturnSnapshot = null;
 var readerReturnRestoreGeneration = 0;
 var readerReturnRestoreActive = false;
 function captureReaderReturnScroll() {
@@ -376,8 +377,12 @@ function closeReaderOverlay(restoreFocus, restoreScroll) {
   readerOverlay = null;
   if (restoreScroll !== false) {
     var saved = readerReturnScrollState;
-    var snapshot = saved && saved.viewKey ? searchViewSnapshots.get(saved.viewKey) : null;
-    var sameView = snapshot && saved.viewKey === getSearchViewKey();
+    var snapshot = readerReturnSnapshot;
+    var source = snapshot && searchSnapshotSources.get(snapshot);
+    var currentView = displayedSearchView;
+    var sameView = snapshot && source && saved && saved.viewKey === getSearchViewKey() &&
+      currentView && currentView.key === saved.viewKey && currentView.revision === source.revision &&
+      searchViewSnapshots.get(saved.viewKey) === snapshot;
     var changed = sameView && (STATE.results.length !== snapshot.results.length || STATE._loadedPage !== snapshot.loadedPage);
     if (changed) {
       readerReturnScrollState = null;
@@ -386,6 +391,7 @@ function closeReaderOverlay(restoreFocus, restoreScroll) {
     }
     restoreReaderReturnScroll();
   }
+  if (restoreScroll !== false) readerReturnSnapshot = null;
   if (restoreFocus !== false && returnFocus && returnFocus.isConnected) returnFocus.focus();
   return true;
 }
@@ -393,7 +399,7 @@ function closeReaderOverlay(restoreFocus, restoreScroll) {
 function openReaderOverlay(url, addHistory) {
   if (addHistory !== false && !readerReturnScrollState) {
     readerReturnScrollState = captureReaderReturnScroll();
-    saveSearchViewSnapshot(readerReturnScrollState && readerReturnScrollState.viewKey || getSearchViewKey());
+    readerReturnSnapshot = saveSearchViewSnapshot(readerReturnScrollState && readerReturnScrollState.viewKey || getSearchViewKey());
   }
   readerOverlay = readerNavigation.mount(url);
   if (addHistory !== false) readerNavigation.remember(url, readerReturnScrollState);
@@ -2117,6 +2123,9 @@ function cancelPendingSearchControls() {
 
 function prepareSearchPositionNavigation({ fromStart, restorePosition }) {
   cancelPendingSearchControls();
+  // The URL is the handoff contract for Reader navigation and session restore.
+  // Publish the current controls before any async result work starts.
+  syncStateToURL();
   // A deliberate trip to the top captures the currently displayed position.
   // During restoration (or when already at the top), retain the existing target.
   if (fromStart && !positionRestore && getResultScrollTop() > 0) setReturnPositionTarget();
@@ -3324,7 +3333,9 @@ function submitSearchQuery(query, { restore = false, record = false, refreshHist
   if (clearResults) { STATE.results = []; keyboardResultIndex = -1; }
   if (record) addHistoryItem(query);
   if (refreshHistory) renderDropdown();
-  if (restore) syncStateToURL();
+  // Publish the current route before the request settles. Reader return URLs
+  // and browser session recovery must not capture the previous query.
+  syncStateToURL();
   const result = doSearch(false, false, restore);
   if (blur) DOM.searchInput.blur();
   return result;
