@@ -198,6 +198,7 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /applyPendingScrollTop\(\);[\s\S]*?setResultScrollTop\(finalScrollTop\);\s*renderVisible\(\);\s*VSCROLL\.isDraggingThumb = false/);
   assert.match(app, /const requestedScrollTop = pendingScrollTop/);
   assert.match(app, /const finalScrollTop = requestedScrollTop === null \? getResultScrollTop\(\) : requestedScrollTop/);
+  assert.match(app, /setResultScrollTop\(finalScrollTop\)/);
   assert.strictEqual(/VSCROLL\.renderStart = -1;\s*VSCROLL\.renderEnd = -1;\s*renderVisible\(\);\s*if \(STATE\._deferredAppendWhileDragging\)/.test(app), false);
   assert.match(app, /VSCROLL\.measuredWindowKey === measureKey/);
   assert.match(app, /VSCROLL\.measuredRowKeys\[idx\] === rowMeasureKey/);
@@ -378,13 +379,14 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.doesNotMatch(app, /var currentRepo = STATE\.repoFull;\s*await loadReaderAssets\(\)/);
   assert.match(app, /convertedReaderRecords = null/);
   assert.match(app, /applyReaderAsset/);
-  assert.match(app, /applyReaderAsset\(rec, rec\.Repo \|\| "", buildRecordRelativePath\(rec\), recordLink\)/);
-  assert.match(app, /isReadableRecord\(readerRecord\)/);
   assert.match(app, /function getReaderLink\(rec, returnUrl, cacheMetadata = true\)/);
   assert.match(app, /if \(cacheMetadata\) try/);
   assert.match(app, /const readerActionUrl = readerActionRecord \? getReaderLink\(readerActionRecord, undefined, false\) : ""/);
-  assert.match(app, /function isDefaultReadableRecord\(rec\)/);
-  assert.match(app, /getReaderLink\(actionRecord\)/);
+  assert.match(app, /if \(button\) \{ button\.remove\(\);/);
+  assert.match(app, /applyReaderAsset\(rec, rec\.Repo \|\| "", buildRecordRelativePath\(rec\), recordLink\)/);
+  assert.match(app, /isReadableRecord\(readerRecord\)/);
+  assert.match(app, /button\.dataset\.readerUrl = getReaderLink\(actionRecord\)/);
+  assert.match(app, /actionBtn\.dataset\.readerUrl = getReaderLink\(applyReaderAsset\(/);
   assert.match(app, /navigateToReader\(actionBtn\.dataset\.readerUrl\)/);
   assert.match(app, /navigateToReader\(readerLink\)/);
   const navigation = fs.readFileSync('static/reader-navigation.js', 'utf8');
