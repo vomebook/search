@@ -29,7 +29,8 @@
       if (!security) return;
       const pageUrl = new URL(sourceInfo.pageUrl(1));
       const controller = new AbortController(),
-        timer = setTimeout(() => controller.abort(), 120000);
+        directSource = ["huggingface.co", "hf-mirror.com"].includes(manifestUrl.hostname),
+        timer = setTimeout(() => controller.abort(), directSource ? 1500 : 120000);
       let disposed = false;
       let preload;
       const dispose = () => {

@@ -372,7 +372,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.evaluate("() => { window.__dropPdfSearchCache(); window.__holdPdfPage = true; }")
         self.page.locator("#full-search-page").fill("2")
         self.page.locator("#full-search-page").dispatch_event("change")
-        self.page.wait_for_function("() => !!window.__releasePdfPage && document.querySelector('#full-search-status').textContent === '正在加载搜索结果…'")
+        self.page.wait_for_function("() => !!window.__releasePdfPage && document.querySelector('#full-search-status').textContent === '180 个结果'")
         self.page.locator("#full-search-cancel").click()
         self.page.evaluate("window.__releasePdfPage()")
         self.page.wait_for_timeout(100)
@@ -410,7 +410,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.evaluate("window.__holdSearchPage = true")
         self.page.locator("#full-search-page").fill("200")
         self.page.locator("#full-search-page").dispatch_event("change")
-        self.page.wait_for_function("() => !!window.__releaseSearchPage && document.querySelector('#full-search-status').textContent === '正在加载搜索结果…'")
+        self.page.wait_for_function("() => !!window.__releaseSearchPage && document.querySelector('#full-search-status').textContent === '12000 个结果'")
         self.page.locator("#full-search-cancel").click()
         self.page.evaluate("window.__releaseSearchPage()")
         self.page.wait_for_timeout(100)
@@ -538,6 +538,53 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => !!window.__fallbackDone")
         self.assertEqual(self.page.locator(".foliate-continuous mark.full-search-highlight").count(), 0)
 
+    def test_foliate_search_reuses_rows_and_bounds_visited_pages(self):
+        with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(6))) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        for number in range(1, 7):
+            files[f'OEBPS/chapter-{number}.xhtml'] = (
+                '<html xmlns="http://www.w3.org/1999/xhtml"><body>' +
+                ''.join(f'<p>needle {number}-{hit}</p>' for hit in range(100)) +
+                '</body></html>').encode()
+        self.serve(support.zip_bytes(files), "application/epub+zip")
+        self.open(self.reader_url("epub"))
+        self.page.evaluate("""() => {
+          window.__searchProbe = {rows: 0, calls: 0};
+          const view = document.querySelector('foliate-view'), search = view.search.bind(view);
+          view.search = (...args) => { __searchProbe.calls++; return search(...args); };
+          new MutationObserver(records => {
+            for (const record of records) __searchProbe.rows += record.addedNodes.length;
+          }).observe(document.querySelector('#full-search-results'), {childList: true});
+        }""")
+        self.search("needle")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "600 个结果")
+        self.assertEqual(self.page.evaluate("__searchProbe.rows"), 50)
+
+        def jump(number):
+            self.page.locator("#full-search-page").fill(str(number))
+            self.page.locator("#full-search-page").dispatch_event("change")
+            self.page.wait_for_function("rank => document.querySelector('.full-search-rank')?.textContent === rank",
+                                        arg=f"{(number - 1) * 50 + 1}.")
+            return self.page.locator(".full-search-result").all_text_contents()
+
+        original = jump(2)
+        jump(3)
+        before = self.page.evaluate("__searchProbe.calls")
+        self.assertEqual(jump(2), original)
+        self.assertEqual(self.page.evaluate("__searchProbe.calls"), before)
+        for number in (4, 5, 6, 7):
+            jump(number)
+        before = self.page.evaluate("__searchProbe.calls")
+        self.assertEqual(jump(2), original)
+        self.assertGreater(self.page.evaluate("__searchProbe.calls"), before)
+        self.page.locator("#full-search-input").fill("absent")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
+        self.page.locator("#full-search-input").fill("needle")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '600 个结果'")
+        before = self.page.evaluate("__searchProbe.calls")
+        self.assertEqual(jump(2), original)
+        self.assertGreater(self.page.evaluate("__searchProbe.calls"), before)
+
     def test_foliate_many_hits_paginate_and_cancel(self):
         with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(3))) as archive:
             files = {name: archive.read(name) for name in archive.namelist()}
@@ -552,10 +599,25 @@ class ReaderRefactorTest(unittest.TestCase):
         self.search("needle")
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "210 个结果")
         self.assertEqual(self.page.locator(".full-search-result").count(), 50)
+        self.page.evaluate("""() => {
+          const status = document.querySelector('#full-search-status');
+          window.__pagingStatuses = [status.textContent];
+          window.__pagingObserver = new MutationObserver(records => {
+            for (const record of records) {
+              for (const node of record.removedNodes) window.__pagingStatuses.push(node.textContent);
+            }
+            window.__pagingStatuses.push(status.textContent);
+          });
+          window.__pagingObserver.observe(status, {childList: true});
+        }""")
+        self.page.locator("#full-search-page-next").click()
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '51.'")
         self.page.locator("#full-search-page").fill("3")
         self.page.locator("#full-search-page").dispatch_event("change")
         self.page.wait_for_function("() => document.querySelector('#full-search-page').value === '3' && document.querySelector('.full-search-result .full-search-rank')?.textContent === '101.'")
         self.assertIn("needle 2-30", self.page.locator(".full-search-result").first.text_content())
+        statuses = self.page.evaluate("() => { window.__pagingObserver.disconnect(); return window.__pagingStatuses; }")
+        self.assertEqual(set(statuses), {"210 个结果"})
         self.page.locator(".full-search-result").first.click()
         self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
         self.page.locator("#history").click()
