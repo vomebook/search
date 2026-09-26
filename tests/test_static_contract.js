@@ -172,11 +172,15 @@ test("result actions use equal desktop heights and compact mobile column", () =>
 test("virtual results use bounded buffering", () => {
   assert.match(app, /const extraScreens = VSCROLL\.isDraggingThumb \? 0 : Math\.min\(3/);
   assert.match(app, /const velocityOverscanPx = extraScreens \* viewH/);
+  assert.match(app, /const visibleFirst = Math\.floor\(findVirtualIndex\(scrollTop\) \/ size\) \+ 1/);
+  assert.match(app, /const direction = VSCROLL\.scrollDirection \|\| 1/);
+  assert.match(app, /Demand the page under the viewport before the surrounding overscan/);
   assert.match(app, /VSCROLL\.renderStart <= safeStart && VSCROLL\.renderEnd >= safeEnd/);
   assert.match(app, /function ensureVirtualViewportCovered/);
   assert.match(app, /function renderVisible\(\)/);
   assert.match(app, /const scrollingDown = scrollTop >= VSCROLL\.lastScrollTop/);
   assert.match(app, /function refreshVirtualAfterAppend/);
+  assert.match(app, /if \(updateView\) \{[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?renderVisible\(\);/);
   assert.match(app, /function reconcileVirtualRows/);
   assert.match(app, /virtual-spacer-bottom/);
   assert.match(app, /Number\(row\.dataset\.contentVersion\) !== VSCROLL\.contentVersion/);
@@ -191,7 +195,9 @@ test("virtual results use bounded buffering", () => {
   assert.match(css, /overflow-anchor: none/);
   assert.strictEqual(/function finishDrag\(\)[\s\S]*?measureHeights/.test(app), false);
   assert.match(app, /dragRange = Math\.max\(1, DOM\.scrollTrack\.clientHeight - DOM\.scrollThumb\.clientHeight\)/);
-  assert.match(app, /applyPendingScrollTop\(\);\s*VSCROLL\.isDraggingThumb = false/);
+  assert.match(app, /applyPendingScrollTop\(\);[\s\S]*?setResultScrollTop\(finalScrollTop\);\s*renderVisible\(\);\s*VSCROLL\.isDraggingThumb = false/);
+  assert.match(app, /const requestedScrollTop = pendingScrollTop/);
+  assert.match(app, /const finalScrollTop = requestedScrollTop === null \? getResultScrollTop\(\) : requestedScrollTop/);
   assert.strictEqual(/VSCROLL\.renderStart = -1;\s*VSCROLL\.renderEnd = -1;\s*renderVisible\(\);\s*if \(STATE\._deferredAppendWhileDragging\)/.test(app), false);
   assert.match(app, /VSCROLL\.measuredWindowKey === measureKey/);
   assert.match(app, /VSCROLL\.measuredRowKeys\[idx\] === rowMeasureKey/);
@@ -374,7 +380,11 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /applyReaderAsset/);
   assert.match(app, /applyReaderAsset\(rec, rec\.Repo \|\| "", buildRecordRelativePath\(rec\), recordLink\)/);
   assert.match(app, /isReadableRecord\(readerRecord\)/);
-  assert.match(app, /getReaderLink\(readerRecord\)/);
+  assert.match(app, /function getReaderLink\(rec, returnUrl, cacheMetadata = true\)/);
+  assert.match(app, /if \(cacheMetadata\) try/);
+  assert.match(app, /const readerActionUrl = readerActionRecord \? getReaderLink\(readerActionRecord, undefined, false\) : ""/);
+  assert.match(app, /function isDefaultReadableRecord\(rec\)/);
+  assert.match(app, /getReaderLink\(actionRecord\)/);
   assert.match(app, /navigateToReader\(actionBtn\.dataset\.readerUrl\)/);
   assert.match(app, /navigateToReader\(readerLink\)/);
   const navigation = fs.readFileSync('static/reader-navigation.js', 'utf8');
