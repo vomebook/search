@@ -1439,10 +1439,9 @@ body.mobile .mobile-selected-count {
   flex-shrink: 0;
 }
 
-.folder-self-toggle:hover,
-.folder-self-toggle:focus-visible {
-  border-color: var(--primary);
-  color: var(--primary);
+.folder-self-toggle:not(.active):hover {
+  border-color: var(--outline);
+  color: var(--on-surface);
 }
 
 .folder-self-toggle.active {

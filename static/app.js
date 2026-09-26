@@ -1802,6 +1802,10 @@ const ROUTER = {
   navigate: function(mode, repo, folder) {
     let hash = mode === "global" ? "#/" : "#/" + repo;
     const sp = buildSearchURLParams({ includeQuery: false, displaySizes: true });
+    if (mode === "repo" && STATE.mode === "repo" && repo === STATE.repo) {
+      STATE.filterFolderSelfs.forEach(function(path) { sp.append("folder_self", path); });
+      STATE.filterFolderSubtrees.forEach(function(path) { sp.append("folder_subtree", path); });
+    }
     if (mode !== "global" && folder) sp.set("path", folder);
     else if (mode !== "global" && folder === undefined && STATE.browserPath) sp.set("path", STATE.browserPath);
     const qs = sp.toString();
@@ -1813,6 +1817,8 @@ const ROUTER = {
     const route = this.parse();
     const prevMode = STATE.mode;
     const prevRepo = STATE.repo;
+    const previousPath = STATE.browserPath;
+    const previousSearchKey = routeInitialized && prevMode === "repo" ? getSearchViewKey() : null;
     const wasSidebarExpanded = DOM.leftSidebar && DOM.leftSidebar.classList.contains("expanded-wide");
     saveSearchViewSnapshot();
     cancelPositionRestore();
@@ -1925,6 +1931,14 @@ const ROUTER = {
     DOM.leftSidebar.classList.toggle("expanded-wide", keepSidebarExpanded);
     this.updateUI();
     updateRandomTxtVisibility();
+    if (previousSearchKey && prevMode === STATE.mode && prevRepo === STATE.repo &&
+        previousPath !== STATE.browserPath && previousSearchKey === getSearchViewKey()) {
+      const routeId = ++routeRenderId;
+      renderBrowser(STATE.browserPath || "", routeId);
+      routeInitialized = true;
+      persistSearchSession();
+      return;
+    }
     if (prevMode !== STATE.mode || prevRepo !== STATE.repo) {
       this.onModeChanged();
       if (wasSidebarExpanded && !route.params.wide) syncStateToURL();
@@ -4367,14 +4381,14 @@ async function renderRepoList(routeId) {
 }
 
 function renderBrowserListItems(list, data, currentRepo, path) {
-  list.innerHTML = "";
+  const fragment = document.createDocumentFragment();
   for (var j = 0; j < (data.folders || []).length; j++) {
     var f = data.folders[j];
     var div = document.createElement("div");
     div.className = "browser-item";
     div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
     div.addEventListener("click", (function(fp) { return function() { ROUTER.navigate("repo", STATE.repo, fp); }; })(f.path));
-    list.appendChild(div);
+    fragment.appendChild(div);
   }
   for (var k = 0; k < (data.files || []).length; k++) {
     var f2 = data.files[k];
@@ -4415,8 +4429,9 @@ function renderBrowserListItems(list, data, currentRepo, path) {
         }
       };
     }(f2, path || ""));
-    list.appendChild(div2);
+    fragment.appendChild(div2);
   }
+  list.replaceChildren(fragment);
 }
 
 function createSidebarBreadcrumb(path) {
