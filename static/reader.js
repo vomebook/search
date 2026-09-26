@@ -5209,10 +5209,12 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
     return {
       location: fullSearchLocation(part.node, fallback, match.index, text.length),
       snippet: fullSearchSnippet(text, match.index, match.value.length),
-      async activate() {
+      async activate(navigationGeneration = readerRuntime.currentGeneration("navigation")) {
+        const searchGeneration = readerRuntime.currentGeneration("search");
         clearFullSearchMarks();
-        const currentNodes = await fullSearchTextNodes(root, readerRuntime.currentGeneration("search"));
-        if (!currentNodes) return false;
+        const currentNodes = await fullSearchTextNodes(root, searchGeneration);
+        if (!currentNodes || !isReaderGenerationCurrent("search", searchGeneration) ||
+            !isReaderGenerationCurrent("navigation", navigationGeneration)) return false;
         let position = 0, parts = [];
         const end = match.index + match.value.length;
         for (const node of currentNodes) {
@@ -5290,17 +5292,17 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
 }
 async function navigateFoliateSearchResult(result, generation) {
   const resolved = await epubRendition?.resolveNavigation?.(result.cfi);
-  if (!resolved || !isReaderGenerationCurrent("navigation", generation)) return;
+  if (!resolved || !isReaderGenerationCurrent("navigation", generation)) return false;
   const section = epubBook?.sections?.[resolved.index],
     sections = epubBook?.sections?.filter((item) => item.linear !== "no") || [],
     visibleIndex = section ? sections.indexOf(section) : -1;
-  if (visibleIndex < 0 || !foliateSectionLoader) return;
+  if (visibleIndex < 0 || !foliateSectionLoader) return false;
   let node = await foliateSectionLoader(visibleIndex);
-  if (!isReaderGenerationCurrent("navigation", generation)) return;
+  if (!isReaderGenerationCurrent("navigation", generation)) return false;
   if (foliateSectionSettler) await foliateSectionSettler();
-  if (!isReaderGenerationCurrent("navigation", generation)) return;
+  if (!isReaderGenerationCurrent("navigation", generation)) return false;
   if (!node?.isConnected) node = await foliateSectionLoader(visibleIndex);
-  if (!node?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return;
+  if (!node?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
   clearFullSearchMarks();
   let target;
   if (typeof resolved.anchor === "function" && node._resolveSearchAnchor) {
@@ -5339,6 +5341,7 @@ async function navigateFoliateSearchResult(result, generation) {
   }
   updateProgressTools();
   scheduleSave();
+  return true;
 }
 async function searchConcentratedPdf(query, generation) {
   const book = await pdfBookTextCache.get();
@@ -5622,6 +5625,7 @@ async function runFullSearch() {
 async function activateFullSearchResult(index, closePanel = true) {
   const result = searchState.results[index];
   if (!result) return;
+  const previousIndex = searchState.index;
   const panelSerial = readerPanelInteractionSerial;
   const searchGeneration = readerRuntime.currentGeneration("search");
   const generation = beginReaderNavigation();
@@ -5630,12 +5634,20 @@ async function activateFullSearchResult(index, closePanel = true) {
     const activated = result.cfi
       ? await navigateFoliateSearchResult(result, generation)
       : await result.activate(generation);
+    if (activated === false && isReaderGenerationCurrent("navigation", generation) &&
+        isReaderGenerationCurrent("search", searchGeneration) && searchState.results[index] === result) {
+      updateSearchState({ index: previousIndex });
+      fullSearchStatus.textContent = "搜索结果定位失败，请重试";
+      return;
+    }
     if (
       activated === false ||
       !isReaderGenerationCurrent("navigation", generation) ||
       searchState.results[index] !== result
     )
       return;
+    if (fullSearchStatus.textContent === "搜索结果定位失败，请重试")
+      fullSearchStatus.textContent = `${chapterSearchPage?.total ?? searchState.results.length} 个结果`;
     if (closePanel && panelSerial === readerPanelInteractionSerial &&
         isReaderGenerationCurrent("search", searchGeneration))
       setReaderPanelOpen(false, true);
