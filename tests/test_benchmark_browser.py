@@ -8,6 +8,7 @@ import sys
 import time
 import unittest
 from datetime import datetime, timezone
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from tests.browser_support import local_server
@@ -18,8 +19,10 @@ API_URL = os.environ.get("GITHUB_SEARCH_API_BASE_URL", "").rstrip("/")
 
 def _git_sha():
     try:
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return subprocess.run(
-            ["git", "log", "-1", "--format=%H"],
+            ["git", "-c", f"safe.directory={repo}", "-C", repo,
+             "log", "-1", "--format=%H"],
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
     except Exception:
@@ -59,6 +62,20 @@ def _print_and_collect(results_list, label, iterations, times):
     })
 
 
+def _open_with_retry(request, timeout=120):
+    """Retry transient gateway/transport failures in the live API benchmark."""
+    for attempt in range(4):
+        try:
+            return urlopen(request, timeout=timeout)
+        except HTTPError as error:
+            if error.code < 500 or attempt == 3:
+                raise
+        except (URLError, TimeoutError, OSError):
+            if attempt == 3:
+                raise
+        time.sleep(0.5 * (attempt + 1))
+
+
 # ===== Live API benchmarks (hits external HF Search API) =====
 
 @unittest.skipIf(not API_URL, "set GITHUB_SEARCH_API_BASE_URL")
@@ -72,7 +89,7 @@ class ApiSearchBenchmarkTests(unittest.TestCase):
             req = Request(API_URL + path, data=body,
                           headers={"Content-Type": "application/json"} if body else {})
             start = time.perf_counter()
-            with urlopen(req, timeout=120) as r:
+            with _open_with_retry(req) as r:
                 r.read()
             elapsed = (time.perf_counter() - start) * 1000
             if i > 0:
@@ -89,7 +106,7 @@ class ApiSearchBenchmarkTests(unittest.TestCase):
         self._bench('"手?机" exact', "/api/search", {"q": "手?机", "exact": True})
         self._bench('"文" exact', "/api/search", {"q": "文", "exact": True})
         self._bench('"ABC" normal', "/api/search", {"q": "ABC"})
-        self._bench('sources', "/api/sources")
+        self._bench('repositories', "/api/repos")
 
     @classmethod
     def tearDownClass(cls):

@@ -100,6 +100,8 @@ function compileWildcardMatcher(pattern) {
   const tokens = String(pattern || "").replace(/\*+/g, "*").split("");
   const literals = tokens.map(char => char === "*" || char === "?" ? null
     : new RegExp("^" + char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i"));
+  const required = Array.from(new Set(tokens.filter(char => char !== "*" && char !== "?")))
+    .map(char => new RegExp(char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
   const masks = new Map();
   function literalMask(char) {
     let mask = masks.get(char);
@@ -111,6 +113,8 @@ function compileWildcardMatcher(pattern) {
     return mask;
   }
   return { test(text) {
+    // Reject fields missing a mandatory literal before allocating DP rows.
+    for (const regex of required) if (!regex.test(text)) return false;
     // Substring glob matching in O(pattern length * text length), without
     // backtracking. Iterate UTF-16 units to retain the former non-u regex rules.
     let previous = new Uint8Array(tokens.length + 1);
