@@ -875,15 +875,18 @@ async function goToPage(value, generation = beginReaderNavigation()) {
       `.reader-page[data-page="${page}"], .reader-docx-page[data-page="${page}"]`
     );
     if (!shell) return false;
-    if (capability.mode === "pdf-pages") await renderPdfManifestShell(shell, false, true);
-    else if (shell.classList.contains("reader-page")) await renderPdfShell(shell, false, true);
+    const imagePage = capability.mode === "pdf-pages";
+    if (!imagePage && shell.classList.contains("reader-page")) await renderPdfShell(shell, false, true);
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     viewport.scrollTop = shell.offsetTop;
     pageNavigationLockUntil = performance.now() + 500;
+    const pendingImage = imagePage ? renderPdfInBackground(shell, false, true) : null;
     updateDocumentState({ page });
     pageInput.value = String(page);
     updateTocCurrentMark();
     updateProgressTools();
+    if (pendingImage) await pendingImage;
+    if (!isReaderGenerationCurrent("navigation", generation)) return false;
     scheduleSave();
     return true;
   } catch (error) {
@@ -2737,8 +2740,7 @@ async function renderPdfPages(prepared) {
         entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0";
         if (entry.isIntersecting) {
           promotePdfRenderWaiter(entry.target);
-          if (pdfUserHasScrolled || entry.target.dataset.renderState !== "rendering")
-            renderPdfInBackground(entry.target, false, true);
+          renderPdfInBackground(entry.target, false, true);
         }
       }
     },
@@ -2901,19 +2903,14 @@ function renderPdfInBackground(shell, force = false, priority = isPdfPageVisible
       if (shell.dataset.renderState !== "rendered" && pdfManifestPrefetchActive &&
           pdfManifestPrefetchActive.url !== pdfPageManifest?.pageUrl(Number(shell.dataset.page)))
         stopPdfManifestPrefetch();
-      cancelSpeculativePdfRenders(shell);
+      if (shell.dataset.renderState !== "rendered" && !shell._renderStarted)
+        cancelSpeculativePdfRenders(shell);
     }
   }
   if (shell._backgroundRender) {
-    if (
-      pdfUserHasScrolled &&
-      priority &&
-      shell._renderStarted &&
-      shell._renderActivePriority !== "1" &&
-      shell._renderCancel
-    ) {
-      shell._restartRender = true;
-      shell._renderCancel();
+    if (priority && capability.mode === "pdf-pages") {
+      const image = shell.querySelector("img");
+      if (image) image.fetchPriority = "high";
     }
     if (force) shell.dataset.pendingRerender = "1";
     return shell._backgroundRender;
@@ -2939,11 +2936,8 @@ function renderPdfInBackground(shell, force = false, priority = isPdfPageVisible
     })
     .finally(() => {
       if (shell._backgroundRender === task) delete shell._backgroundRender;
-      if (shell._restartRender && shell.isConnected && !readerAbortController.signal.aborted) {
-        delete shell._restartRender;
-        Promise.resolve().then(() => renderPdfInBackground(shell, false, true));
-      }
     });
+  return task;
 }
 function renderPdfManifestShell(shell, force = false, priority = false) {
   if (!shell) return Promise.reject(new Error("PDF page shell missing"));
@@ -3031,14 +3025,11 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
   return task;
 }
 function cancelSpeculativePdfRenders(protectedShell) {
-  if (!pdfUserHasScrolled) return;
   for (const shell of content.querySelectorAll('.reader-page[data-render-state="rendering"]')) {
     if (
       shell === protectedShell ||
-      shell.dataset.renderVisible === "1" ||
       isPdfPageVisible(shell) ||
-      !shell._renderStarted ||
-      shell._renderActivePriority === "1"
+      !shell._renderStarted
     )
       continue;
     shell._renderCancel?.();
