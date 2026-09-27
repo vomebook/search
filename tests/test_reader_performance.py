@@ -997,6 +997,8 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.mouse.move(points[0]["x"], points[0]["y"])
         page.mouse.down()
         page.mouse.move(gap["x"], gap["y"], steps=24)
+        self.assertFalse(page.evaluate("""() => getSelection().getRangeAt(0).intersectsNode(
+          document.querySelector('.reader-page[data-page="2"] img'))"""))
         page.mouse.up()
         page.wait_for_function("() => !getSelection().toString().includes('第2页末行')")
         gap_selection = page.evaluate("getSelection().toString()")
