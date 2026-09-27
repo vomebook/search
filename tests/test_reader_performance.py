@@ -900,7 +900,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         context.close()
 
     def test_pdf_pages_ocr_uses_manifest_paths_after_image_is_ready(self):
-        context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
         self.addCleanup(context.close)
         page = context.new_page()
         root = "objects/aa/" + "a" * 64
@@ -910,7 +910,11 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/page-manifest.json"
         ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + ocr_root + "/ocr-manifest.json"
         payloads = [gzip.compress(json.dumps({"version": 1, "kind": "pdf-ocr-page", "page": number,
-                     "width": 100, "height": 140, "blocks": [{"t": f"第{number}页正文", "b": [0.2, 0.2, 0.7, 0.3]}]}).encode())
+                     "width": 100, "height": 140, "blocks": [
+                         {"t": f"第{number}页正文", "b": [0.2, 0.2, 0.7, 0.3]},
+                         {"t": f"第{number}页第二行", "b": [0.2, 0.4, 0.7, 0.5]},
+                         {"t": f"第{number}页末行", "b": [0.2, 0.7, 0.7, 0.8]},
+                     ]}).encode())
                     for number in (1, 2)]
         manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
                     "source_sha256": "a" * 64, "profile": "test-layout-v1-1234567890abcdef",
@@ -951,6 +955,71 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.locator("#page-number").dispatch_event("change")
         page.locator('.reader-page[data-page="2"][data-text-ready="1"]').wait_for(timeout=10000)
         self.assertIn("第2页正文", page.locator('.reader-page[data-page="2"] .reader-pdf-text').text_content())
+        interaction = page.evaluate("""() => {
+          const pages = [...document.querySelectorAll('.reader-page')];
+          const run = pages[1].querySelector('.reader-pdf-text-run');
+          const rect = run.getBoundingClientRect(), image = pages[1].querySelector('img');
+          const bounds = pages[1].getBoundingClientRect();
+          const textTarget = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          const imageTarget = document.elementFromPoint(bounds.left + bounds.width * .9, bounds.top + bounds.height * .5);
+          const range = document.createRange();
+          range.setStart(pages[0].querySelector('.reader-pdf-text-run').firstChild, 0);
+          range.setEnd(run.firstChild, run.firstChild.length);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          return { text: textTarget === run || run.contains(textTarget), image: imageTarget === image,
+            selection: getSelection().toString() };
+        }""")
+        self.assertTrue(interaction["text"])
+        self.assertTrue(interaction["image"])
+        self.assertIn("第1页正文", interaction["selection"])
+        self.assertIn("第2页正文", interaction["selection"])
+        page.evaluate("() => { getSelection().removeAllRanges(); document.querySelector('#viewport').scrollTop = 0; }")
+        points = page.evaluate("""() => [document.querySelectorAll('.reader-page[data-page="1"] .reader-pdf-text-run')[1],
+          document.querySelectorAll('.reader-page[data-page="2"] .reader-pdf-text-run')[1]]
+          .map(run => { const r = run.getBoundingClientRect();
+            return { x: r.left + 2, y: r.top + r.height / 2, end: r.right - 2 }; })""")
+        page.mouse.move(points[0]["x"], points[0]["y"])
+        page.mouse.down()
+        page.mouse.move(points[1]["end"], points[1]["y"], steps=24)
+        page.mouse.up()
+        dragged = page.evaluate("getSelection().toString()")
+        self.assertIn("第1页末行", dragged)
+        self.assertIn("第2页正文", dragged)
+        self.assertNotIn("第1页正文", dragged)
+        self.assertNotIn("第2页末行", dragged)
+        page.evaluate("() => { getSelection().removeAllRanges(); document.querySelector('#viewport').scrollTop = 0; }")
+        gap = page.evaluate("""() => {
+          const runs = document.querySelectorAll('.reader-page[data-page="2"] .reader-pdf-text-run');
+          const first = runs[0].getBoundingClientRect(), second = runs[1].getBoundingClientRect();
+          return { x: first.left + 4, y: (first.bottom + second.top) / 2 };
+        }""")
+        page.mouse.move(points[0]["x"], points[0]["y"])
+        page.mouse.down()
+        page.mouse.move(gap["x"], gap["y"], steps=24)
+        page.mouse.up()
+        page.wait_for_function("() => !getSelection().toString().includes('第2页末行')")
+        gap_selection = page.evaluate("getSelection().toString()")
+        self.assertIn("第1页末行", gap_selection)
+        self.assertIn("第2页正文", gap_selection)
+        self.assertNotIn("第1页正文", gap_selection)
+        self.assertNotIn("第2页末行", gap_selection)
+        page.evaluate("getSelection().removeAllRanges()")
+        upper_gap = page.evaluate("""() => {
+          const runs = document.querySelectorAll('.reader-page[data-page="1"] .reader-pdf-text-run');
+          const first = runs[0].getBoundingClientRect(), second = runs[1].getBoundingClientRect();
+          return { x: second.left + 4, y: first.bottom + (second.top - first.bottom) * .9 };
+        }""")
+        page.mouse.move(points[1]["end"], points[1]["y"])
+        page.mouse.down()
+        page.mouse.move(upper_gap["x"], upper_gap["y"], steps=24)
+        page.mouse.up()
+        page.wait_for_function("() => !getSelection().toString().includes('第1页正文')")
+        reverse = page.evaluate("getSelection().toString()")
+        self.assertIn("第1页第二行", reverse)
+        self.assertIn("第2页正文", reverse)
+        self.assertIn("第1页末行", reverse)
+        self.assertNotIn("第2页末行", reverse)
         self.assertEqual(requested, [ocr_root + "/ocr-manifest.json",
                                      text_root + "/ocr/page-000001.json.gz",
                                      text_root + "/ocr/page-000002.json.gz"])
@@ -969,13 +1038,51 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages&title=Compact", wait_until="domcontentloaded")
         page.locator(".reader-page img.ready").first.wait_for(timeout=10000)
         self.assertLessEqual(page.locator(".reader-page img").count(), 25)
+        page.locator("#viewport").evaluate("node => node.scrollTop = node.scrollHeight * 0.5")
+        page.wait_for_function("() => Number(document.querySelector('#page-number').value) > 1500")
+        self.assertLessEqual(page.locator(".reader-page").count(), 160)
         page.locator("#page-number").fill("4000")
         page.locator("#page-number").dispatch_event("change")
         page.locator(".reader-page[data-page='4000'] img.ready").wait_for(timeout=10000)
         self.assertEqual(page.locator("#page-number").input_value(), "4000")
-        self.assertEqual(page.locator(".reader-page").count(), 5000)
+        self.assertLessEqual(page.locator(".reader-page").count(), 160)
+        self.assertEqual(page.locator(".reader-page[data-page='1']").count(), 0)
+        page.locator("#page-number").fill("1")
+        page.locator("#page-number").dispatch_event("change")
+        page.locator(".reader-page[data-page='1'] img.ready").wait_for(timeout=10000)
+        self.assertLessEqual(page.locator(".reader-page").count(), 160)
         self.assertLessEqual(page.locator(".reader-page img").count(), 25)
         context.close()
+
+    def test_long_native_pdf_keeps_bounded_page_shells(self):
+        module = PDF_MODULE.replace("numPages: 30", "numPages: 1200")
+        self.page.unroute("**/static/vendor/pdf.min.*.mjs")
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=module))
+        self.page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(SOURCE_URL, safe='')}&ext=pdf", wait_until="domcontentloaded")
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for()
+        self.page.evaluate("""() => {
+          const run = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run');
+          const range = document.createRange();
+          range.selectNodeContents(run);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+        }""")
+        self.page.locator("#viewport").evaluate("node => node.scrollTop = node.scrollHeight * .84")
+        self.page.wait_for_function("() => Number(document.querySelector('#page-number').value) > 900")
+        self.assertEqual(self.page.locator('.reader-page[data-page="1"]').count(), 1)
+        self.assertIn("Accessible PDF text", self.page.evaluate("getSelection().toString()"))
+        self.page.evaluate("() => { getSelection().removeAllRanges(); document.activeElement.blur(); }")
+        self.page.locator("#viewport").evaluate("node => node.scrollTop = node.scrollHeight * .92")
+        self.page.wait_for_function("() => Number(document.querySelector('#page-number').value) > 1000")
+        self.page.wait_for_function("() => !document.querySelector('.reader-page[data-page=\"1\"]')")
+        self.assertEqual(self.page.locator('.reader-page[data-page="1"]').count(), 0)
+        self.assertLessEqual(self.page.locator(".reader-page").count(), 160)
+        self.assertEqual(self.page.locator('.reader-page[data-page="1"]').count(), 0)
+        self.page.locator("#page-number").fill("1")
+        self.page.locator("#page-number").dispatch_event("change")
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for()
+        self.assertLessEqual(self.page.locator(".reader-page").count(), 160)
 
     def test_reader_toolbar_controls_have_accessible_names_and_state(self):
         self.open_reader()

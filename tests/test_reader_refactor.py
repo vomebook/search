@@ -270,7 +270,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(state="attached")
 
     def test_pdf_retries_transient_proxy_failure_while_download_starts(self):
-        requests = []
+        requests, held = [], []
         direct = []
         def reader_content(route):
             requests.append(route)
@@ -738,7 +738,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "source_sha256": "a" * 64, "profile": "test-layout-v1-index",
             "page_count": 1, "pages": [{"p": 1, "o": root + "/ocr/page-000001.json.gz"}],
             "book_text": {"path": book_path, "bytes": len(book), "sha256": hashlib.sha256(book).hexdigest()}}
-        requests = []
+        requests, held = [], []
         def resource(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
             requests.append(path)
@@ -762,14 +762,30 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_pdf_ocr_progress_preserves_full_first_page_and_focus(self):
         def pause_after_first_page(route):
             response = route.fetch()
-            needle = "yieldTask: () => waitForReader(0),"
+            needle = "scanned, pages, ...partial.page(0) });"
             script = response.text()
             self.assertIn(needle, script)
-            route.fulfill(response=response, body=script.replace(needle,
-                "yieldTask: () => window.__holdOcrScan ? new Promise(resolve => { "
-                "window.__releaseOcrScan = () => { window.__holdOcrScan = false; resolve(); }; "
-                "}) : waitForReader(0),"))
-        self.page.route("**/static/reader.js?*", pause_after_first_page)
+            script = script.replace("progress: (partial, scanned, pages) => {",
+                "progress: async (partial, scanned, pages) => {")
+            route.fulfill(response=response, body=script.replace(needle, needle + """
+                if (scanned === 1) await new Promise(resolve => {
+                  const release = event => {
+                    if (event.data.type !== 'test-release') return;
+                    self.removeEventListener('message', release);
+                    resolve();
+                  };
+                  self.addEventListener('message', release);
+                });"""))
+        self.page.route("**/static/reader-pdf-book-search-worker.mjs*", pause_after_first_page)
+        self.page.add_init_script("""(() => {
+          const NativeWorker = window.Worker;
+          window.Worker = class extends NativeWorker {
+            constructor(url, options) {
+              super(url, options);
+              if (String(url).includes('reader-pdf-book-search-worker')) window.__pdfSearchWorker = this;
+            }
+          };
+        })()""")
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
             content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 3")))
         root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
@@ -798,12 +814,95 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(self.reader_url("pdf", ocr_manifest=manifest_url))
         self.page.locator("#history").click()
         self.page.locator("#full-search-toggle").click()
-        self.page.evaluate("window.__holdOcrScan = true")
         self.page.locator("#full-search-input").fill("needle")
-        self.page.wait_for_function("() => !!window.__releaseOcrScan && document.querySelectorAll('.full-search-result').length === 50")
-        self.page.evaluate("() => { window.__firstOcrRow = document.querySelector('.full-search-result'); __firstOcrRow.focus(); window.__releaseOcrScan(); }")
+        self.page.wait_for_function("() => !!window.__pdfSearchWorker && document.querySelectorAll('.full-search-result').length === 50")
+        self.page.evaluate("() => { window.__firstOcrRow = document.querySelector('.full-search-result'); __firstOcrRow.focus(); window.__pdfSearchWorker.postMessage({type: 'test-release'}); }")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '61 个结果'")
         self.assertTrue(self.page.evaluate("() => document.querySelector('.full-search-result') === window.__firstOcrRow && document.activeElement === window.__firstOcrRow"))
+
+    def test_pdf_ocr_worker_pages_deep_results_and_reuses_book(self):
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 2")))
+        root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
+        manifest_path = root + "/ocr-manifest.json"
+        book_path = root + "/ocr/book-text.json.gz"
+        book = gzip.compress(json.dumps({"version": 2, "kind": "pdf-book-text", "complete": True,
+            "offset_unit": "unicode-codepoint", "source_sha256": "a" * 64, "page_count": 2,
+            "pages": [{"page": page, "text": text, "layout": {"offset_unit": "unicode-codepoint"},
+                       "text_spans": []} for page, text in ((1, "needle " * 620), (2, "tail"))]}).encode())
+        manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
+                    "source_sha256": "a" * 64, "profile": "test-layout-v1-index", "page_count": 2,
+                    "pages": [{"p": page, "o": root + f"/ocr/page-{page:06d}.json.gz"} for page in (1, 2)],
+                    "book_text": {"path": book_path, "bytes": len(book), "sha256": hashlib.sha256(book).hexdigest()}}
+        book_requests = []
+        def resource(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            headers = {"Access-Control-Allow-Origin": "*"}
+            if path == manifest_path:
+                route.fulfill(json=manifest, headers=headers)
+            elif path == book_path:
+                book_requests.append(path)
+                route.fulfill(content_type="application/gzip", body=book, headers=headers)
+            else:
+                route.fulfill(status=404, headers=headers)
+        self.page.route("**/api/reader-bucket-resource**", resource)
+        self.open(self.reader_url("pdf", ocr_manifest="https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + manifest_path))
+        self.search("needle")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "620 个结果")
+        self.page.locator("#full-search-page").fill("11")
+        self.page.locator("#full-search-page").dispatch_event("change")
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '501.'")
+        self.assertEqual(self.page.locator(".full-search-result").count(), 50)
+        self.page.locator("#full-search-input").fill("tail")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.assertIn("第 2 页", self.page.locator(".full-search-result").first.text_content())
+        self.assertEqual(book_requests, [book_path])
+
+    def test_pdf_ocr_worker_retries_corrupt_book_and_can_cancel(self):
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 1")))
+        root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
+        manifest_path, book_path = root + "/ocr-manifest.json", root + "/ocr/book-text.json.gz"
+        book = gzip.compress(json.dumps({"version": 2, "kind": "pdf-book-text", "complete": True,
+            "offset_unit": "unicode-codepoint", "source_sha256": "a" * 64, "page_count": 1,
+            "pages": [{"page": 1, "text": "needle", "layout": {"offset_unit": "unicode-codepoint"},
+                       "text_spans": []}]}).encode())
+        manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
+                    "source_sha256": "a" * 64, "profile": "test-layout-v1-index", "page_count": 1,
+                    "pages": [{"p": 1, "o": root + "/ocr/page-000001.json.gz"}],
+                    "book_text": {"path": book_path, "bytes": len(book), "sha256": hashlib.sha256(book).hexdigest()}}
+        requests, held = [], []
+        def resource(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            headers = {"Access-Control-Allow-Origin": "*"}
+            if path == manifest_path:
+                route.fulfill(json=manifest, headers=headers)
+            elif path == book_path:
+                requests.append(path)
+                if len(requests) == 1:
+                    held.append(route)
+                    return
+                payload = b"x" * len(book) if len(requests) == 2 else book
+                route.fulfill(content_type="application/gzip", body=payload, headers=headers)
+            else:
+                route.fulfill(status=404, headers=headers)
+        self.page.route("**/api/reader-bucket-resource**", resource)
+        self.open(self.reader_url("pdf", ocr_manifest="https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + manifest_path))
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        with self.page.expect_request(lambda request: urllib.parse.parse_qs(
+                urllib.parse.urlsplit(request.url).query).get("path") == [book_path]):
+            self.page.locator("#full-search-input").fill("needle")
+        self.page.locator("#full-search-cancel").click()
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "搜索已取消")
+        for route in held:
+            try: route.abort()
+            except support.PlaywrightError: pass
+        self.page.locator("#full-search-retry").click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('PDF_OCR_HASH_MISMATCH')")
+        self.page.locator("#full-search-retry").click()
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.assertEqual(requests, [book_path] * 3)
 
     def test_media_proxy_failure_retries_original_once(self):
         buffer = io.BytesIO()
