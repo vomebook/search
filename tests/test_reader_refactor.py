@@ -752,6 +752,8 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.route("**/api/reader-bucket-resource**", resource)
         manifest_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + manifest_path
         self.open(self.reader_url("pdf", ocr_manifest=manifest_url))
+        self.page.wait_for_timeout(7000)
+        self.assertEqual(requests, [manifest_path, book_path])
         self.page.locator("#history").click()
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill("索引独有")

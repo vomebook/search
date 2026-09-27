@@ -87,7 +87,7 @@ self.onmessage = async ({ data }) => {
     controller?.abort();
     return;
   }
-  if (data.type !== "search" && data.type !== "page") return;
+  if (data.type !== "search" && data.type !== "page" && data.type !== "prefetch") return;
   const token = data.type === "search" ? ++active : active;
   const current = () => token === active;
   try {
@@ -110,6 +110,9 @@ self.onmessage = async ({ data }) => {
       if (!current()) return;
       session = { id: data.id, index };
       self.postMessage({ id: data.id, session: session.id, ...index.page(0) });
+    } else if (data.type === "prefetch") {
+      await loadBook();
+      if (current()) self.postMessage({ id: data.id, session, ready: true });
     } else {
       if (!session || data.session !== session.id) throw aborted();
       self.postMessage({ id: data.id, session: session.id, ...session.index.page(data.offset) });
