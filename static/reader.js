@@ -305,6 +305,9 @@ const loadingStatus = document.querySelector("#loading-status");
 const downloadButton = document.querySelector("#download");
 const downloadFeedback = document.querySelector("#download-feedback");
 let readerSourcePromise = null;
+let readerRestorationPromise = null;
+let readerRestorationEntry = null;
+let readerRestorationLoaded = false;
 let downloadFeedbackTimer = 0;
 function showDownloadFeedback(message, duration = 4000) {
   clearTimeout(downloadFeedbackTimer);
@@ -442,6 +445,12 @@ let pdfDocument = null;
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
+const pdfTextContentCache = new Map();
+const PDF_TEXT_CONTENT_CACHE_BYTES = 4 * 1024 * 1024;
+let pdfTextContentCacheBytes = 0;
+const pdfOcrPageCache = new Map();
+const PDF_OCR_PAGE_CACHE_BYTES = 4 * 1024 * 1024;
+let pdfOcrPageCacheBytes = 0;
 let pdfSearchPageLoader = null;
 let pdfSearchInProgress = false;
 let pdfBookSearchModulePromise = null;
@@ -1503,6 +1512,18 @@ async function loadReaderRestoration() {
     restorationFailed = true;
     return null;
   }
+}
+async function getInitialReaderRestoration() {
+  if (!readerRestorationPromise) return null;
+  if (!readerRestorationLoaded) {
+    readerRestorationEntry = await awaitReader(readerRestorationPromise);
+    readerRestorationLoaded = true;
+  }
+  return readerRestorationEntry;
+}
+function initialReaderPage(total) {
+  const page = Number(readerRestorationEntry?.page);
+  return Number.isInteger(page) ? Math.max(1, Math.min(total, page)) : 1;
 }
 function consumeBookmarkHandoff(entry) {
   if (!entry || entry.id !== params.get("bookmark") || entry.url !== params.get("bookmark_source"))
@@ -2620,6 +2641,65 @@ async function loadPdfOcrManifest() {
   try { return await pdfOcrManifestPromise; }
   catch (error) { pdfOcrManifestPromise = null; throw error; }
 }
+function estimatePdfTextContentBytes(content) {
+  let bytes = 0;
+  for (const item of content?.items || [])
+    bytes += String(item.str || "").length * 2 + (item.transform?.length || 0) * 8 + 64;
+  for (const style of Object.values(content?.styles || {}))
+    bytes += Object.entries(style || {}).reduce(
+      (total, [key, value]) => total + key.length + String(value).length * 2 + 16, 0
+    );
+  return Math.max(128, bytes);
+}
+function cachePdfTextContent(page, content) {
+  const bytes = estimatePdfTextContentBytes(content);
+  if (bytes > PDF_TEXT_CONTENT_CACHE_BYTES) return;
+  const previous = pdfTextContentCache.get(page);
+  if (previous) pdfTextContentCacheBytes -= previous.bytes;
+  pdfTextContentCache.delete(page);
+  pdfTextContentCache.set(page, { content, bytes });
+  pdfTextContentCacheBytes += bytes;
+  while (pdfTextContentCacheBytes > PDF_TEXT_CONTENT_CACHE_BYTES) {
+    const oldest = pdfTextContentCache.keys().next().value;
+    const removed = pdfTextContentCache.get(oldest);
+    pdfTextContentCacheBytes -= removed.bytes;
+    pdfTextContentCache.delete(oldest);
+  }
+}
+function cachedPdfTextContent(page) {
+  const record = pdfTextContentCache.get(page);
+  if (!record) return null;
+  pdfTextContentCache.delete(page);
+  pdfTextContentCache.set(page, record);
+  return record.content;
+}
+function estimatePdfOcrPageBytes(payload) {
+  return Math.max(128, (payload?.blocks || []).reduce(
+    (total, block) => total + String(block?.t || "").length * 2 + 48, 0
+  ));
+}
+function cachePdfOcrPage(page, payload) {
+  const bytes = estimatePdfOcrPageBytes(payload);
+  if (bytes > PDF_OCR_PAGE_CACHE_BYTES) return;
+  const previous = pdfOcrPageCache.get(page);
+  if (previous) pdfOcrPageCacheBytes -= previous.bytes;
+  pdfOcrPageCache.delete(page);
+  pdfOcrPageCache.set(page, { payload, bytes });
+  pdfOcrPageCacheBytes += bytes;
+  while (pdfOcrPageCacheBytes > PDF_OCR_PAGE_CACHE_BYTES) {
+    const oldest = pdfOcrPageCache.keys().next().value;
+    const removed = pdfOcrPageCache.get(oldest);
+    pdfOcrPageCacheBytes -= removed.bytes;
+    pdfOcrPageCache.delete(oldest);
+  }
+}
+function cachedPdfOcrPage(page) {
+  const record = pdfOcrPageCache.get(page);
+  if (!record) return null;
+  pdfOcrPageCache.delete(page);
+  pdfOcrPageCache.set(page, record);
+  return record.payload;
+}
 
 async function renderPdfOcrText(shell) {
   if (shell.dataset.textReady === "1" || !pdfPageManifest || !ocrManifestUrl) return;
@@ -2636,8 +2716,12 @@ async function renderPdfOcrText(shell) {
       await acquirePdfTextSlot(isPdfPageVisible(shell));
       try {
         if (epoch !== (shell._textEpoch || 0)) return;
-        const payload = await readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
-          VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob);
+        let payload = cachedPdfOcrPage(page);
+        if (!payload) {
+          payload = await readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
+            VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob);
+          cachePdfOcrPage(page, payload);
+        }
         assertReaderActive();
         if (epoch !== (shell._textEpoch || 0)) return;
         VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
@@ -3006,6 +3090,9 @@ async function renderPdfPages(prepared) {
   pageInput.max = String(totalPages);
   document.querySelector("#page-total").textContent = `/ ${totalPages}`;
   status.textContent = `${totalPages} 页`;
+  await getInitialReaderRestoration();
+  const initialPage = initialReaderPage(totalPages);
+  let initialRenderGate = true;
   if (Array.isArray(manifest.toc) && manifest.toc.length)
     setToc(
       manifest.toc.map((item) => ({
@@ -3038,6 +3125,22 @@ async function renderPdfPages(prepared) {
     },
     { root: viewport, threshold: 0 }
   );
+  const observeShell = (shell) => {
+    if (initialRenderGate) {
+      shell._pdfObserversPending = true;
+      return;
+    }
+    observer.observe(shell);
+    visibleObserver.observe(shell);
+  };
+  const releaseInitialRenderGate = () => {
+    initialRenderGate = false;
+    for (const shell of content.querySelectorAll(".reader-page")) {
+      if (!shell._pdfObserversPending) continue;
+      delete shell._pdfObserversPending;
+      observeShell(shell);
+    }
+  };
   trackReaderResource(() => {
     observer.disconnect();
     visibleObserver.disconnect();
@@ -3063,8 +3166,7 @@ async function renderPdfPages(prepared) {
     )
       shell.appendChild(pdfFirstPagePreload);
     shell.addEventListener("focus", () => renderPdfInBackground(shell));
-    observer.observe(shell);
-    visibleObserver.observe(shell);
+    observeShell(shell);
     return shell;
   };
   const firstShell = createShell(1);
@@ -3075,7 +3177,16 @@ async function renderPdfPages(prepared) {
   }, 1.414);
   pdfShellsReady = pdfShellWindow ? Promise.resolve() : appendShellsBatched(createShell, totalPages, 250);
   pdfShellsReady.catch(() => {});
-  await renderPdfManifestShell(firstShell, false, true);
+  try {
+    const targetShell = pdfShellWindow
+      ? pdfShellWindow.ensure(initialPage)
+      : (await pdfShellsReady, content.querySelector(`.reader-page[data-page="${initialPage}"]`));
+    if (!targetShell) throw new Error("PDF initial page shell missing");
+    await renderPdfManifestShell(targetShell, false, true);
+    viewport.scrollTop = targetShell.offsetTop;
+  } finally {
+    releaseInitialRenderGate();
+  }
 }
 async function renderPdf(prepared) {
   const pdf = await prepared;
@@ -3085,7 +3196,10 @@ async function renderPdf(prepared) {
   pageInput.max = String(documentState.pageCount);
   document.querySelector("#page-total").textContent = `/ ${documentState.pageCount}`;
   status.textContent = `${pdf.numPages} 页`;
-  const firstPage = await pdf.getPage(1);
+  await getInitialReaderRestoration();
+  const initialPage = initialReaderPage(pdf.numPages);
+  let initialRenderGate = true;
+  const firstPage = await pdf.getPage(initialPage);
   assertReaderActive();
   const firstViewport = firstPage.getViewport({ scale: 1 });
   const observer = new IntersectionObserver(
@@ -3114,6 +3228,23 @@ async function renderPdf(prepared) {
     root: document.querySelector("#viewport"),
     threshold: [0, 0.5, 1]
   });
+  const observeShell = (shell) => {
+    if (initialRenderGate) {
+      shell._pdfObserversPending = true;
+      return;
+    }
+    observer.observe(shell);
+    visibleObserver.observe(shell);
+    pageObserver.observe(shell);
+  };
+  const releaseInitialRenderGate = () => {
+    initialRenderGate = false;
+    for (const shell of content.querySelectorAll(".reader-page")) {
+      if (!shell._pdfObserversPending) continue;
+      delete shell._pdfObserversPending;
+      observeShell(shell);
+    }
+  };
   trackReaderResource(() => {
     observer.disconnect();
     visibleObserver.disconnect();
@@ -3135,20 +3266,27 @@ async function renderPdf(prepared) {
     textLayer.setAttribute("aria-label", `第 ${page} 页正文`);
     shell.append(canvas, textLayer);
     shell.addEventListener("focus", () => renderPdfInBackground(shell));
-    observer.observe(shell);
-    visibleObserver.observe(shell);
-    pageObserver.observe(shell);
+    observeShell(shell);
     return shell;
   };
   const firstShell = createShell(1);
   content.appendChild(firstShell);
-  await renderPdfShell(firstShell, false, true);
   pdfShellWindow = createPdfShellWindow(pdf.numPages, firstShell, createShell, (shell) => {
     observer.unobserve(shell);
     visibleObserver.unobserve(shell);
     pageObserver.unobserve(shell);
   }, firstViewport.height / firstViewport.width);
   pdfShellsReady = pdfShellWindow ? Promise.resolve() : appendShellsBatched(createShell, pdf.numPages, 24);
+  try {
+    const targetShell = pdfShellWindow
+      ? pdfShellWindow.ensure(initialPage)
+      : (await pdfShellsReady, content.querySelector(`.reader-page[data-page="${initialPage}"]`));
+    if (!targetShell) throw new Error("PDF initial page shell missing");
+    await renderPdfShell(targetShell, false, true);
+    viewport.scrollTop = targetShell.offsetTop;
+  } finally {
+    releaseInitialRenderGate();
+  }
   const outlineReady = (async () => {
     if (typeof pdf.getOutline !== "function") return;
     try {
@@ -3195,7 +3333,19 @@ function isPdfPageVisible(shell) {
   const viewportRect = viewport?.getBoundingClientRect?.();
   return !!pageRect && !!viewportRect && pageRect.bottom > viewportRect.top && pageRect.top < viewportRect.bottom;
 }
-function renderPdfInBackground(shell, force = false, priority = isPdfPageVisible(shell)) {
+function pdfPagePriority(shell) {
+  if (isPdfPageVisible(shell)) return 2;
+  const pageRect = shell?.getBoundingClientRect?.();
+  const viewportRect = viewport?.getBoundingClientRect?.();
+  return pageRect && viewportRect &&
+    pageRect.bottom > viewportRect.top - PDF_PREFETCH_MARGIN &&
+    pageRect.top < viewportRect.bottom + PDF_PREFETCH_MARGIN ? 1 : 0;
+}
+function normalizePdfPriority(priority) {
+  return priority === true ? 2 : Math.max(0, Math.min(2, Number(priority) || 0));
+}
+function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(shell)) {
+  priority = normalizePdfPriority(priority);
   if (readerAbortController.signal.aborted) return;
   if (priority) {
     shell.dataset.renderPriority = "1";
@@ -3204,7 +3354,7 @@ function renderPdfInBackground(shell, force = false, priority = isPdfPageVisible
   if (shell._backgroundRender) {
     if (priority && capability.mode === "pdf-pages") {
       const image = shell.querySelector("img");
-      if (image) image.fetchPriority = "high";
+      if (image) image.fetchPriority = priority >= 2 ? "high" : "auto";
     }
     if (force) shell.dataset.pendingRerender = "1";
     return shell._backgroundRender;
@@ -3241,7 +3391,8 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
   const renderController = new AbortController();
   shell._renderCancel = () => renderController.abort();
   shell._renderStarted = false;
-  shell._renderActivePriority = priority || shell.dataset.renderVisible === "1" ? "1" : "0";
+  priority = normalizePdfPriority(priority || (shell.dataset.renderVisible === "1" ? 2 : 0));
+  shell._renderActivePriority = String(priority);
   const task = (async () => {
     let acquired = false;
     try {
@@ -3252,6 +3403,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       const entry = pdfPageEntry(Number(shell.dataset.page));
       if (!entry) throw new Error("PDF page entry missing");
       const target = pdfPageManifest.pageUrl(entry.page);
+      let loadText = null;
       let image = shell.querySelector("img");
       if (!image) {
         image = takePdfManifestPrefetch(target) || new Image();
@@ -3259,7 +3411,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
         image.decoding = "async";
         shell.appendChild(image);
       }
-      image.fetchPriority = isPdfPageVisible(shell) ? "high" : "low";
+      image.fetchPriority = priority >= 2 ? "high" : priority >= 1 ? "auto" : "low";
        await new Promise((resolve, reject) => {
          let settled = false,
            timeout = 0,
@@ -3286,14 +3438,15 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
         );
          image.onload = () => finish();
          image.onerror = () => finish(new Error(`PDF page ${entry.page} image failed`));
-         if (image.src !== target) image.src = target;
-         if (priority && ocrManifestUrl && !navigator.connection?.saveData)
-           loadPdfOcrManifest().catch(() => {});
+          if (image.src !== target) image.src = target;
+          if (priority && ocrManifestUrl && !navigator.connection?.saveData)
+            loadText = renderPdfOcrText(shell);
+          loadText?.catch(() => {});
          if (image.complete && image.naturalWidth) finish();
       });
       assertReaderActive();
       shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
-      const loadText = renderPdfOcrText(shell);
+       loadText ||= renderPdfOcrText(shell);
       loadText.catch(() => {});
       image.classList.add("ready");
       shell.dataset.renderState = "rendered";
@@ -3337,6 +3490,7 @@ function renderPdfShell(shell, force = false, priority = false) {
   if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
   shell.dataset.renderState = "rendering";
   const renderController = new AbortController();
+  priority = normalizePdfPriority(priority || (shell.dataset.renderVisible === "1" ? 2 : 0));
   let activeRendering = null;
   shell._renderCancel = () => {
     renderController.abort();
@@ -3408,7 +3562,9 @@ async function renderPdfText(page, shell, signal = null) {
   const layer = shell.querySelector(".reader-pdf-text");
   if (!layer || typeof page.getTextContent !== "function") return;
   try {
-    const text = await awaitReader(page.getTextContent());
+    const pageNumber = Number(shell.dataset.page);
+    const text = cachedPdfTextContent(pageNumber) || await awaitReader(page.getTextContent());
+    cachePdfTextContent(pageNumber, text);
     assertReaderActive();
     if (signal?.aborted) return;
     const pdfViewport = page.getViewport({ scale: 1 });
@@ -3459,7 +3615,7 @@ function highlightPdfText(shell, query = searchState.query) {
 
 function promotePdfRenderWaiter(shell) {
   for (const waiter of pdfRenderWaiters) {
-    if (waiter.shell === shell) waiter.priority = true;
+    if (waiter.shell === shell) waiter.priority = Math.max(waiter.priority, 2);
   }
 }
 function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
@@ -3483,6 +3639,7 @@ function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
       remove();
       reject(readerAbortError());
     };
+    priority = normalizePdfPriority(priority);
     const waiter = {
       shell,
       priority,
@@ -3501,16 +3658,21 @@ function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
       }
     };
     signal?.addEventListener("abort", abort, { once: true });
-    if (priority) pdfRenderWaiters.unshift(waiter);
-    else pdfRenderWaiters.push(waiter);
+    const index = pdfRenderWaiters.findIndex((item) => item.priority < priority);
+    if (index < 0) pdfRenderWaiters.push(waiter);
+    else pdfRenderWaiters.splice(index, 0, waiter);
   });
 }
 function releasePdfRenderSlot() {
   pdfActiveRenders = Math.max(0, pdfActiveRenders - 1);
   if (readerAbortController.signal.aborted) return;
-  let index = pdfRenderWaiters.findIndex(
-    (waiter) => waiter.priority || (waiter.shell && isPdfPageVisible(waiter.shell))
-  );
+  let index = -1, best = 0;
+  for (let i = 0; i < pdfRenderWaiters.length; i++) {
+    const waiter = pdfRenderWaiters[i], value = Math.max(
+      waiter.priority, waiter.shell ? pdfPagePriority(waiter.shell) : 0
+    );
+    if (value > best) { best = value; index = i; }
+  }
   if (index < 0) index = 0;
   const waiter = pdfRenderWaiters.splice(index, 1)[0];
   if (waiter) waiter.resolve();
@@ -4010,7 +4172,10 @@ async function renderChapterManifest(prepared) {
         console.warn("EPUB chapter could not be loaded", error);
       });
     });
-    frame.appendChild(marker);
+    const next = [...frame.querySelectorAll(
+      ".reader-epub-chapter[data-chapter], .reader-chapter-sentinel[data-chapter]"
+    )].find((node) => Number(node.dataset.chapter) > chapter.index);
+    frame.insertBefore(marker, next || null);
     chapterManifestObserver.observe(marker);
     return marker;
   };
@@ -4181,8 +4346,14 @@ async function renderChapterManifest(prepared) {
     return frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`);
   };
   setChapterToc();
-  await fetchChapter(manifest.chapters[0]);
-  prefetchChapters(1);
+  await getInitialReaderRestoration();
+  const savedChapter = Number(readerRestorationEntry?.chapterIndex) - 1;
+  const initialChapter = Number.isInteger(savedChapter)
+    ? Math.max(0, Math.min(manifest.chapters.length - 1, savedChapter))
+    : 0;
+  if (initialChapter > 0) ensureSentinel(manifest.chapters[0]);
+  await fetchChapter(manifest.chapters[initialChapter]);
+  prefetchChapters(initialChapter + 1);
   assertReaderActive();
   status.textContent = `EPUB · ${manifest.chapters.length} 章`;
 }
@@ -4253,6 +4424,10 @@ function disposeFormatResources(mode) {
     pdfPageManifest = null;
     pdfOcrManifest = null;
     pdfOcrManifestPromise = null;
+    pdfTextContentCache.clear();
+    pdfTextContentCacheBytes = 0;
+    pdfOcrPageCache.clear();
+    pdfOcrPageCacheBytes = 0;
     clearPdfManifestPrefetches();
     pdfBookSearchClient?.dispose();
     pdfBookSearchClient = null;
@@ -4520,6 +4695,7 @@ async function start() {
       setReaderStage("foliate");
       foliateContinuous = true;
       const restorationPromise = loadReaderRestoration();
+      readerRestorationPromise = restorationPromise;
       await awaitReader(renderFoliate());
       assertReaderActive();
       const restored = await awaitReader(restorationPromise);
@@ -4532,6 +4708,7 @@ async function start() {
     }
     setReaderStage("prepare");
     const restorationPromise = loadReaderRestoration();
+    readerRestorationPromise = restorationPromise;
     const prepared = await awaitReader(formatAdapters.active.open());
     assertReaderActive();
     await formatAdapters.active.render(prepared);
@@ -5148,8 +5325,13 @@ async function renderFoliate() {
   epubBook = view.book;
   view.style.display = "none";
   const sections = view.book.sections.filter((section) => section.linear !== "no");
+  await getInitialReaderRestoration();
+  const savedSection = Number(readerRestorationEntry?.foliateSection);
+  const initialSection = Number.isInteger(savedSection)
+    ? Math.max(0, Math.min(sections.length - 1, savedSection))
+    : 0;
   setupFoliateWindow(stream, sections);
-  if (sections[0]) await foliateChapterRepository.load(0);
+  if (sections[initialSection]) await foliateChapterRepository.load(initialSection);
   assertReaderActive();
   // Resolving every TOC href can be expensive for large books. The first
   // chapter is already visible, so finish the opening path before enriching
