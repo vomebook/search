@@ -675,6 +675,31 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(pending, [])
         self.assertEqual(self.page_errors, [])
 
+    def test_late_reader_assets_update_directory_without_replacing_rows(self):
+        self.load("#/VOMEBOOK")
+        self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
+        self.page.evaluate("""() => {
+            readerAssets = null;
+            loadReaderAssets = () => new Promise(resolve => {
+                window.finishDirectoryAssets = () => { readerAssets = {}; resolve(readerAssets); };
+            });
+            applyReaderAsset = record => readerAssets
+                ? {...record, ReaderLink: 'https://voiceofml-search.hf.space/test.epub', ReaderExtension: 'epub'}
+                : record;
+            getFolderContents = () => Promise.resolve({
+                folders: [], files: [{name: 'book.caj', ext: 'caj', size: 1}]
+            });
+            ROUTER.navigate('repo', STATE.repo, 'late-assets');
+        }""")
+        self.page.locator('.browser-list .browser-item[data-link]').wait_for()
+        self.page.evaluate("window.directoryFileRow = document.querySelector('.browser-list .browser-item[data-link]')")
+        before = self.page.evaluate("window.directoryFileRow.dataset.readerUrl || ''")
+        self.page.evaluate("window.finishDirectoryAssets()")
+        self.page.wait_for_function("() => !!window.directoryFileRow.dataset.readerUrl && !!readerAssets")
+        self.assertNotEqual(self.page.evaluate("window.directoryFileRow.dataset.readerUrl"), before)
+        self.assertTrue(self.page.evaluate("window.directoryFileRow.isConnected"))
+        self.assertEqual(self.page_errors, [])
+
     def test_directory_falls_back_to_api_when_local_worker_fails(self):
         self.load("#/VOMEBOOK")
         self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
