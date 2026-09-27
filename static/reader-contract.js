@@ -68,12 +68,6 @@
         dispose
       };
       preload.manifest.catch(() => {});
-      if (!navigator.connection?.saveData) {
-        preload.image = new Image();
-        preload.image.decoding = "async";
-        preload.image.fetchPriority = "low";
-        preload.image.src = pageUrl.href;
-      }
       root.addEventListener?.("pagehide", onPageHide);
       root.__VOICE_PDF_PRELOAD__ = preload;
     } catch (_) {}
