@@ -75,6 +75,28 @@ export function getDocument() {
   return { promise: Promise.resolve({ numPages: 30, getPage: () => Promise.resolve(page), getOutline: () => Promise.resolve(window.__pdfOutlineEnabled ? [{title: '第一章', dest: [{}], items: []}] : null), getPageIndex: () => Promise.resolve(0) }) };
 }
 """
+PDF_JUMP_MODULE = """
+export const GlobalWorkerOptions = {};
+export class PDFWorker { promise = Promise.resolve(); destroy() {} }
+export function getDocument() {
+  const page = (number) => ({
+    getViewport({ scale }) { return { width: 600 * scale, height: 800 * scale }; },
+    getTextContent() { return Promise.resolve({ items: [{ str: `Page ${number}`, hasEOL: false }] }); },
+    render() {
+      return { promise: number === 20
+        ? new Promise(resolve => { window.__releasePdfJump = resolve; })
+        : Promise.resolve() };
+    },
+  });
+  const pdf = {
+    numPages: 30,
+    getPage: number => Promise.resolve(page(number)),
+    getOutline: () => Promise.resolve([{ title: '第二十页', dest: [{}], items: [] }]),
+    getPageIndex: () => Promise.resolve(19),
+  };
+  return { promise: Promise.resolve(pdf) };
+}
+"""
 STORE_SCRIPT = """
 window.__storeStartedAt = performance.now();
 window.__readerBookmarks = [];
@@ -1226,6 +1248,22 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.open_reader()
         self.page.locator("#history").click(); self.page.locator("#toc-list .panel-item-main").click()
         self.page.wait_for_function("() => document.querySelector('#page-number').value === '3'")
+
+    def test_pdf_outline_jump_scrolls_before_target_render_finishes(self):
+        self.page.unroute("**/static/vendor/pdf.min.*.mjs")
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PDF_JUMP_MODULE))
+        self.page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(SOURCE_URL, safe='')}&ext=pdf&title=Performance", wait_until="domcontentloaded")
+        self.page.locator(".reader-page").nth(29).wait_for(state="attached")
+        self.page.locator("#history").click()
+        self.page.locator("#toc-list .panel-item-main").click()
+        self.page.wait_for_function("""() => {
+            const viewport = document.querySelector('#viewport');
+            return document.querySelector('#page-number').value === '20' &&
+              viewport.scrollTop > 1000 && typeof window.__releasePdfJump === 'function';
+        }""")
+        self.assertGreater(self.page.locator("#viewport").evaluate("node => node.scrollTop"), 1000)
+        self.page.evaluate("window.__releasePdfJump()")
+        self.page.locator('.reader-page[data-page="20"] canvas.ready').wait_for()
 
     def test_pdf_outline_marks_current_entry_when_page_changes(self):
         self.page.add_init_script("window.__pdfOutlineEnabled = true")
