@@ -7,6 +7,7 @@ from tests.test_reader_performance import ReaderPerformanceTest
 CATEGORY_METHODS = {
     "layout": (
         "test_pdf_rendering_has_bounded_concurrency_and_canvas_memory",
+        "test_long_native_pdf_keeps_bounded_page_shells",
         "test_pdf_exposes_lazy_accessible_text",
         "test_reader_panel_bookmark_search_and_theme",
         "test_reader_controls_fit_viewport_without_overlap_and_work_on_mobile",
@@ -41,6 +42,7 @@ CATEGORY_METHODS = {
         "test_converted_pdf_pages_reject_invalid_manifest_and_missing_first_page",
         "test_converted_pdf_pages_report_error_when_later_page_is_missing",
         "test_converted_pdf_pages_fit_wide_images_without_overlap",
+        "test_pdf_pages_ocr_uses_manifest_paths_after_image_is_ready",
         "test_compact_pdf_manifest_virtualizes_and_navigates_to_distant_page",
         "test_oversized_chapter_manifest_and_response_use_resource_limit",
         "test_zip_bomb_metadata_is_rejected_before_docx_and_foliate_parsers",

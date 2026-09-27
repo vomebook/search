@@ -7,7 +7,7 @@ import "/search/static/reader-section-virtualizer.js";
 import "/search/static/reader-runtime.js";
 import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
-import { validateBookText, searchBookText, createBookTextCache, paintTextHit } from "/search/static/reader-book-text.js";
+import { paintTextHit } from "/search/static/reader-book-text.js";
 import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
@@ -444,16 +444,15 @@ let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
 let pdfSearchPageLoader = null;
 let pdfSearchInProgress = false;
-const pdfBookTextCache = createBookTextCache(async () => {
-  const manifest = await loadPdfOcrManifest();
-  if (!manifest?.book_text?.path) throw new Error("本书集中全文尚未生成");
-  const book = await readPdfOcrJson(pdfOcrSource().assetUrl(manifest.book_text.path),
-    VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes, manifest.book_text.sha256, manifest.book_text.bytes);
-  return validateBookText(book, documentState.pageCount, manifest.source_sha256);
+let pdfBookSearchModulePromise = null;
+let pdfBookSearchClient = null;
+trackReaderResource(() => {
+  pdfBookSearchClient?.dispose();
+  pdfBookSearchClient = null;
 });
-trackReaderResource(() => pdfBookTextCache.clear());
 let pdfActiveRenders = 0;
 let pdfShellsReady = Promise.resolve();
+let pdfShellWindow = null;
 const pdfRenderWaiters = [];
 let pdfActiveTextLoads = 0;
 const pdfTextWaiters = [];
@@ -795,6 +794,7 @@ function setZoom(percent, persist = true) {
   updateDocumentState({ zoom: normalized / 100 });
   content.style.setProperty("--reader-zoom", String(documentState.zoom));
   zoomInput.value = String(normalized);
+  pdfShellWindow?.resize();
   if (htmlFrame && htmlFrame.contentDocument)
     htmlFrame.contentDocument.documentElement.style.zoom = String(documentState.zoom);
   if (pdfDocument) rerenderVisiblePdfPages();
@@ -881,6 +881,7 @@ async function goToPage(value, generation = beginReaderNavigation()) {
     if (!documentState.pageCount || !isReaderGenerationCurrent("navigation", generation))
       return false;
     const page = VoiceOfMLReader.clampNumber(value, 1, documentState.pageCount, 1);
+    pdfShellWindow?.ensure(page);
     // The first page is usable before the background shell queue finishes.
     // Only wait when the requested shell has not been materialized yet.
     let shell = content.querySelector(
@@ -1146,6 +1147,7 @@ function syncHeadingLocation() {
 }
 function handleReaderPositionChange() {
   if (readerAbortController.signal.aborted) return;
+  pdfShellWindow?.schedule();
   scheduleMarkerSync();
   scheduleFoliateScrollSync();
   foliateScrollAnchors.remember();
@@ -2194,6 +2196,20 @@ function notePdfScrollIntent() {
 }
 for (const type of ["wheel", "touchstart", "pointerdown"])
   viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
+let pdfSelectionPointer = null;
+viewport.addEventListener("pointerdown", (event) => {
+  pdfSelectionPointer = event.target.closest?.(".reader-page")
+    ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null;
+}, { passive: true });
+document.addEventListener("pointerup", (event) => {
+  const start = pdfSelectionPointer;
+  pdfSelectionPointer = null;
+  if (!["pdf", "pdf-pages"].includes(capability.mode) || !start || start.id !== event.pointerId ||
+      Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
+  const x = event.clientX, y = event.clientY;
+  requestAnimationFrame(() => correctPdfCrossPageSelection(x, y));
+}, { passive: true });
+document.addEventListener("pointercancel", () => { pdfSelectionPointer = null; }, { passive: true });
 window.addEventListener("pagehide", (event) => {
   saveProgress(event);
   if (!event.persisted) disposeReader();
@@ -2570,6 +2586,7 @@ function trimPdfManifestImages(protectedShell) {
         Math.abs(Number(b.dataset.page) - documentState.page)
   );
   for (const shell of images.slice(25)) {
+    if (pdfSelectionIntersects(shell)) continue;
     shell._textEpoch = (shell._textEpoch || 0) + 1;
     delete shell._ocrPromise;
     shell.querySelector("img")?.remove();
@@ -2727,6 +2744,158 @@ async function appendShellsBatched(createShell, total, batchSize) {
     await waitForReader();
   }
 }
+function pdfSelectionIntersects(element) {
+  const selection = document.getSelection();
+  if (!selection?.rangeCount) return false;
+  if (element.contains(selection.anchorNode) || element.contains(selection.focusNode)) return true;
+  return !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(element);
+}
+function correctPdfCrossPageSelection(x, y) {
+  const selection = document.getSelection();
+  if (!selection?.rangeCount || selection.isCollapsed) return;
+  const origin = selection.anchorNode?.parentElement?.closest(".reader-page");
+  const target = document.elementFromPoint(x, y)?.closest(".reader-page");
+  if (!origin || !target || origin === target || !content.contains(origin) || !content.contains(target)) return;
+  const runs = [...target.querySelectorAll(".reader-pdf-text-run")].filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
+  if (!runs.length) return;
+  let nearest = null, distance = Infinity;
+  for (const run of runs) {
+    const rect = run.getBoundingClientRect();
+    const gap = Math.max(rect.top - y, y - rect.bottom, 0);
+    if (gap < distance) { nearest = run; distance = gap; }
+  }
+  const node = nearest.firstChild, rect = nearest.getBoundingClientRect();
+  let offset;
+  if (y < rect.top || y > rect.bottom) {
+    offset = y < rect.top ? 0 : node.length;
+  } else {
+    const range = document.createRange();
+    const vertical = getComputedStyle(nearest).writingMode.startsWith("vertical");
+    const position = vertical ? y : x;
+    let low = 0, high = node.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      range.setStart(node, mid);
+      range.setEnd(node, mid + 1);
+      const glyph = range.getBoundingClientRect();
+      const center = vertical ? (glyph.top + glyph.bottom) / 2 : (glyph.left + glyph.right) / 2;
+      if (center < position) low = mid + 1;
+      else high = mid;
+    }
+    offset = low;
+  }
+  selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node, offset);
+}
+function createPdfShellWindow(total, firstShell, createShell, unobserve, defaultRatio) {
+  if (total <= 256) return null;
+  const chunkSize = 32, chunks = [], ratios = new Map();
+  let frame = 0, disposed = false;
+  const chunkHeight = (chunk) => {
+    const style = getComputedStyle(content);
+    const width = (content.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) * documentState.zoom;
+    let height = 0;
+    for (let page = chunk.start; page <= chunk.end; page++)
+      height += Math.max(160, width * (ratios.get(page) || defaultRatio)) + 18;
+    return height;
+  };
+  const fragment = document.createDocumentFragment();
+  for (let start = 1; start <= total; start += chunkSize) {
+    const element = document.createElement("div");
+    element.className = "reader-pdf-chunk";
+    element.setAttribute("aria-hidden", "true");
+    const chunk = { element, start, end: Math.min(total, start + chunkSize - 1), mounted: false };
+    chunks.push(chunk);
+    element.style.height = `${chunkHeight(chunk)}px`;
+    fragment.appendChild(element);
+  }
+  content.appendChild(fragment);
+  function mount(chunk) {
+    if (chunk.mounted) return;
+    const pages = document.createDocumentFragment();
+    for (let page = chunk.start; page <= chunk.end; page++) {
+      const shell = page === 1 && firstShell.isConnected ? firstShell : createShell(page);
+      if (ratios.has(page)) shell.style.aspectRatio = `1 / ${ratios.get(page)}`;
+      pages.appendChild(shell);
+    }
+    chunk.element.style.height = "";
+    chunk.element.removeAttribute("aria-hidden");
+    chunk.element.appendChild(pages);
+    chunk.mounted = true;
+  }
+  function unmount(chunk) {
+    if (!chunk.mounted || chunk.element.contains(document.activeElement) ||
+        pdfSelectionIntersects(chunk.element)) return;
+    for (const shell of chunk.element.children) {
+      const page = Number(shell.dataset.page), bounds = shell.getBoundingClientRect();
+      if (bounds.width && bounds.height) ratios.set(page, bounds.height / bounds.width);
+      shell._textEpoch = (shell._textEpoch || 0) + 1;
+      shell._renderCancel?.();
+      unobserve(shell);
+      pdfManifestShells[page] = undefined;
+    }
+    chunk.element.replaceChildren();
+    chunk.element.style.height = `${chunkHeight(chunk)}px`;
+    chunk.element.setAttribute("aria-hidden", "true");
+    chunk.mounted = false;
+  }
+  function show(index) {
+    if (disposed) return;
+    const anchor = pageAtMarker();
+    const before = isPdfPageVisible(anchor) ? anchor.getBoundingClientRect().top : undefined;
+    for (let i = Math.max(0, index - 2); i <= Math.min(chunks.length - 1, index + 2); i++)
+      mount(chunks[i]);
+    for (let i = 0; i < chunks.length; i++)
+      if (Math.abs(i - index) > 2) unmount(chunks[i]);
+    if (anchor?.isConnected && before !== undefined)
+      viewport.scrollTop += anchor.getBoundingClientRect().top - before;
+  }
+  function sync() {
+    frame = 0;
+    if (disposed) return;
+    const marker = viewport.scrollTop + viewport.clientHeight / 2;
+    const index = chunks.findIndex((chunk) => chunk.element.offsetTop + chunk.element.offsetHeight > marker);
+    show(index < 0 ? chunks.length - 1 : index);
+  }
+  mount(chunks[0]);
+  const resizeObserver = new ResizeObserver(() => resize());
+  resizeObserver.observe(viewport);
+  function resize() {
+    if (disposed) return;
+    const anchor = pageAtMarker();
+    const before = isPdfPageVisible(anchor) ? anchor.getBoundingClientRect().top : undefined;
+    for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk)}px`;
+    if (anchor?.isConnected && before !== undefined)
+      viewport.scrollTop += anchor.getBoundingClientRect().top - before;
+    schedule();
+  }
+  function schedule() {
+    if (!disposed && !frame) frame = requestAnimationFrame(sync);
+  }
+  const window = {
+    ensure(page) {
+      const index = Math.floor((page - 1) / chunkSize);
+      show(index);
+      return chunks[index].element.querySelector(`.reader-page[data-page="${page}"]`);
+    },
+    remember(shell) {
+      if (!shell.isConnected) return;
+      const bounds = shell.getBoundingClientRect();
+      if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
+    },
+    schedule,
+    resize,
+    dispose() {
+      disposed = true;
+      if (frame) cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      chunks.length = 0;
+      ratios.clear();
+      pdfShellWindow = null;
+    }
+  };
+  trackReaderResource(() => window.dispose());
+  return window;
+}
 async function renderPdfPages(prepared) {
   const response = await prepared;
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2807,7 +2976,11 @@ async function renderPdfPages(prepared) {
   };
   const firstShell = createShell(1);
   content.appendChild(firstShell);
-  pdfShellsReady = appendShellsBatched(createShell, totalPages, 250);
+  pdfShellWindow = createPdfShellWindow(totalPages, firstShell, createShell, (shell) => {
+    observer.unobserve(shell);
+    visibleObserver.unobserve(shell);
+  }, 1.414);
+  pdfShellsReady = pdfShellWindow ? Promise.resolve() : appendShellsBatched(createShell, totalPages, 250);
   pdfShellsReady.catch(() => {});
   await renderPdfManifestShell(firstShell, false, true);
 }
@@ -2877,7 +3050,12 @@ async function renderPdf(prepared) {
   const firstShell = createShell(1);
   content.appendChild(firstShell);
   await renderPdfShell(firstShell, false, true);
-  pdfShellsReady = appendShellsBatched(createShell, pdf.numPages, 24);
+  pdfShellWindow = createPdfShellWindow(pdf.numPages, firstShell, createShell, (shell) => {
+    observer.unobserve(shell);
+    visibleObserver.unobserve(shell);
+    pageObserver.unobserve(shell);
+  }, firstViewport.height / firstViewport.width);
+  pdfShellsReady = pdfShellWindow ? Promise.resolve() : appendShellsBatched(createShell, pdf.numPages, 24);
   const outlineReady = (async () => {
     if (typeof pdf.getOutline !== "function") return;
     try {
@@ -3025,6 +3203,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       image.classList.add("ready");
       shell.dataset.renderState = "rendered";
       shell.dataset.renderUsedAt = String(Date.now());
+      pdfShellWindow?.remember(shell);
       if (isPdfPageVisible(shell) || !pdfManifestPrefetchOrigin) schedulePdfManifestPrefetch(entry.page);
       else if (!pdfManifestPrefetchActive.size && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
       trimPdfManifestImages(shell);
@@ -3109,6 +3288,7 @@ function renderPdfShell(shell, force = false, priority = false) {
       shell.querySelector("canvas").classList.add("ready");
       shell.dataset.renderState = "rendered";
       shell.dataset.renderUsedAt = String(Date.now());
+      pdfShellWindow?.remember(shell);
       trimPdfCanvases(shell);
     } catch (error) {
       shell.dataset.renderState = "idle";
@@ -3285,7 +3465,8 @@ function trimPdfCanvases(protectedShell) {
     if (
       shell === protectedShell ||
       shell.dataset.renderVisible === "1" ||
-      Number(shell.dataset.page) === documentState.page
+      Number(shell.dataset.page) === documentState.page ||
+      pdfSelectionIntersects(shell)
     )
       continue;
     const canvas = shell.querySelector("canvas");
@@ -3974,7 +4155,9 @@ function disposeFormatResources(mode) {
     pdfOcrManifest = null;
     pdfOcrManifestPromise = null;
     clearPdfManifestPrefetches();
-    pdfBookTextCache.clear();
+    pdfBookSearchClient?.dispose();
+    pdfBookSearchClient = null;
+    pdfShellWindow?.dispose();
     pdfFirstPagePreload?.removeAttribute("src");
     pdfFirstPagePreload = null;
     for (const canvas of content.querySelectorAll(".reader-page canvas")) {
@@ -5125,6 +5308,7 @@ fullSearchCancel.addEventListener("click", () => {
   nextReaderGeneration("search");
   beginReaderNavigation();
   chapterSearchClient?.cancel();
+  pdfBookSearchClient?.cancel();
   pdfSearchInProgress = false;
   chapterSearchInProgress = false;
   chapterSearchPage = null;
@@ -5626,10 +5810,30 @@ async function navigateFoliateSearchResult(result, generation) {
   return true;
 }
 async function searchConcentratedPdf(query, generation) {
-  const book = await pdfBookTextCache.get();
+  const manifest = await loadPdfOcrManifest();
+  if (!manifest?.book_text?.path) throw new Error("本书集中全文尚未生成");
+  if (!pdfBookSearchModulePromise)
+    pdfBookSearchModulePromise = import("/search/static/reader-pdf-book-search.mjs").catch(error => {
+      pdfBookSearchModulePromise = null;
+      throw error;
+    });
+  const module = await pdfBookSearchModulePromise;
+  if (!isReaderGenerationCurrent("search", generation)) return [];
+  if (pdfBookSearchClient?.failed) {
+    pdfBookSearchClient.dispose();
+    pdfBookSearchClient = null;
+  }
+  if (!pdfBookSearchClient)
+    pdfBookSearchClient = module.createPdfBookSearch({
+      url: pdfOcrSource().assetUrl(manifest.book_text.path),
+      sha256: manifest.book_text.sha256,
+      bytes: manifest.book_text.bytes,
+      pageCount: documentState.pageCount,
+      sourceSha: manifest.source_sha256
+    });
+  const client = pdfBookSearchClient;
   let firstPageResults = [];
-  const install = (index) => { pdfSearchPageLoader = (offset) => {
-    const page = index.page(offset);
+  const attach = (page) => {
     const results = page.results.map((hit, position) => {
       const previous = page.offset === 0 ? firstPageResults[position] : null;
       if (previous?.page === hit.page && previous.start === hit.start && previous.length === hit.length)
@@ -5648,23 +5852,19 @@ async function searchConcentratedPdf(query, generation) {
     });
     if (page.offset === 0) firstPageResults = results;
     return { ...page, results };
-  }; };
-  const index = await searchBookText(book, query, {
-    current: () => isReaderGenerationCurrent("search", generation),
-    yieldTask: () => waitForReader(0),
-    progress: async (partial, scanned, pages) => {
-      if (!isReaderGenerationCurrent("search", generation)) return;
-      install(partial);
-      chapterSearchPage = pdfSearchPageLoader(0);
-      updateSearchState({ results: chapterSearchPage.results, index: -1 });
-      renderFullSearchResults();
-      fullSearchStatus.textContent = partial.total
-        ? `${partial.total} 个结果（正在搜索… ${scanned} / ${pages} 页）`
-        : `正在搜索正文… ${scanned} / ${pages} 页`;
-    }
+  };
+  pdfSearchPageLoader = async offset => attach(await client.page(offset));
+  const page = await client.search(query, partial => {
+    if (!isReaderGenerationCurrent("search", generation)) return;
+    chapterSearchPage = attach(partial);
+    updateSearchState({ results: chapterSearchPage.results, index: -1 });
+    renderFullSearchResults();
+    fullSearchStatus.textContent = partial.total
+      ? `${partial.total} 个结果（正在搜索… ${partial.scanned} / ${partial.pages} 页）`
+      : `正在搜索正文… ${partial.scanned} / ${partial.pages} 页`;
   });
-  install(index);
-  chapterSearchPage = pdfSearchPageLoader(0);
+  if (!isReaderGenerationCurrent("search", generation)) return [];
+  chapterSearchPage = attach(page);
   return chapterSearchPage.results;
 }
 function makePdfSearchPageLoader(groups, total, pattern, firstPage) {
@@ -5826,6 +6026,7 @@ function closeFullSearchView() {
   if (pdfSearchInProgress || chapterSearchInProgress) fullSearchComplete = false;
   nextReaderGeneration("search");
   if (chapterSearchInProgress) chapterSearchClient?.cancel();
+  if (pdfSearchInProgress) pdfBookSearchClient?.cancel();
   pdfSearchInProgress = false;
   chapterSearchInProgress = false;
   fullSearchCancel.hidden = true;
@@ -5840,6 +6041,7 @@ async function runFullSearch() {
   fullSearchComplete = false;
   failedSearchPage = null;
   const generation = nextReaderGeneration("search");
+  pdfBookSearchClient?.cancel();
   beginReaderNavigation();
   clearFullSearchMarks();
   updateSearchState({ query, results: [], index: -1 });
@@ -6007,6 +6209,7 @@ function queueFullSearch() {
   nextReaderGeneration("search");
   beginReaderNavigation();
   chapterSearchClient?.cancel();
+  pdfBookSearchClient?.cancel();
   fullSearchComplete = false;
   pdfSearchInProgress = false;
   chapterSearchInProgress = false;
