@@ -881,11 +881,16 @@ async function goToPage(value, generation = beginReaderNavigation()) {
     if (!documentState.pageCount || !isReaderGenerationCurrent("navigation", generation))
       return false;
     const page = VoiceOfMLReader.clampNumber(value, 1, documentState.pageCount, 1);
-    await pdfShellsReady;
-    if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    const shell = content.querySelector(
+    // The first page is usable before the background shell queue finishes.
+    // Only wait when the requested shell has not been materialized yet.
+    let shell = content.querySelector(
       `.reader-page[data-page="${page}"], .reader-docx-page[data-page="${page}"]`
     );
+    if (!shell && capability.mode === "pdf-pages") {
+      await pdfShellsReady;
+      shell = content.querySelector(`.reader-page[data-page="${page}"]`);
+    }
+    if (!isReaderGenerationCurrent("navigation", generation)) return false;
     if (!shell) return false;
     const imagePage = capability.mode === "pdf-pages";
     if (imagePage && shell.dataset.renderState !== "rendered")
@@ -896,6 +901,7 @@ async function goToPage(value, generation = beginReaderNavigation()) {
         : null;
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     viewport.scrollTop = shell.offsetTop;
+    if (imagePage && shell.dataset.renderState === "rendered") renderPdfOcrText(shell);
     pageNavigationLockUntil = performance.now() + 500;
     if (pendingPdf) cancelSpeculativePdfRenders(shell);
     const pendingImage = imagePage ? renderPdfInBackground(shell, false, true) : null;
@@ -2384,7 +2390,7 @@ function preloadPdfFirstPage() {
     else if (!navigator.connection?.saveData) {
       pdfFirstPagePreload = new Image();
       pdfFirstPagePreload.decoding = "async";
-      pdfFirstPagePreload.fetchPriority = "low";
+      pdfFirstPagePreload.fetchPriority = "high";
       pdfFirstPagePreload.src = pageUrl.href;
     }
   } catch (_) {}
@@ -2519,31 +2525,37 @@ async function loadPdfOcrManifest() {
   catch (error) { pdfOcrManifestPromise = null; throw error; }
 }
 
-async function renderPdfOcrText(shell, entry) {
-  if (shell.dataset.textReady === "1" || !entry?.o || !pdfPageManifest) return;
+async function renderPdfOcrText(shell) {
+  if (shell.dataset.textReady === "1" || !pdfPageManifest || !ocrManifestUrl) return;
   if (shell._ocrPromise) return shell._ocrPromise;
   const layer = shell.querySelector(".reader-pdf-text");
   if (!layer) return;
   const epoch = shell._textEpoch || 0;
   const task = (async () => {
-  await acquirePdfTextSlot(isPdfPageVisible(shell));
-  try {
-    if (epoch !== (shell._textEpoch || 0)) return;
-    const payload = await readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
-      VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob);
-    assertReaderActive();
-    if (epoch !== (shell._textEpoch || 0)) return;
-    VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, Number(shell.dataset.page));
-    populateOcrTextLayer(layer, payload.blocks);
-    shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
-    shell.dataset.textReady = "1";
-    highlightPdfText(shell);
-  } catch (error) {
-    if (!readerAbortController.signal.aborted)
-      console.warn(`PDF page ${shell.dataset.page} OCR text failed`, error);
-  } finally {
-    releasePdfTextSlot();
-  }
+    try {
+      const manifest = await loadPdfOcrManifest();
+      if (epoch !== (shell._textEpoch || 0)) return;
+      const page = Number(shell.dataset.page);
+      const entry = manifest.pages[page - 1];
+      await acquirePdfTextSlot(isPdfPageVisible(shell));
+      try {
+        if (epoch !== (shell._textEpoch || 0)) return;
+        const payload = await readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
+          VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob);
+        assertReaderActive();
+        if (epoch !== (shell._textEpoch || 0)) return;
+        VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
+        populateOcrTextLayer(layer, payload.blocks);
+        shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
+        shell.dataset.textReady = "1";
+        highlightPdfText(shell);
+      } finally {
+        releasePdfTextSlot();
+      }
+    } catch (error) {
+      if (!readerAbortController.signal.aborted)
+        console.warn(`PDF page ${shell.dataset.page} OCR text failed`, error);
+    }
   })().finally(() => { if (shell._ocrPromise === task) delete shell._ocrPromise; });
   shell._ocrPromise = task;
   return task;
@@ -2728,7 +2740,6 @@ async function renderPdfPages(prepared) {
   const totalPages = manifest.page_count;
   if (!source) throw new Error("PDF_MANIFEST_INVALID");
   pdfPageManifest = { ...source, pageCount: totalPages };
-  if (ocrManifestUrl) loadPdfOcrManifest().catch(() => {});
   updateDocumentState({ pageCount: totalPages });
   pageInput.max = String(totalPages);
   document.querySelector("#page-total").textContent = `/ ${totalPages}`;
@@ -2759,6 +2770,7 @@ async function renderPdfPages(prepared) {
         if (entry.isIntersecting) {
           promotePdfRenderWaiter(entry.target);
           renderPdfInBackground(entry.target, false, true);
+          if (entry.target.dataset.renderState === "rendered") renderPdfOcrText(entry.target);
         }
       }
     },
@@ -3008,9 +3020,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       });
       assertReaderActive();
       shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
-      const loadText = pdfOcrManifestPromise
-        ? pdfOcrManifestPromise.then(() => renderPdfOcrText(shell, pdfPageEntry(Number(shell.dataset.page))))
-        : renderPdfOcrText(shell, pdfPageEntry(Number(shell.dataset.page)));
+      const loadText = renderPdfOcrText(shell);
       loadText.catch(() => {});
       image.classList.add("ready");
       shell.dataset.renderState = "rendered";

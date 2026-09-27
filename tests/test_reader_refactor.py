@@ -133,6 +133,51 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
                 self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
 
+    def test_pdf_pages_retries_failed_ocr_text_without_reloading_image(self):
+        root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
+        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + root
+        ocr_path = root + "/ocr-manifest.json"
+        manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
+                    "source_sha256": "a" * 64, "profile": "test-layout-v1-retry", "page_count": 2,
+                    "pages": [{"p": page, "o": root + f"/ocr/page-{page:06d}.json.gz"} for page in (1, 2)],
+                    "book_text": {"path": root + "/ocr/book-text.json.gz", "bytes": 1, "sha256": "a" * 64}}
+        attempts, image_requests = [], []
+        self.serve(json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2}), "application/json")
+        def image(route):
+            image_requests.append(route.request.url)
+            route.fulfill(content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1])
+        def resource(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            if path == ocr_path:
+                route.fulfill(json=manifest)
+                return
+            if path.endswith("page-000001.json.gz"):
+                attempts.append(path)
+                if len(attempts) == 1:
+                    route.fulfill(status=503, body="temporarily unavailable")
+                    return
+            number = int(path.rsplit("page-", 1)[1][:6])
+            payload = {"version": 1, "kind": "pdf-ocr-page", "page": number,
+                       "width": 100, "height": 140,
+                       "blocks": [{"t": "Recovered text", "b": [0.1, 0.2, 0.8, 0.3]}]}
+            route.fulfill(content_type="application/gzip", body=gzip.compress(json.dumps(payload).encode()))
+        self.page.route(source + "/pages/**", image)
+        self.page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", resource)
+        self.open(self.reader_url("pdf-pages", url=source + "/page-manifest.json",
+                                  ocr_manifest="https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + ocr_path))
+        self.page.wait_for_function("() => document.querySelector('.reader-page[data-page=\"1\"]')?.dataset.renderState === 'rendered' && !document.querySelector('.reader-page[data-page=\"1\"]')._ocrPromise")
+        self.assertEqual(len(attempts), 1)
+        first_image_requests = image_requests.count(source + "/pages/page-000001.webp")
+        self.page.locator("#page-number").fill("2")
+        self.page.locator("#page-number").dispatch_event("change")
+        self.page.wait_for_function("() => document.querySelector('#page-number').value === '2'")
+        self.page.locator("#page-number").fill("1")
+        self.page.locator("#page-number").dispatch_event("change")
+        self.page.locator('.reader-page[data-page="1"][data-text-ready="1"]').wait_for()
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(image_requests.count(source + "/pages/page-000001.webp"), first_image_requests)
+        self.assertIn("Recovered text", self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
+
     def test_download_during_prepare_does_not_interrupt_reader(self):
         pending_content = []
         checks = []

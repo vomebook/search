@@ -123,7 +123,7 @@
     pdf: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false },
     "pdf-pages": {
       toc: true,
-      search: false,
+      search: true,
       zoom: true,
       bookmarks: true,
       pagination: true,

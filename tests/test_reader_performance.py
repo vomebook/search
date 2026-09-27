@@ -1,4 +1,6 @@
 import base64
+import gzip
+import hashlib
 import io
 import json
 import pathlib
@@ -890,11 +892,68 @@ class ReaderPerformanceTest(unittest.TestCase):
         for current, following in zip(boxes, boxes[1:]):
             self.assertGreaterEqual(following["shell"]["top"], current["image"]["bottom"])
         page.locator("#history").click()
+        self.assertFalse(page.locator("#full-search-toggle").is_hidden())
         self.assertEqual(page.locator("#toc-list .toc-item").count(), 2)
         self.assertIn("第二章 · 第 2 页", page.locator("#toc-list .toc-item").nth(1).text_content())
         page.locator("#toc-list .toc-item").nth(1).click()
         page.wait_for_function("() => document.querySelector('#page-number').value === '2'")
         context.close()
+
+    def test_pdf_pages_ocr_uses_manifest_paths_after_image_is_ready(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        root = "objects/aa/" + "a" * 64
+        image_root = root + "/" + "1" * 16
+        ocr_root = root + "/" + "2" * 16
+        text_root = root + "/" + "3" * 16
+        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/page-manifest.json"
+        ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + ocr_root + "/ocr-manifest.json"
+        payloads = [gzip.compress(json.dumps({"version": 1, "kind": "pdf-ocr-page", "page": number,
+                     "width": 100, "height": 140, "blocks": [{"t": f"第{number}页正文", "b": [0.2, 0.2, 0.7, 0.3]}]}).encode())
+                    for number in (1, 2)]
+        manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
+                    "source_sha256": "a" * 64, "profile": "test-layout-v1-1234567890abcdef",
+                    "page_count": 2, "pages": [
+                        {"p": number, "o": text_root + f"/ocr/page-{number:06d}.json.gz",
+                         "os": hashlib.sha256(payloads[number - 1]).hexdigest(), "ob": len(payloads[number - 1])}
+                        for number in (1, 2)],
+                    "book_text": {"path": ocr_root + "/ocr/book-text.json.gz", "bytes": 1,
+                                  "sha256": "a" * 64},
+                    "page_manifest": {"path": image_root + "/page-manifest.json"}}
+        held, requested = [], []
+        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2})))
+        def serve_ocr(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            requested.append(path)
+            if path == ocr_root + "/ocr-manifest.json":
+                held.append(route)
+            elif path in [entry["o"] for entry in manifest["pages"]]:
+                number = int(path.rsplit("page-", 1)[1][:6])
+                route.fulfill(content_type="application/gzip", body=payloads[number - 1])
+            else:
+                route.fulfill(status=404)
+        page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve_ocr)
+        page.route("https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/pages/**",
+                   lambda route: route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1]))
+        page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
+            {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
+        page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=10000)
+        page.locator('html[data-reader-phase="ready"]').wait_for(timeout=10000)
+        page.wait_for_timeout(100)
+        self.assertEqual(len(held), 1)
+        self.assertEqual(page.locator('.reader-page[data-page="1"]').get_attribute("data-text-ready"), None)
+        held.pop().fulfill(content_type="application/json", body=json.dumps(manifest))
+        page.locator('.reader-page[data-page="1"][data-text-ready="1"]').wait_for(timeout=10000)
+        self.assertIn("第1页正文", page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
+        page.locator("#page-number").fill("2")
+        page.locator("#page-number").dispatch_event("change")
+        page.locator('.reader-page[data-page="2"][data-text-ready="1"]').wait_for(timeout=10000)
+        self.assertIn("第2页正文", page.locator('.reader-page[data-page="2"] .reader-pdf-text').text_content())
+        self.assertEqual(requested, [ocr_root + "/ocr-manifest.json",
+                                     text_root + "/ocr/page-000001.json.gz",
+                                     text_root + "/ocr/page-000002.json.gz"])
 
     def test_compact_pdf_manifest_virtualizes_and_navigates_to_distant_page(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
