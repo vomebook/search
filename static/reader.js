@@ -2194,6 +2194,20 @@ function notePdfScrollIntent() {
 }
 for (const type of ["wheel", "touchstart", "pointerdown"])
   viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
+let pdfSelectionPointer = null;
+viewport.addEventListener("pointerdown", (event) => {
+  pdfSelectionPointer = event.target.closest?.(".reader-page")
+    ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null;
+}, { passive: true });
+document.addEventListener("pointerup", (event) => {
+  const start = pdfSelectionPointer;
+  pdfSelectionPointer = null;
+  if (!["pdf", "pdf-pages"].includes(capability.mode) || !start || start.id !== event.pointerId ||
+      Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
+  const x = event.clientX, y = event.clientY;
+  requestAnimationFrame(() => correctPdfCrossPageSelection(x, y));
+}, { passive: true });
+document.addEventListener("pointercancel", () => { pdfSelectionPointer = null; }, { passive: true });
 window.addEventListener("pagehide", (event) => {
   saveProgress(event);
   if (!event.persisted) disposeReader();
@@ -2570,6 +2584,7 @@ function trimPdfManifestImages(protectedShell) {
         Math.abs(Number(b.dataset.page) - documentState.page)
   );
   for (const shell of images.slice(25)) {
+    if (pdfSelectionIntersects(shell)) continue;
     shell._textEpoch = (shell._textEpoch || 0) + 1;
     delete shell._ocrPromise;
     shell.querySelector("img")?.remove();
@@ -2726,6 +2741,48 @@ async function appendShellsBatched(createShell, total, batchSize) {
     content.appendChild(fragment);
     await waitForReader();
   }
+}
+function pdfSelectionIntersects(element) {
+  const selection = document.getSelection();
+  if (!selection?.rangeCount) return false;
+  if (element.contains(selection.anchorNode) || element.contains(selection.focusNode)) return true;
+  return !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(element);
+}
+function correctPdfCrossPageSelection(x, y) {
+  const selection = document.getSelection();
+  if (!selection?.rangeCount || selection.isCollapsed) return;
+  const origin = selection.anchorNode?.parentElement?.closest(".reader-page");
+  const target = document.elementFromPoint(x, y)?.closest(".reader-page");
+  if (!origin || !target || origin === target || !content.contains(origin) || !content.contains(target)) return;
+  const runs = [...target.querySelectorAll(".reader-pdf-text-run")].filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
+  if (!runs.length) return;
+  let nearest = null, distance = Infinity;
+  for (const run of runs) {
+    const rect = run.getBoundingClientRect();
+    const gap = Math.max(rect.top - y, y - rect.bottom, 0);
+    if (gap < distance) { nearest = run; distance = gap; }
+  }
+  const node = nearest.firstChild, rect = nearest.getBoundingClientRect();
+  let offset;
+  if (y < rect.top || y > rect.bottom) {
+    offset = y < rect.top ? 0 : node.length;
+  } else {
+    const range = document.createRange();
+    const vertical = getComputedStyle(nearest).writingMode.startsWith("vertical");
+    const position = vertical ? y : x;
+    let low = 0, high = node.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      range.setStart(node, mid);
+      range.setEnd(node, mid + 1);
+      const glyph = range.getBoundingClientRect();
+      const center = vertical ? (glyph.top + glyph.bottom) / 2 : (glyph.left + glyph.right) / 2;
+      if (center < position) low = mid + 1;
+      else high = mid;
+    }
+    offset = low;
+  }
+  selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node, offset);
 }
 async function renderPdfPages(prepared) {
   const response = await prepared;
@@ -3285,7 +3342,8 @@ function trimPdfCanvases(protectedShell) {
     if (
       shell === protectedShell ||
       shell.dataset.renderVisible === "1" ||
-      Number(shell.dataset.page) === documentState.page
+      Number(shell.dataset.page) === documentState.page ||
+      pdfSelectionIntersects(shell)
     )
       continue;
     const canvas = shell.querySelector("canvas");

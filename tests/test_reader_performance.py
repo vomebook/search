@@ -910,7 +910,10 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/page-manifest.json"
         ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + ocr_root + "/ocr-manifest.json"
         payloads = [gzip.compress(json.dumps({"version": 1, "kind": "pdf-ocr-page", "page": number,
-                     "width": 100, "height": 140, "blocks": [{"t": f"第{number}页正文", "b": [0.2, 0.2, 0.7, 0.3]}]}).encode())
+                     "width": 100, "height": 140, "blocks": [
+                         {"t": f"第{number}页正文", "b": [0.2, 0.2, 0.7, 0.3]},
+                         {"t": f"第{number}页第二行", "b": [0.2, 0.4, 0.7, 0.5]},
+                         {"t": f"第{number}页末行", "b": [0.2, 0.7, 0.7, 0.8]}]}).encode())
                     for number in (1, 2)]
         manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
                     "source_sha256": "a" * 64, "profile": "test-layout-v1-1234567890abcdef",
@@ -951,6 +954,36 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.locator("#page-number").dispatch_event("change")
         page.locator('.reader-page[data-page="2"][data-text-ready="1"]').wait_for(timeout=10000)
         self.assertIn("第2页正文", page.locator('.reader-page[data-page="2"] .reader-pdf-text').text_content())
+        page.evaluate("document.querySelector('#viewport').scrollTop = 0")
+        points = page.evaluate("""() => [1, 2].map(number => {
+          const run = document.querySelectorAll(`.reader-page[data-page="${number}"] .reader-pdf-text-run`)[1];
+          const rect = run.getBoundingClientRect();
+          return { x: rect.left + 2, y: rect.top + rect.height / 2, end: rect.right - 2 };
+        })""")
+        hit = page.evaluate("""() => {
+          const shell = document.querySelector('.reader-page[data-page="2"]');
+          const box = shell.getBoundingClientRect();
+          const image = shell.querySelector('img'), run = shell.querySelector('.reader-pdf-text-run');
+          const text = run.getBoundingClientRect();
+          return { image: document.elementFromPoint(box.left + box.width * .9, box.top + box.height * .5) === image,
+            text: document.elementFromPoint(text.left + text.width / 2, text.top + text.height / 2) === run };
+        }""")
+        self.assertEqual(hit, {"image": True, "text": True})
+        gap = page.evaluate("""() => {
+          const runs = document.querySelectorAll('.reader-page[data-page="2"] .reader-pdf-text-run');
+          const first = runs[0].getBoundingClientRect(), second = runs[1].getBoundingClientRect();
+          return { x: first.left + 4, y: (first.bottom + second.top) / 2 };
+        }""")
+        page.mouse.move(points[0]["x"], points[0]["y"])
+        page.mouse.down()
+        page.mouse.move(gap["x"], gap["y"], steps=24)
+        page.mouse.up()
+        page.wait_for_function("() => !getSelection().toString().includes('第2页末行')")
+        selection = page.evaluate("getSelection().toString()")
+        self.assertIn("第1页末行", selection)
+        self.assertIn("第2页正文", selection)
+        self.assertNotIn("第1页正文", selection)
+        self.assertNotIn("第2页末行", selection)
         self.assertEqual(requested, [ocr_root + "/ocr-manifest.json",
                                      text_root + "/ocr/page-000001.json.gz",
                                      text_root + "/ocr/page-000002.json.gz"])
