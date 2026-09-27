@@ -923,8 +923,8 @@ body {
 .reader-pdf-text {
   position: absolute;
   inset: 0;
-  overflow: hidden;
-  pointer-events: auto;
+  overflow: visible;
+  pointer-events: none;
   white-space: pre;
   border: 0;
   color: transparent;
@@ -947,6 +947,7 @@ body {
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
+  pointer-events: auto;
 }
 .reader-pdf-text-run::selection {
   color: transparent;
