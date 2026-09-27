@@ -1518,7 +1518,10 @@ async function loadReaderRestoration() {
 async function getInitialReaderRestoration() {
   if (!readerRestorationPromise) return null;
   if (!readerRestorationLoaded) {
-    readerRestorationEntry = await awaitReader(readerRestorationPromise);
+    readerRestorationEntry = await awaitReader(Promise.race([
+      readerRestorationPromise,
+      waitForReader(150).then(() => null)
+    ]));
     readerRestorationLoaded = true;
   }
   return readerRestorationEntry;
@@ -2283,7 +2286,6 @@ document.addEventListener("pointerup", (event) => {
 }, { passive: true });
 document.addEventListener("pointercancel", () => { pdfSelectionPointer = null; }, { passive: true });
 let pdfSelectionBoundaryUpdate = false;
-let pdfTouchSelectionPage = null;
 document.addEventListener("selectionchange", () => {
   if (pdfSelectionBoundaryUpdate ||
       !["pdf", "pdf-pages"].includes(capability.mode)) return;
