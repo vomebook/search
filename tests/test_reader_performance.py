@@ -1065,6 +1065,111 @@ class ReaderPerformanceTest(unittest.TestCase):
                                      text_root + "/ocr/page-000001.json.gz",
                                      text_root + "/ocr/page-000002.json.gz"])
 
+    def test_long_pdf_pages_touch_swipe_from_ocr_does_not_select_or_jump(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        self.addCleanup(context.close)
+        page = context.new_page()
+        root = "objects/aa/" + "a" * 64
+        image_root = root + "/" + "1" * 16
+        text_root = root + "/" + "2" * 16
+        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/page-manifest.json"
+        ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + text_root + "/ocr-manifest.json"
+        total = 359
+        ocr = {"version": 1, "kind": "pdf-ocr", "complete": True, "source_sha256": "a" * 64,
+               "profile": "test-layout-v1-1234567890abcdef", "page_count": total,
+               "pages": [{"p": i, "o": root + "/" + "3" * 16 + f"/ocr/page-{i:06d}.json.gz"}
+                         for i in range(1, total + 1)],
+               "book_text": {"path": text_root + "/ocr/book-text.json.gz", "bytes": 1,
+                             "sha256": "a" * 64},
+               "page_manifest": {"path": image_root + "/page-manifest.json"}}
+        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": total})))
+        def serve_ocr(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            if path == text_root + "/ocr-manifest.json":
+                route.fulfill(content_type="application/json", body=json.dumps(ocr))
+                return
+            number = int(path.rsplit("page-", 1)[1][:6])
+            blocks = [] if number == 2 else [{"t": f"Page {number} selectable text", "b": [0.2, 0.35, 0.8, 0.4]}]
+            route.fulfill(content_type="application/gzip", body=gzip.compress(json.dumps({
+                "version": 1, "kind": "pdf-ocr-page", "page": number,
+                "width": 1441, "height": 2145, "blocks": blocks}).encode()))
+        page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve_ocr)
+        image = b'<svg xmlns="http://www.w3.org/2000/svg" width="1441" height="2145"><rect width="100%" height="100%" fill="white"/></svg>'
+        page.route("https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/pages/**",
+                   lambda route: route.fulfill(content_type="image/svg+xml", body=image))
+        page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
+            {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
+        page.locator('.reader-page[data-page="1"][data-text-ready="1"] img.ready').wait_for(timeout=10000)
+        page.evaluate("""() => {
+          const node = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').firstChild;
+          getSelection().collapse(node, 1);
+          window.__pdfSelectionWrites = 0;
+          const original = Selection.prototype.setBaseAndExtent;
+          Selection.prototype.setBaseAndExtent = function(...args) {
+            window.__pdfSelectionWrites++;
+            return original.apply(this, args);
+          };
+        }""")
+        point = page.evaluate("""() => {
+          const rect = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').getBoundingClientRect();
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }""")
+        cdp = context.new_cdp_session(page)
+        def swipe():
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [point]})
+            for step in range(1, 7):
+                cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [
+                    {"x": point["x"], "y": point["y"] - step * 25}]})
+                page.wait_for_timeout(35)
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            page.wait_for_timeout(350)
+            state = page.evaluate("""() => ({ top: document.querySelector('#viewport').scrollTop,
+              writes: window.__pdfSelectionWrites })""")
+            self.assertEqual(state["writes"], 0, state)
+            self.assertGreater(state["top"], 20, state)
+            self.assertLess(state["top"], 1200, state)
+        swipe()
+        page.locator("#page-number").fill("5")
+        page.locator("#page-number").dispatch_event("change")
+        page.locator('.reader-page[data-page="5"][data-text-ready="1"]').wait_for(timeout=10000)
+        page.locator("#page-number").fill("4")
+        page.locator("#page-number").dispatch_event("change")
+        page.locator('.reader-page[data-page="4"][data-text-ready="1"]').wait_for(timeout=10000)
+        target = page.evaluate("""() => {
+          const run = document.querySelector('.reader-page[data-page="4"] .reader-pdf-text-run');
+          const range = document.createRange();
+          range.setStart(run.firstChild, 0);
+          range.setEnd(run.firstChild, run.firstChild.length);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          window.__pdfSelectionWrites = 0;
+          const start = run.getBoundingClientRect();
+          const end = document.querySelector('.reader-page[data-page="5"] .reader-pdf-text-run').getBoundingClientRect();
+          const targetPage = document.elementFromPoint(end.left + 4, end.top + 4)
+            ?.closest('.reader-page')?.dataset.page;
+          run.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, pointerId: 91,
+            pointerType: 'touch', clientX: start.left + 4, clientY: start.top + 4}));
+          document.dispatchEvent(new PointerEvent('pointermove', {bubbles: true, pointerId: 91,
+            pointerType: 'touch', clientX: end.left + 4, clientY: end.top + 4}));
+          return targetPage;
+        }""")
+        self.assertEqual(target, "5")
+        page.wait_for_timeout(100)
+        self.assertEqual(page.evaluate("window.__pdfSelectionWrites"), 0)
+        page.evaluate("document.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, pointerId: 91, pointerType: 'touch'}))")
+        page.evaluate("""() => {
+          document.querySelector('#viewport').scrollTop = 0;
+          const node = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').firstChild;
+          const range = document.createRange();
+          range.setStart(node, 0);
+          range.setEnd(node, 4);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          window.__pdfSelectionWrites = 0;
+        }""")
+        swipe()
+
     def test_compact_pdf_manifest_virtualizes_and_navigates_to_distant_page(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
