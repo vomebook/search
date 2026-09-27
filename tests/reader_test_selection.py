@@ -72,6 +72,7 @@ CATEGORY_METHODS = {
         "test_actual_store_broadcasts_progress_and_bookmark_updates_between_readers",
         "test_html_and_markdown_toc_click_navigation",
         "test_pdf_outline_click_navigates_to_declared_page",
+        "test_pdf_outline_jump_scrolls_before_target_render_finishes",
         "test_pdf_outline_marks_current_entry_when_page_changes",
         "test_epub_chapters_load_first_lazy_next_and_toc_destination",
     ),
