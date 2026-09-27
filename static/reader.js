@@ -2804,7 +2804,9 @@ function correctPdfCrossPageSelection(x, y, start = null) {
   let nearest = null, distance = Infinity;
   for (const run of runs) {
     const rect = run.getBoundingClientRect();
-    const gap = Math.max(rect.top - y, y - rect.bottom, 0);
+    const dx = Math.max(rect.left - x, x - rect.right, 0);
+    const dy = Math.max(rect.top - y, y - rect.bottom, 0);
+    const gap = Math.hypot(dx, dy);
     if (gap < distance) { nearest = run; distance = gap; }
   }
   const node = nearest.firstChild, rect = nearest.getBoundingClientRect();
