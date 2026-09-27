@@ -3232,6 +3232,8 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
          image.onload = () => finish();
          image.onerror = () => finish(new Error(`PDF page ${entry.page} image failed`));
          if (image.src !== target) image.src = target;
+         if (priority && ocrManifestUrl && !navigator.connection?.saveData)
+           loadPdfOcrManifest().catch(() => {});
          if (image.complete && image.naturalWidth) finish();
       });
       assertReaderActive();
