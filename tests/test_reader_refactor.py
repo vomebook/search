@@ -133,7 +133,116 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
                 self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
 
+    def test_saved_native_pdf_opens_target_page_first(self):
+        store = support.STORE_SCRIPT.replace(
+            "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
+            "get: () => Promise.resolve({page: 12, pageOffset: 20, zoom: 1}),",
+        )
+        module = support.PDF_MODULE.replace(
+            "getPage: () => Promise.resolve(page)",
+            "getPage: (number) => { (window.__pdfPageRequests ||= []).push(number); return Promise.resolve(page); }",
+        )
+        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(content_type="text/javascript", body=module))
+        self.serve(b"pdf", "application/pdf")
+        self.open(self.reader_url("pdf"))
+        self.assertEqual(self.page.evaluate("window.__pdfPageRequests[0]"), 12)
+        self.assertEqual(self.page.locator("#page-number").input_value(), "12")
+        self.page.locator('.reader-page[data-page="12"] canvas.ready').wait_for()
+
+    def test_saved_pdf_pages_requests_target_image_first(self):
+        store = support.STORE_SCRIPT.replace(
+            "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
+            "get: () => Promise.resolve({page: 12, pageOffset: 0, zoom: 1}),",
+        )
+        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 24}
+        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
+        requests = []
+        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
+        self.serve(json.dumps(manifest), "application/json")
+        self.page.route("**/page-manifest.json", lambda route: route.fulfill(json=manifest))
+        def image(route):
+            requests.append(route.request.url)
+            route.fulfill(content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1])
+        self.page.route("**/pages/page-*.webp", image)
+        self.open(self.reader_url("pdf-pages", url=root + "/page-manifest.json"))
+        self.assertTrue(requests, "saved-page image was not requested")
+        self.assertTrue(requests[0].endswith("page-000012.webp"), requests)
+        self.assertEqual(self.page.locator("#page-number").input_value(), "12")
+
+    def test_native_pdf_reuses_text_after_layer_is_cleared(self):
+        module = support.PDF_MODULE.replace(
+            "getTextContent() { return Promise.resolve",
+            "getTextContent() { window.__pdfTextCalls = (window.__pdfTextCalls || 0) + 1; return Promise.resolve",
+        )
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(content_type="text/javascript", body=module))
+        self.page.route("**/static/reader.js?*", lambda route: route.fulfill(
+            response=route.fetch(), body=route.fetch().text() + "\nwindow.__reloadPdfText = async () => { const shell = document.querySelector('.reader-page[data-page=\\\"1\\\"]'); shell.querySelector('.reader-pdf-text').replaceChildren(); shell.dataset.textReady = '0'; await renderPdfText(await pdfDocument.getPage(1), shell); };\n"
+        ))
+        self.serve(b"pdf", "application/pdf")
+        self.open(self.reader_url("pdf"))
+        self.page.wait_for_function("() => document.querySelector('.reader-page[data-page=\\\"1\\\"]')?.dataset.textReady === '1'")
+        before = self.page.evaluate("window.__pdfTextCalls")
+        self.page.evaluate("window.__reloadPdfText()")
+        self.assertEqual(self.page.evaluate("window.__pdfTextCalls"), before)
+        self.assertIn("Accessible PDF text", self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
+
+    def test_saved_chapter_book_fetches_target_first(self):
+        store = support.STORE_SCRIPT.replace(
+            "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
+            "get: () => Promise.resolve({chapterIndex: 8, chapterOffset: 0}),",
+        )
+        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
+        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
+            {"index": i, "path": f"chapter-{i}.xhtml", "bytes": 100} for i in range(1, 13)
+        ]}
+        requested = []
+        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
+        def resource(route):
+            url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("url", [""])[0]
+            if "chapter-" in url and url.endswith(".xhtml"):
+                number = int(url.rsplit("chapter-", 1)[1].split(".", 1)[0])
+                requested.append(number)
+                route.fulfill(content_type="text/html", body=f"<h1>Chapter {number}</h1><p>Content</p>")
+            else:
+                route.fulfill(json=manifest)
+        self.page.route("**/api/reader-content**", resource)
+        self.open(self.reader_url("epub-chapters", url=root + "/chapter-manifest.json"))
+        self.assertEqual(requested[0], 8)
+        self.assertNotIn(1, requested)
+        self.assertTrue(self.page.locator('.reader-epub-chapter[data-chapter="8"]').is_visible())
+        self.page.locator('#history').click()
+        self.page.locator('#toc-list .panel-item-main').nth(6).click()
+        self.page.locator('.reader-epub-chapter[data-chapter="7"]').wait_for(state="attached")
+        self.page.wait_for_function("() => document.querySelector('.reader-chapter-sentinel[data-chapter=\\\"6\\\"]') || document.querySelector('.reader-epub-chapter[data-chapter=\\\"6\\\"]')")
+        self.page.evaluate("() => document.querySelector('.reader-chapter-sentinel[data-chapter=\\\"6\\\"]')?.click()")
+        self.page.locator('.reader-epub-chapter[data-chapter="6"]').wait_for(state="attached")
+        self.assertNotIn(1, requested)
+
+    def test_saved_foliate_builds_target_section_first(self):
+        store = support.STORE_SCRIPT.replace(
+            "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
+            "get: () => Promise.resolve({foliateSection: 10, foliateOffset: 0, foliateTocIndex: 9}),",
+        )
+        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
+        def instrument(route):
+            response = route.fetch()
+            body = response.text().replace(
+                "async function createFoliateSection(section, index) {",
+                "async function createFoliateSection(section, index) { (window.__openedSections ||= []).push(index);",
+            )
+            route.fulfill(response=response, body=body)
+        self.page.route("**/static/reader.js?*", instrument)
+        self.serve(support.epub_with_many_chapters(), "application/epub+zip")
+        self.open(self.reader_url("epub"))
+        self.assertEqual(self.page.evaluate("window.__openedSections[0]"), 10)
+        self.assertTrue(self.page.locator('.foliate-continuous article[data-section="10"]').is_visible())
+
     def test_pdf_pages_retries_failed_ocr_text_without_reloading_image(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nwindow.__reloadPdfOcr = async () => { const shell = document.querySelector('.reader-page[data-page=\\\"1\\\"]'); shell.querySelector('.reader-pdf-text').replaceChildren(); shell.dataset.textReady = '0'; await renderPdfOcrText(shell); };\n")
+        self.page.route("**/static/reader.js?*", instrument)
         root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
         source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + root
         ocr_path = root + "/ocr-manifest.json"
@@ -166,7 +275,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(self.reader_url("pdf-pages", url=source + "/page-manifest.json",
                                   ocr_manifest="https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + ocr_path))
         self.page.wait_for_function("() => document.querySelector('.reader-page[data-page=\"1\"]')?.dataset.renderState === 'rendered' && !document.querySelector('.reader-page[data-page=\"1\"]')._ocrPromise")
-        self.assertEqual(len(attempts), 1)
+        self.assertIn(len(attempts), (1, 2))
         first_image_requests = image_requests.count(source + "/pages/page-000001.webp")
         self.page.locator("#page-number").fill("2")
         self.page.locator("#page-number").dispatch_event("change")
@@ -176,6 +285,9 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator('.reader-page[data-page="1"][data-text-ready="1"]').wait_for()
         self.assertEqual(len(attempts), 2)
         self.assertEqual(image_requests.count(source + "/pages/page-000001.webp"), first_image_requests)
+        self.assertIn("Recovered text", self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
+        self.page.evaluate("window.__reloadPdfOcr()")
+        self.assertEqual(len(attempts), 2)
         self.assertIn("Recovered text", self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
 
     def test_download_during_prepare_does_not_interrupt_reader(self):

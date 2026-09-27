@@ -50,9 +50,10 @@ assert.match(reader, /validatePdfPageManifest/)
 assert.match(reader, /const PDF_PREFETCH_MARGIN = 2400/)
 assert.match(reader, /const visibleObserver = new IntersectionObserver/)
 assert.match(reader, /promotePdfRenderWaiter\(shell\)/)
-assert.match(reader, /image\.fetchPriority = isPdfPageVisible\(shell\) \? "high" : "low"/)
+assert.match(reader, /function pdfPagePriority\(shell\)/)
+assert.match(reader, /priority >= 3 \? "high" : priority >= 1 \? "auto" : "low"/)
 assert.match(reader, /const waiter = \{\s*shell,\s*priority,/)
-assert.match(reader, /waiter\.priority \|\| \(waiter\.shell && isPdfPageVisible\(waiter\.shell\)\)/)
+assert.match(reader, /waiter\.priority, waiter\.shell \? pdfPagePriority\(waiter\.shell\) : 0/)
 assert.match(reader, /function cancelSpeculativePdfRenders\(protectedShell\)/)
 assert.match(reader, /shell\.dataset\.renderVisible === "1"/)
 assert.match(reader, /shell\._renderCancel\?\.\(\)/)
@@ -155,6 +156,13 @@ assert.match(css, /min-height:\s*0\s*!important;\s*height:\s*auto\s*!important;/
 assert.strictEqual(view.includes('.find(x => x.index = resolved.index)'), false)
 assert.strictEqual(view.includes('.find(x => x.index === resolved.index)'), true)
 const vm = require('vm')
+const priorityFunctions = reader.match(/function pdfPagePriority\(shell\) \{[\s\S]*?\n\}\nfunction normalizePdfPriority\(priority\) \{[\s\S]*?\n\}/)
+assert.ok(priorityFunctions, 'PDF page priority functions')
+const priorityContext = { viewport: { getBoundingClientRect: () => ({ top: 0, bottom: 100 }) }, PDF_PREFETCH_MARGIN: 2400 }
+vm.runInNewContext(priorityFunctions[0], priorityContext)
+for (const [top, bottom, expected] of [[10, 90, 3], [70, 160, 2], [110, 190, 1], [2600, 2800, 0]])
+  assert.strictEqual(priorityContext.pdfPagePriority({ getBoundingClientRect: () => ({ top, bottom }) }), expected)
+assert.strictEqual(priorityContext.normalizePdfPriority(true), 3)
 const sandbox = { self: {} }; sandbox.self = sandbox;
 function loadExports(file, name) { vm.runInNewContext(fs.readFileSync(path.join(root, 'static', file), 'utf8'), sandbox); return sandbox[name]; }
 const contractFeatures = loadExports('reader-contract.js', 'VoiceOfMLReader').features
@@ -182,7 +190,8 @@ for (const [mode, [open, render]] of Object.entries(expected)) {
   assert.strictEqual(registered.get(mode).render, registryContext[render], mode + ' renderer')
 }
 registered.get('pdf-pages').open()
-assert.deepStrictEqual(calls.splice(0), [['preloadPdfFirstPage'], ['fetchReaderResponse']])
+assert.deepStrictEqual(calls.splice(0), [['fetchReaderResponse']])
+assert.match(reader, /const initialPage = initialReaderPage\(totalPages\);\s*await preloadPdfFirstPage\(totalPages\)/)
 assert.strictEqual(registered.get('pdf-pages').render, registryContext.renderPdfPages)
 for (const mode of ['audio', 'video']) {
   assert.strictEqual(registered.get(mode).open, registryContext.loadMediaDocument)
