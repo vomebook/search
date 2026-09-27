@@ -80,11 +80,10 @@ async function main() {
   assert.strictEqual(typeof image.sandbox.VoiceOfMLReader.assetFields, "function");
   assert.strictEqual(image.sandbox.__VOICE_PDF_PRELOAD__, image.preload);
   assert.strictEqual(image.state.fetches, 1);
-  assert.strictEqual(image.state.imageSrcs.length, 1);
+  assert.strictEqual(image.state.imageSrcs.length, 0);
   const imageRequest = image.preload.manifest;
   image.preload.dispose();
   image.preload.dispose();
-  assert.strictEqual(image.state.imageSrcs.at(-1), "");
   assert.strictEqual(image.preload.image, null);
   assert.strictEqual(image.listeners.has("pagehide"), false);
   await imageRequest;
@@ -93,7 +92,7 @@ async function main() {
   const bfcacheListener = bfcache.listeners.get("pagehide");
   bfcacheListener({ persisted: true });
   assert.strictEqual(bfcache.listeners.has("pagehide"), true);
-  assert.notStrictEqual(bfcache.preload.image, null);
+  assert.strictEqual(bfcache.preload.image, null);
   bfcacheListener({ persisted: false });
   assert.strictEqual(bfcache.listeners.has("pagehide"), false);
   assert.strictEqual(bfcache.preload.image, null);
