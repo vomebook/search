@@ -876,16 +876,21 @@ async function goToPage(value, generation = beginReaderNavigation()) {
     );
     if (!shell) return false;
     const imagePage = capability.mode === "pdf-pages";
-    if (!imagePage && shell.classList.contains("reader-page")) await renderPdfShell(shell, false, true);
+    const pendingPdf =
+      !imagePage && shell.classList.contains("reader-page")
+        ? renderPdfInBackground(shell, false, true)
+        : null;
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     viewport.scrollTop = shell.offsetTop;
     pageNavigationLockUntil = performance.now() + 500;
+    if (pendingPdf) cancelSpeculativePdfRenders(shell);
     const pendingImage = imagePage ? renderPdfInBackground(shell, false, true) : null;
     updateDocumentState({ page });
     pageInput.value = String(page);
     updateTocCurrentMark();
     updateProgressTools();
-    if (pendingImage) await pendingImage;
+    pendingPdf?.catch(() => {});
+    pendingImage?.catch(() => {});
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     scheduleSave();
     return true;
@@ -2951,7 +2956,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
   const task = (async () => {
     let acquired = false;
     try {
-      await acquirePdfRenderSlot(priority, shell);
+      await acquirePdfRenderSlot(priority, shell, renderController.signal);
       acquired = true;
       shell._renderStarted = true;
       assertReaderActive();
@@ -3028,8 +3033,7 @@ function cancelSpeculativePdfRenders(protectedShell) {
   for (const shell of content.querySelectorAll('.reader-page[data-render-state="rendering"]')) {
     if (
       shell === protectedShell ||
-      isPdfPageVisible(shell) ||
-      !shell._renderStarted
+      isPdfPageVisible(shell)
     )
       continue;
     shell._renderCancel?.();
@@ -3042,12 +3046,19 @@ function renderPdfShell(shell, force = false, priority = false) {
   }
   if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
   shell.dataset.renderState = "rendering";
+  const renderController = new AbortController();
+  let activeRendering = null;
+  shell._renderCancel = () => {
+    renderController.abort();
+    activeRendering?.cancel?.();
+  };
   const task = (async () => {
     let acquired = false;
     try {
-      await acquirePdfRenderSlot(priority, shell);
+      await acquirePdfRenderSlot(priority, shell, renderController.signal);
       acquired = true;
       assertReaderActive();
+      if (renderController.signal.aborted) throw readerAbortError();
       const pdf = pdfDocument;
       if (!pdf) throw readerAbortError();
       do {
@@ -3055,6 +3066,7 @@ function renderPdfShell(shell, force = false, priority = false) {
         const generation = readerRuntime.currentGeneration("pdf"),
           page = await awaitReader(pdf.getPage(Number(shell.dataset.page)));
         assertReaderActive();
+        if (renderController.signal.aborted) throw readerAbortError();
         const base = page.getViewport({ scale: 1 }),
           scale = Math.min(3, Math.max(0.5, shell.clientWidth / base.width)),
           rendered = page.getViewport({ scale });
@@ -3066,13 +3078,16 @@ function renderPdfShell(shell, force = false, priority = false) {
           canvasContext: canvas.getContext("2d"),
           viewport: rendered
         });
+        activeRendering = rendering;
         const untrack = trackReaderResource(() => rendering.cancel?.());
         try {
-          await awaitReader(Promise.all([rendering.promise, renderPdfText(page, shell)]));
+          await awaitReader(Promise.all([rendering.promise, renderPdfText(page, shell, renderController.signal)]));
         } finally {
           untrack();
+          activeRendering = null;
         }
         assertReaderActive();
+        if (renderController.signal.aborted) throw readerAbortError();
         if (!isReaderGenerationCurrent("pdf", generation)) shell.dataset.pendingRerender = "1";
       } while (shell.dataset.pendingRerender);
       shell.querySelector("canvas").classList.add("ready");
@@ -3087,18 +3102,20 @@ function renderPdfShell(shell, force = false, priority = false) {
     }
   })().finally(() => {
     if (shell._renderPromise === task) delete shell._renderPromise;
+    if (shell._renderCancel) delete shell._renderCancel;
   });
   shell._renderPromise = task;
   return task;
 }
 
-async function renderPdfText(page, shell) {
+async function renderPdfText(page, shell, signal = null) {
   if (shell.dataset.textReady === "1") return;
   const layer = shell.querySelector(".reader-pdf-text");
   if (!layer || typeof page.getTextContent !== "function") return;
   try {
     const text = await awaitReader(page.getTextContent());
     assertReaderActive();
+    if (signal?.aborted) return;
     const pdfViewport = page.getViewport({ scale: 1 });
     shell._bookmarkTextItems = text.items
       .filter((item) => item.str && item.str.trim())
@@ -3116,7 +3133,7 @@ async function renderPdfText(page, shell) {
     shell.dataset.textReady = "1";
     highlightPdfText(shell);
   } catch (error) {
-    if (!readerAbortController.signal.aborted)
+    if (!readerAbortController.signal.aborted && !signal?.aborted)
       console.warn(`PDF page ${shell.dataset.page} text extraction failed`, error);
   }
 }
@@ -3150,23 +3167,45 @@ function promotePdfRenderWaiter(shell) {
     if (waiter.shell === shell) waiter.priority = true;
   }
 }
-function acquirePdfRenderSlot(priority = false, shell = null) {
+function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
   if (readerAbortController.signal.aborted) return Promise.reject(readerAbortError());
+  if (signal?.aborted) return Promise.reject(readerAbortError());
   const limit = matchMedia("(max-width: 700px)").matches ? 1 : 2;
   if (pdfActiveRenders < limit) {
     pdfActiveRenders++;
     return Promise.resolve();
   }
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const remove = () => {
+      const index = pdfRenderWaiters.indexOf(waiter);
+      if (index >= 0) pdfRenderWaiters.splice(index, 1);
+      signal?.removeEventListener("abort", abort);
+    };
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      remove();
+      reject(readerAbortError());
+    };
     const waiter = {
       shell,
       priority,
       resolve: () => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", abort);
         pdfActiveRenders++;
         resolve();
       },
-      reject
+      reject: (error) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", abort);
+        reject(error);
+      }
     };
+    signal?.addEventListener("abort", abort, { once: true });
     if (priority) pdfRenderWaiters.unshift(waiter);
     else pdfRenderWaiters.push(waiter);
   });
