@@ -2198,6 +2198,10 @@ for (const type of ["wheel", "touchstart", "pointerdown"])
   viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
 let pdfSelectionPointer = null;
 viewport.addEventListener("pointerdown", (event) => {
+  if (event.pointerType !== "mouse") {
+    pdfSelectionPointer = null;
+    return;
+  }
   const run = event.target.closest?.(".reader-pdf-text-run");
   const selection = document.getSelection();
   const selectedRun = !selection?.isCollapsed && event.target.closest?.(".reader-page")
@@ -2210,7 +2214,7 @@ viewport.addEventListener("pointerdown", (event) => {
 }, { passive: true });
 document.addEventListener("pointermove", (event) => {
   const start = pdfSelectionPointer;
-  if (!start || start.id !== event.pointerId ||
+  if (event.pointerType !== "mouse" || !start || start.id !== event.pointerId ||
       Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
   const selection = document.getSelection();
   if (!start.anchorNode && selection?.rangeCount && start.page.contains(selection.anchorNode) &&
@@ -2231,7 +2235,8 @@ document.addEventListener("pointermove", (event) => {
 document.addEventListener("pointerup", (event) => {
   const start = pdfSelectionPointer;
   pdfSelectionPointer = null;
-  if (!["pdf", "pdf-pages"].includes(capability.mode) || !start || start.id !== event.pointerId ||
+  if (event.pointerType !== "mouse" || !["pdf", "pdf-pages"].includes(capability.mode) ||
+      !start || start.id !== event.pointerId ||
       Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
   const x = event.clientX, y = event.clientY;
   requestAnimationFrame(() => correctPdfCrossPageSelection(x, y, start));
