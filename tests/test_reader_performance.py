@@ -824,7 +824,8 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=10000)
         page.wait_for_timeout(2800)
         self.assertIn(12, requested)
-        self.assertNotIn(13, requested)
+        self.assertIn(13, requested)
+        self.assertIn(14, requested)
         with page.expect_response(lambda response: response.url.endswith("page-000035.webp"), timeout=12000):
             page.locator('.reader-page[data-page="25"]').scroll_into_view_if_needed()
             page.locator('.reader-page[data-page="25"] img.ready').wait_for(timeout=10000)

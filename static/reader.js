@@ -460,22 +460,34 @@ const pdfTextWaiters = [];
 let pdfUserHasScrolled = false;
 const pdfManifestPrefetches = new Map();
 const pdfManifestShells = [];
-const PDF_MANIFEST_PREFETCH_LIMIT = 8;
+const PDF_MANIFEST_PREFETCH_LIMIT = 12;
+const PDF_MANIFEST_PREFETCH_CONCURRENCY = 3;
 let pdfManifestPrefetchTimer = 0;
 let pdfManifestPrefetchNext = 0;
 let pdfManifestPrefetchOrigin = 0;
 let pdfManifestPrefetchWrapped = false;
-let pdfManifestPrefetchActive = null;
+const pdfManifestPrefetchActive = new Set();
+function cancelPdfManifestPrefetch(record) {
+  if (!record) return;
+  pdfManifestPrefetchActive.delete(record);
+  clearTimeout(record.timeout);
+  if (pdfManifestPrefetches.get(record.url) === record) pdfManifestPrefetches.delete(record.url);
+  record.image.onload = record.image.onerror = null;
+  record.image.removeAttribute("src");
+}
 function stopPdfManifestPrefetch() {
   clearTimeout(pdfManifestPrefetchTimer);
   pdfManifestPrefetchTimer = 0;
-  const record = pdfManifestPrefetchActive;
-  if (!record) return;
-  pdfManifestPrefetchActive = null;
-  clearTimeout(record.timeout);
-  pdfManifestPrefetches.delete(record.url);
-  record.image.onload = record.image.onerror = null;
-  record.image.removeAttribute("src");
+  for (const record of [...pdfManifestPrefetchActive]) cancelPdfManifestPrefetch(record);
+}
+function trimPdfManifestPrefetches() {
+  while (pdfManifestPrefetches.size > PDF_MANIFEST_PREFETCH_LIMIT) {
+    const victim = [...pdfManifestPrefetches.values()].find((record) => !pdfManifestPrefetchActive.has(record));
+    if (!victim) return;
+    pdfManifestPrefetches.delete(victim.url);
+    victim.image.onload = victim.image.onerror = null;
+    victim.image.removeAttribute("src");
+  }
 }
 function clearPdfManifestPrefetches() {
   stopPdfManifestPrefetch();
@@ -876,6 +888,8 @@ async function goToPage(value, generation = beginReaderNavigation()) {
     );
     if (!shell) return false;
     const imagePage = capability.mode === "pdf-pages";
+    if (imagePage && shell.dataset.renderState !== "rendered")
+      prioritizePdfManifestPrefetch(pdfPageManifest?.pageUrl(page));
     const pendingPdf =
       !imagePage && shell.classList.contains("reader-page")
         ? renderPdfInBackground(shell, false, true)
@@ -885,6 +899,7 @@ async function goToPage(value, generation = beginReaderNavigation()) {
     pageNavigationLockUntil = performance.now() + 500;
     if (pendingPdf) cancelSpeculativePdfRenders(shell);
     const pendingImage = imagePage ? renderPdfInBackground(shell, false, true) : null;
+    if (imagePage && shell.dataset.renderState !== "rendered") cancelSpeculativePdfRenders(shell);
     updateDocumentState({ page });
     pageInput.value = String(page);
     updateTocCurrentMark();
@@ -2396,10 +2411,8 @@ function takePdfManifestPrefetch(target) {
   const record = pdfManifestPrefetches.get(target);
   if (!record) return null;
   pdfManifestPrefetches.delete(target);
-  if (pdfManifestPrefetchActive === record) {
-    pdfManifestPrefetchActive = null;
-    clearTimeout(record.timeout);
-  }
+  pdfManifestPrefetchActive.delete(record);
+  clearTimeout(record.timeout);
   record.image.onload = record.image.onerror = null;
   return record.image;
 }
@@ -2408,9 +2421,10 @@ function queuePdfManifestPrefetch(delay = 250) {
   clearTimeout(pdfManifestPrefetchTimer);
   pdfManifestPrefetchTimer = setTimeout(() => {
     pdfManifestPrefetchTimer = 0;
-    if (readerAbortController.signal.aborted || document.hidden || !navigator.onLine || pdfManifestPrefetchActive ||
+    if (readerAbortController.signal.aborted || document.hidden || !navigator.onLine ||
+        pdfManifestPrefetchActive.size >= PDF_MANIFEST_PREFETCH_CONCURRENCY ||
         (pdfActiveRenders && content.querySelector('.reader-page[data-render-visible="1"][data-render-state="rendering"]'))) return;
-    while (true) {
+    while (pdfManifestPrefetchActive.size < PDF_MANIFEST_PREFETCH_CONCURRENCY) {
       if (pdfManifestPrefetchWrapped && pdfManifestPrefetchNext >= pdfManifestPrefetchOrigin) return;
       if (pdfManifestPrefetchNext > documentState.pageCount) {
         pdfManifestPrefetchNext = 1;
@@ -2426,9 +2440,9 @@ function queuePdfManifestPrefetch(delay = 250) {
       image.decoding = "async";
       image.fetchPriority = "low";
       const finish = (failed) => {
-        if (pdfManifestPrefetchActive !== record) return;
+        if (!pdfManifestPrefetchActive.has(record)) return;
+        pdfManifestPrefetchActive.delete(record);
         clearTimeout(record.timeout);
-        pdfManifestPrefetchActive = null;
         image.onload = image.onerror = null;
         if (failed) {
           pdfManifestPrefetches.delete(url);
@@ -2439,26 +2453,25 @@ function queuePdfManifestPrefetch(delay = 250) {
       image.onload = () => finish(false);
       image.onerror = () => finish(true);
       pdfManifestPrefetches.set(url, record);
-      pdfManifestPrefetchActive = record;
+      pdfManifestPrefetchActive.add(record);
       record.timeout = setTimeout(() => finish(true), 15000);
       image.src = url;
-      while (pdfManifestPrefetches.size > PDF_MANIFEST_PREFETCH_LIMIT) {
-        const oldest = pdfManifestPrefetches.keys().next().value;
-        if (oldest === url) break;
-        const stale = pdfManifestPrefetches.get(oldest);
-        pdfManifestPrefetches.delete(oldest);
-        stale.image.onload = stale.image.onerror = null;
-        stale.image.removeAttribute("src");
-      }
-      return;
+      trimPdfManifestPrefetches();
     }
   }, delay);
+}
+function prioritizePdfManifestPrefetch(target) {
+  for (const record of [...pdfManifestPrefetchActive]) {
+    if (record.url !== target) cancelPdfManifestPrefetch(record);
+  }
+  const record = pdfManifestPrefetches.get(target);
+  if (record && pdfManifestPrefetchActive.has(record)) record.image.fetchPriority = "high";
 }
 function schedulePdfManifestPrefetch(page) {
   if (capability.mode !== "pdf-pages" || !pdfPageManifest) return;
   const origin = Math.max(1, Math.min(documentState.pageCount + 1, page + 1));
   if (pdfManifestPrefetchOrigin === origin && pdfManifestPrefetchNext) {
-    if (!pdfManifestPrefetchActive && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
+    if (!pdfManifestPrefetchActive.size && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
     return;
   }
   stopPdfManifestPrefetch();
@@ -2904,13 +2917,6 @@ function renderPdfInBackground(shell, force = false, priority = isPdfPageVisible
   if (priority) {
     shell.dataset.renderPriority = "1";
     promotePdfRenderWaiter(shell);
-    if (capability.mode === "pdf-pages") {
-      if (shell.dataset.renderState !== "rendered" && pdfManifestPrefetchActive &&
-          pdfManifestPrefetchActive.url !== pdfPageManifest?.pageUrl(Number(shell.dataset.page)))
-        stopPdfManifestPrefetch();
-      if (shell.dataset.renderState !== "rendered" && !shell._renderStarted)
-        cancelSpeculativePdfRenders(shell);
-    }
   }
   if (shell._backgroundRender) {
     if (priority && capability.mode === "pdf-pages") {
@@ -3010,7 +3016,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       shell.dataset.renderState = "rendered";
       shell.dataset.renderUsedAt = String(Date.now());
       if (isPdfPageVisible(shell) || !pdfManifestPrefetchOrigin) schedulePdfManifestPrefetch(entry.page);
-      else if (!pdfManifestPrefetchActive && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
+      else if (!pdfManifestPrefetchActive.size && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
       trimPdfManifestImages(shell);
       scheduleMarkerSync();
     } catch (error) {
