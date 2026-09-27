@@ -446,9 +446,17 @@ let pdfSearchPageLoader = null;
 let pdfSearchInProgress = false;
 let pdfBookSearchModulePromise = null;
 let pdfBookSearchClient = null;
+let pdfBookSearchPrefetchTimer = 0;
+let pdfBookSearchPrefetchPromise = null;
+// Do not silently download large full-book indexes just because a reader opened.
+const PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES = 8 * 1024 * 1024;
+const PDF_BOOK_SEARCH_PREFETCH_DELAY = 6000;
 trackReaderResource(() => {
   pdfBookSearchClient?.dispose();
   pdfBookSearchClient = null;
+  clearTimeout(pdfBookSearchPrefetchTimer);
+  pdfBookSearchPrefetchTimer = 0;
+  pdfBookSearchPrefetchPromise = null;
 });
 let pdfActiveRenders = 0;
 let pdfShellsReady = Promise.resolve();
@@ -461,11 +469,14 @@ const pdfManifestPrefetches = new Map();
 const pdfManifestShells = [];
 const PDF_MANIFEST_PREFETCH_LIMIT = 12;
 const PDF_MANIFEST_PREFETCH_CONCURRENCY = 3;
+// Keep the existing 12-page render cache; cap only background HTTP fetches per reader.
+const PDF_MANIFEST_PREFETCH_MAX_PAGES = 1000;
 let pdfManifestPrefetchTimer = 0;
 let pdfManifestPrefetchNext = 0;
 let pdfManifestPrefetchOrigin = 0;
-let pdfManifestPrefetchWrapped = false;
 const pdfManifestPrefetchActive = new Set();
+let pdfManifestPrefetchCount = 0;
+let pdfManifestPrefetchWrapped = false;
 function cancelPdfManifestPrefetch(record) {
   if (!record) return;
   pdfManifestPrefetchActive.delete(record);
@@ -492,6 +503,7 @@ function clearPdfManifestPrefetches() {
   stopPdfManifestPrefetch();
   pdfManifestPrefetchNext = 0;
   pdfManifestPrefetchOrigin = 0;
+  pdfManifestPrefetchCount = 0;
   pdfManifestPrefetchWrapped = false;
   pdfManifestShells.length = 0;
   for (const { image } of pdfManifestPrefetches.values()) {
@@ -2477,8 +2489,10 @@ function queuePdfManifestPrefetch(delay = 250) {
     pdfManifestPrefetchTimer = 0;
     if (readerAbortController.signal.aborted || document.hidden || !navigator.onLine ||
         pdfManifestPrefetchActive.size >= PDF_MANIFEST_PREFETCH_CONCURRENCY ||
+        pdfManifestPrefetchCount >= PDF_MANIFEST_PREFETCH_MAX_PAGES ||
         (pdfActiveRenders && content.querySelector('.reader-page[data-render-visible="1"][data-render-state="rendering"]'))) return;
     while (pdfManifestPrefetchActive.size < PDF_MANIFEST_PREFETCH_CONCURRENCY) {
+      if (pdfManifestPrefetchCount >= PDF_MANIFEST_PREFETCH_MAX_PAGES) return;
       if (pdfManifestPrefetchWrapped && pdfManifestPrefetchNext >= pdfManifestPrefetchOrigin) return;
       if (pdfManifestPrefetchNext > documentState.pageCount) {
         pdfManifestPrefetchNext = 1;
@@ -2508,6 +2522,7 @@ function queuePdfManifestPrefetch(delay = 250) {
       image.onerror = () => finish(true);
       pdfManifestPrefetches.set(url, record);
       pdfManifestPrefetchActive.add(record);
+      pdfManifestPrefetchCount++;
       record.timeout = setTimeout(() => finish(true), 15000);
       image.src = url;
       trimPdfManifestPrefetches();
@@ -4491,6 +4506,7 @@ async function start() {
     assertReaderActive();
     if (!setReaderPhase("ready")) return;
     updateDocumentState({ restorationReady: !restorationFailed });
+    schedulePdfBookSearchPrefetch();
     updateProgressTools();
     if (fullSearchInput.value.trim()) runFullSearch();
     scheduleSave();
@@ -5856,16 +5872,14 @@ async function navigateFoliateSearchResult(result, generation) {
   scheduleSave();
   return true;
 }
-async function searchConcentratedPdf(query, generation) {
-  const manifest = await loadPdfOcrManifest();
+async function ensurePdfBookSearchClient(manifest) {
   if (!manifest?.book_text?.path) throw new Error("本书集中全文尚未生成");
   if (!pdfBookSearchModulePromise)
     pdfBookSearchModulePromise = import("/search/static/reader-pdf-book-search.mjs").catch(error => {
       pdfBookSearchModulePromise = null;
       throw error;
-    });
+  });
   const module = await pdfBookSearchModulePromise;
-  if (!isReaderGenerationCurrent("search", generation)) return [];
   if (pdfBookSearchClient?.failed) {
     pdfBookSearchClient.dispose();
     pdfBookSearchClient = null;
@@ -5878,7 +5892,33 @@ async function searchConcentratedPdf(query, generation) {
       pageCount: documentState.pageCount,
       sourceSha: manifest.source_sha256
     });
-  const client = pdfBookSearchClient;
+  return pdfBookSearchClient;
+}
+async function prefetchPdfBookSearch() {
+  if (pdfBookSearchPrefetchPromise || !ocrManifestUrl ||
+      !["pdf", "pdf-pages"].includes(capability.mode) || navigator.connection?.saveData) return;
+  const connection = navigator.connection;
+  if (["slow-2g", "2g"].includes(connection?.effectiveType)) return;
+  pdfBookSearchPrefetchPromise = (async () => {
+    const manifest = await loadPdfOcrManifest();
+    const bytes = Number(manifest?.book_text?.bytes);
+    if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES) return;
+    const client = await ensurePdfBookSearchClient(manifest);
+    await client.prefetch();
+  })().catch(() => {});
+}
+function schedulePdfBookSearchPrefetch() {
+  if (pdfBookSearchPrefetchTimer || pdfBookSearchPrefetchPromise || !ocrManifestUrl ||
+      !["pdf", "pdf-pages"].includes(capability.mode) || navigator.connection?.saveData) return;
+  pdfBookSearchPrefetchTimer = setTimeout(() => {
+    pdfBookSearchPrefetchTimer = 0;
+    const idle = window.requestIdleCallback || ((callback) => setTimeout(callback, 0));
+    idle(() => prefetchPdfBookSearch(), { timeout: 1500 });
+  }, PDF_BOOK_SEARCH_PREFETCH_DELAY);
+}
+async function searchConcentratedPdf(query, generation) {
+  const manifest = await loadPdfOcrManifest();
+  const client = await ensurePdfBookSearchClient(manifest);
   let firstPageResults = [];
   const attach = (page) => {
     const results = page.results.map((hit, position) => {

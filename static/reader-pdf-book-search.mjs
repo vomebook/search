@@ -36,6 +36,7 @@ export function createPdfBookSearch(configuration) {
   }
   return {
     get failed() { return !!failure; },
+    prefetch() { return request("prefetch", {}); },
     search(query, progress) { return request("search", { query }, progress); },
     page(offset) { return request("page", { offset, session }); },
     cancel() { cancelPending(); session = null; worker.postMessage({ type: "cancel" }); },
