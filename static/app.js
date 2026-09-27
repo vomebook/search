@@ -4399,9 +4399,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var browserFileName = getBrowserFileName(f2);
     var browserFileLink = getBrowserFileLink(currentRepo, path || "", f2);
     div2.dataset.link = browserFileLink;
-    var browserAssetPath = path ? path + "/" + browserFileName : browserFileName;
-    var warmBrowserRecord = applyReaderAsset({ File: f2.name, Extension: f2.ext, Link: browserFileLink }, currentRepo, browserAssetPath, browserFileLink);
-    var warmReaderLink = VoiceOfMLReader.readerUrl(warmBrowserRecord, "/search/static/reader.html");
+    var warmReaderLink = getBrowserReaderUrl(f2, currentRepo, path);
     if (warmReaderLink) div2.dataset.readerUrl = warmReaderLink;
     div2.innerHTML = (ICONS[iconType] || ICONS.file) +
       '<span class="browser-name">' + escapeHTML(browserFileName) + '</span>' +
@@ -4432,6 +4430,14 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     fragment.appendChild(div2);
   }
   list.replaceChildren(fragment);
+}
+
+function getBrowserReaderUrl(file, repo, path) {
+  const name = getBrowserFileName(file);
+  const link = getBrowserFileLink(repo, path || "", file);
+  const assetPath = path ? path + "/" + name : name;
+  const record = applyReaderAsset({ File: file.name, Extension: file.ext, Link: link }, repo, assetPath, link);
+  return VoiceOfMLReader.readerUrl(record, "/search/static/reader.html");
 }
 
 function createSidebarBreadcrumb(path) {
@@ -4466,6 +4472,20 @@ async function renderBrowser(path, routeId) {
   DOM.sidebarContent.appendChild(list);
   var data = null;
   var initialData = null;
+  var displayedData = null;
+  var initialAssets = readerAssets;
+  loadReaderAssets().then(function() {
+    if (!list.isConnected || !displayedData || readerAssets === initialAssets ||
+        (routeId && routeId !== routeRenderId) || STATE.mode !== "repo" ||
+        STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
+    list.querySelectorAll('.browser-item[data-link]').forEach(function(row, index) {
+      const file = (displayedData.files || [])[index];
+      if (!file) return;
+      const readerUrl = getBrowserReaderUrl(file, currentRepo, path);
+      if (readerUrl) row.dataset.readerUrl = readerUrl;
+      else delete row.dataset.readerUrl;
+    });
+  });
   if (STATE.useLocalMode && STATE.dataLoaded) {
     try {
       data = await getFolderContents(currentRepo, path);
@@ -4477,6 +4497,7 @@ async function renderBrowser(path, routeId) {
     var initial = data ? null : await loadSidebarInitial(STATE.repo);
     if (initial && (!routeId || routeId === routeRenderId) && STATE.mode === "repo" && STATE.repo === currentRepo.split("/").pop() && STATE.browserPath === path) {
       renderBrowserListItems(list, initial, currentRepo, path);
+      displayedData = initial;
       initialData = initial;
       data = initial;
     }
@@ -4531,6 +4552,7 @@ async function renderBrowser(path, routeId) {
   }
   sidebarRetryCounts.delete(STATE.repo + "|" + (path || ""));
   renderBrowserListItems(list, data, currentRepo, path);
+  displayedData = data;
 }
 
 async function renderFilters(routeId) {
