@@ -38,4 +38,11 @@ for (const offset of [0, 50, 100]) {
   assert.equal(result.results[0].boxes[0].block, offset);
   assert.equal(result.results.at(-1).boxes[0].block, Math.min(offset + 49, 109));
 }
+
+const deepBook = { pages: Array.from({ length: 3 }, (_, page) => ({
+  page: page + 1, text: "needle ".repeat(300), text_spans: []
+})) };
+const deepIndex = await searchBookText(deepBook, "needle", { yieldTask: async () => {} });
+assert.equal(deepIndex.page(500).results[0].page, 2);
+assert.equal(deepIndex.page(500).results[0].start, 200 * "needle ".length);
 console.log("reader book text search contracts passed");

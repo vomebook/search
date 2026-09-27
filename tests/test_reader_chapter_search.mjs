@@ -14,10 +14,13 @@ assert.deepEqual(counted.counts, [125, 130]);
 assert.equal(progressPages[0].total, 125);
 assert.equal(progressPages[0].results.length, 50);
 assert.equal(progressPages.at(-1).total, 255);
-assert.deepEqual(counted.firstPage, await resultPage(chapters, "needle", counted.counts, 0, () => true));
+assert.ok(counted.checkpoints.length >= 1);
+const checkpointed = await countMatches([{ index: 3, title: "检查点", path: "chapters/3.xhtml", text: "needle ".repeat(600) }], "needle", () => true);
+assert.deepEqual(checkpointed.checkpoints.map(checkpoint => checkpoint.ordinal), [0, 256, 512]);
+assert.deepEqual(counted.firstPage, await resultPage(chapters, "needle", counted.counts, 0, () => true, counted.checkpoints));
 const all = [];
 for (let offset = 0; offset < counted.total; offset += 50) {
-  const page = await resultPage(chapters, "needle", counted.counts, offset, () => true);
+  const page = await resultPage(chapters, "needle", counted.counts, offset, () => true, counted.checkpoints);
   assert.ok(page.length <= 50);
   all.push(...page);
 }

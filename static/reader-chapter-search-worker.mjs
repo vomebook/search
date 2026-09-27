@@ -1,6 +1,7 @@
 const PACKED_LIMIT = 64 * 1024 * 1024;
 const TEXT_LIMIT = 256 * 1024 * 1024;
 const PAGE_SIZE = 50;
+const CHECKPOINT_STRIDE = 256;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 function cooperativeYield() {
   let last = performance.now();
@@ -76,12 +77,14 @@ export async function scanText(text, query, visit, current = () => true, yieldWo
 }
 
 export async function countMatches(chapters, query, current, progress = null) {
-  const counts = [], firstPage = [];
+  const counts = [], checkpoints = [], firstPage = [];
   const yieldWork = cooperativeYield();
   let total = 0;
-  for (const chapter of chapters) {
+  for (const [chapterIndex, chapter] of chapters.entries()) {
     let count = 0;
     await scanText(chapter.text, query, (start, length) => {
+      if ((total + count) % CHECKPOINT_STRIDE === 0)
+        checkpoints.push({ ordinal: total + count, chapterIndex, start });
       count++;
       if (firstPage.length < PAGE_SIZE) firstPage.push(searchResult(chapter, start, length));
     }, current, yieldWork);
@@ -91,7 +94,7 @@ export async function countMatches(chapters, query, current, progress = null) {
         counts.length % 8 === 0 || counts.length === chapters.length))
       await progress({ counts, total, scanned: counts.length, firstPage });
   }
-  return { counts, total, firstPage };
+  return { counts, checkpoints, total, firstPage };
 }
 
 function searchResult(chapter, start, length) {
@@ -104,17 +107,28 @@ function searchResult(chapter, start, length) {
   };
 }
 
-export async function resultPage(chapters, query, counts, offset, current) {
+export async function resultPage(chapters, query, counts, offset, current, checkpoints = []) {
   const results = [];
+  offset = Math.max(0, Math.floor(offset));
+  let checkpoint = null;
+  for (let low = 0, high = checkpoints.length - 1; low <= high;) {
+    const middle = (low + high) >> 1;
+    if (checkpoints[middle].ordinal <= offset) {
+      checkpoint = checkpoints[middle];
+      low = middle + 1;
+    } else high = middle - 1;
+  }
   const yieldWork = cooperativeYield();
-  let skip = offset;
-  for (let i = 0; i < chapters.length && results.length < PAGE_SIZE; i++) {
+  let skip = offset - (checkpoint?.ordinal || 0);
+  const firstChapter = checkpoint?.chapterIndex || 0;
+  for (let i = firstChapter; i < chapters.length && results.length < PAGE_SIZE; i++) {
     if (!current()) throw aborted();
-    if (skip >= counts[i]) { skip -= counts[i]; continue; }
+    const start = checkpoint && i === firstChapter ? checkpoint.start : 0;
+    if (!start && skip >= counts[i]) { skip -= counts[i]; continue; }
     const chapter = chapters[i];
-    await scanText(chapter.text, query, (start, length) => {
+    await scanText(chapter.text.slice(start), query, (relativeStart, length) => {
       if (skip) { skip--; return; }
-      results.push(searchResult(chapter, start, length));
+      results.push(searchResult(chapter, start + relativeStart, length));
       return results.length < PAGE_SIZE;
     }, current, yieldWork);
   }
