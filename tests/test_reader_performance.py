@@ -811,6 +811,36 @@ class ReaderPerformanceTest(unittest.TestCase):
                 except PlaywrightError: pass
         self.assertIn(35, requested)
 
+    def test_pdf_pages_jump_does_not_wait_for_stalled_background_image(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.add_init_script("Object.defineProperty(navigator, 'connection', {value: {saveData: true}, configurable: true})")
+        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        source = root + "/page-manifest.json"
+        held, requested = [], []
+        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 40})))
+        def serve_page(route):
+            number = int(route.request.url.rsplit("page-", 1)[1].split(".", 1)[0])
+            requested.append(number)
+            if number == 2:
+                held.append(route)
+            else:
+                route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
+        page.route(f"{root}/pages/**", serve_page)
+        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages", wait_until="domcontentloaded")
+        page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=10000)
+        page.wait_for_function("""() => document.querySelector('.reader-page[data-page="2"]')?._renderStarted""", timeout=10000)
+        page.locator("#page-number").fill("25")
+        page.locator("#page-number").dispatch_event("change")
+        page.wait_for_function("""() => document.querySelector('#viewport').scrollTop >= document.querySelector('.reader-page[data-page="25"]').offsetTop - 2""", timeout=3000)
+        page.locator('.reader-page[data-page="25"] img.ready').wait_for(timeout=3000)
+        self.assertIn(25, requested)
+        for route in held:
+            try: route.abort()
+            except PlaywrightError: pass
+
     def test_converted_pdf_pages_fit_wide_images_without_overlap(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
