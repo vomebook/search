@@ -30,6 +30,8 @@ function pattern(query) {
   return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
 }
 
+const CHECKPOINT_STRIDE = 256;
+
 export function hitBoxes(page, start, length) {
   const begin = Array.from(page.text.slice(0, start)).length;
   const end = begin + Array.from(page.text.slice(start, start + length)).length;
@@ -52,7 +54,7 @@ function hitBoxesAtOffsets(page, begin, end) {
 }
 
 export async function searchBookText(book, query, { current = () => true, yieldTask = () => new Promise(r => setTimeout(r, 0)), progress = null } = {}) {
-  const counts = [], re = pattern(query);
+  const counts = [], checkpoints = [], re = pattern(query);
   let total = 0;
   if (!query) return { total: 0, page: () => ({ total: 0, offset: 0, pageSize: 50, results: [] }) };
   const pageCache = new Map();
@@ -67,21 +69,32 @@ export async function searchBookText(book, query, { current = () => true, yieldT
       return cached;
     }
     const results = [];
-    let passed = 0;
-    for (let index = 0; index < counts.length && results.length < pageSize; index++) {
+    let checkpoint = null;
+    for (let low = 0, high = checkpoints.length - 1; low <= high;) {
+      const middle = (low + high) >> 1;
+      if (checkpoints[middle].ordinal <= offset) {
+        checkpoint = checkpoints[middle];
+        low = middle + 1;
+      } else high = middle - 1;
+    }
+    let passed = checkpoint?.ordinal || 0;
+    const firstPage = checkpoint?.pageIndex || 0;
+    for (let index = firstPage; index < counts.length && results.length < pageSize; index++) {
       if (passed + counts[index] <= offset) { passed += counts[index]; continue; }
       const page = book.pages[index];
+      const start = checkpoint && index === firstPage ? checkpoint.start : 0;
       let previousUnitEnd = 0, previousPointEnd = 0;
-      for (const match of page.text.matchAll(re)) {
+      for (const match of page.text.slice(start).matchAll(re)) {
+        const matchIndex = start + match.index;
         if (passed++ < offset) continue;
-        const begin = Math.max(0, match.index - 72), end = Math.min(page.text.length, match.index + match[0].length + 88);
-        const pointStart = previousPointEnd + Array.from(page.text.slice(previousUnitEnd, match.index)).length;
+        const begin = Math.max(0, matchIndex - 72), end = Math.min(page.text.length, matchIndex + match[0].length + 88);
+        const pointStart = previousPointEnd + Array.from(page.text.slice(previousUnitEnd, matchIndex)).length;
         const pointEnd = pointStart + Array.from(match[0]).length;
-        previousUnitEnd = match.index + match[0].length;
+        previousUnitEnd = matchIndex + match[0].length;
         previousPointEnd = pointEnd;
-        results.push({ page: page.page, start: match.index, length: match[0].length,
+        results.push({ page: page.page, start: matchIndex, length: match[0].length,
           boxes: hitBoxesAtOffsets(page, pointStart, pointEnd),
-          snippet: { text: page.text.slice(begin, end), matchStart: match.index - begin,
+          snippet: { text: page.text.slice(begin, end), matchStart: matchIndex - begin,
             matchLength: match[0].length, prefix: begin ? "…" : "", suffix: end < page.text.length ? "…" : "" } });
         if (results.length === pageSize) break;
       }
@@ -98,6 +111,8 @@ export async function searchBookText(book, query, { current = () => true, yieldT
     if (!current()) throw new DOMException("Search cancelled", "AbortError");
     let count = 0;
     for (const match of book.pages[index].text.matchAll(re)) {
+      if ((total + count) % CHECKPOINT_STRIDE === 0)
+        checkpoints.push({ ordinal: total + count, pageIndex: index, start: match.index });
       count++;
       if (count % 2048 === 0) {
         await yieldTask();
