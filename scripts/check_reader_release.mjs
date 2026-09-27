@@ -160,6 +160,8 @@ function crossCheck(githubRoot, hfRoot) {
     "reader-resources.js",
     "reader-store.js",
     "reader-pdf-text.js",
+    "reader-pdf-book-search-worker.mjs",
+    "reader-pdf-book-search.mjs",
     "search-session.js",
     "download-controller.js",
     "reader-navigation.js",

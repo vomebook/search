@@ -895,6 +895,9 @@ body {
   box-shadow: 0 2px 14px #0008;
   min-height: 160px;
 }
+.reader-pdf-chunk {
+  display: flow-root;
+}
 .reader-content[data-mode="pdf"] .reader-page,
 .reader-content[data-mode="pdf-pages"] .reader-page {
   width: calc(100% * var(--reader-zoom));
@@ -923,8 +926,8 @@ body {
 .reader-pdf-text {
   position: absolute;
   inset: 0;
-  overflow: hidden;
-  pointer-events: auto;
+  overflow: visible;
+  pointer-events: none;
   white-space: pre;
   border: 0;
   color: transparent;
@@ -947,6 +950,7 @@ body {
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
+  pointer-events: auto;
 }
 .reader-pdf-text-run::selection {
   color: transparent;

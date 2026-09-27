@@ -63,6 +63,8 @@
     "reader-security.js",
     "reader-pdf-text.js",
     "reader-book-text.js",
+    "reader-pdf-book-search-worker.mjs",
+    "reader-pdf-book-search.mjs",
     "pdf-worker-wrapper.mjs",
     "reader.css",
     "reader.js"
@@ -70,6 +72,8 @@
   const lazyFiles = new Set([
     "reader-chapter-search-worker.mjs",
     "reader-chapter-search.mjs",
+    "reader-pdf-book-search-worker.mjs",
+    "reader-pdf-book-search.mjs",
     "pdf-worker-wrapper.mjs"
   ]);
   const vendorUrl = (name, base) => base + vendors[name].path;
