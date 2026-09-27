@@ -925,7 +925,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                     "book_text": {"path": ocr_root + "/ocr/book-text.json.gz", "bytes": 1,
                                   "sha256": "a" * 64},
                     "page_manifest": {"path": image_root + "/page-manifest.json"}}
-        held, requested = [], []
+        held, requested, held_images = [], [], []
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
             content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2})))
         def serve_ocr(route):
@@ -939,10 +939,20 @@ class ReaderPerformanceTest(unittest.TestCase):
             else:
                 route.fulfill(status=404)
         page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve_ocr)
+        def serve_image(route):
+            if route.request.url.endswith("page-000001.webp"):
+                held_images.append(route)
+            else:
+                route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
         page.route("https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/pages/**",
-                   lambda route: route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1]))
-        page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
-            {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
+                   serve_image)
+        with page.expect_request(ocr_url):
+            page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
+                {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
+        page.wait_for_timeout(100)
+        self.assertEqual(len(held_images), 1)
+        self.assertEqual(page.locator('.reader-page[data-page="1"] img.ready').count(), 0)
+        held_images.pop().fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
         page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=10000)
         page.locator('html[data-reader-phase="ready"]').wait_for(timeout=10000)
         page.wait_for_timeout(100)
