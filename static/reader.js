@@ -1979,7 +1979,7 @@ function syncCurrentPageFromMarker() {
   const next = Number(page.dataset.page);
   if (!next || next === documentState.page) return;
   updateDocumentState({ page: next });
-  pageInput.value = String(next);
+  if (document.activeElement !== pageInput) pageInput.value = String(next);
   updateTocCurrentMark();
   updateProgressTools();
 }
