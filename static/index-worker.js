@@ -33,6 +33,8 @@ let fulltextBuildTimer = null;
 let fulltextBuild = null;
 const FULLTEXT_BATCH_RECORDS = 256;
 const FULLTEXT_BATCH_MS = 8;
+const FULLTEXT_FOLDER_CACHE_MAX = 64;
+const FULLTEXT_FOLDER_CACHE_UNITS = 65536;
 const directoryIndexes = new Map();
 const DIRECTORY_INDEX_MAX = 4;
 const recordNameCollator = new Intl.Collator("zh");
@@ -41,17 +43,42 @@ function emptyMetadata() {
   return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, txt: { available: false, count: 0, byRepo: {} }, reader: { available: false, count: 0, byRepo: {} } };
 }
 
-function tokenize(text) {
-  const tokens = [];
+function tokenizeParts(text) {
+  const chinese = [];
   const lower = String(text || "").toLowerCase();
-  const alpha = lower.match(/[a-z0-9]+/g);
-  if (alpha) tokens.push.apply(tokens, alpha);
+  const alpha = lower.match(/[a-z0-9]+/g) || [];
   const chineseRuns = lower.match(/[\u4e00-\u9fff\u3400-\u4dbf]+/g) || [];
   for (const run of chineseRuns) {
-    for (const ch of run) tokens.push(ch);
-    for (let i = 0; i < run.length - 1; i++) tokens.push(run[i] + run[i + 1]);
+    for (const ch of run) chinese.push(ch);
+    for (let i = 0; i < run.length - 1; i++) chinese.push(run[i] + run[i + 1]);
   }
-  return Array.from(new Set(tokens));
+  return {alpha, chinese};
+}
+
+function tokenize(text) {
+  const parts = tokenizeParts(text);
+  return Array.from(new Set(parts.alpha.concat(parts.chinese)));
+}
+
+function folderTokenParts(build, text) {
+  const cached = build.folderTokens.get(text);
+  if (cached) {
+    build.folderTokens.delete(text);
+    build.folderTokens.set(text, cached);
+    return cached.parts;
+  }
+  const parts = tokenizeParts(text);
+  const units = text.length + parts.alpha.concat(parts.chinese).reduce((sum, token) => sum + token.length, 0);
+  if (units <= FULLTEXT_FOLDER_CACHE_UNITS) {
+    while (build.folderTokens.size >= FULLTEXT_FOLDER_CACHE_MAX || build.folderUnits + units > FULLTEXT_FOLDER_CACHE_UNITS) {
+      const key = build.folderTokens.keys().next().value;
+      build.folderUnits -= build.folderTokens.get(key).units;
+      build.folderTokens.delete(key);
+    }
+    build.folderTokens.set(text, {parts, units});
+    build.folderUnits += units;
+  }
+  return parts;
 }
 
 function editDistance(s1, s2, maxDist) {
@@ -316,18 +343,22 @@ function replaceCorpus(nextRecords) {
 }
 
 function advanceFulltext(limit, deadline) {
-  if (!fulltextBuild) fulltextBuild = { next: 0, all: {}, files: {} };
+  if (!fulltextBuild) fulltextBuild = { next: 0, all: {}, files: {}, folderTokens: new Map(), folderUnits: 0 };
   const build = fulltextBuild;
   const end = Math.min(records.length, build.next + limit);
   while (build.next < end) {
     const i = build.next++;
     const record = records[i];
     const folders = Array.isArray(record.Folder) ? record.Folder : [];
-    for (const token of tokenize([record.File || ""].concat(folders).join(" "))) {
+    const fileParts = tokenizeParts(record.File || "");
+    const folderParts = folderTokenParts(build, folders.join(" "));
+    // Preserve the original all-field alpha-before-Chinese insertion order.
+    const allTokens = new Set(fileParts.alpha.concat(folderParts.alpha, fileParts.chinese, folderParts.chinese));
+    for (const token of allTokens) {
       if (!build.all[token]) build.all[token] = [];
       build.all[token].push(i);
     }
-    for (const token of tokenize(record.File || "")) {
+    for (const token of new Set(fileParts.alpha.concat(fileParts.chinese))) {
       if (!build.files[token]) build.files[token] = [];
       build.files[token].push(i);
     }
