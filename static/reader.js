@@ -479,14 +479,25 @@ const pdfManifestPrefetches = new Map();
 const pdfManifestShells = [];
 const PDF_MANIFEST_PREFETCH_LIMIT = 12;
 const PDF_MANIFEST_PREFETCH_CONCURRENCY = 3;
-// Keep the existing 12-page render cache; cap only background HTTP fetches per reader.
-const PDF_MANIFEST_PREFETCH_MAX_PAGES = 1000;
+// Keep the 12-page render cache; background prefetch stays a nearby window.
+const PDF_MANIFEST_PREFETCH_MAX_PAGES = 48;
 let pdfManifestPrefetchTimer = 0;
 let pdfManifestPrefetchNext = 0;
 let pdfManifestPrefetchOrigin = 0;
 const pdfManifestPrefetchActive = new Set();
 let pdfManifestPrefetchCount = 0;
 let pdfManifestPrefetchWrapped = false;
+function pdfManifestPrefetchConcurrency() {
+  const type = navigator.connection?.effectiveType;
+  if (type === "slow-2g" || type === "2g") return 1;
+  if (matchMedia("(max-width: 700px)").matches) return 2;
+  return PDF_MANIFEST_PREFETCH_CONCURRENCY;
+}
+function pdfManifestPrefetchMaxPages() {
+  const type = navigator.connection?.effectiveType;
+  if (type === "slow-2g" || type === "2g") return 8;
+  return matchMedia("(max-width: 700px)").matches ? 24 : PDF_MANIFEST_PREFETCH_MAX_PAGES;
+}
 function cancelPdfManifestPrefetch(record) {
   if (!record) return;
   pdfManifestPrefetchActive.delete(record);
@@ -2553,11 +2564,11 @@ function queuePdfManifestPrefetch(delay = 250) {
   pdfManifestPrefetchTimer = setTimeout(() => {
     pdfManifestPrefetchTimer = 0;
     if (readerAbortController.signal.aborted || document.hidden || !navigator.onLine ||
-        pdfManifestPrefetchActive.size >= PDF_MANIFEST_PREFETCH_CONCURRENCY ||
-        pdfManifestPrefetchCount >= PDF_MANIFEST_PREFETCH_MAX_PAGES ||
+        pdfManifestPrefetchActive.size >= pdfManifestPrefetchConcurrency() ||
+        pdfManifestPrefetchCount >= pdfManifestPrefetchMaxPages() ||
         (pdfActiveRenders && content.querySelector('.reader-page[data-render-visible="1"][data-render-state="rendering"]'))) return;
-    while (pdfManifestPrefetchActive.size < PDF_MANIFEST_PREFETCH_CONCURRENCY) {
-      if (pdfManifestPrefetchCount >= PDF_MANIFEST_PREFETCH_MAX_PAGES) return;
+    while (pdfManifestPrefetchActive.size < pdfManifestPrefetchConcurrency()) {
+      if (pdfManifestPrefetchCount >= pdfManifestPrefetchMaxPages()) return;
       if (pdfManifestPrefetchWrapped && pdfManifestPrefetchNext >= pdfManifestPrefetchOrigin) return;
       if (pdfManifestPrefetchNext > documentState.pageCount) {
         pdfManifestPrefetchNext = 1;
