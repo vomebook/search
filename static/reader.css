@@ -907,6 +907,8 @@ body {
   width: 100%;
   max-width: 100%;
   height: auto;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .reader-content[data-mode="pdf-pages"] .reader-page {
   content-visibility: auto;
@@ -917,6 +919,8 @@ body {
   position: relative;
   width: 100%;
   height: auto;
+  user-select: none;
+  -webkit-user-select: none;
   opacity: 0;
   transition: opacity 120ms ease;
 }

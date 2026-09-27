@@ -2198,8 +2198,35 @@ for (const type of ["wheel", "touchstart", "pointerdown"])
   viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
 let pdfSelectionPointer = null;
 viewport.addEventListener("pointerdown", (event) => {
-  pdfSelectionPointer = event.target.closest?.(".reader-page")
-    ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null;
+  const run = event.target.closest?.(".reader-pdf-text-run");
+  const selection = document.getSelection();
+  const selectedRun = !selection?.isCollapsed && event.target.closest?.(".reader-page")
+    ? selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run") : null;
+  const origin = run || selectedRun;
+  pdfSelectionPointer = origin
+    ? { id: event.pointerId, x: event.clientX, y: event.clientY, frame: 0,
+        page: origin.closest(".reader-page"), anchorNode: run ? null : selection.anchorNode,
+        anchorOffset: run ? 0 : selection.anchorOffset } : null;
+}, { passive: true });
+document.addEventListener("pointermove", (event) => {
+  const start = pdfSelectionPointer;
+  if (!start || start.id !== event.pointerId ||
+      Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
+  const selection = document.getSelection();
+  if (!start.anchorNode && selection?.rangeCount && start.page.contains(selection.anchorNode) &&
+      selection.anchorNode.parentElement?.closest(".reader-pdf-text-run")) {
+    start.anchorNode = selection.anchorNode;
+    start.anchorOffset = selection.anchorOffset;
+  }
+  if (start.anchorNode) {
+    start.endX = event.clientX;
+    start.endY = event.clientY;
+    if (!start.frame) start.frame = requestAnimationFrame(() => {
+      start.frame = 0;
+      if (pdfSelectionPointer === start)
+        correctPdfCrossPageSelection(start.endX, start.endY, start);
+    });
+  }
 }, { passive: true });
 document.addEventListener("pointerup", (event) => {
   const start = pdfSelectionPointer;
@@ -2207,7 +2234,7 @@ document.addEventListener("pointerup", (event) => {
   if (!["pdf", "pdf-pages"].includes(capability.mode) || !start || start.id !== event.pointerId ||
       Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
   const x = event.clientX, y = event.clientY;
-  requestAnimationFrame(() => correctPdfCrossPageSelection(x, y));
+  requestAnimationFrame(() => correctPdfCrossPageSelection(x, y, start));
 }, { passive: true });
 document.addEventListener("pointercancel", () => { pdfSelectionPointer = null; }, { passive: true });
 window.addEventListener("pagehide", (event) => {
@@ -2750,11 +2777,22 @@ function pdfSelectionIntersects(element) {
   if (element.contains(selection.anchorNode) || element.contains(selection.focusNode)) return true;
   return !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(element);
 }
-function correctPdfCrossPageSelection(x, y) {
+function correctPdfCrossPageSelection(x, y, start = null) {
   const selection = document.getSelection();
-  if (!selection?.rangeCount || selection.isCollapsed) return;
-  const origin = selection.anchorNode?.parentElement?.closest(".reader-page");
-  const target = document.elementFromPoint(x, y)?.closest(".reader-page");
+  if (!selection?.rangeCount) return;
+  const anchorNode = start?.anchorNode || selection.anchorNode;
+  const anchorOffset = start?.anchorNode ? start.anchorOffset : selection.anchorOffset;
+  if (!start?.anchorNode && selection.isCollapsed) return;
+  const origin = anchorNode?.parentElement?.closest(".reader-page");
+  let target = document.elementFromPoint(x, y)?.closest(".reader-page");
+  if (!target) {
+    let distance = Infinity;
+    for (const shell of content.querySelectorAll(".reader-page")) {
+      const rect = shell.getBoundingClientRect();
+      const gap = Math.max(rect.top - y, y - rect.bottom, 0);
+      if (gap < distance) { distance = gap; target = shell; }
+    }
+  }
   if (!origin || !target || origin === target || !content.contains(origin) || !content.contains(target)) return;
   const runs = [...target.querySelectorAll(".reader-pdf-text-run")].filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
   if (!runs.length) return;
@@ -2784,7 +2822,7 @@ function correctPdfCrossPageSelection(x, y) {
     }
     offset = low;
   }
-  selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node, offset);
+  selection.setBaseAndExtent(anchorNode, anchorOffset, node, offset);
 }
 function createPdfShellWindow(total, firstShell, createShell, unobserve, defaultRatio) {
   if (total <= 256) return null;

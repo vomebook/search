@@ -997,8 +997,16 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.mouse.move(points[0]["x"], points[0]["y"])
         page.mouse.down()
         page.mouse.move(gap["x"], gap["y"], steps=24)
-        self.assertFalse(page.evaluate("""() => getSelection().getRangeAt(0).intersectsNode(
-          document.querySelector('.reader-page[data-page="2"] img'))"""))
+        during = page.evaluate("""() => ({
+          imageSelect: getComputedStyle(document.querySelector('.reader-page[data-page="1"] img')).userSelect,
+          anchor: getSelection().anchorNode?.parentElement?.closest('.reader-page')?.dataset.page,
+          focus: getSelection().focusNode?.parentElement?.closest('.reader-page')?.dataset.page,
+          text: getSelection().toString()
+        })""")
+        self.assertEqual(during["imageSelect"], "none")
+        self.assertEqual(during["anchor"], "1")
+        self.assertEqual(during["focus"], "2")
+        self.assertNotIn("第2页末行", during["text"])
         page.mouse.up()
         page.wait_for_function("() => !getSelection().toString().includes('第2页末行')")
         gap_selection = page.evaluate("getSelection().toString()")
@@ -1022,6 +1030,27 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertIn("第2页正文", reverse)
         self.assertIn("第1页末行", reverse)
         self.assertNotIn("第2页末行", reverse)
+        page.set_viewport_size({"width": 390, "height": 1500})
+        page.evaluate("() => { getSelection().removeAllRanges(); document.querySelector('#viewport').scrollTop = 0; }")
+        bottom = page.evaluate("""() => {
+          const start = document.querySelectorAll('.reader-page[data-page="1"] .reader-pdf-text-run')[2].getBoundingClientRect();
+          const end = document.querySelector('.reader-page[data-page="2"]').getBoundingClientRect();
+          return { x: start.left + 2, y: start.top + start.height / 2,
+            endX: end.left + end.width / 2, endY: end.bottom - 10 };
+        }""")
+        page.mouse.move(bottom["x"], bottom["y"])
+        page.mouse.down()
+        page.mouse.move(bottom["endX"], bottom["endY"], steps=36)
+        page.wait_for_function("() => getSelection().focusNode?.parentElement?.closest('.reader-page')?.dataset.page === '2'")
+        moving = page.evaluate("""() => ({
+          anchor: getSelection().anchorNode.parentElement.closest('.reader-page').dataset.page,
+          text: getSelection().toString()
+        })""")
+        self.assertEqual(moving["anchor"], "1")
+        self.assertIn("第1页末行", moving["text"])
+        self.assertIn("第2页末行", moving["text"])
+        self.assertNotIn("第1页正文", moving["text"])
+        page.mouse.up()
         self.assertEqual(requested, [ocr_root + "/ocr-manifest.json",
                                      text_root + "/ocr/page-000001.json.gz",
                                      text_root + "/ocr/page-000002.json.gz"])
