@@ -9,6 +9,7 @@ CATEGORY_METHODS = {
         "test_pdf_rendering_has_bounded_concurrency_and_canvas_memory",
         "test_long_native_pdf_keeps_bounded_page_shells",
         "test_pdf_exposes_lazy_accessible_text",
+        "test_native_pdf_canvas_does_not_wait_for_text_layer",
         "test_reader_panel_bookmark_search_and_theme",
         "test_reader_controls_fit_viewport_without_overlap_and_work_on_mobile",
         "test_reader_toolbar_controls_have_accessible_names_and_state",

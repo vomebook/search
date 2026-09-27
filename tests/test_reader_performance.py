@@ -473,7 +473,23 @@ class ReaderPerformanceTest(unittest.TestCase):
         first_page = self.page.locator(".reader-page").first
         self.assertEqual(first_page.get_attribute("role"), "region")
         self.assertEqual(first_page.locator("canvas").get_attribute("aria-hidden"), "true")
+        self.page.wait_for_function("document.querySelector('.reader-page')?.dataset.textReady === '1'")
         self.assertEqual(first_page.locator(".reader-pdf-text").text_content(), "Accessible PDF text")
+
+    def test_native_pdf_canvas_does_not_wait_for_text_layer(self):
+        module = PDF_MODULE.replace(
+            "getTextContent() { return Promise.resolve({ items: [{ str: 'Accessible PDF text', hasEOL: false }] }); },",
+            "getTextContent() { return new Promise(resolve => setTimeout(() => resolve({ items: [{ str: 'Accessible PDF text', hasEOL: false }] }), 1000)); },",
+        )
+        self.page.unroute("**/static/vendor/pdf.min.*.mjs")
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=module))
+        self.open_reader()
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=3000)
+        self.assertNotEqual(
+            self.page.locator('.reader-page[data-page="1"]').get_attribute("data-text-ready"), "1"
+        )
+        self.page.locator('.reader-page[data-page="1"][data-text-ready="1"]').wait_for(timeout=3000)
 
     def test_scanned_pdf_bookmark_has_empty_excerpt(self):
         self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
