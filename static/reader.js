@@ -2254,6 +2254,32 @@ document.addEventListener("pointerup", (event) => {
   requestAnimationFrame(() => correctPdfCrossPageSelection(x, y, start));
 }, { passive: true });
 document.addEventListener("pointercancel", () => { pdfSelectionPointer = null; }, { passive: true });
+let pdfSelectionBoundaryUpdate = false;
+document.addEventListener("selectionchange", () => {
+  if (pdfSelectionBoundaryUpdate || !["pdf", "pdf-pages"].includes(capability.mode)) return;
+  const selection = document.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+  const runs = [...content.querySelectorAll(".reader-pdf-text-run")]
+    .filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
+  if (!runs.length) return;
+  const anchorRun = selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run");
+  const focusRun = selection.focusNode?.parentElement?.closest(".reader-pdf-text-run");
+  if (!anchorRun && !focusRun) return;
+  if (focusRun) return;
+  const beforeAnchor = selection.focusNode && selection.anchorNode &&
+    (selection.focusNode === selection.anchorNode
+      ? selection.focusOffset < selection.anchorOffset
+      : Boolean(selection.focusNode.compareDocumentPosition(selection.anchorNode) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const target = beforeAnchor ? runs[0] : runs[runs.length - 1];
+  const node = target.firstChild;
+  pdfSelectionBoundaryUpdate = true;
+  try {
+    selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node,
+      beforeAnchor ? 0 : node.length);
+  } finally {
+    pdfSelectionBoundaryUpdate = false;
+  }
+}, { passive: true });
 window.addEventListener("pagehide", (event) => {
   saveProgress(event);
   if (!event.persisted) disposeReader();

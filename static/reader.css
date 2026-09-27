@@ -31,6 +31,13 @@ body {
   background: #1b1e21;
   border-bottom: 1px solid #34383d;
 }
+.reader-toolbar,
+.reader-panel,
+.reader-progress-tools,
+.reader-page {
+  user-select: none;
+  -webkit-user-select: none;
+}
 .reader-heading {
   min-width: 0;
   flex: 1;
