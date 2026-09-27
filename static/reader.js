@@ -2202,10 +2202,14 @@ document
   .querySelector("#history-close")
   .addEventListener("click", () => setReaderPanelOpen(false, true));
 viewport.addEventListener("scroll", handleReaderPositionChange, { passive: true });
-function notePdfScrollIntent() {
+function notePdfScrollIntent(event) {
+  if (event.type === "touchstart") pdfTouchScrollGesture = true;
   pdfUserHasScrolled = true;
   beginReaderNavigation();
 }
+let pdfTouchScrollGesture = false;
+document.addEventListener("touchend", () => { pdfTouchScrollGesture = false; }, { passive: true });
+document.addEventListener("touchcancel", () => { pdfTouchScrollGesture = false; }, { passive: true });
 for (const type of ["wheel", "touchstart", "pointerdown"])
   viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
 let pdfSelectionPointer = null;
@@ -2255,8 +2259,11 @@ document.addEventListener("pointerup", (event) => {
 }, { passive: true });
 document.addEventListener("pointercancel", () => { pdfSelectionPointer = null; }, { passive: true });
 let pdfSelectionBoundaryUpdate = false;
+let pdfTouchSelectionPage = null;
 document.addEventListener("selectionchange", () => {
-  if (pdfSelectionBoundaryUpdate || !["pdf", "pdf-pages"].includes(capability.mode)) return;
+  if (pdfSelectionBoundaryUpdate || pdfTouchScrollGesture ||
+      (navigator.maxTouchPoints && pdfTouchSelectionPage === null) ||
+      !["pdf", "pdf-pages"].includes(capability.mode)) return;
   const selection = document.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return;
   const runs = [...content.querySelectorAll(".reader-pdf-text-run")]
@@ -2276,6 +2283,44 @@ document.addEventListener("selectionchange", () => {
   try {
     selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node,
       beforeAnchor ? 0 : node.length);
+  } finally {
+    pdfSelectionBoundaryUpdate = false;
+  }
+}, { passive: true });
+document.addEventListener("selectionchange", () => {
+  if (pdfSelectionBoundaryUpdate || !navigator.maxTouchPoints ||
+      !["pdf", "pdf-pages"].includes(capability.mode)) return;
+  const selection = document.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) {
+    pdfTouchSelectionPage = null;
+    return;
+  }
+  const anchorPage = selection.anchorNode?.parentElement?.closest(".reader-page");
+  const focusPage = selection.focusNode?.parentElement?.closest(".reader-page");
+  if (!anchorPage || !focusPage) return;
+  const anchor = Number(anchorPage.dataset.page), focus = Number(focusPage.dataset.page);
+  if (!Number.isInteger(anchor) || !Number.isInteger(focus)) return;
+  if (pdfTouchSelectionPage == null) {
+    pdfTouchSelectionPage = focus;
+    return;
+  }
+  const delta = focus - pdfTouchSelectionPage;
+  if (Math.abs(delta) <= 1) {
+    pdfTouchSelectionPage = focus;
+    return;
+  }
+  const direction = delta > 0 ? 1 : -1;
+  const targetPage = content.querySelector(`.reader-page[data-page="${pdfTouchSelectionPage + direction}"]`);
+  const runs = [...(targetPage?.querySelectorAll(".reader-pdf-text-run") || [])]
+    .filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
+  if (!runs.length) return;
+  const run = direction > 0 ? runs[runs.length - 1] : runs[0];
+  const node = run.firstChild;
+  pdfSelectionBoundaryUpdate = true;
+  try {
+    selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node,
+      direction > 0 ? node.length : 0);
+    pdfTouchSelectionPage += direction;
   } finally {
     pdfSelectionBoundaryUpdate = false;
   }
@@ -2472,7 +2517,12 @@ function preloadPdfFirstPage() {
     if (!source) return;
     const pageUrl = new URL(source.pageUrl(1));
     const early = window.__VOICE_PDF_PRELOAD__;
-    if (early?.image && early.pageUrl === pageUrl.href) pdfFirstPagePreload = early.image;
+    if (early?.image && early.pageUrl === pageUrl.href) {
+      pdfFirstPagePreload = early.image;
+      // The head preload starts at low priority, but once the Reader owns it
+      // the first visible page is demand-critical.
+      pdfFirstPagePreload.fetchPriority = "high";
+    }
     else if (!navigator.connection?.saveData) {
       pdfFirstPagePreload = new Image();
       pdfFirstPagePreload.decoding = "async";
@@ -3363,8 +3413,12 @@ function renderPdfShell(shell, force = false, priority = false) {
         });
         activeRendering = rendering;
         const untrack = trackReaderResource(() => rendering.cancel?.());
+        const textTask = renderPdfText(page, shell, renderController.signal);
+        textTask.catch(() => {});
         try {
-          await awaitReader(Promise.all([rendering.promise, renderPdfText(page, shell, renderController.signal)]));
+          // The canvas is the first visible result. Text extraction can need a
+          // separate range and must not delay the visual first page.
+          await awaitReader(rendering.promise);
         } finally {
           untrack();
           activeRendering = null;
@@ -5140,8 +5194,14 @@ async function renderFoliate() {
   setupFoliateWindow(stream, sections);
   if (sections[0]) await foliateChapterRepository.load(0);
   assertReaderActive();
-  const entries = await foliateTocEntries(view, sections);
-  if (entries.length) setToc(entries);
+  // Resolving every TOC href can be expensive for large books. The first
+  // chapter is already visible, so finish the opening path before enriching
+  // the navigation panel in the background.
+  foliateTocEntries(view, sections)
+    .then((entries) => {
+      if (entries.length && !readerAbortController.signal.aborted) setToc(entries);
+    })
+    .catch(() => {});
   scheduleFoliateScrollSync();
   loadingIndicator.remove();
   loadingStatus.hidden = true;
