@@ -2202,14 +2202,10 @@ document
   .querySelector("#history-close")
   .addEventListener("click", () => setReaderPanelOpen(false, true));
 viewport.addEventListener("scroll", handleReaderPositionChange, { passive: true });
-function notePdfScrollIntent(event) {
-  if (event.type === "touchstart") pdfTouchScrollGesture = true;
+function notePdfScrollIntent() {
   pdfUserHasScrolled = true;
   beginReaderNavigation();
 }
-let pdfTouchScrollGesture = false;
-document.addEventListener("touchend", () => { pdfTouchScrollGesture = false; }, { passive: true });
-document.addEventListener("touchcancel", () => { pdfTouchScrollGesture = false; }, { passive: true });
 for (const type of ["wheel", "touchstart", "pointerdown"])
   viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
 let pdfSelectionPointer = null;
@@ -2261,8 +2257,7 @@ document.addEventListener("pointercancel", () => { pdfSelectionPointer = null; }
 let pdfSelectionBoundaryUpdate = false;
 let pdfTouchSelectionPage = null;
 document.addEventListener("selectionchange", () => {
-  if (pdfSelectionBoundaryUpdate || pdfTouchScrollGesture ||
-      (navigator.maxTouchPoints && pdfTouchSelectionPage === null) ||
+  if (pdfSelectionBoundaryUpdate ||
       !["pdf", "pdf-pages"].includes(capability.mode)) return;
   const selection = document.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return;
@@ -2283,44 +2278,6 @@ document.addEventListener("selectionchange", () => {
   try {
     selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node,
       beforeAnchor ? 0 : node.length);
-  } finally {
-    pdfSelectionBoundaryUpdate = false;
-  }
-}, { passive: true });
-document.addEventListener("selectionchange", () => {
-  if (pdfSelectionBoundaryUpdate || !navigator.maxTouchPoints ||
-      !["pdf", "pdf-pages"].includes(capability.mode)) return;
-  const selection = document.getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount) {
-    pdfTouchSelectionPage = null;
-    return;
-  }
-  const anchorPage = selection.anchorNode?.parentElement?.closest(".reader-page");
-  const focusPage = selection.focusNode?.parentElement?.closest(".reader-page");
-  if (!anchorPage || !focusPage) return;
-  const anchor = Number(anchorPage.dataset.page), focus = Number(focusPage.dataset.page);
-  if (!Number.isInteger(anchor) || !Number.isInteger(focus)) return;
-  if (pdfTouchSelectionPage == null) {
-    pdfTouchSelectionPage = focus;
-    return;
-  }
-  const delta = focus - pdfTouchSelectionPage;
-  if (Math.abs(delta) <= 1) {
-    pdfTouchSelectionPage = focus;
-    return;
-  }
-  const direction = delta > 0 ? 1 : -1;
-  const targetPage = content.querySelector(`.reader-page[data-page="${pdfTouchSelectionPage + direction}"]`);
-  const runs = [...(targetPage?.querySelectorAll(".reader-pdf-text-run") || [])]
-    .filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
-  if (!runs.length) return;
-  const run = direction > 0 ? runs[runs.length - 1] : runs[0];
-  const node = run.firstChild;
-  pdfSelectionBoundaryUpdate = true;
-  try {
-    selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node,
-      direction > 0 ? node.length : 0);
-    pdfTouchSelectionPage += direction;
   } finally {
     pdfSelectionBoundaryUpdate = false;
   }
