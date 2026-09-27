@@ -168,6 +168,43 @@ test("background indexing yields, publishes complete indexes and preserves cold 
     assert.strictEqual(warmed.total, expected.total);
   }
 });
+test("shared token parts preserve complete postings and vocabulary ties with bounded folder reuse", async () => {
+  const input = Array.from({length: 600}, (_, i) => ({...records[0],
+    File: ["A123文化B", "文化 beta 123", "İ手机", "alpha alpha", "文。化", ""][i % 6],
+    Folder: ["目录 alpha " + (i % 80), "手机 Beta 123"]}));
+  input[1].Folder = ["z".repeat(70000)];
+  function referenceTokens(text) {
+    const lower = String(text || "").toLowerCase(), tokens = lower.match(/[a-z0-9]+/g) || [];
+    for (const run of lower.match(/[\u4e00-\u9fff\u3400-\u4dbf]+/g) || []) {
+      for (const char of run) tokens.push(char);
+      for (let i = 0; i < run.length - 1; i++) tokens.push(run[i] + run[i + 1]);
+    }
+    return Array.from(new Set(tokens));
+  }
+  const expected = {all: {}, files: {}};
+  input.forEach((r, i) => {
+    for (const token of referenceTokens([r.File || ""].concat(r.Folder).join(" "))) {
+      if (!expected.all[token]) expected.all[token] = [];
+      expected.all[token].push(i);
+    }
+    for (const token of referenceTokens(r.File)) {
+      if (!expected.files[token]) expected.files[token] = [];
+      expected.files[token].push(i);
+    }
+  });
+  const {worker} = await loaded(input);
+  vm.runInContext("advanceFulltext(500, Infinity)", worker.context);
+  assert.strictEqual(vm.runInContext("fulltextBuild.folderTokens.size <= 64 && fulltextBuild.folderUnits <= 65536", worker.context), true);
+  assert.strictEqual(vm.runInContext('fulltextBuild.folderTokens.has("z".repeat(70000))', worker.context), false);
+  vm.runInContext("buildFulltext()", worker.context);
+  const actual = JSON.parse(vm.runInContext("JSON.stringify({all: wordIndex, files: wordIndexFilesOnly})", worker.context));
+  for (const name of ["all", "files"]) {
+    assert.deepStrictEqual(Object.entries(actual[name]), Object.entries(expected[name]));
+    const vocab = Object.keys(expected[name]).map(token => [token, expected[name][token].length]).sort((a, b) => b[1] - a[1]);
+    assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(" + (name === "all" ? "vocabSorted" : "vocabSortedFilesOnly") + ")", worker.context)), vocab);
+  }
+  assert.strictEqual(vm.runInContext("fulltextBuild === null", worker.context), true);
+});
 test("foreground indexing resumes partial work and clears the scheduled continuation", async () => {
   const input = Array.from({length: 400}, (_, i) => Object.assign({}, records[i % records.length]));
   const { worker, tasks, tick } = scheduledWorker();
