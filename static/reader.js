@@ -2748,7 +2748,7 @@ async function renderPdfOcrText(shell) {
         assertReaderActive();
         if (epoch !== (shell._textEpoch || 0)) return;
         VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-        populateOcrTextLayer(layer, payload.blocks);
+        populateOcrTextLayer(layer, payload.blocks, payload.layout);
         shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
         shell.dataset.textReady = "1";
         highlightPdfText(shell);
