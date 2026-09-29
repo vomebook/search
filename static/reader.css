@@ -953,13 +953,6 @@ body {
   font-size: calc(var(--reader-pdf-font-ratio) * 100cqw);
   transform-origin: left top;
 }
-.reader-pdf-text-fallback {
-  position: absolute;
-  inset: 0;
-  white-space: pre-wrap;
-  overflow: hidden;
-  pointer-events: auto;
-}
 .reader-pdf-text-run {
   display: inline-block;
   color: transparent;

@@ -98,41 +98,18 @@ export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
   layer.replaceChildren(fragment);
 }
 
-export function populateOcrTextLayer(layer, blocks, layout = {}) {
+export function populateOcrTextLayer(layer, blocks) {
   const fragment = layer.ownerDocument.createDocumentFragment();
   const ratio = layer.parentElement.getBoundingClientRect();
-  const vertical = layout?.writing_mode === "vertical-rl" || layout?.writing_mode === "vertical-lr";
-  let positioned = 0;
-  const fallback = [];
   for (const block of blocks || []) {
     const text = String(block?.t || ""), b = block?.b;
-    if (!text) continue;
-    if (!Array.isArray(b) || b.length !== 4 || !b.every(Number.isFinite)) {
-      fallback.push(text);
-      continue;
-    }
+    if (!text || !Array.isArray(b) || b.length !== 4 || !b.every(Number.isFinite)) continue;
     const [x1, y1, x2, y2] = b.map(normalizeBox);
     const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
-    if (!width || !height) {
-      fallback.push(text);
-      continue;
-    }
+    if (!width || !height) continue;
     fragment.appendChild(positionedRun(layer, text, Math.min(x1, x2), Math.min(y1, y2),
-      height * ratio.height / Math.max(1, ratio.width), width, "sans-serif", 0, vertical));
+      height * ratio.height / Math.max(1, ratio.width), width, "sans-serif"));
     fragment.appendChild(layer.ownerDocument.createTextNode("\n"));
-    positioned++;
-  }
-  if (!positioned && fallback.length) {
-    // Native-text extraction can provide correct text without coordinates.
-    // Keep it selectable instead of dropping the entire page text layer.
-    const box = layer.ownerDocument.createElement("div");
-    box.className = "reader-pdf-text-fallback";
-    if (vertical) {
-      box.style.writingMode = layout.writing_mode;
-      box.style.textOrientation = "upright";
-    }
-    box.appendChild(textRun(layer, fallback.join("\n")));
-    fragment.appendChild(box);
   }
   layer.replaceChildren(fragment);
 }
