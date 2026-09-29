@@ -4165,7 +4165,12 @@ function ensureVirtualViewportCovered() {
   if (VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) return;
   const viewTop = getResultScrollTop();
   const viewBottom = viewTop + DOM.resultsContainer.clientHeight;
-  if (viewTop < getVirtualOffset(VSCROLL.renderStart) || viewBottom > getVirtualOffset(VSCROLL.renderEnd)) renderVisible();
+  if (viewTop < getVirtualOffset(VSCROLL.renderStart) || viewBottom > getVirtualOffset(VSCROLL.renderEnd)) {
+    // Let the scroll RAF perform the single DOM update for this frame. A
+    // synchronous render here would duplicate layout and height measurement.
+    VSCROLL.renderStart = -1;
+    VSCROLL.renderEnd = -1;
+  }
 }
 
 function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, anchor = null) {
