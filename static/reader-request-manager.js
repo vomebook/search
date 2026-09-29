@@ -78,7 +78,7 @@
       });
     }
 
-    function request(url, timeoutMs) {
+    function request(url, timeoutMs, requestInit = {}) {
       if (disposed) return Promise.reject(new DOMException("Reader disposed", "AbortError"));
       if (pending.has(url)) return responseForCaller(pending.get(url));
       const controller = new AbortControllerImpl();
@@ -98,7 +98,7 @@
       record.promise = Promise.resolve()
         .then(() => {
           controller.signal.throwIfAborted();
-          return fetchImpl(url, { signal: controller.signal });
+            return fetchImpl(url, { ...requestInit, signal: controller.signal });
         })
         .then(async (response) => {
           if (controller.signal.aborted) {

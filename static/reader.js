@@ -2521,8 +2521,8 @@ function loadScript(url) {
     document.head.appendChild(script);
   });
 }
-function fetchWithReaderTimeout(url, timeoutMs = READER_PROXY_TIMEOUT_MS) {
-  return readerRequestManager.request(url, timeoutMs);
+function fetchWithReaderTimeout(url, timeoutMs = READER_PROXY_TIMEOUT_MS, requestInit = {}) {
+  return readerRequestManager.request(url, timeoutMs, requestInit);
 }
 function retryableReaderProxyError(error) {
   return [408, 429, 500, 502, 503, 504].includes(error?.status) ||
@@ -2540,19 +2540,19 @@ async function retryReaderProxy(open) {
     }
   }
 }
-function fetchReaderUrl(rawUrl) {
+function fetchReaderUrl(rawUrl, requestInit = {}) {
   if (String(rawUrl).includes("/api/reader-bucket-resource?"))
-    return fetchWithReaderTimeout(rawUrl);
+    return fetchWithReaderTimeout(rawUrl, READER_PROXY_TIMEOUT_MS, requestInit);
   const proxyUrl = readerContentUrl(rawUrl);
   return retryReaderProxy(async () => {
-    const response = await fetchWithReaderTimeout(proxyUrl);
+      const response = await fetchWithReaderTimeout(proxyUrl, READER_PROXY_TIMEOUT_MS, requestInit);
     if (response.ok) return response;
     await response.body?.cancel();
     throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
   }).catch((error) => {
     assertReaderActive();
     if (retryableReaderProxyError(error)) throw error;
-    return fetchWithReaderTimeout(rawUrl);
+    return fetchWithReaderTimeout(rawUrl, READER_PROXY_TIMEOUT_MS, requestInit);
   });
 }
 function fetchReaderResponse() {
@@ -2687,8 +2687,8 @@ function pdfOcrSource() {
   return VoiceOfMLReader.pdfPageSource(ocrManifestUrl, location.href,
     "https://voiceofml-search.hf.space", "ocr-manifest.json");
 }
-async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0) {
-  const response = await fetchReaderUrl(url);
+async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0, priority = "auto") {
+  const response = await fetchReaderUrl(url, { priority });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   let bytes = await VoiceOfMLReaderSecurity.readBytes(response, limit);
   if (size && bytes.byteLength !== size) throw new Error("PDF_OCR_SIZE_MISMATCH");
@@ -2711,7 +2711,7 @@ async function loadPdfOcrManifest() {
   if (!ocrManifestUrl) return null;
   if (!pdfOcrManifestPromise) {
     if (!pdfOcrSource()) throw new Error("PDF_OCR_SOURCE_INVALID");
-    pdfOcrManifestPromise = readPdfOcrJson(ocrManifestUrl, VoiceOfMLReaderSecurity.LIMITS.manifestBytes).then((manifest) => {
+    pdfOcrManifestPromise = readPdfOcrJson(ocrManifestUrl, VoiceOfMLReaderSecurity.LIMITS.manifestBytes, "", 0, "high").then((manifest) => {
       assertReaderActive();
       if (manifest.page_count !== documentState.pageCount) throw new Error("PDF_OCR_PAGE_COUNT_MISMATCH");
       pdfOcrManifest = VoiceOfMLReaderSecurity.validatePdfOcrManifest(manifest);
@@ -2721,7 +2721,7 @@ async function loadPdfOcrManifest() {
   try { return await pdfOcrManifestPromise; }
   catch (error) { pdfOcrManifestPromise = null; throw error; }
 }
-function loadPdfOcrPage(page) {
+function loadPdfOcrPage(page, priority = "high") {
   const cached = cachedPdfOcrPage(page);
   if (cached) return Promise.resolve(cached);
   const pending = pdfOcrPagePromises.get(page);
@@ -2730,7 +2730,7 @@ function loadPdfOcrPage(page) {
     const entry = manifest.pages[page - 1];
     if (!entry) throw new Error("PDF_OCR_PAGE_MISSING");
     return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
-      VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob).then((payload) => {
+      VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob, priority).then((payload) => {
         VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
         cachePdfOcrPage(page, payload);
         return payload;
@@ -2814,7 +2814,7 @@ async function renderPdfOcrText(shell) {
       await acquirePdfTextSlot(isPdfPageVisible(shell));
       try {
         if (epoch !== (shell._textEpoch || 0)) return;
-        const payload = await loadPdfOcrPage(page);
+        const payload = await loadPdfOcrPage(page, isPdfPageVisible(shell) ? "high" : "low");
         assertReaderActive();
         if (epoch !== (shell._textEpoch || 0)) return;
         VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
