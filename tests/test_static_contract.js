@@ -185,7 +185,10 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /function ensureVirtualViewportCovered/);
   assert.match(app, /function ensureVirtualViewportCovered\(\)[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?VSCROLL\.renderEnd = -1;/);
   assert.match(app, /function renderVisible\(\)/);
-  assert.match(app, /const scrollingDown = scrollTop >= VSCROLL\.lastScrollTop/);
+  assert.match(app, /const scrollingDown = scrollTop >= previousScrollTop/);
+  assert.match(app, /const previousScrollTop = VSCROLL\.lastScrollTop/);
+  assert.match(app, /const segmentNeedsRecenter =/);
+  assert.match(app, /!segmentNeedsRecenter/);
   assert.match(app, /function refreshVirtualAfterAppend/);
   assert.match(app, /if \(updateView\) \{[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?renderVisible\(\);/);
   assert.match(app, /function reconcileVirtualRows/);
