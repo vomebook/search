@@ -2,6 +2,8 @@ const PACKED_LIMIT = 64 * 1024 * 1024;
 const TEXT_LIMIT = 256 * 1024 * 1024;
 const PAGE_SIZE = 50;
 const CHECKPOINT_STRIDE = 256;
+const BIGRAM_FILTER_HASHES = 7;
+const MAX_BIGRAM_FILTER_BYTES = 32 * 1024;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 function cooperativeYield() {
   let last = performance.now();
@@ -43,16 +45,58 @@ async function readBounded(stream, limit, signal) {
 }
 
 export function validateIndex(data, chapters) {
-  if (data?.version !== 1 || data.kind !== "epub-search-index" ||
+  if (![1, 2].includes(data?.version) || data.kind !== "epub-search-index" ||
       !Array.isArray(data.chapters) || data.chapters.length !== chapters.length)
     throw new Error("全文搜索索引不完整，请重试");
   for (let i = 0; i < chapters.length; i++) {
     const item = data.chapters[i], expected = chapters[i];
     if (item?.index !== expected.index || item.path !== expected.path || typeof item.text !== "string")
       throw new Error("全文搜索索引与章节不一致");
+    if (data.version === 2 && item.bf !== undefined) {
+      let binary;
+      try { binary = atob(item.bf); }
+      catch (_) { throw new Error("全文搜索过滤索引无效"); }
+      if (binary.length < 32 || binary.length > MAX_BIGRAM_FILTER_BYTES ||
+          (binary.length & (binary.length - 1)) !== 0)
+        throw new Error("全文搜索过滤索引无效");
+      const filter = new Uint8Array(binary.length);
+      for (let j = 0; j < binary.length; j++) filter[j] = binary.charCodeAt(j);
+      item.bigramFilter = filter;
+      delete item.bf;
+    }
     item.title = expected.title || `章节 ${expected.index}`;
   }
   return data.chapters;
+}
+
+function bigramHashes(gram) {
+  let first = 2166136261, second = 0x9E3779B9;
+  for (const character of gram) {
+    const codepoint = character.codePointAt(0);
+    first = Math.imul(first ^ codepoint, 16777619) >>> 0;
+    second = (second ^ (codepoint + 0x9E3779B9 + ((second << 6) >>> 0) + (second >>> 2))) >>> 0;
+  }
+  second |= 1;
+  return Array.from({ length: BIGRAM_FILTER_HASHES }, (_, probe) =>
+    (first + Math.imul(probe, second)) >>> 0);
+}
+
+export function queryBigramFilters(query) {
+  const characters = Array.from(query);
+  if (characters.length < 2 || characters.some(character =>
+    character.toLowerCase() !== character.toUpperCase())) return null;
+  return characters.slice(1).map((character, index) => bigramHashes(characters[index] + character));
+}
+
+export function chapterMayContainBigrams(chapter, filters) {
+  const bloom = chapter.bigramFilter;
+  if (!filters || !bloom) return true;
+  const mask = bloom.length * 8 - 1;
+  for (const hashes of filters) for (const hash of hashes) {
+    const bit = hash & mask;
+    if (!(bloom[bit >> 3] & (1 << (bit & 7)))) return false;
+  }
+  return true;
 }
 
 // Scan bounded pieces so a new query can cancel even one very large chapter.
@@ -81,15 +125,18 @@ export async function countMatches(chapters, query, current, progress = null) {
   const counts = [], checkpoints = [], firstPage = [];
   const yieldWork = cooperativeYield();
   const pattern = new RegExp(escapePattern(query), "giu");
+  const filters = queryBigramFilters(query);
   let total = 0;
   for (const [chapterIndex, chapter] of chapters.entries()) {
     let count = 0;
-    await scanText(chapter.text, query, (start, length) => {
-      if ((total + count) % CHECKPOINT_STRIDE === 0)
-        checkpoints.push({ ordinal: total + count, chapterIndex, start });
-      count++;
-      if (firstPage.length < PAGE_SIZE) firstPage.push(searchResult(chapter, start, length));
-    }, current, yieldWork, 0, pattern);
+    if (chapterMayContainBigrams(chapter, filters)) {
+      await scanText(chapter.text, query, (start, length) => {
+        if ((total + count) % CHECKPOINT_STRIDE === 0)
+          checkpoints.push({ ordinal: total + count, chapterIndex, start });
+        count++;
+        if (firstPage.length < PAGE_SIZE) firstPage.push(searchResult(chapter, start, length));
+      }, current, yieldWork, 0, pattern);
+    }
     counts.push(count);
     total += count;
     if (progress && (counts.length === 1 || (count && total <= PAGE_SIZE) ||
@@ -112,6 +159,7 @@ function searchResult(chapter, start, length) {
 export async function resultPage(chapters, query, counts, offset, current, checkpoints = []) {
   const results = [];
   const pattern = new RegExp(escapePattern(query), "giu");
+  const filters = queryBigramFilters(query);
   offset = Math.max(0, Math.floor(offset));
   let checkpoint = null;
   for (let low = 0, high = checkpoints.length - 1; low <= high;) {
@@ -129,6 +177,7 @@ export async function resultPage(chapters, query, counts, offset, current, check
     const start = checkpoint && i === firstChapter ? checkpoint.start : 0;
     if (!start && skip >= counts[i]) { skip -= counts[i]; continue; }
     const chapter = chapters[i];
+    if (!chapterMayContainBigrams(chapter, filters)) continue;
     await scanText(chapter.text, query, (matchStart, length) => {
       if (skip) { skip--; return; }
       results.push(searchResult(chapter, matchStart, length));
