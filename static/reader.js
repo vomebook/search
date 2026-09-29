@@ -2604,7 +2604,7 @@ function pdfPageEntry(page) {
       path: `${pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.webp`
     }
   );
-  const ocrEntry = pdfPageManifest.ocr?.[page - 1] || pdfOcrManifest?.pages?.[page - 1];
+  const ocrEntry = pdfPageManifest.ocr?.[page - 1];
   return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
 }
 function takePdfManifestPrefetch(target) {
@@ -2727,6 +2727,7 @@ function loadPdfOcrPage(page, priority = "high") {
   const pending = pdfOcrPagePromises.get(page);
   if (pending) return pending;
   const task = Promise.resolve().then(() => {
+    if (!Array.isArray(pdfPageManifest?.ocr)) throw new Error("PDF_OCR_PAGE_MANIFEST_REQUIRED");
     const entry = pdfPageEntry(page);
     if (!entry) throw new Error("PDF_OCR_PAGE_MISSING");
     return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
