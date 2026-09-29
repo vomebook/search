@@ -123,6 +123,8 @@ export function populateOcrTextLayer(layer, blocks, layout = {}) {
     positioned++;
   }
   if (!positioned && fallback.length) {
+    // Native-text extraction can provide correct text without coordinates.
+    // Keep it selectable instead of dropping the entire page text layer.
     const box = layer.ownerDocument.createElement("div");
     box.className = "reader-pdf-text-fallback";
     if (vertical) {
