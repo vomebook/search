@@ -1525,6 +1525,7 @@ const VSCROLL = {
   measuredRowKeys: [],
   heightCache: new Map(),
   renderFrame: 0,
+  renderAfterScroll: false,
   estimatedHeight: 60,
   isDraggingThumb: false,
   lastScrollTop: 0,
@@ -3930,10 +3931,20 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
 }
 
 function scheduleVirtualRender() {
+  const afterScroll = arguments[0] === true;
+  if (afterScroll) VSCROLL.renderAfterScroll = true;
   if (VSCROLL.renderFrame) return;
   VSCROLL.renderFrame = requestAnimationFrame(() => {
     VSCROLL.renderFrame = 0;
     renderVisible();
+    if (VSCROLL.renderAfterScroll) {
+      VSCROLL.renderAfterScroll = false;
+      if (VSCROLL.isDraggingThumb) updateScrollThumb();
+      else {
+        updateScrollTrack();
+        maybeLoadNextPage();
+      }
+    }
   });
 }
 
@@ -4069,6 +4080,7 @@ function resetVirtualScrollState() {
   cancelQuickScroll();
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
+  VSCROLL.renderAfterScroll = false;
   activateSearchView();
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
@@ -4142,7 +4154,7 @@ function refreshVirtualAfterAppend(updateView = true) {
   if (!topSpacer || !bottomSpacer || VSCROLL.renderStart < 0 || VSCROLL.renderEnd <= VSCROLL.renderStart) {
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
-    renderVisible();
+    if (updateView) scheduleVirtualRender();
     return;
   }
   ensureHeightTree();
@@ -4153,11 +4165,10 @@ function refreshVirtualAfterAppend(updateView = true) {
   layoutResultScrollSegment(topH, endH, totalH, logicalTop);
   if (previousOrigin !== resultScrollOrigin) DOM.resultsContainer.scrollTop = logicalTop - resultScrollOrigin;
   if (updateView) {
-    // A newly appended page can arrive between scroll events. Rebuild the
-    // bounded window now so the next frame cannot expose the old DOM tail.
+    // Coalesce page arrival with a pending scroll render when possible.
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
-    renderVisible();
+    scheduleVirtualRender();
   }
 }
 
@@ -5337,7 +5348,6 @@ function showToast(msg, dur) {
     DOM.toast.style.display = "none";
   }, dur);
 }
-let scrollTicking = false;
 let scrollLoadTimer = null;
 let scrollRecoveryTimer = null;
 const sidebarRetryCounts = new Map();
@@ -5429,7 +5439,9 @@ function recoverScrollState() {
   expireSearchRequests();
   if (!STATE.isLoading) resetPagingRecovery();
   scrollRecoveryTimer = null;
-  scrollTicking = false;
+  if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
+  VSCROLL.renderFrame = 0;
+  VSCROLL.renderAfterScroll = false;
   if (scrollLoadTimer) {
     clearTimeout(scrollLoadTimer);
     scrollLoadTimer = null;
@@ -5490,18 +5502,7 @@ function setupVirtualScroll() {
     updateCurrentResultPosition();
     if (readerReturnScrollState && !readerReturnRestoreActive) { readerReturnRestoreGeneration++; readerReturnScrollState = null; }
     if (!VSCROLL.isDraggingThumb) ensureVirtualViewportCovered();
-    if (!scrollTicking) {
-      requestAnimationFrame(() => {
-        renderVisible();
-        if (VSCROLL.isDraggingThumb) updateScrollThumb();
-        else {
-          updateScrollTrack();
-          maybeLoadNextPage();
-        }
-        scrollTicking = false;
-      });
-      scrollTicking = true;
-    }
+    scheduleVirtualRender(true);
   }, { passive: true });
 }
 
