@@ -118,6 +118,8 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(pdfText, /reader-pdf-text-fallback/);
   assert.match(pdfText, /writing_mode/);
   assert.match(reader, /populateOcrTextLayer\(layer, payload\.blocks, payload\.layout\)/);
+  assert.match(reader, /const pdfOcrPagePromises = new Map\(\)/);
+  assert.match(reader, /loadPdfOcrPage\(initialPage\)/);
   assert.match(pdfText, /normalizeBox/);
   assert.match(pdfText, /measureRunScale/);
   assert.match(pdfText, /--reader-pdf-run-scale-x/);
