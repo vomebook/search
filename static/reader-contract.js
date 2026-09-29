@@ -214,7 +214,7 @@
   const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
   const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.(?:webp|jxl))`;
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
-  const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html)|book\.epub|audio\.mp3|video\.mp4)`;
+  const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html|txt|md|webp)|book\.epub|audio\.mp3|video\.mp4)`;
   const assetChapters = String.raw`(?:chapter-manifest\.json|epub-chapters/(?:chapter-manifest\.json|chapters/chapter-[0-9]{4}\.xhtml|resources/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))`;
   const ebookBucketPathPattern = new RegExp(`^ebook-chapters/${assetRoot}[a-z0-9-]+/[a-z0-9-]+-epub-chapters-v[0-9]+-bucket/epub-chapters/(?:chapter-manifest\\.json|chapters/chapter-[0-9]{4}\\.xhtml|resources/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*|epub-search-index\\.json\\.gz)$`);
   const assetPrimaryPattern = new RegExp(
@@ -224,6 +224,7 @@
     `^(?:pdf_manifest\\.json|${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr}|(?:[a-z0-9-]+/)?(?:${assetDocument}|${assetChapters})))$`
   );
   const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
+  const staticBucketPathPattern = new RegExp(`^${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?document\\.(?:docx|html|txt|md|webp|jpg|jpeg|png|gif|bmp)$`);
   const optimizedBucket = "vomebook/pdf-optimized";
   const optimizedPathPattern = new RegExp(`^${assetRoot}(?:[a-z0-9-]+/)?document\\.pdf$`);
   const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:${assetPages}|${assetOcr})$`);
@@ -233,6 +234,9 @@
     e: "epub",
     d: "docx",
     h: "html",
+    t: "txt",
+    k: "md",
+    i: "webp",
     a: "audio",
     v: "video"
   });
@@ -240,6 +244,7 @@
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages") {
     if (bucket === optimizedBucket) return optimizedPathPattern.test(path);
     return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
+      staticBucketPathPattern.test(path) ||
       (bucket === "vomebook/pdf-pages" && ebookBucketPathPattern.test(path));
   }
 
@@ -336,9 +341,15 @@
         : asset.m === "p" && path.endsWith("page-manifest.json")
           ? "pdf-pages"
           : assetModes[asset.m];
+    const cdnBucket = bucketName === "vomebook/pdf-pages" && staticBucketPathPattern.test(path);
+    const cdnUrl = cdnBucket
+      ? `https://huggingface.co/buckets/vomebook/pdf-pages/resolve/${path.split("/").map(encodeURIComponent).join("/")}`
+      : "";
     return {
-      ReaderLink: bucket
-        ? `${bucketBase}?${asset.b === optimizedBucket ? `bucket=${encodeURIComponent(asset.b)}&` : ""}path=${encodeURIComponent(path)}`
+      ReaderLink: chapterBucket
+        ? `${bucketBase}?path=${encodeURIComponent(asset.c)}`
+        : bucket
+          ? cdnUrl || `${bucketBase}?${asset.b === optimizedBucket ? `bucket=${encodeURIComponent(asset.b)}&` : ""}path=${encodeURIComponent(path)}`
         : assetBase + path,
       ReaderExtension: asset.c ? "epub-chapters" : extension,
       ReaderChapterManifest: asset.c
