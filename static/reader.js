@@ -446,6 +446,7 @@ let pdfDocument = null;
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
+const pdfOcrPagePromises = new Map();
 const pdfTextContentCache = new Map();
 const PDF_TEXT_CONTENT_CACHE_BYTES = 4 * 1024 * 1024;
 let pdfTextContentCacheBytes = 0;
@@ -2520,8 +2521,8 @@ function loadScript(url) {
     document.head.appendChild(script);
   });
 }
-function fetchWithReaderTimeout(url, timeoutMs = READER_PROXY_TIMEOUT_MS) {
-  return readerRequestManager.request(url, timeoutMs);
+function fetchWithReaderTimeout(url, timeoutMs = READER_PROXY_TIMEOUT_MS, requestInit = {}) {
+  return readerRequestManager.request(url, timeoutMs, requestInit);
 }
 function retryableReaderProxyError(error) {
   return [408, 429, 500, 502, 503, 504].includes(error?.status) ||
@@ -2539,19 +2540,19 @@ async function retryReaderProxy(open) {
     }
   }
 }
-function fetchReaderUrl(rawUrl) {
+function fetchReaderUrl(rawUrl, requestInit = {}) {
   if (String(rawUrl).includes("/api/reader-bucket-resource?"))
-    return fetchWithReaderTimeout(rawUrl);
+    return fetchWithReaderTimeout(rawUrl, READER_PROXY_TIMEOUT_MS, requestInit);
   const proxyUrl = readerContentUrl(rawUrl);
   return retryReaderProxy(async () => {
-    const response = await fetchWithReaderTimeout(proxyUrl);
+      const response = await fetchWithReaderTimeout(proxyUrl, READER_PROXY_TIMEOUT_MS, requestInit);
     if (response.ok) return response;
     await response.body?.cancel();
     throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
   }).catch((error) => {
     assertReaderActive();
     if (retryableReaderProxyError(error)) throw error;
-    return fetchWithReaderTimeout(rawUrl);
+    return fetchWithReaderTimeout(rawUrl, READER_PROXY_TIMEOUT_MS, requestInit);
   });
 }
 function fetchReaderResponse() {
@@ -2686,8 +2687,8 @@ function pdfOcrSource() {
   return VoiceOfMLReader.pdfPageSource(ocrManifestUrl, location.href,
     "https://voiceofml-search.hf.space", "ocr-manifest.json");
 }
-async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0) {
-  const response = await fetchReaderUrl(url);
+async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0, priority = "auto") {
+  const response = await fetchReaderUrl(url, { priority });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   let bytes = await VoiceOfMLReaderSecurity.readBytes(response, limit);
   if (size && bytes.byteLength !== size) throw new Error("PDF_OCR_SIZE_MISMATCH");
@@ -2710,7 +2711,7 @@ async function loadPdfOcrManifest() {
   if (!ocrManifestUrl) return null;
   if (!pdfOcrManifestPromise) {
     if (!pdfOcrSource()) throw new Error("PDF_OCR_SOURCE_INVALID");
-    pdfOcrManifestPromise = readPdfOcrJson(ocrManifestUrl, VoiceOfMLReaderSecurity.LIMITS.manifestBytes).then((manifest) => {
+    pdfOcrManifestPromise = readPdfOcrJson(ocrManifestUrl, VoiceOfMLReaderSecurity.LIMITS.manifestBytes, "", 0, "high").then((manifest) => {
       assertReaderActive();
       if (manifest.page_count !== documentState.pageCount) throw new Error("PDF_OCR_PAGE_COUNT_MISMATCH");
       pdfOcrManifest = VoiceOfMLReaderSecurity.validatePdfOcrManifest(manifest);
@@ -2719,6 +2720,24 @@ async function loadPdfOcrManifest() {
   }
   try { return await pdfOcrManifestPromise; }
   catch (error) { pdfOcrManifestPromise = null; throw error; }
+}
+function loadPdfOcrPage(page, priority = "high") {
+  const cached = cachedPdfOcrPage(page);
+  if (cached) return Promise.resolve(cached);
+  const pending = pdfOcrPagePromises.get(page);
+  if (pending) return pending;
+  const task = loadPdfOcrManifest().then((manifest) => {
+    const entry = manifest.pages[page - 1];
+    if (!entry) throw new Error("PDF_OCR_PAGE_MISSING");
+    return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
+      VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob, priority).then((payload) => {
+        VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
+        cachePdfOcrPage(page, payload);
+        return payload;
+      });
+  }).finally(() => pdfOcrPagePromises.delete(page));
+  pdfOcrPagePromises.set(page, task);
+  return task;
 }
 function estimatePdfTextContentBytes(content) {
   let bytes = 0;
@@ -2795,17 +2814,11 @@ async function renderPdfOcrText(shell) {
       await acquirePdfTextSlot(isPdfPageVisible(shell));
       try {
         if (epoch !== (shell._textEpoch || 0)) return;
-        let payload = cachedPdfOcrPage(page);
-        if (!payload) {
-          payload = await readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
-            VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob);
-          VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-          cachePdfOcrPage(page, payload);
-        }
+        const payload = await loadPdfOcrPage(page, isPdfPageVisible(shell) ? "high" : "low");
         assertReaderActive();
         if (epoch !== (shell._textEpoch || 0)) return;
         VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-        populateOcrTextLayer(layer, payload.blocks);
+        populateOcrTextLayer(layer, payload.blocks, payload.layout);
         shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
         shell.dataset.textReady = "1";
         highlightPdfText(shell);
@@ -3172,6 +3185,12 @@ async function renderPdfPages(prepared) {
   status.textContent = `${totalPages} 页`;
   await getInitialReaderRestoration();
   const initialPage = initialReaderPage(totalPages);
+  // Start the manifest and first OCR page while the first image is loading.
+  // The page renderer reuses these promises, so visible text does not wait for
+  // a second sequential request after the image has painted.
+  if (ocrManifestUrl && !navigator.connection?.saveData) {
+    loadPdfOcrPage(initialPage).catch(() => {});
+  }
   await preloadPdfFirstPage(totalPages);
   let initialRenderGate = true;
   if (Array.isArray(manifest.toc) && manifest.toc.length)
