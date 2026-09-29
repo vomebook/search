@@ -446,6 +446,7 @@ let pdfDocument = null;
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
+const pdfOcrPagePromises = new Map();
 const pdfTextContentCache = new Map();
 const PDF_TEXT_CONTENT_CACHE_BYTES = 4 * 1024 * 1024;
 let pdfTextContentCacheBytes = 0;
@@ -490,13 +491,19 @@ let pdfManifestPrefetchWrapped = false;
 function pdfManifestPrefetchConcurrency() {
   const type = navigator.connection?.effectiveType;
   if (type === "slow-2g" || type === "2g") return 1;
+  if (type === "3g") return 1;
   if (matchMedia("(max-width: 700px)").matches) return 2;
   return PDF_MANIFEST_PREFETCH_CONCURRENCY;
 }
 function pdfManifestPrefetchMaxPages() {
   const type = navigator.connection?.effectiveType;
   if (type === "slow-2g" || type === "2g") return 8;
+  if (type === "3g") return 16;
   return matchMedia("(max-width: 700px)").matches ? 24 : PDF_MANIFEST_PREFETCH_MAX_PAGES;
+}
+function canPrefetchPdfImages() {
+  const connection = navigator.connection;
+  return !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType);
 }
 function cancelPdfManifestPrefetch(record) {
   if (!record) return;
@@ -2390,6 +2397,14 @@ function validFallback(raw) {
 function readerAssetObjectFamily(raw, base = location.href) {
   try {
     const url = new URL(raw, base);
+    if (url.origin === "https://voiceofml-search.hf.space" && url.pathname === "/api/reader-bucket-resource") {
+      const bucketPath = url.searchParams.get("path") || "";
+      const match = bucketPath.match(/^(ebook-chapters\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[a-z0-9-]+\/[a-z0-9-]+-epub-chapters-v[0-9]+-bucket\/epub-chapters\/)/);
+      if (url.hash || url.searchParams.getAll("path").length !== 1 ||
+          [...url.searchParams.keys()].some((key) => key !== "path") || !match ||
+          !VoiceOfMLReader.isBucketPath(bucketPath, true)) return null;
+      return { url, prefix: match[1], bucket: true, bucketPath };
+    }
     if (
       url.protocol !== "https:" ||
       !["huggingface.co", "hf-mirror.com"].includes(url.hostname) ||
@@ -2401,7 +2416,7 @@ function readerAssetObjectFamily(raw, base = location.href) {
       /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?)/
     );
     return match
-      ? { url, prefix: url.pathname.slice(0, url.pathname.indexOf(match[1])) + match[1] }
+      ? { url, prefix: url.pathname.slice(0, url.pathname.indexOf(match[1])) + match[1], bucket: false }
       : null;
   } catch (_) {
     return null;
@@ -2409,18 +2424,29 @@ function readerAssetObjectFamily(raw, base = location.href) {
 }
 function trustedReaderAssetManifestUrl(raw) {
   const family = readerAssetObjectFamily(raw);
+  const manifestPath = family?.bucket ? family.bucketPath : family?.url.pathname;
   return family &&
-    !family.url.search &&
-    !family.url.hash &&
-    /\/chapter-manifest\.json$/i.test(family.url.pathname)
+    (family.bucket || family.url.search === "") &&
+    (family.bucket || !family.url.hash) &&
+    /\/chapter-manifest\.json$/i.test(manifestPath || "")
     ? family.url.href
     : null;
 }
 function trustedChapterUrl(raw, base) {
   const manifest = readerAssetObjectFamily(base);
-  if (!manifest || !/\/chapter-manifest\.json$/i.test(new URL(base, location.href).pathname))
+  const manifestPath = manifest?.bucket ? manifest.bucketPath : new URL(base, location.href).pathname;
+  if (!manifest || !/\/chapter-manifest\.json$/i.test(manifestPath))
     return null;
   try {
+    if (manifest.bucket) {
+      const url = new URL(String(raw || ""), `https://bucket.invalid/${manifest.bucketPath}`);
+      const path = decodeURIComponent(url.pathname.slice(1));
+      if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
+          !path.startsWith(manifest.prefix) ||
+          !/(?:\/chapters\/chapter-[0-9]{4}\.xhtml|\/epub-search-index\.json\.gz)$/i.test(path) ||
+          !VoiceOfMLReader.isBucketPath(path, true)) return null;
+      return `${manifest.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
+    }
     const url = new URL(raw, base);
     return !url.search &&
       !url.hash &&
@@ -2433,6 +2459,29 @@ function trustedChapterUrl(raw, base) {
     return null;
   }
 }
+function trustedChapterReferenceUrl(raw, base, manifestBase) {
+  const family = readerAssetObjectFamily(manifestBase);
+  if (!family) return null;
+  try {
+    if (family.bucket) {
+      const current = readerAssetObjectFamily(base);
+      if (!current?.bucket) return null;
+      const url = new URL(String(raw || ""), `https://bucket.invalid/${current.bucketPath}`);
+      const path = decodeURIComponent(url.pathname.slice(1));
+      if (url.origin !== "https://bucket.invalid" || url.search ||
+          !path.startsWith(family.prefix) || !/\/chapters\/chapter-[0-9]{4}\.xhtml$/i.test(path) ||
+          !VoiceOfMLReader.isBucketPath(path, true)) return null;
+      return { url: `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`,
+               fragment: url.hash };
+    }
+    const url = new URL(raw, base);
+    return !url.search && url.origin === family.url.origin && url.pathname.startsWith(family.prefix) &&
+      /\/(?:chapters\/)?[^/]+\.xhtml?$/i.test(url.pathname)
+      ? { url: url.href, fragment: url.hash } : null;
+  } catch (_) {
+    return null;
+  }
+}
 function trustedChapterResourceUrl(raw, base, attribute, manifestBase) {
   const value = String(raw || "").trim();
   if (!value || /^(?:data:|mailto:|tel:|javascript:)/i.test(value)) return null;
@@ -2440,6 +2489,15 @@ function trustedChapterResourceUrl(raw, base, attribute, manifestBase) {
   const family = readerAssetObjectFamily(manifestBase);
   if (!family) return null;
   try {
+    if (family.bucket) {
+      const current = readerAssetObjectFamily(base);
+      if (!current?.bucket) return null;
+      const url = new URL(value, `https://bucket.invalid/${current.bucketPath}`);
+      const path = decodeURIComponent(url.pathname.slice(1));
+      if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
+          !path.startsWith(family.prefix) || !VoiceOfMLReader.isBucketPath(path, true)) return null;
+      return `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
+    }
     const url = new URL(value, base),
       path = url.pathname.toLowerCase();
     if (url.origin !== family.url.origin || !url.pathname.startsWith(family.prefix)) return null;
@@ -2559,7 +2617,7 @@ function takePdfManifestPrefetch(target) {
   return record.image;
 }
 function queuePdfManifestPrefetch(delay = 250) {
-  if (!pdfManifestPrefetchOrigin || navigator.connection?.saveData) return;
+  if (!pdfManifestPrefetchOrigin || !canPrefetchPdfImages()) return;
   clearTimeout(pdfManifestPrefetchTimer);
   pdfManifestPrefetchTimer = setTimeout(() => {
     pdfManifestPrefetchTimer = 0;
@@ -2663,6 +2721,24 @@ async function loadPdfOcrManifest() {
   try { return await pdfOcrManifestPromise; }
   catch (error) { pdfOcrManifestPromise = null; throw error; }
 }
+function loadPdfOcrPage(page) {
+  const cached = cachedPdfOcrPage(page);
+  if (cached) return Promise.resolve(cached);
+  const pending = pdfOcrPagePromises.get(page);
+  if (pending) return pending;
+  const task = loadPdfOcrManifest().then((manifest) => {
+    const entry = manifest.pages[page - 1];
+    if (!entry) throw new Error("PDF_OCR_PAGE_MISSING");
+    return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
+      VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob).then((payload) => {
+        VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
+        cachePdfOcrPage(page, payload);
+        return payload;
+      });
+  }).finally(() => pdfOcrPagePromises.delete(page));
+  pdfOcrPagePromises.set(page, task);
+  return task;
+}
 function estimatePdfTextContentBytes(content) {
   let bytes = 0;
   for (const item of content?.items || [])
@@ -2738,17 +2814,11 @@ async function renderPdfOcrText(shell) {
       await acquirePdfTextSlot(isPdfPageVisible(shell));
       try {
         if (epoch !== (shell._textEpoch || 0)) return;
-        let payload = cachedPdfOcrPage(page);
-        if (!payload) {
-          payload = await readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
-            VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob);
-          VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-          cachePdfOcrPage(page, payload);
-        }
+        const payload = await loadPdfOcrPage(page);
         assertReaderActive();
         if (epoch !== (shell._textEpoch || 0)) return;
         VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-        populateOcrTextLayer(layer, payload.blocks);
+        populateOcrTextLayer(layer, payload.blocks, payload.layout);
         shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
         shell.dataset.textReady = "1";
         highlightPdfText(shell);
@@ -3115,6 +3185,9 @@ async function renderPdfPages(prepared) {
   status.textContent = `${totalPages} 页`;
   await getInitialReaderRestoration();
   const initialPage = initialReaderPage(totalPages);
+  if (ocrManifestUrl && !navigator.connection?.saveData) {
+    loadPdfOcrPage(initialPage).catch(() => {});
+  }
   await preloadPdfFirstPage(totalPages);
   let initialRenderGate = true;
   if (Array.isArray(manifest.toc) && manifest.toc.length)
@@ -3464,14 +3537,15 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
          image.onload = () => finish();
          image.onerror = () => finish(new Error(`PDF page ${entry.page} image failed`));
           if (image.src !== target) image.src = target;
-          if (priority && ocrManifestUrl && !navigator.connection?.saveData)
-            loadText = renderPdfOcrText(shell);
+           if (priority >= 2 && ocrManifestUrl && !navigator.connection?.saveData)
+             loadText = renderPdfOcrText(shell);
           loadText?.catch(() => {});
          if (image.complete && image.naturalWidth) finish();
       });
       assertReaderActive();
       shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
-       loadText ||= renderPdfOcrText(shell);
+       if (priority >= 2 && ocrManifestUrl && !navigator.connection?.saveData)
+         loadText ||= renderPdfOcrText(shell);
       loadText.catch(() => {});
       image.classList.add("ready");
       shell.dataset.renderState = "rendered";
@@ -4159,11 +4233,19 @@ async function renderChapterManifest(prepared) {
     searchIndex.bytes > 0 &&
     /^[0-9a-f]{64}$/.test(searchIndex.sha256 || "")
       ? {
-          chapters: manifest.chapters,
-          index: {
-            ...searchIndex,
-            url: readerContentUrl(new URL(searchIndex.path, manifestBase).href)
-          }
+        chapters: manifest.chapters,
+        index: {
+          ...searchIndex,
+          url: (() => {
+            const resolved = trustedChapterUrl(searchIndex.path, manifestBase);
+            if (!resolved) return "";
+            const target = new URL(resolved, location.href);
+            const bucketUrl = target.origin === "https://voiceofml-search.hf.space" &&
+              target.pathname === "/api/reader-bucket-resource"
+              ? target.pathname + target.search : resolved;
+            return readerContentUrl(bucketUrl);
+          })()
+        }
         }
       : null;
   const chapterUrl = (chapter) => trustedChapterUrl(chapter.path, manifestBase);
@@ -4321,13 +4403,13 @@ async function renderChapterManifest(prepared) {
     const current = manifest.chapters.find(
       (item) => item.index === Number(article.dataset.chapter)
     );
-    const target = new URL(link.getAttribute("href"), chapterUrl(current));
-    const fragment = target.hash;
-    target.hash = "";
-    const chapter = manifest.chapters.find((item) => chapterUrl(item) === target.href);
+    const destination = trustedChapterReferenceUrl(link.getAttribute("href"), chapterUrl(current), manifestBase);
+    const target = destination ? new URL(destination.url) : null;
+    const fragment = destination?.fragment || "";
+    const chapter = target && manifest.chapters.find((item) => chapterUrl(item) === target.href);
     if (!chapter) {
       // A stale or missing book document must not navigate out to an asset 404.
-      if (/\.(?:xhtml?|html?)$/i.test(target.pathname)) {
+      if (/\.(?:xhtml?|html?)(?:$|#)/i.test(link.getAttribute("href") || "")) {
         event.preventDefault();
         let message = link.nextElementSibling;
         if (!message?.classList.contains("reader-chapter-link-error")) {
