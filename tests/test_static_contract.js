@@ -183,6 +183,7 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /Demand the page under the viewport before the surrounding overscan/);
   assert.match(app, /VSCROLL\.renderStart <= safeStart && VSCROLL\.renderEnd >= safeEnd/);
   assert.match(app, /function ensureVirtualViewportCovered/);
+  assert.match(app, /function ensureVirtualViewportCovered\(\)[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?VSCROLL\.renderEnd = -1;/);
   assert.match(app, /function renderVisible\(\)/);
   assert.match(app, /const scrollingDown = scrollTop >= VSCROLL\.lastScrollTop/);
   assert.match(app, /function refreshVirtualAfterAppend/);
