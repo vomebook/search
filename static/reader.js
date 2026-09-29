@@ -2604,7 +2604,7 @@ function pdfPageEntry(page) {
       path: `${pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.webp`
     }
   );
-  const ocrEntry = pdfOcrManifest?.pages?.[page - 1];
+  const ocrEntry = pdfPageManifest.ocr?.[page - 1] || pdfOcrManifest?.pages?.[page - 1];
   return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
 }
 function takePdfManifestPrefetch(target) {
@@ -2726,8 +2726,8 @@ function loadPdfOcrPage(page, priority = "high") {
   if (cached) return Promise.resolve(cached);
   const pending = pdfOcrPagePromises.get(page);
   if (pending) return pending;
-  const task = loadPdfOcrManifest().then((manifest) => {
-    const entry = manifest.pages[page - 1];
+  const task = Promise.resolve().then(() => {
+    const entry = pdfPageEntry(page);
     if (!entry) throw new Error("PDF_OCR_PAGE_MISSING");
     return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
       VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob, priority).then((payload) => {
@@ -2807,11 +2807,8 @@ async function renderPdfOcrText(shell) {
   const epoch = shell._textEpoch || 0;
   const task = (async () => {
     try {
-      const manifest = await loadPdfOcrManifest();
-      if (epoch !== (shell._textEpoch || 0)) return;
-      const page = Number(shell.dataset.page);
-      const entry = manifest.pages[page - 1];
-      await acquirePdfTextSlot(isPdfPageVisible(shell));
+       const page = Number(shell.dataset.page);
+       await acquirePdfTextSlot(isPdfPageVisible(shell));
       try {
         if (epoch !== (shell._textEpoch || 0)) return;
         const payload = await loadPdfOcrPage(page, isPdfPageVisible(shell) ? "high" : "low");

@@ -263,6 +263,20 @@
           throw error("PDF_MANIFEST_INVALID");
       }
     }
+    if (manifest.ocr !== undefined) {
+      if (!Array.isArray(manifest.ocr) || manifest.ocr.length !== pageCount)
+        throw error("PDF_MANIFEST_INVALID");
+      for (const [index, page] of manifest.ocr.entries()) {
+        const expected = String(index + 1).padStart(6, "0"),
+          root = typeof page?.o === "string" ? PDF_OCR_ROOT.exec(page.o)?.[1] || "" : "";
+        if (!page || page.p !== index + 1 || !PDF_OCR_PATH.test(page.o) ||
+            page.o !== `${root}/ocr/page-${expected}.json.gz` ||
+            pdfSourceRoot(root) !== `objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}` ||
+            !/^[0-9a-f]{64}$/.test(page.os || "") ||
+            !Number.isSafeInteger(page.ob) || page.ob < 1)
+          throw error("PDF_MANIFEST_INVALID");
+      }
+    }
     return manifest;
   }
   const PDF_OCR_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz)$/;
