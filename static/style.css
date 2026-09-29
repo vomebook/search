@@ -791,11 +791,10 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   border-radius: var(--radius-sm);
   text-align: center;
 }
-.result-window-placeholder { box-sizing: border-box; align-items: center; background: var(--surface); }
-.result-window-placeholder.is-alt { background: var(--surface-variant); }
+.result-window-placeholder { box-sizing: border-box; align-items: center; }
 .window-placeholder-lines { width: min(70%, 420px); margin-left: 30px; }
-.window-placeholder-lines i { display: block; height: 10px; margin: 9px 0; border-radius: 3px; background: var(--outline); opacity: .58; }
-.window-placeholder-lines i + i { width: 65%; height: 7px; background: var(--outline-variant); opacity: .5; }
+.window-placeholder-lines i { display: block; height: 10px; margin: 9px 0; border-radius: 3px; background: var(--outline-variant); opacity: .45; }
+.window-placeholder-lines i + i { width: 65%; height: 7px; opacity: .25; }
 
 .result-item {
   display: flex;
