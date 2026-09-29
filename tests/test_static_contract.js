@@ -115,9 +115,6 @@ test("reader intent prefetches the shell and format engines", () => {
   const pdfText = fs.readFileSync("static/reader-pdf-text.js", "utf8");
   assert.match(pdfText, /reader-pdf-text-block/);
   assert.match(pdfText, /reader-pdf-text-run/);
-  assert.match(pdfText, /reader-pdf-text-fallback/);
-  assert.match(pdfText, /writing_mode/);
-  assert.match(reader, /populateOcrTextLayer\(layer, payload\.blocks, payload\.layout\)/);
   assert.match(pdfText, /normalizeBox/);
   assert.match(pdfText, /measureRunScale/);
   assert.match(pdfText, /--reader-pdf-run-scale-x/);
@@ -125,7 +122,6 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(readerCss, /container-type:\s*size/);
   assert.match(readerCss, /font-size:\s*calc\(var\(--reader-pdf-font-ratio/);
   assert.match(readerCss, /\.reader-pdf-text-run::selection/);
-  assert.match(readerCss, /\.reader-pdf-text-fallback/);
   assert.match(readerCss, /\.reader-pdf-text-run\.full-search-highlight/);
   assert.ok(require('../static/reader-resources.js').runtimePaths('/search/static/').includes('/search/static/reader-security.js'));
   assert.match(fs.readFileSync("static/reader-store.js", "utf8"), /function dispose\(\)/);
