@@ -1062,6 +1062,38 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.url, before)
         self.assertLess(abs(self.page.locator('.reader-epub-chapter[data-chapter="12"] #target').evaluate("node => node.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top")), 5)
 
+    def test_bucket_chapter_stream_loads_manifest_chapter_and_resource(self):
+        prefix = ("ebook-chapters/objects/aa/" + "c" * 64
+                  + "/bundle-v1/profile-epub-chapters-v7-bucket/epub-chapters/")
+        chapter = '<html><body><h1>Bucket chapter</h1><img src="../resources/shared/cover.png"></body></html>'
+        chapter_path = prefix + "chapters/chapter-0001.xhtml"
+        manifest_path = prefix + "chapter-manifest.json"
+        resource_path = prefix + "resources/shared/cover.png"
+        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
+            {"index": 1, "path": "chapters/chapter-0001.xhtml", "title": "Bucket chapter",
+             "bytes": len(chapter.encode()), "sha256": hashlib.sha256(chapter.encode()).hexdigest()}
+        ]}
+        requested = []
+        def serve(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            requested.append(path)
+            if path == manifest_path:
+                route.fulfill(content_type="application/json", body=json.dumps(manifest))
+            elif path == chapter_path:
+                route.fulfill(content_type="application/xhtml+xml", body=chapter)
+            elif path == resource_path:
+                route.fulfill(content_type="image/png", body=b"not-a-real-png")
+            else:
+                route.fulfill(status=404, body="missing")
+        self.page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve)
+        url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + urllib.parse.quote(manifest_path, safe="")
+        self.open(self.reader_url("epub-chapters", url=url))
+        self.assertIn("Bucket chapter", self.page.locator(".reader-epub-chapter").inner_text())
+        self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter img')?.src.includes('reader-bucket-resource')")
+        self.assertIn(manifest_path, requested)
+        self.assertIn(chapter_path, requested)
+        self.assertIn(resource_path, requested)
+
     def wait_for_store(self, predicate, arg=None):
         self.page.evaluate("""async arg => {
           const check = """ + predicate + """;

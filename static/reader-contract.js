@@ -216,6 +216,7 @@
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
   const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html)|book\.epub|audio\.mp3|video\.mp4)`;
   const assetChapters = String.raw`(?:chapter-manifest\.json|epub-chapters/(?:chapter-manifest\.json|chapters/chapter-[0-9]{4}\.xhtml|resources/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))`;
+  const ebookBucketPathPattern = new RegExp(`^ebook-chapters/${assetRoot}[a-z0-9-]+/[a-z0-9-]+-epub-chapters-v[0-9]+-bucket/epub-chapters/(?:chapter-manifest\\.json|chapters/chapter-[0-9]{4}\\.xhtml|resources/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*|epub-search-index\\.json\\.gz)$`);
   const assetPrimaryPattern = new RegExp(
     `^${assetRoot}${assetVersion}(?:${assetPages}|(?:[a-z0-9-]+/)?${assetDocument})$`
   );
@@ -238,7 +239,8 @@
 
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages") {
     if (bucket === optimizedBucket) return optimizedPathPattern.test(path);
-    return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path);
+    return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
+      (bucket === "vomebook/pdf-pages" && ebookBucketPathPattern.test(path));
   }
 
   function isAssetSourcePath(path) {
@@ -315,12 +317,15 @@
       return { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") };
     const bucketName = String(asset?.b || "vomebook/pdf-pages");
     const bucket = isBucketPath(path, true, bucketName);
+    const chapterBucket = asset?.cb === "vomebook/pdf-pages" &&
+      ebookBucketPathPattern.test(String(asset?.c || ""));
     if (
       !asset ||
       asset.s !== 2 ||
       !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
       !assetPrimaryPattern.test(path) ||
-      (bucket && !["vomebook/pdf-pages", optimizedBucket].includes(asset?.b))
+      (bucket && !["vomebook/pdf-pages", optimizedBucket].includes(asset?.b)) ||
+      (asset?.cb && !chapterBucket)
     )
       return null;
     const nativeExtension =
@@ -336,7 +341,11 @@
         ? `${bucketBase}?${asset.b === optimizedBucket ? `bucket=${encodeURIComponent(asset.b)}&` : ""}path=${encodeURIComponent(path)}`
         : assetBase + path,
       ReaderExtension: asset.c ? "epub-chapters" : extension,
-      ReaderChapterManifest: asset.c ? assetBase + asset.c : "",
+      ReaderChapterManifest: asset.c
+        ? chapterBucket
+          ? `${bucketBase}?path=${encodeURIComponent(asset.c)}`
+          : assetBase + asset.c
+        : "",
       ReaderFallback: asset.f ? assetBase + asset.f : "",
       ReaderOcrManifest: ocrUrl || (ocrPath.endsWith("/ocr-manifest.json") ? assetBase + ocrPath : ""),
       ReaderOcrMode: String(asset.om || "")

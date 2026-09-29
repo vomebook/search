@@ -57,6 +57,14 @@ for (const url of ['https://evil.test' + sourcePrefix + bucket, 'https://api.tes
 assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket}, '/api/reader-bucket-resource'), null)
 assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource').ReaderLink,
   '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
+const ebookChapterPath = 'ebook-chapters/objects/aa/' + 'c'.repeat(64) +
+  '/chapter-bundle/chapter-profile-epub-chapters-v7-bucket/epub-chapters/chapter-manifest.json'
+const ebookChapterAsset = assets.assetFields({s: 2, m: 'e', p: assetRoot + 'document.epub',
+  c: ebookChapterPath, cb: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource')
+assert.strictEqual(ebookChapterAsset.ReaderExtension, 'epub-chapters')
+assert.strictEqual(ebookChapterAsset.ReaderChapterManifest,
+  '/api/reader-bucket-resource?path=' + encodeURIComponent(ebookChapterPath))
+assert.strictEqual(assets.isBucketPath(ebookChapterPath, true), true)
 const optimized = assetRoot + 'pdf-range-v1-document/document.pdf'
 const optimizedFields = assets.assetFields(
   {s: 2, m: 'p', p: optimized, b: 'vomebook/pdf-optimized'},
