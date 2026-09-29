@@ -57,10 +57,11 @@ export function validateIndex(data, chapters) {
 
 // Scan bounded pieces so a new query can cancel even one very large chapter.
 // Keep counts, rather than one object per hit; all matches remain pageable.
-export async function scanText(text, query, visit, current = () => true, yieldWork = pause) {
-  const pattern = new RegExp(escapePattern(query), "giu");
-  let next = 0;
-  for (let start = 0; start < text.length; start += 65536) {
+export async function scanText(text, query, visit, current = () => true, yieldWork = pause,
+  startOffset = 0, matcher = null) {
+  const pattern = matcher || new RegExp(escapePattern(query), "giu");
+  let next = startOffset;
+  for (let start = startOffset; start < text.length; start += 65536) {
     if (!current()) throw aborted();
     const part = text.slice(start, start + 65536 + query.length + 1);
     pattern.lastIndex = Math.max(0, next - start);
@@ -79,6 +80,7 @@ export async function scanText(text, query, visit, current = () => true, yieldWo
 export async function countMatches(chapters, query, current, progress = null) {
   const counts = [], checkpoints = [], firstPage = [];
   const yieldWork = cooperativeYield();
+  const pattern = new RegExp(escapePattern(query), "giu");
   let total = 0;
   for (const [chapterIndex, chapter] of chapters.entries()) {
     let count = 0;
@@ -87,7 +89,7 @@ export async function countMatches(chapters, query, current, progress = null) {
         checkpoints.push({ ordinal: total + count, chapterIndex, start });
       count++;
       if (firstPage.length < PAGE_SIZE) firstPage.push(searchResult(chapter, start, length));
-    }, current, yieldWork);
+    }, current, yieldWork, 0, pattern);
     counts.push(count);
     total += count;
     if (progress && (counts.length === 1 || (count && total <= PAGE_SIZE) ||
@@ -109,6 +111,7 @@ function searchResult(chapter, start, length) {
 
 export async function resultPage(chapters, query, counts, offset, current, checkpoints = []) {
   const results = [];
+  const pattern = new RegExp(escapePattern(query), "giu");
   offset = Math.max(0, Math.floor(offset));
   let checkpoint = null;
   for (let low = 0, high = checkpoints.length - 1; low <= high;) {
@@ -126,11 +129,11 @@ export async function resultPage(chapters, query, counts, offset, current, check
     const start = checkpoint && i === firstChapter ? checkpoint.start : 0;
     if (!start && skip >= counts[i]) { skip -= counts[i]; continue; }
     const chapter = chapters[i];
-    await scanText(chapter.text.slice(start), query, (relativeStart, length) => {
+    await scanText(chapter.text, query, (matchStart, length) => {
       if (skip) { skip--; return; }
-      results.push(searchResult(chapter, start + relativeStart, length));
+      results.push(searchResult(chapter, matchStart, length));
       return results.length < PAGE_SIZE;
-    }, current, yieldWork);
+    }, current, yieldWork, start, pattern);
   }
   return results;
 }

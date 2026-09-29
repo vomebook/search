@@ -32,6 +32,10 @@ const boundaryText = "x".repeat(65534) + "跨边界😀" + "y".repeat(65536) + "
 const found = [];
 await scanText(boundaryText, "跨边界😀", (start, length) => found.push([start, length]));
 assert.deepEqual(found.map(([start, length]) => boundaryText.slice(start, start + length)), ["跨边界😀", "跨边界😀"]);
+const resumed = [];
+await scanText("skip needle then needle", "needle", (start, length) => resumed.push([start, length]),
+  () => true, async () => {}, 10, /needle/giu);
+assert.deepEqual(resumed, [[17, 6]]);
 let current = true;
 const cancelled = scanText("x".repeat(1000000), "x", () => { current = false; }, () => current);
 await assert.rejects(cancelled, { name: "AbortError" });

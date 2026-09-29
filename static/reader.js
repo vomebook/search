@@ -4223,6 +4223,7 @@ async function renderChapterManifest(prepared) {
   const loaded = new Set(),
     pending = new Map(),
     manifestBase = trustedReaderAssetManifestUrl(chapterManifestUrl || sourceUrl);
+  const chapterByIndex = new Map(manifest.chapters.map((chapter) => [chapter.index, chapter]));
   const chapterPrefetchCount = 6;
   let chapterPreviousObserver = null;
   const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
@@ -4250,6 +4251,12 @@ async function renderChapterManifest(prepared) {
         }
       : null;
   const chapterUrl = (chapter) => trustedChapterUrl(chapter.path, manifestBase);
+  const chapterAt = (index) => chapterByIndex.get(index) || null;
+  const nextChapterNode = (index, selector) => {
+    for (const node of frame.querySelectorAll(selector))
+      if (Number(node.dataset.chapter) > index) return node;
+    return null;
+  };
   const resourceUrl = (raw, base, attribute) => {
     const value = String(raw || "").trim();
     if (!value || value.startsWith("#")) return null;
@@ -4260,9 +4267,7 @@ async function renderChapterManifest(prepared) {
       `.reader-epub-chapter[data-chapter="${article.dataset.chapter}"]`
     );
     if (existing) return existing;
-    const next = [...frame.querySelectorAll(".reader-epub-chapter")].find(
-      (node) => Number(node.dataset.chapter) > Number(article.dataset.chapter)
-    );
+    const next = nextChapterNode(Number(article.dataset.chapter), ".reader-epub-chapter");
     foliateScrollAnchors.preserve(() => frame.insertBefore(article, next || null));
     foliateScrollAnchors.observe(article);
     return article;
@@ -4285,9 +4290,8 @@ async function renderChapterManifest(prepared) {
         console.warn("EPUB chapter could not be loaded", error);
       });
     });
-    const next = [...frame.querySelectorAll(
-      ".reader-epub-chapter[data-chapter], .reader-chapter-sentinel[data-chapter]"
-    )].find((node) => Number(node.dataset.chapter) > chapter.index);
+    const next = nextChapterNode(chapter.index,
+      ".reader-epub-chapter[data-chapter], .reader-chapter-sentinel[data-chapter]");
     frame.insertBefore(marker, next || null);
     (previous ? chapterPreviousObserver : chapterManifestObserver).observe(marker);
     return marker;
@@ -4356,9 +4360,9 @@ async function renderChapterManifest(prepared) {
         for (const entry of navigationState.tocEntries)
           if (entry.chapterIndex === chapter.index)
             entry.target = chapterTarget(article, entry.fragment);
-        const next = manifest.chapters.find((item) => item.index === chapter.index + 1);
+        const next = chapterAt(chapter.index + 1);
         if (next) ensureSentinel(next);
-        const previous = manifest.chapters.find((item) => item.index === chapter.index - 1);
+        const previous = chapterAt(chapter.index - 1);
         if (previous) ensureSentinel(previous, true);
       } catch (error) {
         if (!inserted) chapterBudget.release(bytes.byteLength);
@@ -4401,9 +4405,7 @@ async function renderChapterManifest(prepared) {
       event.altKey
     )
       return;
-    const current = manifest.chapters.find(
-      (item) => item.index === Number(article.dataset.chapter)
-    );
+    const current = chapterAt(Number(article.dataset.chapter));
     const destination = trustedChapterReferenceUrl(link.getAttribute("href"), chapterUrl(current), manifestBase);
     const target = destination ? new URL(destination.url) : null;
     const fragment = destination?.fragment || "";
@@ -4443,9 +4445,7 @@ async function renderChapterManifest(prepared) {
         .filter((entry) => entry.isIntersecting)
         .forEach((entry) => {
           if (readerAbortController.signal.aborted) return;
-          const chapter = manifest.chapters.find(
-            (item) => item.index === Number(entry.target.dataset.chapter)
-          );
+          const chapter = chapterAt(Number(entry.target.dataset.chapter));
           if (chapter) prefetchChapters(chapter.index - 1);
         }),
     { root: viewport, rootMargin: "4000px 0px" }
@@ -4454,7 +4454,7 @@ async function renderChapterManifest(prepared) {
     if (readerAbortController.signal.aborted) return;
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
-      const chapter = manifest.chapters.find((item) => item.index === Number(entry.target.dataset.chapter));
+      const chapter = chapterAt(Number(entry.target.dataset.chapter));
       if (chapter) fetchChapter(chapter).catch(() => {});
     }
   }, { root: viewport });
@@ -4465,7 +4465,7 @@ async function renderChapterManifest(prepared) {
     chapterManifestLoader = null;
   });
   chapterManifestLoader = async (index) => {
-    const chapter = manifest.chapters.find((item) => item.index === index);
+    const chapter = chapterAt(index);
     if (!chapter) return null;
     await fetchChapter(chapter);
     return frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`);
