@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { countMatches, resultPage, scanText, validateIndex } from "../static/reader-chapter-search-worker.mjs";
+import {
+  chapterMayContainBigrams, countMatches, queryBigramFilters, resultPage, scanText, validateIndex
+} from "../static/reader-chapter-search-worker.mjs";
 
 const chapters = [
   { index: 1, title: "开头", path: "chapters/1.xhtml", text: "手机 手。机 a+b [term] " + "needle ".repeat(125) },
@@ -40,6 +42,27 @@ let current = true;
 const cancelled = scanText("x".repeat(1000000), "x", () => { current = false; }, () => current);
 await assert.rejects(cancelled, { name: "AbortError" });
 assert.equal(validateIndex({ version: 1, kind: "epub-search-index", chapters }, chapters).length, 2);
+const indexedChapters = validateIndex({
+  version: 2,
+  kind: "epub-search-index",
+  chapters: [
+    { index: 1, title: "命中", path: "chapters/1.xhtml", text: "读手机书", bf: "CP0BAEAAAAAgAgIAEAAAAIRAAAAAAACAIAgAAAABAAA=" },
+    { index: 2, title: "排除", path: "chapters/2.xhtml", text: "桌面电脑", bf: "AAAAYgAAAAACAAQQQAghAAAEAAAAgAAAhACIAAIIAAE=" }
+  ]
+}, [
+  { index: 1, title: "命中", path: "chapters/1.xhtml" },
+  { index: 2, title: "排除", path: "chapters/2.xhtml" }
+]);
+const filters = queryBigramFilters("手机");
+assert.ok(chapterMayContainBigrams(indexedChapters[0], filters));
+assert.equal(chapterMayContainBigrams(indexedChapters[1], filters), false);
+assert.equal(queryBigramFilters("MOBILE"), null);
+const filteredCount = await countMatches(indexedChapters, "手机", () => true);
+const fullScanCount = await countMatches(indexedChapters.map(({ bigramFilter, ...chapter }) => chapter), "手机", () => true);
+assert.equal(filteredCount.total, 1);
+assert.deepEqual(filteredCount.counts, fullScanCount.counts);
+assert.deepEqual(await resultPage(indexedChapters, "手机", filteredCount.counts, 0, () => true),
+  filteredCount.firstPage);
 assert.throws(() => validateIndex({ version: 1, kind: "epub-search-index", chapters: chapters.slice(0, 1) }, chapters));
 assert.throws(() => validateIndex({ version: 1, kind: "epub-search-index", chapters: [chapters[1], chapters[0]] }, chapters));
 console.log("chapter search: complete counts, paging, literal matches, Unicode boundaries, cancellation and index identity passed");
