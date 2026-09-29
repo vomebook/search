@@ -3962,22 +3962,31 @@ function renderVisible() {
   const est = VSCROLL.estimatedHeight;
   const overscanItems = Math.max(10, Math.floor(viewH / (est || 60)));
   const now = performance.now();
+  const previousScrollTop = VSCROLL.lastScrollTop;
   const elapsed = VSCROLL.lastScrollTime ? Math.max(1, now - VSCROLL.lastScrollTime) : 16;
-  const instantVelocity = Math.abs(scrollTop - VSCROLL.lastScrollTop) / elapsed;
+  const instantVelocity = Math.abs(scrollTop - previousScrollTop) / elapsed;
   VSCROLL.scrollVelocity = VSCROLL.scrollVelocity * 0.7 + instantVelocity * 0.3;
   VSCROLL.lastScrollTime = now;
   const extraScreens = VSCROLL.isDraggingThumb ? 0 : Math.min(3, Math.floor(VSCROLL.scrollVelocity / 1.5));
   const baseOverscanPx = overscanItems * (est || 60);
   const velocityOverscanPx = extraScreens * viewH;
   ensureHeightTree();
-  const scrollingDown = scrollTop >= VSCROLL.lastScrollTop;
+  const scrollingDown = scrollTop >= previousScrollTop;
   VSCROLL.scrollDirection = scrollingDown ? 1 : -1;
   VSCROLL.lastScrollTop = scrollTop;
+  const totalH = fenwickSum(VSCROLL.heightTree, len);
+  const segmentLimit = RESULT_SCROLL_SEGMENT_HEIGHT;
+  const physicalTop = scrollTop - resultScrollOrigin;
+  const maxOrigin = Math.max(0, totalH - segmentLimit);
+  const segmentNeedsRecenter = resultScrollOrigin > maxOrigin
+    || physicalTop < segmentLimit / 4
+    || physicalTop + viewH > segmentLimit * 3 / 4;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
   ensureResultWindowPages(safeStart, safeEnd);
   updateCurrentResultPosition();
-  if (!pendingResultEntrance && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
+  if (!pendingResultEntrance && !segmentNeedsRecenter
+      && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
     : baseOverscanPx * (scrollingDown ? 1 : 2) + (scrollingDown ? 0 : velocityOverscanPx);
@@ -3989,10 +3998,9 @@ function renderVisible() {
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
   if (pendingResultEntrance && start === 0) end = Math.min(len, Math.max(end, 30));
   ensureResultWindowPages(start, end);
-  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd) return;
+  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !segmentNeedsRecenter) return;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
-  const totalH = fenwickSum(VSCROLL.heightTree, len);
   const topH = fenwickSum(VSCROLL.heightTree, start);
   const endH = fenwickSum(VSCROLL.heightTree, end);
   const bottomH = Math.max(0, totalH - endH);
