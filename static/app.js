@@ -2888,7 +2888,7 @@ async function loadResultWindowPage(page, prefetch = false) {
     VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
     displayedSearchView = null;
     rememberDisplayedSearchView();
-    renderVisible(); updateLoadInfo(); updatePagingStatus();
+    scheduleVirtualRender(); updateLoadInfo(); updatePagingStatus();
     clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveSearchPosition, 250);
     return true;
   } catch (error) {
@@ -2944,7 +2944,7 @@ function ensureResultWindowPages(start, end) {
 function createResultWindowPlaceholder(index) {
   const page = Math.floor(index / STATE.pageSize) + 1;
   const row = document.createElement("div");
-  row.className = "result-item result-window-placeholder";
+  row.className = "result-item result-window-placeholder" + (index % 2 === 1 ? " is-alt" : "");
   row.dataset.index = String(index);
   row.dataset.contentVersion = String(VSCROLL.contentVersion);
   row.style.height = (VSCROLL.heights[index] || VSCROLL.estimatedHeight) + "px";
