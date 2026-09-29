@@ -3185,6 +3185,9 @@ async function renderPdfPages(prepared) {
   status.textContent = `${totalPages} 页`;
   await getInitialReaderRestoration();
   const initialPage = initialReaderPage(totalPages);
+  // Start the manifest and first OCR page while the first image is loading.
+  // The page renderer reuses these promises, so visible text does not wait for
+  // a second sequential request after the image has painted.
   if (ocrManifestUrl && !navigator.connection?.saveData) {
     loadPdfOcrPage(initialPage).catch(() => {});
   }
