@@ -446,7 +446,6 @@ let pdfDocument = null;
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
-const pdfOcrPagePromises = new Map();
 const pdfTextContentCache = new Map();
 const PDF_TEXT_CONTENT_CACHE_BYTES = 4 * 1024 * 1024;
 let pdfTextContentCacheBytes = 0;
@@ -2721,24 +2720,6 @@ async function loadPdfOcrManifest() {
   try { return await pdfOcrManifestPromise; }
   catch (error) { pdfOcrManifestPromise = null; throw error; }
 }
-function loadPdfOcrPage(page) {
-  const cached = cachedPdfOcrPage(page);
-  if (cached) return Promise.resolve(cached);
-  const pending = pdfOcrPagePromises.get(page);
-  if (pending) return pending;
-  const task = loadPdfOcrManifest().then((manifest) => {
-    const entry = manifest.pages[page - 1];
-    if (!entry) throw new Error("PDF_OCR_PAGE_MISSING");
-    return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
-      VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob).then((payload) => {
-        VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-        cachePdfOcrPage(page, payload);
-        return payload;
-      });
-  }).finally(() => pdfOcrPagePromises.delete(page));
-  pdfOcrPagePromises.set(page, task);
-  return task;
-}
 function estimatePdfTextContentBytes(content) {
   let bytes = 0;
   for (const item of content?.items || [])
@@ -2814,7 +2795,13 @@ async function renderPdfOcrText(shell) {
       await acquirePdfTextSlot(isPdfPageVisible(shell));
       try {
         if (epoch !== (shell._textEpoch || 0)) return;
-        const payload = await loadPdfOcrPage(page);
+        let payload = cachedPdfOcrPage(page);
+        if (!payload) {
+          payload = await readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
+            VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob);
+          VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
+          cachePdfOcrPage(page, payload);
+        }
         assertReaderActive();
         if (epoch !== (shell._textEpoch || 0)) return;
         VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
@@ -3185,12 +3172,6 @@ async function renderPdfPages(prepared) {
   status.textContent = `${totalPages} 页`;
   await getInitialReaderRestoration();
   const initialPage = initialReaderPage(totalPages);
-  // Start the manifest and first OCR page while the first image is loading.
-  // The page renderer reuses these promises, so visible text does not wait for
-  // a second sequential request after the image has painted.
-  if (ocrManifestUrl && !navigator.connection?.saveData) {
-    loadPdfOcrPage(initialPage).catch(() => {});
-  }
   await preloadPdfFirstPage(totalPages);
   let initialRenderGate = true;
   if (Array.isArray(manifest.toc) && manifest.toc.length)
