@@ -412,6 +412,7 @@ class BrowserBehaviorTest(unittest.TestCase):
             })));
             refreshVirtualAfterAppend();
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            await new Promise(resolve => setTimeout(resolve, 160));
             let naiveHeight = 0;
             let prefixMatches = true;
             for (let index = 0; index < VSCROLL.heights.length; index++) {

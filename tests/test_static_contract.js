@@ -190,8 +190,12 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /const segmentNeedsRecenter =/);
   assert.match(app, /!segmentNeedsRecenter/);
   assert.match(app, /function refreshVirtualAfterAppend/);
-  assert.match(app, /if \(updateView\) \{[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?renderVisible\(\);/);
+  assert.match(app, /if \(updateView\) \{[\s\S]*?VSCROLL\.renderStart = -1;[\s\S]*?scheduleVirtualRender\(\);/);
   assert.match(app, /function reconcileVirtualRows/);
+  assert.match(app, /function updateResultRow/);
+  assert.match(app, /const recycled = \[\]/);
+  assert.match(app, /VSCROLL\.measureTimer/);
+  assert.match(app, /setTimeout\(measure, 120\)/);
   assert.match(app, /virtual-spacer-bottom/);
   assert.match(app, /Number\(row\.dataset\.contentVersion\) !== VSCROLL\.contentVersion/);
   assert.match(app, /VSCROLL\.templateCache\.size > 240/);
@@ -205,7 +209,7 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /if \(!dragFrame\) dragFrame = requestAnimationFrame\(applyPendingScrollTop\)/);
   assert.match(app, /setResultScrollTop\(pendingScrollTop\);\s*pendingScrollTop = null;\s*renderVisible\(\);/);
   assert.match(app, /VSCROLL\.isDraggingThumb\s*\? viewH \* 0\.35/);
-  assert.match(app, /if \(!VSCROLL\.isDraggingThumb && measureHeights\(start, end, anchor\)\)/);
+  assert.match(app, /if \(!VSCROLL\.isDraggingThumb\) \{[\s\S]*?measureHeights\(/);
   assert.match(app, /VSCROLL\.dragMetrics = null/);
   assert.match(css, /overflow-anchor: none/);
   assert.strictEqual(/function finishDrag\(\)[\s\S]*?measureHeights/.test(app), false);

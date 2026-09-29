@@ -1526,6 +1526,7 @@ const VSCROLL = {
   heightCache: new Map(),
   renderFrame: 0,
   renderAfterScroll: false,
+  measureTimer: 0,
   estimatedHeight: 60,
   isDraggingThumb: false,
   lastScrollTop: 0,
@@ -3852,6 +3853,15 @@ function createResultRow(rec, idx) {
   return row;
 }
 
+function updateResultRow(row, rec, idx) {
+  row.className = "result-item" + (idx % 2 === 1 ? " is-alt" : "");
+  row.dataset.index = String(idx);
+  row.dataset.contentVersion = String(VSCROLL.contentVersion);
+  row.innerHTML = buildResultHTML(rec, idx);
+  resultRowRecords.set(row, rec);
+  return row;
+}
+
 // Keep native layout safely below Android WebView height limits. Positions,
 // height measurements and the proxy thumb always use the full logical range.
 const RESULT_SCROLL_SEGMENT_HEIGHT = 1000000;
@@ -3912,14 +3922,18 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   layoutResultScrollSegment(topH, endH, endH + bottomH, logicalTop);
 
   const existing = new Map();
+  const recycled = [];
   DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
     const idx = Number(row.dataset.index);
-    if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion || resultRowRecords.get(row) !== items[idx]) row.remove();
+    if (idx < start || idx >= end || Number(row.dataset.contentVersion) !== VSCROLL.contentVersion || resultRowRecords.get(row) !== items[idx]) {
+      if (items[idx] && items[idx] !== undefined && !row.classList.contains("result-window-placeholder")) recycled.push(row);
+      row.remove();
+    }
     else existing.set(idx, row);
   });
   let cursor = topSpacer.nextSibling;
   for (let idx = start; idx < end; idx++) {
-    const row = existing.get(idx) || createResultRow(items[idx], idx);
+    const row = existing.get(idx) || (items[idx] ? updateResultRow(recycled.pop() || document.createElement("div"), items[idx], idx) : createResultWindowPlaceholder(idx));
     if (row !== cursor) DOM.resultsList.insertBefore(row, cursor || bottomSpacer);
     cursor = row.nextSibling;
   }
@@ -4010,10 +4024,19 @@ function renderVisible() {
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
   // Correct the rendered window before paint, using one content anchor.
   // A deferred measurement can otherwise run against another window/query.
-  if (!VSCROLL.isDraggingThumb && measureHeights(start, end, anchor)) {
-    VSCROLL.renderStart = -1;
-    VSCROLL.renderEnd = -1;
-    scheduleVirtualRender();
+  if (!VSCROLL.isDraggingThumb) {
+    const measure = () => {
+      VSCROLL.measureTimer = 0;
+      if (start !== VSCROLL.renderStart || end !== VSCROLL.renderEnd) return;
+      if (measureHeights(start, end, { index: findVirtualIndex(getResultScrollTop()), offset: getResultScrollTop() - getVirtualOffset(findVirtualIndex(getResultScrollTop())) })) {
+        VSCROLL.renderStart = -1;
+        VSCROLL.renderEnd = -1;
+        scheduleVirtualRender();
+      }
+    };
+    clearTimeout(VSCROLL.measureTimer);
+    if (VSCROLL.scrollVelocity > 0.8) VSCROLL.measureTimer = setTimeout(measure, 120);
+    else measure();
   }
   updateScrollTrack();
   if (pendingResultEntrance) {
@@ -4089,6 +4112,8 @@ function resetVirtualScrollState() {
   if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
   VSCROLL.renderFrame = 0;
   VSCROLL.renderAfterScroll = false;
+  clearTimeout(VSCROLL.measureTimer);
+  VSCROLL.measureTimer = 0;
   activateSearchView();
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
@@ -4194,6 +4219,8 @@ function ensureVirtualViewportCovered() {
 
 function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, anchor = null) {
   if (VSCROLL.isDraggingThumb || start !== VSCROLL.renderStart || end !== VSCROLL.renderEnd) return false;
+  clearTimeout(VSCROLL.measureTimer);
+  VSCROLL.measureTimer = 0;
   const container = DOM.resultsContainer;
   const anchorIndex = anchor ? anchor.index : findVirtualIndex(getResultScrollTop());
   const anchorOffset = anchor ? anchor.offset : getResultScrollTop() - getVirtualOffset(anchorIndex);
@@ -4209,7 +4236,8 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
     const idx = parseInt(els[i].dataset.index);
     if (!STATE.results[idx]) continue;
     if (!Number.isInteger(idx) || idx < 0 || idx >= VSCROLL.heights.length) continue;
-    if (VSCROLL.measuredRowKeys[idx] === rowMeasureKey && VSCROLL.heights[idx] > 0) {
+    if ((VSCROLL.measuredRowKeys[idx] === rowMeasureKey || els[i].dataset.measurementKey === rowMeasureKey)
+        && VSCROLL.heights[idx] > 0) {
       measuredSum += VSCROLL.heights[idx];
       measuredCount++;
       continue;
@@ -4220,6 +4248,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
     measuredSum += height;
     measuredCount++;
     VSCROLL.measuredRowKeys[idx] = rowMeasureKey;
+    els[i].dataset.measurementKey = rowMeasureKey;
     measuredHeightRevision++;
     VSCROLL.heightCache.set(getResultStableId(STATE.results[idx]), { height, measurementKey: rowMeasureKey });
   }
