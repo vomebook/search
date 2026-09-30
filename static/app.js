@@ -476,7 +476,6 @@ function navigateToReader(rawUrl, returnUrl) {
   var target;
   try { target = readerNavigation.parse(syncReaderFolderFilter(rawUrl)); }
   catch (_) { return false; }
-  if (sidebarBackGuardRelease) return false;
   function open() {
     var url = readerNavigation.prepare(target.href, normalizeReaderReturnUrl(returnUrl || location.href));
     openReaderOverlay(url);
@@ -485,10 +484,8 @@ function navigateToReader(rawUrl, returnUrl) {
     STATE.leftSidebarOpen = false;
     STATE.rightSidebarOpen = false;
     updateSidebarVisibility();
-    releaseSidebarBackGuard(function() {
-      syncStateToURL();
-      open();
-    });
+    syncStateToURL();
+    open();
   } else open();
   return true;
 }
@@ -1684,10 +1681,6 @@ function highlightText(text, query) {
 }
 
 let routeInitialized = false;
-let sidebarBackGuardActive = false;
-let sidebarBackGuardRoute = "";
-let sidebarBackGuardRelease = null;
-let sidebarBackNavigationHandled = false;
 
 function updateSidebarExpandButton() {
   if (!DOM.sidebarExpandBtn || !DOM.leftSidebar) return;
@@ -1707,39 +1700,6 @@ function updateSidebarHeader() {
   updateSidebarExpandButton();
 }
 
-function sidebarBackRouteKey(rawUrl) {
-  const url = new URL(rawUrl, location.href);
-  const hash = url.hash || "#/";
-  const queryIndex = hash.indexOf("?");
-  const path = queryIndex >= 0 ? hash.slice(0, queryIndex) : hash;
-  const params = new URLSearchParams(queryIndex >= 0 ? hash.slice(queryIndex + 1) : "");
-  ["sidebar", "filters", "wide"].forEach(key => params.delete(key));
-  const query = params.toString();
-  return url.origin + url.pathname + path + (query ? "?" + query : "");
-}
-
-function ensureSidebarBackGuard(userOpened = false) {
-  if (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen) return;
-  const route = location.href;
-  if (sidebarBackGuardActive && sidebarBackGuardRoute === route) return;
-  history.pushState({ voiceSidebarGuard: true, voiceSidebarOverlay: true }, "", route);
-  sidebarBackGuardActive = true;
-  sidebarBackGuardRoute = route;
-}
-
-function releaseSidebarBackGuard(onReleased) {
-  if (!sidebarBackGuardActive || !history.state?.voiceSidebarOverlay || sidebarBackGuardRoute !== location.href) {
-    sidebarBackGuardActive = false;
-    sidebarBackGuardRoute = "";
-    onReleased();
-    return;
-  }
-  sidebarBackGuardActive = false;
-  sidebarBackGuardRoute = "";
-  sidebarBackGuardRelease = onReleased;
-  history.back();
-}
-
 function navigateSidebarParent() {
   if (STATE.mode !== "repo") return ROUTER.navigate("global");
   const parts = String(STATE.browserPath || "").split("/").filter(Boolean);
@@ -1748,57 +1708,20 @@ function navigateSidebarParent() {
 }
 
 function returnFromSidebar() {
-  releaseSidebarBackGuard(navigateSidebarParent);
+  navigateSidebarParent();
 }
 
 function closeLeftSidebar() {
-  releaseSidebarBackGuard(function() {
-    STATE.leftSidebarOpen = false;
-    DOM.leftSidebar.classList.remove("expanded-wide");
-    updateSidebarVisibility();
-    syncStateToURL();
-  });
+  STATE.leftSidebarOpen = false;
+  DOM.leftSidebar.classList.remove("expanded-wide");
+  updateSidebarVisibility();
+  syncStateToURL();
 }
 
 function closeRightSidebar() {
   STATE.rightSidebarOpen = false;
   updateSidebarVisibility();
-  releaseSidebarBackGuard(syncStateToURL);
-}
-
-function handleSidebarBackNavigation() {
-  if (sidebarBackGuardRelease) {
-    const release = sidebarBackGuardRelease;
-    sidebarBackGuardRelease = null;
-    release();
-    return true;
-  }
-  if ((!STATE.isMobile && !sidebarBackGuardActive) || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen) || !sidebarBackGuardActive) return false;
-  if (sidebarBackRouteKey(sidebarBackGuardRoute) !== sidebarBackRouteKey(location.href)) return false;
-  sidebarBackGuardActive = false;
-  sidebarBackGuardRoute = "";
-  sidebarBackNavigationHandled = true;
-  if (!STATE.isMobile) {
-    if (STATE.rightSidebarOpen) {
-      STATE.rightSidebarOpen = false;
-      updateSidebarVisibility();
-      syncStateToURL();
-      if (STATE.leftSidebarOpen) ensureSidebarBackGuard(true);
-      return true;
-    }
-    STATE.leftSidebarOpen = false;
-    DOM.leftSidebar.classList.remove("expanded-wide");
-    updateSidebarVisibility();
-    updateSidebarHeader();
-    syncStateToURL();
-    return true;
-  }
-  if (STATE.rightSidebarOpen) {
-    closeRightSidebar();
-    return true;
-  }
-  closeLeftSidebar();
-  return true;
+  syncStateToURL();
 }
 
 const ROUTER = {
@@ -2037,9 +1960,7 @@ function syncStateToURL() {
   const qs = sp.toString();
   if (qs) hash += "?" + qs;
   if (window.location.hash !== hash) {
-    const state = history.state && history.state.voiceSidebarGuard ? history.state : null;
-    history.replaceState(state, "", hash);
-    if (state && sidebarBackGuardActive) sidebarBackGuardRoute = location.href;
+    history.replaceState(null, "", hash);
   }
   persistSearchSession();
 }
@@ -5731,7 +5652,6 @@ function toggleLeftSidebar() {
   updateSidebarVisibility();
   updateSidebarHeader();
   syncStateToURL();
-  ensureSidebarBackGuard(true);
 }
 
 function toggleRightSidebar() {
@@ -5740,7 +5660,6 @@ function toggleRightSidebar() {
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
   syncStateToURL();
-  ensureSidebarBackGuard(true);
 }
 
 function updateSidebarVisibility() {
@@ -6172,18 +6091,9 @@ async function init() {
       restoreReaderOverlay(event.state);
       return;
     }
-    if (event.state?.voiceSidebarOverlay) {
-      sidebarBackGuardActive = true;
-      sidebarBackGuardRoute = location.href;
-    }
-    if (handleSidebarBackNavigation()) return;
   });
   window.addEventListener("hashchange", function() {
     if (readerOverlay) return;
-    if (sidebarBackNavigationHandled) {
-      sidebarBackNavigationHandled = false;
-      return;
-    }
     ROUTER.apply();
   });
   window.addEventListener("resize", function() {
@@ -6209,7 +6119,6 @@ async function init() {
   window.addEventListener("online", resumeResultRecovery);
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   ROUTER.apply();
-  ensureSidebarBackGuard();
   restoreReaderFromSession();
   loadReaderAssets().then(function() {
     refreshResultReaderActions();
