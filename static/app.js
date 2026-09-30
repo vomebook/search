@@ -3881,14 +3881,14 @@ function scheduleVirtualRender() {
   if (VSCROLL.renderFrame) return;
   VSCROLL.renderFrame = requestAnimationFrame(() => {
     VSCROLL.renderFrame = 0;
-    renderVisible();
+    const scrollTrackUpdated = renderVisible();
     if (VSCROLL.renderAfterScroll) {
       VSCROLL.renderAfterScroll = false;
-      if (VSCROLL.isDraggingThumb) updateScrollThumb();
-      else {
-        updateScrollTrack();
-        maybeLoadNextPage();
+      if (!scrollTrackUpdated) {
+        if (VSCROLL.isDraggingThumb) updateScrollThumb();
+        else updateScrollTrack();
       }
+      if (!VSCROLL.isDraggingThumb) maybeLoadNextPage();
     }
   });
 }
@@ -3899,7 +3899,7 @@ function renderVisible() {
   ensureVirtualHeights(len);
   if (len === 0) {
     updateScrollTrack();
-    return;
+    return true;
   }
   const container = DOM.resultsContainer;
   const scrollTop = getResultScrollTop();
@@ -3931,7 +3931,7 @@ function renderVisible() {
   ensureResultWindowPages(safeStart, safeEnd);
   updateCurrentResultPosition();
   if (!pendingResultEntrance && !segmentNeedsRecenter
-      && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return;
+      && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return false;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
     : baseOverscanPx * (scrollingDown ? 1 : 2) + (scrollingDown ? 0 : velocityOverscanPx);
@@ -3943,7 +3943,7 @@ function renderVisible() {
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
   if (pendingResultEntrance && start === 0) end = Math.min(len, Math.max(end, 30));
   ensureResultWindowPages(start, end);
-  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !segmentNeedsRecenter) return;
+  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !segmentNeedsRecenter) return false;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
   const topH = fenwickSum(VSCROLL.heightTree, start);
@@ -3965,6 +3965,7 @@ function renderVisible() {
     pendingResultEntrance = false;
     animateVisibleResultRows();
   }
+  return true;
 }
 
 function ensureHeightTree() {

@@ -200,7 +200,9 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /scheduleVirtualRender\(true\)/);
   assert.match(app, /renderAfterScroll: false/);
   assert.doesNotMatch(app, /let scrollTicking = false/);
-  assert.match(app, /if \(VSCROLL\.renderAfterScroll\)[\s\S]*?updateScrollTrack\(\);[\s\S]*?maybeLoadNextPage\(\);/);
+  assert.match(app, /const scrollTrackUpdated = renderVisible\(\);/);
+  assert.match(app, /if \(VSCROLL\.renderAfterScroll\)[\s\S]*?if \(!scrollTrackUpdated\) \{[\s\S]*?if \(VSCROLL\.isDraggingThumb\) updateScrollThumb\(\);[\s\S]*?else updateScrollTrack\(\);[\s\S]*?if \(!VSCROLL\.isDraggingThumb\) maybeLoadNextPage\(\);/);
+  assert.match(app, /updateScrollTrack\(\);[\s\S]*?return true;/);
   assert.match(app, /if \(updateView\) \{[\s\S]*?scheduleVirtualRender\(\);/);
   assert.match(app, /if \(!dragFrame\) dragFrame = requestAnimationFrame\(applyPendingScrollTop\)/);
   assert.match(app, /setResultScrollTop\(pendingScrollTop\);\s*pendingScrollTop = null;\s*renderVisible\(\);/);
