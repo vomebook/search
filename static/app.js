@@ -1718,8 +1718,8 @@ function sidebarBackRouteKey(rawUrl) {
   return url.origin + url.pathname + path + (query ? "?" + query : "");
 }
 
-function ensureSidebarBackGuard() {
-  if (!STATE.isMobile || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen)) return;
+function ensureSidebarBackGuard(userOpened = false) {
+  if ((!STATE.isMobile && !userOpened) || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen)) return;
   const route = location.href;
   if (sidebarBackGuardActive && sidebarBackGuardRoute === route) return;
   history.pushState({ voiceSidebarGuard: true, voiceSidebarOverlay: true }, "", route);
@@ -1773,7 +1773,7 @@ function handleSidebarBackNavigation() {
     release();
     return true;
   }
-  if (!STATE.isMobile || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen) || !sidebarBackGuardActive) return false;
+  if ((!STATE.isMobile && !sidebarBackGuardActive) || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen) || !sidebarBackGuardActive) return false;
   if (sidebarBackRouteKey(sidebarBackGuardRoute) !== sidebarBackRouteKey(location.href)) return false;
   sidebarBackGuardActive = false;
   sidebarBackGuardRoute = "";
@@ -5716,7 +5716,7 @@ function toggleLeftSidebar() {
   updateSidebarVisibility();
   updateSidebarHeader();
   syncStateToURL();
-  ensureSidebarBackGuard();
+  ensureSidebarBackGuard(true);
 }
 
 function toggleRightSidebar() {
@@ -5725,7 +5725,7 @@ function toggleRightSidebar() {
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
   syncStateToURL();
-  ensureSidebarBackGuard();
+  ensureSidebarBackGuard(true);
 }
 
 function updateSidebarVisibility() {
