@@ -1687,6 +1687,7 @@ let routeInitialized = false;
 let sidebarBackGuardActive = false;
 let sidebarBackGuardRoute = "";
 let sidebarBackGuardRelease = null;
+let sidebarBackNavigationHandled = false;
 
 function updateSidebarExpandButton() {
   if (!DOM.sidebarExpandBtn || !DOM.leftSidebar) return;
@@ -1704,6 +1705,17 @@ function updateSidebarHeader() {
   DOM.sidebarTitle.textContent = global ? "仓库列表" : (STATE.repo || "仓库");
   if (DOM.sidebarBackBtn) DOM.sidebarBackBtn.hidden = global;
   updateSidebarExpandButton();
+}
+
+function sidebarBackRouteKey(rawUrl) {
+  const url = new URL(rawUrl, location.href);
+  const hash = url.hash || "#/";
+  const queryIndex = hash.indexOf("?");
+  const path = queryIndex >= 0 ? hash.slice(0, queryIndex) : hash;
+  const params = new URLSearchParams(queryIndex >= 0 ? hash.slice(queryIndex + 1) : "");
+  ["sidebar", "filters", "wide"].forEach(key => params.delete(key));
+  const query = params.toString();
+  return url.origin + url.pathname + path + (query ? "?" + query : "");
 }
 
 function ensureSidebarBackGuard() {
@@ -1762,13 +1774,10 @@ function handleSidebarBackNavigation() {
     return true;
   }
   if (!STATE.isMobile || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen) || !sidebarBackGuardActive) return false;
-  if (!STATE.rightSidebarOpen) {
-    const route = ROUTER.parse();
-    if (route.mode !== STATE.mode || route.repo !== STATE.repo ||
-        (route.params.path || "") !== (STATE.browserPath || "")) return false;
-  }
+  if (sidebarBackRouteKey(sidebarBackGuardRoute) !== sidebarBackRouteKey(location.href)) return false;
   sidebarBackGuardActive = false;
   sidebarBackGuardRoute = "";
+  sidebarBackNavigationHandled = true;
   if (STATE.rightSidebarOpen) {
     closeRightSidebar();
     return true;
@@ -6156,6 +6165,10 @@ async function init() {
   });
   window.addEventListener("hashchange", function() {
     if (readerOverlay) return;
+    if (sidebarBackNavigationHandled) {
+      sidebarBackNavigationHandled = false;
+      return;
+    }
     ROUTER.apply();
   });
   window.addEventListener("resize", function() {

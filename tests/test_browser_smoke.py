@@ -860,7 +860,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertFalse(self.page.locator("#right-sidebar").evaluate("el => el.classList.contains('open')"))
         self.assertEqual(self.page_errors, [])
 
-    def test_mobile_sidebar_history_back_keeps_the_drawer_open(self):
+    def test_mobile_back_closes_drawer_before_restoring_directory_history(self):
         self.context.close()
         self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
         self.page = self.context.new_page()
@@ -873,9 +873,9 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.locator("#sidebar-content .repo-list-item").first.click()
         self.page.wait_for_function("STATE.mode === 'repo'")
         self.page.evaluate("history.back()")
+        self.page.wait_for_function("STATE.mode === 'repo' && !STATE.leftSidebarOpen")
+        self.page.evaluate("history.back()")
         self.page.wait_for_function("STATE.mode === 'global'")
-        self.assertTrue(self.page.locator("#left-sidebar").evaluate("el => el.classList.contains('open')"))
-        self.assertTrue(self.page.locator("#overlay").evaluate("el => el.classList.contains('open')"))
         self.assertEqual(self.page_errors, [])
 
     def test_mobile_back_closes_visible_drawer_before_leaving_search(self):
@@ -928,6 +928,24 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.evaluate("history.back()")
         self.page.wait_for_function("() => STATE.mode === 'repo' && !STATE.leftSidebarOpen && !history.state?.voiceSidebarGuard")
         self.assertEqual(self.page.evaluate("location.hash.split('?')[0]"), "#/VOMEBOOK")
+        self.assertEqual(self.page_errors, [])
+
+    def test_mobile_back_closes_drawer_before_restoring_route_history(self):
+        self.context.close()
+        self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
+        self.page = self.context.new_page()
+        self.page_errors = []
+        self.page.on("pageerror", lambda error: self.page_errors.append(str(error)))
+        self.install_routes(self.page)
+        self.load("#/?sidebar=0")
+        self.page.locator("#hamburger-btn").click()
+        self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK')")
+        self.page.wait_for_function("() => STATE.mode === 'repo' && STATE.leftSidebarOpen")
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("() => STATE.mode === 'repo' && !STATE.leftSidebarOpen")
+        self.assertIn("#/VOMEBOOK", self.page.url)
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("() => STATE.mode === 'global'")
         self.assertEqual(self.page_errors, [])
 
     def test_mobile_reader_return_does_not_restore_closed_sidebar(self):
