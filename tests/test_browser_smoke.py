@@ -948,11 +948,8 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.wait_for_function("() => STATE.mode === 'global'")
         self.assertEqual(self.page_errors, [])
 
-    def test_desktop_back_closes_manually_opened_sidebar_before_route_history(self):
+    def test_desktop_back_closes_sidebar_that_was_open_at_startup(self):
         self.load("#/VOMEBOOK")
-        self.page.locator("#hamburger-btn").click()
-        self.page.wait_for_function("() => !STATE.leftSidebarOpen")
-        self.page.locator("#hamburger-btn").click()
         self.page.wait_for_function("() => STATE.leftSidebarOpen && history.state?.voiceSidebarOverlay")
         self.page.evaluate("history.back()")
         self.page.wait_for_function("() => !STATE.leftSidebarOpen && !history.state?.voiceSidebarGuard")
