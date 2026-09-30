@@ -3559,7 +3559,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
        if (priority >= 2 && ocrManifestUrl && !navigator.connection?.saveData)
          loadText ||= renderPdfOcrText(shell);
-      loadText.catch(() => {});
+      loadText?.catch(() => {});
       image.classList.add("ready");
       shell.dataset.renderState = "rendered";
       shell.dataset.renderUsedAt = String(Date.now());
