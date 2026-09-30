@@ -878,59 +878,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.wait_for_function("STATE.mode === 'global'")
         self.assertEqual(self.page_errors, [])
 
-    def test_mobile_back_closes_visible_drawer_before_leaving_search(self):
-        self.context.close()
-        self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
-        self.page = self.context.new_page()
-        self.page_errors = []
-        self.page.on("pageerror", lambda error: self.page_errors.append(str(error)))
-        self.install_routes(self.page)
-        self.load()
-        self.page.wait_for_function("() => STATE.isMobile && STATE.leftSidebarOpen && history.state?.voiceSidebarGuard")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => !STATE.leftSidebarOpen && !STATE.rightSidebarOpen && !history.state?.voiceSidebarGuard")
-        self.assertTrue(self.page.url.startswith(self.origin + "/search/"))
-
-        self.page.evaluate("history.forward()")
-        self.page.wait_for_function("() => STATE.leftSidebarOpen && history.state?.voiceSidebarOverlay")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => !STATE.leftSidebarOpen && !history.state?.voiceSidebarGuard")
-
-        self.page.locator("#settings-btn").click()
-        self.page.wait_for_function("() => STATE.rightSidebarOpen && history.state?.voiceSidebarGuard")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => !STATE.leftSidebarOpen && !STATE.rightSidebarOpen && !history.state?.voiceSidebarGuard")
-        self.assertTrue(self.page.url.startswith(self.origin + "/search/"))
-
-        self.page.locator("#hamburger-btn").click()
-        self.page.wait_for_function("() => STATE.leftSidebarOpen && history.state?.voiceSidebarGuard")
-        self.page.locator("#settings-btn").click()
-        self.page.wait_for_function("() => STATE.rightSidebarOpen && !STATE.leftSidebarOpen && history.state?.voiceSidebarGuard")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => !STATE.leftSidebarOpen && !STATE.rightSidebarOpen && !history.state?.voiceSidebarGuard")
-
-        self.page.locator("#settings-btn").click()
-        self.page.wait_for_function("() => STATE.rightSidebarOpen && history.state?.voiceSidebarGuard")
-        self.page.locator("#close-filters-btn").click()
-        self.page.wait_for_function("() => !STATE.rightSidebarOpen && !history.state?.voiceSidebarGuard")
-
-        self.page.locator("#hamburger-btn").click()
-        self.page.wait_for_function("() => STATE.leftSidebarOpen && history.state?.voiceSidebarOverlay")
-        self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK', 'docs')")
-        self.page.wait_for_function("() => STATE.browserPath === 'docs'")
-        self.page.locator("#hamburger-btn").click()
-        self.page.wait_for_function("() => !STATE.leftSidebarOpen")
-        self.assertEqual(self.page.evaluate("STATE.browserPath"), "docs")
-        self.assertIn("path=docs", self.page.url)
-
-        self.load("?direct=1#/VOMEBOOK")
-        self.page.wait_for_function("() => typeof STATE !== 'undefined' && STATE.mode === 'repo' && STATE.leftSidebarOpen && history.state?.voiceSidebarOverlay")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => STATE.mode === 'repo' && !STATE.leftSidebarOpen && !history.state?.voiceSidebarGuard")
-        self.assertEqual(self.page.evaluate("location.hash.split('?')[0]"), "#/VOMEBOOK")
-        self.assertEqual(self.page_errors, [])
-
-    def test_mobile_back_closes_drawer_before_restoring_route_history(self):
+    def test_mobile_sidebars_do_not_add_history_guards(self):
         self.context.close()
         self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
         self.page = self.context.new_page()
@@ -938,35 +886,13 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.on("pageerror", lambda error: self.page_errors.append(str(error)))
         self.install_routes(self.page)
         self.load("#/?sidebar=0")
+        self.assertFalse(self.page.evaluate("history.state?.voiceSidebarGuard || history.state?.voiceSidebarOverlay"))
         self.page.locator("#hamburger-btn").click()
-        self.page.evaluate("ROUTER.navigate('repo', 'VOMEBOOK')")
-        self.page.wait_for_function("() => STATE.mode === 'repo' && STATE.leftSidebarOpen")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => STATE.mode === 'repo' && !STATE.leftSidebarOpen")
-        self.assertIn("#/VOMEBOOK", self.page.url)
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => STATE.mode === 'global'")
-        self.assertEqual(self.page_errors, [])
-
-    def test_desktop_back_closes_sidebar_that_was_open_at_startup(self):
-        self.load("#/VOMEBOOK")
-        self.page.wait_for_function("() => STATE.leftSidebarOpen && history.state?.voiceSidebarOverlay")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => !STATE.leftSidebarOpen && !history.state?.voiceSidebarGuard")
-        self.assertEqual(self.page.evaluate("STATE.mode"), "repo")
-        self.assertEqual(self.page_errors, [])
-
-    def test_desktop_back_closes_both_open_sidebars_before_history(self):
-        self.load("#/VOMEBOOK?filters=1")
-        self.page.wait_for_function("() => STATE.leftSidebarOpen && STATE.rightSidebarOpen")
-        self.page.wait_for_function("() => history.state?.voiceSidebarOverlay")
-        current_path = self.page.evaluate("location.hash.split('?')[0]")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => STATE.leftSidebarOpen && !STATE.rightSidebarOpen && history.state?.voiceSidebarOverlay")
-        self.assertEqual(self.page.evaluate("location.hash.split('?')[0]"), current_path)
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => !STATE.leftSidebarOpen && !STATE.rightSidebarOpen")
-        self.assertEqual(self.page.evaluate("location.hash.split('?')[0]"), current_path)
+        self.page.wait_for_function("() => STATE.leftSidebarOpen")
+        self.assertFalse(self.page.evaluate("history.state?.voiceSidebarGuard || history.state?.voiceSidebarOverlay"))
+        self.page.locator("#settings-btn").click()
+        self.page.wait_for_function("() => STATE.rightSidebarOpen && !STATE.leftSidebarOpen")
+        self.assertFalse(self.page.evaluate("history.state?.voiceSidebarGuard || history.state?.voiceSidebarOverlay"))
         self.assertEqual(self.page_errors, [])
 
     def test_mobile_reader_return_does_not_restore_closed_sidebar(self):
@@ -980,13 +906,13 @@ class BrowserBehaviorTest(unittest.TestCase):
                         lambda route: route.fulfill(content_type="text/plain", body="Reader navigation",
                                                   headers={"Access-Control-Allow-Origin": "*"}))
         self.load()
-        self.page.wait_for_function("() => STATE.leftSidebarOpen && history.state?.voiceSidebarGuard")
+        self.page.wait_for_function("() => STATE.leftSidebarOpen")
         url = "/search/static/reader.html?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2FVoiceOfML%2FTest%2Fresolve%2Fmain%2Fback.txt&ext=txt"
         self.assertTrue(self.page.evaluate("url => navigateToReader(url)", url))
         self.page.frame_locator("iframe.reader-overlay").locator(".reader-text").wait_for()
         self.page.evaluate("history.back()")
         self.page.locator("iframe.reader-overlay").wait_for(state="detached")
-        self.assertFalse(self.page.evaluate("STATE.leftSidebarOpen || STATE.rightSidebarOpen || !!history.state?.voiceSidebarGuard"))
+        self.assertFalse(self.page.evaluate("STATE.leftSidebarOpen || STATE.rightSidebarOpen"))
         self.assertIn("sidebar=0", self.page.url)
         self.assertEqual(self.page_errors, [])
 
