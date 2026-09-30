@@ -1719,7 +1719,7 @@ function sidebarBackRouteKey(rawUrl) {
 }
 
 function ensureSidebarBackGuard(userOpened = false) {
-  if ((!STATE.isMobile && !userOpened) || (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen)) return;
+  if (!STATE.isMobile && !userOpened && !(STATE.leftSidebarOpen && STATE.rightSidebarOpen)) return;
   const route = location.href;
   if (sidebarBackGuardActive && sidebarBackGuardRoute === route) return;
   history.pushState({ voiceSidebarGuard: true, voiceSidebarOverlay: true }, "", route);
@@ -1778,6 +1778,21 @@ function handleSidebarBackNavigation() {
   sidebarBackGuardActive = false;
   sidebarBackGuardRoute = "";
   sidebarBackNavigationHandled = true;
+  if (!STATE.isMobile) {
+    if (STATE.rightSidebarOpen) {
+      STATE.rightSidebarOpen = false;
+      updateSidebarVisibility();
+      syncStateToURL();
+      if (STATE.leftSidebarOpen) ensureSidebarBackGuard(true);
+      return true;
+    }
+    STATE.leftSidebarOpen = false;
+    DOM.leftSidebar.classList.remove("expanded-wide");
+    updateSidebarVisibility();
+    updateSidebarHeader();
+    syncStateToURL();
+    return true;
+  }
   if (STATE.rightSidebarOpen) {
     closeRightSidebar();
     return true;
