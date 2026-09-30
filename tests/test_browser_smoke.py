@@ -959,6 +959,19 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(self.page.evaluate("STATE.mode"), "repo")
         self.assertEqual(self.page_errors, [])
 
+    def test_desktop_back_closes_both_open_sidebars_before_history(self):
+        self.load("#/VOMEBOOK?filters=1")
+        self.page.wait_for_function("() => STATE.leftSidebarOpen && STATE.rightSidebarOpen")
+        self.page.wait_for_function("() => history.state?.voiceSidebarOverlay")
+        current_path = self.page.evaluate("location.hash.split('?')[0]")
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("() => STATE.leftSidebarOpen && !STATE.rightSidebarOpen && history.state?.voiceSidebarOverlay")
+        self.assertEqual(self.page.evaluate("location.hash.split('?')[0]"), current_path)
+        self.page.evaluate("history.back()")
+        self.page.wait_for_function("() => !STATE.leftSidebarOpen && !STATE.rightSidebarOpen")
+        self.assertEqual(self.page.evaluate("location.hash.split('?')[0]"), current_path)
+        self.assertEqual(self.page_errors, [])
+
     def test_mobile_reader_return_does_not_restore_closed_sidebar(self):
         self.context.close()
         self.context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
