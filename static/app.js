@@ -1719,7 +1719,7 @@ function sidebarBackRouteKey(rawUrl) {
 }
 
 function ensureSidebarBackGuard(userOpened = false) {
-  if (!STATE.isMobile && !userOpened && !(STATE.leftSidebarOpen && STATE.rightSidebarOpen)) return;
+  if (!STATE.leftSidebarOpen && !STATE.rightSidebarOpen) return;
   const route = location.href;
   if (sidebarBackGuardActive && sidebarBackGuardRoute === route) return;
   history.pushState({ voiceSidebarGuard: true, voiceSidebarOverlay: true }, "", route);
