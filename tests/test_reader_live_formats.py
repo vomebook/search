@@ -94,7 +94,7 @@ def _select_samples():
     print("Reader-Assets revision:", revision)
     root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main"
     ready = [v for v in manifest.get("files", {}).values() if v.get("status") == "ready" and v.get("path") and v.get("sha256")]
-    wanted = {"pdf": ("pdf",), "epub": ("epub",), "mobi": ("mobi",), "azw3": ("azw3",), "fb2": ("fb2",), "docx": ("docx", "doc"), "html": ("html", "htm"), "mht": ("mht", "mhtml")}
+    wanted = {"pdf": ("pdf",), "epub": ("epub",), "mobi": ("mobi",), "azw3": ("azw3",), "fb2": ("fb2",), "docx": ("docx", "doc"), "html": ("html", "htm"), "odt": ("odt",), "rtf": ("rtf",), "mht": ("mht", "mhtml")}
     selected = {}
 
     def reader_extension(item, fallback):
@@ -148,7 +148,7 @@ def _select_samples():
             raw_skips[name] = f"raw API selector failed: {error}"
     for name, reason in raw_skips.items():
         print(f"Raw {name} sample skipped: {reason}")
-    order = ("pdf", "pdf-pages", "epub", "mobi", "azw3", "audio", "video", "fb2", "docx", "html", "mht", "txt", "md")
+    order = ("pdf", "pdf-pages", "epub", "mobi", "azw3", "audio", "video", "fb2", "docx", "html", "odt", "rtf", "mht", "txt", "md")
     return tuple(selected[name] for name in order if name in selected), revision, raw_skips
 
 
