@@ -193,7 +193,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "get: () => Promise.resolve({chapterIndex: 8, chapterOffset: 0}),",
         )
         root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
-        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
+        manifest = {"version": 1, "kind": "epub-chapters", "toc": [], "chapters": [
             {"index": i, "path": f"chapter-{i}.xhtml", "bytes": 100} for i in range(1, 13)
         ]}
         requested = []

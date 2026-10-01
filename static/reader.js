@@ -4313,7 +4313,7 @@ async function renderChapterManifest(prepared) {
       article.querySelector(`[id="${CSS.escape(fragment)}"], [name="${CSS.escape(fragment)}"]`);
   const setChapterToc = () =>
     setToc(
-      (manifest.toc ?? manifest.chapters.map((item) => ({
+      (manifest.toc?.length ? manifest.toc : manifest.chapters.map((item) => ({
         title: item.title || `章节 ${item.index}`, chapter: item.index, depth: 0, fragment: ""
       }))).map((item) => ({
         label: item.title,
