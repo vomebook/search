@@ -97,6 +97,37 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertFalse(self.page.locator("body").evaluate("el => el.classList.contains('mobile')"))
         self.assertEqual(self.page_errors, [])
 
+    def test_odt_and_rtf_default_bucket_assets_render_reader_actions(self):
+        self.load()
+        self.wait_for_local_results()
+        records = [
+            ("odt", "SovMaterials", "1929.05.06在共产国际执委会主席团美国委员会的讲话-5609",
+             ["重要中文文献", "斯大林著作各种", "斯大林论美国党的右倾", "斯大林论美国党的右倾"],
+             "55" + "d09db1d0731cb7b36340d2611139acf1acb9c0f87df9887e297b4db09f45ba"),
+            ("rtf", "VOMEBOOK", "发过的传单原稿",
+             ["马列之声ebook小组第三批成果集成赞助部分", "jiang2-贡献", "关于转基因公害的网页等资料"],
+             "3f" + "e397d913b7cba487c05debfb8be7001249d813747aeb70cc1f494be22c448b"),
+        ]
+        for extension, repo, name, folder, digest in records:
+            with self.subTest(extension=extension):
+                rendered = self.page.evaluate("""input => {
+                  const [extension, repoShort, name, folder, digest] = input;
+                  const repo = `VoiceOfML/${repoShort}`;
+                  const record = {Repo: repo, File: name, Extension: extension, Folder: folder, Size: 100};
+                  const relative = buildRecordRelativePath(record);
+                  const profile = extension === 'odt' ? 'calibre-odt-html-v1' : 'calibre-rtf-html-v1';
+                  const key = `${repo}\\0${relative}`;
+                  readerAssets = {[key]: {s: 2, m: 'h', p: `objects/${digest.slice(0, 2)}/${digest}/${profile}/document.html`}};
+                  const enriched = applyReaderAsset(record, repo, relative, buildRecordLink(record));
+                  return {readerLink: enriched.ReaderLink, readerExtension: enriched.ReaderExtension,
+                    readable: isReadableRecord(enriched), html: buildResultHTML(record, 0)};
+                }""", [extension, repo, name, folder, digest])
+                self.assertTrue(rendered["readable"], extension)
+                self.assertEqual(rendered["readerExtension"], "html", extension)
+                self.assertIn("/buckets/vomebook/pdf-pages/resolve/", rendered["readerLink"], extension)
+                self.assertIn('data-action="read"', rendered["html"], extension)
+                self.assertIn("在线阅读", rendered["html"], extension)
+
     def test_system_back_steps_out_of_reader_search_and_panel(self):
         self.page.route("https://voiceofml-search.hf.space/api/reader-content**",
                         lambda route: route.fulfill(content_type="text/plain", body="find-me in the book",

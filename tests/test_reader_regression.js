@@ -54,9 +54,20 @@ for (const suffix of ['', 'b'.repeat(16) + '/']) {
 assert.ok(assets.pdfPageSource('https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(bucket), 'https://site.test', 'https://api.test'))
 for (const url of ['https://evil.test' + sourcePrefix + bucket, 'https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(assetRoot + 'page-manifest.json')])
   assert.strictEqual(assets.pdfPageSource(url, 'https://site.test', 'https://api.test'), null)
-assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket}, '/api/reader-bucket-resource'), null)
+assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket}, '/api/reader-bucket-resource').ReaderLink,
+  '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
 assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource').ReaderLink,
   '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
+for (const profile of ['calibre-odt-html-v1', 'calibre-rtf-html-v1']) {
+  const path = assetRoot + profile + '/document.html'
+  const fields = assets.assetFields({s: 2, m: 'h', p: path}, '/api/reader-bucket-resource')
+  assert.ok(fields, profile + ' Reader asset should accept the implicit default bucket')
+  assert.strictEqual(fields.ReaderExtension, 'html')
+  assert.strictEqual(fields.ReaderLink, 'https://huggingface.co/buckets/vomebook/pdf-pages/resolve/' + path)
+  const reader = new URL(assets.readerUrl({Link: 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/sample.' + (profile.includes('odt') ? 'odt' : 'rtf'),
+    File: 'sample', Extension: profile.includes('odt') ? 'odt' : 'rtf', ...fields}, '/search/static/reader.html'), 'https://site.test')
+  assert.strictEqual(reader.searchParams.get('ext'), 'html')
+}
 const ebookChapterPath = 'ebook-chapters/objects/aa/' + 'c'.repeat(64) +
   '/chapter-bundle/chapter-profile-epub-chapters-v7-bucket/epub-chapters/chapter-manifest.json'
 const ebookChapterAsset = assets.assetFields({s: 2, m: 'e', p: assetRoot + 'document.epub',
