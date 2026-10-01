@@ -4345,6 +4345,8 @@ async function renderChapterManifest(prepared) {
           for (const name of ["src", "href", "poster", "xlink:href"])
             if (element.hasAttribute(name)) {
               const value = element.getAttribute(name) || "";
+              if (name === "href" && element.localName === "a" &&
+                  trustedChapterReferenceUrl(value, url, manifestBase)) continue;
               const resolved = resourceUrl(value, url, name === "href" ? "href" : "resource");
               if (resolved) element.setAttribute(name, resolved);
               else if (!(name === "href" && value.startsWith("#"))) element.removeAttribute(name);

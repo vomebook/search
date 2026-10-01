@@ -94,12 +94,12 @@ def _select_samples():
     print("Reader-Assets revision:", revision)
     root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main"
     ready = [v for v in manifest.get("files", {}).values() if v.get("status") == "ready" and v.get("path") and v.get("sha256")]
-    wanted = {"pdf": ("pdf",), "epub": ("epub",), "mobi": ("mobi",), "azw3": ("azw3",), "fb2": ("fb2",), "docx": ("docx", "doc"), "html": ("html", "htm")}
+    wanted = {"pdf": ("pdf",), "epub": ("epub",), "mobi": ("mobi",), "azw3": ("azw3",), "fb2": ("fb2",), "docx": ("docx", "doc"), "html": ("html", "htm"), "mht": ("mht", "mhtml")}
     selected = {}
 
     def reader_extension(item, fallback):
         mode = str(item.get("reader_mode") or "").lower()
-        return {"audio": "mp3", "video": "mp4", "docx": "docx"}.get(
+        return {"audio": "mp3", "video": "mp4", "docx": "docx", "html": "html"}.get(
             mode, item.get("source_extension", fallback)
         )
 
@@ -148,7 +148,7 @@ def _select_samples():
             raw_skips[name] = f"raw API selector failed: {error}"
     for name, reason in raw_skips.items():
         print(f"Raw {name} sample skipped: {reason}")
-    order = ("pdf", "pdf-pages", "epub", "mobi", "azw3", "audio", "video", "fb2", "docx", "html", "txt", "md")
+    order = ("pdf", "pdf-pages", "epub", "mobi", "azw3", "audio", "video", "fb2", "docx", "html", "mht", "txt", "md")
     return tuple(selected[name] for name in order if name in selected), revision, raw_skips
 
 
@@ -206,7 +206,16 @@ class ReaderLiveFormatTests(unittest.TestCase):
             article.wait_for(state="attached", timeout=120000)
             self.assertGreater(article.evaluate("node => (node.shadowRoot || node).textContent.trim().length"), 0, name)
         elif mode == "html":
-            self.assertGreater(len(page.frame_locator(".html-frame").locator("body").inner_text(timeout=120000).strip()), 0, name)
+            frame = page.frame_locator(".html-frame")
+            self.assertGreater(len(frame.locator("body").inner_text(timeout=120000).strip()), 0, name)
+            if name == "mht":
+                page.wait_for_function("""() => {
+                  const frame = document.querySelector('.html-frame');
+                  const images = [...(frame?.contentDocument?.images || [])];
+                  return images.every(image => image.complete);
+                }""", timeout=30000)
+                broken = frame.locator("img").evaluate_all("images => images.filter(image => !image.complete || image.naturalWidth === 0).map(image => image.src)")
+                self.assertEqual(broken, [], name)
         elif mode == "docx":
             self.assertGreater(len(page.locator("#content").inner_text().strip()), 0, name)
         elif mode in {"text", "markdown"}:
