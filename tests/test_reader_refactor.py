@@ -1094,6 +1094,38 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertIn(chapter_path, requested)
         self.assertIn(resource_path, requested)
 
+    def test_bucket_chapter_internal_links_keep_reader_navigation(self):
+        prefix = ("ebook-chapters/objects/aa/" + "d" * 64
+                  + "/bundle-v2/profile-epub-chapters-v8-bucket/epub-chapters/")
+        bodies = {
+            1: '<html><body><a href="chapter-0002.xhtml#target">跨章节目录</a><h1>目录</h1></body></html>',
+            2: '<html><body><h1 id="target">目标章节</h1><p style="height:12000px">正文</p></body></html>',
+        }
+        chapter_paths = {index: prefix + f"chapters/chapter-{index:04d}.xhtml" for index in bodies}
+        manifest_path = prefix + "chapter-manifest.json"
+        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
+            {"index": index, "path": f"chapters/chapter-{index:04d}.xhtml", "title": f"Chapter {index}",
+             "bytes": len(body.encode()), "sha256": hashlib.sha256(body.encode()).hexdigest()}
+            for index, body in bodies.items()
+        ]}
+        requests = []
+        def serve(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            requests.append(path)
+            if path == manifest_path:
+                route.fulfill(content_type="application/json", body=json.dumps(manifest))
+            else:
+                index = next((i for i, item in chapter_paths.items() if item == path), None)
+                route.fulfill(content_type="application/xhtml+xml", body=bodies[index]) if index else route.fulfill(status=404)
+        self.page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve)
+        url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + urllib.parse.quote(manifest_path, safe="")
+        self.open(self.reader_url("epub-chapters", url=url))
+        before = self.page.url
+        self.page.get_by_text("跨章节目录", exact=True).click()
+        self.page.wait_for_function("() => !!document.querySelector('.reader-epub-chapter[data-chapter=\"2\"] #target')")
+        self.assertEqual(self.page.url, before)
+        self.assertIn(chapter_paths[2], requests)
+
     def wait_for_store(self, predicate, arg=None):
         self.page.evaluate("""async arg => {
           const check = """ + predicate + """;
