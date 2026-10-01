@@ -498,6 +498,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.doesNotMatch(reader, /pages\.reduce/);
   assert.doesNotMatch(reader, /content\.style\.width/);
   assert.match(readerHtml, /Content-Security-Policy/);
+  assert.match(readerHtml, /connect-src[^\"]*https:\/\/\*\.hf\.co/);
   assert.match(readerHtml, /script-src 'self'/);
   const vendorScript = fs.readFileSync("scripts/copy_reader_vendor.mjs", "utf8") + fs.readFileSync("static/reader-resources.js", "utf8");
   assert.match(vendorScript, /pdfjs-dist@6\.3\.289/);
