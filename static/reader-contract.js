@@ -329,7 +329,7 @@
       asset.s !== 2 ||
       !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
       !assetPrimaryPattern.test(path) ||
-      (bucket && !["vomebook/pdf-pages", optimizedBucket].includes(asset?.b)) ||
+      (bucket && !["vomebook/pdf-pages", optimizedBucket].includes(bucketName)) ||
       (asset?.cb && !chapterBucket)
     )
       return null;
