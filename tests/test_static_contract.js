@@ -364,6 +364,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/")');
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/")');
   assert.match(app, /&& !rec\.ReaderLink\) return false/);
+  assert.match(contract, /includes\(bucketName\)/);
   assert.match(reader, /if \(extension === "docx"\) return readerAsset/);
   assert.match(reader, /function fetchReaderResponse\(\)/);
   assertCode(reader, 'const READER_PROXY_TIMEOUT_MS = 120000;');
