@@ -260,11 +260,17 @@
       const url = new URL(raw, base);
       if (url.username || url.password || url.hash) return null;
       const bucket = url.origin === bucketOrigin && url.pathname === "/api/reader-bucket-resource";
+      const bucketPrefix = "/buckets/vomebook/pdf-pages/resolve/";
+      const directBucket = url.origin === "https://huggingface.co" &&
+        url.pathname.startsWith(bucketPrefix) && !url.search;
       let path;
       if (bucket) {
         if (url.searchParams.getAll("path").length !== 1 ||
             [...url.searchParams.keys()].some((key) => key !== "path")) return null;
         path = url.searchParams.get("path") || "";
+        if (!isBucketPath(path, true)) return null;
+      } else if (directBucket) {
+        path = decodeURIComponent(url.pathname.slice(bucketPrefix.length));
         if (!isBucketPath(path, true)) return null;
       } else {
         if (
@@ -281,7 +287,7 @@
       if (!["page-manifest.json", "ocr-manifest.json"].includes(filename) ||
           !path.endsWith(`/${filename}`)) return null;
       const rootPath = path.slice(0, -filename.length - 1);
-      const pathPrefix = bucket ? "" : url.pathname.slice(0, -path.length);
+      const pathPrefix = bucket || directBucket ? "" : url.pathname.slice(0, -path.length);
       return {
         root: rootPath,
         assetUrl(relativePath) {
@@ -290,6 +296,7 @@
             throw new Error("PDF_ASSET_INVALID");
           const target = new URL(url.href);
           if (bucket) target.searchParams.set("path", relativePath);
+          else if (directBucket) target.pathname = `${bucketPrefix}${relativePath}`;
           else target.pathname = `${pathPrefix}${relativePath}`;
           return target.href;
         },
