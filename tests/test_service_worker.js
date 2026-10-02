@@ -211,7 +211,7 @@ test("reader navigations prefer the network and share one query-independent cach
   assert.deepStrictEqual(instance.operations.put, ["/search/static/reader.html"]);
 });
 test("cached responses return immediately while event lifetime covers delayed network and cache writes", async () => {
-  const url = "https://example.test/search/data/search_data.json.gz";
+  const url = "https://example.test/search/other.txt";
   const cached = response("old");
   let networkDone, writeDone;
   const instance = harness({cacheEntries: [[url, cached]],
@@ -260,10 +260,11 @@ for (const route of [
   { name: "initial JSON", url: "https://example.test/search/data/initial/global.json" },
   { name: "sidebar JSON", url: "https://example.test/search/data/sidebar/global.json" },
 ]) {
-  test(`${route.name} cache hit returns cached response and revalidates`, async () => {
+  test(`${route.name} cache hit prefers the network and updates the cache`, async () => {
     const cached = response(`cached:${route.name}`);
     const instance = harness({ cacheEntries: [[route.url, cached]] });
-    assert.strictEqual(await dispatchFetch(instance, route.url), cached);
+    const result = await dispatchFetch(instance, route.url);
+    assert.strictEqual(result.body, `network:${route.url}`);
     await tick();
     assert.deepStrictEqual(instance.operations.fetch, [route.url]);
     assert.deepStrictEqual(instance.operations.put, [route.url]);
