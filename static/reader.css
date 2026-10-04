@@ -1398,6 +1398,40 @@ body {
   .reader-content {
     padding: 10px;
   }
+  .reader-text,
+  .reader-markdown {
+    width: 100%;
+    max-width: none;
+    overflow-wrap: anywhere;
+  }
+  .foliate-continuous {
+    padding: 16px 12px 48px;
+  }
+  .foliate-continuous > article {
+    overflow-wrap: anywhere;
+  }
+  .docx-body,
+  .docx-body .reader-docx-wrapper,
+  .docx-body .reader-docx-wrapper > section.reader-docx {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .docx-body .reader-docx-wrapper > section.reader-docx {
+    overflow-wrap: anywhere;
+  }
+  .docx-body .reader-docx-wrapper img,
+  .docx-body .reader-docx-wrapper svg,
+  .docx-body .reader-docx-wrapper video {
+    max-width: 100%;
+    height: auto;
+  }
+  .html-frame {
+    height: calc(100dvh - var(--reader-toolbar-height));
+  }
+  .reader-video {
+    max-width: 100%;
+  }
   .reader-heading {
     display: none;
   }
