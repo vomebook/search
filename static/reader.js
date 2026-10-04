@@ -3633,8 +3633,8 @@ function renderPdfShell(shell, force = false, priority = false) {
         const canvas = shell.querySelector("canvas");
         canvas.width = Math.ceil(viewport.width * outputScale);
         canvas.height = Math.ceil(viewport.height * outputScale);
-        canvas.style.width = `${viewport.width}px`;
-        canvas.style.height = `${viewport.height}px`;
+        canvas.style.width = "100%";
+        canvas.style.height = "auto";
         shell.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
         const rendering = page.render({
           canvasContext: canvas.getContext("2d"),
