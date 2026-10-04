@@ -60,7 +60,7 @@ jobs:
       - name: Install test dependencies
         working-directory: huggingface-search
         run: |
-          python -m pip install -r requirements-test.txt
+          python -m pip install -r requirements.txt playwright==1.63.0 Pillow==12.3.0
           python -m playwright install --with-deps chromium
       - name: Run chapter-search unit tests
         working-directory: huggingface-search
