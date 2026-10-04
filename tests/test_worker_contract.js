@@ -458,6 +458,7 @@ async function namesWithCorpus(input, params) {
 test("exact and wildcard searches cover file repository and folder metadata", async () => {
   assert.deepStrictEqual(await names({ q: "alpha guide", exact: true }), ["alpha guide"]);
   assert.deepStrictEqual(await names({ q: "alpha*", exact: true }), ["alpha guide", "beta alpha", "gamma"]);
+  assert.strictEqual((await search({ q: "***", exact: true })).total, records.length);
   assert.strictEqual((await search({ q: "Repo/?", exact: true })).total, records.length);
   assert.deepStrictEqual(await names({ q: "alpha-folder", exact: true, searchFolders: false }), []);
 });
