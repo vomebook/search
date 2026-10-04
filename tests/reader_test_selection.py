@@ -14,6 +14,7 @@ CATEGORY_METHODS = {
         "test_reader_controls_fit_viewport_without_overlap_and_work_on_mobile",
         "test_reader_toolbar_controls_have_accessible_names_and_state",
         "test_mobile_pdf_rendering_uses_one_slot_and_seven_canvases",
+        "test_high_density_mobile_pdf_uses_backing_scale_without_distortion",
         "test_mobile_zoom_enlarges_pdf_page_without_resizing_content_shell",
     ),
     "formats": (
