@@ -21,7 +21,7 @@ const ORDERED_EXTENSIONS = [
   "jpg", "jpeg", "png", "gif", "bmp", "tif", "psd",
   "html", "htm", "mht", "vcf",
   "mp3", "wav", "m4a", "flac", "mpga", "wma", "ape", "amr",
-  "mp4", "mov", "flv", "f4v", "rm", "rmvb", "mkv", "avi", "mpg", "mts", "wmv", "asx", "swf",
+  "mp4", "mov", "flv", "f4v", "rm", "rmvb", "mkv", "avi", "mpg", "mts", "ts", "wmv", "asx", "swf",
 ];
 
 const FILE_ICON_MAP = {
