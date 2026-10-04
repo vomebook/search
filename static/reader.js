@@ -304,6 +304,10 @@ content.appendChild(loadingIndicator);
 content.dataset.mode = capability.mode || "unsupported";
 const status = document.querySelector("#status");
 const loadingStatus = document.querySelector("#loading-status");
+function markReaderContentReady() {
+  loadingIndicator.remove();
+  loadingStatus.hidden = true;
+}
 const downloadButton = document.querySelector("#download");
 const downloadFeedback = document.querySelector("#download-feedback");
 let readerSourcePromise = null;
@@ -728,17 +732,6 @@ document
 mediaPanel
   .querySelector(".media-panel-bookmark")
   .addEventListener("click", (event) => openBookmarkPopover(event.currentTarget));
-const loadingObserver = new MutationObserver(() => {
-  if (
-    content.querySelector(
-      ".reader-page, .reader-image, .reader-audio, .reader-video, .reader-text, .reader-markdown, .html-frame, .docx-body"
-    )
-  ) {
-    loadingIndicator.remove();
-    loadingObserver.disconnect();
-  }
-});
-loadingObserver.observe(content, { childList: true });
 document.querySelector(".page-controls").hidden = !capability.features.pagination;
 document.querySelector(".zoom-controls").hidden = !capability.features.zoom;
 
@@ -2742,15 +2735,18 @@ function loadPdfOcrPage(page, priority = "high") {
   const pending = pdfOcrPagePromises.get(page);
   if (pending) return pending;
   const task = Promise.resolve().then(() => {
-    if (!Array.isArray(pdfPageManifest?.ocr)) throw new Error("PDF_OCR_PAGE_MANIFEST_REQUIRED");
-    const entry = pdfPageEntry(page);
-    if (!entry) throw new Error("PDF_OCR_PAGE_MISSING");
-    return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
-      VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob, priority).then((payload) => {
-        VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-        cachePdfOcrPage(page, payload);
-        return payload;
-      });
+    // OCR is published as its own manifest. The image page manifest may be
+    // intentionally lean and contain only page_count.
+    return loadPdfOcrManifest().then((manifest) => {
+      const entry = manifest?.pages?.[page - 1];
+      if (!entry || entry.p !== page) throw new Error("PDF_OCR_PAGE_MISSING");
+      return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
+        VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob, priority).then((payload) => {
+          VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
+          cachePdfOcrPage(page, payload);
+          return payload;
+        });
+    });
   }).finally(() => pdfOcrPagePromises.delete(page));
   pdfOcrPagePromises.set(page, task);
   return task;
@@ -2960,7 +2956,6 @@ function disposeReader() {
   readerRuntime.dispose();
   contentSanitizerObserver?.disconnect();
   contentSanitizerObserver = null;
-  loadingObserver.disconnect();
   clearTimeout(saveTimer);
   clearTimeout(themeAnimationTimer);
   clearTimeout(panelAnimationTimer);
@@ -2984,10 +2979,9 @@ function fail(message, code = "READER_PARSE") {
   readerRequestManager.dispose();
   formatAdapters.dispose();
   window.__VOICE_PDF_PRELOAD__?.dispose();
-  loadingObserver.disconnect();
   content.dataset.errorCode = code;
   loadingStatus.hidden = true;
-  loadingIndicator.remove();
+  markReaderContentReady();
   const visibleMessage = `${message} [${readerLifecycle.stage}]`;
   content.innerHTML = `<div class="reader-error"></div>`;
   content.querySelector(".reader-error").textContent = visibleMessage;
@@ -3267,11 +3261,14 @@ async function renderPdfPages(prepared) {
     shell.tabIndex = 0;
     shell.setAttribute("role", "region");
     shell.setAttribute("aria-label", `第 ${page} 页`);
+    const pageState = document.createElement("div");
+    pageState.className = "reader-page-state";
+    pageState.textContent = `正在加载第 ${page} 页...`;
     const textLayer = document.createElement("div");
     textLayer.className = "reader-pdf-text";
     textLayer.setAttribute("role", "document");
     textLayer.setAttribute("aria-label", `第 ${page} 页正文`);
-    shell.appendChild(textLayer);
+    shell.append(pageState, textLayer);
     if (
       page === pdfFirstPagePreloadPage &&
       pdfFirstPagePreload &&
@@ -3296,6 +3293,7 @@ async function renderPdfPages(prepared) {
       : (await pdfShellsReady, content.querySelector(`.reader-page[data-page="${initialPage}"]`));
     if (!targetShell) throw new Error("PDF initial page shell missing");
     await renderPdfManifestShell(targetShell, false, true);
+    markReaderContentReady();
     viewport.scrollTop = targetShell.offsetTop;
   } finally {
     releaseInitialRenderGate();
@@ -3396,6 +3394,7 @@ async function renderPdf(prepared) {
       : (await pdfShellsReady, content.querySelector(`.reader-page[data-page="${initialPage}"]`));
     if (!targetShell) throw new Error("PDF initial page shell missing");
     await renderPdfShell(targetShell, false, true);
+    markReaderContentReady();
     viewport.scrollTop = targetShell.offsetTop;
   } finally {
     releaseInitialRenderGate();
@@ -3519,6 +3518,11 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       const target = pdfPageManifest.pageUrl(entry.page);
       let loadText = null;
       let image = shell.querySelector("img");
+      const pageState = shell.querySelector(".reader-page-state");
+      if (pageState) {
+        pageState.hidden = false;
+        pageState.textContent = `正在加载第 ${entry.page} 页...`;
+      }
       if (!image) {
         image = takePdfManifestPrefetch(target) || new Image();
         image.alt = `第 ${entry.page} 页`;
@@ -3564,6 +3568,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
          loadText ||= renderPdfOcrText(shell);
       loadText?.catch(() => {});
       image.classList.add("ready");
+      if (pageState) pageState.hidden = true;
       shell.dataset.renderState = "rendered";
       shell.dataset.renderUsedAt = String(Date.now());
       pdfShellWindow?.remember(shell);
@@ -3573,6 +3578,11 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       scheduleMarkerSync();
     } catch (error) {
       shell.querySelector("img")?.remove();
+      const pageState = shell.querySelector(".reader-page-state");
+      if (pageState) {
+        pageState.hidden = false;
+        pageState.textContent = "页面加载失败，正在重试...";
+      }
       shell.dataset.renderState = "idle";
       throw error;
     } finally {
@@ -3893,6 +3903,7 @@ async function renderText(markdown, prepared) {
     content.appendChild(article);
     setToc(headingTocEntries(article));
   }
+  markReaderContentReady();
   status.textContent = "已加载";
 }
 // HTML documents retain an isolated, script-free scroll window.
@@ -4018,6 +4029,7 @@ async function renderHtml(prepared) {
   frame.srcdoc = buildHtmlFrameSource(documentData);
   content.appendChild(frame);
   await frameLoaded;
+  markReaderContentReady();
   status.textContent = "HTML";
 }
 
@@ -4508,6 +4520,7 @@ async function renderChapterManifest(prepared) {
   }
   prefetchChapters(initialChapter + 1);
   assertReaderActive();
+  markReaderContentReady();
   status.textContent = `EPUB · ${manifest.chapters.length} 章`;
 }
 async function renderDocx(prepared) {
@@ -4564,11 +4577,13 @@ async function renderDocx(prepared) {
       link.rel = "noopener noreferrer";
     }
   }
+  markReaderContentReady();
   status.textContent = documentState.pageCount ? `${documentState.pageCount} 页` : "DOCX";
 }
 function renderImageDocument(image) {
   assertReaderActive();
   content.appendChild(image);
+  markReaderContentReady();
   status.textContent = "图片";
 }
 function disposeFormatResources(mode) {
@@ -4773,6 +4788,7 @@ function renderMedia(mode) {
   });
   media.src = contentUrl;
   content.appendChild(media);
+  markReaderContentReady();
   status.textContent = mode === "audio" ? "音频" : "视频";
 }
 async function loadSwfDocument() {
@@ -4792,6 +4808,7 @@ async function renderSwf(data) {
   content.appendChild(player);
   swfPlayer = player;
   await player.ruffle().load({ data });
+  markReaderContentReady();
   status.textContent = "Flash 内容";
 }
 // Resolve once, then keep source URLs, capability, and presentation in sync.
@@ -4890,8 +4907,7 @@ async function start() {
     assertReaderActive();
     await formatAdapters.active.render(prepared);
     assertReaderActive();
-    loadingIndicator.remove();
-    loadingStatus.hidden = true;
+    markReaderContentReady();
     const restored = await awaitReader(restorationPromise);
     await applyInitialRestoration(restored, generation);
     assertReaderActive();
@@ -5491,7 +5507,7 @@ async function renderFoliate() {
     stream = document.createElement("div");
   view.className = "foliate-reader-view";
   stream.className = "foliate-continuous";
-  content.replaceChildren(view, stream);
+  content.replaceChildren(loadingIndicator, view, stream);
   epubRendition = view;
   await view.open(
     new File([bytes], new URL(sourceUrl).pathname.split("/").pop() || "book.epub", {
@@ -5521,9 +5537,7 @@ async function renderFoliate() {
     })
     .catch(() => {});
   scheduleFoliateScrollSync();
-  loadingIndicator.remove();
-  loadingStatus.hidden = true;
-  loadingObserver.disconnect();
+  markReaderContentReady();
   status.textContent = "EPUB";
 }
 // Reading progress controls and undo.
