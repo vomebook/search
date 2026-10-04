@@ -34,7 +34,7 @@ jobs:
           node-version: "22"
       - name: Install test dependencies
         run: |
-          python -m pip install -r requirements-test.txt
+          python -m pip install playwright==1.63.0 Pillow==12.3.0
           python -m playwright install --with-deps chromium
       - name: Run chapter-search unit tests
         run: node tests/test_reader_chapter_search.mjs
@@ -49,10 +49,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-        with:
-          repository: vomebook/search
-          path: huggingface-search
+      - name: Checkout Hugging Face Search Space
+        run: git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
