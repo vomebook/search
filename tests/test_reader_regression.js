@@ -58,6 +58,18 @@ assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket}, '/api/reader-bu
   '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
 assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource').ReaderLink,
   '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
+const nativeMediaPath = assetRoot + 'native-media-cdn-v1/audio.flac'
+const nativeMedia = assets.assetFields({s: 2, m: 'a', p: nativeMediaPath, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource')
+assert.strictEqual(nativeMedia.ReaderExtension, 'audio')
+assert.strictEqual(nativeMedia.ReaderLink,
+  'https://huggingface.co/buckets/vomebook/pdf-pages/resolve/' + nativeMediaPath)
+assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + nativeMediaPath), true)
+const swfPath = assetRoot + 'native-swf-ruffle-v1/document.swf'
+const swf = assets.assetFields({s: 2, m: 'f', p: swfPath, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource')
+assert.strictEqual(swf.ReaderExtension, 'swf')
+assert.strictEqual(assets.capability('swf').mode, 'swf')
+assert.strictEqual(swf.ReaderLink,
+  'https://huggingface.co/buckets/vomebook/pdf-pages/resolve/' + swfPath)
 for (const profile of ['calibre-odt-html-v1', 'calibre-rtf-html-v1']) {
   const path = assetRoot + profile + '/document.html'
   const fields = assets.assetFields({s: 2, m: 'h', p: path}, '/api/reader-bucket-resource')
@@ -81,8 +93,8 @@ const optimizedFields = assets.assetFields(
   {s: 2, m: 'p', p: optimized, b: 'vomebook/pdf-optimized'},
   '/api/reader-bucket-resource'
 )
-assert.strictEqual(optimizedFields.ReaderLink,
-  '/api/reader-bucket-resource?bucket=vomebook%2Fpdf-optimized&path=' + encodeURIComponent(optimized))
+assert.strictEqual(optimizedFields, null)
+assert.strictEqual(assets.isBucketPath(optimized, true, 'vomebook/pdf-optimized'), false)
 assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + 'pdf_manifest.json'), true)
 assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + assetRoot + 'epub-chapters/chapters/chapter-0012.xhtml'), true)
 for (const path of [assetRoot + '../linearized.pdf', assetRoot + 'private.json', 'objects/invalid/document.pdf']) {
