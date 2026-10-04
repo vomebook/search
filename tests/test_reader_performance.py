@@ -2134,6 +2134,47 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertLessEqual(metrics["rendered"], 7)
         self.assertGreater(metrics["pixels"], 0)
 
+    def test_high_density_mobile_pdf_uses_backing_scale_without_distortion(self):
+        context = self.browser.new_context(
+            viewport={"width": 390, "height": 844}, device_scale_factor=3
+        )
+        page = context.new_page()
+        page.route("**/search/static/reader-store.js", lambda route: route.fulfill(
+            status=200, content_type="text/javascript", body=STORE_SCRIPT
+        ))
+        page.route("**/search/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            status=200, content_type="text/javascript", body=PDF_MODULE
+        ))
+        page.route("**/api/reader-content**", lambda route: route.fulfill(
+            status=200, content_type="application/pdf", body=b"pdf"
+        ))
+        query = urllib.parse.quote(SOURCE_URL, safe="")
+        page.goto(
+            f"{self.origin}/search/static/reader.html?url={query}&ext=pdf&title=Performance",
+            wait_until="domcontentloaded",
+        )
+        page.locator(".reader-page canvas.ready").first.wait_for(timeout=10000)
+        metrics = page.locator(".reader-page").first.evaluate("""shell => {
+          const canvas = shell.querySelector('canvas');
+          const box = canvas.getBoundingClientRect();
+          return {
+            dpr: devicePixelRatio,
+            backingWidth: canvas.width,
+            backingHeight: canvas.height,
+            cssWidth: box.width,
+            cssHeight: box.height,
+            shellAspect: shell.getBoundingClientRect().width / shell.getBoundingClientRect().height,
+            cssAspect: box.width / box.height,
+            backingAspect: canvas.width / canvas.height,
+          };
+        }""")
+        self.assertEqual(metrics["dpr"], 3)
+        self.assertGreaterEqual(metrics["backingWidth"], metrics["cssWidth"] * 1.9)
+        self.assertGreaterEqual(metrics["backingHeight"], metrics["cssHeight"] * 1.9)
+        self.assertAlmostEqual(metrics["shellAspect"], metrics["cssAspect"], delta=0.01)
+        self.assertAlmostEqual(metrics["cssAspect"], metrics["backingAspect"], delta=0.01)
+        context.close()
+
     def test_mobile_zoom_enlarges_pdf_page_without_resizing_content_shell(self):
         self.page.set_viewport_size({"width": 390, "height": 844})
         self.open_reader()

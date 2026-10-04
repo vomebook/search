@@ -3628,14 +3628,19 @@ function renderPdfShell(shell, force = false, priority = false) {
         if (renderController.signal.aborted) throw readerAbortError();
         const base = page.getViewport({ scale: 1 }),
           scale = Math.min(3, Math.max(0.5, shell.clientWidth / base.width)),
-          rendered = page.getViewport({ scale });
+          viewport = page.getViewport({ scale }),
+          outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1)),
+          rendered = page.getViewport({ scale: scale * outputScale });
         const canvas = shell.querySelector("canvas");
-        canvas.width = rendered.width;
-        canvas.height = rendered.height;
-        shell.style.aspectRatio = `${rendered.width} / ${rendered.height}`;
+        canvas.width = Math.ceil(rendered.width);
+        canvas.height = Math.ceil(rendered.height);
+        canvas.style.width = `${viewport.width}px`;
+        canvas.style.height = `${viewport.height}px`;
+        shell.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
         const rendering = page.render({
           canvasContext: canvas.getContext("2d"),
-          viewport: rendered
+          viewport: rendered,
+          transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0]
         });
         activeRendering = rendering;
         const untrack = trackReaderResource(() => rendering.cancel?.());
