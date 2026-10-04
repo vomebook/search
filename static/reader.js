@@ -19,6 +19,7 @@ const MARKED_URL = VoiceOfMLReaderResources.vendorUrl("marked", "/search/static/
 const PURIFY_URL = VoiceOfMLReaderResources.vendorUrl("purify", "/search/static/");
 const JSZIP_URL = VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/");
 const DOCX_PREVIEW_URL = VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/");
+const RUFFLE_URL = VoiceOfMLReaderResources.vendors.ruffle.url;
 const READER_PROXY_TIMEOUT_MS = 120000;
 const readerRequestManager = VoiceOfMLReaderRequests.createReaderRequestManager();
 const readerRuntime = VoiceOfMLReaderRuntime.createReaderRuntime();
@@ -572,6 +573,7 @@ let markerFrame = 0;
 let pageNavigationLockUntil = 0;
 let pendingBookmarkSnapshot = null;
 let mediaElement = null;
+let swfPlayer = null;
 function nextReaderGeneration(name) {
   return readerRuntime.nextGeneration(name);
 }
@@ -2352,11 +2354,12 @@ function validSource(raw) {
   try {
     const url = new URL(raw);
     const bucketPath = url.searchParams.get("path") || "";
-    const bucketName = url.searchParams.get("bucket") || "vomebook/pdf-pages";
     if (
       url.origin === "https://voiceofml-search.hf.space" &&
       url.pathname === "/api/reader-bucket-resource" &&
-      VoiceOfMLReader.isBucketPath(bucketPath, true, bucketName)
+      url.searchParams.getAll("path").length === 1 &&
+      [...url.searchParams.keys()].every((key) => key === "path") &&
+      VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/pdf-pages")
     )
       return true;
     if (url.protocol === "https:" && url.hostname === "huggingface.co" &&
@@ -4565,6 +4568,10 @@ function renderImageDocument(image) {
   status.textContent = "图片";
 }
 function disposeFormatResources(mode) {
+  if (mode === "swf") {
+    swfPlayer?.remove();
+    swfPlayer = null;
+  }
   if (["pdf", "pdf-pages"].includes(mode)) {
     pdfDocument = null;
     pdfPageManifest = null;
@@ -4714,6 +4721,7 @@ function registerReaderFormatAdapters() {
     docx: [loadDocxDocument, renderDocx],
     audio: [loadMediaDocument, () => renderMedia("audio")],
     video: [loadMediaDocument, () => renderMedia("video")],
+    swf: [loadSwfDocument, renderSwf],
     foliate: [loadMediaDocument, renderFoliate]
   };
   for (const [mode, [open, render]] of Object.entries(formats))
@@ -4762,6 +4770,25 @@ function renderMedia(mode) {
   media.src = contentUrl;
   content.appendChild(media);
   status.textContent = mode === "audio" ? "音频" : "视频";
+}
+async function loadSwfDocument() {
+  await loadScript(RUFFLE_URL);
+  const response = await fetchReaderResponse();
+  return new Uint8Array(await response.arrayBuffer());
+}
+async function renderSwf(data) {
+  assertReaderActive();
+  const factory = window.RufflePlayer?.newest?.();
+  if (!factory) throw Object.assign(new Error("Ruffle 未加载"), { code: "READER_SWF_ENGINE" });
+  const player = factory.createPlayer();
+  player.className = "reader-swf";
+  player.setAttribute("aria-label", `${documentState.title} Flash 内容`);
+  player.style.width = "100%";
+  player.style.minHeight = "360px";
+  content.appendChild(player);
+  swfPlayer = player;
+  await player.ruffle().load({ data });
+  status.textContent = "Flash 内容";
 }
 // Resolve once, then keep source URLs, capability, and presentation in sync.
 async function resolveReaderSource() {
