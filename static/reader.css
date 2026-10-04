@@ -1411,13 +1411,15 @@ body {
     overflow-wrap: anywhere;
   }
   .docx-body,
-  .docx-body .reader-docx-wrapper,
-  .docx-body .reader-docx-wrapper > section.reader-docx {
+  .docx-body .reader-docx-wrapper {
     min-width: 0;
     max-width: 100%;
     box-sizing: border-box;
   }
   .docx-body .reader-docx-wrapper > section.reader-docx {
+    width: min(21cm, calc(100vw - 20px)) !important;
+    max-width: none;
+    min-width: 0;
     overflow-wrap: anywhere;
   }
   .docx-body .reader-docx-wrapper img,
