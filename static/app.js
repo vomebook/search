@@ -13,16 +13,15 @@ let pagingFailures = 0;
 let pagingRetryAt = 0;
 
 const ORDERED_EXTENSIONS = [
-  "pdf", "txt",
-  "epub", "mobi", "azw3", "fb2", "djvu", "chm", "caj",
-  "doc", "docx", "odt", "rtf",
-  "ppt", "xlsx",
-  "jpg", "png", "gif", "tif",
-  "html", "htm", "aspx", "css", "js", "xml",
-  "mht",
-  "mp4", "flv", "swf", "rm", "rmvb",
-  "mp3", "wav",
-  "iso", "dat", "exe",
+  "pdf", "djvu",
+  "txt", "md",
+  "epub", "mobi", "azw3", "fb2", "chm",
+  "doc", "docx", "odt", "rtf", "wps", "caj", "kdh",
+  "xls", "xlsx", "csv", "ppt", "pptx", "pps", "ps",
+  "jpg", "jpeg", "png", "gif", "bmp", "tif", "psd",
+  "html", "htm", "mht", "vcf",
+  "mp3", "wav", "m4a", "flac", "mpga", "wma", "ape", "amr",
+  "mp4", "mov", "flv", "f4v", "rm", "rmvb", "mkv", "avi", "mpg", "mts", "wmv", "asx", "swf",
 ];
 
 const FILE_ICON_MAP = {
