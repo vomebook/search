@@ -377,6 +377,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'task.destroy()?.catch?.(() => {})');
   assert.match(app, /function warmReaderIntent/);
   assert.match(reader, /validatePdfPageManifest/);
+  assert.match(readerCss, /\.docx-body \.reader-docx-wrapper/);
+  assert.match(readerCss, /width: 100% !important/);
   assert.match(reader, /loadPdfOcrManifest\(\)\.then\(\(manifest\)/);
   assert.match(reader, /manifest\?\.pages\?\.\[page - 1\]/);
   assert.match(reader, /reader-page-state/);

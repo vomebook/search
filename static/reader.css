@@ -1166,8 +1166,16 @@ body {
   background: transparent;
   padding: 0;
   zoom: var(--reader-zoom);
+  width: 100%;
+  max-width: none;
+  align-items: stretch;
 }
 .docx-body .reader-docx-wrapper > section.reader-docx {
+  width: 100% !important;
+  max-width: none;
+  box-sizing: border-box;
+  padding-left: clamp(16px, 5vw, 2cm) !important;
+  padding-right: clamp(16px, 5vw, 2cm) !important;
   margin: 0 auto 18px;
   box-shadow: 0 2px 14px #0008;
 }
@@ -1430,7 +1438,7 @@ body {
     box-sizing: border-box;
   }
   .docx-body .reader-docx-wrapper > section.reader-docx {
-    width: min(21cm, calc(100vw - 20px)) !important;
+    width: 100% !important;
     max-width: none;
     min-width: 0;
     overflow-wrap: anywhere;
