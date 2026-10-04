@@ -31,6 +31,11 @@
       url: "https://cdn.jsdelivr.net/npm/docx-preview@0.4.0/dist/docx-preview.min.js",
       file: "docx-preview.min.js",
       sha256: "051ef503f2677d53159a388b7384e950eda41ea4e47a103e5e36f124d7faea40"
+    },
+    ruffle: {
+      url: "https://unpkg.com/@ruffle-rs/ruffle@0.6.0/ruffle.js",
+      file: "ruffle.js",
+      sha256: "a686a305345b06542dddedada71869104916a61e393f174687571528ac4225f5"
     }
   };
   for (const vendor of Object.values(vendors)) {

@@ -110,7 +110,8 @@
     audio: "audio",
     mp4: "video",
     mov: "video",
-    video: "video"
+    video: "video",
+    swf: "swf"
   });
   const articleExtensions = Object.freeze(Object.keys(modes));
   const features = Object.freeze({
@@ -188,6 +189,14 @@
       bookmarks: true,
       pagination: false,
       media: true
+    },
+    swf: {
+      toc: false,
+      search: false,
+      zoom: false,
+      bookmarks: true,
+      pagination: false,
+      media: true
     }
   });
 
@@ -214,7 +223,7 @@
   const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
   const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.(?:webp|jxl))`;
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
-  const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html|txt|md|webp)|book\.epub|audio\.mp3|video\.mp4)`;
+  const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html|txt|md|webp|swf)|book\.epub|audio\.(?:mp3|wav|m4a|flac|mpga)|video\.(?:mp4|mov))`;
   const assetChapters = String.raw`(?:chapter-manifest\.json|epub-chapters/(?:chapter-manifest\.json|chapters/chapter-[0-9]{4}\.xhtml|resources/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))`;
   const ebookBucketPathPattern = new RegExp(`^ebook-chapters/${assetRoot}[a-z0-9-]+/[a-z0-9-]+-epub-chapters-v[0-9]+-bucket/epub-chapters/(?:chapter-manifest\\.json|chapters/chapter-[0-9]{4}\\.xhtml|resources/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*|epub-search-index\\.json\\.gz)$`);
   const assetPrimaryPattern = new RegExp(
@@ -224,9 +233,7 @@
     `^(?:pdf_manifest\\.json|${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr}|(?:[a-z0-9-]+/)?(?:${assetDocument}|${assetChapters})))$`
   );
   const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
-  const staticBucketPathPattern = new RegExp(`^${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?document\\.(?:docx|html|txt|md|webp|jpg|jpeg|png|gif|bmp)$`);
-  const optimizedBucket = "vomebook/pdf-optimized";
-  const optimizedPathPattern = new RegExp(`^${assetRoot}(?:[a-z0-9-]+/)?document\\.pdf$`);
+  const staticBucketPathPattern = new RegExp(`^${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:docx|html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))$`);
   const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:${assetPages}|${assetOcr})$`);
   const assetBase = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/";
   const assetModes = Object.freeze({
@@ -238,11 +245,12 @@
     k: "md",
     i: "webp",
     a: "audio",
-    v: "video"
+    v: "video",
+    f: "swf"
   });
 
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages") {
-    if (bucket === optimizedBucket) return optimizedPathPattern.test(path);
+    if (bucket !== "vomebook/pdf-pages") return false;
     return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
       staticBucketPathPattern.test(path) ||
       (bucket === "vomebook/pdf-pages" && ebookBucketPathPattern.test(path));
@@ -336,7 +344,7 @@
       asset.s !== 2 ||
       !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
       !assetPrimaryPattern.test(path) ||
-      (bucket && !["vomebook/pdf-pages", optimizedBucket].includes(bucketName)) ||
+      (asset?.b && bucketName !== "vomebook/pdf-pages") ||
       (asset?.cb && !chapterBucket)
     )
       return null;
@@ -356,7 +364,7 @@
       ReaderLink: chapterBucket
         ? `${bucketBase}?path=${encodeURIComponent(asset.c)}`
         : bucket
-          ? cdnUrl || `${bucketBase}?${asset.b === optimizedBucket ? `bucket=${encodeURIComponent(asset.b)}&` : ""}path=${encodeURIComponent(path)}`
+          ? cdnUrl || `${bucketBase}?path=${encodeURIComponent(path)}`
         : assetBase + path,
       ReaderExtension: asset.c ? "epub-chapters" : extension,
       ReaderChapterManifest: asset.c

@@ -34,9 +34,9 @@ const FILE_ICON_MAP = {
   bmp: "image", webp: "image", svg: "image",
   html: "code", htm: "code", aspx: "code", css: "code", js: "code", xml: "code",
   json: "code", ini: "code", bat: "code",
-  mp4: "video", flv: "video", swf: "video", rm: "video", rmvb: "video",
+  mp4: "video", mov: "video", flv: "video", swf: "video", asx: "video", rm: "video", rmvb: "video",
   wmv: "video", mpg: "video", mts: "video", f4v: "video", asx: "video",
-  mp3: "audio", wav: "audio", wma: "audio", ape: "audio", m4a: "audio", mpga: "audio",
+  mp3: "audio", wav: "audio", wma: "audio", ape: "audio", m4a: "audio", flac: "audio", mpga: "audio",
   iso: "archive", msi: "archive", dat: "archive",
   exe: "file", db: "database", itf: "database",
   url: "text", vcf: "text", hhc: "text",
@@ -3711,7 +3711,7 @@ function buildResultHTML(rec, idx) {
       '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(recordLink)) + '">复制链接</button>' +
       '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(recordLink) + '">下载</button>' +
       '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
-      (readerActionUrl ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(readerActionUrl) + '">' + (["audio", "video"].indexOf(VoiceOfMLReader.capability(readerActionRecord.ReaderExtension || readerActionRecord.Extension).mode) >= 0 ? "在线播放" : "在线阅读") + '</button>' : '') +
+      (readerActionUrl ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(readerActionUrl) + '">' + (["audio", "video", "swf"].indexOf(VoiceOfMLReader.capability(readerActionRecord.ReaderExtension || readerActionRecord.Extension).mode) >= 0 ? "在线播放" : "在线阅读") + '</button>' : '') +
     '</div>'
   );
 }
@@ -3735,7 +3735,7 @@ function refreshResultReaderActions() {
       VSCROLL.measuredRowKeys[index] = null;
     }
     button.dataset.readerUrl = getReaderLink(actionRecord);
-    const label = ["audio", "video"].includes(VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读";
+    const label = ["audio", "video", "swf"].includes(VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读";
     if (button.textContent !== label) { button.textContent = label; VSCROLL.measuredRowKeys[index] = null; }
   }
   VSCROLL.measuredWindowKey = "";
