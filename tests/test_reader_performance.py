@@ -2166,6 +2166,8 @@ class ReaderPerformanceTest(unittest.TestCase):
             shellAspect: shell.getBoundingClientRect().width / shell.getBoundingClientRect().height,
             cssAspect: box.width / box.height,
             backingAspect: canvas.width / canvas.height,
+            canvasCssWidth: parseFloat(getComputedStyle(canvas).width),
+            canvasCssHeight: parseFloat(getComputedStyle(canvas).height),
           };
         }""")
         self.assertEqual(metrics["dpr"], 3)
@@ -2173,6 +2175,8 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertGreaterEqual(metrics["backingHeight"], metrics["cssHeight"] * 1.9)
         self.assertAlmostEqual(metrics["shellAspect"], metrics["cssAspect"], delta=0.01)
         self.assertAlmostEqual(metrics["cssAspect"], metrics["backingAspect"], delta=0.01)
+        self.assertAlmostEqual(metrics["cssWidth"], metrics["canvasCssWidth"], delta=0.01)
+        self.assertAlmostEqual(metrics["cssHeight"], metrics["canvasCssHeight"], delta=0.01)
         context.close()
 
     def test_mobile_zoom_enlarges_pdf_page_without_resizing_content_shell(self):
