@@ -7,6 +7,7 @@ let snapshotGeneration = null;
 
 let records = [];
 let recordIds = [];
+let recordSearchFields = new WeakMap();
 let metadata = emptyMetadata();
 let generation = 0;
 const corpusInstance = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -58,6 +59,18 @@ function tokenizeParts(text) {
 function tokenize(text) {
   const parts = tokenizeParts(text);
   return Array.from(new Set(parts.alpha.concat(parts.chinese)));
+}
+
+function getRecordSearchFields(record) {
+  let fields = recordSearchFields.get(record);
+  if (fields) return fields;
+  fields = {
+    file: String(record.File || "").toLowerCase(),
+    repo: String(record.Repo || "").toLowerCase(),
+    folder: (record.Folder || []).join("/").toLowerCase(),
+  };
+  recordSearchFields.set(record, fields);
+  return fields;
 }
 
 function folderTokenParts(build, text) {
@@ -268,6 +281,7 @@ function replaceCorpus(nextRecords) {
   fulltextBuild = null;
   directoryIndexes.clear();
   searchOrderCache.clear();
+  recordSearchFields = new WeakMap();
   records = nextRecords;
   const repoCounts = {};
   const extensionCounts = {};
@@ -569,14 +583,17 @@ function searchLocal(params) {
     matched = recordIndices.slice();
   } else if (params.exact || literalSearch(query)) {
     const wildcard = query.includes("*") || query.includes("?");
-    const pattern = wildcard ? compileWildcardMatcher(query) : null;
     const lower = query.toLowerCase();
-    for (let i = 0; i < records.length; i++) {
-      const record = records[i] || {};
-      const file = String(record.File || "").toLowerCase();
-      const repo = String(record.Repo || "").toLowerCase();
-      const folder = (record.Folder || []).join("/").toLowerCase();
-      if (pattern ? pattern.test(file) || pattern.test(repo) || (searchFolders && pattern.test(folder)) : file.includes(lower) || repo.includes(lower) || (searchFolders && folder.includes(lower))) matched.push(i);
+    if (wildcard && query.replace(/\*/g, "") === "") {
+      // A star-only pattern matches every string, including an empty field.
+      matched = recordIndices.slice();
+    } else {
+      const pattern = wildcard ? compileWildcardMatcher(query) : null;
+      for (let i = 0; i < records.length; i++) {
+        const record = records[i] || {};
+        const fields = getRecordSearchFields(record);
+        if (pattern ? pattern.test(fields.file) || pattern.test(fields.repo) || (searchFolders && pattern.test(fields.folder)) : fields.file.includes(lower) || fields.repo.includes(lower) || (searchFolders && fields.folder.includes(lower))) matched.push(i);
+      }
     }
   } else {
     buildFulltext();
@@ -609,14 +626,12 @@ function searchLocal(params) {
     const tokens = tokenize(query);
     const scored = filtered.map((index) => {
       const record = records[index] || {};
-      const file = String(record.File || "").toLowerCase();
-      const repo = String(record.Repo || "").toLowerCase();
-      const folder = (record.Folder || []).join("/").toLowerCase();
+      const fields = getRecordSearchFields(record);
       let score = 0;
       for (const token of tokens) {
-        if (file.includes(token)) score += 3;
-        if (searchFolders && folder.includes(token)) score += 2;
-        if (repo.includes(token)) score += 1;
+        if (fields.file.includes(token)) score += 3;
+        if (searchFolders && fields.folder.includes(token)) score += 2;
+        if (fields.repo.includes(token)) score += 1;
       }
       return { index, score };
     });
