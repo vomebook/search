@@ -1,9 +1,11 @@
 """HF Reader regressions using GitHub's /search/ server and external API routes."""
 
 import io
+import base64
 import gzip
 import hashlib
 import json
+import os
 import time
 import unittest
 import urllib.parse
@@ -41,7 +43,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page = self.context.new_page()
         self.errors = []
         self.page.on("pageerror", lambda error: self.errors.append(str(error)))
-        self.page.set_default_timeout(6000)
+        self.page.set_default_timeout(int(os.environ.get("READER_TEST_TIMEOUT_MS", "6000")))
 
     def tearDown(self):
         self.context.close()
@@ -132,6 +134,30 @@ class ReaderRefactorTest(unittest.TestCase):
                 image.wait_for()
                 self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
                 self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
+
+    def test_native_spreadsheet_html_keeps_cells_selectable_and_zoomable(self):
+        chart = support.IMAGE_FIXTURES["webp"][1]
+        chart_data = "data:image/webp;base64," + base64.b64encode(chart).decode()
+        document = (
+            '<!doctype html><html><head><meta charset="utf-8"><style>'
+            'body{width:max-content;min-width:100%;margin:0;padding:12px}'
+            '.reader-spreadsheet-sheet{width:max-content;min-width:100%}'
+            '</style></head><body><section class="reader-spreadsheet-sheet">'
+            '<h2>Summary</h2><table><tr><td id="cell">完整单元格文字</td>'
+            f'<td><img src="{chart_data}"></td></tr></table></section></body></html>'
+        )
+        self.serve(document, "text/html")
+        self.open(self.reader_url("html", "table"))
+        frame_element = self.page.locator("iframe.spreadsheet-html-frame")
+        frame_element.wait_for()
+        frame = frame_element.element_handle().content_frame()
+        self.assertEqual(frame.locator("#cell").text_content().strip(), "完整单元格文字")
+        self.assertGreater(frame.locator("img").evaluate("image => image.naturalWidth"), 0)
+        before = frame.locator("table").evaluate("node => node.getBoundingClientRect().width")
+        self.page.locator("#zoom-in").click(click_count=5)
+        self.assertGreater(
+            frame.locator("table").evaluate("node => node.getBoundingClientRect().width"), before,
+        )
 
     def test_saved_native_pdf_opens_target_page_first(self):
         store = support.STORE_SCRIPT.replace(

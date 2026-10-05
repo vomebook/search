@@ -1158,6 +1158,9 @@ body {
   background: white;
   color-scheme: only light;
 }
+.html-frame.spreadsheet-html-frame {
+  overflow: auto;
+}
 .docx-body {
   overflow-x: auto;
   color: #e7e9eb;
