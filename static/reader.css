@@ -1161,6 +1161,11 @@ body {
 .html-frame.spreadsheet-html-frame {
   overflow: auto;
 }
+.reader-content--spreadsheet {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+}
 .docx-body {
   overflow-x: auto;
   color: #e7e9eb;

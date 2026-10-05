@@ -3918,7 +3918,7 @@ function sanitizeOfflineHtml(text) {
     ADD_TAGS: ["style"],
     FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
     FORBID_ATTR: ["action", "formaction", "srcdoc"],
-    ALLOWED_URI_REGEXP: /^data:image\/(?:gif|png|jpeg|webp);/i
+     ALLOWED_URI_REGEXP: /^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i
   });
   const template = document.createElement("template");
   template.innerHTML = clean;
@@ -3999,6 +3999,30 @@ body{box-sizing:border-box;width:max-content;min-width:100%;padding:12px;font:14
 .reader-spreadsheet-sheet img,.reader-spreadsheet-sheet svg{max-width:none;height:auto}
 </style>`;
 
+async function waitForSpreadsheetImages(frame) {
+  const images = [...(frame.contentDocument?.images || [])];
+  if (!images.length) return;
+  await Promise.race([
+    Promise.all(images.map(async (image) => {
+      image.loading = "eager";
+      image.decoding = "async";
+      if (!image.complete) {
+        await new Promise((resolve) => {
+          const finish = () => {
+            image.removeEventListener("load", finish);
+            image.removeEventListener("error", finish);
+            resolve();
+          };
+          image.addEventListener("load", finish, { once: true });
+          image.addEventListener("error", finish, { once: true });
+        });
+      }
+      try { await image.decode?.(); } catch (_) {}
+    })),
+    new Promise((resolve) => setTimeout(resolve, 30000))
+  ]);
+}
+
 async function renderHtml(prepared) {
   const response = await prepared.response;
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -4010,6 +4034,7 @@ async function renderHtml(prepared) {
   const frame = document.createElement("iframe");
   htmlFrame = frame;
   frame.className = "html-frame";
+  content.classList.toggle("reader-content--spreadsheet", documentData.spreadsheet);
   if (documentData.spreadsheet) frame.classList.add("spreadsheet-html-frame");
   frame.title = `${documentState.title} 正文`;
   frame.setAttribute("sandbox", "allow-same-origin");
@@ -4017,7 +4042,7 @@ async function renderHtml(prepared) {
   frame.style.colorScheme = "only light";
   const frameLoaded = new Promise((resolve, reject) => {
     let untrack = () => {};
-    const loaded = () => {
+    const loaded = async () => {
       untrack();
       try {
         assertReaderActive();
@@ -4030,6 +4055,7 @@ async function renderHtml(prepared) {
         for (const type of ["wheel", "touchstart", "pointerdown"])
           frame.contentDocument.addEventListener(type, beginReaderNavigation, { passive: true });
         setToc(headingTocEntries(frame.contentDocument));
+        if (documentData.spreadsheet) await waitForSpreadsheetImages(frame);
         resolve();
       } catch (error) {
         reject(error);
@@ -4646,6 +4672,7 @@ function disposeFormatResources(mode) {
   if (mode === "html") {
     htmlFrame?.remove();
     htmlFrame = null;
+    content.classList.remove("reader-content--spreadsheet");
   }
   if (["audio", "video"].includes(mode) && mediaElement) {
     mediaElement.pause();
