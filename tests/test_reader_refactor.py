@@ -1214,13 +1214,16 @@ class ReaderRefactorTest(unittest.TestCase):
             raw = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['url'][0]
             requests.append(raw)
             if raw.endswith('chapter-manifest.json'):
-                route.fulfill(content_type='application/json', body=json.dumps(manifest))
+                route.fulfill(content_type='application/json', body=json.dumps(manifest),
+                              headers={'Access-Control-Allow-Origin': '*'})
             elif raw.endswith('epub-search-index.json.gz'):
                 attempt = sum(item.endswith('epub-search-index.json.gz') for item in requests)
                 if not failure or not failure(route, attempt, packed):
-                    route.fulfill(content_type='application/gzip', body=packed)
+                    route.fulfill(content_type='application/gzip', body=packed,
+                                  headers={'Access-Control-Allow-Origin': '*'})
             else:
-                route.fulfill(content_type='text/html', body=bodies[raw])
+                route.fulfill(content_type='text/html', body=bodies[raw],
+                              headers={'Access-Control-Allow-Origin': '*'})
         self.context.route('**/api/reader-content**', serve)
         self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
         return requests, base
