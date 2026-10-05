@@ -24,6 +24,8 @@ jobs:
   github-search:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      READER_TEST_TIMEOUT_MS: "15000"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -48,6 +50,8 @@ jobs:
   huggingface-search:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      READER_TEST_TIMEOUT_MS: "15000"
     steps:
       - name: Checkout Hugging Face Search Space
         run: git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
