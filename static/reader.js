@@ -3263,6 +3263,7 @@ async function renderPdfPages(prepared) {
     shell.setAttribute("aria-label", `第 ${page} 页`);
     const pageState = document.createElement("div");
     pageState.className = "reader-page-state";
+    pageState.hidden = true;
     pageState.textContent = `正在加载第 ${page} 页...`;
     const textLayer = document.createElement("div");
     textLayer.className = "reader-pdf-text";
@@ -3281,6 +3282,7 @@ async function renderPdfPages(prepared) {
   };
   const firstShell = createShell(1);
   content.appendChild(firstShell);
+  markReaderContentReady();
   pdfShellWindow = createPdfShellWindow(totalPages, firstShell, createShell, (shell) => {
     observer.unobserve(shell);
     visibleObserver.unobserve(shell);
@@ -3382,6 +3384,7 @@ async function renderPdf(prepared) {
   };
   const firstShell = createShell(1);
   content.appendChild(firstShell);
+  markReaderContentReady();
   pdfShellWindow = createPdfShellWindow(pdf.numPages, firstShell, createShell, (shell) => {
     observer.unobserve(shell);
     visibleObserver.unobserve(shell);
@@ -3518,12 +3521,8 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       const target = pdfPageManifest.pageUrl(entry.page);
       let loadText = null;
       let image = shell.querySelector("img");
-      const pageState = shell.querySelector(".reader-page-state");
-      if (pageState) {
-        pageState.hidden = false;
-        pageState.textContent = `正在加载第 ${entry.page} 页...`;
-      }
-      if (!image) {
+       const pageState = shell.querySelector(".reader-page-state");
+       if (!image) {
         image = takePdfManifestPrefetch(target) || new Image();
         image.alt = `第 ${entry.page} 页`;
         image.decoding = "async";
@@ -3581,7 +3580,7 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       const pageState = shell.querySelector(".reader-page-state");
       if (pageState) {
         pageState.hidden = false;
-        pageState.textContent = "页面加载失败，正在重试...";
+        pageState.textContent = "页面加载失败，正在重试…";
       }
       shell.dataset.renderState = "idle";
       throw error;

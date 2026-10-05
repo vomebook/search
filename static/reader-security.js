@@ -289,7 +289,7 @@
   function validatePdfOcrManifest(manifest) {
     if (!manifest || manifest.version !== 1 || manifest.kind !== "pdf-ocr" ||
         manifest.complete !== true || !/^[0-9a-f]{64}$/.test(manifest.source_sha256 || "") ||
-        !String(manifest.profile || "").includes("-layout-v1-") ||
+         !/layout-v\d+(?:-|$)/.test(String(manifest.profile || "")) ||
         !Number.isInteger(manifest.page_count) || manifest.page_count < 1 ||
         manifest.page_count > LIMITS.pdfPages || !Array.isArray(manifest.pages) ||
         manifest.pages.length !== manifest.page_count)
