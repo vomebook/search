@@ -150,6 +150,11 @@ async function main() {
   assert.throws(() => security.validatePdfPageManifest({ ...validTocManifest, toc: [{ title: "bad", page: 2, depth: 0 }] }), /PDF_MANIFEST_INVALID/);
   assert.throws(() => security.validatePdfPageManifest({ ...validTocManifest, pages: [] }), /PDF_MANIFEST_INVALID/);
   assert.throws(() => security.validatePdfPageManifest({ version: 1, kind: "pdf-pages", pages: [{ page: 1, path: "pages/page-000001.webp" }] }), /PDF_MANIFEST_INVALID/);
+  const ocrRoot = "objects/aa/" + "a".repeat(64) + "/" + "b".repeat(16);
+  security.validatePdfOcrManifest({ version: 1, kind: "pdf-ocr", complete: true,
+    source_sha256: "a".repeat(64), profile: "test-layout-layout-v2-1234567890abcdef", page_count: 1,
+    pages: [{ p: 1, o: ocrRoot + "/ocr/page-000001.json.gz" }],
+    book_text: { path: ocrRoot + "/ocr/book-text.json.gz", sha256: "c".repeat(64), bytes: 1 } });
 
   const oversized = streamResponse([], "9");
   assert.throws(() => security.assertResponseSize(oversized.response, 8), /READER_RESOURCE_LIMIT/);

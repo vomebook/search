@@ -934,6 +934,9 @@ body {
   pointer-events: none;
   z-index: 2;
 }
+.reader-page-state[hidden] {
+  display: none;
+}
 .reader-page canvas {
   display: block;
   position: relative;
