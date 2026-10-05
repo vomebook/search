@@ -2454,7 +2454,7 @@ function trustedChapterUrl(raw, base) {
       !url.hash &&
       url.origin === manifest.url.origin &&
       url.pathname.startsWith(manifest.prefix) &&
-      /\.(?:xhtml?|html?)$/i.test(url.pathname)
+       /(?:\.(?:xhtml?|html?)|\/epub-search-index\.json\.gz)$/i.test(url.pathname)
       ? url.href
       : null;
   } catch (_) {
