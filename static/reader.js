@@ -3959,14 +3959,18 @@ function buildDiscourseDocument(text) {
 
 function prepareHtmlDocument(text) {
   const discourse = buildDiscourseDocument(text);
+  const html = sanitizeOfflineHtml(discourse || text);
   return {
-    html: sanitizeOfflineHtml(discourse || text),
-    discourse: !!discourse
+    html,
+    discourse: !!discourse,
+    spreadsheet: !discourse && html.includes("reader-spreadsheet-sheet")
   };
 }
 
 function buildHtmlFrameSource(documentData) {
-  return documentData.html + HTML_FRAME_STYLE + (documentData.discourse ? DISCOURSE_HTML_STYLE : "");
+  return documentData.html + HTML_FRAME_STYLE +
+    (documentData.discourse ? DISCOURSE_HTML_STYLE : "") +
+    (documentData.spreadsheet ? SPREADSHEET_HTML_STYLE : "");
 }
 
 const DISCOURSE_HTML_STYLE = `<style>
@@ -3984,6 +3988,16 @@ body{box-sizing:border-box;padding:clamp(18px,4vw,48px);font:16px/1.8 system-ui,
 .reader-forum-post pre{max-width:100%;overflow:auto;white-space:pre-wrap}
 @media(max-width:600px){body{padding:16px 14px}.reader-forum-document>h1{font-size:1.5rem}}
 </style>`;
+const SPREADSHEET_HTML_STYLE = `<style>
+html,body{min-height:100%;margin:0;background:#fff;color:#16191c}
+html{width:max-content;min-width:100%;overflow:auto}
+body{box-sizing:border-box;width:max-content;min-width:100%;padding:12px;font:14px/1.35 Arial,"Noto Sans",sans-serif}
+.reader-spreadsheet-sheet{width:max-content;min-width:100%;margin:0 0 24px}
+.reader-spreadsheet-sheet h2{position:sticky;left:0;width:max-content;margin:0 0 8px;font-size:16px}
+.reader-spreadsheet-sheet table{width:max-content;min-width:max-content;border-collapse:collapse;border-spacing:0}
+.reader-spreadsheet-sheet th,.reader-spreadsheet-sheet td{white-space:nowrap;vertical-align:top;padding:4px 8px;border:1px solid #c8ccd1}
+.reader-spreadsheet-sheet img,.reader-spreadsheet-sheet svg{max-width:none;height:auto}
+</style>`;
 
 async function renderHtml(prepared) {
   const response = await prepared.response;
@@ -3996,6 +4010,7 @@ async function renderHtml(prepared) {
   const frame = document.createElement("iframe");
   htmlFrame = frame;
   frame.className = "html-frame";
+  if (documentData.spreadsheet) frame.classList.add("spreadsheet-html-frame");
   frame.title = `${documentState.title} 正文`;
   frame.setAttribute("sandbox", "allow-same-origin");
   frame.setAttribute("referrerpolicy", "no-referrer");
@@ -4030,7 +4045,7 @@ async function renderHtml(prepared) {
   content.appendChild(frame);
   await frameLoaded;
   markReaderContentReady();
-  status.textContent = "HTML";
+  status.textContent = documentData.spreadsheet ? "表格" : "HTML";
 }
 
 function detectHtmlEncoding(bytes, hint = "") {
