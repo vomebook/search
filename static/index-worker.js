@@ -215,19 +215,30 @@ async function fetchGzipJSON(url) {
   return new Response(stream).text();
 }
 
-async function installCorpus(data, source) {
-  let fingerprint = null;
-  if (typeof crypto !== "undefined" && crypto.subtle && typeof TextEncoder !== "undefined") {
-    const bytes = new TextEncoder().encode(source || JSON.stringify(data));
-    const hash = await crypto.subtle.digest("SHA-256", bytes);
-    // Browser upgrades may change ICU collation; only reuse within that runtime.
-    const runtime = typeof navigator !== "undefined" ? navigator.userAgent : "";
-    const versionHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SEARCH_SEMANTICS_VERSION + runtime));
-    const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
-    fingerprint = "worker:" + hex(versionHash) + ":" + hex(hash);
-  }
+async function corpusFingerprint(source) {
+  if (typeof crypto === "undefined" || !crypto.subtle || typeof TextEncoder === "undefined") return null;
+  const bytes = new TextEncoder().encode(source || "");
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  // Browser upgrades may change ICU collation; only reuse within that runtime.
+  const runtime = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const versionHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SEARCH_SEMANTICS_VERSION + runtime));
+  const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
+  return "worker:" + hex(versionHash) + ":" + hex(hash);
+}
+
+async function installCorpus(data, fingerprint) {
+  if (fingerprint == null) fingerprint = await corpusFingerprint(JSON.stringify(data));
   const result = replaceCorpus(decodeSearchPayload(data));
+  data = null;
   snapshotGeneration = fingerprint;
+  return result;
+}
+
+async function installCorpusFromSource(source) {
+  const fingerprint = await corpusFingerprint(source);
+  const data = JSON.parse(source);
+  source = null;
+  const result = await installCorpus(data, fingerprint);
   return result;
 }
 
@@ -734,8 +745,7 @@ function protocolError(code, message) {
 async function dispatch(type, payload) {
   if (type === "handshake") return { protocol: WORKER_PROTOCOL_VERSION };
   if (type === "load-corpus") {
-    const source = await fetchGzipJSON(payload.url);
-    return installCorpus(JSON.parse(source), source);
+    return installCorpusFromSource(await fetchGzipJSON(payload.url));
   }
   if (type === "replace-corpus") return installCorpus(payload.data);
   if (!records.length) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
