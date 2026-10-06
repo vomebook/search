@@ -965,7 +965,9 @@ async function corpusWorkerRequest(type, payload, timeoutMs) {
     terminateCorpusWorker(error);
     await ensureCorpusWorker();
     if (type !== "load-corpus") {
-      await postCorpusWorkerRequest("load-corpus", { url: new URL(DATA_URL, document.baseURI).href }, WORKER_LOAD_TIMEOUT);
+      await postCorpusWorkerRequest("load-corpus", {
+        url: new URL(DATA_URL, document.baseURI).href,
+      }, WORKER_LOAD_TIMEOUT);
     }
     return postCorpusWorkerRequest(type, payload, timeoutMs);
   }
@@ -1016,7 +1018,7 @@ function isValidSearchResponse(data, expectedPage, expectedPageSize) {
 // One entry owns its network request, deadline and cancellation subscriptions.
 function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
   const controller = new AbortController();
-  const entry = { controller, deadline: Date.now() + timeoutMs, listeners: [] };
+  const entry = { controller, deadline: Date.now() + timeoutMs, listeners: new Map(), nextListenerId: 0 };
   const stopped = new Promise((resolve, reject) => {
     entry.expire = () => {
       reject(new Error("API_TIMEOUT"));
@@ -1036,7 +1038,8 @@ function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
   });
   entry.promise = Promise.race([request, stopped]).finally(() => {
     clearTimeout(timer);
-    entry.listeners.forEach(([owner, cancel]) => owner.removeEventListener("abort", cancel));
+    entry.listeners.forEach(({ owner, cancel }) => owner.removeEventListener("abort", cancel));
+    entry.listeners.clear();
     if (pendingSearchPages.get(cacheKey) === entry) pendingSearchPages.delete(cacheKey);
   });
   pendingSearchPages.set(cacheKey, entry);
@@ -1050,9 +1053,18 @@ function fetchSearchPage(cacheKey, url, body, signal, timeoutMs) {
   if (entry && Date.now() >= entry.deadline) entry.expire();
   if (!entry || entry.controller.signal.aborted) entry = createSearchPageRequest(cacheKey, url, body, timeoutMs);
   if (signal) {
-    const cancel = () => entry.controller.abort();
+    const listenerId = ++entry.nextListenerId;
+    const cancel = () => {
+      const listener = entry.listeners.get(listenerId);
+      if (!listener) return;
+      entry.listeners.delete(listenerId);
+      if (!entry.listeners.size && !entry.controller.signal.aborted) entry.controller.abort();
+    };
     signal.addEventListener("abort", cancel, { once: true });
-    entry.listeners.push([signal, cancel]);
+    entry.listeners.set(listenerId, { owner: signal, cancel });
+    // Abort may have happened between the early check and listener
+    // registration. Re-check so no cancelled subscriber remains attached.
+    if (signal.aborted) cancel();
   }
   return entry.promise;
 }
