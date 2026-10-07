@@ -2401,10 +2401,10 @@ function readerAssetObjectFamily(raw, base = location.href) {
     const url = new URL(raw, base);
     if (url.origin === "https://voiceofml-search.hf.space" && url.pathname === "/api/reader-bucket-resource") {
       const bucketPath = url.searchParams.get("path") || "";
-      const match = bucketPath.match(/^(ebook-chapters\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[a-z0-9-]+\/[a-z0-9-]+-epub-chapters-v[0-9]+-bucket\/epub-chapters\/)/);
+       const match = bucketPath.match(/^(chapters\/ebook\/(?:epub|mobi|azw3|fb2|chm)\/[0-9a-f]{64}\/[0-9a-f]{16}\/)/);
       if (url.hash || url.searchParams.getAll("path").length !== 1 ||
-          [...url.searchParams.keys()].some((key) => key !== "path") || !match ||
-          !VoiceOfMLReader.isBucketPath(bucketPath, true)) return null;
+           [...url.searchParams.keys()].some((key) => key !== "path") || !match ||
+           !VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/reader-assets-v2")) return null;
       return { url, prefix: match[1], bucket: true, bucketPath };
     }
     if (
@@ -2446,7 +2446,7 @@ function trustedChapterUrl(raw, base) {
       if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
           !path.startsWith(manifest.prefix) ||
           !/(?:\/chapters\/chapter-[0-9]{4}\.xhtml|\/epub-search-index\.json\.gz)$/i.test(path) ||
-          !VoiceOfMLReader.isBucketPath(path, true)) return null;
+           !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
       return `${manifest.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
     }
     const url = new URL(raw, base);
@@ -2471,8 +2471,8 @@ function trustedChapterReferenceUrl(raw, base, manifestBase) {
       const url = new URL(String(raw || ""), `https://bucket.invalid/${current.bucketPath}`);
       const path = decodeURIComponent(url.pathname.slice(1));
       if (url.origin !== "https://bucket.invalid" || url.search ||
-          !path.startsWith(family.prefix) || !/\/chapters\/chapter-[0-9]{4}\.xhtml$/i.test(path) ||
-          !VoiceOfMLReader.isBucketPath(path, true)) return null;
+           !path.startsWith(family.prefix) || !/\/chapters\/chapter-[0-9]{4}\.xhtml$/i.test(path) ||
+           !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
       return { url: `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`,
                fragment: url.hash };
     }
@@ -2497,7 +2497,7 @@ function trustedChapterResourceUrl(raw, base, attribute, manifestBase) {
       const url = new URL(value, `https://bucket.invalid/${current.bucketPath}`);
       const path = decodeURIComponent(url.pathname.slice(1));
       if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
-          !path.startsWith(family.prefix) || !VoiceOfMLReader.isBucketPath(path, true)) return null;
+           !path.startsWith(family.prefix) || !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
       return `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
     }
     const url = new URL(value, base),
