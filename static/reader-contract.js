@@ -233,7 +233,7 @@
     `^(?:pdf_manifest\\.json|${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr}|(?:[a-z0-9-]+/)?(?:${assetDocument}|${assetChapters})))$`
   );
   const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
-  const staticBucketPathPattern = new RegExp(`^${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:docx|html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))$`);
+   const staticBucketPathPattern = new RegExp(`^(?:${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:docx|html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))|documents/(?:text|web|spreadsheet|office|pdf)/[a-z0-9_-]+/[0-9a-f]{64}/document\\.(?:txt|md|html|docx|pdf)|media/(?:audio|video|swf)/[a-z0-9_-]+/[0-9a-f]{64}/(?:audio\\.[a-z0-9]+|video\\.[a-z0-9]+|document\\.swf)|derived/[A-Za-z0-9._-]+/[a-z0-9]{32}/document\\.pdf)$`);
   const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:${assetPages}|${assetOcr})$`);
   const assetBase = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/";
   const assetModes = Object.freeze({
@@ -249,11 +249,12 @@
     f: "swf"
   });
 
-  function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages") {
-    if (bucket !== "vomebook/pdf-pages") return false;
+  function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages-v2") {
+     if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path);
+     if (bucket !== "vomebook/pdf-pages-v2") return false;
     return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
       staticBucketPathPattern.test(path) ||
-      (bucket === "vomebook/pdf-pages" && ebookBucketPathPattern.test(path));
+      (bucket === "vomebook/pdf-pages-v2" && ebookBucketPathPattern.test(path));
   }
 
   function isAssetSourcePath(path) {
@@ -268,7 +269,7 @@
       const url = new URL(raw, base);
       if (url.username || url.password || url.hash) return null;
       const bucket = url.origin === bucketOrigin && url.pathname === "/api/reader-bucket-resource";
-      const bucketPrefix = "/buckets/vomebook/pdf-pages/resolve/";
+      const bucketPrefix = "/buckets/vomebook/pdf-pages-v2/resolve/";
       const directBucket = url.origin === "https://huggingface.co" &&
         url.pathname.startsWith(bucketPrefix) && !url.search;
       let path;
@@ -329,22 +330,22 @@
   function assetFields(asset, bucketBase) {
     const path = String(asset?.p || "");
     const ocrPath = String(asset?.o || "");
-    const ocrBucket = asset?.b === "vomebook/pdf-pages" || asset?.ob === "vomebook/pdf-pages";
+    const ocrBucket = asset?.b === "vomebook/pdf-pages-v2" || asset?.ob === "vomebook/pdf-pages-v2";
     const ocrUrl = ocrPath.endsWith("/ocr-manifest.json") && ocrBucket && isBucketPath(ocrPath, true)
       ? `${bucketBase}?path=${encodeURIComponent(ocrPath)}`
       : "";
     if (asset?.s === 3 && ocrUrl)
       return { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") };
-    const bucketName = String(asset?.b || "vomebook/pdf-pages");
+    const bucketName = String(asset?.b || "vomebook/reader-assets-v2");
     const bucket = isBucketPath(path, true, bucketName);
-    const chapterBucket = asset?.cb === "vomebook/pdf-pages" &&
+    const chapterBucket = asset?.cb === "vomebook/reader-assets-v2" &&
       ebookBucketPathPattern.test(String(asset?.c || ""));
     if (
       !asset ||
       asset.s !== 2 ||
       !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
-      !assetPrimaryPattern.test(path) ||
-      (asset?.b && bucketName !== "vomebook/pdf-pages") ||
+       !(bucketName === "vomebook/reader-assets-v2" ? bucket : assetPrimaryPattern.test(path)) ||
+        (asset?.b && bucketName !== "vomebook/pdf-pages-v2" && bucketName !== "vomebook/reader-assets-v2") ||
       (asset?.cb && !chapterBucket)
     )
       return null;
@@ -356,9 +357,9 @@
         : asset.m === "p" && path.endsWith("page-manifest.json")
           ? "pdf-pages"
           : assetModes[asset.m];
-    const cdnBucket = bucketName === "vomebook/pdf-pages" && staticBucketPathPattern.test(path);
+    const cdnBucket = bucketName === "vomebook/pdf-pages-v2" && staticBucketPathPattern.test(path);
     const cdnUrl = cdnBucket
-      ? `https://huggingface.co/buckets/vomebook/pdf-pages/resolve/${path.split("/").map(encodeURIComponent).join("/")}`
+      ? `https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/${path.split("/").map(encodeURIComponent).join("/")}`
       : "";
     return {
       ReaderLink: chapterBucket
