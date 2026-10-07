@@ -8,7 +8,7 @@ const { dirname } = path;
 const { fileURLToPath } = urlModule;
 const { gunzipSync } = zlib;
 
-export const DEFAULT_READER_ASSETS_URL = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/reader_assets.json.gz";
+export const DEFAULT_READER_ASSETS_URL = "https://huggingface.co/buckets/vomebook/reader-assets-v2/resolve/reader-index/reader_assets.json.gz";
 
 export function validateReaderAssets(bytes) {
   const data = JSON.parse(gunzipSync(bytes).toString("utf8"));
