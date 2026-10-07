@@ -232,6 +232,7 @@
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
   const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html|txt|md|webp|swf)|book\.epub|audio\.(?:mp3|wav|m4a|flac|mpga)|video\.(?:mp4|mov))`;
   const assetChapters = String.raw`(?:chapter-manifest\.json|epub-chapters/(?:chapter-manifest\.json|chapters/chapter-[0-9]{4}\.xhtml|resources/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))`;
+  const v2ChapterPathPattern = new RegExp(`^chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz|chapters/chapter-[0-9]{4}\\.xhtml|resources/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*)$`);
   const ebookBucketPathPattern = new RegExp(`^ebook-chapters/${assetRoot}[a-z0-9-]+/[a-z0-9-]+-epub-chapters-v[0-9]+-bucket/epub-chapters/(?:chapter-manifest\\.json|chapters/chapter-[0-9]{4}\\.xhtml|resources/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*|epub-search-index\\.json\\.gz)$`);
   const assetPrimaryPattern = new RegExp(
     `^${assetRoot}${assetVersion}(?:${assetPages}|(?:[a-z0-9-]+/)?${assetDocument})$`
@@ -240,7 +241,8 @@
     `^(?:pdf_manifest\\.json|${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr}|(?:[a-z0-9-]+/)?(?:${assetDocument}|${assetChapters})))$`
   );
   const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
-   const staticBucketPathPattern = new RegExp(`^(?:${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:docx|html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))|documents/(?:text|web|spreadsheet|office|pdf)/[a-z0-9_-]+/[0-9a-f]{64}/document\\.(?:txt|md|html|docx|pdf)|media/(?:audio|video|swf)/[a-z0-9_-]+/[0-9a-f]{64}/(?:audio\\.[a-z0-9]+|video\\.[a-z0-9]+|document\\.swf)|derived/[A-Za-z0-9._-]+/[a-z0-9]{32}/document\\.pdf)$`);
+  const v2ObjectPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
+    const staticBucketPathPattern = new RegExp(`^(?:${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:docx|html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))|documents/(?:text|web|spreadsheet|office|pdf)/[a-z0-9_-]+/[0-9a-f]{64}/document\\.(?:txt|md|html|docx|pdf|vcf|ini)|media/(?:audio|video|swf)/[a-z0-9_-]+/[0-9a-f]{64}/(?:audio\\.[a-z0-9]+|video\\.[a-z0-9]+|document\\.swf)|pages/image/(?:jpg|jpeg|png|bmp|tif|tiff|webp)/[0-9a-f]{64}/(?:page-manifest\\.json|pages/page-[0-9]{6}\\.webp)|derived/[A-Za-z0-9._-]+/[a-z0-9]{32}/document\\.pdf|chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz))$`);
   const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:${assetPages}|${assetOcr})$`);
   const assetBase = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/";
   const assetModes = Object.freeze({
@@ -257,11 +259,11 @@
   });
 
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages-v2") {
-     if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path);
+     if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path) || v2ChapterPathPattern.test(path) || v2ObjectPathPattern.test(path);
      if (bucket !== "vomebook/pdf-pages-v2") return false;
     return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
       staticBucketPathPattern.test(path) ||
-      (bucket === "vomebook/pdf-pages-v2" && ebookBucketPathPattern.test(path));
+       false;
   }
 
   function isAssetSourcePath(path) {
@@ -346,7 +348,7 @@
     const bucketName = String(asset?.b || "vomebook/reader-assets-v2");
     const bucket = isBucketPath(path, true, bucketName);
     const chapterBucket = asset?.cb === "vomebook/reader-assets-v2" &&
-      ebookBucketPathPattern.test(String(asset?.c || ""));
+      (ebookBucketPathPattern.test(String(asset?.c || "")) || v2ChapterPathPattern.test(String(asset?.c || "")));
     if (
       !asset ||
       asset.s !== 2 ||
