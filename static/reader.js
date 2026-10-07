@@ -923,13 +923,13 @@ async function goToPage(value, generation = beginReaderNavigation()) {
     let shell = content.querySelector(
       `.reader-page[data-page="${page}"], .reader-docx-page[data-page="${page}"]`
     );
-    if (!shell && capability.mode === "pdf-pages") {
+    if (!shell && ["pdf-pages", "image-pages"].includes(capability.mode)) {
       await pdfShellsReady;
       shell = content.querySelector(`.reader-page[data-page="${page}"]`);
     }
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     if (!shell) return false;
-    const imagePage = capability.mode === "pdf-pages";
+    const imagePage = ["pdf-pages", "image-pages"].includes(capability.mode);
     if (imagePage && shell.dataset.renderState !== "rendered")
       prioritizePdfManifestPrefetch(pdfPageManifest?.pageUrl(page));
     const pendingPdf =
@@ -2598,11 +2598,13 @@ async function preloadPdfFirstPage(total) {
   } catch (_) {}
 }
 function pdfManifestSource() {
-  return VoiceOfMLReader.pdfPageSource(
-    sourceUrl,
-    location.href,
-    "https://voiceofml-search.hf.space"
-  );
+  return capability.mode === "image-pages"
+    ? VoiceOfMLReader.imagePageSource(sourceUrl, location.href, "https://voiceofml-search.hf.space")
+    : VoiceOfMLReader.pdfPageSource(
+        sourceUrl,
+        location.href,
+        "https://voiceofml-search.hf.space"
+      );
 }
 function pdfPageEntry(page) {
   if (!pdfPageManifest || page < 1 || page > pdfPageManifest.pageCount) return null;
@@ -2679,7 +2681,7 @@ function prioritizePdfManifestPrefetch(target) {
   if (record && pdfManifestPrefetchActive.has(record)) record.image.fetchPriority = "high";
 }
 function schedulePdfManifestPrefetch(page) {
-  if (capability.mode !== "pdf-pages" || !pdfPageManifest) return;
+  if (!["pdf-pages", "image-pages"].includes(capability.mode) || !pdfPageManifest) return;
   const origin = Math.max(1, Math.min(documentState.pageCount + 1, page + 1));
   if (pdfManifestPrefetchOrigin === origin && pdfManifestPrefetchNext) {
     if (!pdfManifestPrefetchActive.size && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
@@ -3301,6 +3303,31 @@ async function renderPdfPages(prepared) {
     releaseInitialRenderGate();
   }
 }
+async function renderImagePages(prepared) {
+  const response = await prepared;
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const manifest = JSON.parse(
+    await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)
+  );
+  if (!manifest || manifest.version !== 1 || manifest.kind !== "image-page-stream" ||
+      !Number.isInteger(manifest.page_count) || manifest.page_count < 1 ||
+      !Array.isArray(manifest.pages) || manifest.pages.length !== manifest.page_count)
+    throw new Error("IMAGE_MANIFEST_INVALID");
+  const normalized = {
+    version: 2,
+    kind: "pdf-pages",
+    page_count: manifest.page_count,
+    entries: manifest.pages.map((entry, index) => ({
+      page: index + 1,
+      path: entry.path,
+      bytes: entry.bytes,
+      sha256: entry.sha256
+    }))
+  };
+  return renderPdfPages(Promise.resolve(new Response(JSON.stringify(normalized), {
+    headers: { "Content-Type": "application/json" }
+  })));
+}
 async function renderPdf(prepared) {
   const pdf = await prepared;
   assertReaderActive();
@@ -3468,7 +3495,7 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
     promotePdfRenderWaiter(shell);
   }
   if (shell._backgroundRender) {
-    if (priority && capability.mode === "pdf-pages") {
+    if (priority && ["pdf-pages", "image-pages"].includes(capability.mode)) {
       const image = shell.querySelector("img");
       if (image) image.fetchPriority = priority >= 3 ? "high" : "auto";
     }
@@ -3476,7 +3503,7 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
     return shell._backgroundRender;
   }
   const task =
-    capability.mode === "pdf-pages"
+      ["pdf-pages", "image-pages"].includes(capability.mode)
       ? renderPdfManifestShell(shell, force, priority)
       : renderPdfShell(shell, force, priority);
   shell._backgroundRender = task;
@@ -4631,7 +4658,7 @@ function disposeFormatResources(mode) {
     swfPlayer?.remove();
     swfPlayer = null;
   }
-  if (["pdf", "pdf-pages"].includes(mode)) {
+  if (["pdf", "pdf-pages", "image-pages"].includes(mode)) {
     pdfDocument = null;
     pdfPageManifest = null;
     pdfOcrManifest = null;
@@ -4771,6 +4798,10 @@ function registerReaderFormatAdapters() {
         return fetchReaderResponse();
       },
       renderPdfPages
+    ],
+    "image-pages": [
+      () => fetchReaderResponse(),
+      renderImagePages
     ],
     pdf: [loadPdfDocument, renderPdf],
     image: [loadImageDocument, renderImageDocument],
