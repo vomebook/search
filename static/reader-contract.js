@@ -83,6 +83,7 @@
   const modes = Object.freeze({
     pdf: "pdf",
     "pdf-pages": "pdf-pages",
+    "image-pages": "image-pages",
     epub: "foliate",
     mobi: "foliate",
     azw: "foliate",
@@ -126,6 +127,14 @@
     "pdf-pages": {
       toc: true,
       search: true,
+      zoom: true,
+      bookmarks: true,
+      pagination: true,
+      media: false
+    },
+    "image-pages": {
+      toc: false,
+      search: false,
       zoom: true,
       bookmarks: true,
       pagination: true,
@@ -273,12 +282,13 @@
 
   // One parser for opening preload, manifest validation and page navigation.
   // Dataset assets may be unversioned; the Bucket API requires a version.
-  function pdfPageSource(raw, base, bucketOrigin, filename = "page-manifest.json") {
+  function pdfPageSource(raw, base, bucketOrigin, filename = "page-manifest.json", bucketName = "vomebook/pdf-pages-v2") {
     try {
       const url = new URL(raw, base);
       if (url.username || url.password || url.hash) return null;
-      const bucket = url.origin === bucketOrigin && url.pathname === "/api/reader-bucket-resource";
-      const bucketPrefix = "/buckets/vomebook/pdf-pages-v2/resolve/";
+      const bucket = [bucketOrigin, "https://voiceofml-search.hf.space"].includes(url.origin) &&
+        url.pathname === "/api/reader-bucket-resource";
+      const bucketPrefix = `/buckets/${bucketName}/resolve/`;
       const directBucket = url.origin === "https://huggingface.co" &&
         url.pathname.startsWith(bucketPrefix) && !url.search;
       let path;
@@ -286,10 +296,10 @@
         if (url.searchParams.getAll("path").length !== 1 ||
             [...url.searchParams.keys()].some((key) => key !== "path")) return null;
         path = url.searchParams.get("path") || "";
-        if (!isBucketPath(path, true)) return null;
+        if (!isBucketPath(path, true, bucketName)) return null;
       } else if (directBucket) {
         path = decodeURIComponent(url.pathname.slice(bucketPrefix.length));
-        if (!isBucketPath(path, true)) return null;
+        if (!isBucketPath(path, true, bucketName)) return null;
       } else {
         if (
           url.protocol !== "https:" ||
@@ -300,7 +310,7 @@
         const prefix = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\//.exec(url.pathname);
         if (!prefix) return null;
         path = decodeURIComponent(url.pathname.slice(prefix[0].length));
-        if (!isBucketPath(path)) return null;
+        if (!isBucketPath(path, false, bucketName)) return null;
       }
       if (!["page-manifest.json", "ocr-manifest.json"].includes(filename) ||
           !path.endsWith(`/${filename}`)) return null;
@@ -309,7 +319,7 @@
       return {
         root: rootPath,
         assetUrl(relativePath) {
-          if (!isBucketPath(relativePath, bucket) ||
+          if (!isBucketPath(relativePath, true, bucketName) ||
               !relativePath.startsWith(rootPath.split("/").slice(0, 3).join("/") + "/"))
             throw new Error("PDF_ASSET_INVALID");
           const target = new URL(url.href);
@@ -328,6 +338,10 @@
     } catch (_) {
       return null;
     }
+  }
+
+  function imagePageSource(raw, base, bucketOrigin) {
+    return pdfPageSource(raw, base, bucketOrigin, "page-manifest.json", "vomebook/reader-assets-v2");
   }
 
   function txtRelativePath(path) {
@@ -365,6 +379,8 @@
         ? nativeExtension
         : asset.m === "p" && path.endsWith("page-manifest.json")
           ? "pdf-pages"
+          : asset.m === "i" && path.endsWith("page-manifest.json")
+            ? "image-pages"
           : assetModes[asset.m];
     const cdnBucket = bucketName === "vomebook/pdf-pages-v2" && staticBucketPathPattern.test(path);
     const cdnUrl = cdnBucket
@@ -475,6 +491,7 @@
     isAssetSourcePath,
     isBucketPath,
     pdfPageSource,
+    imagePageSource,
     txtRelativePath,
     canonicalSourceUrl,
     shortSourceId,
