@@ -906,10 +906,12 @@ body {
   display: flow-root;
 }
 .reader-content[data-mode="pdf"] .reader-page,
-.reader-content[data-mode="pdf-pages"] .reader-page {
+.reader-content[data-mode="pdf-pages"] .reader-page,
+.reader-content[data-mode="image-pages"] .reader-page {
   width: calc(100% * var(--reader-zoom));
 }
-.reader-content[data-mode="pdf-pages"] .reader-page > img {
+.reader-content[data-mode="pdf-pages"] .reader-page > img,
+.reader-content[data-mode="image-pages"] .reader-page > img {
   display: block;
   width: 100%;
   max-width: 100%;
@@ -917,7 +919,8 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
-.reader-content[data-mode="pdf-pages"] .reader-page {
+.reader-content[data-mode="pdf-pages"] .reader-page,
+.reader-content[data-mode="image-pages"] .reader-page {
   content-visibility: auto;
   contain-intrinsic-size: auto 1px 1414px;
 }
