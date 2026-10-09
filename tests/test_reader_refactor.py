@@ -197,14 +197,15 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#page-number").input_value(), "12")
 
     def test_native_pdf_reuses_text_after_layer_is_cleared(self):
-        module = support.PDF_MODULE.replace(
+        module = support.PDF_MODULE.replace("numPages: 30", "numPages: 1").replace(
             "getTextContent() { return Promise.resolve",
             "getTextContent() { window.__pdfTextCalls = (window.__pdfTextCalls || 0) + 1; return Promise.resolve",
         )
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(content_type="text/javascript", body=module))
-        self.page.route("**/static/reader.js?*", lambda route: route.fulfill(
-            response=route.fetch(), body=route.fetch().text() + "\nwindow.__reloadPdfText = async () => { const shell = document.querySelector('.reader-page[data-page=\\\"1\\\"]'); shell.querySelector('.reader-pdf-text').replaceChildren(); shell.dataset.textReady = '0'; await renderPdfText(await pdfDocument.getPage(1), shell); };\n"
-        ))
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + "\nwindow.__reloadPdfText = async () => { const shell = document.querySelector('.reader-page[data-page=\\\"1\\\"]'); shell.querySelector('.reader-pdf-text').replaceChildren(); shell.dataset.textReady = '0'; await renderPdfText(await pdfDocument.getPage(1), shell); };\n")
+        self.page.route("**/static/reader.js?*", instrument)
         self.serve(b"pdf", "application/pdf")
         self.open(self.reader_url("pdf"))
         self.page.wait_for_function("() => document.querySelector('.reader-page[data-page=\\\"1\\\"]')?.dataset.textReady === '1'")
