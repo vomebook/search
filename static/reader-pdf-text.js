@@ -55,8 +55,9 @@ function positionedRun(layer, text, x, y, height, width, family, angle = 0, vert
   if (vertical) {
     run.style.writingMode = "vertical-rl";
     run.style.textOrientation = "upright";
-    // Upright vertical layout advances one em for spaces as well as Han glyphs.
+    // Estimate the scale until native PDF text is attached for measurement.
     const measured = Array.from(text).length;
+    run._readerVerticalAdvance = width / height;
     if (width > 0 && measured) run.style.transform = `scaleY(${width / (height * measured)})`;
   } else {
     const scaleX = measureRunScale(context, text, family, width / height);
@@ -96,6 +97,13 @@ export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
     if (item.hasEOL) fragment.appendChild(layer.ownerDocument.createTextNode("\n"));
   }
   layer.replaceChildren(fragment);
+  // Vertical spaces and fallback glyphs have font-dependent advances. Measure
+  // the attached run so selection covers the PDF's actual vertical extent.
+  for (const run of layer.querySelectorAll('.reader-pdf-text-run')) {
+    if (!(run._readerVerticalAdvance > 0) || !run.offsetHeight) continue;
+    const em = parseFloat(layer.ownerDocument.defaultView.getComputedStyle(run).fontSize);
+    run.style.transform = `scaleY(${run._readerVerticalAdvance * em / run.offsetHeight})`;
+  }
 }
 
 export function populateOcrTextLayer(layer, blocks, layout = {}) {

@@ -1071,16 +1071,17 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(len(requests), 2)
 
     def test_chapter_links_load_target_without_leaving_reader(self):
-        base = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'b' * 64 + '/epub-chapters/'
+        prefix = 'chapters/ebook/epub/' + 'b' * 64 + '/' + 'a' * 16 + '/'
         bodies = {i: f'<h1>Chapter {i}</h1><p id="target" style="height:12000px">正文</p>' for i in range(1, 13)}
         bodies[1] = '<a href="chapter-0012.xhtml#target">跨章节跳转</a>' + bodies[1]
         manifest = dict(version=1, kind='epub-chapters', chapters=[dict(index=i, path=f'chapters/chapter-{i:04d}.xhtml', title=str(i), bytes=len(bodies[i].encode())) for i in bodies])
         def serve(route):
-            url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['url'][0]
-            body = json.dumps(manifest) if url.endswith('chapter-manifest.json') else bodies[int(url.rsplit('-', 1)[1].split('.')[0])]
-            route.fulfill(content_type='application/json' if url.endswith('.json') else 'application/xhtml+xml', body=body)
-        self.page.route('**/api/reader-content**', serve)
-        self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            body = json.dumps(manifest) if path.endswith('chapter-manifest.json') else bodies[int(path.rsplit('-', 1)[1].split('.')[0])]
+            route.fulfill(content_type='application/json' if path.endswith('.json') else 'application/xhtml+xml', body=body)
+        self.page.route('https://voiceofml-search.hf.space/api/reader-bucket-resource**', serve)
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + urllib.parse.quote(prefix + 'chapter-manifest.json', safe='')
+        self.open(self.reader_url('epub-chapters', url=source))
         before = self.page.url
         self.page.get_by_text('跨章节跳转', exact=True).click()
         self.page.wait_for_function("() => !!document.querySelector('.reader-epub-chapter[data-chapter=\"12\"] #target')")
@@ -1089,8 +1090,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertLess(abs(self.page.locator('.reader-epub-chapter[data-chapter="12"] #target').evaluate("node => node.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top")), 5)
 
     def test_bucket_chapter_stream_loads_manifest_chapter_and_resource(self):
-        prefix = ("ebook-chapters/objects/aa/" + "c" * 64
-                  + "/bundle-v1/profile-epub-chapters-v7-bucket/epub-chapters/")
+        prefix = "chapters/ebook/epub/" + "c" * 64 + "/" + "b" * 16 + "/"
         chapter = '<html><body><h1>Bucket chapter</h1><img src="../resources/shared/cover.png"></body></html>'
         chapter_path = prefix + "chapters/chapter-0001.xhtml"
         manifest_path = prefix + "chapter-manifest.json"
@@ -1121,8 +1121,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertIn(resource_path, requested)
 
     def test_bucket_chapter_internal_links_keep_reader_navigation(self):
-        prefix = ("ebook-chapters/objects/aa/" + "d" * 64
-                  + "/bundle-v2/profile-epub-chapters-v8-bucket/epub-chapters/")
+        prefix = "chapters/ebook/epub/" + "d" * 64 + "/" + "c" * 16 + "/"
         bodies = {
             1: '<html><body><a href="chapter-0002.xhtml#target">跨章节目录</a><h1>目录</h1></body></html>',
             2: '<html><body><h1 id="target">目标章节</h1><p style="height:12000px">正文</p></body></html>',
@@ -1881,19 +1880,20 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(url + "&" + urllib.parse.urlencode({"bookmark": bookmark["id"], "bookmark_source": source}))
         self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter[data-chapter=\"3\"]')")
 
-    def test_github_bucket_source_uses_external_content_download_and_ocr(self):
+    def test_github_bucket_source_uses_external_bucket_proxy_download_and_ocr(self):
         source = "/api/reader-bucket-resource?" + urllib.parse.urlencode({
             "path": "objects/aa/" + "a" * 64 + "/0123456789abcdef/pages/page-000001.webp"
         })
         external = "https://voiceofml-search.hf.space"
         requests = []
         self.page.on("request", lambda request: requests.append(request.url))
-        self.serve(support.PNG_BYTES, "image/png")
+        self.page.route(external + "/api/reader-bucket-resource?**", lambda route: route.fulfill(
+            content_type="image/png", body=support.PNG_BYTES))
         self.open(self.reader_url("png", url=source, ocr=external + "/txt/test.txt"))
-        content_requests = [url for url in requests if "/api/reader-content?" in url]
+        content_requests = [url for url in requests if "/api/reader-bucket-resource?" in url]
         self.assertEqual(len(content_requests), 1)
-        self.assertTrue(content_requests[0].startswith(external + "/api/reader-content?"))
-        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(content_requests[0]).query)["url"], [external + source])
+        self.assertEqual(content_requests[0], external + source)
+        self.assertFalse(any("/api/reader-content?" in url for url in requests))
         download = self.page.locator("#download").get_attribute("href")
         self.assertTrue(download.startswith(external + "/api/download?"))
         self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(download).query)["link"], [external + source])
