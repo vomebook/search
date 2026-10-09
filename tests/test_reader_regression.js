@@ -10,6 +10,22 @@ const reader = fs.readFileSync(path.join(root, 'static/reader.js'), 'utf8')
 const contract = fs.readFileSync(path.join(root, 'static/reader-contract.js'), 'utf8')
 const sandbox = { self: {}, TextEncoder, URLSearchParams, URL }
 vm.runInNewContext(contract, sandbox)
+const pdfText = {}
+vm.runInNewContext(fs.readFileSync(path.join(root, 'static/reader-pdf-text.js'), 'utf8').replace(/^export /gm, ''), pdfText)
+for (const [raw, expected] of [
+  ['', ''], ['hello world', 'hello world'], ['a\n b', 'a\n b'],
+  ['\u624b \u673a', '\u624b\u673a'], ['\u624b\u3002\u673a', '\u624b\u3002\u673a'],
+  ['\u6bdb \u6cfd\n\u4e1c hello world', '\u6bdb\u6cfd\u4e1c hello world'],
+  ['\ud840\udc00 \ud840\udc01', '\ud840\udc00\ud840\udc01'],
+  ['\u624b\t\n \u673a a b \u624b \u673a', '\u624b\u673a a b \u624b\u673a'],
+]) {
+  for (let repeat = 0; repeat < 3; repeat++) {
+    assert.strictEqual(pdfText.normalizePdfSearchText(raw), expected)
+    const mapped = pdfText.pdfSearchText(raw)
+    assert.strictEqual(mapped.text, expected)
+    assert.strictEqual(mapped.offsets.map(offset => raw[offset]).join(''), expected)
+  }
+}
 
 const assets = sandbox.self.VoiceOfMLReader
 const vectors = require('./reader-contract-vectors.json')

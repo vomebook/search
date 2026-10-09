@@ -8,7 +8,7 @@ import "/search/static/reader-runtime.js";
 import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
 import { paintTextHit } from "/search/static/reader-book-text.js";
-import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText } from "/search/static/reader-pdf-text.js";
+import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
@@ -465,6 +465,7 @@ let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
 const pdfOcrPagePromises = new Map();
 const pdfTextContentCache = new Map();
+const pdfTextContentPromises = new Map();
 const PDF_TEXT_CONTENT_CACHE_BYTES = 4 * 1024 * 1024;
 let pdfTextContentCacheBytes = 0;
 const pdfOcrPageCache = new Map();
@@ -2801,6 +2802,21 @@ function cachedPdfTextContent(page) {
   pdfTextContentCache.set(page, record);
   return record.content;
 }
+function loadPdfTextContent(page, pdfPage) {
+  assertReaderActive();
+  const cached = cachedPdfTextContent(page);
+  if (cached) return Promise.resolve(cached);
+  const pending = pdfTextContentPromises.get(page);
+  if (pending) return pending;
+  // Rendering and search share extraction, but retain their own cancellation
+  // and result ownership. Only active work lives here, not another text cache.
+  const task = awaitReader(Promise.resolve().then(() => pdfPage.getTextContent()))
+    .finally(() => {
+      if (pdfTextContentPromises.get(page) === task) pdfTextContentPromises.delete(page);
+    });
+  pdfTextContentPromises.set(page, task);
+  return task;
+}
 function estimatePdfOcrPageBytes(payload) {
   return Math.max(128, (payload?.blocks || []).reduce(
     (total, block) => total + String(block?.t || "").length * 2 + 48, 0
@@ -3735,11 +3751,10 @@ async function renderPdfText(page, shell, signal = null) {
   const epoch = shell._textEpoch || 0;
   try {
     const pageNumber = Number(shell.dataset.page);
-    const cached = cachedPdfTextContent(pageNumber);
-    const text = cached || await awaitReader(page.getTextContent());
+    const text = await loadPdfTextContent(pageNumber, page);
     assertReaderActive();
     if (signal?.aborted) return;
-    if (!cached) cachePdfTextContent(pageNumber, text);
+    cachePdfTextContent(pageNumber, text);
     if (epoch !== (shell._textEpoch || 0) || !shell.isConnected) return;
     const pdfViewport = page.getViewport({ scale: 1 });
     shell._bookmarkTextItems = text.items
@@ -3775,7 +3790,7 @@ function highlightPdfText(shell, query = searchState.query) {
   }
   const mapping = pdfSearchText(raw);
   const hits = [];
-  for (const hit of mapping.text.matchAll(new RegExp(fullSearchEscape(pdfSearchText(query).text), "giu"))) {
+  for (const hit of mapping.text.matchAll(new RegExp(fullSearchEscape(normalizePdfSearchText(query)), "giu"))) {
     hits.push(hit);
     if (hits.length === 100) break;
   }
@@ -4680,6 +4695,7 @@ function disposeFormatResources(mode) {
     pdfOcrManifest = null;
     pdfOcrManifestPromise = null;
     pdfTextContentCache.clear();
+    pdfTextContentPromises.clear();
     pdfTextContentCacheBytes = 0;
     pdfOcrPageCache.clear();
     pdfOcrPageCacheBytes = 0;
@@ -6539,16 +6555,16 @@ async function loadPdfSearchText(pdf, page, generation) {
   const pdfPage = await awaitReader(pdf.getPage(page));
   if (!isReaderGenerationCurrent("search", generation))
     throw new DOMException("Search cancelled", "AbortError");
-  const textContent = await awaitReader(pdfPage.getTextContent());
+  const textContent = await loadPdfTextContent(page, pdfPage);
   if (!isReaderGenerationCurrent("search", generation))
     throw new DOMException("Search cancelled", "AbortError");
-  text = pdfSearchText(pdfTextContent(textContent.items)).text;
+  text = normalizePdfSearchText(pdfTextContent(textContent.items));
   cachePdfSearchText(page, text);
   return text;
 }
 async function fullSearchPdfMatches(query, generation) {
   const pdf = pdfDocument, groups = [], firstPage = [],
-    pattern = new RegExp(fullSearchEscape(pdfSearchText(query).text), "giu");
+    pattern = new RegExp(fullSearchEscape(normalizePdfSearchText(query)), "giu");
   if (!pdf) return [];
   let total = 0, hasText = false;
   for (let page = 1; page <= pdf.numPages; page++) {
