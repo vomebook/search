@@ -85,6 +85,9 @@ jobs:
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: python3 -B -m unittest -v -k chapter_search tests.test_reader_refactor
+      - name: Run Reader proxy cancellation and cached-range gate
+        working-directory: huggingface-search
+        run: python3 -B -m unittest -v tests.test_reader_backend tests.test_async_proxy
       - name: Run full Reader refactor suite
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_reader_refactor
