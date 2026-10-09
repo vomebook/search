@@ -136,7 +136,8 @@ class PdfLoadingTests(unittest.TestCase):
                 const restored = fetch === spy;
                 await fetch('/document.pdf', init);
                 return {caches:calls.map(call => call.options.cache),
-                        signals:calls.every(call => call.options.signal === signal),
+                         signals:calls[0].options.signal.aborted && calls[2].options.signal.aborted &&
+                           !signal.aborted && calls[1].options.signal === signal && calls[3].options.signal === signal,
                         headers:calls.every(call => call.options.headers === init.headers),
                         request:calls[2].input === request, outside:calls[1].options === init,
                         restored, originalCache:init.cache};

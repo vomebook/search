@@ -109,8 +109,11 @@
     function unmount() {
       if (!frame) return null;
       try {
+        // Run lifecycle cleanup before detaching the browsing context.
+        frame.contentWindow?.dispatchEvent(new Event("voice-reader-dispose"));
         frame.contentWindow?.postMessage({ type: "voice-reader-abort" }, location.origin);
       } catch (_) {}
+      frame.src = "about:blank";
       frame.remove();
       frame = null;
       for (const state of background) {
