@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import {
-  chapterMayContainBigrams, countMatches, queryBigramFilters, resultPage, scanText, validateIndex
+  chapterMayContainBigrams, countMatches, isSearchIndexProxyURL, queryBigramFilters, resultPage, scanText, validateIndex
 } from "../static/reader-chapter-search-worker.mjs";
+
+const origin = "https://voiceofml-search.hf.space";
+const indexURL = path => new URL(origin + "/api/reader-bucket-resource?path=" + encodeURIComponent(path));
+const prefix = "chapters/ebook/epub/" + "a".repeat(64) + "/" + "b".repeat(16) + "/";
+assert.ok(isSearchIndexProxyURL(new URL(origin + "/api/reader-content?url=source"), origin));
+for (const extension of ["epub", "mobi", "azw3", "fb2", "chm"])
+  assert.ok(isSearchIndexProxyURL(indexURL(prefix.replace("/epub/", "/" + extension + "/") + "epub-search-index.json.gz"), origin));
+for (const path of [prefix + "chapter-manifest.json", prefix + "chapters/chapter-0001.xhtml",
+                    prefix + "../epub-search-index.json.gz", prefix + "%2e%2e/epub-search-index.json.gz",
+                    prefix.replace("/epub/", "/pdf/") + "epub-search-index.json.gz"])
+  assert.equal(isSearchIndexProxyURL(indexURL(path), origin), false, path);
+for (const url of [indexURL(prefix + "epub-search-index.json.gz").href + "&path=other",
+                   indexURL(prefix + "epub-search-index.json.gz").href + "&other=1",
+                   indexURL(prefix + "epub-search-index.json.gz").href + "#fragment",
+                   indexURL(prefix + "epub-search-index.json.gz").href.replace("https://", "https://user@"),
+                   indexURL(prefix + "epub-search-index.json.gz").href.replace(origin, "https://other.hf.space")])
+  assert.equal(isSearchIndexProxyURL(new URL(url), origin), false, url);
 
 const chapters = [
   { index: 1, title: "开头", path: "chapters/1.xhtml", text: "手机 手。机 a+b [term] " + "needle ".repeat(125) },
