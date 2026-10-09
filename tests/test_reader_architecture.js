@@ -179,20 +179,24 @@ const expected = {
   text: ['loadTextDocument', 'renderTextDocument'], markdown: ['loadMarkdownDocument', 'renderMarkdownDocument'],
   html: ['loadHtmlDocument', 'renderHtml'], 'epub-chapters': ['loadChapterManifestDocument', 'renderChapterManifest'],
   docx: ['loadDocxDocument', 'renderDocx'], foliate: ['loadMediaDocument', 'renderFoliate'],
+  swf: ['loadSwfDocument', 'renderSwf'],
 }
 const registered = new Map(), calls = []
 const registryContext = { formatAdapters: { register: (mode, adapter) => registered.set(mode, adapter) } }
-for (const name of [...new Set(Object.values(expected).flat()), 'preloadPdfFirstPage', 'fetchReaderResponse', 'renderPdfPages', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
+for (const name of [...new Set(Object.values(expected).flat()), 'preloadPdfFirstPage', 'fetchReaderResponse', 'renderPdfPages', 'renderImagePages', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
 vm.runInNewContext(registry[0] + '; registerReaderFormatAdapters();', registryContext)
-assert.deepStrictEqual([...registered.keys()].sort(), [...Object.keys(expected), 'pdf-pages', 'audio', 'video'].sort())
+assert.deepStrictEqual([...registered.keys()].sort(), [...Object.keys(expected), 'pdf-pages', 'image-pages', 'audio', 'video'].sort())
 for (const [mode, [open, render]] of Object.entries(expected)) {
   assert.strictEqual(registered.get(mode).open, registryContext[open], mode + ' loader')
   assert.strictEqual(registered.get(mode).render, registryContext[render], mode + ' renderer')
 }
 registered.get('pdf-pages').open()
 assert.deepStrictEqual(calls.splice(0), [['fetchReaderResponse']])
-assert.match(reader, /const initialPage = initialReaderPage\(totalPages\);\s*await preloadPdfFirstPage\(totalPages\)/)
+assert.match(reader, /const initialPage = initialReaderPage\(totalPages\);[\s\S]*?await preloadPdfFirstPage\(totalPages\)/)
 assert.strictEqual(registered.get('pdf-pages').render, registryContext.renderPdfPages)
+registered.get('image-pages').open()
+assert.deepStrictEqual(calls.splice(0), [['fetchReaderResponse']])
+assert.strictEqual(registered.get('image-pages').render, registryContext.renderImagePages)
 for (const mode of ['audio', 'video']) {
   assert.strictEqual(registered.get(mode).open, registryContext.loadMediaDocument)
   registered.get(mode).render()

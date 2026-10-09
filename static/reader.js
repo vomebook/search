@@ -106,6 +106,12 @@ if (!Math.sumPrecise) {
 // GitHub Pages serves assets under /search/ and delegates document requests to HF.
 // Folder returns use hash routes; explicit folder URLs take precedence over resolved metadata.
 function readerContentUrl(url) {
+  try {
+    const parsed = new URL(url, "https://voiceofml-search.hf.space");
+    if (parsed.origin === "https://voiceofml-search.hf.space" &&
+        parsed.pathname === "/api/reader-bucket-resource")
+      return parsed.href;
+  } catch (_) {}
   return `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url)}`;
 }
 function readerDownloadApiUrl(path) {

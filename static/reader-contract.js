@@ -319,7 +319,7 @@
       return {
         root: rootPath,
         assetUrl(relativePath) {
-          if (!isBucketPath(relativePath, true, bucketName) ||
+          if (!isBucketPath(relativePath, bucket || directBucket, bucketName) ||
               !relativePath.startsWith(rootPath.split("/").slice(0, 3).join("/") + "/"))
             throw new Error("PDF_ASSET_INVALID");
           const target = new URL(url.href);
@@ -367,7 +367,7 @@
       !asset ||
       asset.s !== 2 ||
       !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
-       !(bucketName === "vomebook/reader-assets-v2" ? bucket : assetPrimaryPattern.test(path)) ||
+       !(asset.b ? bucket : bucket || assetPrimaryPattern.test(path)) ||
         (asset?.b && bucketName !== "vomebook/pdf-pages-v2" && bucketName !== "vomebook/reader-assets-v2") ||
       (asset?.cb && !chapterBucket)
     )
@@ -382,15 +382,11 @@
           : asset.m === "i" && path.endsWith("page-manifest.json")
             ? "image-pages"
           : assetModes[asset.m];
-    const cdnBucket = bucketName === "vomebook/pdf-pages-v2" && staticBucketPathPattern.test(path);
-    const cdnUrl = cdnBucket
-      ? `https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/${path.split("/").map(encodeURIComponent).join("/")}`
-      : "";
     return {
       ReaderLink: chapterBucket
         ? `${bucketBase}?path=${encodeURIComponent(asset.c)}`
         : bucket
-          ? cdnUrl || `${bucketBase}?path=${encodeURIComponent(path)}`
+          ? `${bucketBase}?path=${encodeURIComponent(path)}`
         : assetBase + path,
       ReaderExtension: asset.c ? "epub-chapters" : extension,
       ReaderChapterManifest: asset.c
