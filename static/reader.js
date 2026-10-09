@@ -2233,6 +2233,10 @@ readerThemeToggle.addEventListener("click", () => {
 window.addEventListener("storage", (event) => {
   if (event.key === "theme" && event.newValue) applyReaderTheme(event.newValue, false);
 });
+window.addEventListener("voice-reader-dispose", () => {
+  saveProgress();
+  disposeReader();
+});
 window.addEventListener("message", (event) => {
   if (
     event.origin === location.origin &&
@@ -2272,6 +2276,48 @@ function notePdfScrollIntent() {
 for (const type of ["wheel", "touchstart", "pointerdown"])
   viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
 let pdfSelectionPointer = null;
+function installReaderTapSelectionClear(region, eventRoot = region.ownerDocument) {
+  let tap = null;
+  const down = (event) => {
+    tap = null;
+    if (event.pointerType !== "touch" || !event.isPrimary) return;
+    const target = event.composedPath()[0];
+    if (target.closest?.("a,button,input,textarea,select,[contenteditable]")) return;
+    const root = target.getRootNode();
+    const selection = root.getSelection?.() || eventRoot.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+    tap = { id: event.pointerId, x: event.clientX, y: event.clientY, time: performance.now(),
+      selection, anchor: selection.anchorNode, anchorOffset: selection.anchorOffset,
+      focus: selection.focusNode, focusOffset: selection.focusOffset };
+  };
+  const move = (event) => {
+    if (tap && event.pointerId === tap.id && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 8)
+      tap = null;
+  };
+  const up = (event) => {
+    const start = tap;
+    tap = null;
+    if (!start || event.pointerId !== start.id || performance.now() - start.time > 300 ||
+        Math.hypot(event.clientX - start.x, event.clientY - start.y) > 8) return;
+    const selection = start.selection;
+    if (selection.anchorNode === start.anchor && selection.anchorOffset === start.anchorOffset &&
+        selection.focusNode === start.focus && selection.focusOffset === start.focusOffset)
+      selection.removeAllRanges();
+  };
+  const cancel = () => { tap = null; };
+  region.addEventListener("pointerdown", down, { passive: true });
+  eventRoot.addEventListener("pointermove", move, { passive: true });
+  eventRoot.addEventListener("pointerup", up, { passive: true });
+  eventRoot.addEventListener("pointercancel", cancel, { passive: true });
+  trackReaderResource(() => {
+    region.removeEventListener("pointerdown", down);
+    eventRoot.removeEventListener("pointermove", move);
+    eventRoot.removeEventListener("pointerup", up);
+    eventRoot.removeEventListener("pointercancel", cancel);
+    tap = null;
+  });
+}
+installReaderTapSelectionClear(viewport);
 viewport.addEventListener("pointerdown", (event) => {
   if (event.pointerType !== "mouse") {
     pdfSelectionPointer = null;
@@ -2667,7 +2713,7 @@ function takePdfManifestPrefetch(target) {
   return record.image;
 }
 function queuePdfManifestPrefetch(delay = 250) {
-  if (!pdfManifestPrefetchOrigin || !canPrefetchPdfImages()) return;
+  if (readerAbortController.signal.aborted || !pdfManifestPrefetchOrigin || !canPrefetchPdfImages()) return;
   clearTimeout(pdfManifestPrefetchTimer);
   pdfManifestPrefetchTimer = setTimeout(() => {
     pdfManifestPrefetchTimer = 0;
@@ -4113,6 +4159,7 @@ async function renderHtml(prepared) {
           passive: true
         });
         frame.contentDocument.addEventListener("keydown", handleReaderKeydown);
+        installReaderTapSelectionClear(frame.contentDocument.body, frame.contentDocument);
         for (const type of ["wheel", "touchstart", "pointerdown"])
           frame.contentDocument.addEventListener(type, beginReaderNavigation, { passive: true });
         setToc(headingTocEntries(frame.contentDocument));
@@ -5036,9 +5083,31 @@ async function start() {
     setReaderStage("prepare");
     const restorationPromise = loadReaderRestoration();
     readerRestorationPromise = restorationPromise;
-    const prepared = await awaitReader(formatAdapters.active.open());
-    assertReaderActive();
-    await formatAdapters.active.render(prepared);
+    const prepareResources = new Set(readerResources);
+    try {
+      const prepared = await awaitReader(formatAdapters.active.open());
+      assertReaderActive();
+      await formatAdapters.active.render(prepared);
+    } catch (error) {
+      assertReaderActive();
+      const originalExtension = String(resolvedReaderData?.original_extension || "").toLowerCase();
+      if (capability.mode !== "image-pages" || !validSource(downloadUrl) ||
+          !["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(originalExtension)) throw error;
+      for (const cleanup of [...readerResources]) {
+        if (prepareResources.has(cleanup)) continue;
+        cleanup();
+        readerResources.delete(cleanup);
+      }
+      formatAdapters.dispose();
+      content.replaceChildren();
+      extension = originalExtension;
+      capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
+      readerRuntime.update("source", { extension });
+      updateDocumentState({ page: 1, pageCount: 0 });
+      formatAdapters.activate(capability.mode);
+      syncCapabilityControls();
+      await renderImageDocument(await loadImageDocument(downloadUrl));
+    }
     assertReaderActive();
     markReaderContentReady();
     const restored = await awaitReader(restorationPromise);
@@ -5253,7 +5322,7 @@ function loadDocxDocument() {
 function loadMediaDocument() {
   return Promise.resolve(null);
 }
-function loadImageDocument() {
+function loadImageDocument(target = sourceUrl) {
   assertReaderActive();
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -5282,10 +5351,10 @@ function loadImageDocument() {
       if (readerAbortController.signal.aborted) return finish(readerAbortError());
       if (!fallback) {
         fallback = true;
-        image.src = sourceUrl;
+        image.src = target;
       } else finish(new Error("image load failed"));
     };
-    image.src = contentUrl;
+    image.src = readerContentUrl(target);
   });
 }
 function loadChapterManifestDocument() {
@@ -6058,6 +6127,14 @@ async function navigateChapterSearchResult(result, generation) {
     start = found + result.snippet.matchStart;
   }
   const parts = mapping.parts(start, start + result.length, article);
+  const headText = module.chapterTextMap([article._chapterSearchHead]).text;
+  if (start < headText.length) {
+    const heading = document.createElement("p");
+    heading.className = "reader-chapter-search-heading";
+    heading.textContent = headText;
+    article.prepend(heading);
+    parts.unshift({ node: heading.firstChild, start, end: Math.min(start + result.length, headText.length) });
+  }
   const [mark] = highlightTextParts(parts);
   (mark || article).scrollIntoView({ block: "center" });
   const tocIndex = navigationState.tocEntries.findIndex(
@@ -6273,6 +6350,7 @@ function clearFullSearchMarks() {
     }
     fullSearchActiveMarks = [];
     for (const parent of changedParents) parent.normalize();
+    content.querySelectorAll(".reader-chapter-search-heading").forEach(node => node.remove());
   } finally {
     fullSearchDomLocator?.resume();
   }
@@ -6596,6 +6674,7 @@ async function ensurePdfBookSearchClient(manifest) {
       throw error;
   });
   const module = await pdfBookSearchModulePromise;
+  assertReaderActive();
   if (pdfBookSearchClient?.failed) {
     pdfBookSearchClient.dispose();
     pdfBookSearchClient = null;
@@ -6611,7 +6690,7 @@ async function ensurePdfBookSearchClient(manifest) {
   return pdfBookSearchClient;
 }
 async function prefetchPdfBookSearch() {
-  if (pdfBookSearchPrefetchPromise || !ocrManifestUrl ||
+  if (readerAbortController.signal.aborted || pdfBookSearchPrefetchPromise || !ocrManifestUrl ||
       !["pdf", "pdf-pages"].includes(capability.mode) || navigator.connection?.saveData) return;
   const connection = navigator.connection;
   if (["slow-2g", "2g"].includes(connection?.effectiveType)) return;

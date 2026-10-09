@@ -93,6 +93,50 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
         self.assertIsNotNone(result['expected'])
         self.assertEqual(result['captured'], result['expected'])
 
+    def test_close_disposes_child_synchronously_before_detachment(self):
+        self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        result = self.page.evaluate('''() => {
+          const child=readerOverlay.contentWindow, frame=readerOverlay;
+          let disposed=false, attached=false;
+          child.addEventListener('voice-reader-dispose', () => {
+            disposed=true; attached=frame.isConnected;
+          });
+          closeReaderOverlay();
+          return {disposed, attached, removed:!frame.isConnected, blank:frame.src==='about:blank'};
+        }''')
+        self.assertTrue(all(result.values()), result)
+
+    def test_random_reader_body_timeout_after_close_remains_retryable(self):
+        result = self.page.evaluate('''async () => {
+          const originalFetch=fetch, originalTimer=setTimeout, previousUrl=location.href;
+          const localFallback=typeof ensureLocalDataLoaded==='function'?ensureLocalDataLoaded:null;
+          let attempts=0, aborted=false;
+          STATE.dataLoaded=false;
+          if (localFallback) ensureLocalDataLoaded=async()=>false;
+          window.setTimeout=(fn,ms,...args)=>originalTimer(fn,ms===10000?50:ms,...args);
+          window.fetch=(input,options)=>{
+            if (!String(input).includes('/api/random-reader')) return originalFetch(input,options);
+            if (++attempts===1) return Promise.resolve(new Response(new ReadableStream({start(controller){
+              options.signal.addEventListener('abort',()=>{aborted=true;controller.error(new DOMException('timed out','AbortError'));},{once:true});
+            }})));
+            return Promise.resolve(new Response(JSON.stringify({Repo:'VoiceOfML/Test',File:'next',Extension:'txt',
+              Link:'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/next.txt',Folder:[]})));
+          };
+          try {
+            const path=new URL(document.querySelector('script[src*="reader-navigation.js"]').src).pathname.replace('reader-navigation.js','reader.html');
+            navigateToReader(path+'?ext=txt');closeReaderOverlay();history.replaceState(null,'',previousUrl);
+            await randomTxt();await new Promise(resolve=>originalTimer(resolve,100));
+            const recovered=aborted&&!readerOverlay;
+            await randomTxt();await new Promise(resolve=>originalTimer(resolve,100));
+            return {recovered,attempts,opened:!!readerOverlay};
+          } finally {
+            window.fetch=originalFetch;window.setTimeout=originalTimer;
+            if(localFallback)ensureLocalDataLoaded=localFallback;
+          }
+        }''')
+        self.assertEqual(result, {'recovered':True,'attempts':2,'opened':True})
+
     def test_reader_folder_url_uses_current_filters(self):
         result = self.page.evaluate('''() => {
           STATE.filterMinSize=2048; STATE.filterMaxSize=8192;

@@ -5271,10 +5271,7 @@ async function randomTxt() {
   var url = STATE.repoFull
     ? API_BASE + "/api/random-reader?repo=" + encodeURIComponent(STATE.repo)
     : API_BASE + "/api/random-reader";
-  fetch(url).then(function(resp) {
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    return resp.json();
-  }).then(function(rec) {
+  fetchJsonWithTimeout(url, 10000, true).then(function(rec) {
     if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
     if (!openReaderRecord(rec, returnUrl)) throw new Error("NO_READER");
   }).catch(function() {

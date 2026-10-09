@@ -22,9 +22,11 @@
           clearTimeout(timer);
           controller.abort();
           removeEventListener("pagehide", onPageHide);
+          removeEventListener("voice-reader-dispose", dispose);
         };
         const onPageHide = (event) => { if (!event.persisted) dispose(); };
         addEventListener("pagehide", onPageHide);
+        addEventListener("voice-reader-dispose", dispose);
         const promise = fetch(`https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`, {
           signal: controller.signal
         }).then(async (response) => {
@@ -34,6 +36,7 @@
         }).finally(() => {
           clearTimeout(timer);
           removeEventListener("pagehide", onPageHide);
+          removeEventListener("voice-reader-dispose", dispose);
         });
         promise.catch(() => {});
         window.__VOICE_READER_RESOLVE__ = { id, promise, dispose };

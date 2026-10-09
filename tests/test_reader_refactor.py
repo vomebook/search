@@ -151,6 +151,32 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator('.reader-docx-page').count(), 1)
         self.assertIn('DOCX readable', self.page.locator('.docx-body').text_content())
 
+    def test_missing_image_manifest_or_page_recovers_original_without_changing_book_identity(self):
+        prefix = 'pages/image/bmp/' + 'a' * 64 + '/'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':prefix+'page-manifest.json'})
+        original = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/original.bmp'
+        resolved = dict(url=source, download=original, extension='image-pages', original_extension='bmp')
+        self.page.route('**/api/reader-resolve?**', lambda route: route.fulfill(json=resolved))
+        originals = []
+        self.page.route('**/api/reader-content?**', lambda route: (
+            originals.append(route.request.url), route.fulfill(content_type='image/webp', body=support.IMAGE_FIXTURES['webp'][1])))
+        for fault in ('manifest', 'page'):
+            with self.subTest(fault=fault):
+                manifest = dict(version=1, kind='image-page-stream', page_count=1,
+                                pages=[dict(path='pages/page-000001.webp', bytes=10, sha256='a'*64)])
+                self.page.route('**/api/reader-bucket-resource?**', lambda route: route.fulfill(json=manifest)
+                                if fault == 'page' and 'page-manifest.json' in route.request.url
+                                else route.fulfill(status=404, body='missing'))
+                self.open(self.origin+'/static/reader.html?id=0ym7e7wbcxau0&ext=image-pages')
+                self.assertTrue(self.page.locator('img.reader-image').evaluate('image => image.naturalWidth > 0'))
+                self.assertTrue(self.page.locator('#full-search-toggle').evaluate('node => node.hidden'))
+                self.assertEqual(self.page.locator('.reader-page').count(), 0)
+                self.assertEqual(self.page.url.split('?')[1], 'id=0ym7e7wbcxau0&ext=image-pages')
+                self.page.evaluate('window.dispatchEvent(new Event("voice-reader-dispose"))')
+                self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
+                self.page.unroute('**/api/reader-bucket-resource?**')
+        self.assertEqual(len(originals), 2)
+
     def test_classic_engine_failure_timeout_and_disposal_release_scripts(self):
         self.page.add_init_script('''const timer = window.setTimeout.bind(window);
           window.setTimeout = (fn, ms, ...args) => timer(fn, ms === 20000 ? 400 : ms, ...args);''')
@@ -1331,10 +1357,14 @@ class ReaderRefactorTest(unittest.TestCase):
             prefix = f'chapters/ebook/{extension}/' + 'a' * 64 + '/' + 'b' * 16 + '/'
             prefixes[extension] = prefix
             bodies = {1:'<h1>First</h1><p>needle</p>', 2:'<h1>Tail</h1>' + '<p>needle</p>' * 65}
+            if extension == 'fb2':
+                bodies[1] = '<html><head><title>Cover</title></head><body>' + bodies[1] + '</body></html>'
             chapters = [{'index':index, 'path':f'chapters/chapter-{index:04d}.xhtml',
                          'title':f'Chapter {index}', 'bytes':len(body.encode())} for index,body in bodies.items()]
             texts = [{**chapter, 'text':'First needle' if chapter['index'] == 1 else 'Tail ' + ' '.join(['needle'] * 65)}
                      for chapter in chapters]
+            if extension == 'fb2':
+                texts[0]['text'] = 'Cover ' + texts[0]['text']
             packed = gzip.compress(json.dumps({'version':1, 'kind':'epub-search-index', 'chapters':texts}).encode(), mtime=0)
             manifest = {'version':1, 'kind':'epub-chapters', 'chapters':chapters,
                         'search_index':{'path':'epub-search-index.json.gz', 'bytes':len(packed),
@@ -1373,6 +1403,20 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.page.locator('.full-search-result').last.click()
                 self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter[data-chapter=\"2\"] mark.full-search-highlight')?.textContent === 'needle'")
                 self.assertEqual(requests.count(prefix+'epub-search-index.json.gz'), 2 if extension == 'epub' else 1)
+                if extension == 'fb2':
+                    self.page.locator('#history').click()
+                    self.page.locator('#full-search-input').fill('Cover')
+                    self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+                    self.page.locator('.full-search-result').first.click()
+                    self.page.locator('.reader-chapter-search-heading mark').wait_for()
+                    self.assertEqual(self.page.locator('.reader-chapter-search-heading mark').all_text_contents(), ['Cover'])
+                    self.page.locator('#history').click()
+                    self.page.locator('#full-search-input').fill('needle')
+                    self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '66 个结果'")
+                    self.page.locator('.full-search-result').first.click()
+                    self.page.locator('.reader-epub-chapter[data-chapter="1"] mark').wait_for()
+                    self.assertEqual(self.page.locator('.reader-epub-chapter[data-chapter="1"] mark').all_text_contents(), ['needle'])
+                    self.assertEqual(self.page.locator('.reader-chapter-search-heading').count(), 0)
 
     def test_bucket_chapter_stream_loads_manifest_chapter_and_resource(self):
         prefix = "chapters/ebook/epub/" + "c" * 64 + "/" + "b" * 16 + "/"
