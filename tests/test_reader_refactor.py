@@ -135,6 +135,101 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
                 self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
 
+    def test_docx_engines_download_in_parallel_before_rendering(self):
+        held = []
+        self.page.route('**/static/vendor/jszip.min.*.js', lambda route: held.append(route))
+        self.serve(support.minimal_docx(), 'application/octet-stream')
+        source = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64 + '/document.docx'
+        with self.page.expect_request('**/static/vendor/docx-preview.min.*.js'):
+            self.page.goto(self.reader_url('docx', url=source), wait_until='domcontentloaded')
+        self.assertEqual(len(held), 1)
+        self.assertEqual(self.page.locator('.docx-body').count(), 0)
+        self.assertFalse(self.page.evaluate('!!window.docx'))
+        self.page.unroute('**/static/vendor/jszip.min.*.js')
+        held[0].continue_()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(self.page.locator('.reader-docx-page').count(), 1)
+        self.assertIn('DOCX readable', self.page.locator('.docx-body').text_content())
+
+    def test_classic_engine_failure_timeout_and_disposal_release_scripts(self):
+        self.page.add_init_script('''const timer = window.setTimeout.bind(window);
+          window.setTimeout = (fn, ms, ...args) => timer(fn, ms === 20000 ? 400 : ms, ...args);''')
+        for extension, fault in (('md', 'http'), ('html', 'timeout'), ('html', 'dispose')):
+            with self.subTest(extension=extension, fault=fault):
+                held = []
+                pattern = '**/static/vendor/' + ('marked' if extension == 'md' else 'purify') + '.min.*.js'
+                self.page.route(pattern, lambda route: route.fulfill(status=503, body='unavailable')
+                                if fault == 'http' else held.append(route))
+                self.serve('Readable document')
+                self.page.goto(self.reader_url(extension), wait_until='domcontentloaded')
+                if fault == 'dispose':
+                    self.page.wait_for_function("() => !!document.querySelector('script[src*=\"purify.min.\"]')")
+                    self.page.evaluate("window.__pendingScript = document.querySelector('script[src*=\"purify.min.\"]'); window.dispatchEvent(new Event('pagehide'))")
+                    self.assertEqual(self.page.evaluate('[__pendingScript.isConnected, __pendingScript.onload, __pendingScript.onerror]'), [False, None, None])
+                    self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
+                else:
+                    self.page.locator('#reader-engine-retry').wait_for()
+                    self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_ENGINE_NETWORK')
+                    self.assertEqual(self.page.locator('script[src*="' + ('marked' if extension == 'md' else 'purify') + '.min."]').count(), 0)
+                self.page.unroute(pattern)
+                for route in held:
+                    route.abort()
+
+    def test_image_wait_releases_listeners_on_success_deadline_and_disposal(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + """
+              window.__imageWaitProbe = async () => {
+                const timers = new Set(), set = window.setTimeout.bind(window), clear = window.clearTimeout.bind(window);
+                window.setTimeout = (fn, ms, ...args) => {
+                  let handle; handle = set(() => { timers.delete(handle); fn(...args); }, ms);
+                  if (ms === 1000 || ms === 10) timers.add(handle);
+                  return handle;
+                };
+                window.clearTimeout = handle => { timers.delete(handle); clear(handle); };
+                const make = () => {
+                  const image = new EventTarget(), listeners = new Set();
+                  image.complete = false;
+                  let decodes = 0;
+                  image.decode = async () => { decodes++; };
+                  const add = image.addEventListener.bind(image), remove = image.removeEventListener.bind(image);
+                  image.addEventListener = (type, fn, ...args) => { listeners.add(type); add(type, fn, ...args); };
+                  image.removeEventListener = (type, fn, ...args) => { listeners.delete(type); remove(type, fn, ...args); };
+                  return {image, root: {querySelectorAll: () => [image]},
+                    metrics: () => [listeners.size, decodes, image.loading]};
+                };
+                const good = make(), first = settleReaderImages(good.root, 1000);
+                good.image.complete = true; good.image.dispatchEvent(new Event('load')); await first;
+                const expired = make(); await settleReaderImages(expired.root, 10);
+                expired.image.dispatchEvent(new Event('load'));
+                const cancelled = make(), pending = settleReaderImages(cancelled.root, 1000).catch(e => e.name);
+                readerRuntime.dispose(); const outcome = await pending;
+                cancelled.image.dispatchEvent(new Event('load')); await Promise.resolve();
+                return [good.metrics(), expired.metrics(), cancelled.metrics(), outcome, timers.size];
+              };
+            """)
+        self.page.route('**/static/reader.js?*', instrument)
+        self.serve('Image waiting')
+        self.open(self.reader_url())
+        self.assertEqual(self.page.evaluate('window.__imageWaitProbe()'),
+                         [[0, 1, 'eager'], [0, 0, 'eager'], [0, 0, 'eager'], 'AbortError', 0])
+
+    def test_epub_lazy_image_loads_while_section_is_prepared_off_dom(self):
+        with zipfile.ZipFile(io.BytesIO(support.minimal_epub())) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        files['OEBPS/chapter.xhtml'] = files['OEBPS/chapter.xhtml'].replace(
+            b'</body>', b'<img src="picture.webp" loading="lazy" alt="Chapter image" width="64" height="32"/></body>')
+        files['OEBPS/picture.webp'] = support.IMAGE_FIXTURES['webp'][1]
+        images = []
+        self.page.route('**/api/reader-resource?**', lambda route: (
+            images.append(route.request.url), route.fulfill(content_type='image/webp', body=files['OEBPS/picture.webp'])))
+        self.serve(support.zip_bytes(files), 'application/epub+zip')
+        self.open(self.reader_url('epub'))
+        image = self.page.locator('article[data-section] img').first
+        self.assertEqual(image.evaluate('node => node.loading'), 'eager')
+        self.assertGreater(image.evaluate('node => node.naturalWidth'), 0)
+        self.assertEqual(len(images), 1)
+
     def test_native_spreadsheet_html_keeps_cells_selectable_and_zoomable(self):
         chart = support.IMAGE_FIXTURES["webp"][1]
         chart_data = "data:image/webp;base64," + base64.b64encode(chart).decode()
