@@ -6143,18 +6143,21 @@ function clearFullSearchMarks() {
   fullSearchActiveMarks = [];
   for (const parent of changedParents) parent.normalize();
 }
-async function fullSearchTextNodes(root, generation) {
+async function fullSearchTextNodes(root, generation, endOffset = Infinity) {
   const nodes = [],
     walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let visited = 0;
+  let visited = 0, length = 0;
   while (walker.nextNode()) {
     if (!isReaderGenerationCurrent("search", generation)) return null;
     const node = walker.currentNode;
     if (
       node.data &&
       !node.parentElement.closest("script,style,mark.full-search-highlight,.reader-pdf-text")
-    )
+    ) {
       nodes.push(node);
+      length += node.data.length;
+      if (length >= endOffset) break;
+    }
     if (++visited % 1000 === 0) await waitForReader();
   }
   return nodes;
@@ -6260,12 +6263,12 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
       async activate(navigationGeneration = readerRuntime.currentGeneration("navigation")) {
         if (!isReaderGenerationCurrent("navigation", navigationGeneration)) return false;
         const searchGeneration = readerRuntime.currentGeneration("search");
+        const end = match.index + match.value.length;
         clearFullSearchMarks();
-        const currentNodes = await fullSearchTextNodes(root, searchGeneration);
+        const currentNodes = await fullSearchTextNodes(root, searchGeneration, end);
         if (!currentNodes || !isReaderGenerationCurrent("search", searchGeneration) ||
             !isReaderGenerationCurrent("navigation", navigationGeneration)) return false;
         let position = 0, parts = [];
-        const end = match.index + match.value.length;
         for (const node of currentNodes) {
           const nodeEnd = position + node.data.length;
           if (nodeEnd > match.index && position < end)

@@ -6,10 +6,10 @@ const normalizeWhitespace = str => str.replace(/\s+/g, ' ')
 const makeExcerpt = (strs, { startIndex, startOffset, endIndex, endOffset }) => {
     const start = strs[startIndex]
     const end = strs[endIndex]
-    const match = start === end
+    const match = startIndex === endIndex
         ? start.slice(startOffset, endOffset)
         : start.slice(startOffset)
-            + strs.slice(start + 1, end).join('')
+            + strs.slice(startIndex + 1, endIndex).join('')
             + end.slice(0, endOffset)
     const trimmedStart = normalizeWhitespace(start.slice(0, startOffset)).trimStart()
     const trimmedEnd = normalizeWhitespace(end.slice(endOffset)).trimEnd()
@@ -41,7 +41,7 @@ const simpleSearch = function* (strs, query, options = {}) {
             const endIndex = strIndex
             const endOffset = end - (sum - strs[strIndex].length)
             const range = { startIndex, startOffset, endIndex, endOffset }
-            yield { range, excerpt: makeExcerpt(strs, range) }
+            yield { range, get excerpt() { return makeExcerpt(strs, range) } }
         }
     } while (index > -1)
 }
@@ -94,7 +94,7 @@ const segmenterSearch = function* (strs, query, options = {}) {
             const startIndex = substrArr[0].strIndex
             const startOffset = substrArr[0].index
             const range = { startIndex, startOffset, endIndex, endOffset }
-            yield { range, excerpt: makeExcerpt(strs, range) }
+            yield { range, get excerpt() { return makeExcerpt(strs, range) } }
         }
         substrArr.shift()
     }
@@ -121,8 +121,15 @@ export const searchMatcher = (textWalker, opts) => {
                 : 'base',
             })) {
                 const { startIndex, startOffset, endIndex, endOffset } = result.range
-                result.range = makeRange(startIndex, startOffset, endIndex, endOffset)
-                yield result
+                // Count every match without building excerpts or DOM ranges
+                // for results outside the requested page.
+                let range
+                yield {
+                    get range() {
+                        return range ??= makeRange(startIndex, startOffset, endIndex, endOffset)
+                    },
+                    get excerpt() { return result.excerpt },
+                }
             }
         }, acceptNode)
         for (const result of iter) yield result
