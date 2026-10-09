@@ -92,6 +92,7 @@ class PdfLoadingTests(unittest.TestCase):
                 held[0].fulfill(content_type='application/pdf', body=minimal_pdf())
                 self.ready()
                 self.assertEqual(self.page.locator('.reader-loading-indicator').count(), 0)
+                self.assertGreaterEqual(self.page.evaluate("document.querySelector('.reader-page').getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top"), -1)
                 self.page.unroute('**/api/reader-bucket-resource?**')
 
     def test_pdf_engine_loads_while_id_resolution_is_pending(self):
