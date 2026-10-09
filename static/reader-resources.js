@@ -71,6 +71,7 @@
     "reader-pdf-book-search-worker.mjs",
     "reader-pdf-book-search.mjs",
     "pdf-worker-wrapper.mjs",
+    "reader-pdf-network.mjs",
     "reader.css",
     "reader.js"
   ]);
