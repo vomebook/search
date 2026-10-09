@@ -2131,6 +2131,66 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator(".full-search-result").first.click()
         self.assertEqual(self.page.locator("#content mark.full-search-highlight").all_text_contents(), ["x"])
 
+    def expose_html_contrast(self):
+        def instrument(route):
+            response = route.fetch()
+            script = response.text()
+            self.assertIn('repairHtmlContrast(frame);', script)
+            route.fulfill(response=response, body=script.replace('repairHtmlContrast(frame);', '') + '''
+              window.__repairContrast = () => repairHtmlContrast(htmlFrame);
+            ''')
+        self.page.route('**/static/reader.js?*', instrument)
+
+    def test_html_contrast_reuses_transparent_ancestors_and_refreshes_between_passes(self):
+        self.expose_html_contrast()
+        self.serve('<main style="color:#111">' + '<div>' * 24 +
+                   '<span>Readable text</span>' * 1200 + '</div>' * 24 + '</main>', 'text/html')
+        self.open(self.reader_url('html'))
+        result = self.page.evaluate('''() => {
+          const frame = document.querySelector('.html-frame'), win = frame.contentWindow;
+          const native = win.getComputedStyle.bind(win);
+          let calls = 0;
+          win.getComputedStyle = (...args) => { calls++; return native(...args); };
+          __repairContrast();
+          const firstCalls = calls;
+          const spans = [...frame.contentDocument.querySelectorAll('span')];
+          const untouched = spans.every(node => !node.style.color);
+          frame.contentDocument.querySelector('main').style.color = '#fff';
+          __repairContrast();
+          win.getComputedStyle = native;
+          return {firstCalls, untouched, repaired: spans.every(node =>
+            node.style.color === 'rgb(17, 17, 17)' && node.style.getPropertyPriority('color') === 'important')};
+        }''')
+        self.assertLessEqual(result['firstCalls'], 1230)
+        self.assertTrue(result['untouched'])
+        self.assertTrue(result['repaired'])
+
+    def test_html_contrast_keeps_sequential_currentcolor_inheritance_and_alpha_rules(self):
+        self.expose_html_contrast()
+        self.serve('''<div id="changing" style="color:#777;background:currentColor">
+          <span id="first" style="color:white">First</span> Parent
+          <span id="last" style="color:white">Last</span></div>
+          <div id="inherit" style="color:white">Parent<span id="child">Child</span></div>
+          <div style="background:#111"><span id="dark" style="color:#111">Dark</span></div>
+          <div style="background:rgba(0,0,0,.1)"><span id="ignored" style="color:white">Ignored</span></div>
+          <div style="background:rgba(0,0,0,.11)"><span id="accepted" style="color:#111">Accepted</span></div>
+          <a id="link" style="color:#0645ad">Link</a>''', 'text/html')
+        self.open(self.reader_url('html'))
+        result = self.page.evaluate('''() => {
+          __repairContrast();
+          const doc = document.querySelector('.html-frame').contentDocument;
+          return Object.fromEntries(['changing','first','last','inherit','child','dark','ignored','accepted','link']
+            .map(id => [id, [doc.getElementById(id).style.color,
+                            doc.getElementById(id).style.getPropertyPriority('color')]]));
+        }''')
+        self.assertEqual(result, {
+            'changing': ['rgb(245, 245, 245)', 'important'], 'first': ['white', ''],
+            'last': ['rgb(17, 17, 17)', 'important'], 'inherit': ['rgb(17, 17, 17)', 'important'],
+            'child': ['', ''], 'dark': ['rgb(245, 245, 245)', 'important'],
+            'ignored': ['rgb(17, 17, 17)', 'important'], 'accepted': ['rgb(245, 245, 245)', 'important'],
+            'link': ['rgb(6, 69, 173)', ''],
+        })
+
     def test_html_preserves_css_prose_and_tracks_progress_and_headings(self):
         html = "<p>Examples: url(icon.png) and @import theme.css;</p>" + "".join(
             f"<h1 id='chapter-{i}'>Chapter {i}</h1><p style='height:1100px'>text</p>" for i in range(4))
