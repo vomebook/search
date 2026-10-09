@@ -14,6 +14,7 @@
       if (record.settled) return;
       record.settled = true;
       clearTimer(record.timeout);
+      record.removeCallerAbort?.();
       active.delete(record);
     }
 
@@ -80,7 +81,13 @@
 
     function request(url, timeoutMs, requestInit = {}) {
       if (disposed) return Promise.reject(new DOMException("Reader disposed", "AbortError"));
-      if (pending.has(url)) return responseForCaller(pending.get(url));
+      const callerSignal = requestInit.signal;
+      if (callerSignal?.aborted) return Promise.reject(callerSignal.reason);
+      // Share plain GETs only. Other options can change the body, validators,
+      // range or cancellation owner even when the URL is identical.
+      const shareable = typeof url === "string" && Object.keys(requestInit).every((key) => key === "priority");
+      const key = shareable ? JSON.stringify([String(url), timeoutMs]) : {};
+      if (pending.has(key)) return responseForCaller(pending.get(key));
       const controller = new AbortControllerImpl();
       const record = {
         controller,
@@ -90,6 +97,11 @@
         settled: false,
         abortBody: null
       };
+      if (callerSignal) {
+        const onAbort = () => abort(record, callerSignal.reason);
+        callerSignal.addEventListener("abort", onAbort, { once: true });
+        record.removeCallerAbort = () => callerSignal.removeEventListener("abort", onAbort);
+      }
       record.timeout = setTimer(
         () => abort(record, new DOMException("Reader request timed out", "TimeoutError")),
         timeoutMs
@@ -116,9 +128,9 @@
           throw error;
         })
         .finally(() => {
-          if (pending.get(url) === record) pending.delete(url);
+          if (pending.get(key) === record) pending.delete(key);
         });
-      pending.set(url, record);
+      pending.set(key, record);
       return responseForCaller(record);
     }
 
