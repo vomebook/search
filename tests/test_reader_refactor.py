@@ -469,7 +469,15 @@ class ReaderRefactorTest(unittest.TestCase):
             "return { width: 600 * scale, height: 800 * scale };",
             "return { width: 600 * scale, height: 800 * scale, scale, transform: [scale,0,0,-scale,0,800*scale], convertToViewportPoint:(x,y)=>[x*scale,(800-y)*scale] };")
         module = module.replace("getTextContent() { return Promise.resolve",
-                                "async getTextContent() { await new Promise(resolve => setTimeout(resolve, 150)); return Promise.resolve")
+                                 "async getTextContent() { await new Promise(resolve => setTimeout(resolve, 150)); return Promise.resolve")
+        module = module.replace("getPage: () => Promise.resolve(page)", """getPage: (number) => Promise.resolve({...page,
+          async getTextContent() {
+            if (number === 3 && !window.__lastPageReleased)
+              await new Promise(resolve => { window.__releaseLastSearchPage = () => {
+                window.__lastPageReleased = true; resolve();
+              }; });
+            return page.getTextContent();
+          }})""")
         items = [dict(str=s, transform=[20, 0, 0, 20, x, 700], width=60, height=20, fontName="f")
                  for s, x in [("毛 ", 50), ("泽", 110), (" 东", 170), ("手。机", 230)]]
         items += [dict(str="毛 泽 东", transform=[20, 0, 0, 20, 50, 650-i*10],
@@ -482,8 +490,10 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill("毛泽东")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('正在搜索') && document.querySelectorAll('.full-search-result').length > 0")
+        self.page.wait_for_function("() => !!window.__releaseLastSearchPage")
         self.assertTrue(self.page.locator("#full-search-page-next").is_disabled())
         self.assertTrue(self.page.locator("#full-search-page").is_disabled())
+        self.page.evaluate("window.__releaseLastSearchPage()")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '123 个结果'")
         self.assertFalse(self.page.locator("#full-search-page-next").is_disabled())
         self.assertEqual(self.page.locator(".full-search-result").count(), 50)
@@ -495,6 +505,55 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator(".full-search-result").count(), 23)
         self.page.locator("#full-search-input").fill("手机")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '未找到正文匹配'")
+
+    def test_pdf_first_query_reuses_rendered_page_text(self):
+        module = support.PDF_MODULE.replace("numPages: 30", "numPages: 1").replace(
+            "getTextContent() { return Promise.resolve",
+            "getTextContent() { window.__pdfTextCalls = (window.__pdfTextCalls || 0) + 1; return Promise.resolve",
+        )
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=module))
+        self.open(self.reader_url("pdf"))
+        self.page.wait_for_function("() => document.querySelector('.reader-page')?.dataset.textReady === '1'")
+        self.search("Accessible")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "1 个结果")
+        self.assertEqual(self.page.evaluate("window.__pdfTextCalls"), 1)
+
+    def test_pdf_search_and_research_share_pending_render_text(self):
+        module = support.PDF_MODULE.replace("numPages: 30", "numPages: 1").replace(
+            "getTextContent() { return Promise.resolve({ items: [{ str: 'Accessible PDF text', hasEOL: false }] }); },",
+            """getTextContent() {
+              window.__pdfTextCalls = (window.__pdfTextCalls || 0) + 1;
+              return window.__heldText ||= new Promise(resolve => {
+                window.__releaseText = () => resolve({items: [{str: 'Accessible PDF text', hasEOL: false}]});
+              });
+            },""",
+        )
+        self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
+            content_type="text/javascript", body=module))
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + """
+              const originalSearchText = loadPdfSearchText;
+              loadPdfSearchText = (...args) => {
+                window.__searchTextRequests = (window.__searchTextRequests || 0) + 1;
+                return originalSearchText(...args);
+              };
+            """)
+        self.page.route("**/static/reader.js?*", instrument)
+        self.open(self.reader_url("pdf"))
+        self.page.wait_for_function("() => !!window.__releaseText")
+        self.page.locator("#history").click()
+        self.page.locator("#full-search-toggle").click()
+        self.page.locator("#full-search-input").fill("Accessible")
+        self.page.wait_for_function("() => window.__searchTextRequests === 1")
+        self.page.locator("#full-search-input").fill("PDF")
+        self.page.wait_for_function("() => window.__searchTextRequests === 2")
+        self.assertEqual(self.page.evaluate("window.__pdfTextCalls"), 1)
+        self.page.evaluate("window.__releaseText()")
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.page.wait_for_function("() => document.querySelector('.reader-page')?.dataset.textReady === '1'")
+        self.assertIn("PDF", self.page.locator(".full-search-result").text_content())
 
     def test_pdf_second_query_reuses_extracted_page_text(self):
         module = support.PDF_MODULE.replace(
@@ -513,6 +572,40 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '30 个结果'")
         self.assertEqual(self.page.evaluate("window.__pdfTextCalls"), first)
 
+    def test_pdf_text_failure_retries_and_disposal_releases_pending_work(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + """
+              window.__textOwnershipProbe = async () => {
+                let calls = 0;
+                const page = {getTextContent() {
+                  calls++;
+                  if (calls === 1) throw Error('extraction failed');
+                  return {items: [{str: 'retry succeeded'}]};
+                }};
+                const failure = await loadPdfTextContent(999, page).catch(error => error.message);
+                const text = await loadPdfTextContent(999, page);
+                const settled = pdfTextContentPromises.size;
+                let release;
+                const pending = loadPdfTextContent(999, {getTextContent: () =>
+                  new Promise(resolve => { release = resolve; })}).catch(error => error.name);
+                await Promise.resolve();
+                readerRuntime.dispose();
+                const disposed = pdfTextContentPromises.size;
+                const outcome = await pending;
+                release({items: [{str: 'obsolete'}]});
+                await Promise.resolve();
+                return [failure, calls, text.items[0].str, settled, disposed, outcome,
+                  pdfTextContentCache.size, pdfTextContentCacheBytes];
+              };
+            """)
+        self.page.route("**/static/reader.js?*", instrument)
+        self.serve(support.minimal_pdf(), "application/pdf")
+        self.open(self.reader_url("pdf"))
+        self.page.wait_for_function("() => document.querySelector('.reader-page')?.dataset.textReady === '1'")
+        self.assertEqual(self.page.evaluate("window.__textOwnershipProbe()"),
+                         ["extraction failed", 2, "retry succeeded", 0, 0, "AbortError", 0, 0])
+
     def test_pdf_search_cache_cleanup_resets_byte_budget(self):
         def instrument(route):
             response = route.fetch()
@@ -525,7 +618,7 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_pdf_search_pages_reextract_evicted_text_and_ignore_cancelled_load(self):
         def instrument(route):
             response = route.fetch()
-            route.fulfill(response=response, body=response.text() + "\nwindow.__dropPdfSearchCache = () => { pdfSearchTextCache.clear(); pdfSearchTextCacheBytes = 0; };\n")
+            route.fulfill(response=response, body=response.text() + "\nwindow.__dropPdfSearchCache = () => { pdfSearchTextCache.clear(); pdfSearchTextCacheBytes = 0; pdfTextContentCache.clear(); pdfTextContentCacheBytes = 0; };\n")
         self.page.route("**/static/reader.js?*", instrument)
         module = support.PDF_MODULE.replace("numPages: 30", "numPages: 3").replace(
             "getPage: () => Promise.resolve(page)", """getPage: (number) => Promise.resolve({ ...page,

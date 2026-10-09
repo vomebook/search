@@ -7,11 +7,14 @@ export function pdfTextContent(items) {
 
 // Embedded OCR often spaces individual Han characters, including vertical text.
 // Keep punctuation and Latin word boundaries, and map hits back to source offsets.
+const hanWordSpacing = /(?<=\p{Script=Han})\s+(?=\p{Script=Han})/gu;
+export function normalizePdfSearchText(raw) {
+  return raw.replace(hanWordSpacing, "");
+}
 export function pdfSearchText(raw) {
-  const removed = /(?<=\p{Script=Han})\s+(?=\p{Script=Han})/gu;
   const offsets = [], chunks = [];
   let start = 0;
-  for (const match of raw.matchAll(removed)) {
+  for (const match of raw.matchAll(hanWordSpacing)) {
     chunks.push(raw.slice(start, match.index));
     for (let i = start; i < match.index; i++) offsets.push(i);
     start = match.index + match[0].length;
