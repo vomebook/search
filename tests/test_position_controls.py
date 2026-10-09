@@ -54,11 +54,14 @@ class PositionControlTests(unittest.TestCase):
         }''', clear_viewport)
 
     def test_unloaded_index_requests_only_neighborhood_and_submits_once(self):
+        # Isolate restore-critical requests from post-restore viewport lookahead.
+        self.page.evaluate("ensureResultWindowPages = () => {}; prefetchNextPage = () => {}")
         self.input_position(95001)
         self.wait_position(95000)
         calls = self.page.evaluate('positionCalls')
         self.assertEqual(calls[:4], [1, 950, 951, 952])
         self.assertEqual(calls.count(1), 1)
+        self.assertEqual(calls[:4], [1, 950, 951, 952])
         self.assertTrue(all(page in [1, 950, 951, 952, 953] for page in calls))
         self.assertEqual(self.page.evaluate('STATE.results[95000].File'), 'paging-95000')
         self.assertEqual(self.page.locator('#current-result-position').input_value(), '95001')

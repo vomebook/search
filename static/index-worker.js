@@ -2,7 +2,7 @@ const WORKER_PROTOCOL_VERSION = 1;
 const MAX_PAGE_SIZE = 500;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
 // Bump when matching, filtering, collation or public record semantics change.
-const SEARCH_SEMANTICS_VERSION = "worker-search-v1";
+const SEARCH_SEMANTICS_VERSION = "worker-search-v2";
 let snapshotGeneration = null;
 
 let records = [];
@@ -18,20 +18,23 @@ let vocabSortedFilesOnly = [];
 const searchOrderCache = new Map();
 const SEARCH_ORDER_CACHE_MAX = 8;
 let recordIndices = [];
-let repoRecordIndices = {};
+let repoRecordIndices = Object.create(null);
 let txtRecordIndices = [];
-let repoTxtRecordIndices = {};
+let repoTxtRecordIndices = Object.create(null);
 let readerRecordIndices = [];
-let repoReaderRecordIndices = {};
+let repoReaderRecordIndices = Object.create(null);
 let sortedByName = [];
 let sortedBySize = [];
-let repoSortedByName = {};
-let repoSortedBySize = {};
+let repoSortedByName = Object.create(null);
+let repoSortedBySize = Object.create(null);
 let nameOrderReady = false;
 let sizeOrderReady = false;
 let sortBuildTimer = null;
 let fulltextBuildTimer = null;
 let fulltextBuild = null;
+const searchJobs = new Map();
+let indexYieldChannel = null;
+const indexYieldQueue = [];
 const FULLTEXT_BATCH_RECORDS = 256;
 const FULLTEXT_BATCH_MS = 8;
 const FULLTEXT_FOLDER_CACHE_MAX = 64;
@@ -119,7 +122,7 @@ function couldBeFuzzy(token, word, maxDist) {
   if (isChineseToken(token) && token.length > 1 && token.length !== word.length) return false;
   if (Math.abs(token.length - word.length) > maxDist) return false;
   if (token.length < 4) return true;
-  const counts = {};
+  const counts = Object.create(null);
   for (const ch of token) counts[ch] = (counts[ch] || 0) + 1;
   let diff = 0;
   for (const ch of word) {
@@ -258,7 +261,7 @@ function compareRecordSize(a, b) {
 function buildNameOrders() {
   if (nameOrderReady) return;
   sortedByName = recordIndices.slice().sort(compareRecordName);
-  repoSortedByName = {};
+  repoSortedByName = Object.create(null);
   for (const repo of Object.keys(repoRecordIndices)) repoSortedByName[repo] = [];
   for (const index of sortedByName) repoSortedByName[records[index].Repo].push(index);
   nameOrderReady = true;
@@ -267,7 +270,7 @@ function buildNameOrders() {
 function buildSizeOrders() {
   if (sizeOrderReady) return;
   sortedBySize = recordIndices.slice().sort(compareRecordSize);
-  repoSortedBySize = {};
+  repoSortedBySize = Object.create(null);
   for (const repo of Object.keys(repoRecordIndices)) repoSortedBySize[repo] = [];
   for (const index of sortedBySize) repoSortedBySize[records[index].Repo].push(index);
   sizeOrderReady = true;
@@ -276,11 +279,12 @@ function buildSizeOrders() {
 function scheduleSortOrders(expectedGeneration) {
   if (typeof setTimeout !== "function") return;
   sortBuildTimer = setTimeout(() => {
+    sortBuildTimer = null;
     if (generation === expectedGeneration) {
+      if (searchJobs.size) { scheduleSortOrders(expectedGeneration); return; }
       buildNameOrders();
       buildSizeOrders();
     }
-    sortBuildTimer = null;
   }, SORT_PRECOMPUTE_DELAY_MS);
 }
 
@@ -294,20 +298,20 @@ function replaceCorpus(nextRecords) {
   searchOrderCache.clear();
   recordSearchFields = new WeakMap();
   records = nextRecords;
-  const repoCounts = {};
-  const extensionCounts = {};
-  const extensionsByRepo = {};
-  const txtByRepo = {};
-  const readerByRepo = {};
-  const idOccurrences = {};
+  const repoCounts = Object.create(null);
+  const extensionCounts = Object.create(null);
+  const extensionsByRepo = Object.create(null);
+  const txtByRepo = Object.create(null);
+  const readerByRepo = Object.create(null);
+  const idOccurrences = Object.create(null);
   let txtCount = 0;
   recordIds = new Array(records.length);
   recordIndices = new Array(records.length);
-  repoRecordIndices = {};
+  repoRecordIndices = Object.create(null);
   txtRecordIndices = [];
-  repoTxtRecordIndices = {};
+  repoTxtRecordIndices = Object.create(null);
   readerRecordIndices = [];
-  repoReaderRecordIndices = {};
+  repoReaderRecordIndices = Object.create(null);
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
     const repo = record.Repo || "";
@@ -318,7 +322,7 @@ function replaceCorpus(nextRecords) {
     repoCounts[repo] = (repoCounts[repo] || 0) + 1;
     if (extension) {
       extensionCounts[extension] = (extensionCounts[extension] || 0) + 1;
-      if (!extensionsByRepo[repo]) extensionsByRepo[repo] = {};
+      if (!extensionsByRepo[repo]) extensionsByRepo[repo] = Object.create(null);
       extensionsByRepo[repo][extension] = (extensionsByRepo[repo][extension] || 0) + 1;
     }
     if (record.HasTxt) {
@@ -343,7 +347,7 @@ function replaceCorpus(nextRecords) {
     count: records.length,
     repos: Object.keys(repoCounts).map((name) => ({ name, count: repoCounts[name] })).sort((a, b) => a.name.localeCompare(b.name)),
     extensions: Object.keys(extensionCounts).sort().map((name) => ({ name, count: extensionCounts[name] })),
-    extensionsByRepo: {},
+    extensionsByRepo: Object.create(null),
     txt: { available: txtCount > 0, count: txtCount, byRepo: txtByRepo },
     reader: { available: readerRecordIndices.length > 0, count: readerRecordIndices.length, byRepo: readerByRepo },
   };
@@ -356,8 +360,8 @@ function replaceCorpus(nextRecords) {
   vocabSortedFilesOnly = [];
   sortedByName = [];
   sortedBySize = [];
-  repoSortedByName = {};
-  repoSortedBySize = {};
+  repoSortedByName = Object.create(null);
+  repoSortedBySize = Object.create(null);
   nameOrderReady = false;
   sizeOrderReady = false;
   sortBuildTimer = null;
@@ -368,7 +372,7 @@ function replaceCorpus(nextRecords) {
 }
 
 function advanceFulltext(limit, deadline) {
-  if (!fulltextBuild) fulltextBuild = { next: 0, all: {}, files: {}, folderTokens: new Map(), folderUnits: 0 };
+  if (!fulltextBuild) fulltextBuild = { next: 0, all: Object.create(null), files: Object.create(null), folderTokens: new Map(), folderUnits: 0 };
   const build = fulltextBuild;
   const end = Math.min(records.length, build.next + limit);
   while (build.next < end) {
@@ -458,6 +462,35 @@ function buildFulltext() {
   advanceFulltext(records.length, Infinity);
 }
 
+function yieldSearchIndex() {
+  if (typeof MessageChannel === "undefined") return new Promise(resolve => typeof setTimeout === "function" ? setTimeout(resolve, 0) : resolve());
+  if (!indexYieldChannel) {
+    indexYieldChannel = new MessageChannel();
+    indexYieldChannel.port1.onmessage = () => indexYieldQueue.shift()?.();
+  }
+  // A message task permits cancellation without the nested-timer 4 ms clamp.
+  return new Promise(resolve => { indexYieldQueue.push(resolve); indexYieldChannel.port2.postMessage(null); });
+}
+
+async function prepareSearchIndex(params, job) {
+  const query = String(params.q || "").trim();
+  if (wordIndex || !query || params.exact || literalSearch(query)) return;
+  if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
+  fulltextBuildTimer = null;
+  try {
+    while (!wordIndex) {
+      if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+      if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+      advanceFulltext(FULLTEXT_BATCH_RECORDS, Date.now() + FULLTEXT_BATCH_MS);
+      if (!wordIndex) await yieldSearchIndex();
+    }
+    if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+    if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+  } finally {
+    if (!wordIndex && job.generation === generation && !fulltextBuildTimer && searchJobs.size <= 1) scheduleFulltext(generation, 4);
+  }
+}
+
 function buildFilterSets(params) {
   const repos = params.repos || null;
   const extensions = params.extensions || null;
@@ -512,8 +545,28 @@ function cleanPath(path) {
   return String(path || "").replace(/^\/+|\/+$/g, "");
 }
 
-function intersectCandidateLists(candidateLists) {
+function intersectCandidateLists(candidateLists, sorted = false) {
   if (!candidateLists.length) return [];
+  if (sorted) {
+    if (candidateLists.length === 1) return candidateLists[0].slice();
+    const lists = candidateLists.slice().sort((a, b) => a.length - b.length);
+    const matched = [];
+    for (const index of lists[0]) {
+      let found = true;
+      for (let i = 1; i < lists.length; i++) {
+        const list = lists[i];
+        let low = 0, high = list.length;
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          if (list[middle] < index) low = middle + 1;
+          else high = middle;
+        }
+        if (list[low] !== index) { found = false; break; }
+      }
+      if (found) matched.push(index);
+    }
+    return matched;
+  }
   const ordered = candidateLists[0];
   let probe = ordered;
   for (const candidates of candidateLists) if (candidates.length < probe.length) probe = candidates;
@@ -525,6 +578,15 @@ function intersectCandidateLists(candidateLists) {
     if (!matched.size) break;
   }
   return ordered.filter((index) => matched.has(index));
+}
+
+function exactSearchScope(repos) {
+  if (!repos?.length) return recordIndices;
+  const unique = Array.from(new Set(repos));
+  if (unique.length === 1) return repoRecordIndices[unique[0]] || [];
+  const indices = [];
+  for (const repo of unique) for (const index of repoRecordIndices[repo] || []) indices.push(index);
+  return indices.sort((a, b) => a - b);
 }
 
 function emptySearchOrder(params) {
@@ -600,7 +662,7 @@ function searchLocal(params) {
       matched = recordIndices.slice();
     } else {
       const pattern = wildcard ? compileWildcardMatcher(query) : null;
-      for (let i = 0; i < records.length; i++) {
+      for (const i of exactSearchScope(params.repos)) {
         const record = records[i] || {};
         const fields = getRecordSearchFields(record);
         if (pattern ? pattern.test(fields.file) || pattern.test(fields.repo) || (searchFolders && pattern.test(fields.folder)) : fields.file.includes(lower) || fields.repo.includes(lower) || (searchFolders && fields.folder.includes(lower))) matched.push(i);
@@ -611,9 +673,11 @@ function searchLocal(params) {
     const activeIndex = searchFolders ? wordIndex : wordIndexFilesOnly;
     const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
     const tokenCandidates = [];
+    let sortedCandidates = true;
     for (const token of tokenize(query)) {
       let candidates = activeIndex[token] || [];
       if (!candidates.length) {
+        sortedCandidates = false;
         const fuzzy = [];
         for (const entry of activeVocab) {
           const vocab = entry[0];
@@ -628,7 +692,7 @@ function searchLocal(params) {
       }
       tokenCandidates.push(candidates);
     }
-    matched = intersectCandidateLists(tokenCandidates);
+    matched = intersectCandidateLists(tokenCandidates, sortedCandidates);
   }
   const filtered = applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
@@ -742,15 +806,25 @@ function protocolError(code, message) {
   return error;
 }
 
-async function dispatch(type, payload) {
+async function dispatch(type, payload, job) {
   if (type === "handshake") return { protocol: WORKER_PROTOCOL_VERSION };
+  if (type === "cancel-search") {
+    const pending = searchJobs.get(payload.requestId);
+    if (pending) pending.cancelled = true;
+    return {cancelled: !!pending};
+  }
   if (type === "load-corpus") {
     return installCorpusFromSource(await fetchGzipJSON(payload.url));
   }
   if (type === "replace-corpus") return installCorpus(payload.data);
   if (!records.length) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
   if (type === "metadata") return Object.assign({ generation }, metadata);
-  if (type === "local-search") return searchLocal(payload || {});
+  if (type === "local-search") {
+    await prepareSearchIndex(payload || {}, job);
+    if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+    if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+    return searchLocal(payload || {});
+  }
   if (type === "random-record") return randomRecord(payload || {});
   if (type === "folder-contents") return folderContents(payload || {});
   if (type === "folder-tree") return folderTree(payload || {});
@@ -764,8 +838,14 @@ self.addEventListener("message", async function(event) {
     self.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: "response", id, ok: false, error: { code: "PROTOCOL_MISMATCH", message: "Refresh required: app/Worker protocol mismatch" } });
     return;
   }
+  const job = {generation, cancelled: false};
+  const searching = message.type === "local-search";
   try {
-    const result = await dispatch(message.type, message.payload || {});
+    if (searching) {
+      if (searchJobs.size >= 32) throw protocolError("SEARCH_BUSY", "Search Worker is busy");
+      searchJobs.set(id, job);
+    }
+    const result = await dispatch(message.type, message.payload || {}, job);
     self.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: "response", id, ok: true, result });
   } catch (error) {
     self.postMessage({
@@ -775,5 +855,7 @@ self.addEventListener("message", async function(event) {
       ok: false,
       error: { code: error && error.code || "WORKER_ERROR", message: String(error && error.message || error) },
     });
+  } finally {
+    if (searching && searchJobs.get(id) === job) searchJobs.delete(id);
   }
 });

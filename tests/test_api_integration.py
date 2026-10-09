@@ -87,6 +87,27 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.page.locator("#search-input").wait_for(state="visible")
 
+    def test_real_worker_demand_index_cancels_without_restart_and_reuses_partial_work(self):
+        self.load()
+        self.page.wait_for_function("STATE.dataLoaded", timeout=30000)
+        observed = self.page.evaluate('''async () => {
+          const count = 4000;
+          await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['VoiceOfML/Test'],fd:[['directory']],
+            rc:Array.from({length:count},(_,i)=>[0,'alpha guide '+i,'txt',0,1,0])}});
+          const worker = corpusWorker, restarts = corpusWorkerRestartCount;
+          const controller = new AbortController();
+          const pending = doSearchLocal({q:'alpha',page:1,pageSize:100,signal:controller.signal})
+            .then(()=>'completed', error=>error.name);
+          const metadata = await corpusWorkerRequest('metadata', {});
+          controller.abort();
+          const cancelled = await pending;
+          const current = await doSearchLocal({q:'alpha',page:1,pageSize:100});
+          return {cancelled,count:metadata.count,total:current.total,rows:current.results.length,
+            sameWorker:worker===corpusWorker,restarts:corpusWorkerRestartCount-restarts};
+        }''')
+        self.assertEqual(observed, {'cancelled':'AbortError', 'count':4000, 'total':4000,
+                                    'rows':100, 'sameWorker':True, 'restarts':0})
+
     def test_initial_to_local_handoff_preserves_render_and_scroll(self):
         with self.server_state.lock:
             self.server_state.delays["/search/data/search_data.json.gz"] = 1.0

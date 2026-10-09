@@ -1,3 +1,38 @@
+class BoundedResponseCache extends Map {
+  constructor(limit, ttl, budget = 8 * 1024 * 1024) {
+    super();
+    this.limit = limit; this.ttl = ttl; this.budget = budget;
+    this.bytes = 0; this.entriesInfo = new Map();
+  }
+  delete(key) {
+    this.bytes -= this.entriesInfo.get(key)?.bytes || 0;
+    this.entriesInfo.delete(key);
+    return super.delete(key);
+  }
+  clear() { super.clear(); this.entriesInfo.clear(); this.bytes = 0; }
+  get(key) {
+    const info = this.entriesInfo.get(key);
+    if (!info) return undefined;
+    if (Date.now() - info.time >= this.ttl) { this.delete(key); return undefined; }
+    const value = super.get(key);
+    super.delete(key); super.set(key, value);
+    return value;
+  }
+  has(key) { return this.get(key) !== undefined; }
+  set(key, value) {
+    this.delete(key);
+    const now = Date.now();
+    for (const [oldKey, info] of this.entriesInfo) if (now - info.time >= this.ttl) this.delete(oldKey);
+    // UTF-16 serialized content budget, not an engine-specific heap estimate.
+    const bytes = 2 * (JSON.stringify(value).length + String(key).length);
+    if (bytes > Math.min(this.budget, 1024 * 1024)) return this;
+    while (this.size && (this.size >= this.limit || this.bytes + bytes > this.budget)) this.delete(this.keys().next().value);
+    super.set(key, value);
+    this.entriesInfo.set(key, {bytes, time: now}); this.bytes += bytes;
+    return this;
+  }
+}
+
 const DATA_URL = "data/search_data.json.gz";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
@@ -285,7 +320,7 @@ function getReaderLink(rec, returnUrl, cacheMetadata = true) {
     readerRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath));
   }
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
-  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", fallback: readerRecord.ReaderFallback || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
+  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", fallback: readerRecord.ReaderFallback || "", pdf_document: readerRecord.ReaderPdfDocument || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
   return readerUrl;
 }
 
@@ -882,6 +917,7 @@ function makeWorkerError(code, message) {
 function rejectCorpusWorkerPending(error) {
   corpusWorkerPending.forEach(function(entry) {
     clearTimeout(entry.timer);
+    entry.cleanup?.();
     entry.reject(error);
   });
   corpusWorkerPending.clear();
@@ -895,13 +931,15 @@ function terminateCorpusWorker(error) {
   rejectCorpusWorkerPending(error || makeWorkerError("WORKER_TERMINATED", "Search Worker terminated"));
 }
 
-function postCorpusWorkerRequest(type, payload, timeoutMs) {
+function postCorpusWorkerRequest(type, payload, timeoutMs, signal) {
   if (!corpusWorker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Search Worker is unavailable"));
+  if (signal?.aborted) return Promise.reject(new DOMException("Cancelled", "AbortError"));
   const id = ++corpusWorkerRequestId;
   return new Promise(function(resolve, reject) {
     const expire = function() {
       if (!corpusWorkerPending.has(id)) return;
       clearTimeout(timer);
+      corpusWorkerPending.get(id).cleanup?.();
       corpusWorkerPending.delete(id);
       const error = makeWorkerError("WORKER_TIMEOUT", "Search Worker request timed out");
       terminateCorpusWorker(error);
@@ -909,8 +947,17 @@ function postCorpusWorkerRequest(type, payload, timeoutMs) {
     };
     const duration = timeoutMs || WORKER_REQUEST_TIMEOUT;
     const timer = setTimeout(expire, duration);
-    corpusWorkerPending.set(id, { resolve: resolve, reject: reject, timer: timer, expire: expire, deadline: Date.now() + duration });
+    const cancel = () => {
+      if (!corpusWorkerPending.has(id)) return;
+      corpusWorkerPending.delete(id); clearTimeout(timer); cleanup();
+      corpusWorker?.postMessage({protocol: WORKER_PROTOCOL_VERSION, type: "cancel-search", id: ++corpusWorkerRequestId, payload: {requestId: id}});
+      reject(new DOMException("Cancelled", "AbortError"));
+    };
+    const cleanup = () => signal?.removeEventListener("abort", cancel);
+    corpusWorkerPending.set(id, { resolve: resolve, reject: reject, timer: timer, expire: expire, cleanup, deadline: Date.now() + duration });
+    signal?.addEventListener("abort", cancel, {once: true});
     corpusWorker.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: type, id: id, payload: payload || {} });
+    if (signal?.aborted) cancel();
   });
 }
 
@@ -928,6 +975,7 @@ function ensureCorpusWorker() {
       if (!pending) return;
       corpusWorkerPending.delete(message.id);
       clearTimeout(pending.timer);
+      pending.cleanup?.();
       if (message.protocol !== WORKER_PROTOCOL_VERSION) {
         pending.reject(makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch"));
         return;
@@ -954,11 +1002,12 @@ function ensureCorpusWorker() {
   return corpusWorkerStartPromise;
 }
 
-async function corpusWorkerRequest(type, payload, timeoutMs) {
+async function corpusWorkerRequest(type, payload, timeoutMs, signal) {
   try {
     await ensureCorpusWorker();
-    return await postCorpusWorkerRequest(type, payload, timeoutMs);
+    return await postCorpusWorkerRequest(type, payload, timeoutMs, signal);
   } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError") throw error;
     if (error && error.code === "PROTOCOL_MISMATCH") throw error;
     if (corpusWorkerRestartCount >= 1) throw error;
     corpusWorkerRestartCount++;
@@ -969,7 +1018,7 @@ async function corpusWorkerRequest(type, payload, timeoutMs) {
         url: new URL(DATA_URL, document.baseURI).href,
       }, WORKER_LOAD_TIMEOUT);
     }
-    return postCorpusWorkerRequest(type, payload, timeoutMs);
+    return postCorpusWorkerRequest(type, payload, timeoutMs, signal);
   }
 }
 
@@ -995,7 +1044,7 @@ function getPreviewLink(path) {
 async function doSearchLocal(params) {
   const workerParams = Object.assign({}, params);
   delete workerParams.signal;
-  const data = await corpusWorkerRequest("local-search", workerParams, WORKER_REQUEST_TIMEOUT);
+  const data = await corpusWorkerRequest("local-search", workerParams, WORKER_REQUEST_TIMEOUT, params.signal);
   return cloneSearchData({
     results: data.records || [],
     total: data.total || 0,
@@ -1103,16 +1152,18 @@ async function doSearchAPI(params, append, requestId) {
     }
   }
   if (requestId !== searchRequestId) return false;
-  applySearchPage(data, append);
-  return true;
+  return applySearchPage(data, append);
 }
 
 function appendSearchResults(page, results = STATE._pageCache[page]) {
+  const metadata = searchPageMetadata.get(results?.[0]);
+  if (!checkSearchPageAppend({ ...metadata, results, total: metadata?.total ?? STATE.total })) return false;
   if (!STATE._resultBackend) STATE._resultBackend = "api";
-  STATE.results = STATE.results.concat(results);
+  for (const record of results) STATE.results.push(record);
   delete STATE._pageCache[page];
   STATE._loadedPage = page;
   STATE.hasMore = STATE.results.length < STATE.total;
+  return true;
 }
 
 function deferSearchAppend() {
@@ -1124,7 +1175,27 @@ function deferSearchAppend() {
 }
 
 // Network, cached and Worker pages share the same state transition.
+function checkSearchPageAppend(data) {
+  const expected = searchPageMetadata.get(STATE.results[0]);
+  const generation = data.generation ?? searchPageMetadata.get(data.results?.[0])?.generation;
+  if (data.total === STATE.total && (!expected?.generation || generation === expected.generation)) return true;
+  const key = getSearchViewKey(), scroll = captureReaderReturnScroll();
+  const record = STATE.results[scroll.index] || STATE.results[0];
+  const position = { version: 1, key, index: scroll.index, offset: scroll.offset,
+    anchorId: getResultStableId(record), loadedPage: STATE._loadedPage, savedAt: Date.now() };
+  const returnTarget = getReturnPositionTarget(key);
+  const backend = STATE._resultBackend;
+  searchResponseCache.clear();
+  searchViewSnapshots.delete(key);
+  STATE._pageCache = {};
+  tryRestoreSearchPosition(key, { position, viewport: null, backend });
+  if (returnTarget) setReturnPositionTarget(returnTarget);
+  return false;
+}
+
 function applySearchPage(data, append) {
+  if (append && !checkSearchPageAppend(data)) return false;
+  rememberSearchPageMetadata(data);
   STATE.total = data.total;
   if (append) {
     STATE._pageCache[data.page] = data.results;
@@ -1141,7 +1212,7 @@ function applySearchPage(data, append) {
 
 function consumeCachedAppendPage() {
   if (!STATE._pageCache[STATE.page]) return false;
-  appendSearchResults(STATE.page);
+  if (!appendSearchResults(STATE.page)) return false;
   STATE.page = STATE._loadedPage;
   STATE._pendingPage = 0;
   STATE.isLoading = false;
@@ -1292,9 +1363,9 @@ async function fetchFolderTree(repo, cacheKey) {
     return data;
   } catch (e) { if (!e || e.name !== "AbortError") noteApiFailure(); return null; }
 }
-const browserApiCache = new Map();
-const browserApiPending = new Map();
 const BROWSER_API_CACHE_MAX = 200;
+const browserApiCache = new BoundedResponseCache(BROWSER_API_CACHE_MAX, 5 * 60 * 1000);
+const browserApiPending = new Map();
 const sidebarInitialCache = new Map();
 const sidebarInitialPending = new Map();
 
@@ -1370,12 +1441,7 @@ function normalizeSidebarPayload(data, path) {
 }
 
 function setBrowserApiCache(cacheKey, data) {
-  if (browserApiCache.has(cacheKey)) browserApiCache.delete(cacheKey);
   browserApiCache.set(cacheKey, data);
-  if (browserApiCache.size > BROWSER_API_CACHE_MAX) {
-    const firstKey = browserApiCache.keys().next().value;
-    browserApiCache.delete(firstKey);
-  }
 }
 
 async function fetchFolderContents(repo, path) {
@@ -1442,22 +1508,15 @@ function getCurrentExtensionCounts() {
   return extensionCounts;
 }
 
-const folderContentsCache = new Map();
-const FOLDER_CACHE_MAX = 100;
+const folderContentsCache = new BoundedResponseCache(100, 5 * 60 * 1000);
 
 async function getFolderContents(repo, path) {
   const cacheKey = repo + "|" + (path || "");
   if (folderContentsCache.has(cacheKey)) {
     const val = folderContentsCache.get(cacheKey);
-    folderContentsCache.delete(cacheKey);
-    folderContentsCache.set(cacheKey, val);
     return val;
   }
   const result = await corpusWorkerRequest("folder-contents", { repo: repo, path: path || "" }, WORKER_REQUEST_TIMEOUT);
-  if (folderContentsCache.size >= FOLDER_CACHE_MAX) {
-    const firstKey = folderContentsCache.keys().next().value;
-    folderContentsCache.delete(firstKey);
-  }
   folderContentsCache.set(cacheKey, result);
   return result;
 }
@@ -2003,7 +2062,7 @@ const API_RECOVERY_DELAY = 30000;
 let localDataPromise = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
 const SEARCH_CACHE_MAX = 60;
-const searchResponseCache = new Map();
+const searchResponseCache = new BoundedResponseCache(SEARCH_CACHE_MAX, SEARCH_CACHE_TTL);
 const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();
 let randomTxtStatusId = 0;
@@ -2575,7 +2634,8 @@ function tryRestoreSearchPosition(key, options = {}) {
   searchId++;
   searchRequestId++;
   const controller = new AbortController();
-  const task = { key, controller, position: {...position}, lookup: previous?.lookup, ready: previous?.ready || new Map(), page: 0, results: [] };
+  const task = { key, controller, position: {...position}, backend: options.backend || previous?.backend,
+    lookup: previous?.lookup, ready: previous?.ready || new Map(), page: 0, results: [] };
   positionRestore = task;
   const current = () => positionRestore === task && key === getSearchViewKey() && !controller.signal.aborted;
   STATE.isLoading = true;
@@ -2584,6 +2644,7 @@ function tryRestoreSearchPosition(key, options = {}) {
   (async () => {
     try {
       const query = JSON.parse(key);
+      if (task.backend) query.resultBackend = task.backend;
       const viewport = options.viewport === undefined ? await readSearchViewport(key) : options.viewport;
       if (!current()) return;
       showSavedSearchViewport(viewport, position, task);
@@ -2635,6 +2696,7 @@ function tryRestoreSearchPosition(key, options = {}) {
         });
         const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key, results, total,
           page, loadedPage: page, pageCache: {}, hasMore: results.length < total,
+          resultBackend: task.backend,
           window: { generation: lookup.generation, pages: [...task.ready.keys()], count: [...task.ready.values()].reduce((sum, data) => sum + data.results.length, 0) },
           estimatedHeight: VSCROLL.estimatedHeight, heightCache: [], heightRecords: [],
           scroll: { index: found < 0 ? index : found, offset: position.offset, viewKey: key }, savedAt: Date.now() };
@@ -2670,7 +2732,7 @@ function applyValidatedSearchViewport(snapshot) {
     else { VSCROLL.templateCache.delete(Number(key)); VSCROLL.measuredRowKeys[key] = null; }
   }
   resultWindow?.controller.abort();
-  resultWindow = { ...snapshot.window, key: snapshot.key, total: snapshot.total, query: JSON.parse(snapshot.key),
+  resultWindow = { ...snapshot.window, key: snapshot.key, total: snapshot.total, query: {...JSON.parse(snapshot.key), resultBackend: snapshot.resultBackend},
     pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
   STATE.results = snapshot.results; STATE.total = snapshot.total;
   STATE.page = STATE._loadedPage = snapshot.loadedPage;
@@ -2923,11 +2985,11 @@ async function fetchPositionPage(query, page, signal, anchorId) {
     minSize: query.minSize, maxSize: query.maxSize, sort: query.sort,
     searchFolders: query.searchFolders, exact: query.exact, page, pageSize: query.pageSize,
     ...(anchorId === undefined ? {} : { anchorId }) };
-  if (query.useLocalMode || mixed || !apiAvailable) {
+  if (query.resultBackend === "local" || (!query.resultBackend && (query.useLocalMode || mixed || !apiAvailable))) {
     const ok = STATE.dataLoaded || await ensureLocalDataLoaded(false, true);
     if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
     if (!ok) throw new Error("LOCAL_UNAVAILABLE");
-    return doSearchLocal(params);
+    return doSearchLocal({...params, signal});
   }
   const body = { q: params.q, repos: params.repos, extensions: params.extensions,
     folders: params.folders, min_size: params.minSize, max_size: params.maxSize,
@@ -3071,7 +3133,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   STATE._pageCache = cloneSearchPageCache(snapshot.pageCache);
   STATE._resultBackend = snapshot.resultBackend || null;
   STATE.hasMore = snapshot.hasMore;
-  if (snapshot.window) resultWindow = { ...snapshot.window, key, total: snapshot.total, query: JSON.parse(key),
+  if (snapshot.window) resultWindow = { ...snapshot.window, key, total: snapshot.total, query: {...JSON.parse(key), resultBackend: snapshot.resultBackend},
     pages: new Set(snapshot.window.pages), pending: new Map(), failures: new Map(), controller: new AbortController() };
   STATE.isLoading = false;
   STATE.page = STATE._loadedPage;
@@ -3115,16 +3177,11 @@ function getCachedSearchResponse(key) {
     searchResponseCache.delete(key);
     return null;
   }
-  searchResponseCache.delete(key);
-  searchResponseCache.set(key, cached);
   return cloneSearchData(cached.data);
 }
 
 function setCachedSearchResponse(key, data) {
   searchResponseCache.set(key, { time: Date.now(), data: cloneSearchData(data) });
-  while (searchResponseCache.size > SEARCH_CACHE_MAX) {
-    searchResponseCache.delete(searchResponseCache.keys().next().value);
-  }
 }
 
 function buildCurrentSearchBody(page) {
@@ -3483,7 +3540,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
         STATE._pageCache = {};
       }
       STATE._resultBackend = "local";
-      doSearchFallbackLocal(params, append, id);
+      doSearchFallbackLocal({...params, signal: searchAbortController.signal}, append, id);
       return;
     }
   }
@@ -3556,7 +3613,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     return;
   }
   STATE._resultBackend = "local";
-  doSearchFallbackLocal(params, append, id);
+  doSearchFallbackLocal({...params, signal: searchAbortController.signal}, append, id);
 }
 
 function handleApiSearchFailure(append, id) {
@@ -3593,6 +3650,7 @@ function doSearchFallbackLocal(params, append, id) {
     } catch (err) {
       console.error("Local Worker search failed:", err);
       if (id !== searchId) return;
+      if (err.name === "AbortError") return;
       pagingError = err;
       if (append) {
         STATE.page = Math.max(1, STATE._loadedPage);
