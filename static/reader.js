@@ -2538,11 +2538,32 @@ function trustedChapterResourceUrl(raw, base, attribute, manifestBase) {
   }
 }
 function loadScript(url) {
+  assertReaderActive();
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
+    let settled = false, timeout = 0, untrack = () => {};
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      untrack();
+      script.onload = script.onerror = null;
+      if (error) {
+        script.remove();
+        reject(error);
+      } else resolve();
+    };
+    const networkError = () => Object.assign(
+      new Error("阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
+      { code: "READER_ENGINE_NETWORK" }
+    );
+    untrack = trackReaderResource(() => finish(readerAbortError()));
+    // Download sibling engines concurrently, execute in dependency order.
+    script.async = false;
     script.src = url;
-    script.onload = resolve;
-    script.onerror = reject;
+    script.onload = () => finish();
+    script.onerror = () => finish(networkError());
+    timeout = setTimeout(() => finish(networkError()), 20000);
     document.head.appendChild(script);
   });
 }
@@ -4057,27 +4078,8 @@ body{box-sizing:border-box;width:max-content;min-width:100%;padding:12px;font:14
 </style>`;
 
 async function waitForSpreadsheetImages(frame) {
-  const images = [...(frame.contentDocument?.images || [])];
-  if (!images.length) return;
-  await Promise.race([
-    Promise.all(images.map(async (image) => {
-      image.loading = "eager";
-      image.decoding = "async";
-      if (!image.complete) {
-        await new Promise((resolve) => {
-          const finish = () => {
-            image.removeEventListener("load", finish);
-            image.removeEventListener("error", finish);
-            resolve();
-          };
-          image.addEventListener("load", finish, { once: true });
-          image.addEventListener("error", finish, { once: true });
-        });
-      }
-      try { await image.decode?.(); } catch (_) {}
-    })),
-    new Promise((resolve) => setTimeout(resolve, 30000))
-  ]);
+  if (frame.contentDocument)
+    await settleReaderImages(frame.contentDocument, 30000);
 }
 
 async function renderHtml(prepared) {
@@ -4113,6 +4115,7 @@ async function renderHtml(prepared) {
           frame.contentDocument.addEventListener(type, beginReaderNavigation, { passive: true });
         setToc(headingTocEntries(frame.contentDocument));
         if (documentData.spreadsheet) await waitForSpreadsheetImages(frame);
+        assertReaderActive();
         resolve();
       } catch (error) {
         reject(error);
@@ -4628,6 +4631,7 @@ async function renderDocx(prepared) {
     response,
     VoiceOfMLReaderSecurity.LIMITS.documentBytes
   );
+  assertReaderActive();
   VoiceOfMLReaderSecurity.inspectZip(bytes, {
     ...VoiceOfMLReaderSecurity.LIMITS,
     archiveCompressedBytes: VoiceOfMLReaderSecurity.LIMITS.documentBytes
@@ -4652,6 +4656,7 @@ async function renderDocx(prepared) {
     renderAltChunks: false,
     debug: false
   });
+  assertReaderActive();
   body.classList.toggle("reader-document-dark", readerTheme === "dark");
   if (!(body.textContent || "").trim() && !body.querySelector("img, table, svg, canvas"))
     throw new Error("DOCX rendered no supported content");
@@ -5213,7 +5218,7 @@ function loadHtmlDocument() {
 function loadDocxDocument() {
   return Promise.all([
     fetchReaderResponse(),
-    loadScript(JSZIP_URL).then(() => loadScript(DOCX_PREVIEW_URL))
+    Promise.all([loadScript(JSZIP_URL), loadScript(DOCX_PREVIEW_URL)])
   ]);
 }
 function loadMediaDocument() {
@@ -5307,33 +5312,47 @@ function foliateSearchAnchor(source, sourceNodes, body, renderedBody) {
     return selected;
   };
 }
-async function settleReaderImages(root) {
+async function settleReaderImages(root, timeoutMs = 2500) {
+  assertReaderActive();
   const images = [...root.querySelectorAll("img[src],img[srcset]")];
   if (!images.length) return;
-  let timeout = 0;
+  let timeout = 0, active = true;
+  const cleanups = new Set();
   const decoded = Promise.allSettled(
-    images.map((image) =>
-      typeof image.decode === "function"
-        ? image.decode()
-        : image.complete
-          ? Promise.resolve()
-          : new Promise((resolve) => {
-              image.addEventListener("load", resolve, { once: true });
-              image.addEventListener("error", resolve, { once: true });
-            })
-    )
+    images.map(async (image) => {
+      // Sections are prepared off-DOM; lazy images cannot enter a viewport yet.
+      image.loading = "eager";
+      image.decoding = "async";
+      if (!image.complete) await new Promise((resolve) => {
+        const finish = () => {
+          image.removeEventListener("load", finish);
+          image.removeEventListener("error", finish);
+          cleanups.delete(finish);
+          resolve();
+        };
+        cleanups.add(finish);
+        image.addEventListener("load", finish, { once: true });
+        image.addEventListener("error", finish, { once: true });
+        if (image.complete) finish();
+      });
+      if (active) {
+        try { await image.decode?.(); } catch (_) {}
+      }
+    })
   );
   try {
     await awaitReader(
       Promise.race([
         decoded,
         new Promise((resolve) => {
-          timeout = setTimeout(resolve, 2500);
+          timeout = setTimeout(resolve, timeoutMs);
         })
       ])
     );
   } finally {
+    active = false;
     clearTimeout(timeout);
+    for (const cleanup of cleanups) cleanup();
   }
 }
 function rewriteFoliateResources(doc, section) {
