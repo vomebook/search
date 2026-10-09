@@ -1888,6 +1888,134 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open') && history.state.voiceReaderGuard")
         self.assertEqual(self.page.url, url)
 
+    def test_txt_small_chunks_reuse_preview_decoder_and_visit_samples_once(self):
+        def instrument(route):
+            response = route.fetch()
+            script = response.text()
+            needle = 'for (const chunk of sampleChunks) {'
+            self.assertIn(needle, script)
+            route.fulfill(response=response, body=script.replace(needle,
+                needle + ' window.__sampleVisits = (window.__sampleVisits || 0) + 1;'))
+        self.page.route('**/static/reader.js?*', instrument)
+        self.page.add_init_script('''const nativeFetch = window.fetch.bind(window), Decoder = window.TextDecoder;
+          window.__previewDecoders = 0;
+          window.TextDecoder = class extends Decoder {
+            constructor(label, ...args) { super(label, ...args); if (!label || label === 'utf-8') window.__previewDecoders++; }
+          };
+          window.fetch = (url, init) => String(url).includes('/api/reader-content?')
+            ? Promise.resolve(new Response(new ReadableStream({start(controller) {
+                controller.enqueue(new TextEncoder().encode('h'));
+                controller.enqueue(new TextEncoder().encode('ea'));
+                controller.enqueue(new TextEncoder().encode('d'));
+                window.__finishChunks = () => {
+                  for (let i = 0; i < 600; i++) controller.enqueue(new TextEncoder().encode('x'.repeat(64)));
+                  for (const byte of new TextEncoder().encode('\\n\u4e2d\u6587')) controller.enqueue(new Uint8Array([byte]));
+                  controller.close();
+                };
+              }}), {headers:{'Content-Type':'text/plain'}})) : nativeFetch(url, init);''')
+        self.page.goto(self.reader_url(), wait_until='domcontentloaded')
+        self.page.locator('.reader-text').filter(has_text='head').wait_for()
+        self.assertEqual(self.page.locator('.reader-text').text_content(), 'head')
+        self.search('head')
+        self.page.evaluate('window.__finishChunks()')
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(self.page.locator('.reader-text').text_content(), 'head' + 'x' * 38400 + '\n中文')
+        self.assertLessEqual(self.page.evaluate('window.__sampleVisits'), 1220)
+        self.assertLessEqual(self.page.evaluate('window.__previewDecoders'), 5)
+
+    def test_txt_preview_cursor_preserves_split_legacy_encodings(self):
+        self.page.add_init_script('''const nativeFetch = window.fetch.bind(window);
+          window.fetch = (url, init) => String(url).includes('/api/reader-content?')
+            ? Promise.resolve(new Response(new ReadableStream({start(controller) {
+                const bytes = new Uint8Array(JSON.parse(new URL(location.href).searchParams.get('test_bytes')));
+                for (const byte of bytes.slice(0, 4)) controller.enqueue(new Uint8Array([byte]));
+                window.__finishLegacy = () => {
+                  for (const byte of bytes.slice(4)) controller.enqueue(new Uint8Array([byte]));
+                  controller.close();
+                };
+              }}))) : nativeFetch(url, init);''')
+        cases = [('丠丠ABCD', 'utf-16le', 'Encoding'), ('中文文本', 'utf-16', 'Encoding'),
+                 ('中文文本', 'utf-16be', 'Encoding'), ('head中文文本', 'gb18030', '中文'),
+                 ('Русский текст', 'cp1251', 'Русский'), ('head中文', 'utf-8-sig', 'Encoding')]
+        for text, encoding, title in cases:
+            with self.subTest(encoding=encoding):
+                encoded = text.encode(encoding)
+                if encoding == 'utf-16be':
+                    encoded = b'\xfe\xff' + encoded
+                self.page.goto(self.reader_url(title=title, test_bytes=json.dumps(list(encoded))), wait_until='domcontentloaded')
+                self.page.wait_for_function('() => !!window.__finishLegacy')
+                if encoding == 'utf-16le':
+                    self.page.wait_for_function("() => document.querySelector('.reader-text')?.textContent === ' N N'")
+                self.page.evaluate('window.__finishLegacy()')
+                self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+                self.assertEqual(self.page.locator('.reader-text').text_content(), text)
+
+    def expose_toc_probe(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '''
+              window.__startTocProbe = () => {
+                const sourceSections = [{linear:'yes'}, {linear:'no'}, {linear:'yes'}];
+                const visibleSections = [sourceSections[0], sourceSections[2], sourceSections[0]];
+                const probe = window.__tocProbe = {calls:0, active:0, peak:0, scans:0, held:[]};
+                visibleSections.indexOf = section => {probe.scans++; return Array.prototype.indexOf.call(visibleSections, section);};
+                let hold = true;
+                const children = Array.from({length:85}, (_, n) => ({label:'Chapter ' + n, href:'chapter-' + n + '#anchor%20' + n}));
+                children.push({label:'Invalid', href:'invalid'});
+                const view = {book:{sections:sourceSections, toc:[{label:'Volume', subitems:children}],
+                  async resolveHref(href) {
+                    probe.calls++; probe.active++; probe.peak = Math.max(probe.peak, probe.active);
+                    try {
+                      if (hold) await new Promise(resolve => probe.held.push(resolve));
+                      if (probe.busy) {
+                        const deadline = performance.now() + 1;
+                        while (performance.now() < deadline) {}
+                      }
+                      if (href === 'invalid') throw Error('bad href');
+                      const number = Number(href.match(/chapter-(\\d+)/)[1]);
+                      return {index:number % 3, anchor:() => number};
+                    } finally {probe.active--;}
+                  }}, goTo(href) {probe.navigation = href;}};
+                probe.release = () => {hold = false; for (const resolve of probe.held.splice(0)) resolve();};
+                probe.promise = foliateTocEntries(view, visibleSections).then(entries => {
+                  entries.find(e => e.href === 'chapter-84#anchor%2084').activate();
+                  probe.entries = entries.map(e => ({label:e.label, section:e.sectionIndex, fragment:e.fragment,
+                    anchor:typeof e.anchor === 'function' ? e.anchor() : null}));
+                }, error => {probe.error = error.name;});
+              };
+            ''')
+        self.page.route('**/static/reader.js?*', instrument)
+        self.serve('TOC probe')
+        self.open(self.reader_url())
+        self.page.evaluate('window.__startTocProbe()')
+
+    def test_foliate_toc_bounds_resolution_and_keeps_every_entry_in_order(self):
+        self.expose_toc_probe()
+        self.page.wait_for_function('() => window.__tocProbe.calls >= 8')
+        self.assertEqual(self.page.evaluate('__tocProbe.calls'), 8)
+        self.page.evaluate('''__tocProbe.busy = true; __tocProbe.ticks = [];
+          const timer = setInterval(() => __tocProbe.ticks.push(__tocProbe.calls), 0);
+          __tocProbe.promise.finally(() => clearInterval(timer)); __tocProbe.release();''')
+        self.page.evaluate('__tocProbe.promise')
+        entries = self.page.evaluate('__tocProbe.entries')
+        self.assertEqual(entries[:-1], [dict(label=f'Chapter {n}', section=(0, -1, 1)[n % 3],
+                                           fragment=f'anchor {n}', anchor=n) for n in range(85)])
+        self.assertEqual(entries[-1], {'label':'Invalid', 'section':-1, 'fragment':'', 'anchor':None})
+        self.assertEqual(self.page.evaluate('[__tocProbe.peak, __tocProbe.scans, __tocProbe.calls]'), [8, 0, 86])
+        self.assertGreaterEqual(len(self.page.evaluate('__tocProbe.ticks')), 2)
+        self.assertEqual(self.page.evaluate('__tocProbe.navigation'), 'chapter-84#anchor%2084')
+
+    def test_foliate_toc_disposal_stops_queued_resolution_and_late_publication(self):
+        self.expose_toc_probe()
+        self.page.wait_for_function('() => window.__tocProbe.calls >= 8')
+        self.page.evaluate("window.dispatchEvent(new Event('pagehide'))")
+        self.page.wait_for_function("() => window.__tocProbe.error === 'AbortError'")
+        self.assertEqual(self.page.evaluate('__tocProbe.calls'), 8)
+        self.page.evaluate('__tocProbe.release()')
+        self.page.wait_for_function('() => __tocProbe.active === 0')
+        self.assertFalse(self.page.evaluate('!!__tocProbe.entries'))
+        self.assertEqual(self.page.evaluate('__tocProbe.calls'), 8)
+
     def test_text_search_publishes_partial_results_before_full_scan(self):
         self.page.add_init_script("""const native = window.setTimeout.bind(window);
           window.setTimeout = (fn, ms, ...args) => native(fn, ms === 0 ? 20 : ms, ...args);""")
