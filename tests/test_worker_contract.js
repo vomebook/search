@@ -64,7 +64,14 @@ function makeWorker(workerSource = source, options = {}) {
   async function send(type, payload, options) {
     const settings = Object.assign({ protocol: PROTOCOL, id: "request" }, options || {});
     const before = messages.length;
-    await listeners.message({ data: { protocol: settings.protocol, type, id: settings.id, payload: payload || {} } });
+    const work = listeners.message({ data: { protocol: settings.protocol, type, id: settings.id, payload: payload || {} } });
+    if (type === "local-search" && context.drive) {
+      let settled = false;
+      work.finally(() => { settled = true; });
+      for (let i = 0; !settled && i < 10000; i++) { await Promise.resolve(); if (!settled) context.drive(); }
+      assert(settled, "scheduled query did not settle");
+    }
+    await work;
     const sent = messages.slice(before);
     assert.strictEqual(sent.length, 1);
     return sent[0];
@@ -98,6 +105,53 @@ async function names(params) {
 
 test("registers one versioned message protocol listener", () => {
   assert.strictEqual(typeof makeWorker().listeners.message, "function");
+});
+
+test("repository-scoped literal scans skip other records and preserve source-order ties", async () => {
+  const input = Array.from({length:12}, (_, i) => ({...records[0],
+    Repo: i % 3 === 0 ? "Repo/B" : "Repo/A", File:"same " + i}));
+  const {worker} = await loaded(input);
+  const before = await worker.request("local-search", {q:"same",exact:true,repos:["Repo/A"]});
+  worker.context.skip = input.map((_,i)=>i).filter(i=>i%3===0);
+  vm.runInContext('for (const i of skip) records[i] = new Proxy({}, {get(){throw Error("out-of-scope read");}}); searchOrderCache.clear();',worker.context);
+  for (const q of ["same", "sa*e", "sa?e"]){
+    const current = await worker.request("local-search",{q,exact:true,repos:["Repo/A","Repo/A"]});
+    assert.deepStrictEqual(current.ids,before.ids);
+    assert.strictEqual(current.total,8);
+  }
+  const full = await loaded(input);
+  const result = await full.worker.request("local-search",{q:"same",exact:true,repos:["Repo/A","missing","Repo/B","Repo/A"]});
+  assert.deepStrictEqual(result.records.map(r=>r.File), input.map(r=>r.File));
+});
+
+test("sorted posting intersection agrees with set intersection without changing fuzzy tie order", () => {
+  const {context} = makeWorker();
+  let seed=123;
+  const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed;};
+  for(let run=0;run<100;run++){
+    context.lists=Array.from({length:1+random()%5},()=>Array.from({length:100},(_,i)=>i).filter(()=>random()%4===0));
+    assert.strictEqual(vm.runInContext('JSON.stringify(intersectCandidateLists(lists,true)) === JSON.stringify(intersectCandidateLists(lists))',context),true);
+  }
+  context.lists=[[9,2,7,1],[7,9,1]];
+  assert.strictEqual(vm.runInContext('JSON.stringify(intersectCandidateLists(lists))',context),'[9,7,1]');
+});
+
+test("inherited object names remain ordinary tokens and repository keys", async () => {
+  const input = ["constructor", "__proto__", "toString", "hasOwnProperty"].map(name => ({
+    ...records[0], Repo: name, File: name, Extension: "constructor", Folder: [name],
+  }));
+  const {worker, metadata} = await loaded(input);
+  assert.strictEqual(metadata.count, input.length);
+  for (const record of input) {
+    const result = await worker.request("local-search", {q: record.File, repos: [record.Repo], searchFolders: false});
+    assert.strictEqual(result.total, 1);
+    assert.strictEqual(result.records[0].File, record.File);
+    assert.strictEqual((await worker.request("folder-contents", {repo: record.Repo, path: record.Repo})).files.length, 1);
+    assert.strictEqual((await worker.request("local-search", {repos: [record.Repo], sort: "name"})).total, 1);
+  }
+  const plain = await loaded([records[0]]);
+  assert.strictEqual((await plain.worker.request("local-search", {q: "constructor"})).total, 0);
+  assert.strictEqual((await plain.worker.request("local-search", {repos: ["__proto__"]})).total, 0);
 });
 
 test("bounded wildcards preserve regex case, UTF-16 and line-terminator semantics", () => {
@@ -142,8 +196,52 @@ function scheduledWorker(options = {}) {
     tasks.delete(id);
     task.fn();
   }
+  worker.context.drive = () => { if (tasks.size) tick(); };
   return { worker, tasks, tick };
 }
+
+test("demanded indexing yields to metadata and cancellation without discarding partial progress", async () => {
+  const {worker, tasks, tick} = scheduledWorker({navigator: {deviceMemory: 2}});
+  await worker.request("replace-corpus", {data: compact(Array.from({length: 1200}, () => records[0]))});
+  while (tasks.size) tick();
+  const pending = worker.listeners.message({data:{protocol:1, type:"local-search", id:"slow", payload:{q:"alpha"}}});
+  await Promise.resolve();
+  assert(vm.runInContext("fulltextBuild.next > 0 && fulltextBuild.next < records.length", worker.context));
+  const metadata = await worker.request("metadata");
+  assert.strictEqual(metadata.count, 1200);
+  await worker.request("cancel-search", {requestId:"slow"}, {id:"cancel"});
+  tick(); await pending;
+  const response = worker.messages.find(message => message.id === "slow");
+  assert.strictEqual(response.error.code, "SEARCH_CANCELLED");
+  assert(vm.runInContext("fulltextBuild !== null && searchJobs.size === 0", worker.context));
+  assert.strictEqual((await worker.request("local-search", {q:"alpha"})).total, 1200);
+});
+
+test("corpus replacement invalidates a yielded foreground query", async () => {
+  const {worker, tasks, tick} = scheduledWorker({navigator:{deviceMemory:2}});
+  await worker.request("replace-corpus", {data:compact(Array.from({length:700},()=>records[0]))});
+  while (tasks.size) tick();
+  const pending = worker.listeners.message({data:{protocol:1,type:"local-search",id:"old",payload:{q:"alpha"}}});
+  await Promise.resolve();
+  await worker.request("replace-corpus", {data:compact([records[4]])}, {id:"replace"});
+  while (tasks.size) { tick(); await Promise.resolve(); }
+  await pending;
+  assert.strictEqual(worker.messages.find(message=>message.id==="old").error.code,"CORPUS_REPLACED");
+  assert.strictEqual((await worker.request("local-search",{q:"手机"})).total,1);
+});
+
+test("speculative sort preparation defers while demand indexing is active", async () => {
+  const {worker, tasks, tick} = scheduledWorker({navigator:{deviceMemory:2}});
+  await worker.request("replace-corpus", {data:compact(Array.from({length:700},()=>records[0]))});
+  const pending = worker.listeners.message({data:{protocol:1,type:"local-search",id:"demand",payload:{q:"alpha"}}});
+  await Promise.resolve();
+  tick();
+  assert(vm.runInContext("!nameOrderReady && !sizeOrderReady && sortBuildTimer !== null",worker.context));
+  await worker.request("cancel-search",{requestId:"demand"},{id:"cancel"});
+  tick(); await pending;
+  while(tasks.size) tick();
+  assert(vm.runInContext("nameOrderReady && sizeOrderReady",worker.context));
+});
 test("background indexing yields, publishes complete indexes and preserves cold search results", async () => {
   const input = Array.from({length: 400}, (_, i) => Object.assign({}, records[i % records.length]));
   const cold = await loaded(input);
@@ -297,7 +395,7 @@ test("snapshot identity survives Worker restarts but changes with content and se
   assert.deepStrictEqual(old.ids, current.ids);
   await second.worker.request('replace-corpus', {data: compact(records)});
   assert.strictEqual(old.snapshot_generation, (await second.worker.request('local-search', {})).snapshot_generation);
-  const changed = makeWorker(source.replace('worker-search-v1', 'worker-search-v2'));
+  const changed = makeWorker(source.replace('worker-search-v2', 'worker-search-v3'));
   await changed.request('replace-corpus', {data: compact(records)});
   assert.notStrictEqual(old.snapshot_generation, (await changed.request('local-search', {})).snapshot_generation);
   const resized = records.map(record => Object.assign({}, record, {Size: 1}));

@@ -62,6 +62,34 @@ class PagingRecoveryTests(unittest.TestCase):
     def tearDown(self):
         self.context.close()
 
+    def test_updated_generation_relocates_without_mixing_ordinary_pages(self):
+        self.page.evaluate(r'''() => {
+          const previous = window.fetch;
+          window.currentGeneration = 'A';
+          window.fetch = (input, options) => {
+            const body = JSON.parse(options?.body || '{}');
+            if (body.q !== 'paging-generation') return previous(input, options);
+            const generation = currentGeneration;
+            if (generation === 'A' && body.page > 1) return new Promise(() => {});
+            const all = Array.from({length:301}, (_, i) => ({Repo:'VoiceOfML/Test',
+              File: 'paging-' + (generation === 'B' ? i - 1 : i), Extension:'txt', Folder:[], Size:1}));
+            const anchor_index = body.anchor_id === undefined ? undefined : all.findIndex(r => getResultStableId(r) === body.anchor_id);
+            return Promise.resolve(new Response(JSON.stringify({generation, total:301, page:body.page,
+              page_size:body.page_size, anchor_index,
+              results:all.slice((body.page-1)*body.page_size,body.page*body.page_size)})));
+          };
+          STATE.query = 'paging-generation'; doSearch(false, true);
+        }''')
+        self.page.wait_for_function("STATE._loadedPage === 1 && !STATE.isLoading && searchPageMetadata.get(STATE.results[0])?.generation === 'A'")
+        self.page.evaluate("currentGeneration='B'; cancelSearchPrefetch(); STATE.page=2; doSearch(true)")
+        self.page.wait_for_function("!positionRestore && resultWindow?.generation === 'B' && !STATE.isLoading")
+        names = self.page.evaluate('STATE.results.filter(Boolean).map(r => r.File)')
+        self.assertGreaterEqual(len(names), 200)
+        self.assertEqual(names, ['paging-' + str(i) for i in range(-1, len(names) - 1)])
+        self.assertEqual(self.page.evaluate('STATE.total'), 301)
+        self.assertEqual(self.page.evaluate('STATE._resultBackend'), 'api')
+        self.assertEqual(self.errors, [])
+
     def reach_bottom(self):
         self.page.evaluate('DOM.resultsContainer.scrollTop = DOM.resultsContainer.scrollHeight')
         self.page.wait_for_function('STATE.isLoading && STATE._pendingPage === 2')
