@@ -4171,26 +4171,42 @@ function repairHtmlContrast(frame) {
     });
     return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
   };
-  const background = (element) => {
+  const backgrounds = new Map();
+  const background = (element, style) => {
+    const pending = [];
+    let light = 1;
     for (let current = element; current; current = current.parentElement) {
-      const color = parseColor(frame.contentWindow.getComputedStyle(current).backgroundColor);
-      if (color && color[3] > 0.1) return color;
+      if (backgrounds.has(current)) {
+        light = backgrounds.get(current);
+        break;
+      }
+      pending.push(current);
+      const color = parseColor((current === element ? style :
+        frame.contentWindow.getComputedStyle(current)).backgroundColor);
+      if (color && color[3] > 0.1) {
+        light = luminance(color);
+        break;
+      }
     }
-    return [255, 255, 255, 1];
+    for (const current of pending) backgrounds.set(current, light);
+    return light;
   };
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
   const elements = new Set();
   while (walker.nextNode() && elements.size < 10000)
     if (walker.currentNode.data.trim()) elements.add(walker.currentNode.parentElement);
   for (const element of elements) {
-    const foreground = parseColor(frame.contentWindow.getComputedStyle(element).color);
-    const backdrop = background(element);
+    const style = frame.contentWindow.getComputedStyle(element);
+    const foreground = parseColor(style.color);
+    const dark = background(element, style);
     if (!foreground) continue;
-    const light = luminance(foreground),
-      dark = luminance(backdrop);
+    const light = luminance(foreground);
     const contrast = (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
-    if (contrast < 3)
+    if (contrast < 3) {
       element.style.setProperty("color", dark > 0.45 ? "#111" : "#f5f5f5", "important");
+      // Inherited color and currentColor backgrounds can change after a repair.
+      backgrounds.clear();
+    }
   }
 }
 async function renderPlainText(response) {
