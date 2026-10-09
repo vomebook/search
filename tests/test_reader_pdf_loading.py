@@ -1,6 +1,8 @@
 """Actual module imports and PDF.js with cold cache and transport faults."""
 import contextlib
 import json
+import re
+import threading
 import time
 import unittest
 import urllib.parse
@@ -38,9 +40,6 @@ class PdfLoadingTests(unittest.TestCase):
         self.page.on('request', lambda request: self.modules.append(request.url)
                      if '/vendor/pdf.min.' in request.url else None)
         self.page.route('**/api/reader-content**', self.document)
-        cdp = self.context.new_cdp_session(self.page)
-        cdp.send('Network.enable')
-        cdp.send('Network.setCacheDisabled', {'cacheDisabled': True})
 
     def document(self, route):
         self.documents.append(route.request.url)
@@ -60,6 +59,92 @@ class PdfLoadingTests(unittest.TestCase):
         self.ready()
         self.assertEqual(len(self.modules), 1)
         self.assertNotIn('reader-module-retry', self.modules[0])
+
+    def test_pdf_range_policy_keeps_default_browser_cache_from_serializing_reads(self):
+        payload = b''.join(bytes([index]) * 128 for index in range(16))
+        metrics = {mode: {'active': 0, 'peak': 0} for mode in ('upstream', 'reader')}
+        lock = threading.Lock()
+        original = SearchHandler.do_GET
+
+        def serve(handler):
+            if not handler.path.startswith('/cache-lock-probe.pdf?'):
+                return original(handler)
+            mode = urllib.parse.parse_qs(urllib.parse.urlsplit(handler.path).query)['mode'][0]
+            match = re.fullmatch(r'bytes=(\d+)-(\d+)', handler.headers.get('Range', ''))
+            start, end = int(match[1]), int(match[2])
+            headers = {'Content-Type': 'application/pdf', 'Cache-Control': 'public, max-age=31536000',
+                       'ETag': '"range-cache-probe"', 'Accept-Ranges': 'bytes',
+                       'Content-Range': f'bytes {start}-{end}/{len(payload)}', 'Content-Length': str(end-start+1)}
+            with lock:
+                metrics[mode]['active'] += 1
+                metrics[mode]['peak'] = max(metrics[mode]['peak'], metrics[mode]['active'])
+            try:
+                time.sleep(.08)
+                handler.send_response(206)
+                for name, value in headers.items():
+                    handler.send_header(name, value)
+                handler.end_headers()
+                handler.wfile.write(payload[start:end+1])
+                handler.wfile.flush()
+            finally:
+                with lock:
+                    metrics[mode]['active'] -= 1
+
+        # Playwright routing also disables HTTP caching. Use an un-routed context.
+        with patch.object(SearchHandler, 'do_GET', serve), \
+                self.browser.new_context(service_workers='block') as context:
+            page = context.new_page()
+            page.goto(self.origin + '/search/static/manifest.json')
+            page.evaluate("async () => { window.__pdfNetwork = await import('/search/static/reader-pdf-network.mjs'); }")
+            for mode in ('upstream', 'reader'):
+                results = page.evaluate('''async mode => {
+                  const url = '/cache-lock-probe.pdf?mode=' + mode;
+                  const policy = mode === 'reader' ? __pdfNetwork.createPdfFetchPolicy() : null;
+                  policy?.add([url]);
+                  try { return await Promise.all(Array.from({length:16}, async (_, index) => {
+                    const headers = {Range:'bytes=' + index*128 + '-' + (index*128+127)};
+                    const response = await fetch(url, {headers});
+                    const bytes = new Uint8Array(await response.arrayBuffer());
+                    return {status:response.status, range:response.headers.get('Content-Range'),
+                            exact:bytes.length === 128 && bytes.every(value => value === index)};
+                  })); } finally { policy?.dispose(); }
+                }''', mode)
+                self.assertEqual(results, [{'status':206, 'range':f'bytes {index*128}-{index*128+127}/2048',
+                                            'exact':True} for index in range(16)])
+        self.assertGreater(metrics['reader']['peak'], 1, metrics)
+        self.assertEqual(self.errors, [])
+
+    def test_pdf_fetch_policy_scopes_requests_preserves_options_and_restores_owner(self):
+        with self.browser.new_context(service_workers='block') as context:
+            page = context.new_page()
+            page.goto(self.origin + '/search/static/manifest.json')
+            result = page.evaluate('''async () => {
+              const {createPdfFetchPolicy} = await import('/search/static/reader-pdf-network.mjs');
+              const native = fetch, calls = [], signal = new AbortController().signal;
+              const init = {cache:'force-cache', signal, headers:{Range:'bytes=0-1'}};
+              const spy = (input, options) => {calls.push({input, options}); return Promise.resolve(new Response('ok'));};
+              globalThis.fetch = spy;
+              const policy = createPdfFetchPolicy();
+              try {
+                policy.add(['/document.pdf']);
+                await fetch('/document.pdf', init);
+                await fetch('/document.pdf?other=1', init);
+                policy.add(['/fallback.pdf']);
+                const request = new Request(new URL('/fallback.pdf', location.href));
+                await fetch(request, init);
+                policy.dispose();
+                const restored = fetch === spy;
+                await fetch('/document.pdf', init);
+                return {caches:calls.map(call => call.options.cache),
+                        signals:calls.every(call => call.options.signal === signal),
+                        headers:calls.every(call => call.options.headers === init.headers),
+                        request:calls[2].input === request, outside:calls[1].options === init,
+                        restored, originalCache:init.cache};
+              } finally { policy.dispose(); globalThis.fetch = native; }
+            }''')
+        self.assertEqual(result, {'caches':['no-store','force-cache','no-store','force-cache'],
+                                 'signals':True, 'headers':True, 'request':True, 'outside':True,
+                                 'restored':True, 'originalCache':'force-cache'})
 
     def test_v2_bucket_pdf_uses_external_proxy_without_nested_content_request(self):
         path = 'derived/test/' + 'a' * 32 + '/document.pdf'

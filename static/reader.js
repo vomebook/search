@@ -8,6 +8,8 @@ import "/search/static/reader-runtime.js";
 import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
 import { paintTextHit } from "/search/static/reader-book-text.js";
+import { createPdfFetchPolicy } from "./reader-pdf-network.mjs";
+let pdfFetchPolicy = null;
 import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
@@ -5205,6 +5207,11 @@ async function loadPdfEngine() {
 function loadPdfDocument() {
   return preloadPdfEngine().then((pdfjs) => {
     assertReaderActive();
+    if (!pdfFetchPolicy) {
+      pdfFetchPolicy = createPdfFetchPolicy();
+      trackReaderResource(() => { pdfFetchPolicy?.dispose(); pdfFetchPolicy = null; });
+    }
+    pdfFetchPolicy.add([sourceUrl, contentUrl]);
     pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
     const options = (url) => ({
       url,
