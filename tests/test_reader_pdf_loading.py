@@ -95,6 +95,30 @@ class PdfLoadingTests(unittest.TestCase):
                 self.assertGreaterEqual(self.page.evaluate("document.querySelector('.reader-page').getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top"), -1)
                 self.page.unroute('**/api/reader-bucket-resource?**')
 
+    def test_legacy_v2_bucket_pdf_links_stay_on_proxy_for_both_buckets(self):
+        direct = []
+        self.page.route('https://huggingface.co/**', lambda route: (direct.append(route.request.url), route.abort()))
+        for bucket, path in (
+            ('reader-assets-v2', 'documents/pdf/ppt/' + 'a' * 64 + '/document.pdf'),
+            ('pdf-pages-v2', 'derived/test/' + 'b' * 32 + '/document.pdf'),
+        ):
+            with self.subTest(bucket=bucket):
+                requested = []
+                def proxy(route):
+                    requested.append(route.request.url)
+                    route.fulfill(content_type='application/pdf', body=minimal_pdf())
+                self.page.route('**/api/reader-bucket-resource?**', proxy)
+                source = f'https://huggingface.co/buckets/vomebook/{bucket}/resolve/{path}'
+                self.page.goto(self.origin + '/search/static/reader.html?' + urllib.parse.urlencode(
+                    dict(url=source, ext='pdf', title='Legacy bucket link')), wait_until='domcontentloaded')
+                self.ready()
+                self.assertEqual(len(requested), 1)
+                self.assertTrue(requested[0].startswith('https://voiceofml-search.hf.space/api/reader-bucket-resource?'))
+                self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(requested[0]).query)['path'], [path])
+                self.assertEqual(self.documents, [])
+                self.assertEqual(direct, [])
+                self.page.unroute('**/api/reader-bucket-resource?**', proxy)
+
     def test_pdf_engine_loads_while_id_resolution_is_pending(self):
         pending = []
         self.page.route('**/api/reader-resolve?**', lambda route: pending.append(route))

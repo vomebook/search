@@ -53,6 +53,58 @@ async function main() {
   assert.strictEqual(shared.manager.pendingCount, 0);
   assert.strictEqual(shared.timers.size, 0);
 
+  const optionCalls = [];
+  const distinct = loadManager((url, init) => new Promise((resolve) => optionCalls.push({ url, init, resolve })));
+  const variants = [
+    distinct.manager.request("document", 1000, { headers: { Range: "bytes=0-9" } }),
+    distinct.manager.request("document", 1000, { headers: { Range: "bytes=10-19" } }),
+    distinct.manager.request("document", 1000, { method: "HEAD" }),
+    distinct.manager.request("document", 25),
+    distinct.manager.request("document", 1000),
+    distinct.manager.request("document", 1000, { priority: "high" })
+  ];
+  await Promise.resolve();
+  assert.strictEqual(optionCalls.length, 5, "different ranges, methods and deadlines must not share a response");
+  for (const { init, resolve } of optionCalls)
+    resolve(new Response(init.method === "HEAD" ? null : (init.headers?.Range || "whole body")));
+  const variantResponses = await Promise.all(variants);
+  assert.deepStrictEqual(await Promise.all(variantResponses.map(response => response.text())),
+    ["bytes=0-9", "bytes=10-19", "", "whole body", "whole body", "whole body"]);
+  assert.strictEqual(distinct.manager.activeCount, 0);
+  assert.strictEqual(distinct.timers.size, 0);
+
+  const caller = new AbortController();
+  const ownedCalls = [];
+  const owned = loadManager((_url, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    ownedCalls.push({ resolve });
+  }));
+  const ownedRequest = owned.manager.request("same-source", 1000, { signal: caller.signal });
+  const otherRequest = owned.manager.request("same-source", 1000);
+  await Promise.resolve();
+  assert.strictEqual(ownedCalls.length, 2);
+  caller.abort(new DOMException("Caller cancelled", "AbortError"));
+  await assert.rejects(ownedRequest, error => error === caller.signal.reason);
+  ownedCalls[1].resolve(new Response("unaffected"));
+  assert.strictEqual(await (await otherRequest).text(), "unaffected");
+  await assert.rejects(owned.manager.request("already-cancelled", 1000, { signal: caller.signal }),
+    error => error === caller.signal.reason);
+  assert.strictEqual(ownedCalls.length, 2);
+  assert.strictEqual(owned.manager.activeCount, 0);
+  assert.strictEqual(owned.timers.size, 0);
+
+  const bodyCaller = new AbortController();
+  let ownedBodyCancels = 0;
+  const ownedBody = loadManager(() => Promise.resolve(new Response(new ReadableStream({
+    cancel() { ownedBodyCancels++; }
+  }))));
+  const ownedResponse = await ownedBody.manager.request("owned-body", 1000, { signal: bodyCaller.signal });
+  bodyCaller.abort(new DOMException("Caller cancelled body", "AbortError"));
+  await assert.rejects(ownedResponse.text(), error => error === bodyCaller.signal.reason);
+  assert.strictEqual(ownedBodyCancels, 1);
+  assert.strictEqual(ownedBody.manager.activeCount, 0);
+  assert.strictEqual(ownedBody.timers.size, 0);
+
   const timedOut = loadManager(
     (_url, { signal }) =>
       new Promise((_resolve, reject) => {

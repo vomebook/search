@@ -111,6 +111,12 @@ function readerContentUrl(url) {
     if (parsed.origin === "https://voiceofml-search.hf.space" &&
         parsed.pathname === "/api/reader-bucket-resource")
       return parsed.href;
+    if (parsed.origin === "https://huggingface.co" && !parsed.username && !parsed.password && !parsed.search && !parsed.hash) {
+      const prefix = /^\/buckets\/(vomebook\/(?:pdf-pages-v2|reader-assets-v2))\/resolve\//.exec(parsed.pathname);
+      const path = prefix && decodeURIComponent(parsed.pathname.slice(prefix[0].length));
+      if (path && VoiceOfMLReader.isBucketPath(path, true, prefix[1]))
+        return `https://voiceofml-search.hf.space/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
+    }
   } catch (_) {}
   return `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url)}`;
 }
@@ -2356,20 +2362,26 @@ window.addEventListener("online", () => queuePdfManifestPrefetch());
 function validSource(raw) {
   try {
     const url = new URL(raw);
+    if (url.username || url.password || url.hash) return false;
     const bucketPath = url.searchParams.get("path") || "";
     if (
       url.origin === "https://voiceofml-search.hf.space" &&
       url.pathname === "/api/reader-bucket-resource" &&
       url.searchParams.getAll("path").length === 1 &&
       [...url.searchParams.keys()].every((key) => key === "path") &&
-      VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/pdf-pages-v2")
+       (VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/pdf-pages-v2") ||
+        VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/reader-assets-v2"))
     )
       return true;
     if (url.protocol === "https:" && url.hostname === "huggingface.co" &&
-        url.pathname.startsWith("/buckets/vomebook/pdf-pages-v2/resolve/") && !url.search && !url.hash) {
-      const prefix = "/buckets/vomebook/pdf-pages-v2/resolve/";
+        (url.pathname.startsWith("/buckets/vomebook/pdf-pages-v2/resolve/") ||
+         url.pathname.startsWith("/buckets/vomebook/reader-assets-v2/resolve/")) && !url.search) {
+      const prefix = url.pathname.startsWith("/buckets/vomebook/pdf-pages-v2/resolve/")
+        ? "/buckets/vomebook/pdf-pages-v2/resolve/"
+        : "/buckets/vomebook/reader-assets-v2/resolve/";
       const path = decodeURIComponent(url.pathname.slice(prefix.length));
-      return VoiceOfMLReader.isBucketPath(path, true, "vomebook/pdf-pages-v2");
+      const bucket = prefix.includes("pdf-pages-v2") ? "vomebook/pdf-pages-v2" : "vomebook/reader-assets-v2";
+      return VoiceOfMLReader.isBucketPath(path, true, bucket);
     }
     if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname))
       return false;
@@ -2555,12 +2567,6 @@ async function retryReaderProxy(open) {
 function fetchReaderUrl(rawUrl, requestInit = {}) {
   if (String(rawUrl).includes("/api/reader-bucket-resource?"))
     return fetchWithReaderTimeout(rawUrl, READER_PROXY_TIMEOUT_MS, requestInit);
-  try {
-    const url = new URL(rawUrl, location.href);
-    if (url.protocol === "https:" && url.hostname === "huggingface.co" &&
-        url.pathname.startsWith("/buckets/vomebook/pdf-pages-v2/resolve/") && !url.search && !url.hash)
-      return fetchWithReaderTimeout(url.href, READER_PROXY_TIMEOUT_MS, requestInit);
-  } catch (_) {}
   const proxyUrl = readerContentUrl(rawUrl);
   return retryReaderProxy(async () => {
       const response = await fetchWithReaderTimeout(proxyUrl, READER_PROXY_TIMEOUT_MS, requestInit);
