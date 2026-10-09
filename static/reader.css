@@ -127,6 +127,13 @@ body {
   text-align: right;
   font: inherit;
   outline: none;
+  padding: 0 2px;
+  appearance: textfield;
+}
+.compact-input input::-webkit-inner-spin-button,
+.compact-input input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
 }
 .icon-button {
   width: 32px;
@@ -939,12 +946,6 @@ body {
 }
 .reader-page-state[hidden] {
   display: none;
-}
-.reader-preparing-surface {
-  width: min(100%, 900px);
-  aspect-ratio: 1 / 1.414;
-  min-height: 220px;
-  content-visibility: visible;
 }
 .reader-page canvas {
   display: block;

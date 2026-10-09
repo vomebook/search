@@ -97,5 +97,79 @@
     });
   }
 
-  root.VoiceOfMLReaderChapters = Object.freeze({ createChapterRepository });
+  function createChapterScheduler({ create, concurrency = 3, speculativeLimit = 2 }) {
+    const records = new Map(), active = new Set();
+    let disposed = false, scheduled = false;
+    const abortError = () => new DOMException("Chapter load cancelled", "AbortError");
+    function cancel(record) {
+      if (records.get(record.index) !== record) return;
+      records.delete(record.index);
+      record.controller.abort(abortError());
+      record.reject(record.controller.signal.reason);
+    }
+    function pump() {
+      scheduled = false;
+      if (disposed) return;
+      while (active.size < concurrency) {
+        const queued = [...records.values()].filter(record => !record.started);
+        const speculative = [...active].filter(record => !record.demand).length;
+        const record = queued.find(record => record.demand) ||
+          (speculative < speculativeLimit && queued.find(record => !record.demand));
+        if (!record) break;
+        record.started = true;
+        active.add(record);
+        Promise.resolve().then(() => {
+          record.controller.signal.throwIfAborted();
+          return create(record.index, record.controller.signal, record.demand ? "high" : "low");
+        }).then(value => {
+          record.controller.signal.throwIfAborted();
+          record.resolve(value);
+        }).catch(record.reject).finally(() => {
+          active.delete(record);
+          if (records.get(record.index) === record) records.delete(record.index);
+          schedule();
+        });
+      }
+    }
+    function schedule() {
+      if (scheduled || disposed) return;
+      scheduled = true;
+      Promise.resolve().then(pump);
+    }
+    function load(index, demand = true) {
+      if (disposed) return Promise.reject(abortError());
+      if (demand) {
+        for (const record of records.values())
+          if (!record.demand && record.index !== index) cancel(record);
+      }
+      let record = records.get(index);
+      if (record) {
+        record.demand ||= demand;
+        schedule();
+        return record.promise;
+      }
+      record = { index, demand, started: false, controller: new root.AbortController() };
+      record.promise = new Promise((resolve, reject) => Object.assign(record, { resolve, reject }));
+      records.set(index, record);
+      schedule();
+      return record.promise;
+    }
+    function prefetch(indices) {
+      const wanted = new Set(indices);
+      for (const record of records.values())
+        if (!record.demand && !wanted.has(record.index)) cancel(record);
+      for (const index of wanted) load(index, false).catch(() => {});
+    }
+    function dispose() {
+      disposed = true;
+      for (const record of records.values()) cancel(record);
+    }
+    return Object.freeze({
+      load, prefetch, dispose,
+      get activeCount() { return active.size; },
+      get pendingCount() { return records.size; }
+    });
+  }
+
+  root.VoiceOfMLReaderChapters = Object.freeze({ createChapterRepository, createChapterScheduler });
 })(typeof self !== "undefined" ? self : globalThis);

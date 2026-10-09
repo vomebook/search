@@ -396,7 +396,10 @@
         : "",
       ReaderFallback: asset.f ? assetBase + asset.f : "",
       ReaderOcrManifest: ocrUrl || (ocrPath.endsWith("/ocr-manifest.json") ? assetBase + ocrPath : ""),
-      ReaderOcrMode: String(asset.om || "")
+      ReaderOcrMode: String(asset.om || ""),
+      ReaderPdfDocument: asset.pd && ["vomebook/reader-assets-v2", "vomebook/pdf-pages-v2"].includes(asset.pdb) &&
+        isBucketPath(asset.pd, true, asset.pdb) && asset.pd.endsWith("/document.pdf")
+        ? `${bucketBase}?path=${encodeURIComponent(asset.pd)}` : ""
     };
   }
 
@@ -427,6 +430,7 @@
       params.set("ocr_manifest", record.ReaderOcrManifest || record.readerOcrManifest);
     if (!shortId && (record.ReaderFallback || record.readerFallback))
       params.set("fallback", record.ReaderFallback || record.readerFallback);
+    if (!shortId && record.ReaderPdfDocument) params.set("pdf_document", record.ReaderPdfDocument);
     if (
       !shortId &&
       (record.ReaderChapterManifest ||

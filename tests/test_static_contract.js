@@ -96,8 +96,8 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(app, /var warmedReaderSources = new Set\(\)/);
   assert.match(app, /warmedReaderSources\.size >= 8/);
   assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
-  assertCode(reader, 'if (!fallback) { fallback = true; image.src = sourceUrl; } else finish(new Error("image load failed"))');
-  assert.match(reader, /image\.src = contentUrl/);
+  assertCode(reader, 'if (!fallback) { fallback = true; image.src = target; } else finish(new Error("image load failed"))');
+  assert.match(reader, /image\.src = readerContentUrl\(target\)/);
   assert.match(reader, /disableStream: true/);
   assert.match(reader, /capability = readerRuntime\.negotiate\(VoiceOfMLReader\.capability\(extension\)\)/);
   assert.match(reader, /resolved\.extension[\s\S]*content\.dataset\.mode = capability\.mode/);
@@ -370,8 +370,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'const READER_PROXY_TIMEOUT_MS = 120000;');
   assertCode(reader, '}, READER_PROXY_TIMEOUT_MS)');
   assert.match(reader, /function fetchWithReaderTimeout/);
-  assertCode(reader, 'loadPdfTaskWithTimeout(pdfjs, options, contentUrl)');
-  assertCode(reader, 'loadPdfTaskWithTimeout(pdfjs, options, sourceUrl)');
+  assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxyUrl))');
+  assertCode(reader, 'return loadPdfTaskWithTimeout(pdfjs, options, originalUrl)');
   assert.match(reader, /function loadPdfWithTimeout/);
   assertCode(reader, 'trackReaderResource(destroy)');
   assertCode(reader, 'task.destroy()?.catch?.(() => {})');
