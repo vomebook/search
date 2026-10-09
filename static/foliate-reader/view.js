@@ -561,9 +561,11 @@ export class View extends HTMLElement {
                 if (opts.current?.() === false) return
                 let count = 0
                 const subitems = []
-                for (const { range, excerpt } of matcher(doc, query)) {
-                    if (count >= offset && subitems.length < limit)
+                for (const match of matcher(doc, query)) {
+                    if (count >= offset && subitems.length < limit) {
+                        const { range, excerpt } = match
                         subitems.push({ cfi: this.getCFI(sectionIndex, range), excerpt })
+                    }
                     count++
                     if (count % 2048 === 0) {
                         await new Promise(resolve => setTimeout(resolve, 0))
