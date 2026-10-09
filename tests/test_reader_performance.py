@@ -875,7 +875,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.wait_for_function("""() => document.querySelector('.reader-page[data-page="2"]')?._renderStarted""", timeout=10000)
         page.locator("#page-number").fill("25")
         page.locator("#page-number").dispatch_event("change")
-        page.wait_for_function("""() => document.querySelector('#viewport').scrollTop >= document.querySelector('.reader-page[data-page="25"]').offsetTop - 2""", timeout=3000)
+        page.wait_for_function("""() => document.querySelector('.reader-page[data-page="25"]').getBoundingClientRect().top <= document.querySelector('#viewport').getBoundingClientRect().top + 2""", timeout=3000)
         page.locator('.reader-page[data-page="25"] img.ready').wait_for(timeout=3000)
         self.assertIn(25, requested)
         for route in held:

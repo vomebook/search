@@ -918,6 +918,10 @@ document
     documentState.pageCount ? goToPage(documentState.page + 1) : turnViewport(1)
   );
 
+function readerPageScrollTop(shell) {
+  return viewport.scrollTop + shell.getBoundingClientRect().top -
+    viewport.getBoundingClientRect().top - viewport.clientTop;
+}
 async function goToPage(value, generation = beginReaderNavigation()) {
   try {
     if (!documentState.pageCount || !isReaderGenerationCurrent("navigation", generation))
@@ -943,7 +947,7 @@ async function goToPage(value, generation = beginReaderNavigation()) {
         ? renderPdfInBackground(shell, false, true)
         : null;
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    viewport.scrollTop = shell.offsetTop;
+    viewport.scrollTop = readerPageScrollTop(shell);
     if (imagePage && shell.dataset.renderState === "rendered") renderPdfOcrText(shell);
     pageNavigationLockUntil = performance.now() + 500;
     if (pendingPdf) cancelSpeculativePdfRenders(shell);
@@ -992,7 +996,7 @@ async function saveProgress(event) {
         `.reader-page[data-page="${documentState.page}"], .reader-docx-page[data-page="${documentState.page}"]`
       )
     : null;
-  const pageOffset = shell ? Math.max(0, viewport.scrollTop - shell.offsetTop) : 0;
+  const pageOffset = shell ? Math.max(0, viewport.scrollTop - readerPageScrollTop(shell)) : 0;
   const htmlScrollTop = htmlFrame && htmlFrame.contentWindow ? htmlFrame.contentWindow.scrollY : 0;
   const readerUrl = currentReaderUrl();
   const foliatePosition = captureFoliateBookmarkPosition() || captureChapterPosition();
@@ -2028,7 +2032,7 @@ function captureBookmarkSnapshot() {
   syncCurrentPageFromMarker();
   const foliatePosition = captureFoliateBookmarkPosition() || captureChapterPosition();
   const shell = documentState.pageCount ? pageAtMarker() : null;
-  const pageOffset = shell ? Math.max(0, viewport.scrollTop - shell.offsetTop) : 0;
+  const pageOffset = shell ? Math.max(0, viewport.scrollTop - readerPageScrollTop(shell)) : 0;
   const progress = readerProgressPercent();
   const htmlScrollTop = htmlFrame && htmlFrame.contentWindow ? htmlFrame.contentWindow.scrollY : 0;
   const scrollTop = viewport.scrollTop;
@@ -3304,7 +3308,7 @@ async function renderPdfPages(prepared) {
     if (!targetShell) throw new Error("PDF initial page shell missing");
     await renderPdfManifestShell(targetShell, false, true);
     markReaderContentReady();
-    viewport.scrollTop = targetShell.offsetTop;
+    viewport.scrollTop = readerPageScrollTop(targetShell);
   } finally {
     releaseInitialRenderGate();
   }
@@ -3431,7 +3435,7 @@ async function renderPdf(prepared) {
     if (!targetShell) throw new Error("PDF initial page shell missing");
     await renderPdfShell(targetShell, false, true);
     markReaderContentReady();
-    viewport.scrollTop = targetShell.offsetTop;
+    viewport.scrollTop = readerPageScrollTop(targetShell);
   } finally {
     releaseInitialRenderGate();
   }
@@ -4771,7 +4775,7 @@ async function restoreFormat(mode, entry, generation = beginReaderNavigation()) 
         `.reader-page[data-page="${documentState.page}"], .reader-docx-page[data-page="${documentState.page}"]`
       );
       if (shell && Number.isFinite(entry.pageOffset))
-        viewport.scrollTop = shell.offsetTop + entry.pageOffset;
+        viewport.scrollTop = readerPageScrollTop(shell) + entry.pageOffset;
       updateProgressTools();
       scheduleSave();
     } else if (!(await restoreProgressState(entry, generation))) return false;
