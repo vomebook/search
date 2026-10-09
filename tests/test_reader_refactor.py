@@ -1325,6 +1325,55 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.url, before)
         self.assertLess(abs(self.page.locator('.reader-epub-chapter[data-chapter="12"] #target').evaluate("node => node.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top")), 5)
 
+    def test_chapter_search_v2_bucket_index_keeps_checksum_retry_paging_and_highlight(self):
+        documents, prefixes, requests = {}, {}, []
+        for extension in ('epub', 'mobi', 'azw3', 'fb2'):
+            prefix = f'chapters/ebook/{extension}/' + 'a' * 64 + '/' + 'b' * 16 + '/'
+            prefixes[extension] = prefix
+            bodies = {1:'<h1>First</h1><p>needle</p>', 2:'<h1>Tail</h1>' + '<p>needle</p>' * 65}
+            chapters = [{'index':index, 'path':f'chapters/chapter-{index:04d}.xhtml',
+                         'title':f'Chapter {index}', 'bytes':len(body.encode())} for index,body in bodies.items()]
+            texts = [{**chapter, 'text':'First needle' if chapter['index'] == 1 else 'Tail ' + ' '.join(['needle'] * 65)}
+                     for chapter in chapters]
+            packed = gzip.compress(json.dumps({'version':1, 'kind':'epub-search-index', 'chapters':texts}).encode(), mtime=0)
+            manifest = {'version':1, 'kind':'epub-chapters', 'chapters':chapters,
+                        'search_index':{'path':'epub-search-index.json.gz', 'bytes':len(packed),
+                                        'sha256':hashlib.sha256(packed).hexdigest()}}
+            documents[prefix+'chapter-manifest.json'] = ('application/json', json.dumps(manifest))
+            documents[prefix+'epub-search-index.json.gz'] = ('application/gzip', packed)
+            for chapter in chapters:
+                documents[prefix+chapter['path']] = ('text/html', bodies[chapter['index']])
+
+        def serve(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            requests.append(path)
+            mime, body = documents[path]
+            if path == prefixes['epub']+'epub-search-index.json.gz' and requests.count(path) == 1:
+                body = body[:-1] + bytes([body[-1] ^ 1])
+            route.fulfill(content_type=mime, body=body, headers={'Access-Control-Allow-Origin':'*'})
+
+        self.context.route('**/api/reader-bucket-resource**', serve)
+        for extension,prefix in prefixes.items():
+            with self.subTest(extension=extension):
+                source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':prefix+'chapter-manifest.json'})
+                self.open(self.reader_url('epub-chapters', url=source))
+                self.assertNotIn(prefix+'epub-search-index.json.gz', requests)
+                self.page.locator('#history').click()
+                self.page.locator('#full-search-toggle').click()
+                self.page.locator('#full-search-input').fill('needle')
+                if extension == 'epub':
+                    self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('索引校验失败')")
+                    self.page.locator('#full-search-retry').click()
+                self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '66 个结果'")
+                self.assertEqual(self.page.locator('.full-search-result').count(), 50)
+                self.page.locator('#full-search-page').fill('2')
+                self.page.locator('#full-search-page').dispatch_event('change')
+                self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '51.'")
+                self.assertEqual(self.page.locator('.full-search-result').count(), 16)
+                self.page.locator('.full-search-result').last.click()
+                self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter[data-chapter=\"2\"] mark.full-search-highlight')?.textContent === 'needle'")
+                self.assertEqual(requests.count(prefix+'epub-search-index.json.gz'), 2 if extension == 'epub' else 1)
+
     def test_bucket_chapter_stream_loads_manifest_chapter_and_resource(self):
         prefix = "chapters/ebook/epub/" + "c" * 64 + "/" + "b" * 16 + "/"
         chapter = '<html><body><h1>Bucket chapter</h1><img src="../resources/shared/cover.png"></body></html>'

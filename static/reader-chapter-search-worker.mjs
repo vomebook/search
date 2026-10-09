@@ -187,6 +187,15 @@ export async function resultPage(chapters, query, counts, offset, current, check
   return results;
 }
 
+export function isSearchIndexProxyURL(url, origin) {
+  if (url.origin !== origin || url.username || url.password || url.hash) return false;
+  if (url.pathname === "/api/reader-content") return true;
+  return url.pathname === "/api/reader-bucket-resource" &&
+    url.searchParams.getAll("path").length === 1 &&
+    [...url.searchParams.keys()].every(key => key === "path") &&
+    /^chapters\/ebook\/(?:epub|mobi|azw3|fb2|chm)\/[0-9a-f]{64}\/[0-9a-f]{16}\/epub-search-index\.json\.gz$/.test(url.searchParams.get("path"));
+}
+
 let configuration, indexPromise, chapters, active = 0, session, loadController;
 async function loadIndex() {
   if (chapters) return chapters;
@@ -197,8 +206,7 @@ async function loadIndex() {
   indexPromise = (async () => {
     const { index, chapters: expected } = configuration;
     const url = new URL(index.url, self.location.origin);
-    if (url.origin !== "https://voiceofml-search.hf.space" || url.pathname !== "/api/reader-content" ||
-        url.username || url.password ||
+    if (!isSearchIndexProxyURL(url, "https://voiceofml-search.hf.space") ||
         !Number.isSafeInteger(index.bytes) || index.bytes <= 0 || index.bytes > PACKED_LIMIT ||
         !/^[0-9a-f]{64}$/.test(index.sha256)) throw new Error("全文搜索索引无效");
     const response = await fetch(url, { signal: controller.signal, credentials: "omit" });
