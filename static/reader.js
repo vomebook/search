@@ -4214,13 +4214,16 @@ async function renderPlainText(response) {
     return;
   }
   const reader = response.body.getReader(),
-    sampleChunks = [];
+    sampleChunks = [],
+    previewDecoder = new TextDecoder("utf-8");
   const untrack = trackReaderResource(() => {
     reader.cancel(readerAbortError()).catch(() => {});
   });
   let length = 0,
     sampleLength = 0,
     displayedSampleSize = 0,
+    previewChunkIndex = 0,
+    previewChunkOffset = 0,
     decoder = null,
     asciiPreviewPossible = true,
     asciiPrefixLength = 0;
@@ -4272,16 +4275,19 @@ async function renderPlainText(response) {
           } else if (asciiLength < value.length) asciiPreviewPossible = false;
         }
         if (asciiPrefixLength >= 4 && asciiPrefixLength > displayedSampleSize) {
-          let offset = 0;
-          for (const chunk of sampleChunks) {
-            const start = Math.max(0, displayedSampleSize - offset),
-              end = Math.min(chunk.length, asciiPrefixLength - offset);
-            if (end > start)
-              appendDecoded(new TextDecoder("utf-8").decode(chunk.subarray(start, end)));
-            offset += chunk.length;
-            if (offset >= asciiPrefixLength) break;
+          // The full sample remains for encoding detection; preview only its
+          // unseen ASCII prefix instead of revisiting all previous chunks.
+          while (displayedSampleSize < asciiPrefixLength) {
+            const chunk = sampleChunks[previewChunkIndex];
+            const end = Math.min(chunk.length, previewChunkOffset + asciiPrefixLength - displayedSampleSize);
+            appendDecoded(previewDecoder.decode(chunk.subarray(previewChunkOffset, end)));
+            displayedSampleSize += end - previewChunkOffset;
+            previewChunkOffset = end;
+            if (end === chunk.length) {
+              previewChunkIndex++;
+              previewChunkOffset = 0;
+            }
           }
-          displayedSampleSize = asciiPrefixLength;
         }
         if (sampleLength < 65540) continue;
         startDecoder();
@@ -5580,6 +5586,7 @@ function setupFoliateWindow(stream, sections) {
   };
 }
 async function foliateTocEntries(view, sections) {
+  assertReaderActive();
   const entries = [];
   const append = (items, depth = 0) => {
     for (const item of items || []) {
@@ -5595,21 +5602,38 @@ async function foliateTocEntries(view, sections) {
     }
   };
   append(view.book.toc);
-  await Promise.all(
-    entries.map(async (entry) => {
+  const sectionIndices = new Map();
+  for (const [index, section] of sections.entries())
+    if (!sectionIndices.has(section)) sectionIndices.set(section, index);
+  let next = 0, yieldDeadline = performance.now() + 8, yieldTask = null;
+  const resolveEntries = async () => {
+    while (next < entries.length) {
+      assertReaderActive();
+      if (yieldTask || performance.now() >= yieldDeadline) {
+        yieldTask ||= waitForReader().finally(() => {
+          yieldTask = null;
+          yieldDeadline = performance.now() + 8;
+        });
+        await yieldTask;
+        continue;
+      }
+      const entry = entries[next++];
       try {
         const target = await view.book.resolveHref(entry.href),
           section = target && view.book.sections[target.index];
-        entry.sectionIndex = section ? sections.indexOf(section) : -1;
+        assertReaderActive();
+        entry.sectionIndex = section ? sectionIndices.get(section) ?? -1 : -1;
         entry.anchor = typeof target?.anchor === "function" ? target.anchor : null;
         const fragment = entry.href.split("#")[1] || "";
         entry.fragment = fragment ? decodeURIComponent(fragment) : "";
       } catch (_) {
+        assertReaderActive();
         entry.sectionIndex = -1;
         entry.fragment = "";
       }
-    })
-  );
+    }
+  };
+  await awaitReader(Promise.all(Array.from({ length: Math.min(8, entries.length) }, resolveEntries)));
   assertReaderActive();
   return entries;
 }
