@@ -862,6 +862,53 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(jump(2), original)
         self.assertGreater(self.page.evaluate("__searchProbe.calls"), before)
 
+    def test_foliate_counting_materializes_only_requested_results(self):
+        for name, needle, probe in (
+            ("search.js", "const makeExcerpt = (strs, { startIndex, startOffset, endIndex, endOffset }) => {", "__excerptCalls"),
+            ("text-walker.js", "const range = document.createRange()", "__rangeCalls"),
+        ):
+            def instrument(route, _request, needle=needle, probe=probe):
+                response = route.fetch()
+                self.assertIn(needle, response.text())
+                route.fulfill(response=response, body=response.text().replace(needle,
+                    needle + f"; window.{probe} = (window.{probe} || 0) + 1;"))
+            self.page.route(f"**/foliate-reader/{name}", instrument)
+        with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(1))) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        files['OEBPS/chapter-1.xhtml'] = (
+            '<html xmlns="http://www.w3.org/1999/xhtml"><body>' +
+            ''.join(f'<p>needle {hit}</p>' for hit in range(1000)) + '</body></html>'
+        ).encode()
+        self.serve(support.zip_bytes(files), "application/epub+zip")
+        self.open(self.reader_url("epub"))
+        self.page.evaluate("window.__excerptCalls = window.__rangeCalls = 0")
+        self.search("needle")
+        self.assertEqual(self.page.locator("#full-search-status").text_content(), "1000 个结果")
+        self.assertEqual(self.page.evaluate("[window.__excerptCalls, window.__rangeCalls]"), [50, 50])
+        self.page.locator("#full-search-page").fill("20")
+        self.page.locator("#full-search-page").dispatch_event("change")
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '951.'")
+        self.assertEqual(self.page.evaluate("[window.__excerptCalls, window.__rangeCalls]"), [100, 100])
+        self.assertIn("999", self.page.locator(".full-search-result").last.text_content())
+        self.page.locator(".full-search-result").last.click()
+        self.page.wait_for_function("() => [...document.querySelectorAll('article[data-section]')].some(node => node.shadowRoot?.querySelector('mark')?.parentElement.textContent === 'needle 999')")
+
+    def test_foliate_excerpt_preserves_all_inline_match_nodes(self):
+        self.serve("Text")
+        self.open(self.reader_url())
+        base = urllib.parse.urlsplit(self.reader_url()).path.rsplit('/', 1)[0]
+        result = self.page.evaluate("""async base => {
+          const {search} = await import(base + '/foliate-reader/search.js');
+          return ['variant', 'base'].map(sensitivity => {
+            const result = [...search(['before ne', 'e', 'dle after'], 'needle',
+              {sensitivity, granularity: 'grapheme'})][0];
+            return result.excerpt;
+          }).concat([...search(['ne', 'ed', 'ne'], 'needne',
+            {sensitivity: 'base', granularity: 'grapheme'})][0].excerpt);
+        }""", base)
+        self.assertEqual(result, [{"pre": "before ", "match": "needle", "post": " after"}] * 2 +
+                         [{"pre": "", "match": "needne", "post": ""}])
+
     def test_foliate_many_hits_paginate_and_cancel(self):
         with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters(3))) as archive:
             files = {name: archive.read(name) for name in archive.namelist()}
@@ -1773,7 +1820,7 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_pending_text_result_cannot_highlight_after_new_search(self):
         def hold_activation(route):
             response = route.fetch()
-            needle = "const currentNodes = await fullSearchTextNodes(root, searchGeneration);"
+            needle = "const currentNodes = await fullSearchTextNodes(root, searchGeneration, end);"
             script = response.text()
             self.assertIn(needle, script)
             route.fulfill(response=response, body=script.replace(needle,
@@ -1790,6 +1837,49 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.evaluate("window.__releaseActivation()")
         self.page.wait_for_function("() => window.__activationSettled")
         self.assertEqual(self.page.locator("#content mark.full-search-highlight").all_text_contents(), ["freshword"])
+
+    def test_dom_search_navigation_only_walks_through_selected_match(self):
+        html = '<p>before <span>nee</span><b>dl</b><i>e</i> after</p>' + '<p>ordinary</p>' * 8000 + '<p>last needle</p>'
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + """
+              window.__probeActivationWalk = () => {
+                const doc = (htmlFrame?.contentDocument?.body || content).ownerDocument;
+                const native = doc.createTreeWalker.bind(doc);
+                window.__activationVisited = 0;
+                doc.createTreeWalker = (...args) => {
+                  const walker = native(...args), next = walker.nextNode.bind(walker);
+                  walker.nextNode = () => { window.__activationVisited++; return next(); };
+                  return walker;
+                };
+              };
+            """)
+        self.page.route("**/static/reader.js?*", instrument)
+        for extension in ('html', 'md', 'docx', 'txt'):
+            with self.subTest(extension=extension):
+                if extension == 'docx':
+                    self.page.route('**/static/vendor/docx-preview.min.*.js', lambda route: route.fulfill(
+                        content_type='text/javascript', body="window.docx = {renderAsync: async (_bytes, body) => {body.innerHTML = " + json.dumps(html) + ";}}"))
+                    self.serve(support.minimal_docx(), 'application/octet-stream')
+                else:
+                    self.serve('before needle after\n' + 'ordinary\n' * 8000 + 'last needle' if extension == 'txt' else html,
+                               'text/html' if extension == 'html' else 'text/plain')
+                source = self.reader_url(extension, url='https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64 + '/document.docx') if extension == 'docx' else self.reader_url(extension)
+                self.open(source)
+                self.search('needle')
+                self.assertEqual(self.page.locator('#full-search-status').text_content(), '2 个结果')
+                self.page.evaluate('window.__probeActivationWalk()')
+                self.page.locator('.full-search-result').first.click()
+                target = self.page.frame_locator('.html-frame') if extension == 'html' else self.page
+                self.assertEqual(''.join(target.locator('mark.full-search-highlight').all_text_contents()), 'needle')
+                self.assertLessEqual(self.page.evaluate('window.__activationVisited'), 4)
+                self.page.locator('#history').click()
+                self.page.evaluate('window.__activationVisited = 0')
+                self.page.locator('.full-search-result').last.click()
+                target.locator('mark.full-search-highlight').first.wait_for()
+                self.assertEqual(''.join(target.locator('mark.full-search-highlight').all_text_contents()), 'needle')
+                if extension != 'txt':
+                    self.assertGreater(self.page.evaluate('window.__activationVisited'), 8000)
 
     def test_search_scans_beyond_20000_nodes_and_cancels_old_query(self):
         self.serve("<main>" + "<span>ordinary </span>" * 21000 + "<p>unique-tail</p></main>", "text/html")
