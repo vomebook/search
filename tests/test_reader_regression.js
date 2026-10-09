@@ -56,34 +56,39 @@ for (const url of ['https://evil.test' + sourcePrefix + bucket, 'https://api.tes
   assert.strictEqual(assets.pdfPageSource(url, 'https://site.test', 'https://api.test'), null)
 assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket}, '/api/reader-bucket-resource').ReaderLink,
   '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
-assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource').ReaderLink,
+assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket, b: 'vomebook/pdf-pages-v2'}, '/api/reader-bucket-resource').ReaderLink,
   '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
-const nativeMediaPath = assetRoot + 'native-media-cdn-v1/audio.flac'
-const nativeMedia = assets.assetFields({s: 2, m: 'a', p: nativeMediaPath, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource')
+const nativeMediaPath = 'media/audio/native/' + 'a'.repeat(64) + '/audio.flac'
+const nativeMedia = assets.assetFields({s: 2, m: 'a', p: nativeMediaPath, b: 'vomebook/reader-assets-v2'}, '/api/reader-bucket-resource')
 assert.strictEqual(nativeMedia.ReaderExtension, 'audio')
 assert.strictEqual(nativeMedia.ReaderLink,
-  'https://huggingface.co/buckets/vomebook/pdf-pages/resolve/' + nativeMediaPath)
-assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + nativeMediaPath), true)
-const swfPath = assetRoot + 'native-swf-ruffle-v1/document.swf'
-const swf = assets.assetFields({s: 2, m: 'f', p: swfPath, b: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource')
+  '/api/reader-bucket-resource?path=' + encodeURIComponent(nativeMediaPath))
+assert.strictEqual(assets.isBucketPath(nativeMediaPath, true, 'vomebook/reader-assets-v2'), true)
+const swfPath = 'media/swf/native/' + 'a'.repeat(64) + '/document.swf'
+const swf = assets.assetFields({s: 2, m: 'f', p: swfPath, b: 'vomebook/reader-assets-v2'}, '/api/reader-bucket-resource')
 assert.strictEqual(swf.ReaderExtension, 'swf')
 assert.strictEqual(assets.capability('swf').mode, 'swf')
 assert.strictEqual(swf.ReaderLink,
-  'https://huggingface.co/buckets/vomebook/pdf-pages/resolve/' + swfPath)
+  '/api/reader-bucket-resource?path=' + encodeURIComponent(swfPath))
+for (const path of ['derived/migration/' + 'a'.repeat(32) + '/document.pdf', 'documents/pdf/ppt/' + 'a'.repeat(64) + '/document.pdf']) {
+  const fields = assets.assetFields({s: 2, m: 'p', p: path, b: path.startsWith('derived/') ? 'vomebook/pdf-pages-v2' : 'vomebook/reader-assets-v2'}, '/api/reader-bucket-resource')
+  assert.strictEqual(fields.ReaderLink, '/api/reader-bucket-resource?path=' + encodeURIComponent(path))
+  assert.strictEqual(fields.ReaderExtension, 'pdf')
+}
+assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket, b: 'vomebook/pdf-pages'}), null)
 for (const profile of ['calibre-odt-html-v1', 'calibre-rtf-html-v1']) {
   const path = assetRoot + profile + '/document.html'
   const fields = assets.assetFields({s: 2, m: 'h', p: path}, '/api/reader-bucket-resource')
   assert.ok(fields, profile + ' Reader asset should accept the implicit default bucket')
   assert.strictEqual(fields.ReaderExtension, 'html')
-  assert.strictEqual(fields.ReaderLink, 'https://huggingface.co/buckets/vomebook/pdf-pages/resolve/' + path)
+  assert.strictEqual(fields.ReaderLink, '/api/reader-bucket-resource?path=' + encodeURIComponent(path))
   const reader = new URL(assets.readerUrl({Link: 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/sample.' + (profile.includes('odt') ? 'odt' : 'rtf'),
     File: 'sample', Extension: profile.includes('odt') ? 'odt' : 'rtf', ...fields}, '/search/static/reader.html'), 'https://site.test')
   assert.strictEqual(reader.searchParams.get('ext'), 'html')
 }
-const ebookChapterPath = 'ebook-chapters/objects/aa/' + 'c'.repeat(64) +
-  '/chapter-bundle/chapter-profile-epub-chapters-v7-bucket/epub-chapters/chapter-manifest.json'
-const ebookChapterAsset = assets.assetFields({s: 2, m: 'e', p: assetRoot + 'document.epub',
-  c: ebookChapterPath, cb: 'vomebook/pdf-pages'}, '/api/reader-bucket-resource')
+const ebookChapterPath = 'chapters/ebook/epub/' + 'c'.repeat(64) + '/' + 'b'.repeat(16) + '/chapter-manifest.json'
+const ebookChapterAsset = assets.assetFields({s: 2, m: 'e', p: ebookChapterPath, b: 'vomebook/reader-assets-v2',
+  c: ebookChapterPath, cb: 'vomebook/reader-assets-v2'}, '/api/reader-bucket-resource')
 assert.strictEqual(ebookChapterAsset.ReaderExtension, 'epub-chapters')
 assert.strictEqual(ebookChapterAsset.ReaderChapterManifest,
   '/api/reader-bucket-resource?path=' + encodeURIComponent(ebookChapterPath))

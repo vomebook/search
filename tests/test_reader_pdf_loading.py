@@ -1,6 +1,7 @@
 """Actual module imports and PDF.js with cold cache and transport faults."""
 import contextlib
 import json
+import time
 import unittest
 import urllib.parse
 from unittest.mock import patch
@@ -59,6 +60,39 @@ class PdfLoadingTests(unittest.TestCase):
         self.ready()
         self.assertEqual(len(self.modules), 1)
         self.assertNotIn('reader-module-retry', self.modules[0])
+
+    def test_v2_bucket_pdf_uses_external_proxy_without_nested_content_request(self):
+        path = 'derived/test/' + 'a' * 32 + '/document.pdf'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + path
+        for width, height, opening in ((1280, 800, 'direct'), (390, 844, 'resolved')):
+            with self.subTest(opening=opening, width=width):
+                self.page.set_viewport_size({'width': width, 'height': height})
+                held = []
+                self.page.route('**/api/reader-bucket-resource?**', lambda route: held.append(route))
+                self.page.route('**/api/reader-resolve?**', lambda route: route.fulfill(
+                    content_type='application/json', body=json.dumps({
+                        'url': source, 'download': SOURCE, 'extension': 'pdf',
+                    })))
+                options = dict(ext='pdf', title='Bucket PDF')
+                if opening == 'direct':
+                    options['url'] = '/api/reader-bucket-resource?path=' + path
+                else:
+                    options['id'] = '398vk0yyy8m29'
+                with self.page.expect_request('**/api/reader-bucket-resource?**'):
+                    self.page.goto(self.origin + '/search/static/reader.html?' + urllib.parse.urlencode(options),
+                                   wait_until='domcontentloaded')
+                deadline = time.monotonic() + 5
+                while not held and time.monotonic() < deadline:
+                    self.page.wait_for_timeout(20)
+                self.assertEqual(len(held), 1)
+                self.assertEqual(held[0].request.url, source)
+                self.assertEqual(self.documents, [])
+                self.assertEqual(self.page.locator('.reader-preparing-surface').count(), 0)
+                self.assertEqual(self.page.locator('.reader-loading-indicator').count(), 1)
+                held[0].fulfill(content_type='application/pdf', body=minimal_pdf())
+                self.ready()
+                self.assertEqual(self.page.locator('.reader-loading-indicator').count(), 0)
+                self.page.unroute('**/api/reader-bucket-resource?**')
 
     def test_pdf_engine_loads_while_id_resolution_is_pending(self):
         pending = []

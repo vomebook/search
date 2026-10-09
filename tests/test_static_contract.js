@@ -101,7 +101,7 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(reader, /disableStream: true/);
   assert.match(reader, /capability = readerRuntime\.negotiate\(VoiceOfMLReader\.capability\(extension\)\)/);
   assert.match(reader, /resolved\.extension[\s\S]*content\.dataset\.mode = capability\.mode/);
-  const imageRule = readerCss.match(/\.reader-content\[data-mode="pdf-pages"\]\s+\.reader-page\s*>\s*img\s*\{([^}]+)\}/);
+  const imageRule = readerCss.match(/\.reader-content\[data-mode="pdf-pages"\]\s+\.reader-page\s*>\s*img\s*,\s*\.reader-content\[data-mode="image-pages"\]\s+\.reader-page\s*>\s*img\s*\{([^}]+)\}/);
   assert.ok(imageRule, 'PDF image sizing rule');
   for (const [property, value] of [['display', 'block'], ['width', '100%'], ['max-width', '100%'], ['height', 'auto']]) {
     assert.match(imageRule[1], new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*${value}\\s*(?:;|$)`));
@@ -364,7 +364,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/")');
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/")');
   assert.match(app, /&& !rec\.ReaderLink\) return false/);
-  assert.match(contract, /asset\?\.b && bucketName !== "vomebook\/pdf-pages"/);
+  assert.match(contract, /asset\?\.b && bucketName !== "vomebook\/pdf-pages-v2" && bucketName !== "vomebook\/reader-assets-v2"/);
   assert.match(reader, /if \(extension === "docx"\) return readerAsset/);
   assert.match(reader, /function fetchReaderResponse\(\)/);
   assertCode(reader, 'const READER_PROXY_TIMEOUT_MS = 120000;');
