@@ -2043,7 +2043,7 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_pending_text_result_cannot_highlight_after_new_search(self):
         def hold_activation(route):
             response = route.fetch()
-            needle = "const currentNodes = await fullSearchTextNodes(root, searchGeneration, end);"
+            needle = "let currentNodes = await fullSearchTextNodes(root, searchGeneration, end, checkpoint);"
             script = response.text()
             self.assertIn(needle, script)
             route.fulfill(response=response, body=script.replace(needle,
@@ -2062,7 +2062,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#content mark.full-search-highlight").all_text_contents(), ["freshword"])
 
     def test_dom_search_navigation_only_walks_through_selected_match(self):
-        html = '<p>before <span>nee</span><b>dl</b><i>e</i> after</p>' + '<p>ordinary</p>' * 8000 + '<p>last needle</p>'
+        html = '<p>before <span>nee</span><b>dl</b><i>e</i> after</p>' + '<p>ordinary</p>' * 8000 + '<p>last <span>nee</span><b>dl</b><i>e</i></p>'
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + """
@@ -2101,8 +2101,123 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.page.locator('.full-search-result').last.click()
                 target.locator('mark.full-search-highlight').first.wait_for()
                 self.assertEqual(''.join(target.locator('mark.full-search-highlight').all_text_contents()), 'needle')
-                if extension != 'txt':
-                    self.assertGreater(self.page.evaluate('window.__activationVisited'), 8000)
+                self.assertLessEqual(self.page.evaluate('window.__activationVisited'), 130)
+                self.page.locator('#history').click()
+                self.page.evaluate('window.__activationVisited = 0')
+                self.page.locator('.full-search-result').last.click()
+                self.assertEqual(''.join(target.locator('mark.full-search-highlight').all_text_contents()), 'needle')
+                self.assertLessEqual(self.page.evaluate('window.__activationVisited'), 130)
+
+    def expose_dom_search_locator(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '''
+              window.__domLocator = () => fullSearchDomLocator;
+              window.__activateDomResult = async index => {
+                const doc = (htmlFrame?.contentDocument?.body || content).ownerDocument;
+                const native = doc.createTreeWalker.bind(doc);
+                let visits = 0;
+                doc.createTreeWalker = (...args) => {
+                  const walker = native(...args), next = walker.nextNode.bind(walker);
+                  walker.nextNode = () => { visits++; return next(); };
+                  return walker;
+                };
+                try { return {ok: await searchState.results[index].activate(), visits}; }
+                finally { doc.createTreeWalker = native; }
+              };
+              window.__headingOracle = async entries => {
+                const root = htmlFrame.contentDocument.body;
+                setToc(entries.map(entry => ({label:entry.label, target:root.querySelector(entry.selector)})));
+                const nodes = await fullSearchTextNodes(root, readerRuntime.currentGeneration('search'));
+                let length = 0;
+                const offsets = nodes.map(node => {
+                  const part = {node, start:length, end:length + node.data.length};
+                  length = part.end;
+                  return part;
+                });
+                const lookup = createFullSearchHeadingLookup(root, offsets);
+                const compare = () => offsets.map(part => {
+                  const heading = [...navigationState.tocEntries].reverse().find(entry => entry.target &&
+                    (entry.target === part.node.parentElement ||
+                     (entry.target.compareDocumentPosition(part.node) & Node.DOCUMENT_POSITION_FOLLOWING)));
+                  const page = part.node.parentElement.closest('[data-page]');
+                  const expected = page ? '第 ' + page.dataset.page + ' 页' :
+                    heading ? heading.label : '正文 ' + Math.min(100, Math.floor(part.start / Math.max(1,length) * 100)) + '%';
+                  return [fullSearchLocation(part.node, '', part.start, length, lookup), expected];
+                });
+                const pairs = compare();
+                setToc([...navigationState.tocEntries].reverse());
+                return {indexed:!!lookup, pairs:[...pairs, ...compare()]};
+              };
+            ''')
+        self.page.route('**/static/reader.js?*', instrument)
+
+    def test_dom_search_locator_invalidates_on_mutation_and_releases_on_query_and_disposal(self):
+        self.expose_dom_search_locator()
+        self.serve('<p>needle</p>' + '<p>ordinary</p>' * 9000 + '<p>last needle</p>', 'text/html')
+        self.open(self.reader_url('html'))
+        self.search('needle')
+        self.assertLessEqual(self.page.evaluate('__activateDomResult(1)')['visits'], 130)
+        # No task boundary: pending observer records must invalidate synchronously too.
+        result = self.page.evaluate('''() => {
+          const root = document.querySelector('.html-frame').contentDocument.body;
+          root.append(root.ownerDocument.createTextNode(' appended needle'));
+          return __activateDomResult(1);
+        }''')
+        self.assertTrue(result['ok'])
+        self.assertGreater(result['visits'], 9000)
+        self.page.evaluate('window.__oldLocator = __domLocator()')
+        self.page.locator('#full-search-input').fill('ordinary')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '9000 个结果'")
+        self.assertFalse(self.page.evaluate('__oldLocator.current()'))
+        self.page.locator('#full-search-input').fill('needle')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '3 个结果'")
+        self.assertEqual(self.page.locator('#full-search-status').text_content(), '3 个结果')
+        result = self.page.evaluate('__activateDomResult(2)')
+        self.assertTrue(result['ok'])
+        self.assertLessEqual(result['visits'], 130)
+        result = self.page.evaluate('''() => {
+          const root = document.querySelector('.html-frame').contentDocument.body;
+          root.prepend(root.ownerDocument.createTextNode('shift prefix '));
+          return __activateDomResult(2);
+        }''')
+        self.assertFalse(result['ok'])
+        self.assertEqual(self.page.frame_locator('.html-frame').locator('mark.full-search-highlight').count(), 0)
+        self.page.evaluate('window.__oldLocator = __domLocator(); window.dispatchEvent(new Event("pagehide"))')
+        self.assertFalse(self.page.evaluate('__oldLocator.current()'))
+        self.assertTrue(self.page.evaluate('__domLocator() === null'))
+
+    def test_dom_search_heading_boundaries_preserve_labels_after_repeated_navigation_and_paging(self):
+        self.serve('<p>needle before</p>' + ''.join(
+            f'<h2 id="heading-{index}">Heading {index}</h2><p>needle</p>' for index in range(150)), 'text/html')
+        self.open(self.reader_url('html'))
+        self.search('needle')
+        self.assertEqual(self.page.locator('#full-search-status').text_content(), '151 个结果')
+        self.assertEqual(self.page.locator('.full-search-location').all_text_contents()[1:],
+                         [f'Heading {index}' for index in range(49)])
+        self.page.locator('.full-search-result').last.click()
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-page').fill('3')
+        self.page.locator('#full-search-page').dispatch_event('change')
+        self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '101.'")
+        self.assertEqual(self.page.locator('.full-search-location').all_text_contents(),
+                         [f'Heading {index}' for index in range(99,149)])
+        self.page.locator('.full-search-result').last.click()
+        self.assertEqual(self.page.frame_locator('.html-frame').locator('mark.full-search-highlight').all_text_contents(), ['needle'])
+
+    def test_dom_search_heading_lookup_matches_ordered_duplicate_empty_and_unordered_toc(self):
+        self.expose_dom_search_locator()
+        self.serve('''<p>Before</p><h2 id="one">One</h2><div>Outer<h3 id="two">Two</h3>After</div>
+          <h2 id="empty"></h2><h2 id="three">Three</h2><p data-page="7">Page text</p><p>Tail</p>''', 'text/html')
+        self.open(self.reader_url('html'))
+        ordered = [{'selector':'#one','label':'One'}, {'selector':'#two','label':'Two'},
+                   {'selector':'#two','label':'Duplicate'}, {'selector':'#empty','label':'Empty'},
+                   {'selector':'#three','label':'Three'}]
+        for entries, indexed in ((ordered, True), ([ordered[0]], True), (list(reversed(ordered)), False)):
+            result = self.page.evaluate('__headingOracle', entries)
+            self.assertEqual(result['indexed'], indexed)
+            for actual, expected in result['pairs']:
+                self.assertEqual(actual, expected)
 
     def test_search_scans_beyond_20000_nodes_and_cancels_old_query(self):
         self.serve("<main>" + "<span>ordinary </span>" * 21000 + "<p>unique-tail</p></main>", "text/html")

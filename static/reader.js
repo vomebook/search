@@ -6189,23 +6189,92 @@ function fullSearchEscape(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 let fullSearchActiveMarks = [];
-function clearFullSearchMarks() {
-  content.querySelectorAll(".reader-text-hit-box").forEach((node) => node.remove());
-  const changedParents = new Set();
-  for (const mark of fullSearchActiveMarks) {
-    if (mark.tagName === "MARK") {
-      if (mark.parentNode) changedParents.add(mark.parentNode);
-      mark.replaceWith(mark.textContent);
-    }
-    else mark.classList.remove("full-search-highlight");
+let fullSearchDomLocator = null;
+readerRuntime.events.on("generation", ({ name }) => {
+  if (name === "search") {
+    fullSearchDomLocator?.dispose();
+    fullSearchDomLocator = null;
   }
-  fullSearchActiveMarks = [];
-  for (const parent of changedParents) parent.normalize();
+});
+trackReaderResource(() => {
+  fullSearchDomLocator?.dispose();
+  fullSearchDomLocator = null;
+});
+function createFullSearchDomLocator(root, generation) {
+  fullSearchDomLocator?.dispose();
+  const checkpoints = [];
+  let valid = true, disposed = false;
+  const invalidate = () => { valid = false; checkpoints.length = 0; };
+  const observer = new MutationObserver(invalidate);
+  const current = () => {
+    if (observer.takeRecords().length) invalidate();
+    return valid && !disposed && isReaderGenerationCurrent("search", generation);
+  };
+  const resume = () => {
+    if (!disposed) observer.observe(root, {
+      subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class"]
+    });
+  };
+  const locator = {
+    current,
+    build(offsets) {
+      if (!current()) return;
+      const stride = Math.max(128, Math.ceil(offsets.length / 2048));
+      for (let index = 0; index < offsets.length && checkpoints.length < 2048;) {
+        const { node, parent: target, start } = offsets[index];
+        // Element boundaries survive text splitting and normalization by our marks.
+        if (target?.firstChild === node) {
+          checkpoints.push({ target, start });
+          index += stride;
+        } else index++;
+      }
+    },
+    checkpoint(offset) {
+      if (!current()) return null;
+      let low = 0, high = checkpoints.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (checkpoints[middle].start <= offset) low = middle + 1;
+        else high = middle;
+      }
+      const checkpoint = checkpoints[low - 1];
+      if (checkpoint && (!checkpoint.target.isConnected || !root.contains(checkpoint.target))) {
+        invalidate();
+        return null;
+      }
+      return checkpoint || null;
+    },
+    pause() { current(); observer.disconnect(); },
+    resume,
+    dispose() { disposed = true; invalidate(); observer.disconnect(); }
+  };
+  resume();
+  fullSearchDomLocator = locator;
+  return locator;
 }
-async function fullSearchTextNodes(root, generation, endOffset = Infinity) {
+function clearFullSearchMarks() {
+  fullSearchDomLocator?.pause();
+  try {
+    content.querySelectorAll(".reader-text-hit-box").forEach((node) => node.remove());
+    const changedParents = new Set();
+    for (const mark of fullSearchActiveMarks) {
+      if (mark.tagName === "MARK") {
+        if (mark.parentNode) changedParents.add(mark.parentNode);
+        mark.replaceWith(mark.textContent);
+      }
+      else mark.classList.remove("full-search-highlight");
+    }
+    fullSearchActiveMarks = [];
+    for (const parent of changedParents) parent.normalize();
+  } finally {
+    fullSearchDomLocator?.resume();
+  }
+}
+async function fullSearchTextNodes(root, generation, endOffset = Infinity, checkpoint = null) {
   const nodes = [],
     walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let visited = 0, length = 0;
+  if (checkpoint) walker.currentNode = checkpoint.target;
+  let visited = 0, length = checkpoint?.start || 0;
   while (walker.nextNode()) {
     if (!isReaderGenerationCurrent("search", generation)) return null;
     const node = walker.currentNode;
@@ -6222,16 +6291,21 @@ async function fullSearchTextNodes(root, generation, endOffset = Infinity) {
   return nodes;
 }
 function highlightTextParts(parts) {
+  fullSearchDomLocator?.pause();
   const marks = [];
-  for (const { node, start, end } of [...parts].reverse()) {
-    node.splitText(end);
-    const selected = node.splitText(start),
-      mark = node.ownerDocument.createElement("mark");
-    mark.className = "full-search-highlight";
-    mark.textContent = selected.data;
-    selected.replaceWith(mark);
-    fullSearchActiveMarks.push(mark);
-    marks.unshift(mark);
+  try {
+    for (const { node, start, end } of [...parts].reverse()) {
+      node.splitText(end);
+      const selected = node.splitText(start),
+        mark = node.ownerDocument.createElement("mark");
+      mark.className = "full-search-highlight";
+      mark.textContent = selected.data;
+      selected.replaceWith(mark);
+      fullSearchActiveMarks.push(mark);
+      marks.unshift(mark);
+    }
+  } finally {
+    fullSearchDomLocator?.resume();
   }
   return marks;
 }
@@ -6261,9 +6335,52 @@ function fullSearchSnippetDom(snippet) {
   if (snippet.suffix) node.append(snippet.suffix);
   return node;
 }
-function fullSearchLocation(node, fallback, offset, total) {
-  const page = node.parentElement && node.parentElement.closest("[data-page]");
+function createFullSearchHeadingLookup(root, offsets) {
+  const entries = navigationState.tocEntries, boundaries = [];
+  const headings = entries.filter(entry => entry.target);
+  let previous = null;
+  for (const entry of headings) {
+    const target = entry.target;
+    if (!target.isConnected || target.getRootNode() !== root.getRootNode() ||
+        (previous && previous !== target &&
+         !(previous.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING))) return null;
+    previous = target;
+  }
+  const linear = headings.length * Math.ceil(Math.log2(offsets.length + 1)) > offsets.length;
+  let cursor = 0;
+  for (const entry of headings) {
+    const target = entry.target;
+    let low = 0, high = offsets.length;
+    if (linear) {
+      while (cursor < offsets.length &&
+             !(target.compareDocumentPosition(offsets[cursor].node) & Node.DOCUMENT_POSITION_FOLLOWING)) cursor++;
+      low = cursor;
+    } else {
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (target.compareDocumentPosition(offsets[middle].node) & Node.DOCUMENT_POSITION_FOLLOWING) high = middle;
+        else low = middle + 1;
+      }
+    }
+    boundaries.push({ start: offsets[low]?.start ?? Infinity, label: entry.label });
+  }
+  return (offset) => {
+    if (navigationState.tocEntries !== entries) return null;
+    let low = 0, high = boundaries.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (boundaries[middle].start <= offset) low = middle + 1;
+      else high = middle;
+    }
+    return { label: boundaries[low - 1]?.label };
+  };
+}
+function fullSearchLocation(node, fallback, offset, total, headingLookup = null, parent = node.parentElement) {
+  const page = parent && parent.closest("[data-page]");
   if (page) return `第 ${page.dataset.page} 页`;
+  const indexed = headingLookup?.(offset);
+  if (indexed?.label !== undefined) return indexed.label;
+  if (indexed) return `正文 ${Math.min(100, Math.floor(offset / Math.max(1, total) * 100))}%`;
   if (navigationState.tocEntries.length) {
     const heading = [...navigationState.tocEntries].reverse().find(entry => entry.target &&
       (entry.target === node.parentElement || !!(entry.target.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)));
@@ -6274,13 +6391,14 @@ function fullSearchLocation(node, fallback, offset, total) {
 async function fullSearchDomMatches(root, fallback, query, generation, progressive = false,
                                     occurrence = null, navigationGeneration = readerRuntime.currentGeneration("navigation")) {
   root = foliateSectionRoot(root);
+  const locator = progressive ? createFullSearchDomLocator(root, generation) : null;
   const nodes = await fullSearchTextNodes(root, generation);
   if (!nodes || !isReaderGenerationCurrent("search", generation)) return [];
   const offsets = [],
     chunks = [];
   let length = 0;
   for (const [index, node] of nodes.entries()) {
-    offsets.push({ node, start: length, end: length + node.data.length });
+    offsets.push({ node, parent: node.parentElement, start: length, end: length + node.data.length });
     chunks.push(node.data);
     length += node.data.length;
     if (index % 1000 === 999) {
@@ -6288,6 +6406,8 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
       if (!isReaderGenerationCurrent("search", generation)) return [];
     }
   }
+  locator?.build(offsets);
+  const headingLookup = createFullSearchHeadingLookup(root, offsets);
   const text = chunks.join(""), groups = [], firstHits = [];
   const patternText = fullSearchEscape(query);
   let nextStart = 0, total = 0;
@@ -6317,17 +6437,22 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
   const resultFor = (match) => {
     const part = offsets[locateIndex(match.index)];
     return {
-      location: fullSearchLocation(part.node, fallback, match.index, text.length),
+      location: fullSearchLocation(part.node, fallback, match.index, text.length, headingLookup, part.parent),
       snippet: fullSearchSnippet(text, match.index, match.value.length),
       async activate(navigationGeneration = readerRuntime.currentGeneration("navigation")) {
         if (!isReaderGenerationCurrent("navigation", navigationGeneration)) return false;
         const searchGeneration = readerRuntime.currentGeneration("search");
         const end = match.index + match.value.length;
         clearFullSearchMarks();
-        const currentNodes = await fullSearchTextNodes(root, searchGeneration, end);
+        let checkpoint = locator?.checkpoint(match.index);
+        let currentNodes = await fullSearchTextNodes(root, searchGeneration, end, checkpoint);
+        if (checkpoint && !locator.current()) {
+          checkpoint = null;
+          currentNodes = await fullSearchTextNodes(root, searchGeneration, end);
+        }
         if (!currentNodes || !isReaderGenerationCurrent("search", searchGeneration) ||
             !isReaderGenerationCurrent("navigation", navigationGeneration)) return false;
-        let position = 0, parts = [];
+        let position = checkpoint?.start || 0, parts = [];
         for (const node of currentNodes) {
           const nodeEnd = position + node.data.length;
           if (nodeEnd > match.index && position < end)
