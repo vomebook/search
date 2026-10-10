@@ -2175,7 +2175,7 @@ class ReaderRefactorTest(unittest.TestCase):
             with self.subTest(extension=extension):
                 if extension == 'docx':
                     self.page.route('**/static/vendor/docx-preview.min.*.js', lambda route: route.fulfill(
-                        content_type='text/javascript', body="window.docx = {renderAsync: async (_bytes, body) => {body.innerHTML = " + json.dumps(html) + ";}}"))
+                        content_type='text/javascript', body="window.docx = {parseAsync: async () => ({blobToURL:()=>null}), renderDocument: async () => {const body=document.createElement('div'); body.innerHTML = " + json.dumps(html) + ";return [body];}}"))
                     self.serve(support.minimal_docx(), 'application/octet-stream')
                 else:
                     self.serve('before needle after\n' + 'ordinary\n' * 8000 + 'last needle' if extension == 'txt' else html,

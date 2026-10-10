@@ -123,9 +123,10 @@ window.ePub = () => ({ renderTo: (frame) => ({
 }) });
 """
 DOCX_SCRIPT = """
-window.docx = { renderAsync: (_bytes, body) => new Promise((resolve) => setTimeout(() => {
-  body.textContent = 'DOCX readable'; resolve();
-}, 20)) };
+window.docx = { parseAsync: async () => ({blobToURL: blob => URL.createObjectURL(blob)}),
+  renderDocument: () => new Promise(resolve => setTimeout(() => {
+    resolve([document.createTextNode('DOCX readable')]);
+  }, 20)) };
 """
 PNG_BYTES = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
@@ -1654,7 +1655,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844}); page = context.new_page()
                 page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.route("**/static/vendor/jszip.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.JSZip=function(){window.__archiveParserStarted=true};"))
-                page.route("**/static/vendor/docx-preview.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.docx={renderAsync(){window.__archiveParserStarted=true}};"))
+                page.route("**/static/vendor/docx-preview.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.docx={parseAsync(){window.__archiveParserStarted=true}};"))
                 page.route("**/static/foliate-reader/view.js*", lambda route: route.fulfill(status=200, content_type="text/javascript", body="customElements.define('foliate-view', class extends HTMLElement { open() { window.__archiveParserStarted=true; throw new Error('parser must not start'); } });"))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/octet-stream", body=payload))
                 source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bomb.epub" if extension == "epub" else f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{'a' * 64}/docx-native-v1/document.docx"
