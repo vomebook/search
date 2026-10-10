@@ -11,7 +11,7 @@ export function validateBookText(book, pageCount, sourceSha = "") {
         !page.layout || page.layout.offset_unit !== "unicode-codepoint" ||
         !Array.isArray(page.text_spans))
       throw new Error("PDF_TEXT_INDEX_INVALID");
-    const length = Array.from(page.text).length;
+    const length = codePointLength(page.text);
     let previousEnd = 0;
     for (const span of page.text_spans) {
       if (!Number.isInteger(span.start) || !Number.isInteger(span.end) ||
@@ -33,8 +33,8 @@ function pattern(query) {
 const CHECKPOINT_STRIDE = 256;
 
 export function hitBoxes(page, start, length) {
-  const begin = Array.from(page.text.slice(0, start)).length;
-  const end = begin + Array.from(page.text.slice(start, start + length)).length;
+  const begin = codePointLength(page.text.slice(0, start));
+  const end = begin + codePointLength(page.text.slice(start, start + length));
   return hitBoxesAtOffsets(page, begin, end);
 }
 
@@ -88,8 +88,8 @@ export async function searchBookText(book, query, { current = () => true, yieldT
         const matchIndex = start + match.index;
         if (passed++ < offset) continue;
         const begin = Math.max(0, matchIndex - 72), end = Math.min(page.text.length, matchIndex + match[0].length + 88);
-        const pointStart = previousPointEnd + Array.from(page.text.slice(previousUnitEnd, matchIndex)).length;
-        const pointEnd = pointStart + Array.from(match[0]).length;
+        const pointStart = previousPointEnd + codePointLength(page.text.slice(previousUnitEnd, matchIndex));
+        const pointEnd = pointStart + codePointLength(match[0]);
         previousUnitEnd = matchIndex + match[0].length;
         previousPointEnd = pointEnd;
         results.push({ page: page.page, start: matchIndex, length: match[0].length,
@@ -148,4 +148,10 @@ export function paintTextHit(shell, boxes) {
       height: `${(box[3] - box[1]) * 100}%`, background: "rgb(240 199 94 / 45%)" });
     shell.appendChild(mark);
   }
+}
+
+function codePointLength(text) {
+  let length = 0;
+  for (const point of text) length++;
+  return length;
 }
