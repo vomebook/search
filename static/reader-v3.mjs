@@ -4,7 +4,7 @@ const positive = value => Number.isFinite(value) && value > 0;
 const integer = value => Number.isSafeInteger(value) && value > 0;
 const invalid = () => { throw new Error("PDF_V3_INVALID"); };
 const modes = new Set(["auto", "horizontal-ltr", "horizontal-rtl", "vertical-rl", "vertical-lr"]);
-const pathPattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/(?:reading-manifest\.json|page-map\.json\.gz|text-layer-manifest\.json|text-review-manifest\.json|text\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\.json)|preview\/(?:page-[0-9]{6}\.(?:png|webp|jpeg)|partition-[0-9]{6}-[0-9]{6}-manifest\.json))$/;
+const pathPattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/(?:reading-manifest\.json|page-map\.json\.gz|text-layer-manifest\.json|text-review-manifest\.json|text\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz|search-[0-9]{6}-[0-9]{6}\.json\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\.json)|preview\/(?:page-[0-9]{6}\.(?:png|webp|jpeg)|partition-[0-9]{6}-[0-9]{6}-manifest\.json))$/;
 export const isV3Path = path => typeof path === "string" && pathPattern.test(path);
 export function validateResource(ref, source = "") {
   if (!ref || !["vomebook/pdf-pages-v2", "vomebook/reader-assets-v2"].includes(ref.bucket) ||
@@ -108,6 +108,13 @@ export function createV3Repository({ readJson, readBytes, resourceUrl, signal, p
       partitions(value.partitions, pageCount, true, sourceSha);
       validateResource(value.book_text, sourceSha);
       if (!value.book_text.path.endsWith("/text/book-text.json.gz")) invalid();
+      if (value.search_partitions !== undefined) {
+        partitions(value.search_partitions, pageCount, true, sourceSha);
+        for (const part of value.search_partitions) {
+          if (part.end - part.start >= 32 || !part.resource.path.endsWith(
+            `/text/search-${String(part.start).padStart(6, "0")}-${String(part.end).padStart(6, "0")}.json.gz`)) invalid();
+        }
+      }
       active(); index = value; return value;
     }).catch(error => { textPending = null; throw error; });
     return textPending;
