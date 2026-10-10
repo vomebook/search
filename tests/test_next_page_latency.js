@@ -22,7 +22,7 @@ function fixture(source) {
     VSCROLL:{renderFrame:0,renderAfterScroll:false,isDraggingThumb:false},
     document:{hidden:false}, navigator:{onLine:true}, AbortController, DOMException,
     searchPrefetchAbortController:null, searchRequestId:1, pagingCheckTimer:null,
-    pagingRetryAt:0, pagingFailures:0, positionRestore:null, readerOverlay:null,
+    pagingRetryAt:0, pagingFailures:0, positionRestore:null, readerOverlay:null, snapshotCloneTask:null,
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
     recentSearchPages:new Map(), searchResponseCache:new Map(),
@@ -77,6 +77,54 @@ function fixture(source) {
 for (const project of ["github-Search","huggingface-Search"]) {
   const root = path.resolve(__dirname,"../../",project);
   const source = fs.readFileSync(path.join(root,"static/app.js"),"utf8");
+  function sparseFixture() {
+    const f=fixture(source), c=f.context;
+    c.scheduleVirtualRender=()=>{};
+    c.resultWindowCurrent=window=>!window.controller.signal.aborted;
+    c.fetchPositionPageWithRecovery=(query,page,signal)=>c.fetchSearchPage('', '', {page}, signal);
+    install(source,c,['requestResultWindowPage']);
+    const window={key:'query',query:{pageSize:100},total:801,generation:'stable',
+      controller:new AbortController(),pending:new Map(),failures:new Map()};
+    return {...f,window};
+  }
+  test(project+' sparse demand starts after 25 ms and rejects late disk completion',async()=>{
+    const f=sparseFixture(), task=f.context.requestResultWindowPage(f.window,2,false);
+    await f.advance(24);assert.strictEqual(f.calls.length,0);
+    await f.advance(25);assert.strictEqual(f.calls[0].at,25);
+    const data=f.data(2);f.calls[0].resolve(data);assert.strictEqual(await task,data);
+    f.reads[0].result={...f.data(2),key:'query',savedAt:Date.now()};f.reads[0].onsuccess();
+    assert.strictEqual(f.window.pending.size,0);
+  });
+  test(project+' sparse promoted demand releases disk immediately and retains one promise',async()=>{
+    const f=sparseFixture(), task=f.context.requestResultWindowPage(f.window,2,true);
+    await f.advance(10);
+    assert.strictEqual(f.context.requestResultWindowPage(f.window,2,false),task);
+    await f.flush();assert.strictEqual(f.calls[0].at,10);
+    for(let i=0;i<10;i++) assert.strictEqual(f.context.requestResultWindowPage(f.window,2,false),task);
+    assert.strictEqual(f.calls.length,1);f.calls[0].resolve(f.data(2));await task;
+  });
+  test(project+' sparse cancellation clears disk waits without starting transport',async()=>{
+    const f=sparseFixture(), task=f.context.requestResultWindowPage(f.window,2,true);
+    await f.advance(10);f.window.controller.abort();assert.strictEqual(await task,null);
+    await f.advance(150);assert.strictEqual(f.calls.length,0);assert.strictEqual(f.window.pending.size,0);
+  });
+  test(project+' repeated sparse demand preserves a fast disk hit',async()=>{
+    const f=sparseFixture(),task=f.context.requestResultWindowPage(f.window,2,false);
+    for(let i=0;i<10;i++) assert.strictEqual(f.context.requestResultWindowPage(f.window,2,false),task);
+    assert.strictEqual(task.diskWait.signal.aborted,false);
+    await f.advance(10);f.reads[0].result={...f.data(2),key:'query',savedAt:Date.now()};f.reads[0].onsuccess();
+    await task;assert.strictEqual(f.calls.length,0);
+  });
+  test(project+' sparse fast disk reuse and three pending slots remain bounded',async()=>{
+    const f=sparseFixture(), tasks=[];
+    for(let page=2;page<=4;page++) tasks.push(f.context.requestResultWindowPage(f.window,page,true));
+    assert.strictEqual(await f.context.requestResultWindowPage(f.window,5,false),null);
+    for(let i=0;i<3;i++) {
+      const data={...f.data(i+2),key:'query',savedAt:Date.now()};
+      f.reads[i].result=data;f.reads[i].onsuccess();
+    }
+    await Promise.all(tasks);assert.strictEqual(f.calls.length,0);
+  });
   test(project + " next-page disk wait is bounded without delaying farther cache reuse",async()=>{
     const f=fixture(source); f.start(); await f.advance(24); assert.strictEqual(f.calls.length,0);
     await f.advance(25); assert.deepStrictEqual(f.calls.map(c=>[c.page,c.at]),[[2,25]]);

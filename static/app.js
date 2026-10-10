@@ -696,6 +696,7 @@ function renderDownloadBatch() {
 
 function getSelectedFiles() {
   return Object.keys(selectedIndices).map(Number).flatMap(index => {
+    if (snapshotCloneTask) materializeSnapshotRange(snapshotCloneTask, index, index + 1);
     const record = STATE.results[index];
     if (!record) return [];
     return [{ filename: record.File + (record.Extension ? "." + record.Extension : ""), link: getRecordLink(record) }];
@@ -2351,6 +2352,8 @@ let measuredHeightRevision = 0;
 const searchSnapshotSources = new WeakMap();
 const searchSnapshotResultBudgets = new WeakMap();
 const searchSnapshotHeightValues = new WeakMap();
+const searchSnapshotCloneSources = new WeakMap();
+let snapshotCloneTask = null;
 const searchViewportSnapshots = new Map();
 const SEARCH_VIEWPORT_MAX = 64;
 const SEARCH_VIEWPORT_BYTES_MAX = 64 * 1024;
@@ -2683,6 +2686,7 @@ function showPositionRestoreStatus(message, retry = false) {
 }
 
 function cancelPositionRestore() {
+  cancelSnapshotClone();
   positionEntryId++;
   if (resultWindow) resultWindow.controller.abort();
   resultWindow = null;
@@ -2927,13 +2931,17 @@ function requestResultWindowPage(window, page, prefetch = false) {
   if (window.prefetched?.has(page)) return Promise.resolve(window.prefetched.get(page));
   if (window.pending.has(page)) {
     const request = window.pending.get(page);
-    if (!prefetch) request.demanded = true;
+    if (!prefetch && !request.demanded) { request.demanded = true; request.diskWait?.abort(); }
     return request;
   }
   if (prefetch && window.prefetchFailures?.has(page)) return Promise.resolve(null);
   if (window.pending.size >= 3 || window.failures.has(page) || window.invalid) return Promise.resolve(null);
+  const diskWait = new AbortController();
+  const releaseDisk = () => diskWait.abort();
+  window.controller.signal.addEventListener("abort", releaseDisk, { once: true });
+  if (window.controller.signal.aborted) releaseDisk();
   const request = (async () => {
-    const cached = await readRecentSearchPage(window.key, page, window);
+    const cached = await readRecentSearchPage(window.key, page, window, prefetch ? 150 : 25, diskWait.signal);
     if (!resultWindowCurrent(window)) return null;
     return cached || fetchPositionPageWithRecovery(window.query, page, window.controller.signal, undefined, () => request.demanded);
   })().then(data => {
@@ -2941,11 +2949,13 @@ function requestResultWindowPage(window, page, prefetch = false) {
     validatePositionWindowPage(data, page, window.query.pageSize, window);
     return data;
   }).finally(() => {
+    window.controller.signal.removeEventListener("abort", releaseDisk);
     window.pending.delete(page);
     if (resultWindowCurrent(window)) scheduleVirtualRender();
   });
   window.pending.set(page, request);
   request.demanded = !prefetch;
+  request.diskWait = diskWait;
   return request;
 }
 
@@ -3001,6 +3011,10 @@ async function loadResultWindowPage(page, prefetch = false) {
 }
 
 function ensureResultWindowPages(start, end) {
+  if (snapshotCloneTask) {
+    materializeSnapshotRange(snapshotCloneTask, start, end);
+    return;
+  }
   // A restored search window must keep loading visible pages; reader return state
   // is only a temporary scroll target and must not block normal pagination.
   if (!resultWindow || readerOverlay || VSCROLL.isDraggingThumb) return;
@@ -3091,8 +3105,23 @@ function trimSearchViewSnapshots() {
   }
   while (searchViewSnapshots.size > SEARCH_VIEW_SNAPSHOT_MAX) searchViewSnapshots.delete(searchViewSnapshots.keys().next().value);
 }
+let searchViewKeyMemo = null;
+
+function sameSearchFilterValues(current, saved) {
+  // Retained aliases can mutate arrays without going through a filter handler.
+  if (!saved || current.length !== saved.length) return false;
+  for (let i = 0; i < current.length; i++) if (current[i] !== saved[i]) return false;
+  return true;
+}
+
 function getSearchViewKey() {
-  return stableSearchStringify({
+  const scalars = [STATE.mode, STATE.repoFull || "", STATE.query || "", STATE.filterMinSize,
+    STATE.filterMaxSize, STATE.sort || "relevance", STATE.searchFolders, STATE.exact, STATE.useLocalMode, STATE.pageSize];
+  const filters = [STATE.filterRepos, STATE.filterExtensions, STATE.filterFolderSelfs, STATE.filterFolderSubtrees,
+    STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ? [] : STATE.filterFolders];
+  if (searchViewKeyMemo && sameSearchFilterValues(scalars, searchViewKeyMemo.scalars)
+      && filters.every((values, index) => sameSearchFilterValues(values, searchViewKeyMemo.filters[index]))) return searchViewKeyMemo.key;
+  const key = stableSearchStringify({
     mode: STATE.mode,
     repo: STATE.repoFull || "",
     query: STATE.query || "",
@@ -3102,7 +3131,7 @@ function getSearchViewKey() {
       self: STATE.filterFolderSelfs.slice().sort(),
       subtree: STATE.filterFolderSubtrees.slice().sort(),
     },
-    plainFolders: STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ? [] : STATE.filterFolders.slice().sort(),
+    plainFolders: filters[4].slice().sort(),
     minSize: STATE.filterMinSize,
     maxSize: STATE.filterMaxSize,
     sort: STATE.sort || "relevance",
@@ -3111,6 +3140,8 @@ function getSearchViewKey() {
     useLocalMode: STATE.useLocalMode,
     pageSize: STATE.pageSize,
   });
+  searchViewKeyMemo = { key, scalars, filters: filters.map(values => values.slice()) };
+  return key;
 }
 function getHeightMeasurementKey() {
   return (DOM.resultsContainer?.clientWidth || 0) + ":" + (STATE.isMobile ? "mobile" : "desktop") + ":" + (STATE.isDark ? "dark" : "light");
@@ -3194,6 +3225,13 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   if (getReturnPositionTarget(key)) return searchViewSnapshots.get(key) || null;
   if (!DOM.resultsContainer || !view || positionRestore || key !== view.key || view.loadedPage < 1) return null;
   const position = saveSearchPosition();
+  const restoringSnapshot = searchSnapshotCloneSources.get(view.results);
+  if (restoringSnapshot?.key === key) {
+    const snapshot = restoringSnapshot;
+    if (position) snapshot.scroll = { ...position, viewKey: key };
+    snapshot.savedAt = Date.now();
+    return snapshot;
+  }
   const existing = searchViewSnapshots.get(key);
   const source = existing && searchSnapshotSources.get(existing);
   const signature = `${view.revision}:${measuredHeightRevision}:${getHeightMeasurementKey()}`;
@@ -3243,6 +3281,68 @@ function activateSearchView(key = getSearchViewKey()) {
   const snapshot = searchViewSnapshots.get(key);
   VSCROLL.heightCache = new Map(snapshot?.heightCache || []);
 }
+function cancelSnapshotClone() {
+  const task = snapshotCloneTask;
+  snapshotCloneTask = null;
+  if (!task) return;
+  clearTimeout(task.timer);
+  if (task.frame) cancelAnimationFrame(task.frame);
+}
+
+function materializeSnapshotRange(task, start, end) {
+  for (let index = Math.max(0, start); index < Math.min(end, task.results.length); index++) {
+    if (index in task.results || !(index in task.snapshot.results)) continue;
+    task.results[index] = cloneSearchResult(task.snapshot.results[index]);
+    if (STATE.results !== task.results) continue;
+    VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
+    if (index >= VSCROLL.renderStart && index < VSCROLL.renderEnd) {
+      VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1; scheduleVirtualRender();
+    }
+    const cached = VSCROLL.heightCache.get(getResultStableId(task.results[index]));
+    if (cached?.measurementKey === getHeightMeasurementKey() && VSCROLL.heights[index] !== cached.height) {
+      VSCROLL.heights[index] = cached.height; VSCROLL.heightsDirty = true;
+    }
+  }
+}
+
+function prepareSnapshotClone(snapshot, key, restoreScroll) {
+  // Clone the anchor neighborhood before paint; keep the complete source immutable.
+  const task = { snapshot, key, results: new Array(snapshot.results.length), cursor: 0,
+    keys: snapshot.window ? Object.keys(snapshot.results) : null, timer: null, frame: 0 };
+  snapshotCloneTask = task;
+  searchSnapshotCloneSources.set(task.results, snapshot);
+  const size = STATE.pageSize, index = restoreScroll ? snapshot.scroll?.index || 0 : 0;
+  materializeSnapshotRange(task, 0, size);
+  materializeSnapshotRange(task, Math.max(0, Math.floor(index / size) - 2) * size,
+    (Math.floor(index / size) + 3) * size);
+  return task.results;
+}
+
+function startSnapshotClone() {
+  const task = snapshotCloneTask;
+  if (!task) return;
+  const step = () => {
+    task.timer = null;
+    if (snapshotCloneTask !== task || STATE.results !== task.results || getSearchViewKey() !== task.key) {
+      if (snapshotCloneTask === task) cancelSnapshotClone();
+      return;
+    }
+    const count = task.keys ? task.keys.length : task.results.length, started = performance.now();
+    for (let batch = 0; task.cursor < count && batch < 256 && performance.now() - started < 4; batch++) {
+      const index = task.keys ? Number(task.keys[task.cursor++]) : task.cursor++;
+      materializeSnapshotRange(task, index, index + 1);
+    }
+    if (task.cursor < count) { task.timer = setTimeout(step, 0); return; }
+    snapshotCloneTask = null;
+    searchSnapshotCloneSources.delete(task.results);
+    const source = searchSnapshotSources.get(task.snapshot);
+    if (source) searchSnapshotResultBudgets.set(task.results, { length: task.results.length, bytes: source.resultsBytes });
+    displayedSearchView = null; rememberDisplayedSearchView();
+    scheduleVirtualRender(); prefetchNextPage(); scheduleBottomLoad();
+  };
+  task.frame = requestAnimationFrame(() => { task.frame = 0; task.timer = setTimeout(step, 0); });
+}
+
 function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
   const snapshot = searchViewSnapshots.get(key);
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
@@ -3253,9 +3353,11 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   searchAbortController = new AbortController();
   searchId++;
   searchRequestId++;
-  STATE.results = snapshot.results.map(cloneSearchResult);
+  const materialized = snapshot.window?.count ?? snapshot.results.length;
+  STATE.results = materialized > 2000 && !preserveRestore
+    ? prepareSnapshotClone(snapshot, key, restoreScroll) : snapshot.results.map(cloneSearchResult);
   const source = searchSnapshotSources.get(snapshot);
-  if (source) searchSnapshotResultBudgets.set(STATE.results, { length: STATE.results.length, bytes: source.resultsBytes });
+  if (source && !snapshotCloneTask) searchSnapshotResultBudgets.set(STATE.results, { length: STATE.results.length, bytes: source.resultsBytes });
   STATE.total = snapshot.total;
   STATE.page = snapshot.page;
   STATE._loadedPage = snapshot.loadedPage;
@@ -3284,6 +3386,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   updateStatusBar();
   updateLoadInfo();
   syncStateToURL(true);
+  startSnapshotClone();
   return true;
 }
 
@@ -4296,7 +4399,7 @@ function resetVirtualScrollState() {
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
-  VSCROLL.sparseHeights = !!resultWindow;
+  VSCROLL.sparseHeights = !!resultWindow || !!snapshotCloneTask;
   VSCROLL.heightBase = VSCROLL.estimatedHeight || 60;
   VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
@@ -4320,7 +4423,9 @@ function ensureVirtualHeights(len) {
   if (VSCROLL.sparseHeights) {
     VSCROLL.heights.length = len; VSCROLL.measuredRowKeys.length = len;
     const measurementKey = getHeightMeasurementKey();
-    for (const key of Object.keys(STATE.results)) if (Number(key) >= oldLen) {
+    const keys = resultWindow || snapshotCloneTask ? Object.keys(STATE.results)
+      : Array.from({length: len - oldLen}, (_, offset) => oldLen + offset);
+    for (const key of keys) if (Number(key) >= oldLen) {
       const cached = VSCROLL.heightCache.get(getResultStableId(STATE.results[key]));
       if (cached?.measurementKey === measurementKey) VSCROLL.heights[key] = cached.height;
     }
@@ -5080,6 +5185,8 @@ function renderCheckboxList(container, items, selected, onChange) {
 }
 
 function renderFilterFolderTree() {
+  cancelFolderTreeRendering();
+  folderSelectionMemo = null;
   setupFolderTreeEvents();
   DOM.filterFolderTree.innerHTML = "";
   if (!STATE.folderTree || STATE.folderTree.length === 0) {
@@ -5093,9 +5200,10 @@ function refreshFilterFolderSelectionState() {
   if (!DOM.filterFolderTree || !STATE.folderTree || STATE.folderTree.length === 0) return;
   const subtreeSet = getFolderSubtreeSet();
   const selfSet = getFolderSelfSet();
+  const lookup = getFolderSelectionLookup(subtreeSet, selfSet);
   DOM.filterFolderTree.querySelectorAll(".filter-folder-item").forEach(function(row) {
     const node = row._folderNode;
-    if (node) applyFolderSelectionToNode(node, row, subtreeSet, selfSet);
+    if (node) applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
   });
 }
 
@@ -5120,10 +5228,11 @@ function setupFolderTreeEvents() {
       const children = row.nextElementSibling;
       const expanding = !!STATE.folderTreeCollapsed[node.path];
       STATE.folderTreeCollapsed[node.path] = !expanding;
+      if (!expanding) cancelFolderTreeRendering(children);
       if (expanding && !children._childrenRendered) {
+        children.style.display = "block";
         renderFilterTreeNodes(children, node.children, Number(row.style.getPropertyValue("--fdepth")) + 1);
-        children._childrenRendered = true;
-      }
+      } else if (expanding) resumeFolderTreeRendering(children);
       toggle.setAttribute("aria-expanded", String(expanding));
       toggleFolderChildrenAnimated(children, toggle, expanding);
     }
@@ -5209,22 +5318,46 @@ function folderPathCovered(path, subtreeSet) {
   return false;
 }
 
-function folderSelectionState(node, subtreeSet, selfSet) {
-  if (!node) return { full: false, partial: false };
-  if (folderPathCovered(node.path, subtreeSet)) return { full: true, partial: false };
-  const direct = selfSet.has(node.path);
-  const children = (node.children || []).map(child => folderSelectionState(child, subtreeSet, selfSet));
-  let full;
-  if (node.isRoot) {
-    full = (!node.hasDirectFiles || direct) && (children.length ? children.every(child => child.full) : !!node.hasDirectFiles);
-  } else if (node.showSelfToggle && !direct) {
-    full = false;
-  } else if (!node.hasChildren) {
-    full = !!node.hasDirectFiles && direct || subtreeSet.has(node.path);
-  } else {
-    full = children.every(child => child.full) && (!node.hasDirectFiles || direct);
+function createFolderSelectionLookup(nodes, subtreeSet, selfSet) {
+  const lookup = new Map();
+  const stack = (nodes || []).map(node => ({ node, covered: folderPathCovered(node.path, subtreeSet), exit: false }));
+  while (stack.length) {
+    const entry = stack.pop(), node = entry.node;
+    if (!entry.exit) {
+      const covered = entry.covered || !!node.path && subtreeSet.has(node.path);
+      stack.push({ node, covered, exit: true });
+      for (let i = (node.children || []).length - 1; i >= 0; i--) stack.push({ node: node.children[i], covered, exit: false });
+      continue;
+    }
+    const direct = selfSet.has(node.path), children = node.children || [];
+    let full;
+    if (entry.covered) full = true;
+    else if (node.isRoot) full = (!node.hasDirectFiles || direct) && (children.length ? children.every(child => lookup.get(child).full) : !!node.hasDirectFiles);
+    else if (node.showSelfToggle && !direct) full = false;
+    else if (!node.hasChildren) full = !!node.hasDirectFiles && direct || subtreeSet.has(node.path);
+    else full = children.every(child => lookup.get(child).full) && (!node.hasDirectFiles || direct);
+    lookup.set(node, { full, partial: !full && (direct || subtreeSet.has(node.path) || children.some(child => {
+      const state = lookup.get(child); return state.full || state.partial;
+    })) });
   }
-  return { full, partial: !full && (direct || subtreeSet.has(node.path) || children.some(child => child.full || child.partial)) };
+  return lookup;
+}
+
+let folderSelectionMemo = null;
+
+function getFolderSelectionLookup(subtreeSet, selfSet) {
+  if (!folderSelectionMemo || folderSelectionMemo.tree !== STATE.folderTree
+      || !sameSearchFilterValues(STATE.filterFolderSubtrees, folderSelectionMemo.subtrees)
+      || !sameSearchFilterValues(STATE.filterFolderSelfs, folderSelectionMemo.selfs)) {
+    folderSelectionMemo = { tree: STATE.folderTree, subtrees: STATE.filterFolderSubtrees.slice(),
+      selfs: STATE.filterFolderSelfs.slice(), lookup: createFolderSelectionLookup(STATE.folderTree, subtreeSet, selfSet) };
+  }
+  return folderSelectionMemo.lookup;
+}
+
+function folderSelectionState(node, subtreeSet, selfSet, lookup = null) {
+  if (!node) return { full: false, partial: false };
+  return (lookup || createFolderSelectionLookup([node], subtreeSet, selfSet)).get(node);
 }
 
 // Split covering ancestors before removing a branch or its direct files.
@@ -5255,13 +5388,8 @@ function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
 }
 
 function normalizeFolderSelection(subtreeSet, selfSet) {
-  const collapse = nodes => {
-    for (const node of nodes || []) {
-      collapse(node.children);
-      if (!node.isRoot && folderSelectionState(node, subtreeSet, selfSet).full) subtreeSet.add(node.path);
-    }
-  };
-  collapse(STATE.folderTree);
+  const lookup = createFolderSelectionLookup(STATE.folderTree, subtreeSet, selfSet);
+  for (const [node, state] of lookup) if (!node.isRoot && state.full) subtreeSet.add(node.path);
   for (const path of subtreeSet) {
     const slash = path.lastIndexOf("/");
     if (slash >= 0 && folderPathCovered(path.slice(0, slash), subtreeSet)) subtreeSet.delete(path);
@@ -5296,10 +5424,10 @@ function collectFolderNodePaths(nodes, subtreePaths, selfPaths) {
   }
 }
 
-function applyFolderSelectionToNode(node, row, subtreeSet, selfSet) {
+function applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup = null) {
   const cb = row.querySelector("input[type='checkbox']");
   if (!cb) return;
-  const { full, partial } = folderSelectionState(node, subtreeSet, selfSet);
+  const { full, partial } = folderSelectionState(node, subtreeSet, selfSet, lookup);
   cb.checked = full;
   cb.indeterminate = !full && partial;
   const selfBtn = row.querySelector(".folder-self-toggle");
@@ -5310,11 +5438,68 @@ function applyFolderSelectionToNode(node, row, subtreeSet, selfSet) {
   }
 }
 
-function renderFilterTreeNodes(container, nodes, depth) {
+let folderTreeRenderQueue = [];
+let folderTreeRenderTimer = null;
+let folderTreeRenderActive = false;
+
+function cancelFolderTreeRendering(root = null) {
+  folderTreeRenderQueue = folderTreeRenderQueue.filter(task => {
+    if (root && !root.contains(task.container)) return true;
+    task.container._renderTask = null;
+    return false;
+  });
+  if (!folderTreeRenderQueue.length) { clearTimeout(folderTreeRenderTimer); folderTreeRenderTimer = null; }
+}
+
+function resumeFolderTreeRendering(root) {
+  for (const container of root.querySelectorAll(".tree-children")) {
+    if (!container.isConnected || container._childrenRendered || container._renderTask || !container._folderNode) continue;
+    let visible = true;
+    for (let parent = container; parent && parent !== DOM.filterFolderTree; parent = parent.parentElement) {
+      if (parent._folderNode && STATE.folderTreeCollapsed[parent._folderNode.path]) { visible = false; break; }
+    }
+    if (visible) renderFilterTreeNodes(container, container._folderNode.children, container._folderDepth);
+  }
+}
+
+function drainFolderTreeRendering() {
+  if (folderTreeRenderActive) return;
+  folderTreeRenderActive = true;
+  clearTimeout(folderTreeRenderTimer); folderTreeRenderTimer = null;
+  const changed = new Set();
   const subtreeSet = getFolderSubtreeSet();
   const selfSet = getFolderSelfSet();
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
+  const lookup = getFolderSelectionLookup(subtreeSet, selfSet);
+  const started = performance.now();
+  try {
+    for (let count = 0; folderTreeRenderQueue.length && count < 32 && performance.now() - started < 4; ) {
+      const task = folderTreeRenderQueue[0];
+      if (!task.container.isConnected || task.tree !== STATE.folderTree || task.route !== routeRenderId) {
+        task.container._renderTask = null; folderTreeRenderQueue.shift(); continue;
+      }
+      if (task.index === task.nodes.length) {
+        task.container._childrenRendered = true; task.container._renderTask = null;
+        folderTreeRenderQueue.shift(); continue;
+      }
+      appendFilterTreeNode(task.container, task.nodes[task.index++], task.depth, subtreeSet, selfSet, lookup);
+      changed.add(task.container); count++;
+    }
+    for (const container of changed) if (container._transitionCleanup && !STATE.folderTreeCollapsed[container._folderPath]) {
+      container.style.height = container.scrollHeight + "px";
+    }
+  } finally { folderTreeRenderActive = false; }
+  if (folderTreeRenderQueue.length) folderTreeRenderTimer = setTimeout(drainFolderTreeRendering, 0);
+}
+
+function renderFilterTreeNodes(container, nodes, depth) {
+  if (container._renderTask) return;
+  container.replaceChildren(); container._childrenRendered = false;
+  const task = { container, nodes, depth, index: 0, tree: STATE.folderTree, route: routeRenderId };
+  container._renderTask = task; folderTreeRenderQueue.push(task);
+  if (!folderTreeRenderActive) drainFolderTreeRendering();
+}
+
+function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, lookup) {
     const has = node.children && node.children.length > 0;
     const row = document.createElement("div");
     row.className = "filter-folder-item";
@@ -5328,18 +5513,19 @@ function renderFilterTreeNodes(container, nodes, depth) {
       (node.showSelfToggle ? '<button type="button" class="folder-self-toggle" data-path="' + escapeHTML(node.path) + '">本层文件</button>' : '') +
       '<span class="folder-count">' + (node.count || 0).toLocaleString() + '</span>';
     const toggle = row.querySelector(".tree-toggle");
-    applyFolderSelectionToNode(node, row, subtreeSet, selfSet);
+    applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
     container.appendChild(row);
     if (has) {
       const childDiv = document.createElement("div");
       childDiv.className = "tree-children";
+      childDiv._folderPath = node.path;
+      childDiv._folderNode = node; childDiv._folderDepth = depth + 1;
       if (collapsed) childDiv.style.display = "none";
-      if (!collapsed) renderFilterTreeNodes(childDiv, node.children, depth + 1);
-      childDiv._childrenRendered = !collapsed;
+      childDiv._childrenRendered = false;
       toggle.setAttribute("aria-expanded", String(!collapsed));
       container.appendChild(childDiv);
+      if (!collapsed) renderFilterTreeNodes(childDiv, node.children, depth + 1);
     }
-  }
 }
 
 function handleFolderCheckboxChange(node) {
@@ -5636,6 +5822,7 @@ function retryBottomPage() {
 }
 
 function maybeLoadNextPage(bottomOnly = false, retry = false) {
+  if (snapshotCloneTask) return;
   if (positionRestore) return;
   expireSearchRequests();
   if (document.hidden || readerOverlay || pagingFailures >= 2 || Date.now() < pagingRetryAt) return;
@@ -6184,7 +6371,7 @@ async function init() {
     if (e.shiftKey && lastSelectedIndex >= 0) {
       var lo = Math.min(lastSelectedIndex, idx);
       var hi = Math.max(lastSelectedIndex, idx);
-      for (var si = lo; si <= hi; si++) if (STATE.results[si]) selectedIndices[si] = true;
+      for (var si = lo; si <= hi; si++) if (STATE.results[si] || snapshotCloneTask?.snapshot.results[si]) selectedIndices[si] = true;
     } else if (cb.checked) {
       selectedIndices[idx] = true;
     } else {
@@ -6209,9 +6396,10 @@ async function init() {
     updateSelectionUI();
   });
   if (DOM.multiSelectAll) DOM.multiSelectAll.addEventListener("click", function() {
-    var allSelected = STATE.results.length > 0 && STATE.results.every(function(record, index) { return !record || selectedIndices[index]; });
+    const records = snapshotCloneTask?.snapshot.results || STATE.results;
+    var allSelected = records.length > 0 && records.every(function(record, index) { return !record || selectedIndices[index]; });
     if (allSelected) selectedIndices = {};
-    else for (var si = 0; si < STATE.results.length; si++) if (STATE.results[si]) selectedIndices[si] = true;
+    else for (var si = 0; si < records.length; si++) if (records[si]) selectedIndices[si] = true;
     lastSelectedIndex = allSelected ? -1 : STATE.results.length - 1;
     updateSelectionUI();
   });

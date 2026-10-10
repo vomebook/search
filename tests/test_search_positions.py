@@ -171,6 +171,51 @@ class SearchPositionTests(unittest.TestCase):
         }''')
         self.assertEqual(kept, ['small'])
 
+    def prepare_deep_snapshot(self):
+        self.page.evaluate('''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();setReturnPositionTarget();
+          STATE.results=Array.from({length:5000},(_,i)=>({Repo:'VoiceOfML/Test',File:'deep-'+i,Extension:'txt',Folder:['docs'],Size:1}));
+          STATE.total=5000;STATE.page=STATE._loadedPage=50;STATE.hasMore=false;STATE.isLoading=false;STATE._pageCache={};
+          searchViewSnapshots.clear();VSCROLL.heightCache.clear();resetVirtualScrollState();renderResults();
+          setResultScrollTop(getVirtualOffset(4000)+11);
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          window.deepSnapshot=saveSearchViewSnapshot();window.deepKey=getSearchViewKey();
+        }''')
+
+    def test_deep_snapshot_restores_neighborhood_then_complete_independent_records(self):
+        self.prepare_deep_snapshot()
+        result = self.page.evaluate('''async () => {
+          restoreSearchViewSnapshot(deepKey);
+          const initial=Object.keys(STATE.results).length,index=findVirtualIndex(getResultScrollTop());
+          const pending=!!snapshotCloneTask;
+          const saved=saveSearchViewSnapshot()===deepSnapshot;
+          setResultScrollTop(getVirtualOffset(1000)+11);renderVisible();
+          const jumped=!!STATE.results[1000] && !!DOM.resultsList.querySelector('.result-item[data-index="1000"]');
+          DOM.multiSelectToggle.checked=true;updateSelectionUI();DOM.multiSelectAll.click();
+          const selected=Object.keys(selectedIndices).length;
+          selectedIndices={4999:true};const files=getSelectedFiles();
+          const download=files.length===1 && files[0].filename==='deep-4999.txt';
+          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          const complete=STATE.results.every((r,i)=>r?.File==='deep-'+i) && Object.keys(STATE.results).length===5000;
+          STATE.results[0].Folder.push('changed');
+          return {bounded:initial<1000,pending,index,saved,jumped,selected,download,complete,
+            independent:deepSnapshot.results[0].Folder.join('/')==='docs'};
+        }''')
+        self.assertEqual(result, dict(bounded=True,pending=True,index=4000,saved=True,jumped=True,
+                                      selected=5000,download=True,complete=True,independent=True))
+
+    def test_query_change_cancels_snapshot_batches_without_saving_partial_content(self):
+        self.prepare_deep_snapshot()
+        result = self.page.evaluate('''async () => {
+          restoreSearchViewSnapshot(deepKey);const old=STATE.results;
+          STATE.query='paging-latest';doSearch(false,true);const oldCount=Object.keys(old).length;
+          await new Promise(r=>setTimeout(r,100));
+          return {cancelled:!snapshotCloneTask,stable:Object.keys(old).length===oldCount,
+            complete:searchViewSnapshots.get(deepKey).results.length===5000 && Object.keys(searchViewSnapshots.get(deepKey).results).length===5000,
+            latest:STATE.query==='paging-latest' && STATE.results!==old};
+        }''')
+        self.assertEqual(result, dict(cancelled=True,stable=True,complete=True,latest=True))
+
     def test_unchanged_controls_reuse_snapshot_and_do_not_scan_storage(self):
         result = self.page.evaluate('''async () => {
           const first=saveSearchViewSnapshot(), results=first.results;

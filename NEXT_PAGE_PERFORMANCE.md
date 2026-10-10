@@ -1,5 +1,97 @@
 # Next-Page Performance
 
+## Interaction Follow-Up (2026-10-10, Local Only)
+
+Implemented locally after the snapshot publication below; not yet deployed.
+
+- Sparse visible-page demand uses a 25 ms disk budget; speculative reads retain
+  150 ms. Promotion aborts the speculative disk wait exactly once, retaining the
+  same request promise and slot. Repeated foreground checks leave fast disk hits
+  eligible. Window cancellation releases the wait/listener; late disk data does
+  not replace transport. The existing three-slot demand bound and generation
+  validation are retained.
+- View keys memoize canonical sorting/encoding with all existing fields. Scalar
+  and filter-content equality is checked before reuse, including in-place edits
+  through retained aliases; the equality check is linear, not an O(1) revision
+  shortcut. Layout, paging and inactive plain-folder changes do not re-encode.
+- Directory full/partial selection is computed once in iterative postorder with
+  inherited subtree coverage. Normalization preserves complete file membership.
+  Rendering/checkbox refresh reuse a current-tree/current-selection lookup.
+  Directory DOM admission uses one queue, at most 32 rows and a 4 ms soft budget
+  per batch. Collapse and route/tree replacement cancel pending rows; reopening
+  resumes interrupted expanded descendants and uses the latest selection.
+- Snapshots with more than 2,000 materialized records clone page 1 and the saved
+  anchor's five-page neighborhood before rendering. Remaining independent copies
+  use at most 256 records/4 ms per timer batch after a frame opportunity. Visible
+  jumps materialize their own range immediately. Sparse height geometry avoids
+  initial full-body ID/height initialization. Cancellation cannot save partial
+  content over the complete source snapshot. Bulk selection sees the complete
+  source, and file actions materialize their selected records. Ordinary append
+  resumes after completion, retaining the 5% threshold and bounded prefetch.
+
+Controlled local Chromium observations (three runs/site, synthetic fixtures):
+
+| Operation | Earlier observation | Current observation |
+| --- | --- | --- |
+| Stalled disk, sparse demanded transport | ~150 ms | ~25-26 ms |
+| 3,280-node selection normalization | 24,604 visits; 27-54 ms | 3,280 visits; 2-6 ms |
+| First synchronous expansion of 1,000 children | 24-46 ms | 1.6-2.7 ms; remaining rows admitted in batches |
+| 5,000 filters, 100 unchanged view-key calls | 71-114 ms | 3.7-4.5 ms |
+| Restore 30,000 records, synchronous call | 30,000 clones; 43-71 ms | 600 clones; 30-42 ms |
+
+The final restoration completes all copies asynchronously; its synchronous number
+is not an end-to-end restoration benchmark. Layout still contributes to that call.
+All records and exact totals remain accessible. These are local observations, not
+production or physical-phone latency guarantees. Script:
+`/tmp/opencode/search_second_profile.py`.
+
+Verification: shared latency 36/36; shared state/selection 6/6; independent folder
+membership oracle covers 2,048 combinations. Snapshot budget 10/10, Worker 49/49,
+static 35/35, page-generation 6/6 and response-cache 2/2 also pass. Focused Chromium:
+positions/windows/sidebar 57/57, controls/scroll 28/28, recent-pages/prefetch 18/18;
+four explicit 390px deep-restore/directory cases pass. Screenshots:
+`/tmp/opencode/search-interaction-github-mobile.png`.
+
+```bash
+node tests/test_next_page_latency.js
+node tests/test_search_interaction_state.js
+node tests/test_folder_selection.js
+python3 -B -m unittest tests.test_search_positions tests.test_position_window tests.test_sidebar_keyboard -v
+python3 -B -m unittest tests.test_position_controls tests.test_scroll_stability -v
+python3 -B -m unittest tests.test_recent_search_pages tests.test_prefetch_pipeline -v
+```
+
+Current-source preview: `http://127.0.0.1:8794/search/`.
+
+## Snapshot Publication (2026-10-10)
+
+- Published optimization: `dcde38fa0a09233863f5a5a3ebca70c64b605652`, based on
+  `4782ba0`. Pages workflow `38015369885`: completed/success.
+- The automatic Reader-index-only follow-up `4d9c4c046634f44219e3197c99eaceba66bbc748`
+  is a direct child of this release. Its workflow `38015385775` also succeeded;
+  the final checked remote revision is that child. Search runtime is unchanged.
+- Deployed app: `/search/static/app.1ec4efab6dbd.js`.
+- Isolated current-remote release checks passed: shared snapshot-budget 10,
+  Worker 49, static 35, page-generation 6, fixed-clock pagination 26, and
+  position/sparse-window/prefetch/sidebar Chromium 60.
+- Documented GitHub page/external-API production smoke: passed. Desktop local
+  Worker and 390px mobile API checks preserve first-200 order/total and display
+  row 101. No browser page errors.
+- Actual deployed Worker: cached hit and missing-anchor requests across pages
+  still succeed when its selected order's `findIndex` is made to throw inside
+  the disposable browser fixture. The original method is restored afterward.
+- Deployed-code 50,000-row memory fixtures at index 40,000: sidebar/search-input/
+  theme controls capture zero snapshots; oversized bodies are rejected, repeated
+  saves encode nothing, and the index/count stay fixed. Smaller height-only
+  snapshots reuse their result body and obtain one stable ID for position saving.
+  These fixtures are not production corpus counts or real-device latency claims.
+- Acceptance script: `/tmp/opencode/next_page_production_acceptance.py`; screenshots
+  `/tmp/opencode/next-page-github-local-desktop.png` and
+  `/tmp/opencode/next-page-github-api-mobile.png`.
+- Publication used an isolated latest-remote worktree. This receipt was updated
+  locally after acceptance; the published report contains the implementation and
+  local measurement notes below.
+
 ## Snapshot And Anchor Follow-Up (2026-10-10, Local Only)
 
 Implemented locally; this section is not a publication receipt.
@@ -204,10 +296,6 @@ branch in an isolated worktree, retaining remote Reader/index changes and local
 uncommitted Reader work. The deployment commit is identifiable by
 `perf: reduce next-page display latency`; deployment workflow and read-only
 production acceptance are verified separately after push.
-
-The clean release worktree passes all 35 static contracts after aligning the
-PDF fallback assertions with the committed Reader's `contentUrl/sourceUrl`.
-The earlier 34/35 result above describes the local dirty development snapshot.
 
 ## Production Acceptance (2026-10-10)
 
