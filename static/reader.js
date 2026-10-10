@@ -508,6 +508,8 @@ let pdfActiveTextLoads = 0;
 let pdfActiveSearchTextLoads = 0;
 const pdfTextWaiters = [];
 let pdfUserHasScrolled = false;
+let pdfScrollDirection = 1;
+let pdfLastScrollTop = 0;
 const pdfManifestPrefetches = new Map();
 const pdfManifestShells = [];
 const PDF_MANIFEST_PREFETCH_LIMIT = 12;
@@ -582,8 +584,11 @@ function trimPdfSurfaces(protectedShell) {
   let images = shells.filter(shell => shell.querySelector("img.ready")).length;
   let pixels = pdfRetainedPixels();
   const retentionPage = Number(pageAtMarker()?.dataset.page) || documentState.page;
-  shells.sort((a, b) => Math.abs(Number(b.dataset.page) - retentionPage) -
-    Math.abs(Number(a.dataset.page) - retentionPage) ||
+  const distance = shell => {
+    const delta = Number(shell.dataset.page) - retentionPage;
+    return Math.abs(delta) * (delta * pdfScrollDirection < 0 ? 2 : 1);
+  };
+  shells.sort((a, b) => distance(b) - distance(a) ||
     Number(a.dataset.renderUsedAt || 0) - Number(b.dataset.renderUsedAt || 0));
   for (const shell of shells) {
     const canvas = shell.querySelector("canvas.ready"), image = shell.querySelector("img.ready");
@@ -1288,6 +1293,8 @@ function syncHeadingLocation() {
 }
 function handleReaderPositionChange() {
   if (readerAbortController.signal.aborted) return;
+  if (viewport.scrollTop !== pdfLastScrollTop) pdfScrollDirection = viewport.scrollTop > pdfLastScrollTop ? 1 : -1;
+  pdfLastScrollTop = viewport.scrollTop;
   pdfShellWindow?.schedule();
   scheduleMarkerSync();
   scheduleFoliateScrollSync();
@@ -2095,6 +2102,7 @@ function scheduleMarkerSync() {
     markerFrame = 0;
     if (readerAbortController.signal.aborted) return;
     syncCurrentPageFromMarker();
+    refreshNearbyPdfPages();
     syncHeadingLocation();
     updateProgressTools();
     scheduleSave();
@@ -3738,6 +3746,15 @@ function pdfPagePriority(shell) {
   if (pageRect.bottom > viewportRect.top && pageRect.top < viewportRect.bottom) return 2;
   return pageRect.bottom > viewportRect.top - PDF_PREFETCH_MARGIN &&
     pageRect.top < viewportRect.bottom + PDF_PREFETCH_MARGIN ? 1 : 0;
+}
+function refreshNearbyPdfPages() {
+  if (!documentState.restorationReady || !["pdf", "pdf-pages", "image-pages"].includes(capability.mode)) return;
+  const page = documentState.page;
+  for (const offset of [0, 1, 2, 3, -1]) {
+    const candidate = page + offset * pdfScrollDirection;
+    const shell = content.querySelector(`.reader-page[data-page="${candidate}"]`);
+    if (shell && shell.dataset.renderState !== "rendered") renderPdfInBackground(shell);
+  }
 }
 function normalizePdfPriority(priority) {
   return priority === true ? 3 : Math.max(0, Math.min(3, Number(priority) || 0));
@@ -6266,7 +6283,20 @@ async function restoreProgressState(state, generation = beginReaderNavigation())
       media.currentTime = state.mediaTime;
     } else if (htmlFrame && htmlFrame.contentWindow && Number.isFinite(state.htmlScrollTop))
       htmlFrame.contentWindow.scrollTo(0, state.htmlScrollTop);
-    else if (Number.isFinite(state.scrollTop)) viewport.scrollTop = state.scrollTop;
+    else if (Number.isFinite(state.scrollTop)) {
+      if (capability.mode === "text") {
+        let measured = 0;
+        for (const block of content.querySelectorAll(".reader-text-block")) {
+          block.style.contentVisibility = "visible";
+          const height = block.getBoundingClientRect().height;
+          block.style.containIntrinsicBlockSize = `auto ${height}px`;
+          block.style.contentVisibility = "auto";
+          measured += height;
+          if (measured > state.scrollTop + viewport.clientHeight) break;
+        }
+      }
+      viewport.scrollTop = state.scrollTop;
+    }
     updateProgressTools();
     scheduleSave();
     return true;
