@@ -2,7 +2,9 @@
 import contextlib
 import functools
 import http.server
+import json
 import os
+import re
 from pathlib import Path
 import threading
 import unittest
@@ -91,6 +93,86 @@ class PdfFollowupTests(unittest.TestCase):
         self.assertIn('queue',stages)
         self.assertIn('draw',stages)
 
+    def test_first_page_loading_replaces_document_indicator_without_moving_paper(self):
+        held=ENGINE.replace("return {promise:Promise.resolve(),cancel(){}};",
+            "return {promise:new Promise(resolve=>{if(number===1)window.__releaseFirst=resolve;}),cancel(){}};")
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=held))
+        self.page.goto(self.origin+PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/persistent.pdf',ext='pdf')),wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>!!window.__releaseFirst')
+        self.assertEqual(self.page.locator('.reader-loading-indicator').count(),0)
+        shell=self.page.locator('.reader-page[data-page="1"]')
+        self.assertTrue(shell.locator('.reader-page-state').is_visible())
+        before=shell.bounding_box()
+        self.page.evaluate('window.__releaseFirst()')
+        shell.locator('canvas.ready').wait_for(state='attached')
+        self.assertAlmostEqual(before['y'],shell.bounding_box()['y'],delta=1)
+
+    def test_range_headers_and_first_chunk_are_available_before_end_of_body(self):
+        self.page.goto(self.origin+PREFIX+'/static/reader.html?ext=txt')
+        result=self.page.evaluate('''async()=>{
+          const {createPdfFetchPolicy}=await import('./reader-pdf-network.mjs'),native=fetch;
+          let source;globalThis.fetch=async()=>new Response(new ReadableStream({start(c){source=c;c.enqueue(new Uint8Array([1,2]));}}),
+            {status:206,headers:{'Content-Range':'bytes 0-3/4',ETag:'"A"'}});
+          const policy=createPdfFetchPolicy({idleMs:1000});policy.add(['/stream.pdf']);
+          try{
+            const response=await Promise.race([fetch('/stream.pdf',{headers:{Range:'bytes=0-3'}}),
+              new Promise((_,reject)=>setTimeout(()=>reject(Error('headers withheld until body completes')),150))]);
+            const reader=response.body.getReader();const first=await reader.read();
+            source.enqueue(new Uint8Array([3,4]));source.close();const second=await reader.read(),end=await reader.read();
+            return {first:[...first.value],second:[...second.value],end:end.done};
+          }finally{policy.dispose();globalThis.fetch=native;}
+        }''')
+        self.assertEqual(result,dict(first=[1,2],second=[3,4],end=True))
+
+    def test_initial_and_conditional_fetches_keep_their_existing_header_deadline(self):
+        self.page.goto(self.origin+PREFIX+'/static/reader.html?ext=txt')
+        result=self.page.evaluate('''async()=>{
+          const {createPdfFetchPolicy}=await import('./reader-pdf-network.mjs'),native=fetch;
+          let calls=0;globalThis.fetch=async(_url,init)=>{
+            calls++;await new Promise(resolve=>setTimeout(resolve,70));init.signal.throwIfAborted();return new Response('complete');};
+          const policy=createPdfFetchPolicy({idleMs:15,attemptMs:30});policy.add(['/slow.pdf']);
+          try{return {bodies:await Promise.all([fetch('/slow.pdf'),fetch('/slow.pdf',{headers:{Range:'bytes=0-3','If-Range':'"A"'}})])
+              .then(rs=>Promise.all(rs.map(r=>r.text()))),calls};}
+          finally{policy.dispose();globalThis.fetch=native;}
+        }''')
+        self.assertEqual(result,dict(bodies=['complete','complete'],calls=2))
+
+    def test_real_pdf_engine_accepts_partial_range_recovery_without_reopening_document(self):
+        from tests.test_reader_performance import minimal_pdf
+        small=minimal_pdf();xref=small.index(b'xref\n');attachment=b'x'*(4*1024*1024)
+        extra=b'6 0 obj\n<< /Length '+str(len(attachment)).encode()+b' >>\nstream\n'+attachment+b'\nendstream\nendobj\n'
+        suffix=small[xref:].replace(b'0 6\n',b'0 7\n').replace(b'trailer\n',f'{xref:010d} 00000 n \ntrailer\n'.encode()).replace(b'/Size 6',b'/Size 7')
+        suffix=re.sub(rb'startxref\n\d+',b'startxref\n'+str(xref+len(extra)).encode(),suffix)
+        packed=small[:xref]+extra+suffix
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/reader-pdf-network.mjs',lambda route:route.fulfill(content_type='text/javascript',body=
+            (ROOT/'static/reader-pdf-network.mjs').read_text().replace('idleMs = 15000','idleMs = 80')))
+        prefix=small[:xref]+extra[:extra.index(b'stream\n')+7]
+        tail=b'\nendstream\nendobj\n'+suffix
+        setup=f'const source=new Uint8Array({len(packed)});source.set({json.dumps(list(prefix))});source.set({json.dumps(list(tail))},{len(packed)-len(tail)});'
+        self.page.add_init_script('(()=>{'+setup+'''
+          const native=fetch;window.__pdfRequests=[];let held=false;
+          window.fetch=async(input,init)=>{
+            const url=String(input);if(!url.includes('/api/reader-content?'))return native(input,init);
+            const range=new Headers(init?.headers).get('Range');__pdfRequests.push(range);
+            const match=/bytes=(\\d+)-(\\d+)/.exec(range||'');
+            const start=match?Number(match[1]):0,end=match?Math.min(Number(match[2]),source.length-1):source.length-1;
+            const headers={'Content-Type':'application/pdf','Content-Length':String(end-start+1),'Accept-Ranges':'bytes',ETag:'"fixture"'};
+            if(match)headers['Content-Range']='bytes '+start+'-'+end+'/'+source.length;
+            let body=source.slice(start,end+1);
+            if(match&&end===source.length-1&&!held){held=true;
+              body=new ReadableStream({start(c){c.enqueue(source.slice(start,start+17));},cancel(){window.__partialCancelled=true;}});}
+            const response=new Response(body,{status:match?206:200,headers});
+            Object.defineProperty(response,'url',{value:new URL(url,location.href).href});return response;
+          };
+        })();''')
+        self.open()
+        self.page.locator('.reader-page canvas.ready').wait_for(state='attached')
+        self.assertTrue(self.page.evaluate('!!window.__partialCancelled'))
+        self.assertEqual(self.page.evaluate('__pdfRequests.filter(r=>r===null).length'),1)
+        self.assertFalse(self.page.locator('.reader-loading-indicator').count())
+
     def test_complete_search_reuses_disk_text_on_reopen_and_invalidates_version(self):
         self.open()
         self.search('needleA',12)
@@ -146,7 +228,9 @@ class PdfFollowupTests(unittest.TestCase):
             const task=fetch('/fixture.pdf',{headers:{Range:'bytes=0-3'},signal:controller.signal});
             if(mode==='cancel')setTimeout(()=>controller.abort(),10);
             let bytes,error;
-            try{bytes=[...new Uint8Array(await(await task).arrayBuffer())];}catch(e){error=e.message;}
+            try{const r=(await task).body.getReader();bytes=[];
+              while(true){const part=await r.read();if(part.done)break;bytes.push(...new Uint8Array(part.value.buffer));}
+            }catch(e){error=e.message;}
             rows.push({mode,calls,cancels,bytes,error,identity:policy.identity,timings:policy.timings});policy.dispose();}
           try{for(const mode of ['headers','body','temporary','changed','exhausted','cancel','permanent'])await run(mode);return rows;}
           finally{globalThis.fetch=native;}

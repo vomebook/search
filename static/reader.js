@@ -1425,8 +1425,10 @@ function createTocRow(entry, index) {
   link.tabIndex = 0;
   link.setAttribute("role", "link");
   link.textContent = entry.label;
-  const activate = () => {
-    if (!getSelection().toString()) navigateTocEntry(index);
+  const activate = (event) => {
+    const selection = getSelection();
+    if (event?.type === "click" && selection?.toString() && selection.containsNode(link, true)) return;
+    navigateTocEntry(index);
   };
   link.addEventListener("click", activate);
   link.addEventListener("keydown", (event) => {
@@ -1637,7 +1639,8 @@ async function activateFoliateTocEntry(entry, generation = beginReaderNavigation
   if (!section || visibleIndex < 0 || !foliateSectionLoader) return false;
   let node = await foliateSectionLoader(visibleIndex);
   if (!isReaderGenerationCurrent("navigation", generation)) return false;
-  if (foliateSectionSettler) await foliateSectionSettler();
+  // Background neighbors are not part of a demanded TOC destination.
+  await waitForReader(0, true);
   if (!isReaderGenerationCurrent("navigation", generation)) return false;
   if (!node?.isConnected) node = await foliateSectionLoader(visibleIndex);
   if (!node?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
@@ -1669,6 +1672,7 @@ async function activateFoliateTocEntry(entry, generation = beginReaderNavigation
   updateProgressTools();
   scheduleSave();
   setReaderPanelOpen(false, true);
+  foliateScrollAnchors.remember();
   return true;
 }
 document.addEventListener("click", async (event) => {
@@ -3812,6 +3816,8 @@ async function renderPdf(prepared) {
       ? pdfShellWindow.ensure(initialPage)
       : (await pdfShellsReady, content.querySelector(`.reader-page[data-page="${initialPage}"]`));
     if (!targetShell) throw new Error("PDF initial page shell missing");
+    markReaderContentReady();
+    viewport.scrollTop = readerPageScrollTop(targetShell);
     await renderPdfShell(targetShell, false, true);
     markReaderContentReady();
     viewport.scrollTop = readerPageScrollTop(targetShell);
@@ -4015,7 +4021,7 @@ async function renderHybridPdfCanvas(shell, signal, priority) {
       const generation = readerRuntime.currentGeneration("pdf");
       if (signal.aborted || !shell.isConnected) throw readerAbortError();
       const page = await measurePdf(awaitReader(pdf.getPage(Number(shell.dataset.page)), signal), "page", Number(shell.dataset.page));
-      if (!acquired) { await measurePdf(acquirePdfRenderSlot(priority, shell, signal), "queue", Number(shell.dataset.page)); acquired = true; }
+      if (!acquired) { await measurePdf(acquirePdfRenderSlot(priority, shell, signal), "queue", Number(shell.dataset.page)); acquired = true; shell._pdfRenderOwnsSlot = true; }
       const base = page.getViewport({ scale: 1 });
       const geometry = pdfV3Map.pages[Number(shell.dataset.page) - 1];
       if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
@@ -4049,7 +4055,7 @@ async function renderHybridPdfCanvas(shell, signal, priority) {
     } while (true);
   } finally {
     rendering?.cancel?.(); if (canvas) canvas.width = canvas.height = 0;
-    if (acquired) releasePdfRenderSlot();
+    if (acquired) { delete shell._pdfRenderOwnsSlot; releasePdfRenderSlot(); }
     signal.removeEventListener("abort", cancel); untrack();
   }
 }
@@ -4176,6 +4182,7 @@ function renderPdfImageShell(shell, force = false, priority = false) {
 function cancelSpeculativePdfRenders(protectedShell) {
   for (const shell of content.querySelectorAll('.reader-page')) {
     if (!shell._hybridRenderPromise && shell.dataset.renderState !== "rendering") continue;
+    if (!shell._pdfRenderOwnsSlot && !shell._renderStarted) continue;
     if (
       shell === protectedShell ||
       isPdfPageVisible(shell) || pdfSelectionIntersects(shell)
@@ -4208,6 +4215,7 @@ function renderPdfShell(shell, force = false, priority = false) {
     try {
       await measurePdf(acquirePdfRenderSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
       acquired = true;
+      shell._pdfRenderOwnsSlot = true;
       assertReaderActive();
       if (renderController.signal.aborted) throw readerAbortError();
       const pdf = pdfDocument;
@@ -4263,7 +4271,7 @@ function renderPdfShell(shell, force = false, priority = false) {
       shell.dataset.renderState = "idle";
       throw error;
     } finally {
-      if (acquired) releasePdfRenderSlot();
+      if (acquired) { delete shell._pdfRenderOwnsSlot; releasePdfRenderSlot(); }
     }
   })().finally(() => {
     if (shell._renderPromise === task) delete shell._renderPromise;
@@ -4453,12 +4461,8 @@ async function renderText(markdown, prepared) {
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   if (!markdown) await renderPlainText(response);
   else {
-    const bytes = await VoiceOfMLReaderSecurity.readBytes(
-      response,
-      VoiceOfMLReaderSecurity.LIMITS.documentBytes
-    );
+    const bytes = await readPreparedBytes(response, prepared.engines);
     const text = new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes);
-    await prepared.engines;
     const article = document.createElement("article");
     article.className = "reader-markdown";
     article.innerHTML = DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } });
@@ -4567,11 +4571,8 @@ async function waitForSpreadsheetImages(frame) {
 }
 
 async function renderHtml(prepared) {
-  const response = await prepared.response;
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const bytes = await VoiceOfMLReaderSecurity.readBytes(response);
+  const bytes = await readPreparedBytes(prepared.response, prepared.engine);
   const text = new TextDecoder(detectHtmlEncoding(bytes, documentState.title)).decode(bytes);
-  await prepared.engine;
   assertReaderActive();
   const documentData = prepareHtmlDocument(text);
   const frame = document.createElement("iframe");
@@ -4700,9 +4701,9 @@ async function renderPlainText(response) {
   pre.className = "reader-text";
   content.appendChild(pre);
   let block = null, blockLength = 0;
-  const appendDecoded = value => {
+  const appendDecoded = async value => {
     const text = value.replace(/\ufffd/g, "");
-    let offset = 0;
+    let offset = 0, deadline = performance.now() + 8;
     while (offset < text.length) {
       if (!block) {
         block = document.createElement("pre");
@@ -4721,9 +4722,15 @@ async function renderPlainText(response) {
       const tail = block.lastChild;
       if (tail?.nodeType === Node.TEXT_NODE) tail.appendData(text.slice(offset, end));
       else block.appendChild(document.createTextNode(text.slice(offset, end)));
+      if (text.length) markReaderContentReady();
       blockLength += end - offset;
       offset = end;
       if (offset < text.length || blockLength >= 32768) { block = null; blockLength = 0; }
+      if (offset < text.length && performance.now() >= deadline) {
+        await waitForReader();
+        assertReaderActive();
+        deadline = performance.now() + 8;
+      }
     }
   };
   const limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes;
@@ -4736,7 +4743,7 @@ async function renderPlainText(response) {
       throw error;
     }
     assertReaderActive();
-    appendDecoded(new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes));
+    await appendDecoded(new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes));
     return;
   }
   const reader = response.body.getReader(),
@@ -4753,7 +4760,7 @@ async function renderPlainText(response) {
     decoder = null,
     asciiPreviewPossible = true,
     asciiPrefixLength = 0;
-  const startDecoder = () => {
+  const startDecoder = async () => {
     const sample = new Uint8Array(sampleLength);
     let offset = 0;
     for (const chunk of sampleChunks) {
@@ -4761,7 +4768,7 @@ async function renderPlainText(response) {
       offset += chunk.byteLength;
     }
     decoder = new TextDecoder(detectTextEncoding(sample, documentState.title));
-    appendDecoded(decoder.decode(sample.subarray(displayedSampleSize), { stream: true }));
+    await appendDecoded(decoder.decode(sample.subarray(displayedSampleSize), { stream: true }));
     sampleChunks.length = 0;
   };
   try {
@@ -4800,7 +4807,7 @@ async function renderPlainText(response) {
           while (displayedSampleSize < asciiPrefixLength) {
             const chunk = sampleChunks[previewChunkIndex];
             const end = Math.min(chunk.length, previewChunkOffset + asciiPrefixLength - displayedSampleSize);
-            appendDecoded(previewDecoder.decode(chunk.subarray(previewChunkOffset, end)));
+            await appendDecoded(previewDecoder.decode(chunk.subarray(previewChunkOffset, end)));
             displayedSampleSize += end - previewChunkOffset;
             previewChunkOffset = end;
             if (end === chunk.length) {
@@ -4810,13 +4817,13 @@ async function renderPlainText(response) {
           }
         }
         if (sampleLength < 65540) continue;
-        startDecoder();
+        await startDecoder();
       } else {
-        appendDecoded(decoder.decode(value, { stream: true }));
+        await appendDecoded(decoder.decode(value, { stream: true }));
       }
     }
-    if (!decoder) startDecoder();
-    appendDecoded(decoder.decode());
+    if (!decoder) await startDecoder();
+    await appendDecoded(decoder.decode());
   } catch (reason) {
     try {
       await reader.cancel(reason);
@@ -5269,12 +5276,7 @@ async function renderChapterManifest(prepared) {
   status.textContent = `EPUB · ${manifest.chapters.length} 章`;
 }
 async function renderDocx(prepared) {
-  const [response] = await prepared;
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const bytes = await VoiceOfMLReaderSecurity.readBytes(
-    response,
-    VoiceOfMLReaderSecurity.LIMITS.documentBytes
-  );
+  const bytes = await readPreparedBytes(prepared.response, prepared.engines);
   assertReaderActive();
   VoiceOfMLReaderSecurity.inspectZip(bytes, {
     ...VoiceOfMLReaderSecurity.LIMITS,
@@ -5920,25 +5922,32 @@ function loadPdfDocument(target = sourceUrl) {
     return measurePdf(loadPdfWithTimeout(pdfjs, options, target, readerContentUrl(target)), "document");
   });
 }
+function prepareReaderDocument(engineTasks) {
+  const engines = Promise.all(engineTasks);
+  const response = Promise.race([fetchReaderResponse(), engines.then(() => new Promise(() => {}))]);
+  // Rendering owns both promises; early rejection must not become unhandled.
+  response.catch(() => {});
+  engines.catch(() => {});
+  return {response, engines};
+}
+function readPreparedBytes(response, engines, limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes) {
+  return Promise.all([Promise.resolve(response).then(response => {
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return VoiceOfMLReaderSecurity.readBytes(response,limit);
+  }), engines]).then(([bytes]) => bytes);
+}
 function loadTextDocument() {
   return fetchReaderResponse().then((response) => ({ response }));
 }
 function loadMarkdownDocument() {
-  return Promise.all([
-    fetchReaderResponse(),
-    Promise.all([loadScript(MARKED_URL), loadScript(PURIFY_URL)])
-  ]).then(([response, engines]) => ({ response, engines }));
+  return prepareReaderDocument([loadScript(MARKED_URL), loadScript(PURIFY_URL)]);
 }
 function loadHtmlDocument() {
-  return Promise.all([fetchReaderResponse(), loadScript(PURIFY_URL)]).then(
-    ([response, engine]) => ({ response, engine })
-  );
+  const {response, engines} = prepareReaderDocument([loadScript(PURIFY_URL)]);
+  return {response, engine:engines};
 }
 function loadDocxDocument() {
-  return Promise.all([
-    fetchReaderResponse(),
-    Promise.all([loadScript(JSZIP_URL), loadScript(DOCX_PREVIEW_URL)])
-  ]);
+  return prepareReaderDocument([loadScript(JSZIP_URL), loadScript(DOCX_PREVIEW_URL)]);
 }
 function loadMediaDocument() {
   return Promise.resolve(null);
@@ -6357,15 +6366,9 @@ async function foliateTocEntries(view, sections) {
   return entries;
 }
 async function renderFoliate() {
-  const [response] = await Promise.all([
-    fetchReaderResponse(),
-    import("/search/static/foliate-reader/view.js?reader-v1")
-  ]);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const bytes = await VoiceOfMLReaderSecurity.readBytes(
-    response,
-    VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes
-  );
+  const prepared = prepareReaderDocument([import("/search/static/foliate-reader/view.js?reader-v1")]);
+  const [response, bytes] = await Promise.all([prepared.response,readPreparedBytes(
+    prepared.response,prepared.engines,VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes)]);
   assertReaderActive();
   if (VoiceOfMLReaderSecurity.isZipContainer(extension, bytes))
     VoiceOfMLReaderSecurity.inspectZip(bytes);
