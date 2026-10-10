@@ -96,3 +96,7 @@ branch in an isolated worktree, retaining remote Reader/index changes and local
 uncommitted Reader work. The deployment commit is identifiable by
 `perf: reduce next-page display latency`; deployment workflow and read-only
 production acceptance are verified separately after push.
+
+The clean release worktree passes all 35 static contracts after aligning the
+PDF fallback assertions with the committed Reader's `contentUrl/sourceUrl`.
+The earlier 34/35 result above describes the local dirty development snapshot.
