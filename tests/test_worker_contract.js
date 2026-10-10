@@ -386,6 +386,24 @@ test("same-count corpus replacement changes snapshot identity and relocates anch
   assert.notStrictEqual(old.snapshot_generation, current.snapshot_generation);
   assert.strictEqual(current.anchor_index, records.length - 1);
 });
+test("anchor skips other repositories and preserves first duplicate and raw keys", async () => {
+  const {worker} = await loaded();
+  vm.runInContext(`
+    records = [
+      {Repo:"Other", get File() {throw Error("unrelated path read");}},
+      {Repo:"Target/child", get File() {throw Error("repository boundary missed");}},
+      {Repo:"Target", File:"book", Folder:["docs"], Extension:"pdf"},
+      {Repo:"Target", File:"book", Folder:["docs"], Extension:"pdf"},
+      {Repo:"", File:"bare", Folder:[], Extension:""},
+      {Repo:"Target\\0nested", File:"book", Folder:[], Extension:"pdf"}
+    ];
+  `, worker.context);
+  assert.strictEqual(vm.runInContext('findSearchAnchor([0,1,3,2], "Target\\0docs/book.pdf")', worker.context), 2);
+  assert.strictEqual(vm.runInContext('findSearchAnchor([4], "\\0bare")', worker.context), 0);
+  assert.strictEqual(vm.runInContext('findSearchAnchor([5], "Target\\0nested\\0book.pdf")', worker.context), 0);
+  assert.strictEqual(vm.runInContext('findSearchAnchor([0,1], "missing")', worker.context), -1);
+});
+
 test("anchor reuse skips scans across pages, retains missing anchors and bounds both cache levels", async () => {
   const {worker}=await loaded();
   const params={q:"alpha",pageSize:1,anchorId:"Repo/A\0docs/child/beta alpha.pdf"};
@@ -530,13 +548,25 @@ test("Chinese multi-character queries require adjacent Chinese pairs", async () 
 });
 
 test("main-thread root select-all represents and persists direct root files with the empty self path", () => {
-  const context = vm.createContext({ Set });
+  const context = vm.createContext({ Set, STATE:{folderTree:[]},
+    updateFilterCancelButtons(){}, scheduleFilterSearch(){}, showToast(){throw Error("unexpected limit");} });
   vm.runInContext(app.slice(app.indexOf("function folderPathCovered("), app.indexOf("// Split covering ancestors")), context);
   const root = { path: "", isRoot: true, hasDirectFiles: true, children: [{ path: "child", hasDirectFiles: true }] };
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set()).full, false);
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set([""])).full, true);
   assert.match(app, /if \(node\.hasDirectFiles\) selfSet\.add\(node\.path\)/);
-  assert.match(app, /selfSet\.forEach\(function\(path\) \{ if \(!merged\.includes\(path\)\) merged\.push\(path\); \}\)/);
+  for (const name of ["mergeFolderFilters", "normalizeFolderSelection", "splitFolderSelection",
+    "setNodeSubtreeSelection", "persistFolderSelection"]) {
+    const fn = app.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
+    assert(fn, name); vm.runInContext(fn[0], context);
+  }
+  context.STATE.folderTree = [root];
+  const subtrees = new Set(), selfs = new Set();
+  context.setNodeSubtreeSelection(root, true, subtrees, selfs);
+  context.persistFolderSelection(subtrees, selfs);
+  assert.deepStrictEqual(Array.from(context.STATE.filterFolderSelfs), [""]);
+  assert.deepStrictEqual(Array.from(context.STATE.filterFolderSubtrees), ["child"]);
+  assert.deepStrictEqual(Array.from(context.STATE.filterFolders), ["", "child"]);
   assert.match(app, /function getFolderSelfSet\(\) \{\s*return new Set\(STATE\.filterFolderSelfs \|\| \[\]\);/);
   assert.match(app, /if \(node\.hasDirectFiles\) selfPaths\.push\(node\.path\)/);
 });

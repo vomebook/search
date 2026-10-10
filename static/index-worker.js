@@ -635,11 +635,15 @@ function findSearchAnchor(indices, anchorId) {
     searchAnchorCache.delete(owner); searchAnchorCache.set(owner, cached);
     return index;
   }
-  const index = indices.findIndex(index => {
+  const separator = anchorId.indexOf("\0");
+  const anchorRepo = anchorId.slice(0, separator), anchorPath = anchorId.slice(separator + 1);
+  const index = separator < 0 ? -1 : indices.findIndex(index => {
     const record = records[index];
+    const repo = String(record.Repo || "");
+    if (repo !== anchorRepo && (!repo.includes("\0") || !anchorId.startsWith(`${repo}\0`))) return false;
     const filename = (record.File || "") + (record.Extension ? "." + record.Extension : "");
     const path = (record.Folder || []).concat(filename).join("/");
-    return `${record.Repo || ""}\0${path}` === anchorId;
+    return repo === anchorRepo ? path === anchorPath : `${repo}\0${path}` === anchorId;
   });
   if (anchorId.length <= SEARCH_ANCHOR_KEY_MAX) {
     const lookups = cached || new Map();

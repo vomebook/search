@@ -73,6 +73,49 @@
     } catch (_) {}
   }
 
+  function preloadChapterOpeningResources() {
+    if (root.__VOICE_READER_CHAPTER_PRELOAD__) return;
+    try {
+      if (!location.pathname.endsWith("/reader.html")) return;
+      const params = new URLSearchParams(location.search), id = params.get("id") || "";
+      let source = params.get("chapter_manifest") || params.get("url") || "";
+      if (!source && id) {
+        for (const key of [`reader-source:${id}`, `reader-resolve:${id}`]) {
+          const value = JSON.parse(sessionStorage.getItem(key) || "null");
+          if (value?.url) { source = value.chapter_manifest || value.url; break; }
+        }
+      }
+      if (source.startsWith("/api/")) source = `https://voiceofml-search.hf.space${source}`;
+      const url = new URL(source, location.href), path = url.searchParams.get("path") || "";
+      if ((url.origin !== location.origin && url.origin !== "https://voiceofml-search.hf.space") ||
+          url.username || url.password || url.hash || url.pathname !== "/api/reader-bucket-resource" ||
+          [...url.searchParams.keys()].length !== 1 || !isBucketPath(path, true) ||
+          !path.startsWith("chapters/ebook/") || !path.endsWith("/chapter-manifest.json")) return;
+      const security = root.VoiceOfMLReaderSecurity;
+      if (!security) return;
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 120000);
+      let disposed = false;
+      const onPageHide = event => { if (!event.persisted) dispose(); };
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        clearTimeout(timer);
+        controller.abort();
+        root.removeEventListener?.("pagehide", onPageHide);
+        root.removeEventListener?.("voice-reader-dispose", dispose);
+      };
+      const manifest = fetch(url.href, { signal: controller.signal, priority: "high", credentials: "omit" })
+        .then(async response => {
+          const bytes = await security.readBytes(response, security.LIMITS.manifestBytes);
+          return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
+        }).finally(() => clearTimeout(timer));
+      manifest.catch(() => {});
+      root.__VOICE_READER_CHAPTER_PRELOAD__ = { manifestUrl: url.href, manifest, dispose };
+      root.addEventListener?.("pagehide", onPageHide);
+      root.addEventListener?.("voice-reader-dispose", dispose);
+    } catch (_) {}
+  }
+
   const ReaderMode = Object.freeze({
     UNSUPPORTED: 0,
     ORIGINAL: 1,
@@ -501,4 +544,5 @@
     readerUrl
   });
   preloadPdfOpeningResources();
+  preloadChapterOpeningResources();
 })(typeof self !== "undefined" ? self : window);
