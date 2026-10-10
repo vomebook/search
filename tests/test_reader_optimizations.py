@@ -519,8 +519,8 @@ class ReaderOptimizationTests(unittest.TestCase):
                 self.assertEqual(state.text_content(),'')
                 self.assertEqual(state.get_attribute('role'),'status')
                 self.assertIn('2',state.get_attribute('aria-label'))
-                self.assertEqual(shell.evaluate('e=>getComputedStyle(e).backgroundColor'),'rgba(0, 0, 0, 0)')
-                self.assertEqual(shell.evaluate('e=>getComputedStyle(e).boxShadow'),'none')
+                self.assertEqual(shell.evaluate('e=>getComputedStyle(e).backgroundColor'),'rgb(255, 255, 255)')
+                self.assertNotEqual(shell.evaluate('e=>getComputedStyle(e).boxShadow'),'none')
                 delay=state.evaluate('''e=>{const a=e.getAnimations({subtree:true}).find(a=>a.animationName==='reader-page-loading-reveal');
                   a.pause();a.currentTime=0;const initial=getComputedStyle(e,'::before').opacity;
                   a.currentTime=500;return {initial,visible:getComputedStyle(e,'::before').opacity};}''')
