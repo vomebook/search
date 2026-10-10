@@ -34,6 +34,7 @@ class ReaderOptimizationTests(unittest.TestCase):
               window.__markerPage = () => pageAtMarker()?.dataset.page;
               window.__restoreText = top => restoreProgressState({scrollTop:top});
               window.__cancelNavigation = () => beginReaderNavigation();
+              window.__headingTools = {set:setToc,sync:syncHeadingLocation,index:()=>navigationState.currentChapterIndex};
               window.__pdfTools = {trim: trimPdfSurfaces, pixels: pdfRetainedPixels, budget: pdfPixelBudget,
                 prefetch: pdfManifestPrefetches, setPage: page => updateDocumentState({page})};
               window.__startPdfProbe = () => {
@@ -555,6 +556,29 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(result['total'],1,result)
         self.assertEqual(result['workers'],2,result)
         self.assertLess(result['elapsed'],4000,result)
+
+    def test_many_headings_reuse_geometry_and_refresh_after_content_changes(self):
+        self.expose()
+        self.serve('heading cache fixture')
+        self.open(self.reader_url('txt'))
+        self.page.evaluate('''()=>{const root=document.querySelector('#content');root.replaceChildren();
+          window.__headingReads=0;const entries=[];
+          for(let i=0;i<1000;i++){const target=document.createElement('h2');target.textContent='Heading '+i;
+            target.style.margin='0';target.style.height='40px';root.append(target);
+            const native=target.getBoundingClientRect.bind(target);target.getBoundingClientRect=()=>{__headingReads++;return native();};
+            entries.push({target,label:'Heading '+i,activate:()=>{}});}
+          __headingTools.set(entries);__headingTools.sync();}''')
+        self.page.wait_for_timeout(100)
+        data=self.page.evaluate('''()=>{const v=document.querySelector('#viewport');__headingTools.sync();__headingReads=0;
+          for(let i=0;i<20;i++){v.scrollTop=1000+i*40;__headingTools.sync();}
+          const reads=__headingReads,index=__headingTools.index();
+          const headings=[...document.querySelectorAll('#content h2')];
+          headings[0].style.height='800px';__headingTools.sync();
+          const marker=v.getBoundingClientRect().top+8;
+          const expected=headings.reduce((best,node,i)=>node.getBoundingClientRect().top<=marker?i:best,-1);
+          return {reads,index,actual:__headingTools.index(),expected};}''')
+        self.assertEqual(data['reads'],0,data)
+        self.assertEqual(data['actual'],data['expected'],data)
 
 
 if __name__ == '__main__':

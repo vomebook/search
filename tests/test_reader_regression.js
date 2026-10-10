@@ -23,8 +23,21 @@ for (const [raw, expected] of [
     assert.strictEqual(pdfText.normalizePdfSearchText(raw), expected)
     const mapped = pdfText.pdfSearchText(raw)
     assert.strictEqual(mapped.text, expected)
-    assert.strictEqual(mapped.offsets.map(offset => raw[offset]).join(''), expected)
+    assert.strictEqual(Array.from({length: mapped.text.length}, (_, index) => raw[pdfText.pdfSourceOffset(mapped, index)]).join(''), expected)
   }
+}
+
+const unchanged = pdfText.pdfSearchText('unchanged text '.repeat(10000))
+assert.strictEqual(unchanged.offsets, null)
+const sparse = pdfText.pdfSearchText('prefix '.repeat(10000) + '\u624b \u673a' + ' suffix'.repeat(10000))
+assert.strictEqual(sparse.offsets.byteLength, 8)
+for (const raw of ['\u624b \u673a \u624b\n\u673a', '\ud840\udc00 \ud840\udc01\r\n\u624b \u673a']) {
+  const deleted = new Set()
+  for (const match of raw.matchAll(/(?<=\p{Script=Han})\s+(?=\p{Script=Han})/gu))
+    for (let i=match.index;i<match.index+match[0].length;i++) deleted.add(i)
+  const oracle = Array.from({length:raw.length}, (_,i)=>i).filter(i=>!deleted.has(i))
+  const mapped = pdfText.pdfSearchText(raw)
+  assert.deepStrictEqual(Array.from({length:mapped.text.length}, (_,i)=>pdfText.pdfSourceOffset(mapped,i)), oracle)
 }
 
 const assets = sandbox.self.VoiceOfMLReader

@@ -80,9 +80,19 @@ async function loadBook() {
     if (request.signal.aborted) throw aborted();
     const validated = validateBookText(decoded, configuration.pageCount, configuration.sourceSha);
     // Search needs offsets and hit boxes, not the duplicate full page layout.
-    book = { pages: validated.pages.map(page => ({ page: page.page, text: page.text,
-      text_spans: page.text_spans.map(({ start, end, box, block, precision }) =>
-        ({ start, end, box, block, precision })) })) };
+    const compact = { pages: validated.pages };
+    let deadline = performance.now() + 8;
+    for (let index = 0; index < compact.pages.length; index++) {
+      if (request.signal.aborted) throw aborted();
+      const page = compact.pages[index];
+      compact.pages[index] = {page:page.page, text:page.text,
+        text_spans:page.text_spans.map(({start,end,box,block,precision}) => ({start,end,box,block,precision}))};
+      if (index % 16 === 15 && performance.now() >= deadline) {
+        await pause();
+        deadline = performance.now() + 8;
+      }
+    }
+    book = compact;
     self.postMessage({ bookReady: true });
     return book;
   })().finally(() => {
