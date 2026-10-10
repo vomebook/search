@@ -50,6 +50,8 @@ jobs:
         run: |
           node tests/test_reader_request_manager.js
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+      - name: Run multi-format preparation and navigation gates
+        run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
       - name: Run chapter-bundle browser gate
         run: |
           node tests/test_reader_chapter_scheduler.js
@@ -101,6 +103,9 @@ jobs:
         run: |
           node tests/test_reader_request_manager.js
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+      - name: Run multi-format preparation and navigation gates
+        working-directory: huggingface-search
+        run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
