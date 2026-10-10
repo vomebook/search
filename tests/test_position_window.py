@@ -73,6 +73,17 @@ class PositionWindowTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('windowCalls.every(page=>[1,498,499,500,501,248,249,250,251,252,253,254,255,256].includes(page))'))
         self.assertEqual(self.page.evaluate('getResultStableId(STATE.results[49850])'), 'VoiceOfML/Test\0paging-49850.txt')
 
+    def test_gap_loading_invalidates_snapshot_bytes_and_keeps_prior_snapshot_independent(self):
+        self.page.evaluate('window.beforeGap=saveSearchViewSnapshot()')
+        self.jump(25050)
+        self.wait_anchor(25050)
+        result = self.page.evaluate('''() => {
+          const after=saveSearchViewSnapshot();
+          return {beforeMissing:!beforeGap.results[25050],afterPresent:!!after.results[25050],
+            exact:getSearchSnapshotResultsBytes(STATE.results,true)===new TextEncoder().encode(JSON.stringify(STATE.results)).byteLength};
+        }''')
+        self.assertEqual(result, dict(beforeMissing=True, afterPresent=True, exact=True))
+
     def test_failed_gap_keeps_saved_position_and_can_retry(self):
         self.page.set_viewport_size({'width':390,'height':844})
         self.page.evaluate('windowFailures.add(251);saveSearchPosition()')

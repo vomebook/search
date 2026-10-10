@@ -1160,6 +1160,7 @@ function appendSearchResults(page, results = STATE._pageCache[page]) {
   if (!checkSearchPageAppend({ ...metadata, results, total: metadata?.total ?? STATE.total })) return false;
   if (!STATE._resultBackend) STATE._resultBackend = "api";
   for (const record of results) STATE.results.push(record);
+  extendSearchSnapshotBudget(STATE.results, results);
   delete STATE._pageCache[page];
   STATE._loadedPage = page;
   STATE.hasMore = STATE.results.length < STATE.total;
@@ -2348,6 +2349,8 @@ let lastPositionPruneAt = 0;
 let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
 const searchSnapshotSources = new WeakMap();
+const searchSnapshotResultBudgets = new WeakMap();
+const searchSnapshotHeightValues = new WeakMap();
 const searchViewportSnapshots = new Map();
 const SEARCH_VIEWPORT_MAX = 64;
 const SEARCH_VIEWPORT_BYTES_MAX = 64 * 1024;
@@ -2455,6 +2458,7 @@ async function loadCachedPreviewPage(window, page) {
     if (!entry) { (window.missingPages ||= new Set()).add(page); return; }
     const start = (page - 1) * window.query.pageSize;
     if (start + entry.results.length > STATE.results.length) return;
+    searchSnapshotResultBudgets.delete(STATE.results);
     entry.results.forEach((record, offset) => {
       const index = start + offset;
       if (STATE.results[index]) return;
@@ -2607,6 +2611,9 @@ function rememberDisplayedSearchView() {
     resultBackend: STATE._resultBackend,
     total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache,
     length: STATE.results.length, window: resultWindow, revision: unchanged ? previous.revision : ++displayedViewRevision };
+  if (STATE.results.length <= STATE.pageSize && !searchSnapshotResultBudgets.has(STATE.results)) {
+    getSearchSnapshotResultsBytes(STATE.results, !!resultWindow);
+  }
 }
 
 function saveSearchPosition() {
@@ -2657,15 +2664,13 @@ function setupSearchPositionSaving() {
     clearTimeout(positionSaveTimer);
     positionSaveTimer = setTimeout(saveSearchPosition, 250);
   }, { passive: true });
-  // Capture before controls mutate filters, clear results, or replace the route.
-  for (const type of ["change", "click", "keydown"]) document.addEventListener(type, event => {
+  // Query and route handlers save explicitly; capture only filters before mutation.
+  for (const type of ["change", "click"]) document.addEventListener(type, event => {
     if (!(event.target instanceof Element)) return;
-    if (event.target.closest("#results-container, #scroll-track, #search-position-status, #load-info")) return;
-    // Layout-only controls keep the current view; copying deep results blocks their animation.
-    if (event.target.closest("#hamburger-btn, #settings-btn, #sidebar-expand-btn, #overlay")) return;
-    if (type === "keydown" && event.key === "Escape" && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) return;
-    if (type === "keydown" && !["Enter", "Escape"].includes(event.key)) return;
-    saveSearchViewSnapshot();
+    const selector = type === "change"
+      ? "#sort-select, #search-folders-toggle, #exact-search-toggle, #local-mode-toggle, #filter-repo-list input, #filter-ext-list input, #filter-folder-tree input, #filter-min-size, #filter-max-size, #filter-min-unit, #filter-max-unit"
+      : "#clear-filters-btn, #repo-filter-cancel, #folder-filter-cancel, #ext-filter-cancel, #folder-select-all, #folder-deselect-all, #ext-select-all, #ext-deselect-all, .folder-self-toggle";
+    if (event.target.closest(selector)) saveSearchViewSnapshot();
   }, true);
   document.addEventListener("visibilitychange", () => { if (document.hidden) saveSearchPosition(); });
   window.addEventListener("pagehide", saveSearchPosition);
@@ -2957,6 +2962,7 @@ async function loadResultWindowPage(page, prefetch = false) {
       return true;
     }
     const results = STATE.results;
+    searchSnapshotResultBudgets.delete(results);
     data.results.forEach((record, offset) => {
       const index = (page - 1) * window.query.pageSize + offset;
       results[index] = record; VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
@@ -3128,6 +3134,60 @@ function cloneSearchPageCache(cache) {
   });
   return copy;
 }
+
+function getSearchSnapshotResultsBytes(results, sparse = false) {
+  const cached = searchSnapshotResultBudgets.get(results);
+  if (cached?.length === results.length) return cached.bytes;
+  const encoder = new TextEncoder();
+  let bytes = 2;
+  if (sparse) {
+    const keys = Object.keys(results);
+    bytes += Math.max(0, results.length - 1) + (results.length - keys.length) * 4;
+    for (const key of keys) {
+      if (bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) break;
+      bytes += encoder.encode(JSON.stringify(results[key]) ?? "null").byteLength;
+    }
+  } else {
+    for (let start = 0; start < results.length && bytes <= SEARCH_VIEW_SNAPSHOT_BYTES_MAX; start += 100) {
+      bytes += encoder.encode(JSON.stringify(results.slice(start, start + 100))).byteLength - 2 + (start ? 1 : 0);
+    }
+  }
+  // An over-budget lower bound suffices until replacement or sparse-page mutation.
+  searchSnapshotResultBudgets.set(results, { length: results.length, bytes });
+  return bytes;
+}
+
+function extendSearchSnapshotBudget(results, page) {
+  const budget = searchSnapshotResultBudgets.get(results);
+  if (!budget) return;
+  if (budget.length !== results.length - page.length) {
+    searchSnapshotResultBudgets.delete(results);
+    return;
+  }
+  if (page.length && budget.bytes <= SEARCH_VIEW_SNAPSHOT_BYTES_MAX) {
+    budget.bytes += new TextEncoder().encode(JSON.stringify(page)).byteLength - 2 + (budget.length ? 1 : 0);
+  }
+  budget.length = results.length;
+}
+
+function captureSearchSnapshotHeights() {
+  const entries = [];
+  let bytes = 2;
+  const encoder = new TextEncoder();
+  for (const [id, value] of VSCROLL.heightCache) {
+    let cached = searchSnapshotHeightValues.get(value);
+    if (!cached || cached.id !== id) {
+      const entry = Object.freeze([id, Object.freeze({ ...value })]);
+      cached = { id, entry, bytes: encoder.encode(JSON.stringify(entry)).byteLength };
+      searchSnapshotHeightValues.set(value, cached);
+    }
+    bytes += cached.bytes + (entries.length ? 1 : 0);
+    if (bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) return { entries: [], bytes };
+    entries.push(cached.entry);
+  }
+  return { entries, bytes };
+}
+
 function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const view = displayedSearchView;
   // Browsing from the top must not overwrite the snapshot offered by Return.
@@ -3144,18 +3204,16 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
     searchViewSnapshots.set(key, existing);
     return existing;
   }
-  ensureHeightTree();
-  const heightRecords = view.results.map(function(result, index) {
-    const id = getResultStableId(result);
-    const measurementKey = VSCROLL.measuredRowKeys[index];
-    return id && measurementKey && VSCROLL.heights[index]
-      ? [id, { height: VSCROLL.heights[index], measurementKey: measurementKey }]
-      : null;
-  }).filter(Boolean);
+  const resultsBytes = getSearchSnapshotResultsBytes(view.results, !!view.window);
+  if (resultsBytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) {
+    searchViewSnapshots.delete(key);
+    return null;
+  }
+  const heights = captureSearchSnapshotHeights();
   const snapshot = {
     version: SEARCH_VIEW_SNAPSHOT_VERSION,
     key,
-    results: source?.revision === view.revision ? existing.results : view.results.map(cloneSearchResult),
+    results: [],
     total: view.total,
     page: view.loadedPage,
     loadedPage: view.loadedPage,
@@ -3164,16 +3222,17 @@ function saveSearchViewSnapshot(key = displayedSearchView?.key) {
     hasMore: view.results.length < view.total,
     window: view.window ? { generation: view.window.generation, pages: [...view.window.pages], count: view.window.count } : null,
     estimatedHeight: VSCROLL.estimatedHeight,
-    heightCache: Array.from(VSCROLL.heightCache.entries()).map(([id, value]) => [id, Object.assign({}, value)]),
-    heightRecords: heightRecords,
+    heightCache: [],
+    heightRecords: [],
     scroll: position ? { ...position, viewKey: key } : { index: 0, offset: 0, viewKey: key },
     savedAt: Date.now(),
   };
+  snapshot.bytes = resultsBytes + heights.bytes + new TextEncoder().encode(JSON.stringify(snapshot)).byteLength + 256;
   searchViewSnapshots.delete(key);
+  if (snapshot.bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) return null;
+  snapshot.results = source?.revision === view.revision ? existing.results : view.results.map(cloneSearchResult);
+  snapshot.heightCache = heights.entries;
   searchViewSnapshots.set(key, snapshot);
-  const resultsBytes = source?.revision === view.revision ? source.resultsBytes
-    : new TextEncoder().encode(JSON.stringify(snapshot.results)).byteLength;
-  snapshot.bytes = resultsBytes + new TextEncoder().encode(JSON.stringify({ ...snapshot, results: [] })).byteLength + 256;
   searchSnapshotSources.set(snapshot, { signature, revision: view.revision, resultsBytes });
   trimSearchViewSnapshots();
   return snapshot;
@@ -3195,6 +3254,8 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   searchId++;
   searchRequestId++;
   STATE.results = snapshot.results.map(cloneSearchResult);
+  const source = searchSnapshotSources.get(snapshot);
+  if (source) searchSnapshotResultBudgets.set(STATE.results, { length: STATE.results.length, bytes: source.resultsBytes });
   STATE.total = snapshot.total;
   STATE.page = snapshot.page;
   STATE._loadedPage = snapshot.loadedPage;

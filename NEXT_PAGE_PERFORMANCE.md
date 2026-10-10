@@ -1,9 +1,84 @@
 # Next-Page Performance
 
+## Snapshot And Anchor Follow-Up (2026-10-10, Local Only)
+
+Implemented locally; this section is not a publication receipt.
+
+- Global capture is restricted to result-affecting filter changes/actions. Query
+  submission and route navigation retain their explicit pre-mutation saves.
+  Search-input focus/click, theme/history settings and folder expansion do not
+  capture complete result snapshots.
+- First-page rendering seeds a weak, result-array-owned UTF-8 byte ledger.
+  Ordinary append accounts for the new page only. Above the existing 8 MiB
+  snapshot budget, skip complete result cloning and retain the negative size
+  decision across later appends/height changes. Lightweight positions, recent
+  pages and viewport previews still save independently.
+- Sparse bodies count JSON null placeholders exactly; materializing a page
+  invalidates their ledger. Snapshot restore transfers the known body size to
+  its independently cloned active results. Positive sizes are exact; an early
+  over-budget stop stores only a sufficient lower bound.
+- Height snapshots use the measured-height map, not a full result-ID scan.
+  Immutable height entries and encoded entry costs are weakly reused; changed
+  measurements create new entries, leaving prior snapshots independent.
+- Worker anchor lookups retain at most eight order-owner tokens with eight
+  anchors each. Keys longer than 4,096 UTF-16 units bypass this cache without
+  changing lookup results. Tokens do not retain evicted order arrays; corpus
+  replacement clears ownership. Hits, misses and original first-match order
+  are preserved across page/page-size changes.
+
+Controlled local Chromium observations, three runs per site:
+
+- In the original injected 50,000-row fixture, rejected unchanged snapshots
+  previously took 73-120 ms. Current repeat saves took 0-0.3 ms; search-input
+  clicks triggered zero snapshots and took 0-0.2 ms at that depth.
+- Stable-ID calls during a height-only save fell from 50,001 to one (the
+  lightweight position anchor). At 10,000 rows, current height-only saves took
+  0-0.2 ms. Measured rows, not the reserved/loaded result depth, are inspected.
+- A separate continuous-paging fixture appends 499 pages of 100 records after
+  page 1. At 50,000 records/index 40,000, the size rejection is already known:
+  first save took 1.5 ms in all three runs, repeat saves 0 ms, and the median
+  append/geometry call took 0.2 ms. Saved index remained 40,000.
+- Injecting all 50,000 rows at once bypasses first-page accounting and still
+  requires a one-time size scan (69-95 ms in the final Pages run). No claim is
+  made that arbitrary cold snapshots are constant-time, or that these local
+  timings describe production or a physical phone.
+- Measurement script: `/tmp/opencode/search_remaining_profile.py`.
+
+Verification: shared snapshot-budget 10/10, Worker 49/49, static 35/35,
+fixed-clock pagination 26/26, page-generation 6/6 and response-cache 2/2.
+Focused Chromium: positions/scroll/sidebar 37/37; prefetch/footer/sparse-window/
+recent-pages 62/62. UTF-8 accounting, sparse mutation invalidation, old-snapshot
+independence, zero neutral-control captures, bounded anchor retention and
+cross-page scan-free anchor reuse have dedicated regressions.
+Current-source local preview: `http://127.0.0.1:8794/search/` (HTTP 200 checked).
+
+```bash
+node tests/test_snapshot_budget.js
+node tests/test_worker_contract.js
+python3 -B -m unittest tests.test_search_positions tests.test_scroll_stability tests.test_sidebar_keyboard -v
+python3 -B -m unittest tests.test_prefetch_pipeline tests.test_position_controls tests.test_position_window tests.test_recent_search_pages -v
+```
+
 ## Follow-Up (2026-10-10, Local)
 
-Implemented after the first production release; these follow-up edits are not
-published until the requested release completes. No dedicated old-version baseline is retained.
+Implemented after the first production release and published on 2026-10-10.
+No dedicated old-version baseline is retained.
+
+### Follow-Up Publication
+
+- Local implementation commit: `3af4a68`; published commit:
+  `4782ba05d6660caea88a8f7b109cc4df3a6759e9`.
+- Pages workflow `38012198149`: success.
+- Deployed app: `/search/static/app.6e187ed75255.js`.
+- Clean release checks: static contracts 35/35, shared fixed-clock regressions
+  26/26, browser pagination/scroll/sidebar regressions 37/37.
+- Documented production smoke: passed. Read-only desktop Worker and mobile API
+  browser checks preserve first-200 order/total and display row 101.
+- Deployed-code synthetic 50,000-row fixture at index 40,000: sidebar toggles
+  produce zero snapshots and preserve the current index on desktop and mobile.
+  This is not a production corpus count or a real-device latency guarantee.
+- Production acceptance script: `/tmp/opencode/next_page_production_acceptance.py`.
+  This receipt was updated locally after successful deployment.
 
 - A farther page promoted to the immediately next page stops its remaining
   IndexedDB wait and starts/joins transport through the existing request owner.
