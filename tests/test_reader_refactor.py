@@ -1171,12 +1171,8 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_pdf_ocr_progress_preserves_full_first_page_and_focus(self):
         def pause_after_first_page(route):
             response = route.fetch()
-            needle = "scanned, pages, ...partial.page(0) });"
             script = response.text()
-            self.assertIn(needle, script)
-            script = script.replace("progress: (partial, scanned, pages) => {",
-                "progress: async (partial, scanned, pages) => {")
-            route.fulfill(response=response, body=script.replace(needle, needle + """
+            pause = """
                 if (scanned === 1) await new Promise(resolve => {
                   const release = event => {
                     if (event.data.type !== 'test-release') return;
@@ -1184,7 +1180,18 @@ class ReaderRefactorTest(unittest.TestCase):
                     resolve();
                   };
                   self.addEventListener('message', release);
-                });"""))
+                });"""
+            legacy = "scanned, pages, ...partial.page(0) });"
+            partitioned = "scanned, pages, ...page });"
+            if legacy in script:
+                script = script.replace("progress: (partial, scanned, pages) => {",
+                    "progress: async (partial, scanned, pages) => {")
+                script = script.replace(legacy, legacy + pause, 1)
+            else:
+                self.assertIn(partitioned, script)
+                message = "self.postMessage({ id: data.id, session: session.id, progress: true,\n            " + partitioned
+                script = script.replace(message, pause + "\n          " + message, 1)
+            route.fulfill(response=response, body=script)
         self.page.route("**/static/reader-pdf-book-search-worker.mjs*", pause_after_first_page)
         self.page.add_init_script("""(() => {
           const NativeWorker = window.Worker;
