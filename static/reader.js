@@ -4004,9 +4004,6 @@ function renderPdfImageShell(shell, force = false, priority = false) {
   if (shell._renderPromise) return shell._renderPromise;
   if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
   shell.dataset.renderState = "rendering";
-  const loadingState = shell.querySelector(".reader-page-state");
-  if (loadingState && !shell.querySelector("canvas.ready, img.ready"))
-    setPdfPageLoadingState(loadingState, shell.dataset.page);
   const renderController = new AbortController();
   shell._renderCancel = () => renderController.abort();
   shell._renderStarted = false;
