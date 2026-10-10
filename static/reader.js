@@ -4929,7 +4929,7 @@ async function renderChapterManifest(prepared) {
       `.reader-epub-chapter[data-chapter="${article.dataset.chapter}"]`
     );
     if (existing) return existing;
-    const next = nextChapterNode(Number(article.dataset.chapter), ".reader-epub-chapter");
+    const next = nextChapterNode(Number(article.dataset.chapter), ".reader-epub-chapter, .reader-chapter-sentinel");
     const marker = frame.querySelector(`.reader-chapter-sentinel[data-chapter="${article.dataset.chapter}"]`);
     const insert = () => {
       if (marker) {
