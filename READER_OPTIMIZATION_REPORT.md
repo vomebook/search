@@ -1,5 +1,50 @@
 # Reader Retention And Search Reuse
 
+## Resource Followup (Released, 2026-10-10)
+
+Both development checkouts now additionally implement:
+
+- A shared retained-pixel budget for PDF canvases, decoded page images and decoded
+  speculative images, equivalent to 32 MiB RGBA on reported low-memory devices,
+  48 MiB on mobile and 96 MiB on desktop. Existing page-count limits also apply.
+  Speculation and distant pages are reclaimed first. Visible/current pages and
+  selection ranges may exceed this soft target. It is not a browser-heap limit.
+- DOCX `content-visibility:auto` and intrinsic page size, retaining all DOM/text
+  for exact search, navigation and selections. A real twenty-page fixture verified
+  skipped offscreen descendant rendering, all twenty hits, last-page highlights
+  and return to the first page. Parsing and retained DOM are unchanged.
+- Native PDF two-page ordered text lookahead, with a shared mobile two-slot or
+  desktop three-slot extraction queue and one reserved demand slot. Search totals,
+  result order and pagination stay exact. Cancelled queued extractions release
+  their ownership before a same-page foreground retry; active work keeps its slot
+  until settlement, and obsolete searches cannot publish late totals.
+
+Related browser acceptance passed: HF 53 and Pages 45 distinct cases across
+optimization/style, native PDF search, PDF loading/closure and HF legacy hybrid
+theme checks. Architecture contracts, content-hashed builds and cross-site
+resource checks passed. These are local correctness checks, not production timing
+or heap measurements.
+
+Application releases: HF `7ba0c5705d955ccbe039b3f21d1916571d1c9b43` and Pages
+`00e57cac8ae03ad16ec879147f017ce690110302`. The single PDF ownership-fixture
+followup ended at HF `c2e62abd4951a3b0ae6974134edbb98bcf6db8f6` (RUNNING) and
+Pages `c954ee1941419e85c2d0669c6c1716c4992c1c63` (deployment successful).
+Reader CI `38016506982` passed both jobs, including complete HF 92 / Pages 93
+Reader suites. The first run exposed a fixture that reused a now-cached page and
+assumed extraction started after one microtask. It now uses an uncached page and
+awaits actual extraction startup before disposal; all cleanup assertions remain.
+
+Default-cache, active-Service-Worker production Chromium accepted four real PDF
+opens (both sites at 1100/390px), exact 38-hit search against independent all-page
+PyMuPDF extraction, and preserved canvas pixels and selection across inversion.
+Both sites also rendered a real 42-page DOCX with the offscreen policy and exact
+533-hit rendered-text search. These are selected sample counts, not corpus totals.
+Both production smoke layers and deployed JavaScript/CSS hash checks passed.
+Concurrent search updates and generated Reader indexes were retained; local v3
+development was not included. Documentation successors contain no runtime changes.
+
+CI: https://github.com/vomebook/search/actions/runs/38016506982
+
 ## Local Implementation (2026-10-09)
 
 Implemented in the HF and GitHub Search development checkouts. This report
