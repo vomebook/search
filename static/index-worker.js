@@ -501,14 +501,15 @@ async function prepareSearchIndex(params, job) {
 function buildFilterSets(params) {
   const repos = params.repos || null;
   const extensions = params.extensions || null;
+  const folders = params.folders && params.folders.length ? new Set(params.folders.map(cleanPath)) : null;
+  const singleFolder = folders?.size === 1 ? folders.values().next().value : "";
   return {
     repoSet: repos && repos.length ? new Set(repos) : null,
     extensionSet: extensions && extensions.length
       ? new Set(extensions.map((extension) => String(extension || "").toLowerCase()))
       : null,
-    folders: params.folders && params.folders.length
-      ? params.folders.map(cleanPath)
-      : null,
+    folders,
+    folderPrefix: singleFolder ? singleFolder + "/" : null,
     selfFolders: new Set((params.folderSelfs || []).map(cleanPath).filter((path) => typeof path === "string")),
     subtreeFolders: new Set((params.folderSubtrees || []).map(cleanPath).filter((path) => typeof path === "string")),
   };
@@ -521,25 +522,32 @@ function matchesFolderFilters(recordFolders, folderPath, params, filters) {
       matched = filters.subtreeFolders.has(recordFolders.slice(0, depth).join("/"));
     return !(filters.selfFolders.size || filters.subtreeFolders.size) || matched;
   }
-  if (!filters.folders?.length) return true;
-  for (const folder of filters.folders) {
-    if (params.folderMatchMode === "exact" && folderPath === folder) return true;
-    if (params.folderMatchMode !== "exact" && (!folder
-        ? recordFolders.length === 0
-        : folderPath === folder || folderPath.indexOf(folder + "/") === 0)) return true;
+  if (!filters.folders) return true;
+  if (params.folderMatchMode === "exact") return filters.folders.has(folderPath);
+  // An empty prefix selects only root files in the Worker, not all descendants.
+  if (!folderPath) return recordFolders.length === 0 && filters.folders.has("");
+  if (filters.folders.has(folderPath)) return true;
+  if (filters.folderPrefix) return folderPath.startsWith(filters.folderPrefix);
+  for (let end = folderPath.lastIndexOf("/"); end > 0; end = folderPath.lastIndexOf("/", end - 1)) {
+    if (filters.folders.has(folderPath.slice(0, end))) return true;
   }
   return false;
 }
 
 function applyFilters(indices, params) {
   const filters = buildFilterSets(params);
+  const hasFolderFilters = params.folderMatchMode === "mixed"
+    ? filters.selfFolders.size || filters.subtreeFolders.size
+    : !!filters.folders;
   return indices.filter((index) => {
     const record = records[index] || {};
     if (filters.repoSet && !filters.repoSet.has(record.Repo)) return false;
     if (filters.extensionSet && !filters.extensionSet.has(String(record.Extension || "").toLowerCase())) return false;
-    const recordFolders = Array.isArray(record.Folder) ? record.Folder : [];
-    const folderPath = recordFolders.join("/");
-    if (!matchesFolderFilters(recordFolders, folderPath, params, filters)) return false;
+    if (hasFolderFilters) {
+      const recordFolders = Array.isArray(record.Folder) ? record.Folder : [];
+      const folderPath = recordFolders.join("/");
+      if (!matchesFolderFilters(recordFolders, folderPath, params, filters)) return false;
+    }
     if (typeof record.Size === "number" && record.Size > 0) {
       if (params.minSize !== null && record.Size < params.minSize) return false;
       if (params.maxSize !== null && record.Size > params.maxSize) return false;
