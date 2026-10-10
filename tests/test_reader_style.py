@@ -4,6 +4,7 @@ import io
 import unittest
 import urllib.parse
 import zipfile
+from PIL import Image
 
 from tests.browser_support import local_server
 from tests.test_reader_performance import (
@@ -14,6 +15,7 @@ from tests.test_reader_performance import (
     sync_playwright,
     zip_bytes,
 )
+from tests import test_reader_performance as support
 
 
 @unittest.skipIf(sync_playwright is None, "install requirements-test.txt for reader style tests")
@@ -135,6 +137,84 @@ class ReaderStyleTests(unittest.TestCase):
         """)
         for selector in (".reader-error", ".epub-frame .reader-markdown", ".reader-markdown a"):
             self.assert_contrast(selector)
+
+    def test_pdf_page_surface_follows_dark_theme_without_touching_text_layer(self):
+        self.page.route("**/api/reader-content**", lambda route: route.fulfill(
+            content_type="application/pdf", body=support.minimal_pdf()
+        ))
+        source = urllib.parse.quote(
+            "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/theme.pdf", safe=""
+        )
+        self.page.goto(
+            f"{self.origin}/search/static/reader.html?url={source}&ext=pdf&title=Theme PDF",
+            wait_until="domcontentloaded",
+        )
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        canvas = self.page.locator('.reader-content[data-mode="pdf"] .reader-page canvas').first
+        self.page.locator('.reader-page canvas.ready').first.wait_for()
+        self.page.wait_for_function("() => document.querySelector('.reader-page')?.dataset.textReady === '1'")
+        self.page.locator('.reader-page').first.evaluate("node => window.__themePage = node")
+        text_layer = self.page.locator('.reader-pdf-text').first
+        self.assertEqual(text_layer.evaluate("e => getComputedStyle(e).filter"), "none")
+        self.assertEqual(canvas.evaluate("e => getComputedStyle(e).filter"), "invert(0.9) hue-rotate(180deg)")
+        self.page.locator("#history").click()
+        for theme in ('light', 'dark'):
+            self.page.locator("#theme-toggle").click()
+            self.settle()
+            self.assertEqual(canvas.evaluate("e => getComputedStyle(e).filter"), 'none' if theme == 'light' else 'invert(0.9) hue-rotate(180deg)')
+        self.page.locator("#history").click()
+        for width in (1100, 390):
+            self.page.set_viewport_size({"width": width, "height": 844})
+            self.page.locator('.reader-pdf-text-run').first.evaluate("node => {const range=document.createRange(); range.selectNodeContents(node); getSelection().removeAllRanges(); getSelection().addRange(range);}")
+            selected = self.page.evaluate("getSelection().toString()")
+            self.assertEqual(selected, 'Reader PDF')
+            original_pixels = canvas.evaluate("c => c.toDataURL()")
+            for theme in ("dark", "light", "dark"):
+                self.page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+                self.settle()
+                bounds = self.page.locator('.reader-page').first.bounding_box()
+                png = Image.open(io.BytesIO(self.page.screenshot())).convert("RGB")
+                pixel = png.getpixel((round(bounds['x'] + bounds['width'] * .85), round(bounds['y'] + 30)))
+                self.assertTrue(max(pixel) < 50 if theme == "dark" else min(pixel) > 240, (theme, pixel))
+                self.assertEqual(canvas.evaluate("c => c.toDataURL()"), original_pixels)
+                self.assertTrue(self.page.evaluate("document.querySelector('.reader-page') === __themePage"))
+                self.assertEqual(self.page.evaluate("getSelection().toString()"), selected)
+        self.page.evaluate("getSelection().removeAllRanges()")
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('Reader')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        mark = self.page.locator('.reader-page mark.full-search-highlight').first
+        self.assertEqual(mark.text_content(), 'Reader')
+        self.assertEqual(mark.evaluate("e => getComputedStyle(e).filter"), 'none')
+        self.assertNotEqual(mark.evaluate("e => getComputedStyle(e).backgroundColor"), 'rgba(0, 0, 0, 0)')
+        self.page.locator('#content').evaluate("node => node.dataset.mode = 'image-pages'")
+        self.assertEqual(self.page.locator('.reader-page canvas').first.evaluate("e => getComputedStyle(e).filter"), 'none')
+
+    def test_pdf_page_images_follow_theme_but_original_images_do_not(self):
+        output = io.BytesIO()
+        Image.new('RGB', (600, 800), 'white').save(output, 'WEBP')
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            json={"version": 2, "kind": "pdf-pages", "page_count": 1}))
+        self.page.route('**/pages/page-*.webp', lambda route: route.fulfill(
+            content_type='image/webp', body=output.getvalue()))
+        source = urllib.parse.quote('https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64 + '/page-manifest.json', safe='')
+        self.page.goto(f'{self.origin}/search/static/reader.html?url={source}&ext=pdf-pages')
+        image = self.page.locator('.reader-page img.ready').first
+        image.wait_for()
+        original = image.get_attribute('src')
+        for width in (1100, 390):
+            self.page.set_viewport_size({'width': width, 'height': 844})
+            for theme in ('dark', 'light', 'dark'):
+                self.page.evaluate('theme => document.documentElement.dataset.theme = theme', theme)
+                self.settle()
+                bounds = image.bounding_box()
+                png = Image.open(io.BytesIO(self.page.screenshot())).convert('RGB')
+                pixel = png.getpixel((round(bounds['x'] + bounds['width'] * .8), round(bounds['y'] + 30)))
+                self.assertTrue(max(pixel) < 50 if theme == 'dark' else min(pixel) > 240, (theme, pixel))
+                self.assertEqual(image.get_attribute('src'), original)
+        self.page.evaluate("document.querySelector('#content').dataset.mode = 'image-pages'")
+        self.assertEqual(image.evaluate('e => getComputedStyle(e).filter'), 'none')
 
     def open_theme_fixture(self, extension, data):
         self.page.route("**/api/reader-content**", lambda route: route.fulfill(body=data))

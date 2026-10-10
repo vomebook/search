@@ -960,6 +960,16 @@ body {
 .reader-page canvas.ready {
   opacity: 1;
 }
+/* PDF pages keep their transparent text/selection layer above the themed page. */
+:root[data-theme="dark"] .reader-content[data-mode="pdf"] .reader-page canvas,
+:root[data-theme="dark"] .reader-content[data-mode="pdf-pages"] .reader-page canvas,
+:root[data-theme="dark"] .reader-content[data-mode="pdf-pages"] .reader-page > img {
+  filter: invert(0.9) hue-rotate(180deg);
+}
+:root[data-theme="dark"] .reader-content[data-mode="pdf"] .reader-page,
+:root[data-theme="dark"] .reader-content[data-mode="pdf-pages"] .reader-page {
+  background: #202428;
+}
 .reader-pdf-text {
   position: absolute;
   inset: 0;
@@ -1021,6 +1031,9 @@ body {
   margin: 0 auto;
   background: #fff;
 }
+.reader-epub-chapter {
+  display: flow-root;
+}
 .reader-chapter-sentinel {
   display: block;
   width: 100%;
@@ -1031,6 +1044,11 @@ body {
   opacity: 0;
   overflow: hidden;
   pointer-events: none;
+}
+.reader-chapter-load-error {
+  min-height: 40px;
+  opacity: 1;
+  pointer-events: auto;
 }
 .reader-content[data-mode="audio"],
 .reader-content[data-mode="video"] {
