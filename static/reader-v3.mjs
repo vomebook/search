@@ -18,6 +18,13 @@ function validBox(b) {
   return Array.isArray(b) && b.length === 4 && b.every(v => Number.isFinite(v) && v >= 0 && v <= 1) &&
     b[0] < b[2] && b[1] < b[3];
 }
+function validQuad(quad) {
+  if (!Array.isArray(quad) || quad.length !== 4 || quad.some(point =>
+      !Array.isArray(point) || point.length !== 2 || point.some(v => !Number.isFinite(v) || v < 0 || v > 1))) return false;
+  let area = 0;
+  for (let i = 0; i < 4; i++) area += quad[i][0] * quad[(i + 1) % 4][1] - quad[(i + 1) % 4][0] * quad[i][1];
+  return Math.abs(area) > 2e-9;
+}
 export function validateTextLayer(layer, entry, source) {
   if (!layer || layer.version !== 1 || layer.kind !== "pdf-text-layer" || layer.source_sha256 !== source ||
       layer.page !== entry.page || !sha(layer.generation) || layer.generation !== entry.generation ||
@@ -39,8 +46,7 @@ export function validateTextLayer(layer, entry, source) {
         !Number.isSafeInteger(region.start) || !Number.isSafeInteger(region.end) || region.start < end ||
         region.end <= region.start || region.end > chars.length || typeof region.text !== "string" ||
         chars.slice(region.start, region.end).join("") !== region.text || !validBox(region.box) ||
-        !Array.isArray(region.quad) || region.quad.length !== 4 || region.quad.some(p =>
-          !Array.isArray(p) || p.length !== 2 || p.some(v => !Number.isFinite(v) || v < 0 || v > 1)) ||
+         !validQuad(region.quad) ||
         !modes.has(region.writing_mode) || !["ltr", "rtl", "mixed", "neutral"].includes(region.direction)) invalid();
     end = region.end;
     ids.add(region.id);
