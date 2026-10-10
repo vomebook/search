@@ -7,7 +7,7 @@ import "/search/static/reader-section-virtualizer.js";
 import "/search/static/reader-runtime.js";
 import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
-import { paintTextHit } from "/search/static/reader-book-text.js";
+import { paintTextHit, hitBoxes } from "/search/static/reader-book-text.js";
 import { createPdfFetchPolicy } from "./reader-pdf-network.mjs";
 import { createV3Repository, validateResource, validateReadingManifest, validatePageMap } from "./reader-v3.mjs";
 import { populateIndependentTextLayer, independentTextCaret } from "./reader-pdf-text.js";
@@ -7290,11 +7290,15 @@ async function navigateFoliateSearchResult(result, generation) {
 }
 async function ensurePdfBookSearchClient(manifest) {
   let textUrl = "";
+  let partitioned = null;
   if (manifest?.text_layer) {
     pdfTextLayerRepository ||= createPdfV3Repository(manifest.source_sha256, manifest.page_count);
     const index = await pdfTextLayerRepository.textIndex(manifest.text_layer);
     manifest = { ...manifest, book_text: index.book_text };
     textUrl = v3ResourceUrl(index.book_text);
+    if (index.search_partitions) partitioned = {generation: index.generation,
+      partitions: index.search_partitions.map(part => ({start: part.start, end: part.end,
+        url: v3ResourceUrl(part.resource), bytes: part.resource.bytes, sha256: part.resource.sha256}))};
   }
   if (!manifest?.book_text?.path) throw new Error("本书集中全文尚未生成");
   if (!pdfBookSearchModulePromise)
@@ -7314,7 +7318,8 @@ async function ensurePdfBookSearchClient(manifest) {
       sha256: manifest.book_text.sha256,
       bytes: manifest.book_text.bytes,
       pageCount: documentState.pageCount,
-      sourceSha: manifest.source_sha256
+      sourceSha: manifest.source_sha256,
+      ...partitioned
     });
   return pdfBookSearchClient;
 }
@@ -7354,12 +7359,21 @@ async function searchConcentratedPdf(query, generation) {
           return false;
         content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
         const shell = content.querySelector(`.reader-page[data-page="${hit.page}"]`);
-        if (shell && hit.boxes.length) {
+        if (shell && (hit.boxes.length || hit.textGeneration)) {
+          let boxes = hit.boxes;
+          if (hit.textGeneration) {
+            const layer = await pdfTextLayerRepository.textPage(manifest.text_layer, hit.page);
+            if (!isReaderGenerationCurrent("navigation", nav)) return false;
+            if (layer.generation !== hit.textGeneration) throw new Error("PDF_V3_GENERATION_CHANGED");
+            boxes = hitBoxes({text: layer.text, text_spans: layer.regions.map(region => ({
+              start: region.start, end: region.end, box: region.box, precision: region.mapping_precision
+            }))}, hit.start, hit.length);
+          }
           if (pdfV3Manifest) {
             await renderPdfOcrText(shell);
             if (!isReaderGenerationCurrent("navigation", nav)) return false;
           }
-          paintTextHit(shell, hit.boxes, hit);
+          paintTextHit(shell, boxes, hit);
           shell.querySelector(".reader-text-hit-box")?.scrollIntoView({ block: "center" });
         }
         return true;
