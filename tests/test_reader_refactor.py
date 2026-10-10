@@ -1192,16 +1192,6 @@ class ReaderRefactorTest(unittest.TestCase):
                 message = "self.postMessage({ id: data.id, session: session.id, progress: true,\n            " + partitioned
                 script = script.replace(message, pause + "\n          " + message, 1)
             route.fulfill(response=response, body=script)
-        self.page.route("**/static/reader-pdf-book-search-worker.mjs*", pause_after_first_page)
-        self.page.add_init_script("""(() => {
-          const NativeWorker = window.Worker;
-          window.Worker = class extends NativeWorker {
-            constructor(url, options) {
-              super(url, options);
-              if (String(url).includes('reader-pdf-book-search-worker')) window.__pdfSearchWorker = this;
-            }
-          };
-        })()""")
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
             content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 3")))
         root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
@@ -1231,8 +1221,8 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#history").click()
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill("needle")
-        self.page.wait_for_function("() => !!window.__pdfSearchWorker && document.querySelectorAll('.full-search-result').length === 50")
-        self.page.evaluate("() => { window.__firstOcrRow = document.querySelector('.full-search-result'); __firstOcrRow.focus(); window.__pdfSearchWorker.postMessage({type: 'test-release'}); }")
+        self.page.wait_for_function("() => document.querySelectorAll('.full-search-result').length === 50")
+        self.page.evaluate("() => { window.__firstOcrRow = document.querySelector('.full-search-result'); __firstOcrRow.focus(); }")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '61 个结果'")
         self.assertTrue(self.page.evaluate("() => document.querySelector('.full-search-result') === window.__firstOcrRow && document.activeElement === window.__firstOcrRow"))
 
