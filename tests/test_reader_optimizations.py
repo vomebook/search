@@ -80,7 +80,7 @@ class ReaderOptimizationTests(unittest.TestCase):
                 };
               };
             ''')
-        self.page.route('**/static/reader.js?*', instrument)
+        self.page.route('**/static/reader.js*', instrument)
 
     def test_pdf_pixel_budget_releases_prefetch_and_protects_selection(self):
         self.expose()

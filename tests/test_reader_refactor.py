@@ -234,7 +234,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 return [good.metrics(), expired.metrics(), cancelled.metrics(), outcome, timers.size];
               };
             """)
-        self.page.route('**/static/reader.js?*', instrument)
+        self.page.route('**/static/reader.js*', instrument)
         self.serve('Image waiting')
         self.open(self.reader_url())
         self.assertEqual(self.page.evaluate('window.__imageWaitProbe()'),
@@ -326,7 +326,7 @@ class ReaderRefactorTest(unittest.TestCase):
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + "\nwindow.__reloadPdfText = async () => { const shell = document.querySelector('.reader-page[data-page=\\\"1\\\"]'); shell.querySelector('.reader-pdf-text').replaceChildren(); shell.dataset.textReady = '0'; await renderPdfText(await pdfDocument.getPage(1), shell); };\n")
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         self.serve(b"pdf", "application/pdf")
         self.open(self.reader_url("pdf"))
         self.page.wait_for_function("() => document.querySelector('.reader-page[data-page=\\\"1\\\"]')?.dataset.textReady === '1'")
@@ -380,7 +380,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 "async function createFoliateSection(section, index) { (window.__openedSections ||= []).push(index);",
             )
             route.fulfill(response=response, body=body)
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         self.serve(support.epub_with_many_chapters(), "application/epub+zip")
         self.open(self.reader_url("epub"))
         self.assertEqual(self.page.evaluate("window.__openedSections[0]"), 10)
@@ -390,7 +390,7 @@ class ReaderRefactorTest(unittest.TestCase):
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + "\nwindow.__reloadPdfOcr = async () => { const shell = document.querySelector('.reader-page[data-page=\\\"1\\\"]'); shell.querySelector('.reader-pdf-text').replaceChildren(); shell.dataset.textReady = '0'; await renderPdfOcrText(shell); };\n")
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
         source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + root
         ocr_path = root + "/ocr-manifest.json"
@@ -661,7 +661,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 return originalSearchText(...args);
               };
             """)
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         self.open(self.reader_url("pdf"))
         self.page.wait_for_function("() => !!window.__releaseText")
         self.page.locator("#history").click()
@@ -721,7 +721,7 @@ class ReaderRefactorTest(unittest.TestCase):
                   pdfTextContentCache.size, pdfTextContentCacheBytes];
               };
             """)
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         self.serve(support.minimal_pdf(), "application/pdf")
         self.open(self.reader_url("pdf"))
         self.page.wait_for_function("() => document.querySelector('.reader-page')?.dataset.textReady === '1'")
@@ -732,7 +732,7 @@ class ReaderRefactorTest(unittest.TestCase):
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + "\nwindow.__pdfCacheProbe = () => { cachePdfSearchText(1, 'cached'); readerRuntime.dispose(); return [pdfSearchTextCache.size, pdfSearchTextCacheBytes]; };\n")
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         self.serve(support.minimal_pdf(), "application/pdf")
         self.open(self.reader_url("pdf"))
         self.assertEqual(self.page.evaluate("window.__pdfCacheProbe()"), [0, 0])
@@ -741,7 +741,7 @@ class ReaderRefactorTest(unittest.TestCase):
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + "\nwindow.__dropPdfSearchCache = () => { pdfSearchTextCache.clear(); pdfSearchTextCacheBytes = 0; pdfTextContentCache.clear(); pdfTextContentCacheBytes = 0; };\n")
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         module = support.PDF_MODULE.replace("numPages: 30", "numPages: 3").replace(
             "getPage: () => Promise.resolve(page)", """getPage: (number) => Promise.resolve({ ...page,
               getTextContent() {
@@ -797,7 +797,7 @@ class ReaderRefactorTest(unittest.TestCase):
                   }"""
             )
             route.fulfill(response=response, body=script)
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         module = support.PDF_MODULE.replace("numPages: 30", "numPages: 2").replace(
             "getPage: () => Promise.resolve(page)", """getPage: () => Promise.resolve({ ...page,
               getTextContent() { return Promise.resolve({ items: [{ str: 'needle '.repeat(6000), hasEOL: false }] }); } })""")
@@ -827,7 +827,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 window.__failSearchPage = false;
                 throw new Error('temporary page load');
               }"""))
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         module = support.PDF_MODULE.replace("numPages: 30", "numPages: 3").replace(
             "getPage: () => Promise.resolve(page)", """getPage: () => Promise.resolve({ ...page,
               getTextContent() { return Promise.resolve({ items: [{ str: 'needle '.repeat(60), hasEOL: false }] }); } })""")
@@ -921,7 +921,7 @@ class ReaderRefactorTest(unittest.TestCase):
             } """ + needle)
             route.fulfill(response=response, body=script.replace(
                 "target = matches[0]?.target;", "target = matches[0]?.target; window.__fallbackDone = true;"))
-        self.page.route("**/static/reader.js?*", hold_fallback)
+        self.page.route("**/static/reader.js*", hold_fallback)
         self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
         self.open(self.reader_url("epub"))
         self.search("正文")
@@ -1993,7 +1993,7 @@ class ReaderRefactorTest(unittest.TestCase):
             self.assertIn(needle, script)
             route.fulfill(response=response, body=script.replace(needle,
                 needle + ' window.__sampleVisits = (window.__sampleVisits || 0) + 1;'))
-        self.page.route('**/static/reader.js?*', instrument)
+        self.page.route('**/static/reader.js*', instrument)
         self.page.add_init_script('''const nativeFetch = window.fetch.bind(window), Decoder = window.TextDecoder;
           window.__previewDecoders = 0;
           window.TextDecoder = class extends Decoder {
@@ -2081,7 +2081,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 }, error => {probe.error = error.name;});
               };
             ''')
-        self.page.route('**/static/reader.js?*', instrument)
+        self.page.route('**/static/reader.js*', instrument)
         self.serve('TOC probe')
         self.open(self.reader_url())
         self.page.evaluate('window.__startTocProbe()')
@@ -2146,7 +2146,7 @@ class ReaderRefactorTest(unittest.TestCase):
             route.fulfill(response=response, body=script.replace(needle,
                 "await new Promise(resolve => { window.__releaseActivation = resolve; }); " +
                 needle + " window.__activationSettled = true;"))
-        self.page.route("**/static/reader.js?*", hold_activation)
+        self.page.route("**/static/reader.js*", hold_activation)
         self.serve("oldword " * 70 + "freshword")
         self.open(self.reader_url())
         self.search("oldword")
@@ -2174,7 +2174,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 };
               };
             """)
-        self.page.route("**/static/reader.js?*", instrument)
+        self.page.route("**/static/reader.js*", instrument)
         for extension in ('html', 'md', 'docx', 'txt'):
             with self.subTest(extension=extension):
                 if extension == 'docx':
@@ -2247,7 +2247,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 return {indexed:!!lookup, pairs:[...pairs, ...compare()]};
               };
             ''')
-        self.page.route('**/static/reader.js?*', instrument)
+        self.page.route('**/static/reader.js*', instrument)
 
     def test_dom_search_locator_invalidates_on_mutation_and_releases_on_query_and_disposal(self):
         self.expose_dom_search_locator()
@@ -2351,7 +2351,7 @@ class ReaderRefactorTest(unittest.TestCase):
             route.fulfill(response=response, body=script.replace('repairHtmlContrast(frame);', '') + '''
               window.__repairContrast = () => repairHtmlContrast(htmlFrame);
             ''')
-        self.page.route('**/static/reader.js?*', instrument)
+        self.page.route('**/static/reader.js*', instrument)
 
     def test_html_contrast_reuses_transparent_ancestors_and_refreshes_between_passes(self):
         self.expose_html_contrast()
@@ -2662,7 +2662,7 @@ class ReaderRefactorTest(unittest.TestCase):
             else:
                 route.fulfill(content_type='text/html', body='<h1>Copyright</h1><p>Immediately readable text</p>')
         self.page.route('**/api/reader-bucket-resource?*', resource)
-        self.page.route('**/static/reader.js?*', lambda route: held.append((route, route.fetch())))
+        self.page.route('**/static/reader.js*', lambda route: held.append((route, route.fetch())))
         self.page.goto(self.reader_url('epub-chapters', url=source), wait_until='commit')
         self.page.wait_for_function('() => !!window.__VOICE_READER_CHAPTER_PRELOAD__?.manifest')
         self.page.wait_for_function('async () => (await window.__VOICE_READER_CHAPTER_PRELOAD__.manifest).ok')
@@ -2732,7 +2732,7 @@ class ReaderRefactorTest(unittest.TestCase):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + '\nwindow.__earlyChapter = index => navigationState.tocEntries[index-1].activate(beginReaderNavigation());\n')
         self.page.route('**/api/reader-content**',resource)
-        self.page.route('**/static/reader.js?*',instrument)
+        self.page.route('**/static/reader.js*',instrument)
         self.page.goto(self.reader_url('epub-chapters',url=root+'/chapter-manifest.json'))
         self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state='attached')
         self.assertTrue(self.page.evaluate('__earlyChapter(15)'))
