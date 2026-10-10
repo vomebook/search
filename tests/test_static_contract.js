@@ -361,7 +361,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /"gb18030", "big5", "windows-1251", "windows-1252"/);
   assertCode(reader, 'pre.textContent = new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes)');
   assertCode(reader, 'docx: [loadDocxDocument, renderDocx]');
-  assert.match(reader, /docx\.renderAsync/);
+  assertCode(reader, 'const docxDocument = await docx.parseAsync(bytes, options)');
+  assertCode(reader, 'const nodes = await docx.renderDocument(docxDocument, options)');
   assert.match(reader, /renderAltChunks: false/);
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/")');
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/")');

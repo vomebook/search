@@ -1145,7 +1145,7 @@ async function doSearchAPI(params, append, requestId) {
       data = await fetchSearchPage(cacheKey, base, body, params.signal, append ? APPEND_REQUEST_TIMEOUT : 10000);
       if (requestId !== searchRequestId || (params.signal && params.signal.aborted)) return false;
       noteApiSuccess();
-      setCachedSearchResponse(cacheKey, data);
+      setCachedSearchResponse(cacheKey, data, append);
     } catch (error) {
       if (requestId === searchRequestId && !(params.signal && params.signal.aborted)) noteSearchApiFailure(error);
       throw error;
@@ -1226,6 +1226,8 @@ function consumeCachedAppendPage() {
 }
 
 function cancelSearchPrefetch() {
+  cancelPendingSearchCacheWrites();
+  searchPrefetchAbortController?.cacheWaits?.forEach(wait => wait.controller.abort());
   searchPrefetchAbortController?.abort();
   searchPrefetchAbortController = null;
 }
@@ -1239,11 +1241,14 @@ function prefetchSearchPages(base, template) {
     controller.groupKey = groupKey;
     controller.active = new Map();
     controller.attempted = new Set();
+    controller.cacheWaits = new Map();
     searchPrefetchAbortController = controller;
   }
   const current = () => searchPrefetchAbortController === controller && !controller.signal.aborted && key === getSearchViewKey();
   const pump = () => {
     if (!current() || document.hidden || !navigator.onLine) return;
+    const promoted = controller.cacheWaits.get(STATE._loadedPage + 1);
+    if (promoted && !promoted.urgent) promoted.controller.abort();
     const last = Math.min(Math.ceil(STATE.total / STATE.pageSize), STATE._loadedPage + 3);
     for (const page of controller.attempted) if (page <= STATE._loadedPage) controller.attempted.delete(page);
     for (let page = STATE._loadedPage + 1; page <= last && controller.active.size < 2; page++) {
@@ -1258,16 +1263,21 @@ function prefetchSearchPages(base, template) {
         if (data && expected && (data.generation !== expected.generation || data.total !== expected.total)) {
           searchResponseCache.delete(cacheKey); data = null;
         }
-        if (!data && expected) data = await readRecentSearchPage(key, page, expected, page === STATE._loadedPage + 1 ? 25 : 150);
+        if (!data && expected) {
+          const wait = { controller: new AbortController(), urgent: page === STATE._loadedPage + 1 };
+          controller.cacheWaits.set(page, wait);
+          try { data = await readRecentSearchPage(key, page, expected, wait.urgent ? 25 : 150, wait.controller.signal); }
+          finally { controller.cacheWaits.delete(page); }
+        }
         if (!current()) return;
         if (!data) data = await fetchSearchPage(cacheKey, base, body, controller.signal, APPEND_REQUEST_TIMEOUT);
         if (!current()) return;
         validatePositionWindowPage(data, page, body.page_size, expected);
         noteApiSuccess();
         rememberSearchPageMetadata(data);
-        setCachedSearchResponse(cacheKey, data);
         if (page > STATE._loadedPage) STATE._pageCache[page] = data.results;
         scheduleBottomLoad(0, page);
+        setCachedSearchResponse(cacheKey, data, true);
       })().catch(error => {
         if (current()) noteSearchApiFailure(error);
       }).finally(() => { controller.active.delete(page); pump(); });
@@ -2406,16 +2416,27 @@ function saveRecentSearchPages(position, view, visibleEnd) {
   if (store) try { pruneSearchContentStore(store, RECENT_SEARCH_PAGE_MAX, RECENT_SEARCH_PAGE_TTL); } catch (_) {}
 }
 
-async function readRecentSearchPage(key, page, expected, timeoutMs = 150) {
+async function readRecentSearchPage(key, page, expected, timeoutMs = 150, signal = null) {
   const id = [key, page];
   let entry = recentSearchPages.get(JSON.stringify(id));
   if (!entry && searchPositionDB?.objectStoreNames.contains("recent-pages")) entry = await new Promise(resolve => {
-    const timer = setTimeout(() => resolve(null), timeoutMs);
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      resolve(value);
+    };
+    const abort = () => finish(null);
+    const timer = setTimeout(abort, timeoutMs);
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener("abort", abort, { once: true });
     try {
       const request = searchPositionDB.transaction("recent-pages").objectStore("recent-pages").get(id);
-      request.onsuccess = () => { clearTimeout(timer); resolve(request.result); };
-      request.onerror = () => { clearTimeout(timer); resolve(null); };
-    } catch (_) { clearTimeout(timer); resolve(null); }
+      request.onsuccess = () => finish(request.result);
+      request.onerror = abort;
+    } catch (_) { abort(); }
   });
   if (!entry || entry.key !== key || entry.savedAt < Date.now() - RECENT_SEARCH_PAGE_TTL || !expected.generation
       || !Array.isArray(entry.results) || Object.keys(entry.results).length !== entry.results.length) return null;
@@ -2640,6 +2661,9 @@ function setupSearchPositionSaving() {
   for (const type of ["change", "click", "keydown"]) document.addEventListener(type, event => {
     if (!(event.target instanceof Element)) return;
     if (event.target.closest("#results-container, #scroll-track, #search-position-status, #load-info")) return;
+    // Layout-only controls keep the current view; copying deep results blocks their animation.
+    if (event.target.closest("#hamburger-btn, #settings-btn, #sidebar-expand-btn, #overlay")) return;
+    if (type === "keydown" && event.key === "Escape" && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) return;
     if (type === "keydown" && !["Enter", "Escape"].includes(event.key)) return;
     saveSearchViewSnapshot();
   }, true);
@@ -3205,16 +3229,22 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
 function cloneSearchData(data) {
   if (!data || !Array.isArray(data.results)) return data;
   rememberSearchPageMetadata(data);
-  return {
+  const copy = {
     ...data,
     results: data.results.slice(),
     total: data.total,
     page: data.page,
     page_size: data.page_size,
   };
+  const identity = searchResponseCacheIdentities.get(data) || {};
+  searchResponseCacheIdentities.set(data, identity);
+  searchResponseCacheIdentities.set(copy, identity);
+  return copy;
 }
 
 function getCachedSearchResponse(key) {
+  const pending = pendingSearchCacheWrites.get(key);
+  if (pending && pending.viewKey === getSearchViewKey()) return cloneSearchData(pending.data);
   var cached = searchResponseCache.get(key);
   if (!cached) return null;
   if (Date.now() - cached.time > SEARCH_CACHE_TTL) {
@@ -3224,8 +3254,44 @@ function getCachedSearchResponse(key) {
   return cloneSearchData(cached.data);
 }
 
-function setCachedSearchResponse(key, data) {
-  searchResponseCache.set(key, { time: Date.now(), data: cloneSearchData(data) });
+const pendingSearchCacheWrites = new Map();
+const searchResponseCacheIdentities = new WeakMap();
+let searchCacheWriteFrame = 0;
+let searchCacheWriteTimer = null;
+
+function cancelPendingSearchCacheWrites() {
+  if (searchCacheWriteFrame) cancelAnimationFrame(searchCacheWriteFrame);
+  clearTimeout(searchCacheWriteTimer);
+  searchCacheWriteFrame = 0;
+  searchCacheWriteTimer = null;
+  pendingSearchCacheWrites.clear();
+}
+
+function setCachedSearchResponse(key, data, defer = false) {
+  const cached = searchResponseCache.get(key)?.data;
+  const identity = searchResponseCacheIdentities.get(data);
+  if (cached && identity && searchResponseCacheIdentities.get(cached) === identity) return;
+  if (!defer) {
+    pendingSearchCacheWrites.delete(key);
+    searchResponseCache.set(key, { time: Date.now(), data: cloneSearchData(data) });
+    return;
+  }
+  // Retain at most the existing lookahead's three pages, never another queue of results.
+  pendingSearchCacheWrites.delete(key);
+  pendingSearchCacheWrites.set(key, { data: cloneSearchData(data), viewKey: getSearchViewKey() });
+  while (pendingSearchCacheWrites.size > 3) pendingSearchCacheWrites.delete(pendingSearchCacheWrites.keys().next().value);
+  if (searchCacheWriteFrame || searchCacheWriteTimer !== null) return;
+  searchCacheWriteFrame = requestAnimationFrame(() => {
+    searchCacheWriteFrame = 0;
+    searchCacheWriteTimer = setTimeout(() => {
+      searchCacheWriteTimer = null;
+      const writes = [...pendingSearchCacheWrites];
+      pendingSearchCacheWrites.clear();
+      for (const [cacheKey, entry] of writes) if (entry.viewKey === getSearchViewKey()) {
+        setCachedSearchResponse(cacheKey, entry.data);
+      }
+    }, 0);
+  });
 }
 
 function buildCurrentSearchBody(page) {
@@ -4232,6 +4298,7 @@ function ensureVirtualHeights(len) {
 
 function refreshVirtualAfterAppend(updateView = true) {
   if (updateView && !positionRestore && STATE._loadedPage >= 1) rememberDisplayedSearchView();
+  const previousLength = VSCROLL.heights.length;
   ensureVirtualHeights(STATE.results.length);
   const topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
   const bottomSpacer = DOM.resultsList.querySelector(".virtual-spacer-bottom");
@@ -4249,6 +4316,14 @@ function refreshVirtualAfterAppend(updateView = true) {
   layoutResultScrollSegment(topH, endH, totalH, logicalTop);
   if (previousOrigin !== resultScrollOrigin) DOM.resultsContainer.scrollTop = logicalTop - resultScrollOrigin;
   if (updateView) {
+    const viewH = DOM.resultsContainer.clientHeight, estimate = VSCROLL.estimatedHeight || 60;
+    const buffer = 2 * Math.max(10, Math.floor(viewH / estimate)) * estimate + 3 * viewH;
+    if (!resultWindow && previousLength < STATE.results.length && VSCROLL.renderEnd < previousLength
+        && topH <= logicalTop && endH >= logicalTop + viewH
+        && getVirtualOffset(previousLength) > logicalTop + viewH + buffer) {
+      updateScrollTrack();
+      return;
+    }
     // Coalesce page arrival with a pending scroll render when possible.
     VSCROLL.renderStart = -1;
     VSCROLL.renderEnd = -1;
