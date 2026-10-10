@@ -14,6 +14,7 @@ function fixture(source) {
     STATE: { results: [], total: 0, _pageCache: {}, _loadedPage: 1 },
     DOM: { resultsContainer: {} }, VSCROLL: { heightCache: new Map(), estimatedHeight: 100 },
     searchSnapshotResultBudgets: new WeakMap(), searchSnapshotHeightValues: new WeakMap(),
+    searchSnapshotCloneSources: new WeakMap(), snapshotCloneTask: null,
     searchSnapshotSources: new WeakMap(), searchViewSnapshots: new Map(), searchPageMetadata: new WeakMap(),
     SEARCH_VIEW_SNAPSHOT_BYTES_MAX: 8 * 1024 * 1024, SEARCH_VIEW_SNAPSHOT_MAX: 8,
     SEARCH_VIEW_SNAPSHOT_VERSION: 1, measuredHeightRevision: 0, positionRestore: null,
