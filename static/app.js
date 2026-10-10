@@ -632,6 +632,10 @@ function setupReaderIntentWarming() {
   };
   ["pointerover", "pointerdown", "focusin"].forEach(function(type) { document.addEventListener(type, warm, { passive: true }); });
   var warmShell = () => warmReaderIntent("/search/static/reader.html");
+  navigator.serviceWorker?.addEventListener("controllerchange", () => {
+    for (const href of VoiceOfMLReaderResources.shellAssets("/search/static/")) warmedReaderAssets.delete(href);
+    warmShell();
+  });
   setTimeout(warmShell, 1500);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) warmShell(); });
 }

@@ -163,6 +163,21 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.page.locator('#back').wait_for(state='visible')
 
+    def test_first_install_rewarms_shell_after_delayed_controller_claim(self):
+        self.page.add_init_script('''(() => {
+          const register = navigator.serviceWorker.register.bind(navigator.serviceWorker);
+          navigator.serviceWorker.register = (...args) => new Promise(resolve => setTimeout(resolve,2500)).then(()=>register(...args));
+        })();''')
+        self.page.goto(self.origin + '/search/', wait_until='domcontentloaded')
+        self.assertTrue(self.page.evaluate('''async()=>{
+          for(let i=0;i<200;i++){
+            const cache=await caches.open('vomebook-search-v1.0.0');
+            if(navigator.serviceWorker.controller && await cache.match('/search/static/reader.html'))return true;
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          return false;
+        }'''))
+
     def test_reader_query_navigations_keep_one_normalized_cache_entry(self):
         self.prime()
         for suffix in ("one", "two"):
