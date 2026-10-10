@@ -122,7 +122,7 @@ class SidebarKeyboardTests(unittest.TestCase):
             folder=dict(common,q='phone',min_size='1KB',max_size='2MB',folder_self='docs/中文')))
 
     def test_collapsed_tree_avoids_hidden_dom_and_keeps_selection(self):
-        result = self.page.evaluate('''() => {
+        result = self.page.evaluate('''async () => {
           STATE.folderTree=[{name:'root',path:'root',count:1000,selfCount:0,children:
             Array.from({length:1000},(_,i)=>({name:'child'+i,path:'root/'+i,count:1,selfCount:1,children:[]}))}];
           STATE.folderTreeCollapsed={root:true};
@@ -132,17 +132,19 @@ class SidebarKeyboardTests(unittest.TestCase):
           const root=DOM.filterFolderTree.querySelector('.filter-folder-item');
           root.querySelector('input').click();
           root.querySelector('.tree-toggle').click();
+          const immediate=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
+          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,10));
           const expanded=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           const child=DOM.filterFolderTree.querySelector('[data-path="root/0"] input');
           const inherited=child.checked; child.click();
           const partial=root.querySelector('input').indeterminate;
           const excluded=!child.checked;
           root.querySelector('.tree-toggle').click(); root.querySelector('.tree-toggle').click();
-          return {initial,expanded,inherited,partial,excluded,
+          return {initial,expanded,inherited,partial,excluded,bounded:immediate>1 && immediate<=33,
             final:DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length,
             siblings:DOM.filterFolderTree.querySelector('[data-path="root/1"] input').checked};
         }''')
-        self.assertEqual(result, dict(initial=1, expanded=1001, inherited=True, partial=True,
+        self.assertEqual(result, dict(initial=1, expanded=1001, inherited=True, partial=True,bounded=True,
                                       excluded=True, final=1001, siblings=True))
 
     def test_tree_rerender_has_one_delegated_action_and_respects_nested_collapse(self):
@@ -160,6 +162,39 @@ class SidebarKeyboardTests(unittest.TestCase):
             childChecked:DOM.filterFolderTree.querySelector('[data-path="a/b/c"] input').checked};
         }''')
         self.assertEqual(result, dict(rows=2, selected=True, final=3, childChecked=False))
+
+    def test_batched_expansion_cancels_and_refreshes_selection_for_late_rows(self):
+        result=self.page.evaluate('''async () => {
+          STATE.folderTree=[{name:'root',path:'root',count:1000,hasChildren:true,children:
+            Array.from({length:1000},(_,i)=>({name:String(i),path:'root/'+i,count:1,hasDirectFiles:true,children:[]}))}];
+          STATE.folderTreeCollapsed={root:true};STATE.filterFolderSubtrees=[];STATE.filterFolderSelfs=[];
+          renderFilterFolderTree();const toggle=DOM.filterFolderTree.querySelector('.tree-toggle');
+          toggle.click();const partial=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
+          toggle.click();await new Promise(r=>setTimeout(r,30));
+          const stopped=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length===partial && !folderTreeRenderQueue.length;
+          STATE.filterFolderSubtrees=['root'];refreshFilterFolderSelectionState();toggle.click();
+          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,10));
+          const final=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
+          const late=DOM.filterFolderTree.querySelector('[data-path="root/999"] input').checked;
+          STATE.folderTree=[{name:'new',path:'new',count:1,hasDirectFiles:true,children:[]}];renderFilterFolderTree();
+          await new Promise(r=>setTimeout(r,30));
+          return {stopped,final,late,current:DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length===1};
+        }''')
+        self.assertEqual(result,dict(stopped=True,final=1001,late=True,current=True))
+
+    def test_parent_reopen_resumes_interrupted_open_descendant(self):
+        result=self.page.evaluate('''async () => {
+          STATE.folderTree=[{name:'root',path:'root',count:500,hasChildren:true,children:[
+            {name:'branch',path:'root/b',count:500,hasChildren:true,children:Array.from({length:500},(_,i)=>
+              ({name:String(i),path:'root/b/'+i,count:1,hasDirectFiles:true,children:[]}))}]}];
+          STATE.folderTreeCollapsed={root:true,'root/b':false};renderFilterFolderTree();
+          const toggle=DOM.filterFolderTree.querySelector('.tree-toggle');toggle.click();toggle.click();
+          const stopped=!folderTreeRenderQueue.length;toggle.click();
+          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,10));
+          return {stopped,complete:DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length===502,
+            open:STATE.folderTreeCollapsed['root/b']===false};
+        }''')
+        self.assertEqual(result,dict(stopped=True,complete=True,open=True))
 
     def test_metadata_deadline_covers_body_and_allows_retry_without_breaker_failure(self):
         self.page.clock.install()
