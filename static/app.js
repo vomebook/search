@@ -1258,7 +1258,7 @@ function prefetchSearchPages(base, template) {
         if (data && expected && (data.generation !== expected.generation || data.total !== expected.total)) {
           searchResponseCache.delete(cacheKey); data = null;
         }
-        if (!data && expected) data = await readRecentSearchPage(key, page, expected);
+        if (!data && expected) data = await readRecentSearchPage(key, page, expected, page === STATE._loadedPage + 1 ? 25 : 150);
         if (!current()) return;
         if (!data) data = await fetchSearchPage(cacheKey, base, body, controller.signal, APPEND_REQUEST_TIMEOUT);
         if (!current()) return;
@@ -1267,7 +1267,7 @@ function prefetchSearchPages(base, template) {
         rememberSearchPageMetadata(data);
         setCachedSearchResponse(cacheKey, data);
         if (page > STATE._loadedPage) STATE._pageCache[page] = data.results;
-        scheduleBottomLoad();
+        scheduleBottomLoad(0, page);
       })().catch(error => {
         if (current()) noteSearchApiFailure(error);
       }).finally(() => { controller.active.delete(page); pump(); });
@@ -1285,10 +1285,54 @@ function prefetchNextPage() {
     return;
   }
   if (!STATE._loadedPage) return Promise.resolve();
+  if (STATE._resultBackend === "local") return prefetchLocalSearchPage();
   if (!apiAvailable) return Promise.resolve();
-  if (STATE._resultBackend === "local" || (STATE.useLocalMode && STATE.dataLoaded && STATE._resultBackend !== "api")) return Promise.resolve();
+  if (STATE.useLocalMode && STATE.dataLoaded && STATE._resultBackend !== "api") return Promise.resolve();
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) return Promise.resolve();
   return prefetchSearchPages(getSearchApiBase(), buildCurrentSearchBody(1));
+}
+
+function prefetchLocalSearchPage() {
+  if (!STATE.hasMore || document.hidden || readerOverlay) return Promise.resolve();
+  const key = getSearchViewKey(), groupKey = "local|" + key;
+  let controller = searchPrefetchAbortController;
+  if (!controller || controller.signal.aborted || controller.groupKey !== groupKey) {
+    controller?.abort();
+    controller = new AbortController();
+    controller.groupKey = groupKey;
+    controller.active = new Map();
+    controller.attempted = new Set();
+    searchPrefetchAbortController = controller;
+  }
+  const page = STATE._loadedPage + 1;
+  if (controller.active.has(page)) return controller.active.get(page);
+  if (STATE._pageCache[page] || controller.active.size || controller.attempted.has(page)) return Promise.resolve();
+  controller.attempted.clear();
+  controller.attempted.add(page);
+  const current = () => searchPrefetchAbortController === controller && !controller.signal.aborted
+    && STATE._resultBackend === "local" && key === getSearchViewKey();
+  const task = (async () => {
+    const data = await doSearchLocal({ ...buildLocalSearchParams(page), signal: controller.signal });
+    if (!current()) throw new DOMException("Cancelled", "AbortError");
+    const metadata = searchPageMetadata.get(STATE.results[0]);
+    const expected = metadata?.generation ? { generation: metadata.generation, total: STATE.total,
+      query: { pageSize: STATE.pageSize } } : null;
+    validatePositionWindowPage(data, page, STATE.pageSize, null);
+    if (expected && (data.generation !== expected.generation || data.total !== expected.total)) return data;
+    rememberSearchPageMetadata(data);
+    if (page > STATE._loadedPage) {
+      STATE._pageCache[page] = data.results;
+      scheduleBottomLoad(0, page);
+    }
+    return data;
+  })();
+  controller.active.set(page, task);
+  const release = () => {
+    controller.active.delete(page);
+    if (current() && STATE._loadedPage >= page) prefetchLocalSearchPage();
+  };
+  task.then(release, release);
+  return task;
 }
 
 let localDataLoadTimer = null;
@@ -2362,11 +2406,11 @@ function saveRecentSearchPages(position, view, visibleEnd) {
   if (store) try { pruneSearchContentStore(store, RECENT_SEARCH_PAGE_MAX, RECENT_SEARCH_PAGE_TTL); } catch (_) {}
 }
 
-async function readRecentSearchPage(key, page, expected) {
+async function readRecentSearchPage(key, page, expected, timeoutMs = 150) {
   const id = [key, page];
   let entry = recentSearchPages.get(JSON.stringify(id));
   if (!entry && searchPositionDB?.objectStoreNames.contains("recent-pages")) entry = await new Promise(resolve => {
-    const timer = setTimeout(() => resolve(null), 150);
+    const timer = setTimeout(() => resolve(null), timeoutMs);
     try {
       const request = searchPositionDB.transaction("recent-pages").objectStore("recent-pages").get(id);
       request.onsuccess = () => { clearTimeout(timer); resolve(request.result); };
@@ -3458,15 +3502,7 @@ function clearResultsSkeleton() {
   DOM.resultsList.querySelectorAll(".result-skeleton-item").forEach((row) => row.remove());
 }
 
-function doSearch(append, fromStart = false, restorePosition = false) {
-  if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
-  if (!append && prepareSearchPositionNavigation({ fromStart, restorePosition })) return;
-  if (append && STATE.isLoading) return;
-  if (append && !STATE._loadedPage) append = false;
-  if (!append) STATE.page = 1;
-  clearTimeout(filterSearchTimer);
-  filterSearchTimer = null;
-  const id = ++searchId;
+function buildLocalSearchParams(page) {
   var activeFolderFilters = [];
   var folderMatchMode = null;
   if (STATE.filterFolderSelfs.length > 0 || STATE.filterFolderSubtrees.length > 0) {
@@ -3477,7 +3513,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     );
     folderMatchMode = "mixed";
   }
-  const params = {
+  return {
     q: STATE.query,
     repos: STATE.mode === "repo" ? [STATE.repoFull] : (STATE.filterRepos.length > 0 ? STATE.filterRepos : null),
     extensions: STATE.filterExtensions.length > 0 ? STATE.filterExtensions : null,
@@ -3490,9 +3526,27 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     sort: STATE.sort,
     searchFolders: STATE.searchFolders,
     exact: STATE.exact,
-    page: STATE.page,
+    page,
     pageSize: STATE.pageSize,
   };
+}
+
+function doSearch(append, fromStart = false, restorePosition = false) {
+  if (append && resultWindow) { loadResultWindowPage(STATE._loadedPage + 1); return; }
+  if (!append && prepareSearchPositionNavigation({ fromStart, restorePosition })) return;
+  if (append && STATE.isLoading) return;
+  if (append && !STATE._loadedPage) append = false;
+  if (!append) STATE.page = 1;
+  clearTimeout(filterSearchTimer);
+  filterSearchTimer = null;
+  const id = ++searchId;
+  const params = buildLocalSearchParams(STATE.page);
+  const folderMatchMode = params.folderMatchMode;
+  if (append && STATE._pageCache[STATE.page]) {
+    if (deferSearchAppend()) return;
+    consumeCachedAppendPage();
+    return;
+  }
   STATE.isLoading = true;
   updatePagingStatus();
   setSearchVisualLoading(false);
@@ -3509,6 +3563,7 @@ function doSearch(append, fromStart = false, restorePosition = false) {
     searchRequestId++;
     STATE._pageCache = {};
     STATE._loadedPage = 0;
+    STATE._pagingAppendScrollTop = null;
     STATE._resultBackend = null;
     STATE._pendingPage = 0;
     STATE._deferredAppendWhileDragging = false;
@@ -3639,13 +3694,17 @@ function doSearchFallbackLocal(params, append, id) {
     let pagingError = null;
     if (id !== searchId) return;
     try {
-      const data = await doSearchLocal(params);
+      const controller = searchPrefetchAbortController;
+      const pending = append && controller?.groupKey === "local|" + getSearchViewKey()
+        && !controller.signal.aborted && controller.active.get(params.page);
+      const data = await (pending || doSearchLocal(params));
       if (id !== searchId) return;
       if (append && !data.results.length && STATE.results.length < data.total) throw new Error("EMPTY_LOCAL_PAGE");
       if (!applySearchPage(data, append)) return;
       STATE.page = STATE._loadedPage;
       pagingSucceeded = true;
       renderSearchPage(append);
+      prefetchNextPage();
       syncStateToURL();
     } catch (err) {
       console.error("Local Worker search failed:", err);
@@ -3946,7 +4005,10 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
 
 function scheduleVirtualRender() {
   const afterScroll = arguments[0] === true;
-  if (afterScroll) VSCROLL.renderAfterScroll = true;
+  if (afterScroll && !VSCROLL.renderAfterScroll) {
+    VSCROLL.renderAfterScroll = true;
+    if (!VSCROLL.isDraggingThumb) maybeLoadNextPage();
+  }
   if (VSCROLL.renderFrame) return;
   VSCROLL.renderFrame = requestAnimationFrame(() => {
     VSCROLL.renderFrame = 0;
@@ -3957,7 +4019,6 @@ function scheduleVirtualRender() {
         if (VSCROLL.isDraggingThumb) updateScrollThumb();
         else updateScrollTrack();
       }
-      if (!VSCROLL.isDraggingThumb) maybeLoadNextPage();
     }
   });
 }
@@ -5409,12 +5470,17 @@ function resetPagingRecovery() {
   updatePagingStatus();
 }
 
-function scheduleBottomLoad(delay = 0) {
+function scheduleBottomLoad(delay = 0, readyPage = 0) {
+  if (readyPage && readyPage !== STATE._loadedPage + 1) return;
   clearTimeout(pagingCheckTimer);
   const generation = searchRequestId;
   pagingCheckTimer = setTimeout(() => {
     pagingCheckTimer = null;
-    if (generation === searchRequestId) maybeLoadNextPage(true);
+    if (generation !== searchRequestId) return;
+    // A ready page may satisfy one scroll intent, not drain the lookahead buffer.
+    if (readyPage && (readyPage !== STATE._loadedPage + 1 ||
+        (STATE._pagingAppendScrollTop === getResultScrollTop() && !isResultsAtBottom()))) return;
+    maybeLoadNextPage(!readyPage);
   }, Math.max(delay, pagingRetryAt - Date.now()));
 }
 
@@ -5443,6 +5509,7 @@ function maybeLoadNextPage(bottomOnly = false, retry = false) {
   const loadedHeight = getVirtualTotalHeight();
   const triggerPoint = loadedHeight * 0.05;
   if (retry || isResultsAtBottom() || (!bottomOnly && scrollTop >= triggerPoint)) {
+    STATE._pagingAppendScrollTop = scrollTop;
     STATE.page = STATE._loadedPage + 1;
     doSearch(true);
   }
