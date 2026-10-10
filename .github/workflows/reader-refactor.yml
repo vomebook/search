@@ -43,7 +43,9 @@ jobs:
           python -m playwright install --with-deps chromium
           node scripts/copy_reader_vendor.mjs static/vendor
       - name: Run chapter-search unit tests
-        run: node tests/test_reader_chapter_search.mjs
+        run: |
+          node tests/test_reader_chapter_search.mjs
+          node tests/test_reader_ocr_transport.mjs
       - name: Run Reader request and PDF loading regressions
         run: |
           node tests/test_reader_request_manager.js
@@ -87,7 +89,9 @@ jobs:
           node scripts/copy_reader_vendor.mjs static/vendor
       - name: Run chapter-search unit tests
         working-directory: huggingface-search
-        run: node tests/test_reader_chapter_search.mjs
+        run: |
+          node tests/test_reader_chapter_search.mjs
+          node tests/test_reader_ocr_transport.mjs
       - name: Run Reader request and PDF loading regressions
         working-directory: huggingface-search
         run: |

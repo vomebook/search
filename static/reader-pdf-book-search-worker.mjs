@@ -20,8 +20,10 @@ function validUrl(raw) {
     !url.search && !!prefix && bookPath.test(decodeURIComponent(url.pathname.slice(prefix[0].length)));
 }
 
-async function readBounded(stream, signal) {
+async function readBounded(stream, signal, expected = null, text = false) {
   const reader = stream.getReader(), chunks = [];
+  const bytes = expected === null ? null : new Uint8Array(expected);
+  const decoder = text ? new TextDecoder() : null;
   let size = 0;
   const cancel = () => reader.cancel().catch(() => {});
   signal.addEventListener("abort", cancel, { once: true });
@@ -32,9 +34,15 @@ async function readBounded(stream, signal) {
       if (signal.aborted) throw aborted();
       if (done) break;
       size += value.byteLength;
-      if (size > limit) throw new Error("READER_RESOURCE_LIMIT");
-      chunks.push(value);
+      if (size > limit || (bytes && size > bytes.length)) throw new Error("READER_RESOURCE_LIMIT");
+      if (bytes) bytes.set(value, size - value.byteLength);
+      else chunks.push(decoder ? decoder.decode(value, {stream:true}) : value);
     }
+    if (bytes) {
+      if (size !== expected) throw new Error("PDF_OCR_SIZE_MISMATCH");
+      return bytes;
+    }
+    if (decoder) { chunks.push(decoder.decode()); return chunks.join(""); }
     const result = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
@@ -60,14 +68,15 @@ async function loadBook() {
   pendingBook = (async () => {
     const response = await fetch(configuration.url, { signal: request.signal, credentials: "omit" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const packed = await readBounded(response.body, request.signal);
+    let packed = await readBounded(response.body, request.signal, configuration.bytes);
     if (packed.byteLength !== configuration.bytes) throw new Error("PDF_OCR_SIZE_MISMATCH");
     const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
       .map(value => value.toString(16).padStart(2, "0")).join("");
     if (digest !== configuration.sha256) throw new Error("PDF_OCR_HASH_MISMATCH");
-    const expanded = await readBounded(
-      new Blob([packed]).stream().pipeThrough(new DecompressionStream("gzip")), request.signal);
-    const decoded = JSON.parse(new TextDecoder().decode(expanded));
+    const stream = new ReadableStream({start(controller) {controller.enqueue(packed); controller.close();}});
+    packed = null;
+    const decoded = JSON.parse(await readBounded(
+      stream.pipeThrough(new DecompressionStream("gzip")), request.signal, null, true));
     if (request.signal.aborted) throw aborted();
     book = validateBookText(decoded, configuration.pageCount, configuration.sourceSha);
     return book;
