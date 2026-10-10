@@ -359,10 +359,10 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /standardFontDataUrl: PDFJS_STANDARD_FONT_URL/);
   assert.match(readerHtml, /'wasm-unsafe-eval'/);
   assert.match(reader, /"gb18030", "big5", "windows-1251", "windows-1252"/);
-  assertCode(reader, 'pre.textContent = new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes)');
+  assertCode(reader, 'appendDecoded(new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes))');
   assertCode(reader, 'docx: [loadDocxDocument, renderDocx]');
-  assertCode(reader, 'const docxDocument = await docx.parseAsync(bytes, options)');
-  assertCode(reader, 'const nodes = await docx.renderDocument(docxDocument, options)');
+  assertCode(reader, 'const docxDocument = await awaitReader(docx.parseAsync(bytes, options))');
+  assertCode(reader, 'const nodes = await awaitReader(docx.renderDocument(docxDocument, options))');
   assert.match(reader, /renderAltChunks: false/);
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/")');
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/")');
@@ -373,8 +373,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'const READER_PROXY_TIMEOUT_MS = 120000;');
   assertCode(reader, '}, READER_PROXY_TIMEOUT_MS)');
   assert.match(reader, /function fetchWithReaderTimeout/);
-  assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, contentUrl))');
-  assertCode(reader, 'return loadPdfTaskWithTimeout(pdfjs, options, sourceUrl)');
+  assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxy))');
+  assertCode(reader, 'return loadPdfTaskWithTimeout(pdfjs, options, target)');
   assert.match(reader, /function loadPdfWithTimeout/);
   assertCode(reader, 'trackReaderResource(destroy)');
   assertCode(reader, 'task.destroy()?.catch?.(() => {})');

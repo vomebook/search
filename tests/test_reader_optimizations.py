@@ -32,6 +32,8 @@ class ReaderOptimizationTests(unittest.TestCase):
             route.fulfill(response=response, body=script + '''
               window.__snapshot = () => fullSearchDomSnapshot;
               window.__markerPage = () => pageAtMarker()?.dataset.page;
+              window.__restoreText = top => restoreProgressState({scrollTop:top});
+              window.__cancelNavigation = () => beginReaderNavigation();
               window.__pdfTools = {trim: trimPdfSurfaces, pixels: pdfRetainedPixels, budget: pdfPixelBudget,
                 prefetch: pdfManifestPrefetches, setPage: page => updateDocumentState({page})};
               window.__startPdfProbe = () => {
@@ -362,6 +364,15 @@ class ReaderOptimizationTests(unittest.TestCase):
         return support.zip_bytes(files)
 
     def test_real_docx_images_use_owned_blob_urls_and_release_on_close(self):
+        self.page.add_init_script('window.__imageReads=0;')
+        def zip_engine(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '''
+              const original=JSZip.loadAsync;
+              JSZip.loadAsync=async(...args)=>{const zip=await original(...args);
+                const file=zip.file('word/media/image.png'),read=file.async.bind(file);
+                file.async=(...args)=>{__imageReads++;return read(...args);};return zip;};''')
+        self.page.route('**/static/vendor/jszip.min.*.js', zip_engine)
         self.page.add_init_script('''window.__created = []; window.__revoked = [];
           const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
           URL.createObjectURL = blob => { const url=create(blob); __created.push(url); return url; };
@@ -375,6 +386,7 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('async () => (await document.fonts.load("16px FixtureFont")).length'), 1)
         self.assertTrue(self.page.evaluate('[...document.fonts].some(font => font.family === "FixtureFont" && font.status === "loaded")'))
         self.assertEqual(self.page.evaluate('__created.length'), 2)
+        self.assertEqual(self.page.evaluate('__imageReads'), 1)
         self.page.evaluate('window.dispatchEvent(new Event("voice-reader-dispose"))')
         self.assertEqual(self.page.evaluate('__created.slice().sort()'), self.page.evaluate('__revoked.slice().sort()'))
 
@@ -442,6 +454,107 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('__query("needle")'), 1)
         self.assertIsNone(self.page.evaluate('__snapshot().value'))
         self.assertEqual(self.page.evaluate('__query("needle")'), 1)
+
+    def test_unbroken_txt_bounds_blocks_and_preserves_unicode_cross_block_search(self):
+        self.expose()
+        text = ('x' * 32765) + 'A\U0001f600B' + ('y' * 100000) + '\r\nend'
+        self.serve(text)
+        self.open(self.reader_url('txt'))
+        self.assertEqual(self.page.locator('.reader-text').text_content(), text)
+        lengths = self.page.locator('.reader-text-block').evaluate_all('nodes=>nodes.map(n=>n.textContent.length)')
+        self.assertGreater(len(lengths), 3)
+        self.assertLessEqual(max(lengths), 32768)
+        self.assertEqual(self.page.evaluate('__query("A\U0001f600B")'), 1)
+        self.search('A\U0001f600B')
+        self.page.locator('.full-search-result').click()
+        self.assertEqual(self.page.locator('mark.full-search-highlight').all_text_contents(), ['A\U0001f600', 'B'])
+        self.assertEqual(self.page.locator('.reader-text').text_content(), text)
+
+    def test_text_restoration_yields_and_obsolete_navigation_cannot_scroll(self):
+        self.expose()
+        self.serve('restoration fixture')
+        self.open(self.reader_url('txt'))
+        result = self.page.evaluate('''async()=>{
+          const root=document.querySelector('.reader-text'),v=document.querySelector('#viewport');
+          root.replaceChildren();window.__measurements=0;
+          for(let i=0;i<80;i++){
+            const block=document.createElement('pre');block.className='reader-text-block';block.textContent='line';
+            block.style.height='40px';const native=block.getBoundingClientRect.bind(block);
+            block.getBoundingClientRect=()=>{__measurements++;return native();};root.append(block);
+          }
+          v.scrollTop=10;const before=v.scrollTop;
+          setTimeout(()=>__cancelNavigation(),0);
+          const cancelled=await __restoreText(2000),reads=__measurements,after=v.scrollTop;
+          let tick=false;setTimeout(()=>{tick=true;},0);
+          const restored=await __restoreText(2000);
+          return {cancelled,reads,before,after,restored,tick,top:v.scrollTop};
+        }''')
+        self.assertFalse(result['cancelled'], result)
+        self.assertLessEqual(result['reads'], 8, result)
+        self.assertEqual(result['after'], result['before'], result)
+        self.assertTrue(result['restored'] and result['tick'], result)
+        self.assertEqual(result['top'], 2000, result)
+
+    def test_failed_pdf_page_exposes_manual_retry_and_clears_loading_state(self):
+        self.page.add_init_script('window.__pageAttempts={};')
+        engine = '''export const GlobalWorkerOptions={};export class PDFWorker {promise=Promise.resolve();destroy(){}}
+          export function getDocument(){return {promise:Promise.resolve({numPages:3,getOutline:async()=>null,
+            getPage:async number=>({getViewport:({scale})=>({width:600*scale,height:800*scale}),
+              getTextContent:async()=>({items:[],styles:{}}),render:({canvasContext})=>{
+                const attempts=__pageAttempts[number]=(__pageAttempts[number]||0)+1;
+                canvasContext.fillStyle='white';canvasContext.fillRect(0,0,2000,2000);
+                return {promise:number===2&&attempts<=4?Promise.reject(Error('range fixture failure')):Promise.resolve(),cancel(){}};
+              }})}),destroy(){}};}'''
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.serve(b'pdf','application/pdf')
+        self.open(self.reader_url('pdf'))
+        self.page.locator('#page-number').fill('2')
+        self.page.locator('#page-number').press('Enter')
+        retry = self.page.locator('.reader-page[data-page="2"] .reader-page-state button')
+        retry.wait_for()
+        self.assertEqual(self.page.evaluate('__pageAttempts[2]'),4)
+        self.assertIn('页面加载失败',retry.locator('..').text_content())
+        retry.click()
+        self.page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(state='attached')
+        self.assertTrue(self.page.locator('.reader-page[data-page="2"] .reader-page-state').evaluate('node=>node.hidden'))
+        self.assertEqual(self.page.evaluate('__pageAttempts[2]'),5)
+
+    def test_ocr_cancel_terminates_synchronous_parse_and_retry_uses_fresh_worker(self):
+        self.serve('OCR cancellation fixture')
+        self.open(self.reader_url('txt'))
+        book = dict(version=2,kind='pdf-book-text',complete=True,offset_unit='unicode-codepoint',page_count=1,
+                    pages=[dict(page=1,text='needle',layout=dict(offset_unit='unicode-codepoint'),text_spans=[])])
+        packed=gzip.compress(json.dumps(book).encode(),mtime=0)
+        path='objects/aa/'+'a'*64+'/bbbbbbbbbbbbbbbb/text/book-text.json.gz'
+        configuration=dict(url=self.origin+'/api/reader-bucket-resource?'+urllib.parse.urlencode(dict(path=path)),
+                           bytes=len(packed),sha256=hashlib.sha256(packed).hexdigest(),pageCount=1)
+        self.page.route('**/api/reader-bucket-resource?**',lambda route:route.fulfill(body=packed))
+        scripts=[]
+        def worker(route):
+            response=route.fetch();scripts.append(route.request.url)
+            prefix='''const parse=JSON.parse;JSON.parse=(...args)=>{self.postMessage({parsing:true});
+              const until=performance.now()+10000;while(performance.now()<until){}return parse(...args);};'''
+            route.fulfill(response=response,body=(prefix if len(scripts)==1 else '')+response.text())
+        self.page.route('**/static/reader-pdf-book-search-worker.mjs',worker)
+        self.page.evaluate('''async configuration=>{
+          const Native=Worker;window.__workers=[];
+          window.Worker=class extends Native{constructor(...args){super(...args);__workers.push(this);
+            this.addEventListener('message',event=>{if(event.data.parsing)window.__parsing=true;});}
+            terminate(){this.wasTerminated=true;super.terminate();}};
+          const {createPdfBookSearch}=await import('/static/reader-pdf-book-search.mjs');
+          window.__ocr=createPdfBookSearch(configuration);
+          window.__firstSearch=__ocr.search('needle').catch(error=>error.name);
+        }''',configuration)
+        self.page.wait_for_function('()=>window.__parsing')
+        result=self.page.evaluate('''async()=>{const start=performance.now();__ocr.cancel();
+          const name=await __firstSearch,terminated=__workers[0].wasTerminated;
+          const retry=await __ocr.search('needle');__ocr.dispose();
+          return {name,terminated,total:retry.total,elapsed:performance.now()-start,workers:__workers.length};}''')
+        self.assertEqual(result['name'],'AbortError',result)
+        self.assertTrue(result['terminated'],result)
+        self.assertEqual(result['total'],1,result)
+        self.assertEqual(result['workers'],2,result)
+        self.assertLess(result['elapsed'],4000,result)
 
 
 if __name__ == '__main__':
