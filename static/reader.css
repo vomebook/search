@@ -964,6 +964,21 @@ body {
 .reader-page-state[hidden] {
   display: none;
 }
+.reader-page-state[data-state="loading"]::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 2px solid #8b929a40;
+  border-top-color: #8b929a;
+  border-radius: 50%;
+  opacity: 0;
+  animation: reader-loading-spin 800ms linear 400ms infinite,
+    reader-page-loading-reveal 0s 400ms forwards;
+}
+@keyframes reader-page-loading-reveal {
+  to { opacity: 1; }
+}
 .reader-docx-page {
   content-visibility: auto;
   contain-intrinsic-block-size: auto var(--reader-docx-height, 1123px);
@@ -993,6 +1008,11 @@ body {
 :root[data-page-inverted="true"] .reader-content[data-mode="pdf"] .reader-page,
 :root[data-page-inverted="true"] .reader-content[data-mode="pdf-pages"] .reader-page {
   background: #202428;
+}
+:root .reader-content:is([data-mode="pdf"], [data-mode="pdf-pages"])
+  .reader-page:not(:has(canvas.ready, img.ready)) {
+  background: transparent;
+  box-shadow: none;
 }
 .reader-pdf-text {
   position: absolute;
@@ -1444,6 +1464,9 @@ body {
   .reader-loading-spinner {
     animation: none;
     border-top-color: #3b4147;
+  }
+  .reader-page-state[data-state="loading"]::before {
+    animation: reader-page-loading-reveal 0s 400ms forwards;
   }
 }
 @media (prefers-contrast: more) {

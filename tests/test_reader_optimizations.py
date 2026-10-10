@@ -496,6 +496,44 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertTrue(result['restored'] and result['tick'], result)
         self.assertEqual(result['top'], 2000, result)
 
+    def test_pdf_loading_placeholder_is_quiet_and_keeps_page_geometry(self):
+        engine = '''export const GlobalWorkerOptions={};export class PDFWorker {promise=Promise.resolve();destroy(){}}
+          export function getDocument(){return {promise:Promise.resolve({numPages:3,getOutline:async()=>null,
+            getPage:async number=>({getViewport:({scale})=>({width:600*scale,height:800*scale}),
+              getTextContent:async()=>({items:[],styles:{}}),render:({canvasContext})=>{
+                canvasContext.fillStyle='white';canvasContext.fillRect(0,0,2400,3200);
+                canvasContext.fillStyle='black';canvasContext.fillText('PDF page '+number,30,60);
+                return {promise:number===2?new Promise(resolve=>{window.__releaseLoadingPage=resolve;}):Promise.resolve(),cancel(){}};
+              }})}),destroy(){}};}'''
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.serve(b'pdf','application/pdf')
+        for width in (1100,390):
+            with self.subTest(width=width):
+                self.page.set_viewport_size(dict(width=width,height=844))
+                self.open(self.reader_url('pdf','loading-'+str(width)))
+                self.page.locator('#page-number').fill('2')
+                self.page.locator('#page-number').press('Enter')
+                self.page.wait_for_function('() => !!window.__releaseLoadingPage')
+                shell=self.page.locator('.reader-page[data-page="2"]')
+                state=shell.locator('.reader-page-state')
+                self.assertEqual(state.text_content(),'')
+                self.assertEqual(state.get_attribute('role'),'status')
+                self.assertIn('2',state.get_attribute('aria-label'))
+                self.assertEqual(shell.evaluate('e=>getComputedStyle(e).backgroundColor'),'rgba(0, 0, 0, 0)')
+                self.assertEqual(shell.evaluate('e=>getComputedStyle(e).boxShadow'),'none')
+                delay=state.evaluate('''e=>{const a=e.getAnimations({subtree:true}).find(a=>a.animationName==='reader-page-loading-reveal');
+                  a.pause();a.currentTime=0;const initial=getComputedStyle(e,'::before').opacity;
+                  a.currentTime=500;return {initial,visible:getComputedStyle(e,'::before').opacity};}''')
+                self.assertEqual(delay,dict(initial='0',visible='1'))
+                before=shell.bounding_box()
+                self.page.evaluate('window.__releaseLoadingPage()')
+                shell.locator('canvas.ready').wait_for(state='attached')
+                self.assertTrue(state.is_hidden())
+                after=shell.bounding_box()
+                self.assertAlmostEqual(before['height'],after['height'],delta=1)
+                self.assertAlmostEqual(before['width'],after['width'],delta=1)
+                self.assertEqual(shell.evaluate('e=>getComputedStyle(e).backgroundColor'),'rgb(255, 255, 255)')
+
     def test_failed_pdf_page_exposes_manual_retry_and_clears_loading_state(self):
         self.page.add_init_script('window.__pageAttempts={};')
         engine = '''export const GlobalWorkerOptions={};export class PDFWorker {promise=Promise.resolve();destroy(){}}
@@ -515,6 +553,8 @@ class ReaderOptimizationTests(unittest.TestCase):
         retry.wait_for()
         self.assertEqual(self.page.evaluate('__pageAttempts[2]'),4)
         self.assertIn('页面加载失败',retry.locator('..').text_content())
+        self.assertEqual(retry.locator('..').get_attribute('data-state'),'error')
+        self.assertIsNone(retry.locator('..').get_attribute('aria-label'))
         retry.click()
         self.page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(state='attached')
         self.assertTrue(self.page.locator('.reader-page[data-page="2"] .reader-page-state').evaluate('node=>node.hidden'))
