@@ -1571,3 +1571,15 @@ body {
     height: 36px;
   }
 }
+
+.reader-page-state button {
+  pointer-events: auto;
+  margin-left: 8px;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}

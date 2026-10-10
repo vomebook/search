@@ -3762,6 +3762,7 @@ function normalizePdfPriority(priority) {
 function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(shell)) {
   priority = normalizePdfPriority(priority);
   if (readerAbortController.signal.aborted) return;
+  if (!force && shell.dataset.renderFailed === "1") return;
   if (priority) {
     shell.dataset.renderPriority = "1";
     promotePdfRenderWaiter(shell);
@@ -3783,10 +3784,16 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
       : renderPdfShell(shell, force, priority);
   shell._backgroundRender = task;
   task
+    .then(() => { delete shell.dataset.renderRetries; delete shell.dataset.renderFailed; })
     .catch((error) => {
       if (readerAbortController.signal.aborted || error?.name === "AbortError") return;
       console.warn(`PDF page ${shell.dataset.page} render failed`, error);
       const retries = Number(shell.dataset.renderRetries || 0);
+      const pageState = shell.querySelector(".reader-page-state");
+      if (pageState && !shell.querySelector("canvas.ready, img.ready")) {
+        pageState.hidden = false;
+        pageState.textContent = retries < 3 ? "页面加载失败，正在重试..." : "页面加载失败";
+      }
       if (retries < 3) {
         shell.dataset.renderRetries = String(retries + 1);
         waitForReader(400 * (retries + 1))
@@ -3794,6 +3801,21 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
             if (shell.isConnected) renderPdfInBackground(shell);
           })
           .catch(() => {});
+      } else {
+        shell.dataset.renderFailed = "1";
+        if (pageState && !pageState.hidden) {
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.textContent = "重试";
+          retry.title = "重试加载此页";
+          retry.addEventListener("click", () => {
+            delete shell.dataset.renderFailed;
+            delete shell.dataset.renderRetries;
+            pageState.textContent = `正在加载第 ${shell.dataset.page} 页...`;
+            renderPdfInBackground(shell, true, 3);
+          }, {once:true});
+          pageState.append(retry);
+        }
       }
     })
     .finally(() => {
@@ -4081,6 +4103,8 @@ function renderPdfShell(shell, force = false, priority = false) {
       shell.dataset.renderUsedAt = String(Date.now());
       pdfShellWindow?.remember(shell);
       trimPdfCanvases(shell);
+      delete shell.dataset.renderRetries;
+      delete shell.dataset.renderFailed;
     } catch (error) {
       shell.dataset.renderState = "idle";
       throw error;
@@ -4523,21 +4547,29 @@ async function renderPlainText(response) {
   content.appendChild(pre);
   let block = null, blockLength = 0;
   const appendDecoded = value => {
-    let text = value.replace(/\ufffd/g, "");
-    while (text) {
+    const text = value.replace(/\ufffd/g, "");
+    let offset = 0;
+    while (offset < text.length) {
       if (!block) {
         block = document.createElement("pre");
         block.className = "reader-text-block";
         pre.appendChild(block);
       }
-      const boundary = text.indexOf("\n", Math.max(0, 32768 - blockLength));
-      const take = boundary < 0 ? text.length : boundary + 1;
+      let end = Math.min(text.length, offset + 32768 - blockLength);
+      if (end < text.length) {
+        const newline = text.lastIndexOf("\n", end - 1);
+        if (newline >= offset) end = newline + 1;
+        const previous = text.charCodeAt(end - 1), next = text.charCodeAt(end);
+        if ((previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) ||
+            (previous === 13 && next === 10)) end--;
+      }
+      if (end === offset) { block = null; blockLength = 0; continue; }
       const tail = block.lastChild;
-      if (tail?.nodeType === Node.TEXT_NODE) tail.appendData(text.slice(0, take));
-      else block.appendChild(document.createTextNode(text.slice(0, take)));
-      blockLength += take;
-      text = text.slice(take);
-      if (boundary >= 0) { block = null; blockLength = 0; }
+      if (tail?.nodeType === Node.TEXT_NODE) tail.appendData(text.slice(offset, end));
+      else block.appendChild(document.createTextNode(text.slice(offset, end)));
+      blockLength += end - offset;
+      offset = end;
+      if (offset < text.length || blockLength >= 32768) { block = null; blockLength = 0; }
     }
   };
   const limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes;
@@ -5086,9 +5118,9 @@ async function renderDocx(prepared) {
     renderAltChunks: false,
     debug: false
   };
-  const docxDocument = await docx.parseAsync(bytes, options);
+  const docxDocument = await awaitReader(docx.parseAsync(bytes, options));
   assertReaderActive();
-  const urls = new Set(), urlsByPath = new Map(), blobToURL = docxDocument.blobToURL.bind(docxDocument);
+  const urls = new Set(), urlsByPath = new Map(), contentTypes = docxDocument.contentTypes || [];
   let released = false;
   const release = () => {
     released = true;
@@ -5097,11 +5129,14 @@ async function renderDocx(prepared) {
     urlsByPath.clear();
   };
   const untrack = trackReaderResource(release);
+  memoizeDocxAssets(docxDocument, () => released);
   // Own this parsed document's images, fonts and numbering assets only.
   docxDocument.blobToURL = (blob, path) => {
-    if (released) return null;
+    if (released || !blob) return null;
     if (path && urlsByPath.has(path)) return urlsByPath.get(path);
-    const url = blobToURL(blob, path);
+    const type = path && contentTypes.find(entry => entry.partName === path ||
+      (entry.extension && path.endsWith(`.${entry.extension}`)));
+    const url = URL.createObjectURL(type ? new Blob([blob], {type:type.contentType}) : blob);
     if (typeof url === "string" && url.startsWith("blob:")) {
       urls.add(url);
       if (path) urlsByPath.set(path, url);
@@ -5109,7 +5144,7 @@ async function renderDocx(prepared) {
     return url;
   };
   try {
-    const nodes = await docx.renderDocument(docxDocument, options);
+    const nodes = await awaitReader(docx.renderDocument(docxDocument, options));
     assertReaderActive();
     for (const node of nodes) (node.nodeName === "STYLE" ? styles : body).appendChild(node);
   } catch (error) {
@@ -6285,16 +6320,23 @@ async function restoreProgressState(state, generation = beginReaderNavigation())
       htmlFrame.contentWindow.scrollTo(0, state.htmlScrollTop);
     else if (Number.isFinite(state.scrollTop)) {
       if (capability.mode === "text") {
-        let measured = 0;
+        let measured = 0, batch = 0, started = performance.now();
         for (const block of content.querySelectorAll(".reader-text-block")) {
+          if (!isReaderGenerationCurrent("navigation", generation)) return false;
           block.style.contentVisibility = "visible";
           const height = block.getBoundingClientRect().height;
           block.style.containIntrinsicBlockSize = `auto ${height}px`;
           block.style.contentVisibility = "auto";
           measured += height;
           if (measured > state.scrollTop + viewport.clientHeight) break;
+          if (++batch >= 8 || performance.now() - started >= 8) {
+            await waitForReader();
+            batch = 0;
+            started = performance.now();
+          }
         }
       }
+      if (!isReaderGenerationCurrent("navigation", generation)) return false;
       viewport.scrollTop = state.scrollTop;
     }
     updateProgressTools();
@@ -7653,3 +7695,31 @@ start().catch((error) => {
   console.error(error);
   fail("阅读文件解析失败，请刷新后重试，或下载原文件。", classifyReaderError(error));
 });
+
+function memoizeDocxResource(load, keyFor, isReleased) {
+  const pending = new Map();
+  return (...args) => {
+    if (isReleased()) return Promise.resolve(null);
+    const key = keyFor(...args);
+    if (!key) return load(...args);
+    if (!pending.has(key)) {
+      const task = Promise.resolve().then(() => isReleased() ? null : load(...args));
+      pending.set(key, task);
+      task.catch(() => { if (pending.get(key) === task) pending.delete(key); });
+    }
+    return pending.get(key);
+  };
+}
+
+function memoizeDocxAssets(doc, isReleased) {
+  if (typeof doc.getPathById !== "function") return;
+  for (const [name, part] of [["loadDocumentImage", "documentPart"],
+    ["loadNumberingImage", "numberingPart"], ["loadFont", "fontTablePart"]]) {
+    if (typeof doc[name] !== "function") continue;
+    const original = doc[name].bind(doc);
+    doc[name] = memoizeDocxResource(original, (id, parameter) => {
+      const path = doc.getPathById(name === "loadDocumentImage" ? parameter || doc[part] : doc[part], id);
+      return path ? (name === "loadFont" ? `${path}\u0000${parameter}` : path) : null;
+    }, isReleased);
+  }
+}

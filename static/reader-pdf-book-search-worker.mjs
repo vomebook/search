@@ -78,7 +78,12 @@ async function loadBook() {
     const decoded = JSON.parse(await readBounded(
       stream.pipeThrough(new DecompressionStream("gzip")), request.signal, null, true));
     if (request.signal.aborted) throw aborted();
-    book = validateBookText(decoded, configuration.pageCount, configuration.sourceSha);
+    const validated = validateBookText(decoded, configuration.pageCount, configuration.sourceSha);
+    // Search needs offsets and hit boxes, not the duplicate full page layout.
+    book = { pages: validated.pages.map(page => ({ page: page.page, text: page.text,
+      text_spans: page.text_spans.map(({ start, end, box, block, precision }) =>
+        ({ start, end, box, block, precision })) })) };
+    self.postMessage({ bookReady: true });
     return book;
   })().finally(() => {
     clearTimeout(timer);
