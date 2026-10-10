@@ -4,6 +4,8 @@
     let frame = null;
     let returnFocus = null;
     let background = [];
+    let opening = null;
+    let releaseOpening = null;
     const sessionKey = "reader-navigation-current";
     function parse(raw) {
       const url = new URL(raw, location.origin);
@@ -80,13 +82,39 @@
       next.className = "reader-overlay";
       next.title = "在线阅读";
       next.src = parse(url.href).href;
+      next.classList.add("reader-overlay-pending");
       returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       frame = next;
+      opening = document.createElement("div");
+      opening.className = "reader-overlay-opening";
+      const back = document.createElement("button");
+      back.className = "icon-button";
+      back.type = "button";
+      back.setAttribute("aria-label", "返回搜索");
+      back.textContent = "\u2190";
+      back.addEventListener("click", () => history.back());
+      const status = document.createElement("span");
+      status.setAttribute("role", "status");
+      status.textContent = "正在打开阅读器...";
+      opening.append(back, status);
+      const reveal = () => {
+        if (frame !== next || !opening) return;
+        next.classList.remove("reader-overlay-pending");
+        opening?.remove();
+        opening = null;
+        releaseOpening?.();
+        next.focus();
+      };
+      const onShell = event => {
+        if (event.origin === location.origin && event.source === next.contentWindow && event.data?.type === "voice-reader-shell") reveal();
+      };
+      window.addEventListener("message", onShell);
+      releaseOpening = () => { window.removeEventListener("message", onShell); releaseOpening = null; };
       document.body.classList.add("reader-overlay-open");
-      document.body.appendChild(next);
-      next.focus();
+      document.body.append(next, opening);
+      back.focus();
       background = Array.from(document.body.children)
-        .filter((element) => element !== next)
+        .filter((element) => element !== next && element !== opening)
         .map((element) => {
           const state = {
             element,
@@ -100,9 +128,9 @@
       next.addEventListener(
         "load",
         () => {
-          if (frame === next) next.focus();
-        },
-        { once: true }
+          if (next.contentDocument?.URL === "about:blank") return;
+          reveal();
+        }
       );
       return next;
     }
@@ -116,6 +144,9 @@
       frame.src = "about:blank";
       frame.remove();
       frame = null;
+      opening?.remove();
+      opening = null;
+      releaseOpening?.();
       for (const state of background) {
         if (!state.inert) state.element.removeAttribute("inert");
         if (state.ariaHidden === null) state.element.removeAttribute("aria-hidden");

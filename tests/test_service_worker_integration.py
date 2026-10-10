@@ -1,4 +1,5 @@
 import json
+import time
 import unittest
 
 from tests.browser_support import local_server
@@ -121,7 +122,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         result = self.page.evaluate("fetch('/search/manifest.json?background-test=1', {cache: 'no-store'}).then(response => response.json())")
         self.assertIn("name", result)
 
-    def test_fixed_cache_contains_core_without_unused_repository_or_reader_payloads(self):
+    def test_fixed_cache_contains_core_without_unused_repository_or_engine_payloads(self):
         self.prime()
         caches_by_name = self.cache_urls()
         self.assertEqual(list(caches_by_name), ["vomebook-search-v1.0.0"])
@@ -139,7 +140,28 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         for path in expected_paths:
             self.assertIn(self.origin + path, urls, path)
         self.assertFalse(any("/static/vendor/" in url for url in urls))
-        self.assertFalse(any("/repos/" in url or "/static/reader.js" in url for url in urls))
+        self.assertFalse(any("/repos/" in url for url in urls))
+
+    def test_warmed_reader_shell_does_not_wait_for_slow_revalidation(self):
+        self.prime()
+        self.assertTrue(self.page.evaluate('''async () => {
+          const cache = await caches.open('vomebook-search-v1.0.0');
+          for(let i=0;i<200;i++) {
+            if(await cache.match('/search/static/reader.html') && await cache.match('/search/static/reader.js')) return true;
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          return false;
+        }'''))
+        with self.server_state.lock:
+            self.server_state.delays['/search/static/reader.html'] = 3
+        started = time.monotonic()
+        response = self.page.goto(self.origin + '/search/static/reader.html?ext=txt', wait_until='domcontentloaded')
+        self.assertLess(time.monotonic() - started, 2, self.page.evaluate('''()=>({
+          navigation:performance.getEntriesByType('navigation').map(r=>r.toJSON()),
+          resources:performance.getEntriesByType('resource').map(r=>({name:r.name,start:r.startTime,ms:r.duration}))})'''))
+        self.assertTrue(response.from_service_worker)
+        self.assertEqual(response.status, 200)
+        self.page.locator('#back').wait_for(state='visible')
 
     def test_reader_query_navigations_keep_one_normalized_cache_entry(self):
         self.prime()
