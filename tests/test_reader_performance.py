@@ -1528,6 +1528,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.page.locator("#full-search-input").fill("目标词")
         self.page.locator("#full-search-status").filter(has_text="2 个结果").wait_for()
         self.page.locator("#full-search-results .full-search-result").nth(1).click()
+        self.page.wait_for_function("() => document.querySelector('#history').getAttribute('aria-expanded') === 'false'")
         self.assertGreater(self.page.locator("#viewport").evaluate("element => element.scrollTop"), 0)
 
     def test_pdf_allows_two_bookmarks_on_one_page_and_restores_offsets(self):
