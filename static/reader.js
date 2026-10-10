@@ -613,7 +613,7 @@ function trimPdfSurfaces(protectedShell) {
     shell.dataset.textReady = "0";
     shell.dataset.renderState = "idle";
     const pageState = shell.querySelector(".reader-page-state");
-    if (pageState) pageState.hidden = false;
+    if (pageState) setPdfPageLoadingState(pageState, shell.dataset.page);
   }
   fullSearchActiveMarks = fullSearchActiveMarks.filter(mark => mark.isConnected);
 }
@@ -3606,8 +3606,8 @@ async function renderPdfPages(prepared) {
     shell.setAttribute("aria-label", `第 ${page} 页`);
     const pageState = document.createElement("div");
     pageState.className = "reader-page-state";
+    setPdfPageLoadingState(pageState, page);
     pageState.hidden = true;
-    pageState.textContent = `正在加载第 ${page} 页...`;
     const textLayer = document.createElement("div");
     textLayer.className = "reader-pdf-text";
     textLayer.setAttribute("role", "document");
@@ -3749,7 +3749,7 @@ async function renderPdf(prepared) {
     shell.append(canvas, textLayer);
     const pageState = document.createElement("div");
     pageState.className = "reader-page-state";
-    pageState.textContent = `正在加载第 ${page} 页...`;
+    setPdfPageLoadingState(pageState, page);
     shell.appendChild(pageState);
     shell.addEventListener("focus", () => renderPdfInBackground(shell));
     observeShell(shell);
@@ -3815,6 +3815,13 @@ async function renderPdf(prepared) {
   assertReaderActive();
 }
 
+function setPdfPageLoadingState(pageState, page) {
+  pageState.dataset.state = "loading";
+  pageState.setAttribute("role", "status");
+  pageState.setAttribute("aria-label", `正在加载第 ${page} 页`);
+  pageState.replaceChildren();
+  pageState.hidden = false;
+}
 function isPdfPageVisible(shell) {
   const pageRect = shell?.getBoundingClientRect?.();
   const viewportRect = viewport?.getBoundingClientRect?.();
@@ -3873,6 +3880,8 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
       const retries = Number(shell.dataset.renderRetries || 0);
       const pageState = shell.querySelector(".reader-page-state");
       if (pageState && !shell.querySelector("canvas.ready, img.ready")) {
+        pageState.dataset.state = "error";
+        pageState.removeAttribute("aria-label");
         pageState.hidden = false;
         pageState.textContent = retries < 3 ? "页面加载失败，正在重试..." : "页面加载失败";
       }
@@ -3893,7 +3902,7 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
           retry.addEventListener("click", () => {
             delete shell.dataset.renderFailed;
             delete shell.dataset.renderRetries;
-            pageState.textContent = `正在加载第 ${shell.dataset.page} 页...`;
+            setPdfPageLoadingState(pageState, shell.dataset.page);
             renderPdfInBackground(shell, true, 3);
           }, {once:true});
           pageState.append(retry);
@@ -3995,6 +4004,9 @@ function renderPdfImageShell(shell, force = false, priority = false) {
   if (shell._renderPromise) return shell._renderPromise;
   if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
   shell.dataset.renderState = "rendering";
+  const loadingState = shell.querySelector(".reader-page-state");
+  if (loadingState && !shell.querySelector("canvas.ready, img.ready"))
+    setPdfPageLoadingState(loadingState, shell.dataset.page);
   const renderController = new AbortController();
   shell._renderCancel = () => renderController.abort();
   shell._renderStarted = false;
@@ -4089,6 +4101,8 @@ function renderPdfImageShell(shell, force = false, priority = false) {
        shell._v3PreviewRelease?.();
       const pageState = shell.querySelector(".reader-page-state");
       if (pageState && shell.dataset.pdfPresented !== "1") {
+        pageState.dataset.state = "error";
+        pageState.removeAttribute("aria-label");
         pageState.hidden = false;
         pageState.textContent = "页面加载失败，正在重试…";
       }
@@ -4125,6 +4139,9 @@ function renderPdfShell(shell, force = false, priority = false) {
   }
   if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
   shell.dataset.renderState = "rendering";
+  const loadingState = shell.querySelector(".reader-page-state");
+  if (loadingState && !shell.querySelector("canvas.ready, img.ready"))
+    setPdfPageLoadingState(loadingState, shell.dataset.page);
   const renderController = new AbortController();
   priority = normalizePdfPriority(priority || pdfPagePriority(shell));
   let activeRendering = null;
