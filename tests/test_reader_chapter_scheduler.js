@@ -35,8 +35,11 @@ async function main() {
   assert.strictEqual(scheduler.load(32), promoted);
   await tick();
   assert.strictEqual(starts[3].index, 32, "queued demand overtakes speculation");
+  assert.deepStrictEqual(starts.slice(3).map(item => item.index), [32, 30, 31]);
+  assert.ok(starts.slice(3).every(item => !item.signal.aborted), "promotion retains current-window peers");
   held.get(32)("promoted");
   assert.strictEqual(await promoted, "promoted");
+  held.get(30)("neighbor"); held.get(31)("neighbor");
   await tick();
   scheduler.prefetch([40, 41, 42]);
   await tick();
