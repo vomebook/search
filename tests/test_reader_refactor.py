@@ -1125,7 +1125,8 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_pdf_with_valid_ocr_index_searches_index_not_native_text(self):
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
-            content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 1")))
+            content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 1").replace(
+                "getTextContent() { return Promise.resolve", "getTextContent() { window.__nativeTextReads=(window.__nativeTextReads||0)+1; return Promise.resolve")))
         root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
         manifest_path = root + "/ocr-manifest.json"
         book_path = root + "/ocr/book-text.json.gz"
@@ -1154,13 +1155,18 @@ class ReaderRefactorTest(unittest.TestCase):
         manifest_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + manifest_path
         self.open(self.reader_url("pdf", ocr_manifest=manifest_url))
         self.page.wait_for_timeout(7000)
-        self.assertEqual(requests, [manifest_path, book_path])
+        layer_path = root + "/ocr/page-000001.json.gz"
+        self.assertEqual([path for path in requests if path != layer_path], [manifest_path, book_path])
+        self.assertLessEqual(requests.count(layer_path), 1)
+        native_reads = self.page.evaluate("window.__nativeTextReads || 0")
         self.page.locator("#history").click()
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill("索引独有")
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
         self.assertEqual(self.page.locator(".full-search-result").count(), 1)
-        self.assertEqual(requests, [manifest_path, book_path])
+        self.assertEqual([path for path in requests if path != layer_path], [manifest_path, book_path])
+        self.assertLessEqual(requests.count(layer_path), 1)
+        self.assertEqual(self.page.evaluate("window.__nativeTextReads || 0"), native_reads)
 
     def test_pdf_ocr_progress_preserves_full_first_page_and_focus(self):
         def pause_after_first_page(route):
