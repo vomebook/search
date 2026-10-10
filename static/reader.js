@@ -9,6 +9,8 @@ import "/search/static/reader-format-adapters.js";
 import "/search/static/reader-security.js";
 import { paintTextHit } from "/search/static/reader-book-text.js";
 import { createPdfFetchPolicy } from "./reader-pdf-network.mjs";
+import { createV3Repository, validateResource, validateReadingManifest, validatePageMap } from "./reader-v3.mjs";
+import { populateIndependentTextLayer } from "./reader-pdf-text.js";
 let pdfFetchPolicy = null;
 import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
@@ -467,6 +469,13 @@ trackReaderResource(() => { docxPageNodes = []; });
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
+let pdfV3Manifest = null, pdfV3Map = null, pdfV3Repository = null, pdfTextLayerRepository = null;
+const pdfV3BlobReleases = new Set();
+trackReaderResource(() => {
+  for (const release of [...pdfV3BlobReleases]) release();
+  pdfV3Repository?.dispose(); pdfTextLayerRepository?.dispose();
+});
+let pdfHybridUrl = "", pdfHybridDocumentPromise = null;
 const pdfOcrPagePromises = new Map();
 const pdfTextContentCache = new Map();
 const pdfTextContentPromises = new Map();
@@ -2739,6 +2748,7 @@ function fetchReaderResponse() {
   return fetchReaderUrl(sourceUrl);
 }
 async function preloadPdfFirstPage(total) {
+  if (pdfV3Manifest) return;
   await getInitialReaderRestoration();
   try {
     const source = pdfManifestSource();
@@ -2761,6 +2771,8 @@ async function preloadPdfFirstPage(total) {
   } catch (_) {}
 }
 function pdfManifestSource() {
+  if (String(sourceUrl).includes("reading-manifest.json"))
+    return VoiceOfMLReader.pdfPageSource(sourceUrl, location.href, location.origin, "reading-manifest.json");
   return capability.mode === "image-pages"
     ? VoiceOfMLReader.imagePageSource(sourceUrl, location.href, "https://voiceofml-search.hf.space")
     : VoiceOfMLReader.pdfPageSource(
@@ -2845,6 +2857,7 @@ function prioritizePdfManifestPrefetch(target) {
   if (record && pdfManifestPrefetchActive.has(record)) record.image.fetchPriority = "high";
 }
 function schedulePdfManifestPrefetch(page) {
+  if (pdfV3Manifest) return;
   if (!["pdf-pages", "image-pages"].includes(capability.mode) || !pdfPageManifest) return;
   const origin = Math.max(1, Math.min(documentState.pageCount + 1, page + 1));
   if (pdfManifestPrefetchOrigin === origin && pdfManifestPrefetchNext) {
@@ -2860,6 +2873,25 @@ function schedulePdfManifestPrefetch(page) {
 function pdfOcrSource() {
   return VoiceOfMLReader.pdfPageSource(ocrManifestUrl, location.href,
     "https://voiceofml-search.hf.space", "ocr-manifest.json");
+}
+function v3ResourceUrl(ref) {
+  validateResource(ref);
+  return new URL(readerDownloadApiUrl(`/api/reader-bucket-resource?path=${encodeURIComponent(ref.path)}`), location.href).href;
+}
+function createPdfV3Repository(sourceSha, pageCount) {
+  return createV3Repository({ sourceSha, pageCount, signal: readerAbortController.signal,
+    resourceUrl: v3ResourceUrl,
+    readJson: (url, ref) => readPdfOcrJson(url, VoiceOfMLReaderSecurity.LIMITS.chapterBytes, ref.sha256, ref.bytes),
+    readBytes: async (url, ref) => {
+      const response = await fetchReaderUrl(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const packed = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.chapterBytes);
+      const actual = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
+        .map(value => value.toString(16).padStart(2, "0")).join("");
+      if (packed.byteLength !== ref.bytes || actual !== ref.sha256) throw new Error("PDF_V3_HASH_MISMATCH");
+      return packed;
+    }
+  });
 }
 async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0, priority = "auto") {
   const response = await fetchReaderUrl(url, { priority });
@@ -2904,6 +2936,17 @@ function loadPdfOcrPage(page, priority = "high") {
     // OCR is published as its own manifest. The image page manifest may be
     // intentionally lean and contain only page_count.
     return loadPdfOcrManifest().then((manifest) => {
+      if (manifest?.text_layer) {
+        pdfTextLayerRepository ||= createPdfV3Repository(manifest.source_sha256, manifest.page_count);
+        return pdfTextLayerRepository.textPage(manifest.text_layer, page).then(payload => {
+          if (pdfV3Map) {
+            const geometry = pdfV3Map.pages[page - 1];
+            if (Math.abs((payload.geometry.width / payload.geometry.height) / (geometry.width / geometry.height) - 1) > .01)
+              throw new Error("PDF_V3_TEXT_GEOMETRY_MISMATCH");
+          }
+          assertReaderActive(); cachePdfOcrPage(page, payload); return payload;
+        });
+      }
       const entry = manifest?.pages?.[page - 1];
       if (!entry || entry.p !== page) throw new Error("PDF_OCR_PAGE_MISSING");
       return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
@@ -2983,6 +3026,7 @@ function loadPdfTextContent(page, pdfPage, generation = null) {
   return task;
 }
 function estimatePdfOcrPageBytes(payload) {
+  if (payload?.kind === "pdf-text-layer") return Math.max(128, JSON.stringify(payload).length * 2);
   return Math.max(128, (payload?.blocks || []).reduce(
     (total, block) => total + String(block?.t || "").length * 2 + 48, 0
   ));
@@ -3011,7 +3055,7 @@ function cachedPdfOcrPage(page) {
 }
 
 async function renderPdfOcrText(shell) {
-  if (shell.dataset.textReady === "1" || !pdfPageManifest || !ocrManifestUrl) return;
+  if (shell.dataset.textReady === "1" || !ocrManifestUrl) return;
   if (shell._ocrPromise) return shell._ocrPromise;
   const layer = shell.querySelector(".reader-pdf-text");
   if (!layer) return;
@@ -3025,9 +3069,14 @@ async function renderPdfOcrText(shell) {
         const payload = await loadPdfOcrPage(page, isPdfPageVisible(shell) ? "high" : "low");
         assertReaderActive();
         if (epoch !== (shell._textEpoch || 0)) return;
-        VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-        populateOcrTextLayer(layer, payload.blocks, payload.layout);
-        shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
+        if (payload.kind === "pdf-text-layer") {
+          populateIndependentTextLayer(layer, payload);
+          shell._bookmarkTextItems = payload.regions.map(region => ({ text: region.text, y: region.box[1] }));
+        } else {
+          VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
+          populateOcrTextLayer(layer, payload.blocks, payload.layout);
+          shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
+        }
         shell.dataset.textReady = "1";
         highlightPdfText(shell);
       } finally {
@@ -3288,6 +3337,7 @@ function createPdfShellWindow(total, firstShell, createShell, unobserve, default
       shell._textEpoch = (shell._textEpoch || 0) + 1;
       shell._renderCancel?.();
       unobserve(shell);
+      shell._hybridCancel?.(); shell._v3PreviewRelease?.();
       pdfManifestShells[page] = undefined;
     }
     chunk.element.replaceChildren();
@@ -3356,16 +3406,35 @@ function createPdfShellWindow(total, firstShell, createShell, unobserve, default
 async function renderPdfPages(prepared) {
   const response = await prepared;
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const manifest = VoiceOfMLReaderSecurity.validatePdfPageManifest(
-    JSON.parse(
-      await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)
-    )
-  );
+  const decoded = JSON.parse(await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes));
+  const manifest = decoded?.kind === "pdf-reading"
+    ? validateReadingManifest(decoded, VoiceOfMLReaderSecurity.LIMITS.pdfPages)
+    : VoiceOfMLReaderSecurity.validatePdfPageManifest(decoded);
+  if (manifest.kind === "pdf-reading") {
+    if (pdfManifestSource()?.root.split("/").slice(0, 3).join("/") !==
+        `objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}`)
+      throw new Error("PDF_V3_SOURCE_MISMATCH");
+    pdfV3Repository = createPdfV3Repository(manifest.source_sha256, manifest.page_count);
+    pdfV3Map = validatePageMap(await pdfV3Repository.read(manifest.page_map), manifest);
+    pdfV3Manifest = manifest;
+    pdfOcrManifest = manifest.text_layer ? manifest : null;
+    ocrManifestUrl = manifest.text_layer ? sourceUrl : "";
+  }
   assertReaderActive();
   const source = pdfManifestSource();
   const totalPages = manifest.page_count;
   if (!source) throw new Error("PDF_MANIFEST_INVALID");
   pdfPageManifest = { ...source, pageCount: totalPages };
+  if (pdfV3Manifest) {
+    pdfPageManifest.pageUrl = () => "";
+    pdfHybridUrl = v3ResourceUrl(manifest.primary.resource);
+    pdfHybridDocumentPromise = loadPdfDocument(pdfHybridUrl).then(pdf => {
+      assertReaderActive();
+      if (pdf.numPages !== totalPages) throw new Error("PDF_PRIMARY_PAGE_COUNT_MISMATCH");
+      pdfDocument = pdf; return pdf;
+    });
+    pdfHybridDocumentPromise.catch(() => {});
+  }
   updateDocumentState({ pageCount: totalPages });
   pageInput.max = String(totalPages);
   document.querySelector("#page-total").textContent = `/ ${totalPages}`;
@@ -3437,6 +3506,10 @@ async function renderPdfPages(prepared) {
     shell.className = "reader-page";
     shell.dataset.page = String(page);
     shell.style.aspectRatio = "1 / 1.414";
+    if (pdfV3Map) {
+      const geometry = pdfV3Map.pages[page - 1];
+      shell.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
+    }
     pdfManifestShells[page] = shell;
     shell.tabIndex = 0;
     shell.setAttribute("role", "region");
@@ -3474,6 +3547,7 @@ async function renderPdfPages(prepared) {
       ? pdfShellWindow.ensure(initialPage)
       : (await pdfShellsReady, content.querySelector(`.reader-page[data-page="${initialPage}"]`));
     if (!targetShell) throw new Error("PDF initial page shell missing");
+    viewport.scrollTop = readerPageScrollTop(targetShell);
     await renderPdfManifestShell(targetShell, false, true);
     markReaderContentReady();
     viewport.scrollTop = readerPageScrollTop(targetShell);
@@ -3680,7 +3754,10 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
       const image = shell.querySelector("img");
       if (image) image.fetchPriority = priority >= 3 ? "high" : "auto";
     }
-    if (force) shell.dataset.pendingRerender = "1";
+    if (force) {
+      shell.dataset.pendingRerender = "1";
+      if (pdfHybridUrl) shell.dataset.pendingHybridRerender = "1";
+    }
     return shell._backgroundRender;
   }
   const task =
@@ -3707,7 +3784,92 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
     });
   return task;
 }
+function pdfPrimarySource() {
+  return pdfV3Manifest ? v3ResourceUrl(pdfV3Manifest.primary.resource) : "";
+}
 function renderPdfManifestShell(shell, force = false, priority = false) {
+  if (!pdfHybridUrl) return renderPdfImageShell(shell, force, priority);
+  if (!force && shell.querySelector("canvas.ready")) return Promise.resolve();
+  if (shell._hybridRenderPromise) {
+    if (force) shell.dataset.pendingHybridRerender = "1";
+    return shell._hybridReadyPromise;
+  }
+  const controller = new AbortController();
+  shell._hybridCancel = () => { controller.abort(); shell._renderCancel?.(); };
+  const pdfTask = renderHybridPdfCanvas(shell, controller.signal, priority);
+  const previewTask = (async () => {
+    if (pdfDocument || shell.dataset.pdfPresented === "1") await waitForReader(250);
+    if (controller.signal.aborted || !shell.isConnected) throw readerAbortError();
+    if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
+    return renderPdfImageShell(shell, false, priority);
+  })();
+  const ready = Promise.any([pdfTask, previewTask]).catch(error => {
+    if (controller.signal.aborted || readerAbortController.signal.aborted) throw readerAbortError();
+    throw error.errors?.[1] || error.errors?.[0] || error;
+  });
+  shell._hybridReadyPromise = ready;
+  const complete = Promise.allSettled([pdfTask, previewTask]).finally(() => {
+    if (shell._hybridRenderPromise === complete) {
+      delete shell._hybridRenderPromise; delete shell._hybridReadyPromise; delete shell._hybridCancel;
+      if (shell.dataset.pendingHybridRerender && shell.isConnected && !readerLifecycle.disposed) {
+        delete shell.dataset.pendingHybridRerender;
+        renderPdfInBackground(shell, true);
+      }
+    }
+  });
+  shell._hybridRenderPromise = complete;
+  return ready;
+}
+async function renderHybridPdfCanvas(shell, signal, priority) {
+  let acquired = false, canvas = null, rendering = null;
+  const cancel = () => rendering?.cancel?.();
+  const untrack = trackReaderResource(() => { rendering?.cancel?.(); shell._hybridCancel?.(); });
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    const pdf = await awaitReader(pdfHybridDocumentPromise, signal);
+    do {
+      const generation = readerRuntime.currentGeneration("pdf");
+      if (signal.aborted || !shell.isConnected) throw readerAbortError();
+      const page = await awaitReader(pdf.getPage(Number(shell.dataset.page)), signal);
+      if (!acquired) { await acquirePdfRenderSlot(priority, shell, signal); acquired = true; }
+      const base = page.getViewport({ scale: 1 });
+      const geometry = pdfV3Map.pages[Number(shell.dataset.page) - 1];
+      if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
+        throw new Error("PDF_V3_DOCUMENT_GEOMETRY_MISMATCH");
+      const view = page.getViewport({ scale: Math.min(3, shell.clientWidth / base.width) });
+      const outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
+      canvas = document.createElement("canvas"); canvas.setAttribute("aria-hidden", "true");
+      canvas.width = Math.ceil(view.width * outputScale); canvas.height = Math.ceil(view.height * outputScale);
+      rendering = page.render({ canvasContext: canvas.getContext("2d"), viewport: view,
+        transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0] });
+      await awaitReader(rendering.promise, signal); rendering = null;
+      while (pdfSelectionIntersects(shell) && !signal.aborted) await waitForReader(100);
+      if (signal.aborted || !shell.isConnected) throw readerAbortError();
+      if (!isReaderGenerationCurrent("pdf", generation)) { canvas.width = canvas.height = 0; continue; }
+      const anchor = content.querySelector(`.reader-page[data-page="${documentState.page}"]`);
+      const oldTop = anchor?.getBoundingClientRect().top;
+      canvas.classList.add("ready");
+      const previous = shell.querySelector("canvas");
+      if (previous) { previous.replaceWith(canvas); previous.width = previous.height = 0; }
+      else shell.prepend(canvas);
+      shell.style.aspectRatio = `${base.width} / ${base.height}`;
+      shell._renderCancel?.(); shell.querySelector("img")?.remove(); shell._v3PreviewRelease?.();
+      const state = shell.querySelector(".reader-page-state"); if (state) state.hidden = true;
+      shell.dataset.pdfPresented = "1"; shell.dataset.renderState = "rendered";
+      delete shell.dataset.pendingHybridRerender;
+      shell.dataset.renderUsedAt = String(Date.now());
+      if (anchor) viewport.scrollTop += anchor.getBoundingClientRect().top - oldTop;
+      pdfShellWindow?.remember(shell); trimPdfCanvases(shell);
+      (ocrManifestUrl ? renderPdfOcrText(shell) : renderPdfText(page, shell, signal)).catch(() => {});
+      scheduleMarkerSync(); canvas = null; return;
+    } while (true);
+  } finally {
+    rendering?.cancel?.(); if (canvas) canvas.width = canvas.height = 0;
+    if (acquired) releasePdfRenderSlot();
+    signal.removeEventListener("abort", cancel); untrack();
+  }
+}
+function renderPdfImageShell(shell, force = false, priority = false) {
   if (!shell) return Promise.reject(new Error("PDF page shell missing"));
   if (shell._renderPromise) return shell._renderPromise;
   if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
@@ -3726,7 +3888,18 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       assertReaderActive();
       const entry = pdfPageEntry(Number(shell.dataset.page));
       if (!entry) throw new Error("PDF page entry missing");
-      const target = pdfPageManifest.pageUrl(entry.page);
+       let target = pdfPageManifest.pageUrl(entry.page);
+       if (pdfV3Manifest) {
+         const preview = await pdfV3Repository.preview(pdfV3Manifest, pdfV3Map, entry.page);
+         shell._v3PreviewEntry = preview.entry;
+         assertReaderActive();
+         if (renderController.signal.aborted) throw readerAbortError();
+         shell._v3PreviewRelease?.();
+         target = URL.createObjectURL(preview.blob);
+         const release = () => { URL.revokeObjectURL(target); pdfV3BlobReleases.delete(release); delete shell._v3PreviewRelease; };
+         shell._v3PreviewRelease = release;
+         pdfV3BlobReleases.add(release);
+       }
       let loadText = null;
       let image = shell.querySelector("img");
        const pageState = shell.querySelector(".reader-page-state");
@@ -3770,7 +3943,14 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
          if (image.complete && image.naturalWidth) finish();
       });
       assertReaderActive();
-      shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
+       if (shell.dataset.pdfPresented === "1") return;
+       if (pdfV3Manifest) {
+         const geometry = pdfV3Map.pages[entry.page - 1];
+         if (image.naturalWidth !== shell._v3PreviewEntry.width || image.naturalHeight !== shell._v3PreviewEntry.height ||
+             Math.abs((image.naturalWidth / image.naturalHeight) / (geometry.width / geometry.height) - 1) > .01)
+           throw new Error("PDF_V3_PREVIEW_GEOMETRY_MISMATCH");
+       }
+       shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
        if (priority >= 2 && ocrManifestUrl && !navigator.connection?.saveData)
          loadText ||= renderPdfOcrText(shell);
       loadText?.catch(() => {});
@@ -3784,13 +3964,14 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
       trimPdfManifestImages(shell);
       scheduleMarkerSync();
     } catch (error) {
-      shell.querySelector("img")?.remove();
+       shell.querySelector("img")?.remove();
+       shell._v3PreviewRelease?.();
       const pageState = shell.querySelector(".reader-page-state");
-      if (pageState) {
+      if (pageState && shell.dataset.pdfPresented !== "1") {
         pageState.hidden = false;
         pageState.textContent = "页面加载失败，正在重试…";
       }
-      shell.dataset.renderState = "idle";
+      if (shell.dataset.pdfPresented !== "1") shell.dataset.renderState = "idle";
       throw error;
     } finally {
       if (acquired) releasePdfRenderSlot();
@@ -3805,13 +3986,15 @@ function renderPdfManifestShell(shell, force = false, priority = false) {
   return task;
 }
 function cancelSpeculativePdfRenders(protectedShell) {
-  for (const shell of content.querySelectorAll('.reader-page[data-render-state="rendering"]')) {
+  for (const shell of content.querySelectorAll('.reader-page')) {
+    if (!shell._hybridRenderPromise && shell.dataset.renderState !== "rendering") continue;
     if (
       shell === protectedShell ||
       isPdfPageVisible(shell)
     )
       continue;
     shell._renderCancel?.();
+    shell._hybridCancel?.();
   }
 }
 function renderPdfShell(shell, force = false, priority = false) {
@@ -3896,6 +4079,7 @@ function renderPdfShell(shell, force = false, priority = false) {
 }
 
 async function renderPdfText(page, shell, signal = null) {
+  if (ocrManifestUrl) return renderPdfOcrText(shell);
   if (shell.dataset.textReady === "1") return;
   const layer = shell.querySelector(".reader-pdf-text");
   if (!layer || typeof page.getTextContent !== "function") return;
@@ -4968,6 +5152,11 @@ function disposeFormatResources(mode) {
     pdfPageManifest = null;
     pdfOcrManifest = null;
     pdfOcrManifestPromise = null;
+    pdfV3Repository?.dispose(); pdfTextLayerRepository?.dispose();
+    for (const shell of pdfManifestShells) shell?._v3PreviewRelease?.();
+    pdfV3Repository = pdfTextLayerRepository = null;
+    pdfV3Manifest = pdfV3Map = null;
+    pdfHybridUrl = ""; pdfHybridDocumentPromise = null;
     pdfTextContentCache.clear();
     pdfTextContentPromises.clear();
     pdfTextContentCacheBytes = 0;
@@ -5380,12 +5569,12 @@ function loadPdfTaskWithTimeout(pdfjs, options, url) {
     );
   });
 }
-function loadPdfWithTimeout(pdfjs, options) {
-  return retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, contentUrl)).catch((error) => {
+function loadPdfWithTimeout(pdfjs, options, target = sourceUrl, proxy = contentUrl) {
+  return retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxy)).catch((error) => {
     assertReaderActive();
     if (error && error.name === "AbortError") throw error;
     if (retryableReaderProxyError(error)) throw error;
-    return loadPdfTaskWithTimeout(pdfjs, options, sourceUrl);
+    return loadPdfTaskWithTimeout(pdfjs, options, target);
   });
 }
 function preloadPdfEngine() {
@@ -5394,7 +5583,7 @@ function preloadPdfEngine() {
 }
 async function preparePdfWorker(pdfjs) {
   assertReaderActive();
-  if (capability.mode !== "pdf") return pdfjs;
+  if (capability.mode !== "pdf" && !pdfPrimarySource()) return pdfjs;
   pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
   const worker = new pdfjs.PDFWorker();
   pdfWorker = worker;
@@ -5471,14 +5660,14 @@ async function loadPdfEngine() {
     }
   }
 }
-function loadPdfDocument() {
+function loadPdfDocument(target = sourceUrl) {
   return preloadPdfEngine().then((pdfjs) => {
     assertReaderActive();
     if (!pdfFetchPolicy) {
       pdfFetchPolicy = createPdfFetchPolicy();
       trackReaderResource(() => { pdfFetchPolicy?.dispose(); pdfFetchPolicy = null; });
     }
-    pdfFetchPolicy.add([sourceUrl, contentUrl]);
+    pdfFetchPolicy.add([target, readerContentUrl(target)]);
     pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
     const options = (url) => ({
       url,
@@ -5494,7 +5683,7 @@ function loadPdfDocument() {
       standardFontDataUrl: PDFJS_STANDARD_FONT_URL,
       withCredentials: false
     });
-    return loadPdfWithTimeout(pdfjs, options);
+    return loadPdfWithTimeout(pdfjs, options, target, readerContentUrl(target));
   });
 }
 function loadTextDocument() {
@@ -6932,6 +7121,13 @@ async function navigateFoliateSearchResult(result, generation) {
   return true;
 }
 async function ensurePdfBookSearchClient(manifest) {
+  let textUrl = "";
+  if (manifest?.text_layer) {
+    pdfTextLayerRepository ||= createPdfV3Repository(manifest.source_sha256, manifest.page_count);
+    const index = await pdfTextLayerRepository.textIndex(manifest.text_layer);
+    manifest = { ...manifest, book_text: index.book_text };
+    textUrl = v3ResourceUrl(index.book_text);
+  }
   if (!manifest?.book_text?.path) throw new Error("本书集中全文尚未生成");
   if (!pdfBookSearchModulePromise)
     pdfBookSearchModulePromise = import("/search/static/reader-pdf-book-search.mjs").catch(error => {
@@ -6946,7 +7142,7 @@ async function ensurePdfBookSearchClient(manifest) {
   }
   if (!pdfBookSearchClient)
     pdfBookSearchClient = module.createPdfBookSearch({
-      url: pdfOcrSource().assetUrl(manifest.book_text.path),
+      url: textUrl || pdfOcrSource().assetUrl(manifest.book_text.path),
       sha256: manifest.book_text.sha256,
       bytes: manifest.book_text.bytes,
       pageCount: documentState.pageCount,
