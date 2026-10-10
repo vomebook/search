@@ -1105,6 +1105,17 @@ body {
     monospace;
   color: #e7e9eb;
 }
+.reader-text-block {
+  margin: 0;
+  font: inherit;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 1600px;
+}
+.reader-text-block:focus-within {
+  content-visibility: visible;
+}
 .reader-markdown {
   margin: 0 auto;
   max-width: 76ch;

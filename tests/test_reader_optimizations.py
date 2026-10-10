@@ -31,6 +31,7 @@ class ReaderOptimizationTests(unittest.TestCase):
               chapterManifestCleanup = () => {''')
             route.fulfill(response=response, body=script + '''
               window.__snapshot = () => fullSearchDomSnapshot;
+              window.__markerPage = () => pageAtMarker()?.dataset.page;
               window.__pdfTools = {trim: trimPdfSurfaces, pixels: pdfRetainedPixels, budget: pdfPixelBudget,
                 prefetch: pdfManifestPrefetches, setPage: page => updateDocumentState({page})};
               window.__startPdfProbe = () => {
@@ -88,6 +89,7 @@ class ReaderOptimizationTests(unittest.TestCase):
               __pdfTools.setPage(1);
               for (let page=1; page<=8; page++) {
                 const shell=document.createElement('div'); shell.className='reader-page';
+                shell.style.height='1200px';
                 shell.dataset.page=page; shell.dataset.renderState='rendered';
                 const canvas=document.createElement('canvas'); canvas.className='ready';
                 canvas.width=2400; canvas.height=3400;
@@ -108,10 +110,11 @@ class ReaderOptimizationTests(unittest.TestCase):
               prefetched.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
               __pdfTools.prefetch.set('fixture', {image:prefetched, url:'fixture'});
               __pdfTools.trim(root.firstChild);
+              const nearestRetained=!!root.children[2].querySelector('canvas.ready');
               const protectedSelection=selected.querySelector('canvas').width===2400 && getSelection().getRangeAt(0).toString()==='page 2';
               const prefetchedReleased=!prefetched.hasAttribute('src') && __pdfTools.prefetch.size===0;
               getSelection().removeAllRanges(); __pdfTools.trim(root.firstChild);
-              return {protectedSelection,prefetchedReleased,pixels:__pdfTools.pixels(),budget:__pdfTools.budget(),
+              return {protectedSelection,prefetchedReleased,nearestRetained,pixels:__pdfTools.pixels(),budget:__pdfTools.budget(),
                 retained:root.firstChild.querySelector('canvas').width,
                 released:[...root.children].filter(shell=>!shell.querySelector('canvas.ready, img')).length};
             }''')
@@ -119,6 +122,47 @@ class ReaderOptimizationTests(unittest.TestCase):
             self.assertLessEqual(result['pixels'], result['budget'])
             self.assertEqual(result['retained'], 2400)
             self.assertGreaterEqual(result['released'], 5)
+
+    def test_mobile_large_page_pdf_keeps_nearby_canvases_at_display_resolution(self):
+        self.context.close()
+        self.context = self.browser.new_context(viewport=dict(width=390,height=844),device_scale_factor=3)
+        self.page = self.context.new_page()
+        self.page.add_init_script("Object.defineProperty(navigator,'deviceMemory',{value:2});window.__renderedPages=[];")
+        engine = '''export const GlobalWorkerOptions={};export class PDFWorker {promise=Promise.resolve();destroy(){}}
+          export function getDocument(){return {promise:Promise.resolve({numPages:40,getOutline:async()=>null,
+            getPage:async number=>({getViewport:({scale})=>({width:1274*scale,height:1828*scale}),
+              getTextContent:async()=>({items:[],styles:{}}),render:({canvasContext})=>{
+                __renderedPages.push(number);canvasContext.fillStyle='white';canvasContext.fillRect(0,0,4000,6000);
+                return {promise:Promise.resolve(),cancel(){}};}})}),destroy(){}};}'''
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.serve(b'pdf','application/pdf')
+        self.open(self.reader_url('pdf'))
+        self.page.wait_for_function('() => !!document.querySelector(".reader-page[data-page=\\"4\\"] canvas.ready")')
+        self.page.wait_for_timeout(150)
+        data = self.page.locator('.reader-page[data-page="1"]').evaluate('''shell=>{
+          const canvas=shell.querySelector('canvas');return {css:shell.clientWidth,backing:canvas.width,
+            next:[2,3,4].map(page=>!!document.querySelector('.reader-page[data-page="'+page+'"] canvas.ready'))};}''')
+        self.assertLessEqual(data['backing'],data['css']*2+1,data)
+        self.assertTrue(all(data['next']),data)
+        self.page.evaluate('''()=>{const shell=document.querySelector('.reader-page[data-page="3"]'),v=document.querySelector('#viewport');
+          window.__thirdCount=__renderedPages.filter(page=>page===3).length;v.scrollTop+=shell.getBoundingClientRect().top-v.getBoundingClientRect().top;}''')
+        self.page.wait_for_timeout(150)
+        self.assertEqual(self.page.evaluate('__renderedPages.filter(page=>page===3).length'),self.page.evaluate('__thirdCount'))
+
+    def test_long_txt_blocks_preserve_exact_text_cross_block_hits_and_selection(self):
+        self.expose()
+        text=('ordinary line\n'*2400)+'needle\n'+('tail line\n'*6000)+'needle\n'
+        self.serve(text)
+        self.open(self.reader_url('txt'))
+        self.assertEqual(self.page.locator('.reader-text').text_content(),text)
+        self.assertGreater(self.page.locator('.reader-text-block').count(),2)
+        self.assertEqual(self.page.evaluate('__query("needle")'),2)
+        self.search('needle')
+        self.page.locator('.full-search-result').last.click()
+        self.assertEqual(self.page.locator('mark.full-search-highlight').text_content(),'needle')
+        self.assertEqual(self.page.locator('.reader-text').text_content(),text)
+        self.assertEqual(self.page.locator('.reader-text').evaluate('''root=>{const range=document.createRange();range.selectNodeContents(root);
+          getSelection().removeAllRanges();getSelection().addRange(range);return range.toString();}'''),text)
 
     def test_pdf_parallel_search_reserves_demand_slot_and_cancels_stale_totals(self):
         self.expose()
@@ -156,6 +200,11 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.open(self.docx_url())
         pages = self.page.locator('.reader-docx-page')
         self.assertEqual(pages.count(), 20)
+        marker = self.page.evaluate('''()=>{let reads=0;const pages=[...document.querySelectorAll('.reader-docx-page')];
+          for(const page of pages){const native=page.getBoundingClientRect.bind(page);page.getBoundingClientRect=()=>{reads++;return native();};}
+          const actual=__markerPage();return {actual,reads};}''')
+        self.assertEqual(marker['actual'],'1')
+        self.assertLessEqual(marker['reads'],6)
         self.assertEqual(pages.last.evaluate('e => getComputedStyle(e).contentVisibility'), 'auto')
         self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
         self.assertFalse(pages.last.evaluate('e => e.firstElementChild.checkVisibility({contentVisibilityAuto:true})'))
