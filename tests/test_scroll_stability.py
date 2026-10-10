@@ -32,6 +32,28 @@ class ScrollStabilityTests(unittest.TestCase):
     def tearDown(self):
         self.fixture.tearDown()
 
+    def test_far_append_preserves_rows_without_render_then_new_page_is_accessible(self):
+        result = self.page.evaluate('''async () => {
+          cancelSearchPrefetch();STATE.total=1100;STATE._loadedPage=10;
+          const rows=[...DOM.resultsList.querySelectorAll('.result-item')];
+          const before=getResultScrollTop();const original=renderVisible;let renders=0;
+          renderVisible=()=>{renders++;return original()};
+          const page=Array.from({length:100},(_,i)=>({Repo:'VoiceOfML/Test',File:'row-'+(1000+i),
+            Extension:'txt',Folder:[],Size:1}));
+          appendSearchResults(11,page);refreshVirtualAfterAppend();await scrollFrames(3);
+          const idleRenders=renders,stable=rows.every(row=>row.isConnected),after=getResultScrollTop();
+          setResultScrollTop(getVirtualOffset(1000));
+          DOM.resultsContainer.dispatchEvent(new Event('scroll'));await scrollFrames(3);
+          const row=DOM.resultsList.querySelector('.result-item[data-index="1000"]');
+          return {idleRenders,stable,before,after,total:STATE.total,length:STATE.results.length,
+            visible:!!row && row.textContent.includes('row-1000')};
+        }''')
+        self.assertEqual(result['idleRenders'], 0)
+        self.assertTrue(result['stable'])
+        self.assertEqual(result['before'], result['after'])
+        self.assertEqual([result['total'], result['length']], [1100,1100])
+        self.assertTrue(result['visible'])
+
     def test_shorter_rows_preserve_content_anchor_without_jumping_to_bottom(self):
         result = self.page.evaluate('''async () => {
           rowStyle.textContent='.result-item {height:80px!important;min-height:0!important;box-sizing:border-box}';

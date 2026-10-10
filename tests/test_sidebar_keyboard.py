@@ -21,6 +21,38 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(self.fixture.errors, [])
         self.fixture.tearDown()
 
+    def test_deep_sidebar_toggles_skip_full_result_snapshots(self):
+        result = self.page.evaluate('''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
+          STATE.results=Array.from({length:50000},(_,i)=>({Repo:'VoiceOfML/Test',File:'deep-'+i,
+            Extension:'txt',Folder:[],Size:1}));
+          STATE.total=50000;STATE._loadedPage=500;STATE.page=500;STATE.hasMore=false;STATE.isLoading=false;
+          STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';
+          const style=document.createElement('style');
+          style.textContent='.result-item{height:100px!important;min-height:0!important;box-sizing:border-box}';
+          document.head.append(style);
+          resetVirtualScrollState();renderResults();setResultScrollTop(getVirtualOffset(40000)+12);
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          const before={index:findVirtualIndex(getResultScrollTop()),total:STATE.total,length:STATE.results.length};
+          const original=saveSearchViewSnapshot;let snapshots=0;
+          saveSearchViewSnapshot=(...args)=>{snapshots++;return original(...args)};
+          const timings=[];
+          for(const id of ['hamburger-btn','hamburger-btn','settings-btn','settings-btn','sidebar-expand-btn','sidebar-expand-btn']) {
+            const start=performance.now();document.getElementById(id).click();timings.push(performance.now()-start);
+            await new Promise(r=>setTimeout(r,180));
+          }
+          STATE.rightSidebarOpen=true;updateSidebarVisibility();
+          document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+          const sideSnapshots=snapshots;
+          const after={index:findVirtualIndex(getResultScrollTop()),total:STATE.total,length:STATE.results.length};
+          saveSearchViewSnapshot=()=>{snapshots++};
+          DOM.sortSelect.dispatchEvent(new Event('change',{bubbles:true}));
+          return {sideSnapshots,filterSnapshot:snapshots>sideSnapshots,before,after,timings};
+        }''')
+        self.assertEqual(result['sideSnapshots'], 0)
+        self.assertTrue(result['filterSnapshot'])
+        self.assertEqual(result['before'], result['after'])
+
     def test_result_repository_is_text_in_attributes_and_labels(self):
         result = self.page.evaluate('''() => {
           const repo = 'x"><img src=x onerror="window.injected=true">';

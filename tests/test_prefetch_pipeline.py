@@ -66,6 +66,24 @@ class PrefetchPipelineTests(unittest.TestCase):
         self.page.wait_for_timeout(50)
         self.assertEqual(self.page.evaluate('[STATE.query,STATE.results.length,Object.keys(STATE._pageCache).length]'), ['paging-new',1,0])
 
+    def test_shared_next_page_renders_before_one_cache_write(self):
+        self.start_pipeline()
+        self.fixture.reach_bottom()
+        self.page.evaluate('''() => {
+          window.pageWork=[];const render=renderVisible,write=searchResponseCache.set;
+          renderVisible=()=>{if(STATE._loadedPage>=2) pageWork.push('render');return render()};
+          searchResponseCache.set=function(key,value){
+            if(value.data.page===2) pageWork.push('cache');return write.call(this,key,value);
+          };
+          aheadReleases[2]();
+        }''')
+        self.page.wait_for_function("STATE._loadedPage===2 && !STATE.isLoading && pageWork.includes('cache')")
+        observed = self.page.evaluate('pageWork')
+        self.assertIn('render', observed)
+        self.assertLess(observed.index('render'), observed.index('cache'))
+        self.assertEqual(observed.count('cache'), 1)
+        self.assertEqual(self.page.evaluate('aheadCalls.filter(p=>p===2).length'), 1)
+
     def test_ready_next_page_applies_at_threshold_without_another_scroll(self):
         self.start_pipeline()
         self.page.evaluate('aheadReleases[3]()')
@@ -127,7 +145,7 @@ class PrefetchPipelineTests(unittest.TestCase):
 
     def test_matching_saved_pages_avoid_network_and_old_generation_is_rejected(self):
         result = self.page.evaluate('''async () => {
-          searchPrefetchAbortController?.abort();searchPrefetchAbortController=null;
+          cancelSearchPrefetch();
           STATE._pageCache={};searchResponseCache.clear();recentSearchPages.clear();
           const key=getSearchViewKey();const template={q:STATE.query,page:1,page_size:100};
           const metadata={generation:'stable',page:1,page_size:100,total:STATE.total,results:STATE.results};
@@ -146,7 +164,7 @@ class PrefetchPipelineTests(unittest.TestCase):
             while(controllerActive()) await new Promise(resolve=>setTimeout(resolve,0));
             const reused=Object.keys(STATE._pageCache).map(Number);
             const calls=networkPages.slice();
-            searchPrefetchAbortController.abort();searchPrefetchAbortController=null;STATE._pageCache={};searchResponseCache.clear();
+            cancelSearchPrefetch();STATE._pageCache={};searchResponseCache.clear();
             cached.forEach(entry=>cacheRecentSearchPage({...entry,generation:'old'}));
             prefetchSearchPages('/api/search',template);
             while(controllerActive()) await new Promise(resolve=>setTimeout(resolve,0));
