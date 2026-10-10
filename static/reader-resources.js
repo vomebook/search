@@ -107,10 +107,12 @@
     "reader-pdf-book-search.mjs",
     "pdf-worker-wrapper.mjs",
     "reader-pdf-network.mjs",
+    "reader-pdf-text-store.mjs",
     "reader.css",
     "reader.js"
   ]);
   const lazyFiles = new Set([
+    "reader-pdf-text-store.mjs",
     "reader-chapter-search-worker.mjs",
     "reader-chapter-search.mjs",
     "reader-pdf-book-search-worker.mjs",

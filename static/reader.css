@@ -1009,11 +1009,6 @@ body {
 :root[data-page-inverted="true"] .reader-content[data-mode="pdf-pages"] .reader-page {
   background: #202428;
 }
-:root .reader-content:is([data-mode="pdf"], [data-mode="pdf-pages"])
-  .reader-page:not(:has(canvas.ready, img.ready)) {
-  background: transparent;
-  box-shadow: none;
-}
 .reader-pdf-text {
   position: absolute;
   inset: 0;
