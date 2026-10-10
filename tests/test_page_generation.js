@@ -12,9 +12,11 @@ for (const project of ["github-Search", "huggingface-Search"]) {
       if (/^\d+$/.test(String(key))) throw Error("existing result reread during append");
       return Reflect.get(target,key,receiver);
     }});
-    const context={STATE:{results,_pageCache:{},total:100500},searchPageMetadata:new WeakMap(),checkSearchPageAppend:()=>true};
+    const context={STATE:{results,_pageCache:{},total:100500},searchPageMetadata:new WeakMap(),
+      searchSnapshotResultBudgets:new WeakMap(),checkSearchPageAppend:()=>true};
     vm.createContext(context);
     vm.runInContext(source.match(/^function appendSearchResults\([^]*?^}/m)[0],context);
+    vm.runInContext(source.match(/^function extendSearchSnapshotBudget\([^]*?^}/m)[0],context);
     context.page=Array.from({length:500},(_,i)=>({File:String(100000+i)}));
     vm.runInContext("appendSearchResults(201,page)",context);
     assert.strictEqual(context.STATE.results,results);
