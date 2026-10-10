@@ -95,17 +95,23 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
         self.assertEqual(self.page.evaluate('__chapterStats().bytes'), 0)
 
+    def settle_chapters(self):
+        for _ in range(2):
+            self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+            self.page.wait_for_function('() => __chapterStats().pending === 0')
+
     def test_chapter_window_preserves_geometry_selection_and_complete_search(self):
         requested, _held = self.chapter_book()
         for width in (1100, 390):
             with self.subTest(width=width):
                 self.page.set_viewport_size(dict(width=width, height=800))
-                for chapter in (1, 10, 20, 30, 40, 50, 60):
+                for chapter in (*range(1, 61, 4), 60):
                     self.assertTrue(self.page.evaluate('__goChapter', chapter))
+                    self.settle_chapters()
                     self.page.wait_for_function('() => document.querySelectorAll(".reader-epub-chapter").length <= 12 && __chapterStats().pending === 0')
                 self.assertGreater(self.page.locator('.reader-chapter-placeholder').count(), 0)
                 self.assertTrue(self.page.evaluate('__goChapter(1)'))
-                self.page.wait_for_function('() => __chapterStats().pending === 0')
+                self.settle_chapters()
                 self.page.evaluate('async () => {await __goChapter(3); await __goChapter(2); await __goChapter(1);}')
                 self.page.evaluate('''() => {
                   window.__pinned = document.querySelector('.reader-epub-chapter[data-chapter="1"]');
@@ -116,12 +122,13 @@ class ReaderOptimizationTests(unittest.TestCase):
                   getSelection().removeAllRanges(); getSelection().addRange(range);
                 }''')
                 self.assertTrue(self.page.evaluate('__goChapter(60)'))
-                self.page.wait_for_function('() => __chapterStats().pending === 0')
+                self.settle_chapters()
                 self.assertTrue(self.page.evaluate('__pinned.isConnected'))
                 self.assertTrue(self.page.evaluate('__pinnedMiddle.isConnected'))
                 self.page.evaluate('getSelection().removeAllRanges(); document.querySelector("#viewport").dispatchEvent(new Event("scroll"))')
-                self.assertTrue(self.page.evaluate('__goChapter(30)'))
-                self.page.wait_for_function('() => __chapterStats().pending === 0')
+                for chapter in (30, 40, 50):
+                    self.assertTrue(self.page.evaluate('__goChapter', chapter))
+                    self.settle_chapters()
                 self.page.wait_for_function('() => !__pinned.isConnected')
                 marker = self.page.locator('.reader-chapter-placeholder[data-chapter="1"]')
                 self.assertGreater(marker.evaluate('node => node.getBoundingClientRect().height'), 1600)
@@ -133,7 +140,7 @@ class ReaderOptimizationTests(unittest.TestCase):
                     self.assertGreater(marker.evaluate('node => node.getBoundingClientRect().height'), 1600)
                     self.page.unroute('**/*chapter-1.xhtml')
                 self.assertTrue(self.page.evaluate('__goChapter(1)'))
-                self.page.wait_for_function('() => __chapterStats().pending === 0')
+                self.settle_chapters()
                 after = self.page.locator('#viewport').evaluate('node => node.scrollHeight')
                 after_rows = self.page.locator('.epub-frame > [data-chapter]').evaluate_all('nodes => nodes.map(node => [node.dataset.chapter, node.className, node.getBoundingClientRect().height, node.offsetTop])')
                 self.assertAlmostEqual(before, after, delta=3, msg=json.dumps(dict(before=before_rows, after=after_rows)))
