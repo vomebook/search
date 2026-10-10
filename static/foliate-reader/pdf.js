@@ -6,10 +6,10 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsPath('pdf.worker.mjs')
 
 const fetchText = async url => await (await fetch(url)).text()
 
-// https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v5.5.207/web/text_layer_builder.css
+// https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v6.4.299/web/text_layer_builder.css
 const textLayerBuilderCSS = await fetchText(pdfjsPath('text_layer_builder.css'))
 
-// https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v5.5.207/web/annotation_layer_builder.css
+// https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v6.4.299/web/annotation_layer_builder.css
 const annotationLayerBuilderCSS = await fetchText(pdfjsPath('annotation_layer_builder.css'))
 
 const render = async (page, doc, zoom) => {
@@ -123,6 +123,7 @@ export const makePDF = async file => {
         range: transport,
         cMapUrl: pdfjsPath('cmaps/'),
         standardFontDataUrl: pdfjsPath('standard_fonts/'),
+        wasmUrl: pdfjsPath('wasm/'),
         isEvalSupported: false,
     }).promise
 

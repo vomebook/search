@@ -46,6 +46,7 @@ CATEGORY_METHODS = {
         "test_converted_pdf_pages_fit_wide_images_without_overlap",
         "test_pdf_pages_ocr_uses_manifest_paths_after_image_is_ready",
         "test_long_pdf_pages_touch_swipe_from_ocr_does_not_select_or_jump",
+        "test_long_pdf_pages_touch_swipe_preserves_existing_ocr_selection",
         "test_compact_pdf_manifest_virtualizes_and_navigates_to_distant_page",
         "test_oversized_chapter_manifest_and_response_use_resource_limit",
         "test_zip_bomb_metadata_is_rejected_before_docx_and_foliate_parsers",

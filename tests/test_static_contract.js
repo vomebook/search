@@ -510,14 +510,14 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(readerHtml, /connect-src[^\"]*https:\/\/\*\.hf\.co/);
   assert.match(readerHtml, /script-src 'self'/);
   const vendorScript = fs.readFileSync("scripts/copy_reader_vendor.mjs", "utf8") + fs.readFileSync("static/reader-resources.js", "utf8");
-  assert.match(vendorScript, /pdfjs-dist@6\.3\.289/);
+  assert.match(vendorScript, /pdfjs-dist@6\.4\.299/);
   assert.match(vendorScript, /standard_fonts\//);
   assert.match(vendorScript, /cmaps\//);
   assert.match(vendorScript, /relative\.startsWith\("wasm\/"\)/);
-  assert.match(vendorScript, /06f25e887adc6489f04c9fcb14198c77e4e5623a59a0bba5c4cea5838a4f1241/);
-  assert.match(vendorScript, /f80490490320511e5df18c580b9edd6b5db8058dceebaf6f161992e0a964b9e2/);
-  assert.match(vendorScript, /marked@18\.0\.13\/lib\/marked\.umd\.js/);
-  assert.match(vendorScript, /dompurify@3\.4\.15/);
+  assert.match(vendorScript, /86269b40170eb41740ea05ad2102d71d33de4f122b34eb2f478be0ea7779c415/);
+  assert.match(vendorScript, /57456c8e0c81e46be31174b499ef77f2b9f5ee46d04412ba627320a36755d4c2/);
+  assert.match(vendorScript, /marked@18\.1\.0\/lib\/marked\.umd\.js/);
+  assert.match(vendorScript, /dompurify@3\.4\.16/);
   assert.doesNotMatch(vendorScript, /writeFileSync\(join\(output, target\)\)/);
   for (const path of ["pdf.min.mjs", "pdf.worker.min.mjs", "marked.min.js", "purify.min.js"]) assert.ok(!sw.includes("static/vendor/" + path));
   assert.match(sw, /url\.pathname === "\/search\/static\/reader\.html"/);
@@ -566,7 +566,7 @@ test("deployment workflow uses official checkout configure upload and deploy act
 });
 test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.doesNotMatch(workflow, /node tests\//);
-  assert.match(workflow, /node-version: '22'/);
+  assert.match(workflow, /node-version: '26\.11\.1'/);
   assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader-pdf-text\.js/);
   assert.match(workflow, /node scripts\/compose_app\.mjs/);
   assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify --target=es2020/);

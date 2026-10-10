@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { get } from "node:https";
 import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -7,6 +7,8 @@ import { createRequire } from "node:module";
 const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 
 const output = process.argv[2] || "static/vendor";
+const foliateOutput = process.argv.includes("--refresh-foliate")
+  ? join(process.cwd(), "static/foliate-reader/vendor") : null;
 mkdirSync(output, { recursive: true });
 function download(url, redirects = 0) {
   return new Promise((resolve, reject) => {
@@ -55,10 +57,15 @@ for (let offset = 0; offset + 512 <= tar.length;) {
     const target = join(output, relative);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, tar.subarray(offset + 512, offset + 512 + size));
+    if (foliateOutput) {
+      const foliateTarget = join(foliateOutput, "pdfjs", relative);
+      mkdirSync(dirname(foliateTarget), { recursive: true });
+      writeFileSync(foliateTarget, tar.subarray(offset + 512, offset + 512 + size));
+    }
   }
   offset += 512 + Math.ceil(size / 512) * 512;
 }
-for (const {url, file: target, sha256: expected, path} of Object.values(resources.vendors)) {
+for (const [name, {url, file: target, sha256: expected, path}] of Object.entries(resources.vendors)) {
   const bytes = await downloadWithRetry(url);
   const actual = createHash("sha256").update(bytes).digest("hex");
   if (actual !== expected) throw new Error(`${url}: SHA-256 ${actual} does not match ${expected}`);
@@ -66,6 +73,20 @@ for (const {url, file: target, sha256: expected, path} of Object.values(resource
   const versioned = path.slice("vendor/".length);
   mkdirSync(dirname(join(output, versioned)), { recursive: true });
   writeFileSync(join(output, versioned), bytes);
+  if (foliateOutput && (name === "pdf" || name === "pdfWorker")) {
+    const filename = name === "pdf" ? "pdf.mjs" : "pdf.worker.mjs";
+    mkdirSync(join(foliateOutput, "pdfjs"), { recursive: true });
+    writeFileSync(join(foliateOutput, "pdfjs", filename), bytes);
+    rmSync(join(foliateOutput, "pdfjs", filename + ".map"), { force: true });
+  }
+}
+if (foliateOutput) for (const {url, file, sha256: expected} of Object.values(resources.foliateVendors)) {
+  const bytes = await downloadWithRetry(url);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expected) throw new Error(`${url}: SHA-256 ${actual} does not match ${expected}`);
+  const target = join(foliateOutput, file);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, bytes);
 }
 }
 
