@@ -3,7 +3,7 @@
 ## Local Implementation (2026-10-09)
 
 Implemented in the HF and GitHub Search development checkouts. This report
-describes local fixtures and builds; this optimization set has not been deployed.
+describes the pre-deployment fixtures and builds. Final release acceptance follows below.
 Existing concurrent search/paging publications were retained as the new baseline.
 
 - Chapter scheduling has three active slots, with at most two speculative loads.
@@ -71,4 +71,35 @@ cross-chapter selections, exact full-book totals and last/first chapter navigati
   shared-source cross-project gate passed. Generated artifacts stay in `/tmp/opencode`.
 
 Detailed commands and required workflow steps are in each project's `TESTING.md`.
-Production acceptance belongs to the eventual deployment, not these local results.
+The local A/B measurements above remain distinct from production acceptance.
+
+## Release Acceptance (2026-10-10)
+
+- HF application release `0e3343ff8d013af4a5a8643f2c670e4dde07abcd` uploaded twelve
+  reviewed files with matching SHA-256 checks. Test-only follow-ups ended at
+  `90d147ef60c45fdb65c8968b93d13e8ff7946a05`, verified RUNNING.
+- Pages application release `1df9ce9f055a09c46d87af286f1151f062a6af07` and test-only
+  follow-ups ending at `3c0ee5b4d6608d1c0223faf1d95faf81141fad3e` deployed successfully.
+- Required Reader CI `38011336725` passed both jobs: full Reader suites HF 92
+  and Pages 93 cases; request/PDF-loading/closure/navigation gates HF 33 and
+  Pages 27 cases; six optimization cases per site; PDF theme/chapter-search
+  gates; and HF backend/upstream ownership gates of 34/59 cases. No failing
+  assertions were removed or skipped. Earlier runs exposed a stale string-based
+  Foliate pause fixture and a chapter-test race before the animation-frame
+  prefetch queue started. Fixtures now use the current traversal and await both
+  frames and queue settlement before creating/asserting eviction pressure.
+- Default-cache, active-Service-Worker Chromium checked a real 24-chapter EPUB:
+  navigation through chapters 1, 6, 12, 18, 24 and back to 1 retained at most
+  twelve loaded chapters on both sites; twelve placeholders remained, and return
+  navigation passed. Real EPUB/CHM complete-index searches matched independently
+  verified index totals and last-hit highlights (selected EPUB 1,858/10,348 hits;
+  CHM 65/132 hits). These are sample counts, not corpus totals.
+- HTM, Markdown, TXT and DOCX on both sites matched independent rendered-text
+  totals, all result-page labels and repeated last/first/last highlight offsets.
+  All eight production opens had no page errors. EPUB/DOCX/TXT/HTML closure on
+  both sites recorded zero new Reader-body requests/encoded bytes in 1.8-second
+  windows after a 200 ms delivery grace; ordinary search background work is excluded.
+- Both documented production smoke layers passed. Other sessions' search,
+  paging, pipeline and generated-index publications were preserved.
+
+CI: https://github.com/vomebook/search/actions/runs/38011336725
