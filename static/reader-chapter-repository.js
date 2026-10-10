@@ -138,11 +138,11 @@
     }
     function load(index, demand = true) {
       if (disposed) return Promise.reject(abortError());
-      if (demand) {
+      let record = records.get(index);
+      if (demand && !record) {
         for (const record of records.values())
           if (!record.demand && record.index !== index) cancel(record);
       }
-      let record = records.get(index);
       if (record) {
         record.demand ||= demand;
         schedule();
