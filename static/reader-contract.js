@@ -236,7 +236,7 @@
   }
 
   const assetRoot = String.raw`objects/[0-9a-f]{2}/[0-9a-f]{64}/`;
-  const v3BucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:reading-manifest\\.json|page-map\\.json\\.gz|text-layer-manifest\\.json|text-review-manifest\\.json|text/(?:page-[0-9]{6}\\.json\\.gz|book-text\\.json\\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\\.json)|preview/(?:page-[0-9]{6}\\.(?:png|webp|jpeg)|partition-[0-9]{6}-[0-9]{6}-manifest\\.json))$`);
+  const v3BucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:reading-manifest\\.json|page-map\\.json\\.gz|text-layer-manifest\\.json|text-review-manifest\\.json|text/(?:page-[0-9]{6}\\.json\\.gz|book-text\\.json\\.gz|search-[0-9]{6}-[0-9]{6}\\.json\\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\\.json)|preview/(?:page-[0-9]{6}\\.(?:png|webp|jpeg)|partition-[0-9]{6}-[0-9]{6}-manifest\\.json))$`);
   const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
   const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.(?:webp|jxl))`;
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
