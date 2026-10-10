@@ -386,6 +386,24 @@ test("same-count corpus replacement changes snapshot identity and relocates anch
   assert.notStrictEqual(old.snapshot_generation, current.snapshot_generation);
   assert.strictEqual(current.anchor_index, records.length - 1);
 });
+test("anchor reuse skips scans across pages, retains missing anchors and bounds both cache levels", async () => {
+  const {worker}=await loaded();
+  const params={q:"alpha",pageSize:1,anchorId:"Repo/A\0docs/child/beta alpha.pdf"};
+  assert.strictEqual((await worker.request("local-search",params)).anchor_index,1);
+  vm.runInContext('globalThis.originalFind = Array.prototype.findIndex; Array.prototype.findIndex = () => {throw Error("anchor rescanned")}',worker.context);
+  assert.strictEqual((await worker.request("local-search",{...params,page:2,pageSize:2})).anchor_index,1);
+  vm.runInContext('Array.prototype.findIndex = originalFind',worker.context);
+  for(let i=0;i<12;i++) assert.strictEqual((await worker.request("local-search",{...params,anchorId:"missing-"+i})).anchor_index,-1);
+  assert.strictEqual(vm.runInContext('[...searchAnchorCache.values()][0].size',worker.context),8);
+  vm.runInContext('Array.prototype.findIndex = () => {throw Error("missing anchor rescanned")}',worker.context);
+  assert.strictEqual((await worker.request("local-search",{...params,anchorId:"missing-11",page:3})).anchor_index,-1);
+  vm.runInContext('Array.prototype.findIndex = originalFind',worker.context);
+  for(let i=0;i<12;i++) await worker.request("local-search",{q:"alpha",minSize:i,anchorId:params.anchorId});
+  assert.strictEqual(vm.runInContext('searchAnchorCache.size',worker.context),8);
+  const before=vm.runInContext('[...searchAnchorCache.values()].reduce((sum,cache)=>sum+cache.size,0)',worker.context);
+  await worker.request("local-search",{q:"alpha",minSize:11,anchorId:"x".repeat(4097)});
+  assert.strictEqual(vm.runInContext('[...searchAnchorCache.values()].reduce((sum,cache)=>sum+cache.size,0)',worker.context),before);
+});
 test("snapshot identity survives Worker restarts but changes with content and search rules", async () => {
   const first = await loaded();
   const second = await loaded();

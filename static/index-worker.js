@@ -17,6 +17,11 @@ let vocabSorted = [];
 let vocabSortedFilesOnly = [];
 const searchOrderCache = new Map();
 const SEARCH_ORDER_CACHE_MAX = 8;
+let searchAnchorOwners = new WeakMap();
+const searchAnchorCache = new Map();
+const SEARCH_ANCHOR_ORDER_MAX = 8;
+const SEARCH_ANCHOR_PER_ORDER_MAX = 8;
+const SEARCH_ANCHOR_KEY_MAX = 4096;
 let recordIndices = [];
 let repoRecordIndices = Object.create(null);
 let txtRecordIndices = [];
@@ -296,6 +301,8 @@ function replaceCorpus(nextRecords) {
   fulltextBuild = null;
   directoryIndexes.clear();
   searchOrderCache.clear();
+  searchAnchorOwners = new WeakMap();
+  searchAnchorCache.clear();
   recordSearchFields = new WeakMap();
   records = nextRecords;
   const repoCounts = Object.create(null);
@@ -611,6 +618,33 @@ function emptySearchOrder(params) {
   return recordIndices;
 }
 
+function findSearchAnchor(indices, anchorId) {
+  const owner = searchAnchorOwners.get(indices) || {};
+  const cached = searchAnchorCache.get(owner);
+  if (cached?.has(anchorId)) {
+    const index = cached.get(anchorId);
+    cached.delete(anchorId); cached.set(anchorId, index);
+    searchAnchorCache.delete(owner); searchAnchorCache.set(owner, cached);
+    return index;
+  }
+  const index = indices.findIndex(index => {
+    const record = records[index];
+    const filename = (record.File || "") + (record.Extension ? "." + record.Extension : "");
+    const path = (record.Folder || []).concat(filename).join("/");
+    return `${record.Repo || ""}\0${path}` === anchorId;
+  });
+  if (anchorId.length <= SEARCH_ANCHOR_KEY_MAX) {
+    const lookups = cached || new Map();
+    lookups.set(anchorId, index);
+    while (lookups.size > SEARCH_ANCHOR_PER_ORDER_MAX) lookups.delete(lookups.keys().next().value);
+    // Owner tokens do not retain an evicted complete result order.
+    searchAnchorOwners.set(indices, owner);
+    searchAnchorCache.delete(owner); searchAnchorCache.set(owner, lookups);
+    while (searchAnchorCache.size > SEARCH_ANCHOR_ORDER_MAX) searchAnchorCache.delete(searchAnchorCache.keys().next().value);
+  }
+  return index;
+}
+
 function pageResult(indices, params) {
   const page = Math.max(1, Number(params.page) || 1);
   const pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, Number(params.pageSize) || 100));
@@ -625,12 +659,7 @@ function pageResult(indices, params) {
     snapshot_generation: snapshotGeneration || `worker:${corpusInstance}:${generation}`,
   };
   if (typeof params.anchorId === "string") {
-    result.anchor_index = indices.findIndex(index => {
-      const record = records[index];
-      const filename = (record.File || "") + (record.Extension ? "." + record.Extension : "");
-      const path = (record.Folder || []).concat(filename).join("/");
-      return `${record.Repo || ""}\0${path}` === params.anchorId;
-    });
+    result.anchor_index = findSearchAnchor(indices, params.anchorId);
   }
   return result;
 }

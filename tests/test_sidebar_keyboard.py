@@ -67,6 +67,23 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(result['attributes'], [result['repo']] * 3)
         self.assertEqual(result['label'], result['repo'])
 
+    def test_neutral_controls_skip_snapshots_but_filter_changes_capture(self):
+        result = self.page.evaluate('''() => {
+          const original=saveSearchViewSnapshot;let captures=0;
+          saveSearchViewSnapshot=()=>{captures++};
+          DOM.searchInput.click();DOM.themeBtn.click();
+          DOM.historyToggle.dispatchEvent(new Event('change',{bubbles:true}));
+          STATE.folderTree=[{name:'root',path:'root',count:1,selfCount:0,children:[
+            {name:'child',path:'root/child',count:1,selfCount:1,children:[]}]}];
+          STATE.folderTreeCollapsed={root:true};renderFilterFolderTree();
+          DOM.filterFolderTree.querySelector('.tree-toggle').click();
+          const neutral=captures;
+          DOM.sortSelect.dispatchEvent(new Event('change',{bubbles:true}));
+          saveSearchViewSnapshot=original;
+          return {neutral,filter:captures>neutral};
+        }''')
+        self.assertEqual(result, dict(neutral=0, filter=True))
+
     def test_navigation_preserves_zero_and_exact_byte_size_limits(self):
         result = self.page.evaluate('''() => {
           ROUTER.apply=()=>{};
