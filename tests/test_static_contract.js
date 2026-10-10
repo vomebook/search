@@ -350,11 +350,12 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /const requestUrl = String\(url\) === sourceUrl \? contentUrl : url/);
   assert.match(reader, /new URL\(url, location\.href\)\.pathname\.split\("\/"\)\.pop\(\)/);
   assert.match(reader, /document\.createDocumentFragment\(\)/);
-  assertCode(reader, 'VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.documentBytes)');
+  assertCode(reader, 'limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes');
+  assertCode(reader, 'VoiceOfMLReaderSecurity.readBytes(response, limit)');
   assert.match(reader, /new TextDecoder\(detectTextEncoding\(bytes, documentState\.title\)\)/);
   assert.match(reader, /function detectTextEncoding/);
   assert.match(reader, /new TextDecoder\("utf-8", \{ fatal: true \}\)\.decode\(bytes, \{ stream: true \}\)/);
-  assertCode(reader, 'const bytes = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.documentBytes)');
+  assert.match(reader, /readPreparedBytes\(/);
   assert.match(reader, /cMapUrl: PDFJS_CMAP_URL/);
   assert.match(reader, /standardFontDataUrl: PDFJS_STANDARD_FONT_URL/);
   assert.match(readerHtml, /'wasm-unsafe-eval'/);
@@ -523,8 +524,9 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(sw, /url\.pathname === "\/search\/static\/reader\.html"/);
   assert.match(sw, /READER_RUNTIME_PATHS\.has\(url\.pathname\)/);
   assertCode(sw, 'VoiceOfMLReaderResources.runtimePaths("/search/static/")');
-  assert.match(sw, /readerNavigation = event\.request\.mode === "navigate" && url\.pathname === "\/search\/static\/reader\.html"/);
-  assert.match(sw, /cacheKey = readerNavigation \? "\/search\/static\/reader\.html" : searchNavigation \? "\/search\/" : event\.request/);
+  assert.match(sw, /readerShell = url\.pathname === "\/search\/static\/reader\.html"/);
+  assert.match(sw, /networkFirst = !readerShell &&/);
+  assert.match(sw, /cacheKey = readerShell \? "\/search\/static\/reader\.html" : searchNavigation \? "\/search\/" : event\.request/);
   assert.match(sw, /fetch\(event\.request\)[\s\S]*cache\.put\(cacheKey/);
 });
 test("mobile shell hides sidebars before application startup", () => {

@@ -107,6 +107,31 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
         }''')
         self.assertTrue(all(result.values()), result)
 
+    def test_pending_shell_has_immediate_feedback_and_rejects_unowned_reveal(self):
+        held = []
+        self.context = self.fixture.context
+        self.context.route('**/static/pending-reader.html?**', lambda route: held.append(route))
+        self.page.evaluate('''() => {
+          window.__pendingNavigation = VoiceOfMLReaderNavigation.createNavigation('/search/static/pending-reader.html');
+          __pendingNavigation.mount(new URL('/search/static/pending-reader.html?ext=txt', location.origin));
+        }''')
+        self.page.locator('.reader-overlay-opening').wait_for()
+        self.assertTrue(self.page.locator('.reader-overlay-pending').count())
+        self.page.evaluate('window.postMessage({type:"voice-reader-shell"},location.origin)')
+        self.page.wait_for_timeout(30)
+        self.assertTrue(self.page.locator('.reader-overlay-opening').is_visible())
+        self.page.evaluate('__pendingNavigation.unmount()')
+        self.assertEqual(self.page.locator('.reader-overlay-opening').count(), 0)
+        self.assertEqual(self.page.locator('.reader-overlay').count(), 0)
+        for route in held:
+            route.fulfill(content_type='text/html', body='<body>cancelled</body>')
+
+    def test_shell_is_warmed_without_pointer_intent_or_reader_execution(self):
+        self.page.wait_for_function('warmedReaderAssets.has("/search/static/reader.html")')
+        self.assertTrue(self.page.locator('link[rel="modulepreload"][href="/search/static/reader.js"]').count())
+        self.assertEqual(self.page.locator('.reader-overlay').count(), 0)
+        self.assertFalse(self.page.evaluate('!!window.VoiceOfMLReaderPdfDiagnostics'))
+
     def test_random_reader_body_timeout_after_close_remains_retryable(self):
         result = self.page.evaluate('''async () => {
           const originalFetch=fetch, originalTimer=setTimeout, previousUrl=location.href;

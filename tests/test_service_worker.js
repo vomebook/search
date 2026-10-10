@@ -200,15 +200,31 @@ for (const method of ["HEAD", "POST"]) {
     assert.deepStrictEqual(instance.operations.put, []);
   });
 }
-test("reader navigations prefer the network and share one query-independent cache key", async () => {
+test("reader warming and navigations reuse cache immediately while refreshing one shell key", async () => {
   const cached = response("cached-reader");
   const network = response("network-reader");
   const instance = harness({ cacheEntries: [["/search/static/reader.html", cached]], fetch: () => Promise.resolve(network) });
   const url = "https://example.test/search/static/reader.html?url=one";
-  assert.strictEqual(await dispatchFetch(instance, url, "navigate"), network);
+  assert.strictEqual(await dispatchFetch(instance, url, "navigate"), cached);
   await tick();
   assert.deepStrictEqual(instance.operations.fetch, [url]);
   assert.deepStrictEqual(instance.operations.put, ["/search/static/reader.html"]);
+});
+test("a stalled shell revalidation cannot block repeated Reader navigation", async () => {
+  for (const [text, prefix, cacheName] of [
+    [source, '/search/static/', CACHE_NAME],
+    ...(fs.existsSync('../huggingface-Search/static/sw.js') ? [[fs.readFileSync('../huggingface-Search/static/sw.js', 'utf8'), '/static/', 'voiceofml-search-hf-v1.0.0']] : [])
+  ]) {
+    let release;
+    const cached = response('reader-ready');
+    const instance = harness({source: text, fetch: () => new Promise(resolve => { release = resolve; })});
+    instance.stores.set(cacheName, new Map([[prefix + 'reader.html', cached]]));
+    assert.strictEqual(await dispatchFetch(instance, 'https://example.test' + prefix + 'reader.html?id=one', 'navigate'), cached);
+    await tick();
+    release(response('updated'));
+    await Promise.all(instance.operations.lifetimes);
+    assert.strictEqual(instance.stores.get(cacheName).get(prefix + 'reader.html').body, 'updated');
+  }
 });
 test("cached responses return immediately while event lifetime covers delayed network and cache writes", async () => {
   const url = "https://example.test/search/other.txt";

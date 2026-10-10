@@ -52,6 +52,10 @@ jobs:
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
       - name: Run multi-format preparation and navigation gates
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+      - name: Check warmed Reader shell reuse
+        run: |
+          node tests/test_service_worker.js
+          python3 -B -m unittest -v tests.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_shell_does_not_wait_for_slow_revalidation
       - name: Run chapter-bundle browser gate
         run: |
           node tests/test_reader_chapter_scheduler.js

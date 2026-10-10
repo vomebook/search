@@ -42,7 +42,7 @@
         window.__VOICE_READER_RESOLVE__ = { id, promise, dispose };
       })();
     </script>
-    <link rel="modulepreload" href="/search/static/reader.js?reader-v3" />
+    <link rel="modulepreload" href="/search/static/reader.js" />
     <style>
       #loading-status {
         display: none !important;
@@ -185,6 +185,8 @@
       </section>
     </aside>
     <script>
+      if (window.parent !== window)
+        window.parent.postMessage({ type: "voice-reader-shell" }, location.origin);
       for (const panel of document.querySelectorAll(".reader-panel-view")) {
         const header = panel.querySelector(".panel-view-header");
         const actions =
@@ -200,6 +202,6 @@
         panel.insertBefore(input, panel.querySelector(".panel-list"));
       }
     </script>
-    <script type="module" src="/search/static/reader.js?reader-v3"></script>
+    <script type="module" src="/search/static/reader.js"></script>
   </body>
 </html>

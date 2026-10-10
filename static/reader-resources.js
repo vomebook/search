@@ -122,7 +122,7 @@
   const vendorUrl = (name, base) => base + vendors[name].path;
   const runtimePaths = (base) => readerFiles.map((file) => base + file);
   const shellAssets = (base) =>
-    readerFiles.filter((file) => !lazyFiles.has(file)).map((file) => base + file);
+    ["reader.html", ...readerFiles.filter((file) => !lazyFiles.has(file))].map((file) => base + file);
   function engineAssets(extension, base, foliateSuffix = "") {
     if (extension === "pdf")
       return [
