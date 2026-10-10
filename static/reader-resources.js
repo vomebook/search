@@ -3,24 +3,24 @@
   // Canonical resource inventory for runtime, warming, caching and static builds.
   const vendors = {
     pdf: {
-      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs",
+      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/build/pdf.min.mjs",
       file: "pdf.min.mjs",
-      sha256: "f80490490320511e5df18c580b9edd6b5db8058dceebaf6f161992e0a964b9e2"
+      sha256: "57456c8e0c81e46be31174b499ef77f2b9f5ee46d04412ba627320a36755d4c2"
     },
     pdfWorker: {
-      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs",
+      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/build/pdf.worker.min.mjs",
       file: "pdf.worker.min.mjs",
-      sha256: "8ab0e5e30031b4a06ecfddd5ae9562f0227f830ee7ec9ed1a968b134243d2386"
+      sha256: "9536359f1b8367850d485731ca1d5e45c159a7b7a0912325e539937aa21ceb18"
     },
     marked: {
-      url: "https://cdn.jsdelivr.net/npm/marked@18.0.13/lib/marked.umd.js",
+      url: "https://cdn.jsdelivr.net/npm/marked@18.1.0/lib/marked.umd.js",
       file: "marked.min.js",
-      sha256: "b147274a9ce27d17276587167e49483d719f6893eeca3a3667a59797661d3556"
+      sha256: "f424dcb508fdf93e0137a970cfce8f3207ea2e3f37eca5f7556a52875683632a"
     },
     purify: {
-      url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js",
+      url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js",
       file: "purify.min.js",
-      sha256: "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5"
+      sha256: "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2"
     },
     jszip: {
       url: "https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js",
@@ -28,14 +28,14 @@
       sha256: "7f839b2d4688b845c105ebf5d2f9803075f91ea0fe72bdaac176c3a04dd3d2c1"
     },
     docx: {
-      url: "https://cdn.jsdelivr.net/npm/docx-preview@0.4.0/dist/docx-preview.min.js",
+      url: "https://cdn.jsdelivr.net/npm/docx-preview@0.4.1/dist/docx-preview.min.js",
       file: "docx-preview.min.js",
-      sha256: "051ef503f2677d53159a388b7384e950eda41ea4e47a103e5e36f124d7faea40"
+      sha256: "c4a133c65a112799e35b143c572dfff9e923a3bf39b5fd3b07a06aa0f8f530c2"
     },
     ruffle: {
-      url: "https://unpkg.com/@ruffle-rs/ruffle@0.6.0/ruffle.js",
+      url: "https://unpkg.com/@ruffle-rs/ruffle@0.7.1/ruffle.js",
       file: "ruffle.js",
-      sha256: "a686a305345b06542dddedada71869104916a61e393f174687571528ac4225f5"
+      sha256: "26036a94567088dfb3de88a759e8ed10a4cea07b29500af36f345eef42420098"
     }
   };
   for (const vendor of Object.values(vendors)) {
@@ -49,9 +49,42 @@
     Object.freeze(vendor);
   }
   const pdfArchive = Object.freeze({
-    url: "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.3.289.tgz",
-    sha256: "06f25e887adc6489f04c9fcb14198c77e4e5623a59a0bba5c4cea5838a4f1241"
+    url: "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.4.299.tgz",
+    sha256: "86269b40170eb41740ea05ad2102d71d33de4f122b34eb2f478be0ea7779c415"
   });
+  const foliateVendors = {
+    fflateLicense: {
+      url: "https://cdn.jsdelivr.net/npm/fflate@0.8.3/LICENSE",
+      file: "LICENSE_fflate",
+      sha256: "0a1df3a083d0c010560aa342e87959c8c1070e6fd54545741f083f22d0c8b551"
+    },
+    zipLicense: {
+      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.23.0/LICENSE",
+      file: "LICENSE_zipjs",
+      sha256: "1b7ebc8d7889ed25491484ab2b102370742ca6c0b26650a0c62cc2269b579b84"
+    },
+    fflate: {
+      url: "https://cdn.jsdelivr.net/npm/fflate@0.8.3/esm/browser.js",
+      file: "fflate.js",
+      sha256: "b7ca4450b19559a1d50eb381adcee94b82449674be4cd17789d9beba7e6122a1"
+    },
+    zip: {
+      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.23.0/index.min.js",
+      file: "zip.js",
+      sha256: "1b4d7f05a108b7e5815b429f116f17deb36af1949e1aff5aedcf47292d65c8ed"
+    },
+    textLayer: {
+      url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.4.299/web/text_layer_builder.css",
+      file: "pdfjs/text_layer_builder.css",
+      sha256: "5b21bcb7d703cae5b8eebf9c8579435409aaf351b62e7518327ada60bdd0946f"
+    },
+    annotationLayer: {
+      url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.4.299/web/annotation_layer_builder.css",
+      file: "pdfjs/annotation_layer_builder.css",
+      sha256: "5a692d678ff97932023adf101c9faae5a0fda623f341e6646b6dc9251e259ad8"
+    }
+  };
+  for (const vendor of Object.values(foliateVendors)) Object.freeze(vendor);
   const readerFiles = Object.freeze([
     "reader-resources.js",
     "reader-engine-preload.js",
@@ -114,6 +147,8 @@
   }
   const resources = Object.freeze({
     vendors: Object.freeze(vendors),
+    foliateVendors: Object.freeze(foliateVendors),
+    foliateRevision: "78914aef4466eb960965702401634c2cb348e9b1",
     pdfArchive,
     readerFiles,
     vendorUrl,
