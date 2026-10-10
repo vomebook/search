@@ -2743,6 +2743,36 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function('top => Math.abs(document.querySelector(\'.reader-epub-chapter[data-chapter="15"]\').getBoundingClientRect().top-top)<3',arg=before)
         self.assertTrue(target.is_visible())
 
+    def test_concurrent_chapter_open_keeps_order_when_third_chapter_arrives_first(self):
+        root = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64
+        manifest = {'version':1, 'kind':'epub-chapters', 'chapters':[
+            {'index':i, 'path':f'chapter-{i}.xhtml', 'bytes':100} for i in range(1,5)]}
+        held = {}
+        def body(number):
+            return f'<h1>Chapter {number}</h1><p style="height:1200px">Readable {number}</p>'
+        def resource(route):
+            url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('url',[''])[0]
+            if url.endswith('chapter-manifest.json'):
+                route.fulfill(json=manifest)
+                return
+            number = int(url.rsplit('chapter-',1)[1].split('.',1)[0])
+            if number in (1,2):
+                held[number] = route
+            else:
+                route.fulfill(content_type='text/html',body=body(number))
+        self.page.route('**/api/reader-content**',resource)
+        self.page.goto(self.reader_url('epub-chapters',url=root+'/chapter-manifest.json'))
+        self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state='attached')
+        held[1].fulfill(content_type='text/html',body=body(1))
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(self.page.locator('.epub-frame > [data-chapter]').evaluate_all(
+            'nodes=>nodes.map(node=>Number(node.dataset.chapter))'),[1,2,3,4])
+        held[2].fulfill(content_type='text/html',body=body(2))
+        self.page.locator('.reader-epub-chapter[data-chapter="2"]').wait_for(state='attached')
+        self.assertEqual(self.page.locator('.reader-epub-chapter').evaluate_all(
+            'nodes=>nodes.map(node=>Number(node.dataset.chapter))'),[1,2,3,4])
+        self.assertEqual(self.page.locator('#viewport').evaluate('node=>node.scrollTop'),0)
+
 
 if __name__ == "__main__":
     unittest.main()
