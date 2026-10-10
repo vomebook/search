@@ -13,6 +13,21 @@ import { createV3Repository, validateResource, validateReadingManifest, validate
 import { populateIndependentTextLayer, independentTextCaret } from "./reader-pdf-text.js";
 let pdfFetchPolicy = null;
 import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText, pdfSourceOffset } from "/search/static/reader-pdf-text.js";
+const pdfPageTimings = [];
+function pdfStage(stage, page = 0) {
+  const started = performance.now();
+  return (outcome = "ready") => {
+    if (readerAbortController.signal.aborted) return;
+    pdfPageTimings.push({at:started, stage, page, outcome, ms:performance.now()-started});
+    if (pdfPageTimings.length > 64) pdfPageTimings.shift();
+  };
+}
+function measurePdf(promise, stage, page = 0) {
+  const finish = pdfStage(stage,page);
+  return Promise.resolve(promise).then(value => { finish(); return value; }, error => {
+    finish(error?.name === "AbortError" ? "cancelled" : "failed"); throw error;
+  });
+}
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
@@ -56,15 +71,27 @@ function stopReaderWork() {
 }
 readerRuntime.track(stopReaderWork);
 trackReaderResource(() => window.__VOICE_READER_RESOLVE__?.dispose());
-function awaitReader(promise) {
+const pdfDiagnostics = Object.freeze({snapshot:() => ({pages:pdfPageTimings.map(row=>({...row})), requests:pdfFetchPolicy?.timings || [], cache:pdfPersistentTextStore?.stats || null})});
+window.VoiceOfMLReaderPdfDiagnostics = pdfDiagnostics;
+trackReaderResource(() => {
+  pdfPageTimings.length = 0;
+  if (window.VoiceOfMLReaderPdfDiagnostics === pdfDiagnostics) delete window.VoiceOfMLReaderPdfDiagnostics;
+});
+function awaitReader(promise, extraSignal = null) {
   return new Promise((resolve, reject) => {
-    const signal = readerAbortController.signal,
-      abort = () => reject(readerAbortError());
+    let settled = false;
+    const signals = extraSignal ? [readerAbortController.signal, extraSignal] : [readerAbortController.signal];
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signals.forEach(signal => signal.removeEventListener("abort", abort));
+      callback(value);
+    };
+    const abort = () => finish(reject, readerAbortError());
     Promise.resolve(promise)
-      .then(resolve, reject)
-      .finally(() => signal.removeEventListener("abort", abort));
-    if (signal.aborted) abort();
-    else signal.addEventListener("abort", abort, { once: true });
+      .then(value => finish(resolve, value), error => finish(reject, error));
+    if (signals.some(signal => signal.aborted)) abort();
+    else signals.forEach(signal => signal.addEventListener("abort", abort, { once: true }));
   });
 }
 function waitForReader(delay = 0, animationFrame = false) {
@@ -3681,7 +3708,7 @@ async function renderPdf(prepared) {
   await getInitialReaderRestoration();
   const initialPage = initialReaderPage(pdf.numPages);
   let initialRenderGate = true;
-  const firstPage = await pdf.getPage(initialPage);
+  const firstPage = await measurePdf(awaitReader(pdf.getPage(initialPage)), "page", initialPage);
   assertReaderActive();
   const firstViewport = firstPage.getViewport({ scale: 1 });
   const observer = new IntersectionObserver(
@@ -3852,11 +3879,15 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
   priority = normalizePdfPriority(priority);
   if (readerAbortController.signal.aborted) return;
   if (!force && shell.dataset.renderFailed === "1") return;
+  if (priority >= 2 && (force || shell.dataset.renderState !== "rendered") &&
+      pdfActiveRenders >= (matchMedia("(max-width: 700px)").matches ? 1 : 2))
+    cancelSpeculativePdfRenders(shell);
   if (priority) {
     shell.dataset.renderPriority = "1";
     promotePdfRenderWaiter(shell);
   }
   if (shell._backgroundRender) {
+    if (priority >= 2 && shell._pdfRenderCancelled) shell._resumePdfDemand = true;
     if (priority && ["pdf-pages", "image-pages"].includes(capability.mode)) {
       const image = shell.querySelector("img");
       if (image) image.fetchPriority = priority >= 3 ? "high" : "auto";
@@ -3911,6 +3942,12 @@ function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(
     })
     .finally(() => {
       if (shell._backgroundRender === task) delete shell._backgroundRender;
+      delete shell._pdfRenderCancelled;
+      if (shell._resumePdfDemand) {
+        delete shell._resumePdfDemand;
+        if (!readerAbortController.signal.aborted && shell.isConnected && isPdfPageVisible(shell))
+          queueMicrotask(() => renderPdfInBackground(shell));
+      }
     });
   return task;
 }
@@ -3960,8 +3997,8 @@ async function renderHybridPdfCanvas(shell, signal, priority) {
     do {
       const generation = readerRuntime.currentGeneration("pdf");
       if (signal.aborted || !shell.isConnected) throw readerAbortError();
-      const page = await awaitReader(pdf.getPage(Number(shell.dataset.page)), signal);
-      if (!acquired) { await acquirePdfRenderSlot(priority, shell, signal); acquired = true; }
+      const page = await measurePdf(awaitReader(pdf.getPage(Number(shell.dataset.page)), signal), "page", Number(shell.dataset.page));
+      if (!acquired) { await measurePdf(acquirePdfRenderSlot(priority, shell, signal), "queue", Number(shell.dataset.page)); acquired = true; }
       const base = page.getViewport({ scale: 1 });
       const geometry = pdfV3Map.pages[Number(shell.dataset.page) - 1];
       if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
@@ -3972,7 +4009,7 @@ async function renderHybridPdfCanvas(shell, signal, priority) {
       canvas.width = Math.ceil(view.width * outputScale); canvas.height = Math.ceil(view.height * outputScale);
       rendering = page.render({ canvasContext: canvas.getContext("2d"), viewport: view,
         transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0] });
-      await awaitReader(rendering.promise, signal); rendering = null;
+      await measurePdf(awaitReader(rendering.promise, signal), "draw", Number(shell.dataset.page)); rendering = null;
       while (!pdfV3Manifest && pdfSelectionIntersects(shell) && !signal.aborted) await waitForReader(100);
       if (signal.aborted || !shell.isConnected) throw readerAbortError();
       if (!isReaderGenerationCurrent("pdf", generation)) { canvas.width = canvas.height = 0; continue; }
@@ -4012,7 +4049,7 @@ function renderPdfImageShell(shell, force = false, priority = false) {
   const task = (async () => {
     let acquired = false;
     try {
-      await acquirePdfRenderSlot(priority, shell, renderController.signal);
+      await measurePdf(acquirePdfRenderSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
       acquired = true;
       shell._renderStarted = true;
       assertReaderActive();
@@ -4087,6 +4124,8 @@ function renderPdfImageShell(shell, force = false, priority = false) {
       image.classList.add("ready");
       if (pageState) pageState.hidden = true;
       shell.dataset.renderState = "rendered";
+      delete shell.dataset.renderRetries;
+      delete shell.dataset.renderFailed;
       shell.dataset.renderUsedAt = String(Date.now());
       pdfShellWindow?.remember(shell);
       if (isPdfPageVisible(shell) || !pdfManifestPrefetchOrigin) schedulePdfManifestPrefetch(entry.page);
@@ -4122,9 +4161,10 @@ function cancelSpeculativePdfRenders(protectedShell) {
     if (!shell._hybridRenderPromise && shell.dataset.renderState !== "rendering") continue;
     if (
       shell === protectedShell ||
-      isPdfPageVisible(shell)
+      isPdfPageVisible(shell) || pdfSelectionIntersects(shell)
     )
       continue;
+    shell._pdfRenderCancelled = true;
     shell._renderCancel?.();
     shell._hybridCancel?.();
   }
@@ -4149,7 +4189,7 @@ function renderPdfShell(shell, force = false, priority = false) {
   const task = (async () => {
     let acquired = false;
     try {
-      await acquirePdfRenderSlot(priority, shell, renderController.signal);
+      await measurePdf(acquirePdfRenderSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
       acquired = true;
       assertReaderActive();
       if (renderController.signal.aborted) throw readerAbortError();
@@ -4158,7 +4198,8 @@ function renderPdfShell(shell, force = false, priority = false) {
       do {
         delete shell.dataset.pendingRerender;
         const generation = readerRuntime.currentGeneration("pdf"),
-          page = await awaitReader(pdf.getPage(Number(shell.dataset.page)));
+          pageNumber = Number(shell.dataset.page),
+          page = await measurePdf(awaitReader(pdf.getPage(pageNumber), renderController.signal), "page", pageNumber);
         assertReaderActive();
         if (renderController.signal.aborted) throw readerAbortError();
         const base = page.getViewport({ scale: 1 }),
@@ -4183,7 +4224,7 @@ function renderPdfShell(shell, force = false, priority = false) {
         try {
           // The canvas is the first visible result. Text extraction can need a
           // separate range and must not delay the visual first page.
-          await awaitReader(rendering.promise);
+          await measurePdf(awaitReader(rendering.promise, renderController.signal), "draw", Number(shell.dataset.page));
         } finally {
           untrack();
           activeRendering = null;
@@ -5568,7 +5609,7 @@ async function start() {
   const generation = readerRuntime.currentGeneration("navigation");
   // Resolve the original source and import its known engine concurrently.
   if (extension === "pdf" || /\.pdf(?:$|[?#])/i.test(sourceUrl)) preloadPdfEngine().catch(() => {});
-  readerSourcePromise = resolveReaderSource();
+  readerSourcePromise = measurePdf(resolveReaderSource(), "resolve");
   await readerSourcePromise;
   assertReaderActive();
   if (readerId && /\/calibre-chm-epub-[^/]+\/document\.epub(?:$|\?)/i.test(sourceUrl)) {
@@ -5809,7 +5850,7 @@ async function loadPdfEngine() {
   }
 }
 function loadPdfDocument(target = sourceUrl) {
-  return preloadPdfEngine().then((pdfjs) => {
+  return measurePdf(preloadPdfEngine(), "engine").then((pdfjs) => {
     assertReaderActive();
     if (!pdfFetchPolicy) {
       pdfFetchPolicy = createPdfFetchPolicy();
@@ -5831,7 +5872,7 @@ function loadPdfDocument(target = sourceUrl) {
       standardFontDataUrl: PDFJS_STANDARD_FONT_URL,
       withCredentials: false
     });
-    return loadPdfWithTimeout(pdfjs, options, target, readerContentUrl(target));
+    return measurePdf(loadPdfWithTimeout(pdfjs, options, target, readerContentUrl(target)), "document");
   });
 }
 function loadTextDocument() {
@@ -7441,6 +7482,28 @@ function publishPdfSearchProgress(generation, groups, total, pattern, firstPage,
   return true;
 }
 const pdfSearchTextCache = new Map();
+let pdfPersistentTextStore = null, pdfPersistentTextOpening = null, pdfPersistentTextVersion = null;
+async function getPdfPersistentTextStore(pdf) {
+  const version = pdfFetchPolicy?.identity;
+  if (!version || ocrManifestUrl || readerAbortController.signal.aborted) return null;
+  if (pdfPersistentTextVersion !== version) {
+    pdfPersistentTextStore?.dispose();
+    pdfPersistentTextStore = null;
+    pdfPersistentTextVersion = version;
+    const pending = (async () => {
+      let timer;
+      const module = await awaitReader(Promise.race([import("./reader-pdf-text-store.mjs"),
+        new Promise(resolve => {timer=setTimeout(()=>resolve(null),1000);})])).finally(()=>clearTimeout(timer));
+      if (!module) return null;
+      const key = await module.pdfTextStoreKey({source:sourceUrl,version,pageCount:pdf.numPages,
+        engine:VoiceOfMLReaderResources.vendors.pdf.sha256});
+      if (!key || readerAbortController.signal.aborted || pdfFetchPolicy?.identity !== version || pdfPersistentTextOpening !== pending) return null;
+      return pdfPersistentTextStore = module.createPdfTextStore(key,{signal:readerAbortController.signal});
+    })().catch(() => null);
+    pdfPersistentTextOpening = pending;
+  }
+  return pdfPersistentTextStore || pdfPersistentTextOpening;
+}
 const PDF_SEARCH_TEXT_CACHE_BYTES = 8 * 1024 * 1024;
 let pdfSearchTextCacheBytes = 0;
 function cachePdfSearchText(page, text) {
@@ -7460,6 +7523,8 @@ function cachePdfSearchText(page, text) {
   }
 }
 trackReaderResource(() => {
+  pdfPersistentTextStore?.dispose();
+  pdfPersistentTextStore = pdfPersistentTextOpening = pdfPersistentTextVersion = null;
   pdfSearchTextCache.clear();
   pdfSearchTextCacheBytes = 0;
 });
@@ -7472,6 +7537,14 @@ async function loadPdfSearchText(pdf, page, generation) {
     pdfSearchTextCache.set(page, text);
     return text;
   }
+  const store = await getPdfPersistentTextStore(pdf);
+  const version = pdfFetchPolicy?.identity;
+  const stored = store ? await store.get(page).catch(() => null) : null;
+  if (!isReaderGenerationCurrent("search", generation)) throw readerAbortError();
+  if (stored !== null && version && version === pdfFetchPolicy?.identity) {
+    cachePdfSearchText(page, stored);
+    return stored;
+  }
   const pdfPage = await awaitReader(pdf.getPage(page));
   if (!isReaderGenerationCurrent("search", generation))
     throw new DOMException("Search cancelled", "AbortError");
@@ -7480,6 +7553,7 @@ async function loadPdfSearchText(pdf, page, generation) {
     throw new DOMException("Search cancelled", "AbortError");
   text = normalizePdfSearchText(pdfTextContent(textContent.items));
   cachePdfSearchText(page, text);
+  if (store && version && version === pdfFetchPolicy?.identity) store.put(page,text).catch(() => {});
   return text;
 }
 async function fullSearchPdfMatches(query, generation) {
