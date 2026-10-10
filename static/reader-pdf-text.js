@@ -155,15 +155,16 @@ export function populateIndependentTextLayer(layer, payload) {
   let end = 0;
   for (const region of payload.regions) {
     fragment.appendChild(layer.ownerDocument.createTextNode(chars.slice(end, region.start).join("")));
-    const [x0, y0, x1, y1] = region.box;
     const vertical = region.writing_mode.startsWith("vertical");
     const q = region.quad;
     const dx = q[1][0] - q[0][0], dy = (q[1][1] - q[0][1]) * ratio;
-    const angle = vertical ? 0 : Math.atan2(dy, dx);
-    const height = vertical ? x1 - x0 : Math.hypot(q[3][0] - q[0][0], (q[3][1] - q[0][1]) * ratio);
-    const width = vertical ? (y1 - y0) * ratio : Math.hypot(dx, dy);
-    const positioned = positionedRun(layer, region.text, vertical ? x0 : q[0][0],
-      vertical ? y0 : q[0][1], Math.max(height, .0001), width, "sans-serif", angle, vertical);
+    const angle = Math.atan2(dy, dx);
+    const across = Math.hypot(dx, dy);
+    const down = Math.hypot(q[3][0] - q[0][0], (q[3][1] - q[0][1]) * ratio);
+    const height = vertical ? across : down;
+    const width = vertical ? down : across;
+    const positioned = positionedRun(layer, region.text, q[0][0],
+      q[0][1], Math.max(height, .0001), width, "sans-serif", angle, vertical);
     const run = positioned.querySelector(".reader-pdf-text-run");
     run.dir = ["rtl", "ltr"].includes(region.direction) ? region.direction : "auto";
     run.style.unicodeBidi = "plaintext";
@@ -175,5 +176,21 @@ export function populateIndependentTextLayer(layer, payload) {
   }
   fragment.appendChild(layer.ownerDocument.createTextNode(chars.slice(end).join("")));
   layer.replaceChildren(fragment);
+  // Page surfaces disable selection; separators must be selectable along with runs.
+  layer.style.userSelect = "text";
+  layer.style.webkitUserSelect = "text";
   layer.dataset.textGeneration = payload.generation;
+}
+
+
+export function independentTextCaret(doc, x, y) {
+  const position = doc.caretPositionFromPoint?.(x, y);
+  const range = position ? null : doc.caretRangeFromPoint?.(x, y);
+  const node = position?.offsetNode || range?.startContainer;
+  let offset = position?.offset ?? range?.startOffset;
+  if (node?.nodeType !== 3 || !node.parentElement?.closest(
+      '.reader-pdf-text[data-text-generation] .reader-pdf-text-run[data-region-id]')) return null;
+  if (offset > 0 && offset < node.length && /[\uDC00-\uDFFF]/.test(node.data[offset]) &&
+      /[\uD800-\uDBFF]/.test(node.data[offset - 1])) offset--;
+  return { node, offset };
 }

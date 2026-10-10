@@ -137,12 +137,14 @@ export function createBookTextCache(load) {
   }, clear() { value = null; pending = null; } };
 }
 
-export function paintTextHit(shell, boxes) {
+export function paintTextHit(shell, boxes, hit = null) {
   shell.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
-  for (const { box } of boxes) {
+  const positioned = positionedHitBoxes(shell, hit);
+  for (const { box, precision } of positioned?.length ? positioned : boxes) {
     const mark = shell.ownerDocument.createElement("span");
     mark.className = "reader-text-hit-box";
     mark.setAttribute("aria-hidden", "true");
+    mark.dataset.mappingPrecision = precision || 'block';
     Object.assign(mark.style, { position: "absolute", pointerEvents: "none", zIndex: "4",
       left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${(box[2] - box[0]) * 100}%`,
       height: `${(box[3] - box[1]) * 100}%`, background: "rgb(240 199 94 / 45%)" });
@@ -154,4 +156,33 @@ function codePointLength(text) {
   let length = 0;
   for (const point of text) length++;
   return length;
+}
+
+
+function positionedHitBoxes(shell, hit) {
+  const layer = shell.querySelector('.reader-pdf-text[data-text-generation]');
+  if (!layer || !Number.isSafeInteger(hit?.start) || hit.start < 0 ||
+      !Number.isSafeInteger(hit?.length) || hit.length < 1) return null;
+  const walker = layer.ownerDocument.createTreeWalker(layer, 4);
+  let offset = 0, start = null, end = null;
+  while (walker.nextNode()) {
+    const node = walker.currentNode, next = offset + node.data.length;
+    if (!start && hit.start < next) start = [node, hit.start - offset];
+    if (start && hit.start + hit.length <= next) {
+      end = [node, hit.start + hit.length - offset];
+      break;
+    }
+    offset = next;
+  }
+  if (!end) return null;
+  const range = layer.ownerDocument.createRange();
+  range.setStart(...start); range.setEnd(...end);
+  const bounds = shell.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return null;
+  const rects = [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0);
+  if (!rects.length || rects.length > 256) return null;
+  return rects.map(rect => ({ precision: 'text-range', box: [
+    Math.max(0, (rect.left - bounds.left) / bounds.width), Math.max(0, (rect.top - bounds.top) / bounds.height),
+    Math.min(1, (rect.right - bounds.left) / bounds.width), Math.min(1, (rect.bottom - bounds.top) / bounds.height)
+  ] })).filter(({ box }) => box[2] > box[0] && box[3] > box[1]);
 }
