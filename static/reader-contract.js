@@ -236,6 +236,7 @@
   }
 
   const assetRoot = String.raw`objects/[0-9a-f]{2}/[0-9a-f]{64}/`;
+  const v3BucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:reading-manifest\\.json|page-map\\.json\\.gz|text-layer-manifest\\.json|text-review-manifest\\.json|text/(?:page-[0-9]{6}\\.json\\.gz|book-text\\.json\\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\\.json)|preview/(?:page-[0-9]{6}\\.(?:png|webp|jpeg)|partition-[0-9]{6}-[0-9]{6}-manifest\\.json))$`);
   const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
   const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.(?:webp|jxl))`;
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
@@ -270,7 +271,9 @@
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages-v2") {
      if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path) || v2ChapterPathPattern.test(path) || v2ObjectPathPattern.test(path);
      if (bucket !== "vomebook/pdf-pages-v2") return false;
-    return (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
+    return /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/document\.pdf$/.test(path) ||
+      (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
+      v3BucketPathPattern.test(path) ||
       staticBucketPathPattern.test(path) ||
        false;
   }
@@ -312,7 +315,7 @@
         path = decodeURIComponent(url.pathname.slice(prefix[0].length));
         if (!isBucketPath(path, false, bucketName)) return null;
       }
-      if (!["page-manifest.json", "ocr-manifest.json"].includes(filename) ||
+      if (!["page-manifest.json", "ocr-manifest.json", "reading-manifest.json"].includes(filename) ||
           !path.endsWith(`/${filename}`)) return null;
       const rootPath = path.slice(0, -filename.length - 1);
       const pathPrefix = bucket || directBucket ? "" : url.pathname.slice(0, -path.length);
@@ -377,7 +380,7 @@
     const extension =
       asset.m === "e"
         ? nativeExtension
-        : asset.m === "p" && path.endsWith("page-manifest.json")
+        : asset.m === "p" && /\/(?:page|reading)-manifest\.json$/.test(path)
           ? "pdf-pages"
           : asset.m === "i" && path.endsWith("page-manifest.json")
             ? "image-pages"
