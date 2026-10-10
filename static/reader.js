@@ -462,6 +462,8 @@ let folderNavigationTarget = null;
 let bookmarkInvoker = null;
 const bookmarkInertSiblings = new Map();
 let pdfDocument = null;
+let docxPageNodes = [];
+trackReaderResource(() => { docxPageNodes = []; });
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
@@ -570,14 +572,14 @@ function trimPdfSurfaces(protectedShell) {
   let canvases = shells.filter(shell => shell.querySelector("canvas.ready")).length;
   let images = shells.filter(shell => shell.querySelector("img.ready")).length;
   let pixels = pdfRetainedPixels();
-  shells.sort((a, b) => Math.abs(Number(b.dataset.page) - documentState.page) -
-    Math.abs(Number(a.dataset.page) - documentState.page) ||
+  const retentionPage = Number(pageAtMarker()?.dataset.page) || documentState.page;
+  shells.sort((a, b) => Math.abs(Number(b.dataset.page) - retentionPage) -
+    Math.abs(Number(a.dataset.page) - retentionPage) ||
     Number(a.dataset.renderUsedAt || 0) - Number(b.dataset.renderUsedAt || 0));
   for (const shell of shells) {
     const canvas = shell.querySelector("canvas.ready"), image = shell.querySelector("img.ready");
     if (pixels <= pdfPixelBudget() && !(canvas && canvases > canvasLimit) && !(image && images > 25)) continue;
-    if (shell === protectedShell || shell.dataset.renderVisible === "1" ||
-        Number(shell.dataset.page) === documentState.page || pdfSelectionIntersects(shell)) continue;
+    if (isPdfPageVisible(shell) || Number(shell.dataset.page) === retentionPage || pdfSelectionIntersects(shell)) continue;
     shell._textEpoch = (shell._textEpoch || 0) + 1;
     if (canvas) {
       pixels -= pdfSurfacePixels(canvas);
@@ -596,6 +598,8 @@ function trimPdfSurfaces(protectedShell) {
     shell._bookmarkTextItems = [];
     shell.dataset.textReady = "0";
     shell.dataset.renderState = "idle";
+    const pageState = shell.querySelector(".reader-page-state");
+    if (pageState) pageState.hidden = false;
   }
   fullSearchActiveMarks = fullSearchActiveMarks.filter(mark => mark.isConnected);
 }
@@ -2055,16 +2059,15 @@ async function renderBookmarks() {
 }
 function pageAtMarker() {
   const y = bookmarkRibbon.getBoundingClientRect().bottom,
-    pages = [...content.querySelectorAll(".reader-page, .reader-docx-page")];
+    pages = docxPageNodes.length ? docxPageNodes : [...content.querySelectorAll(".reader-page, .reader-docx-page")];
   if (!pages.length) return null;
-  return (
-    pages.find((page) => {
-      const rect = page.getBoundingClientRect();
-      return rect.top <= y && rect.bottom > y;
-    }) ||
-    pages.find((page) => page.getBoundingClientRect().bottom > y) ||
-    pages[pages.length - 1]
-  );
+  let low = 0, high = pages.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (pages[middle].getBoundingClientRect().bottom > y) high = middle;
+    else low = middle + 1;
+  }
+  return pages[Math.min(low, pages.length - 1)];
 }
 function syncCurrentPageFromMarker() {
   if (performance.now() < pageNavigationLockUntil) return;
@@ -3580,13 +3583,16 @@ async function renderPdf(prepared) {
     textLayer.setAttribute("role", "document");
     textLayer.setAttribute("aria-label", `第 ${page} 页正文`);
     shell.append(canvas, textLayer);
+    const pageState = document.createElement("div");
+    pageState.className = "reader-page-state";
+    pageState.textContent = `正在加载第 ${page} 页...`;
+    shell.appendChild(pageState);
     shell.addEventListener("focus", () => renderPdfInBackground(shell));
     observeShell(shell);
     return shell;
   };
   const firstShell = createShell(1);
   content.appendChild(firstShell);
-  markReaderContentReady();
   pdfShellWindow = createPdfShellWindow(pdf.numPages, firstShell, createShell, (shell) => {
     observer.unobserve(shell);
     visibleObserver.unobserve(shell);
@@ -3838,7 +3844,7 @@ function renderPdfShell(shell, force = false, priority = false) {
         assertReaderActive();
         if (renderController.signal.aborted) throw readerAbortError();
         const base = page.getViewport({ scale: 1 }),
-          scale = Math.min(3, Math.max(0.5, shell.clientWidth / base.width)),
+          scale = Math.min(3, shell.clientWidth / base.width),
           viewport = page.getViewport({ scale }),
           outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
         const canvas = shell.querySelector("canvas");
@@ -3869,6 +3875,8 @@ function renderPdfShell(shell, force = false, priority = false) {
         if (!isReaderGenerationCurrent("pdf", generation)) shell.dataset.pendingRerender = "1";
       } while (shell.dataset.pendingRerender);
       shell.querySelector("canvas").classList.add("ready");
+      const pageState = shell.querySelector(".reader-page-state");
+      if (pageState) pageState.hidden = true;
       shell.dataset.renderState = "rendered";
       shell.dataset.renderUsedAt = String(Date.now());
       pdfShellWindow?.remember(shell);
@@ -3998,12 +4006,14 @@ function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
 function releasePdfRenderSlot() {
   pdfActiveRenders = Math.max(0, pdfActiveRenders - 1);
   if (readerAbortController.signal.aborted) return;
-  let index = -1, best = 0;
+  let index = -1, best = -1, nearest = Infinity;
   for (let i = 0; i < pdfRenderWaiters.length; i++) {
-    const waiter = pdfRenderWaiters[i], value = Math.max(
-      waiter.priority, waiter.shell ? pdfPagePriority(waiter.shell) : 0
-    );
-    if (value > best) { best = value; index = i; }
+    const waiter = pdfRenderWaiters[i], value = waiter.shell ? pdfPagePriority(waiter.shell) : waiter.priority;
+    const rect = waiter.shell?.getBoundingClientRect(), bounds = viewport.getBoundingClientRect();
+    const distance = rect ? Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0) : Infinity;
+    if (value > best || (value === best && distance < nearest)) {
+      best = value; nearest = distance; index = i;
+    }
   }
   if (index < 0) index = 0;
   const waiter = pdfRenderWaiters.splice(index, 1)[0];
@@ -4307,9 +4317,28 @@ function repairHtmlContrast(frame) {
 }
 async function renderPlainText(response) {
   assertReaderActive();
-  const pre = document.createElement("pre");
+  const pre = document.createElement("div");
   pre.className = "reader-text";
   content.appendChild(pre);
+  let block = null, blockLength = 0;
+  const appendDecoded = value => {
+    let text = value.replace(/\ufffd/g, "");
+    while (text) {
+      if (!block) {
+        block = document.createElement("pre");
+        block.className = "reader-text-block";
+        pre.appendChild(block);
+      }
+      const boundary = text.indexOf("\n", Math.max(0, 32768 - blockLength));
+      const take = boundary < 0 ? text.length : boundary + 1;
+      const tail = block.lastChild;
+      if (tail?.nodeType === Node.TEXT_NODE) tail.appendData(text.slice(0, take));
+      else block.appendChild(document.createTextNode(text.slice(0, take)));
+      blockLength += take;
+      text = text.slice(take);
+      if (boundary >= 0) { block = null; blockLength = 0; }
+    }
+  };
   const limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes;
   VoiceOfMLReaderSecurity.assertResponseSize(response, limit);
   if (!response.body?.getReader) {
@@ -4320,9 +4349,7 @@ async function renderPlainText(response) {
       throw error;
     }
     assertReaderActive();
-    pre.textContent = new TextDecoder(detectTextEncoding(bytes, documentState.title))
-      .decode(bytes)
-      .replace(/\ufffd/g, "");
+    appendDecoded(new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes));
     return;
   }
   const reader = response.body.getReader(),
@@ -4339,14 +4366,6 @@ async function renderPlainText(response) {
     decoder = null,
     asciiPreviewPossible = true,
     asciiPrefixLength = 0;
-  const appendDecoded = (value) => {
-    const text = value.replace(/\ufffd/g, "");
-    if (!text) return;
-    // Search can split or normalize previous chunks while the response streams.
-    const tail = pre.lastChild;
-    if (tail?.nodeType === Node.TEXT_NODE) tail.appendData(text);
-    else pre.appendChild(document.createTextNode(text));
-  };
   const startDecoder = () => {
     const sample = new Uint8Array(sampleLength);
     let offset = 0;
@@ -4381,6 +4400,8 @@ async function renderPlainText(response) {
           if (value[asciiLength] === 0) {
             // A split UTF-16 prefix must not leave an ASCII preview behind.
             pre.textContent = "";
+            block = null;
+            blockLength = 0;
             displayedSampleSize = 0;
             asciiPrefixLength = 0;
             asciiPreviewPossible = false;
@@ -4903,6 +4924,7 @@ async function renderDocx(prepared) {
     throw new Error("DOCX rendered no supported content");
   }
   const pages = [...body.querySelectorAll(":scope > .reader-docx-wrapper > section.reader-docx")];
+  docxPageNodes = pages;
   if (pages.length) {
     updateDocumentState({ pageCount: pages.length });
     pageInput.max = String(documentState.pageCount);
@@ -6573,11 +6595,11 @@ function clearFullSearchMarks() {
     fullSearchDomSnapshot?.resume();
   }
 }
-async function fullSearchTextNodes(root, generation, endOffset = Infinity, checkpoint = null) {
+async function fullSearchTextNodes(root, generation, endOffset = Infinity, checkpoint = null, collect = null) {
   const nodes = [],
     walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   if (checkpoint) walker.currentNode = checkpoint.target;
-  let visited = 0, length = checkpoint?.start || 0;
+  let visited = 0, length = checkpoint?.start || 0, deadline = performance.now() + 8;
   while (walker.nextNode()) {
     if (!isReaderGenerationCurrent("search", generation)) return null;
     const node = walker.currentNode;
@@ -6585,11 +6607,15 @@ async function fullSearchTextNodes(root, generation, endOffset = Infinity, check
       node.data &&
       !node.parentElement.closest("script,style,mark.full-search-highlight,.reader-pdf-text")
     ) {
-      nodes.push(node);
+      if (collect) collect(node);
+      else nodes.push(node);
       length += node.data.length;
       if (length >= endOffset) break;
     }
-    if (++visited % 1000 === 0) await waitForReader();
+    if (++visited % 256 === 0 && performance.now() >= deadline) {
+      await waitForReader();
+      deadline = performance.now() + 8;
+    }
   }
   return nodes;
 }
@@ -6700,20 +6726,16 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
     fullSearchDomSnapshot.value?.toc === navigationState.tocEntries ? fullSearchDomSnapshot.value : null;
   const snapshot = progressive ? (cached ? fullSearchDomSnapshot : createDomSearchSnapshot(root)) : null;
   const locator = progressive ? createFullSearchDomLocator(root, generation) : null;
-  const nodes = cached ? [] : await fullSearchTextNodes(root, generation);
-  if (!nodes || !isReaderGenerationCurrent("search", generation)) return [];
   const offsets = cached ? cached.offsets : [],
     chunks = [];
   let length = 0;
-  for (const [index, node] of nodes.entries()) {
+  const collect = node => {
     offsets.push({ node, parent: node.parentElement, start: length, end: length + node.data.length });
     chunks.push(node.data);
     length += node.data.length;
-    if (index % 1000 === 999) {
-      await waitForReader();
-      if (!isReaderGenerationCurrent("search", generation)) return [];
-    }
-  }
+  };
+  const nodes = cached ? [] : await fullSearchTextNodes(root, generation, Infinity, null, collect);
+  if (!nodes || !isReaderGenerationCurrent("search", generation)) return [];
   if (cached) locator?.seed(cached.checkpoints);
   else locator?.build(offsets);
   const headingLookup = cached ? cached.headingLookup : createFullSearchHeadingLookup(root, offsets);

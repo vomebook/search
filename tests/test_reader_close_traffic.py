@@ -152,7 +152,10 @@ class ReaderCloseTrafficTests(unittest.TestCase):
                         send('pointerdown', action==='secondary'?{isPrimary:false}:{});
                         if (action==='drag') send('pointermove',{clientX:120});
                         if (action==='cancel') send('pointercancel');
-                        if (action==='changed') selection.setBaseAndExtent(node.firstChild,0,node.firstChild,3);
+                        if (action==='changed') {
+                          const text = node.ownerDocument.createTreeWalker(node, NodeFilter.SHOW_TEXT).nextNode();
+                          selection.setBaseAndExtent(text, 0, text, Math.min(3, text.data.length));
+                        }
                         send('pointerup');
                         output.push(!!selection.toString());
                       }
