@@ -11,17 +11,30 @@ const hanWordSpacing = /(?<=\p{Script=Han})\s+(?=\p{Script=Han})/gu;
 export function normalizePdfSearchText(raw) {
   return raw.replace(hanWordSpacing, "");
 }
+export function pdfSourceOffset(mapping, index) {
+  const offsets = mapping.offsets;
+  if (!offsets) return index;
+  let low = 0, high = offsets.length / 2;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (offsets[middle * 2] <= index) low = middle + 1;
+    else high = middle;
+  }
+  return index + (low ? offsets[(low - 1) * 2 + 1] : 0);
+}
 export function pdfSearchText(raw) {
   const offsets = [], chunks = [];
-  let start = 0;
+  let start = 0, removed = 0;
   for (const match of raw.matchAll(hanWordSpacing)) {
     chunks.push(raw.slice(start, match.index));
-    for (let i = start; i < match.index; i++) offsets.push(i);
+    const boundary = match.index - removed;
+    removed += match[0].length;
+    offsets.push(boundary, removed);
     start = match.index + match[0].length;
   }
+  if (!offsets.length) return { text: raw, offsets: null };
   chunks.push(raw.slice(start));
-  for (let i = start; i < raw.length; i++) offsets.push(i);
-  return { text: chunks.join(""), offsets };
+  return { text: chunks.join(""), offsets: new Uint32Array(offsets) };
 }
 
 function textRun(layer, text) {
