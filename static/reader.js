@@ -10,7 +10,7 @@ import "/search/static/reader-security.js";
 import { paintTextHit } from "/search/static/reader-book-text.js";
 import { createPdfFetchPolicy } from "./reader-pdf-network.mjs";
 import { createV3Repository, validateResource, validateReadingManifest, validatePageMap } from "./reader-v3.mjs";
-import { populateIndependentTextLayer } from "./reader-pdf-text.js";
+import { populateIndependentTextLayer, independentTextCaret } from "./reader-pdf-text.js";
 let pdfFetchPolicy = null;
 import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
@@ -2421,10 +2421,11 @@ viewport.addEventListener("pointerdown", (event) => {
   const selectedRun = !selection?.isCollapsed && event.target.closest?.(".reader-page")
     ? selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run") : null;
   const origin = run || selectedRun;
+  const caret = !event.shiftKey && event.button === 0 ? independentTextCaret(document, event.clientX, event.clientY) : null;
   pdfSelectionPointer = origin
     ? { id: event.pointerId, x: event.clientX, y: event.clientY, frame: 0,
-        page: origin.closest(".reader-page"), anchorNode: run ? null : selection.anchorNode,
-        anchorOffset: run ? 0 : selection.anchorOffset } : null;
+        page: origin.closest(".reader-page"), anchorNode: caret?.node || (run ? null : selection.anchorNode),
+        anchorOffset: caret?.offset ?? (run ? 0 : selection.anchorOffset) } : null;
 }, { passive: true });
 document.addEventListener("pointermove", (event) => {
   const start = pdfSelectionPointer;
@@ -3259,6 +3260,11 @@ function correctPdfCrossPageSelection(x, y, start = null) {
   if (!start?.anchorNode && selection.isCollapsed) return;
   const origin = anchorNode?.parentElement?.closest(".reader-page");
   let target = document.elementFromPoint(x, y)?.closest(".reader-page");
+  const caret = start?.anchorNode && independentTextCaret(document, x, y);
+  if (caret && origin?.contains(anchorNode) && content.contains(caret.node)) {
+    selection.setBaseAndExtent(anchorNode, anchorOffset, caret.node, caret.offset);
+    return;
+  }
   if (!target) {
     let distance = Infinity;
     for (const shell of content.querySelectorAll(".reader-page")) {
@@ -3882,7 +3888,7 @@ async function renderHybridPdfCanvas(shell, signal, priority) {
       rendering = page.render({ canvasContext: canvas.getContext("2d"), viewport: view,
         transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0] });
       await awaitReader(rendering.promise, signal); rendering = null;
-      while (pdfSelectionIntersects(shell) && !signal.aborted) await waitForReader(100);
+      while (!pdfV3Manifest && pdfSelectionIntersects(shell) && !signal.aborted) await waitForReader(100);
       if (signal.aborted || !shell.isConnected) throw readerAbortError();
       if (!isReaderGenerationCurrent("pdf", generation)) { canvas.width = canvas.height = 0; continue; }
       const anchor = content.querySelector(`.reader-page[data-page="${documentState.page}"]`);
@@ -7259,7 +7265,11 @@ async function searchConcentratedPdf(query, generation) {
         content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
         const shell = content.querySelector(`.reader-page[data-page="${hit.page}"]`);
         if (shell && hit.boxes.length) {
-          paintTextHit(shell, hit.boxes);
+          if (pdfV3Manifest) {
+            await renderPdfOcrText(shell);
+            if (!isReaderGenerationCurrent("navigation", nav)) return false;
+          }
+          paintTextHit(shell, hit.boxes, hit);
           shell.querySelector(".reader-text-hit-box")?.scrollIntoView({ block: "center" });
         }
         return true;
