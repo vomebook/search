@@ -148,6 +148,10 @@ class ReaderOptimizationTests(unittest.TestCase):
           window.__thirdCount=__renderedPages.filter(page=>page===3).length;v.scrollTop+=shell.getBoundingClientRect().top-v.getBoundingClientRect().top;}''')
         self.page.wait_for_timeout(150)
         self.assertEqual(self.page.evaluate('__renderedPages.filter(page=>page===3).length'),self.page.evaluate('__thirdCount'))
+        self.page.evaluate('''()=>{const shell=document.querySelector('.reader-page[data-page="4"]'),canvas=shell.querySelector('canvas');
+          canvas.width=canvas.height=0;canvas.classList.remove('ready');shell.dataset.renderState='idle';
+          document.querySelector('#viewport').scrollTop+=20;}''')
+        self.page.wait_for_function('() => !!document.querySelector(".reader-page[data-page=\\"4\\"] canvas.ready")')
 
     def test_long_txt_blocks_preserve_exact_text_cross_block_hits_and_selection(self):
         self.expose()
