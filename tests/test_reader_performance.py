@@ -898,6 +898,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.goto(f"{self.origin}/search/static/reader.html?id=wide-pages&ext=pdf&title=Converted", wait_until="domcontentloaded")
         page.locator(".reader-page img.ready").first.wait_for(timeout=10000)
         self.assertEqual(page.locator("#content").get_attribute("data-mode"), "pdf-pages")
+        page.wait_for_function("() => document.querySelectorAll('.reader-page img.ready').length === 3")
         boxes = page.locator(".reader-page").evaluate_all("""pages => pages.slice(0, 3).map(page => {
           const shell = page.getBoundingClientRect(), image = page.querySelector('img').getBoundingClientRect();
           return { shell: { top: shell.top, right: shell.right, bottom: shell.bottom, left: shell.left, width: shell.width }, image: { top: image.top, right: image.right, bottom: image.bottom, left: image.left, width: image.width } };
@@ -1981,6 +1982,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.locator("#history").click()
         page.locator("#toc-list .panel-item-main").nth(9).click()
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(10)').classList.contains('is-current')")
+        page.locator('.foliate-continuous article[data-section="11"] #chapter-11').wait_for(state='attached')
         page.evaluate("""() => { const viewport = document.querySelector('#viewport'), target = document.querySelector('.foliate-continuous article[data-section="11"]').shadowRoot.querySelector('#chapter-11'); viewport.scrollTop += target.getBoundingClientRect().top - viewport.getBoundingClientRect().top + 100; viewport.dispatchEvent(new Event('scroll')); }""")
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(11)').classList.contains('is-current')", timeout=1000)
         context.close()
