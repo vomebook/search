@@ -92,6 +92,9 @@ jobs:
         run: |
           node tests/test_reader_chapter_search.mjs
           node tests/test_reader_ocr_transport.mjs
+          node tests/test_reader_heading_cache.js
+          node tests/test_reader_engine_preload.js
+          node tests/test_reader_regression.js
       - name: Run Reader request and PDF loading regressions
         working-directory: huggingface-search
         run: |
@@ -116,7 +119,7 @@ jobs:
         run: timeout 120s python3 -B -m unittest -v tests.test_reader_backend
       - name: Run Reader upstream ownership gate
         working-directory: huggingface-search
-        run: timeout 120s python3 -B -m unittest -v tests.test_async_proxy
+        run: timeout 120s python3 -B -m unittest -v tests.test_async_proxy tests.test_reader_range_flights tests.test_proxy_ownership
       - name: Run full Reader refactor suite
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_reader_refactor

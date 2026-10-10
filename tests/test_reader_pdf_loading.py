@@ -356,3 +356,19 @@ class PdfLoadingTests(unittest.TestCase):
             self.assertTrue(page.evaluate('() => !!navigator.serviceWorker.controller'))
             self.assertEqual(len(requests), 2)
             self.assertIn('reader-module-retry=1', requests[1])
+
+    def test_engine_preload_starts_while_reader_dependency_is_still_pending(self):
+        held=[]
+        self.page.route('**/static/reader-runtime.js',lambda route:held.append(route))
+        self.page.goto(self.origin+'/static/reader.html?'+urllib.parse.urlencode(dict(url=SOURCE,ext='pdf')),wait_until='commit')
+        self.page.locator('link[rel="modulepreload"][href*="pdf.min"]').wait_for(state='attached')
+        for _ in range(100):
+            if held: break
+            self.page.wait_for_timeout(10)
+        self.assertGreaterEqual(len(self.modules),1)
+        self.assertEqual(len(self.documents),0)
+        self.assertEqual(len(held),1)
+        self.page.unroute('**/static/reader-runtime.js')
+        held[0].continue_()
+        self.ready()
+        self.assertEqual(len(self.modules),1)

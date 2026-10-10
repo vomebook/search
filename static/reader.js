@@ -12,7 +12,7 @@ import { createPdfFetchPolicy } from "./reader-pdf-network.mjs";
 import { createV3Repository, validateResource, validateReadingManifest, validatePageMap } from "./reader-v3.mjs";
 import { populateIndependentTextLayer, independentTextCaret } from "./reader-pdf-text.js";
 let pdfFetchPolicy = null;
-import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText } from "/search/static/reader-pdf-text.js";
+import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText, pdfSourceOffset } from "/search/static/reader-pdf-text.js";
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
 const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
@@ -1267,8 +1267,78 @@ function headingTocEntries(root) {
       activate: () => target.scrollIntoView({ block: "start" })
     }));
 }
+let headingLocationCache = null;
+trackReaderResource(() => { headingLocationCache?.dispose(); headingLocationCache = null; });
+function createHeadingLocationCache(root, entries) {
+  let positions = null, targets = [], width = -1, extent = -1, zoom = -1, wasAnimating = false, live = false;
+  const invalidate = () => { positions = null; };
+  const mutations = new MutationObserver(invalidate), resize = new ResizeObserver(invalidate);
+  mutations.observe(root, {subtree:true, childList:true, characterData:true,
+    attributes:true, attributeFilter:["style", "class", "hidden", "width", "height"]});
+  resize.observe(root);
+  root.addEventListener("load", invalidate, true);
+  root.ownerDocument.fonts?.addEventListener("loadingdone", invalidate);
+  return { root, entries,
+    at(marker, scroll) {
+      if (mutations.takeRecords().length) invalidate();
+      const nextWidth = root.clientWidth, nextExtent = root.scrollHeight, nextZoom = documentState.zoom;
+      const animating = root.getAnimations?.({subtree:true}).some(animation => animation.playState === "running" || animation.pending) || false;
+      if (live || animating || wasAnimating || nextWidth !== width || nextExtent !== extent || nextZoom !== zoom ||
+          targets.some(row => row.target !== row.entry.target || row.connected !== !!row.target?.isConnected)) invalidate();
+      wasAnimating = animating;
+      if (!positions) {
+        targets = entries.map((entry, index) => ({entry, index, target:entry.target, connected:!!entry.target?.isConnected}));
+        const fixed = new WeakMap();
+        const scrollDependent = target => {
+          const ancestors = [];
+          let value = false;
+          for (let node = target; node; node = node.parentElement) {
+            if (fixed.has(node)) { value = fixed.get(node); break; }
+            ancestors.push(node);
+            const position = root.ownerDocument.defaultView?.getComputedStyle(node).position;
+            if (position === "fixed" || position === "sticky") { value = true; break; }
+            if (node === root) break;
+          }
+          for (const node of ancestors) fixed.set(node, value);
+          return value;
+        };
+        // Source CSS may pin headings while scrolling; keep their live geometry.
+        live = targets.some(row => row.connected && scrollDependent(row.target));
+        positions = targets.filter(row => row.connected).map(row => ({index:row.index,
+          top:row.target.getBoundingClientRect().top + scroll - marker})).sort((a,b) => a.top-b.top || a.index-b.index);
+        width = root.clientWidth; extent = root.scrollHeight; zoom = nextZoom;
+      }
+      let low = 0, high = positions.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (positions[middle].top <= scroll) low = middle + 1;
+        else high = middle;
+      }
+      return positions[low ? low - 1 : 0]?.index ?? -1;
+    },
+    dispose() {
+      mutations.disconnect(); resize.disconnect();
+      root.removeEventListener("load", invalidate, true);
+      root.ownerDocument.fonts?.removeEventListener("loadingdone", invalidate);
+      positions = null; targets = [];
+    }
+  };
+}
 function syncHeadingLocation() {
   const marker = htmlFrame ? 8 : viewport.getBoundingClientRect().top + 8;
+  const root = htmlFrame?.contentDocument?.body || content;
+  if (!["foliate", "epub-chapters"].includes(capability.mode)) {
+    if (headingLocationCache?.root !== root || headingLocationCache?.entries !== navigationState.tocEntries) {
+      headingLocationCache?.dispose();
+      headingLocationCache = createHeadingLocationCache(root, navigationState.tocEntries);
+    }
+    const current = headingLocationCache.at(marker, htmlFrame ? htmlFrame.contentWindow.scrollY : viewport.scrollTop);
+    if (current >= 0 && current !== navigationState.currentChapterIndex) {
+      updateNavigationState({currentChapterIndex:current});
+      updateTocCurrentMark();
+    }
+    return;
+  }
   let current = -1,
     currentPosition = -Infinity,
     first = -1,
@@ -4177,7 +4247,7 @@ function highlightPdfText(shell, query = searchState.query) {
     if (hits.length === 100) break;
   }
   for (const hit of hits.reverse()) {
-    const start = mapping.offsets[hit.index], end = mapping.offsets[hit.index + hit[0].length - 1] + 1;
+    const start = pdfSourceOffset(mapping, hit.index), end = pdfSourceOffset(mapping, hit.index + hit[0].length - 1) + 1;
     highlightTextParts(runs.filter((run) => run.end > start && run.start < end).map((run) => ({
       node: run.node, start: Math.max(start, run.start) - run.start, end: Math.min(end, run.end) - run.start
     })));

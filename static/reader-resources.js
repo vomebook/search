@@ -54,6 +54,7 @@
   });
   const readerFiles = Object.freeze([
     "reader-resources.js",
+    "reader-engine-preload.js",
     "reader-chapter-search-worker.mjs",
     "reader-chapter-search.mjs",
     "reader-contract.js",
