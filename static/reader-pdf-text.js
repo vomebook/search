@@ -147,3 +147,33 @@ export function populateOcrTextLayer(layer, blocks, layout = {}) {
   }
   layer.replaceChildren(fragment);
 }
+
+export function populateIndependentTextLayer(layer, payload) {
+  const fragment = layer.ownerDocument.createDocumentFragment();
+  const chars = Array.from(payload.text), bounds = layer.parentElement.getBoundingClientRect();
+  const ratio = bounds.height / Math.max(1, bounds.width);
+  let end = 0;
+  for (const region of payload.regions) {
+    fragment.appendChild(layer.ownerDocument.createTextNode(chars.slice(end, region.start).join("")));
+    const [x0, y0, x1, y1] = region.box;
+    const vertical = region.writing_mode.startsWith("vertical");
+    const q = region.quad;
+    const dx = q[1][0] - q[0][0], dy = (q[1][1] - q[0][1]) * ratio;
+    const angle = vertical ? 0 : Math.atan2(dy, dx);
+    const height = vertical ? x1 - x0 : Math.hypot(q[3][0] - q[0][0], (q[3][1] - q[0][1]) * ratio);
+    const width = vertical ? (y1 - y0) * ratio : Math.hypot(dx, dy);
+    const positioned = positionedRun(layer, region.text, vertical ? x0 : q[0][0],
+      vertical ? y0 : q[0][1], Math.max(height, .0001), width, "sans-serif", angle, vertical);
+    const run = positioned.querySelector(".reader-pdf-text-run");
+    run.dir = ["rtl", "ltr"].includes(region.direction) ? region.direction : "auto";
+    run.style.unicodeBidi = "plaintext";
+    run.dataset.regionId = region.id;
+    run.dataset.mappingPrecision = region.mapping_precision;
+    if (vertical) run.style.writingMode = region.writing_mode === "vertical-lr" ? "vertical-lr" : "vertical-rl";
+    fragment.appendChild(positioned);
+    end = region.end;
+  }
+  fragment.appendChild(layer.ownerDocument.createTextNode(chars.slice(end).join("")));
+  layer.replaceChildren(fragment);
+  layer.dataset.textGeneration = payload.generation;
+}

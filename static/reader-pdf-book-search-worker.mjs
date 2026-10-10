@@ -3,7 +3,7 @@ import { searchBookText, validateBookText } from "./reader-book-text.js";
 
 const aborted = () => new DOMException("Search cancelled", "AbortError");
 const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
-const bookPath = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr\/book-text\.json\.gz$/;
+const bookPath = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:(?:[0-9a-f]{16}\/)?ocr\/book-text\.json\.gz|[0-9a-f]{16}\/text\/book-text\.json\.gz)$/;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 let configuration, book, pendingBook, controller, active = 0, session;
 
