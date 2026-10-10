@@ -56,6 +56,7 @@ jobs:
         run: |
           node tests/test_service_worker.js
           python3 -B -m unittest -v tests.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_shell_does_not_wait_for_slow_revalidation
+          python3 -B -m unittest -v tests.test_service_worker_integration.ServiceWorkerIntegrationTest.test_first_install_rewarms_shell_after_delayed_controller_claim
       - name: Run chapter-bundle browser gate
         run: |
           node tests/test_reader_chapter_scheduler.js
