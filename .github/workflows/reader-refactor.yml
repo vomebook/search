@@ -55,7 +55,9 @@ jobs:
       - name: Run chapter-search browser gate
         run: python3 -B -m unittest -v -k chapter_search tests.test_reader_refactor
       - name: Run PDF theme browser gate
-        run: python3 -B -m unittest -v -k test_pdf_page tests.test_reader_style
+        run: |
+          python3 -B -m unittest -v -k test_pdf_page tests.test_reader_style
+          python3 -B -m unittest -v tests.test_reader_style.ReaderStyleTests.test_page_inversion_remembers_explicit_choice_and_fits_sidebar
       - name: Run full Reader refactor suite
         run: python3 -B -m unittest -v tests.test_reader_refactor
       - name: Check Reader JavaScript syntax
@@ -103,6 +105,7 @@ jobs:
         working-directory: huggingface-search
         run: |
           python3 -B -m unittest -v -k test_pdf_page tests.test_reader_style
+          python3 -B -m unittest -v tests.test_reader_style.ReaderStyleTests.test_page_inversion_remembers_explicit_choice_and_fits_sidebar
           python3 -B -m unittest -v tests.test_reader_pdf_hybrid.HybridPdfTests.test_dark_theme_keeps_preview_and_pdf_handoff_consistent
       - name: Run Reader proxy cancellation and cached-range gate
         working-directory: huggingface-search

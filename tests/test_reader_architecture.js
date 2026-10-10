@@ -65,7 +65,7 @@ assert.match(reader, /image\.fetchPriority = "low"/)
 assert.match(reader, /pdfManifestPrefetchActive\.add\(record\)/)
 assert.match(reader, /queuePdfManifestPrefetch\(\)/)
 const pdfPageRender = reader.match(/function renderPdfManifestShell\(shell, force = false, priority = false\) \{[\s\S]*?\n\}\nfunction renderPdfShell/)[0]
-assert.match(pdfPageRender, /const target = pdfPageManifest\.pageUrl\(entry\.page\)/)
+assert.match(pdfPageRender, /(?:const|let) target = pdfPageManifest\.pageUrl\(entry\.page\)/)
 assert.doesNotMatch(pdfPageRender, /entry\.j|entry\.w|\.jxl/)
 assert.match(reader, /chapterManifestObserver\?\.disconnect\(\)/)
 assert.match(reader, /content\.dataset\.errorCode = code/)

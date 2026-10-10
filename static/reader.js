@@ -494,6 +494,7 @@ let pdfShellsReady = Promise.resolve();
 let pdfShellWindow = null;
 const pdfRenderWaiters = [];
 let pdfActiveTextLoads = 0;
+let pdfActiveSearchTextLoads = 0;
 const pdfTextWaiters = [];
 let pdfUserHasScrolled = false;
 const pdfManifestPrefetches = new Map();
@@ -539,13 +540,64 @@ function stopPdfManifestPrefetch() {
   for (const record of [...pdfManifestPrefetchActive]) cancelPdfManifestPrefetch(record);
 }
 function trimPdfManifestPrefetches() {
-  while (pdfManifestPrefetches.size > PDF_MANIFEST_PREFETCH_LIMIT) {
+  while (pdfManifestPrefetches.size > PDF_MANIFEST_PREFETCH_LIMIT || pdfRetainedPixels() > pdfPixelBudget()) {
     const victim = [...pdfManifestPrefetches.values()].find((record) => !pdfManifestPrefetchActive.has(record));
     if (!victim) return;
     pdfManifestPrefetches.delete(victim.url);
     victim.image.onload = victim.image.onerror = null;
     victim.image.removeAttribute("src");
   }
+}
+function pdfPixelBudget() {
+  const lowMemory = Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 2;
+  return (lowMemory ? 32 : matchMedia("(max-width: 700px)").matches ? 48 : 96) * 1024 * 1024 / 4;
+}
+function pdfSurfacePixels(surface) {
+  return surface?.tagName === "CANVAS" ? surface.width * surface.height :
+    (surface?.naturalWidth || 0) * (surface?.naturalHeight || 0);
+}
+function pdfRetainedPixels() {
+  let pixels = 0;
+  for (const surface of content.querySelectorAll(".reader-page > canvas, .reader-page > img"))
+    pixels += pdfSurfacePixels(surface);
+  for (const record of pdfManifestPrefetches.values()) pixels += pdfSurfacePixels(record.image);
+  return pixels;
+}
+function trimPdfSurfaces(protectedShell) {
+  trimPdfManifestPrefetches();
+  const shells = [...content.querySelectorAll('.reader-page[data-render-state="rendered"]')];
+  const canvasLimit = matchMedia("(max-width: 700px)").matches ? 7 : 11;
+  let canvases = shells.filter(shell => shell.querySelector("canvas.ready")).length;
+  let images = shells.filter(shell => shell.querySelector("img.ready")).length;
+  let pixels = pdfRetainedPixels();
+  shells.sort((a, b) => Math.abs(Number(b.dataset.page) - documentState.page) -
+    Math.abs(Number(a.dataset.page) - documentState.page) ||
+    Number(a.dataset.renderUsedAt || 0) - Number(b.dataset.renderUsedAt || 0));
+  for (const shell of shells) {
+    const canvas = shell.querySelector("canvas.ready"), image = shell.querySelector("img.ready");
+    if (pixels <= pdfPixelBudget() && !(canvas && canvases > canvasLimit) && !(image && images > 25)) continue;
+    if (shell === protectedShell || shell.dataset.renderVisible === "1" ||
+        Number(shell.dataset.page) === documentState.page || pdfSelectionIntersects(shell)) continue;
+    shell._textEpoch = (shell._textEpoch || 0) + 1;
+    if (canvas) {
+      pixels -= pdfSurfacePixels(canvas);
+      canvas.width = canvas.height = 0;
+      canvas.classList.remove("ready");
+      canvases--;
+    }
+    if (image) {
+      pixels -= pdfSurfacePixels(image);
+      image.removeAttribute("src");
+      image.remove();
+      shell._v3PreviewRelease?.();
+      images--;
+    }
+    shell.querySelector(".reader-pdf-text")?.replaceChildren();
+    shell._bookmarkTextItems = [];
+    shell.dataset.textReady = "0";
+    shell.dataset.renderState = "idle";
+  }
+  fullSearchActiveMarks = fullSearchActiveMarks.filter(mark => mark.isConnected);
 }
 function clearPdfManifestPrefetches() {
   stopPdfManifestPrefetch();
@@ -595,7 +647,9 @@ let pendingBookmarkSnapshot = null;
 let mediaElement = null;
 let swfPlayer = null;
 function nextReaderGeneration(name) {
-  return readerRuntime.nextGeneration(name);
+  const generation = readerRuntime.nextGeneration(name);
+  if (name === "search") drainPdfTextWaiters();
+  return generation;
 }
 function isReaderGenerationCurrent(name, value) {
   return !readerAbortController.signal.aborted && readerRuntime.isCurrent(name, value);
@@ -763,6 +817,24 @@ const THEME_SUN_ICON =
 const THEME_MOON_ICON =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
 const readerThemeToggle = document.querySelector("#theme-toggle");
+const pageInvertToggle = document.querySelector("#page-invert-toggle");
+let pageInverted = false;
+try { pageInverted = localStorage.getItem("reader-page-inversion") === "true"; } catch (_) {}
+function applyPageInversion(persist = false) {
+  document.documentElement.dataset.pageInverted = String(pageInverted);
+  pageInvertToggle.textContent = pageInverted ? "关闭页面反色" : "页面反色";
+  pageInvertToggle.title = pageInvertToggle.textContent;
+  pageInvertToggle.setAttribute("aria-label", pageInvertToggle.textContent);
+  pageInvertToggle.setAttribute("aria-pressed", String(pageInverted));
+  if (persist) {
+    try { localStorage.setItem("reader-page-inversion", String(pageInverted)); } catch (_) {}
+  }
+}
+pageInvertToggle.addEventListener("click", () => {
+  pageInverted = !pageInverted;
+  applyPageInversion(true);
+});
+applyPageInversion();
 let themeAnimationTimer = 0;
 readerThemeToggle.className = "theme-toggle";
 function applyReaderTheme(theme, persist = true, animate = true) {
@@ -2748,6 +2820,7 @@ function queuePdfManifestPrefetch(delay = 250) {
           pdfManifestPrefetches.delete(url);
           image.removeAttribute("src");
         }
+        trimPdfManifestPrefetches();
         queuePdfManifestPrefetch();
       };
       image.onload = () => finish(false);
@@ -2873,18 +2946,36 @@ function cachedPdfTextContent(page) {
   pdfTextContentCache.set(page, record);
   return record.content;
 }
-function loadPdfTextContent(page, pdfPage) {
+function loadPdfTextContent(page, pdfPage, generation = null) {
   assertReaderActive();
   const cached = cachedPdfTextContent(page);
   if (cached) return Promise.resolve(cached);
   const pending = pdfTextContentPromises.get(page);
-  if (pending) return pending;
+  if (pending) {
+    if (generation === null) pending.request.demanded = true;
+    else pending.request.generation = generation;
+    drainPdfTextWaiters();
+    return pending;
+  }
   // Rendering and search share extraction, but retain their own cancellation
   // and result ownership. Only active work lives here, not another text cache.
-  const task = awaitReader(Promise.resolve().then(() => pdfPage.getTextContent()))
+  const request = { demanded: generation === null, generation, page };
+  const task = Promise.resolve().then(async () => {
+    const background = await acquirePdfTextSlot(request.demanded, request);
+    try {
+      assertReaderActive();
+      if (!request.demanded && !isReaderGenerationCurrent("search", request.generation)) throw readerAbortError();
+      const text = await awaitReader(pdfPage.getTextContent());
+      cachePdfTextContent(page, text);
+      return text;
+    } finally {
+      releasePdfTextSlot(background);
+    }
+  })
     .finally(() => {
       if (pdfTextContentPromises.get(page) === task) pdfTextContentPromises.delete(page);
     });
+  task.request = request;
   pdfTextContentPromises.set(page, task);
   return task;
 }
@@ -2948,26 +3039,7 @@ async function renderPdfOcrText(shell) {
   return task;
 }
 function trimPdfManifestImages(protectedShell) {
-  const images = [...content.querySelectorAll('.reader-page[data-render-state="rendered"]')];
-  if (images.length <= 25) return;
-  images.sort(
-    (a, b) =>
-      Number(b === protectedShell) - Number(a === protectedShell) ||
-      Math.abs(Number(a.dataset.page) - documentState.page) -
-        Math.abs(Number(b.dataset.page) - documentState.page)
-  );
-  for (const shell of images.slice(25)) {
-    if (pdfSelectionIntersects(shell)) continue;
-    shell._textEpoch = (shell._textEpoch || 0) + 1;
-    delete shell._ocrPromise;
-    shell.querySelector("img")?.remove();
-    const textLayer = shell.querySelector(".reader-pdf-text");
-    if (textLayer) textLayer.replaceChildren();
-    shell._bookmarkTextItems = [];
-    shell.dataset.textReady = "0";
-    fullSearchActiveMarks = fullSearchActiveMarks.filter((mark) => mark.isConnected);
-    shell.dataset.renderState = "idle";
-  }
+  trimPdfSurfaces(protectedShell);
 }
 const EPUB_HTML_TAGS = new Set(
   "a,abbr,address,area,article,aside,audio,b,base,bdi,bdo,blockquote,body,br,button,canvas,caption,cite,code,col,colgroup,data,datalist,dd,del,details,dfn,dialog,div,dl,dt,em,fieldset,figcaption,figure,footer,form,h1,h2,h3,h4,h5,h6,head,header,hgroup,hr,html,i,iframe,img,input,ins,kbd,label,legend,li,link,main,map,mark,menu,meta,meter,nav,noscript,object,ol,optgroup,option,output,p,picture,pre,progress,q,rb,rp,rt,rtc,ruby,s,samp,script,search,section,select,slot,small,source,span,strong,style,sub,summary,sup,table,tbody,td,template,textarea,tfoot,th,thead,time,title,tr,track,u,ul,var,video,wbr".split(
@@ -3937,70 +4009,43 @@ function releasePdfRenderSlot() {
   const waiter = pdfRenderWaiters.splice(index, 1)[0];
   if (waiter) waiter.resolve();
 }
-function acquirePdfTextSlot(priority = false) {
+function acquirePdfTextSlot(priority = false, request = null) {
   if (readerAbortController.signal.aborted) return Promise.reject(readerAbortError());
-  const limit = matchMedia("(max-width: 700px)").matches ? 1 : 2;
-  if (pdfActiveTextLoads < limit) {
-    pdfActiveTextLoads++;
-    return Promise.resolve();
-  }
   return new Promise((resolve, reject) => {
-    const waiter = {
-      resolve: () => {
-        pdfActiveTextLoads++;
-        resolve();
-      },
-      reject
-    };
-    if (priority) pdfTextWaiters.unshift(waiter);
-    else pdfTextWaiters.push(waiter);
+    pdfTextWaiters.push({ priority, request, resolve, reject });
+    drainPdfTextWaiters();
   });
 }
-function releasePdfTextSlot() {
-  pdfActiveTextLoads = Math.max(0, pdfActiveTextLoads - 1);
+function drainPdfTextWaiters() {
   if (readerAbortController.signal.aborted) return;
-  const waiter = pdfTextWaiters.shift();
-  if (waiter) waiter.resolve();
+  const limit = matchMedia("(max-width: 700px)").matches ? 2 : 3;
+  for (let index = pdfTextWaiters.length - 1; index >= 0; index--) {
+    const request = pdfTextWaiters[index].request;
+    if (request && !request.demanded && !isReaderGenerationCurrent("search", request.generation)) {
+      if (pdfTextContentPromises.get(request.page)?.request === request)
+        pdfTextContentPromises.delete(request.page);
+      pdfTextWaiters.splice(index, 1)[0].reject(readerAbortError());
+    }
+  }
+  while (pdfActiveTextLoads < limit) {
+    let index = pdfTextWaiters.findIndex(waiter => waiter.priority || waiter.request?.demanded);
+    if (index < 0) index = pdfTextWaiters.findIndex(waiter =>
+      !waiter.request || pdfActiveSearchTextLoads < limit - 1);
+    if (index < 0) return;
+    const waiter = pdfTextWaiters.splice(index, 1)[0];
+    const background = !!waiter.request && !waiter.request.demanded;
+    pdfActiveTextLoads++;
+    if (background) pdfActiveSearchTextLoads++;
+    waiter.resolve(background);
+  }
+}
+function releasePdfTextSlot(background = false) {
+  pdfActiveTextLoads = Math.max(0, pdfActiveTextLoads - 1);
+  if (background) pdfActiveSearchTextLoads = Math.max(0, pdfActiveSearchTextLoads - 1);
+  drainPdfTextWaiters();
 }
 function trimPdfCanvases(protectedShell) {
-  const limit = matchMedia("(max-width: 700px)").matches ? 7 : 11;
-  const rendered = [...content.querySelectorAll('.reader-page[data-render-state="rendered"]')];
-  if (rendered.length <= limit) return;
-  rendered.sort((a, b) => {
-    const aVisible =
-      a === protectedShell ||
-      a.dataset.renderVisible === "1" ||
-      Number(a.dataset.page) === documentState.page;
-    const bVisible =
-      b === protectedShell ||
-      b.dataset.renderVisible === "1" ||
-      Number(b.dataset.page) === documentState.page;
-    if (aVisible !== bVisible) return aVisible ? 1 : -1;
-    const distance =
-      Math.abs(Number(b.dataset.page) - documentState.page) -
-      Math.abs(Number(a.dataset.page) - documentState.page);
-    return distance || Number(a.dataset.renderUsedAt || 0) - Number(b.dataset.renderUsedAt || 0);
-  });
-  while (rendered.length > limit) {
-    const shell = rendered.shift();
-    if (
-      shell === protectedShell ||
-      shell.dataset.renderVisible === "1" ||
-      Number(shell.dataset.page) === documentState.page ||
-      pdfSelectionIntersects(shell)
-    )
-      continue;
-    const canvas = shell.querySelector("canvas");
-    shell._textEpoch = (shell._textEpoch || 0) + 1;
-    canvas.width = 0;
-    canvas.height = 0;
-    canvas.classList.remove("ready");
-    const textLayer = shell.querySelector(".reader-pdf-text");
-    if (textLayer) textLayer.replaceChildren();
-    shell._bookmarkTextItems = [];
-    shell.dataset.textReady = "0";
-    shell.dataset.renderState = "idle";
-  }
+  trimPdfSurfaces(protectedShell);
 }
 
 function rerenderVisiblePdfPages() {
@@ -4866,6 +4911,7 @@ async function renderDocx(prepared) {
     pages.forEach((page, index) => {
       page.classList.add("reader-docx-page");
       page.dataset.page = String(index + 1);
+      page.style.setProperty("--reader-docx-height", page.style.minHeight || page.style.height || "1123px");
     });
     setToc(headingTocEntries(body));
   }
@@ -7025,7 +7071,7 @@ async function loadPdfSearchText(pdf, page, generation) {
   const pdfPage = await awaitReader(pdf.getPage(page));
   if (!isReaderGenerationCurrent("search", generation))
     throw new DOMException("Search cancelled", "AbortError");
-  const textContent = await loadPdfTextContent(page, pdfPage);
+  const textContent = await loadPdfTextContent(page, pdfPage, generation);
   if (!isReaderGenerationCurrent("search", generation))
     throw new DOMException("Search cancelled", "AbortError");
   text = normalizePdfSearchText(pdfTextContent(textContent.items));
@@ -7036,10 +7082,25 @@ async function fullSearchPdfMatches(query, generation) {
   const pdf = pdfDocument, groups = [], firstPage = [],
     pattern = new RegExp(fullSearchEscape(normalizePdfSearchText(query)), "giu");
   if (!pdf) return [];
+  const pending = new Map();
+  let nextPage = 1;
+  const fill = () => {
+    while (pending.size < 2 && nextPage <= pdf.numPages && isReaderGenerationCurrent("search", generation)) {
+      const page = nextPage++;
+      pending.set(page, loadPdfSearchText(pdf, page, generation).then(
+        text => ({ text }), error => ({ error })));
+    }
+  };
+  fill();
   let total = 0, hasText = false;
   for (let page = 1; page <= pdf.numPages; page++) {
     if (!isReaderGenerationCurrent("search", generation)) return [];
-    const text = await loadPdfSearchText(pdf, page, generation);
+    const result = await pending.get(page);
+    pending.delete(page);
+    if (!isReaderGenerationCurrent("search", generation)) return [];
+    if (result.error) throw result.error;
+    const text = result.text;
+    fill();
     hasText ||= !!text.trim();
     let count = 0;
     for (const match of text.matchAll(pattern)) {
@@ -7322,6 +7383,7 @@ fullSearchView
   .addEventListener("click", () => moveFullSearch(1));
 function syncCapabilityControls() {
   content.dataset.mode = capability.mode || "unsupported";
+  pageInvertToggle.hidden = !["pdf", "pdf-pages"].includes(capability.mode);
   document.querySelector(".page-controls").hidden = !capability.features.pagination;
   document.querySelector(".zoom-controls").hidden = !capability.features.zoom;
   mediaTab.hidden = !capability.features.media;

@@ -31,6 +31,33 @@ class ReaderOptimizationTests(unittest.TestCase):
               chapterManifestCleanup = () => {''')
             route.fulfill(response=response, body=script + '''
               window.__snapshot = () => fullSearchDomSnapshot;
+              window.__pdfTools = {trim: trimPdfSurfaces, pixels: pdfRetainedPixels, budget: pdfPixelBudget,
+                prefetch: pdfManifestPrefetches, setPage: page => updateDocumentState({page})};
+              window.__startPdfProbe = () => {
+                pdfTextContentCache.clear(); pdfTextContentCacheBytes = 0;
+                pdfSearchTextCache.clear(); pdfSearchTextCacheBytes = 0;
+                window.__extraction = {active:0, peak:0, calls:[], releases:[]};
+                const page = number => ({getTextContent: async () => {
+                  const state = __extraction;
+                  state.calls.push(number); state.peak = Math.max(state.peak, ++state.active);
+                  try {
+                    if (number <= 2) await new Promise(resolve => state.releases.push(resolve));
+                    else await new Promise(resolve => setTimeout(resolve, 10));
+                    return {items:[{str:'needle page ' + number + ' needle'}], styles:{}};
+                  } finally { state.active--; }
+                }});
+                pdfDocument = {numPages:30, getPage: async number => page(number)};
+                window.__demandPdfProbe = () => loadPdfTextContent(100, page(100));
+                window.__finishPdfProbe = () => __extraction.releases.splice(0).forEach(resolve => resolve());
+                const generation = nextReaderGeneration('search');
+                window.__pdfProbeTask = fullSearchPdfMatches('needle', generation);
+                window.__pdfProbeTask.catch(() => {});
+              };
+              window.__pdfProbePage = offset => pdfSearchPageLoader(offset);
+              window.__pdfProbeTotal = () => chapterSearchPage.total;
+              window.__cancelPdfProbe = () => {nextReaderGeneration('search'); chapterSearchPage = {total:123};};
+              window.__retryCancelledPageProbe = () => loadPdfTextContent(2, {
+                getTextContent:async()=>({items:[{str:'fresh demand'}],styles:{}})});
               window.__query = async query => {
                 fullSearchInput.value = query;
                 await runFullSearch();
@@ -49,6 +76,115 @@ class ReaderOptimizationTests(unittest.TestCase):
               };
             ''')
         self.page.route('**/static/reader.js?*', instrument)
+
+    def test_pdf_pixel_budget_releases_prefetch_and_protects_selection(self):
+        self.expose()
+        self.serve('pixel budget fixture')
+        self.open(self.reader_url('txt'))
+        for width in (1100, 390):
+            self.page.set_viewport_size(dict(width=width, height=800))
+            result = self.page.evaluate('''() => {
+              const root = document.querySelector('#content'); root.replaceChildren();
+              __pdfTools.setPage(1);
+              for (let page=1; page<=8; page++) {
+                const shell=document.createElement('div'); shell.className='reader-page';
+                shell.dataset.page=page; shell.dataset.renderState='rendered';
+                const canvas=document.createElement('canvas'); canvas.className='ready';
+                canvas.width=2400; canvas.height=3400;
+                const text=document.createElement('div'); text.className='reader-pdf-text'; text.textContent='page '+page;
+                shell.append(canvas,text); root.append(shell);
+                if (page >= 5) {
+                  const image=new Image(); image.className='ready';
+                  Object.defineProperties(image, {naturalWidth:{value:2400},naturalHeight:{value:3400}});
+                  image.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+                  canvas.replaceWith(image);
+                }
+              }
+              const selected=root.children[1]; const range=document.createRange();
+              range.selectNodeContents(selected.querySelector('.reader-pdf-text'));
+              getSelection().removeAllRanges(); getSelection().addRange(range);
+              const prefetched=new Image();
+              Object.defineProperties(prefetched, {naturalWidth:{value:2400},naturalHeight:{value:3400}});
+              prefetched.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+              __pdfTools.prefetch.set('fixture', {image:prefetched, url:'fixture'});
+              __pdfTools.trim(root.firstChild);
+              const protectedSelection=selected.querySelector('canvas').width===2400 && getSelection().getRangeAt(0).toString()==='page 2';
+              const prefetchedReleased=!prefetched.hasAttribute('src') && __pdfTools.prefetch.size===0;
+              getSelection().removeAllRanges(); __pdfTools.trim(root.firstChild);
+              return {protectedSelection,prefetchedReleased,pixels:__pdfTools.pixels(),budget:__pdfTools.budget(),
+                retained:root.firstChild.querySelector('canvas').width,
+                released:[...root.children].filter(shell=>!shell.querySelector('canvas.ready, img')).length};
+            }''')
+            self.assertTrue(result['protectedSelection'] and result['prefetchedReleased'], result)
+            self.assertLessEqual(result['pixels'], result['budget'])
+            self.assertEqual(result['retained'], 2400)
+            self.assertGreaterEqual(result['released'], 5)
+
+    def test_pdf_parallel_search_reserves_demand_slot_and_cancels_stale_totals(self):
+        self.expose()
+        self.serve('search scheduling fixture')
+        self.open(self.reader_url('txt'))
+        self.page.evaluate('__startPdfProbe()')
+        self.page.wait_for_function('() => __extraction.calls.length === 2')
+        self.page.evaluate('__demandPdfProbe()')
+        self.assertEqual(self.page.evaluate('__extraction.calls'), [1, 2, 100])
+        self.assertEqual(self.page.evaluate('__extraction.peak'), 3)
+        self.page.evaluate('__finishPdfProbe()')
+        first = self.page.evaluate('__pdfProbeTask')
+        self.assertEqual(self.page.evaluate('__pdfProbeTotal()'), 60)
+        self.assertEqual([hit['location'] for hit in first], [f'第 {page} 页' for page in range(1, 26) for _ in range(2)])
+        tail = self.page.evaluate('__pdfProbePage(50)')
+        self.assertEqual(tail['total'], 60)
+        self.assertEqual([hit['location'] for hit in tail['results']], [f'第 {page} 页' for page in range(26, 31) for _ in range(2)])
+        self.assertLessEqual(self.page.evaluate('__extraction.peak'), 3)
+        self.page.evaluate('__startPdfProbe()')
+        self.page.wait_for_function('() => __extraction.calls.length === 2')
+        self.page.evaluate('__cancelPdfProbe(); __finishPdfProbe()')
+        self.assertEqual(self.page.evaluate('__pdfProbeTask'), [])
+        self.assertEqual(self.page.evaluate('__pdfProbeTotal()'), 123)
+        self.assertEqual(self.page.evaluate('__extraction.calls'), [1, 2])
+
+    def test_large_docx_skips_offscreen_paint_but_searches_all_pages(self):
+        self.expose()
+        with zipfile.ZipFile(io.BytesIO(fixtures.support.minimal_docx())) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        paragraphs = ''.join(f'<w:p><w:r><w:t>needle page {page}</w:t></w:r></w:p>' +
+                             ('<w:p><w:r><w:br w:type="page"/></w:r></w:p>' if page < 20 else '')
+                             for page in range(1, 21))
+        files['word/document.xml'] = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + paragraphs + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>')
+        self.serve(fixtures.support.zip_bytes(files), 'application/octet-stream')
+        self.open(self.docx_url())
+        pages = self.page.locator('.reader-docx-page')
+        self.assertEqual(pages.count(), 20)
+        self.assertEqual(pages.last.evaluate('e => getComputedStyle(e).contentVisibility'), 'auto')
+        self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+        self.assertFalse(pages.last.evaluate('e => e.firstElementChild.checkVisibility({contentVisibilityAuto:true})'))
+        self.assertEqual(self.page.evaluate('__query("needle")'), 20)
+        self.search('needle')
+        self.page.locator('.full-search-result').last.click()
+        self.page.wait_for_function('() => document.querySelector(".reader-docx-page:last-child mark")')
+        self.assertEqual(pages.last.locator('mark').text_content(), 'needle')
+        self.page.locator('#history').click()
+        self.page.locator('#page-number').fill('1')
+        self.page.locator('#page-number').press('Enter')
+        self.page.wait_for_function('() => document.querySelector("#page-number").value === "1"')
+        self.assertEqual(self.page.evaluate('__query("needle")'), 20)
+
+    def test_mobile_pdf_search_keeps_one_demand_slot_and_drops_queued_cancelled_work(self):
+        self.expose()
+        self.serve('mobile scheduling fixture')
+        self.open(self.reader_url('txt'))
+        self.page.set_viewport_size(dict(width=390, height=800))
+        self.page.evaluate('__startPdfProbe()')
+        self.page.wait_for_function('() => __extraction.calls.length === 1')
+        self.page.evaluate('__demandPdfProbe()')
+        self.assertEqual(self.page.evaluate('__extraction.calls'), [1, 100])
+        self.assertEqual(self.page.evaluate('__extraction.peak'), 2)
+        self.page.evaluate('__cancelPdfProbe(); window.__freshDemand = __retryCancelledPageProbe(); __finishPdfProbe()')
+        self.assertEqual(self.page.evaluate('__freshDemand'), {'items': [{'str': 'fresh demand'}], 'styles': {}})
+        self.assertEqual(self.page.evaluate('__pdfProbeTask'), [])
+        self.assertEqual(self.page.evaluate('__pdfProbeTotal()'), 123)
+        self.assertEqual(self.page.evaluate('__extraction.calls'), [1, 100])
 
     def chapter_book(self, hold=False):
         self.expose()
