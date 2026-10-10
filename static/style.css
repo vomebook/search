@@ -70,6 +70,31 @@ body.reader-overlay-open {
   background: #181a1d;
 }
 
+.reader-overlay-pending { visibility: hidden; }
+.reader-overlay-opening {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: var(--surface);
+  color: var(--on-surface);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 10px;
+  font-size: 14px;
+  line-height: 32px;
+}
+.reader-overlay-opening button {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 20px;
+  cursor: pointer;
+}
+
 body.light {
   --surface: #fdfbff;
   --surface-variant: #f0eff4;

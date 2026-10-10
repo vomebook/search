@@ -600,7 +600,22 @@ function warmReaderIntent(rawUrl) {
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
-    var link = document.createElement("link"); link.rel = href.indexOf("/foliate-reader/view.js") >= 0 ? "modulepreload" : "prefetch"; link.href = href; document.head.appendChild(link);
+    if (href.endsWith("/reader.html")) {
+      fetch(href, { priority: "low", signal: AbortSignal.timeout(8000) })
+        .then(response => {
+          if (!response.ok) throw new Error("Reader shell HTTP " + response.status);
+          return response.arrayBuffer();
+        }).catch(() => warmedReaderAssets.delete(href));
+      return;
+    }
+    var link = document.createElement("link");
+    var module = href.endsWith(".mjs") || href.includes("/foliate-reader/view.js") || (href.endsWith(".js") && !engineAssets.includes(href));
+    link.rel = module ? "modulepreload" : "preload";
+    if (!module) link.as = href.endsWith(".css") ? "style" : "script";
+    link.fetchPriority = "low";
+    link.href = href;
+    link.addEventListener("error", () => { warmedReaderAssets.delete(href); link.remove(); }, { once: true });
+    document.head.appendChild(link);
   });
   startReaderSourceWarmup(API_BASE, readerId, sourceUrl);
   warmConnection();
@@ -616,6 +631,9 @@ function setupReaderIntentWarming() {
     if (target) warmReaderIntent(target.dataset.readerUrl || target.dataset.readUrl);
   };
   ["pointerover", "pointerdown", "focusin"].forEach(function(type) { document.addEventListener(type, warm, { passive: true }); });
+  var warmShell = () => warmReaderIntent("/search/static/reader.html");
+  setTimeout(warmShell, 1500);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) warmShell(); });
 }
 
 function isReadableRecord(rec) {

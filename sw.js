@@ -61,11 +61,11 @@ self.addEventListener("fetch", (event) => {
   }
   // Retired URLs must reach the server; never return or repopulate old cache entries.
   if (isRetiredAsset(url.pathname)) return;
-  const readerNavigation = event.request.mode === "navigate" && url.pathname === "/search/static/reader.html";
+  const readerShell = url.pathname === "/search/static/reader.html";
   const searchNavigation = event.request.mode === "navigate" && ["/search/", "/search/index.html"].includes(url.pathname);
   const generatedData = url.pathname.startsWith("/search/data/");
-  const networkFirst = searchNavigation || readerNavigation || generatedData || READER_RUNTIME_PATHS.has(url.pathname);
-  const cacheKey = readerNavigation ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
+  const networkFirst = !readerShell && (searchNavigation || generatedData || READER_RUNTIME_PATHS.has(url.pathname));
+  const cacheKey = readerShell ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
   const cachePromise = caches.open(CACHE_NAME).catch(() => null);
   const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey) : undefined).catch(() => undefined);
   // Content-addressed assets never need a revalidation request on cache hits.
