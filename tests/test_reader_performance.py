@@ -52,12 +52,12 @@ VENDOR_STEMS = {
 
 def route_local_vendor_fallback(page):
     for key, requested in VENDOR_FILES.items():
-        candidates = sorted((ROOT / "static/vendor").glob(VENDOR_STEMS[key]))
-        if not candidates:
+        path = ROOT / "static/vendor" / requested
+        if not path.is_file():
             continue
         page.route(
             f"**/static/vendor/{requested}",
-            lambda route, _request, path=str(candidates[-1]): route.fulfill(path=path),
+            lambda route, _request, path=str(path): route.fulfill(path=path),
         )
 SOURCE_URL = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/performance.pdf"
 PDF_MODULE = """
@@ -889,7 +889,8 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
         root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3, "toc": [{"title": "第一章", "page": 1, "depth": 0}, {"title": "第二章", "page": 2, "depth": 1}]}
-        wide_page = b'<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="3200"><rect width="100%" height="100%" fill="white"/></svg>'
+        # Three wide pages must fit even the minimum retained-pixel budget.
+        wide_page = b'<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="white"/></svg>'
         page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-resolve?id=wide-pages", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"url": source, "download": source, "extension": "pdf-pages", "original_extension": "pdf", "title": "Converted"})))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
@@ -1104,7 +1105,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.mouse.up()
         page.wait_for_function("() => getSelection().focusNode?.parentElement?.closest('[data-column]')?.dataset.column === 'right'")
 
-    def test_long_pdf_pages_touch_swipe_from_ocr_does_not_select_or_jump(self):
+    def test_long_pdf_pages_touch_swipe_preserves_existing_ocr_selection(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
         self.addCleanup(context.close)
         page = context.new_page()
@@ -1128,7 +1129,15 @@ class ReaderPerformanceTest(unittest.TestCase):
             if path == text_root + "/ocr-manifest.json":
                 route.fulfill(content_type="application/json", body=json.dumps(ocr))
                 return
-            number = int(path.rsplit("page-", 1)[1][:6])
+            if path == image_root + "/page-manifest.json":
+                route.fulfill(content_type="application/json", body=json.dumps(
+                    {"version": 2, "kind": "pdf-pages", "page_count": total}))
+                return
+            match = re.search(r"/ocr/page-(\d{6})\.json\.gz$", path)
+            if not match:
+                route.fulfill(status=404, body="Unexpected fixture resource")
+                return
+            number = int(match.group(1))
             blocks = [] if number == 2 else [{"t": f"Page {number} selectable text", "b": [0.2, 0.35, 0.8, 0.4]}]
             payload = {"version": 1, "kind": "pdf-ocr-page", "page": number,
                        "width": 1441, "height": 2145, "blocks": blocks}
@@ -1199,20 +1208,22 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertEqual(page.evaluate("window.__pdfTouchTarget"), "5")
         self.assertEqual(page.evaluate("window.__pdfSelectionWrites"), 0)
         page.evaluate("document.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, pointerId: 91, pointerType: 'touch'}))")
-        page.evaluate("""() => {
-          document.querySelector('#viewport').scrollTop = 0;
-          const node = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').firstChild;
+        page.evaluate("getSelection().removeAllRanges()")
+        page.locator("#page-number").fill("1")
+        page.locator("#page-number").dispatch_event("change")
+        point = page.wait_for_function("""() => {
+          const run = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run');
+          if (!run?.firstChild || document.querySelector('#page-number').value !== '1') return false;
+          const node = run.firstChild;
           const range = document.createRange();
           range.setStart(node, 0);
           range.setEnd(node, 4);
           getSelection().removeAllRanges();
           getSelection().addRange(range);
           window.__pdfSelectionWrites = 0;
-        }""")
-        point = page.evaluate("""() => {
-          const rect = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').getBoundingClientRect();
+          const rect = run.getBoundingClientRect();
           return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }""")
+        }""", timeout=10000).json_value()
         cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [point]})
         for step in range(1, 7):
             cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [
@@ -1250,7 +1261,15 @@ class ReaderPerformanceTest(unittest.TestCase):
             if path == text_root + "/ocr-manifest.json":
                 route.fulfill(content_type="application/json", body=json.dumps(ocr))
                 return
-            number = int(path.rsplit("page-", 1)[1][:6])
+            if path == image_root + "/page-manifest.json":
+                route.fulfill(content_type="application/json", body=json.dumps(
+                    {"version": 2, "kind": "pdf-pages", "page_count": total}))
+                return
+            match = re.search(r"/ocr/page-(\d{6})\.json\.gz$", path)
+            if not match:
+                route.fulfill(status=404, body="Unexpected fixture resource")
+                return
+            number = int(match.group(1))
             blocks = [] if number == 2 else [{"t": f"Page {number} selectable text", "b": [0.2, 0.35, 0.8, 0.4]}]
             route.fulfill(content_type="application/gzip", body=gzip.compress(json.dumps({
                 "version": 1, "kind": "pdf-ocr-page", "page": number,
@@ -1319,17 +1338,27 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.wait_for_timeout(100)
         self.assertEqual(page.evaluate("window.__pdfSelectionWrites"), 0)
         page.evaluate("document.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, pointerId: 91, pointerType: 'touch'}))")
-        page.evaluate("""() => {
-          document.querySelector('#viewport').scrollTop = 0;
-          const node = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').firstChild;
+        page.evaluate("getSelection().removeAllRanges()")
+        page.locator("#page-number").fill("1")
+        page.locator("#page-number").dispatch_event("change")
+        # Offscreen OCR layers are recycled; wait and select within one browser turn.
+        point = page.wait_for_function("""() => {
+          const shell = document.querySelector('.reader-page[data-page="1"]');
+          const run = shell?.querySelector('.reader-pdf-text-run');
+          const image = shell?.querySelector('img.ready');
+          if (!run?.firstChild || !image?.complete || document.querySelector('#page-number').value !== '1') return false;
+          const node = run.firstChild;
           const range = document.createRange();
           range.setStart(node, 0);
           range.setEnd(node, 4);
           getSelection().removeAllRanges();
           getSelection().addRange(range);
           window.__pdfSelectionWrites = 0;
-        }""")
+          const rect = run.getBoundingClientRect();
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }""", timeout=10000).json_value()
         swipe()
+
 
     def test_compact_pdf_manifest_virtualizes_and_navigates_to_distant_page(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})

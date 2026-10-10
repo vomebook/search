@@ -52,6 +52,15 @@ function checkBehavior(root) {
 }
 
 function checkAssets(output, hashed = false) {
+  for (const vendor of Object.values(resources.foliateVendors)) {
+    const filename = path.join("foliate-reader/vendor", vendor.file);
+    assert(hash(path.join(output, filename)) === vendor.sha256,
+      `Foliate vendor integrity mismatch: ${filename}`);
+  }
+  for (const [name, filename] of [["pdf", "pdf.mjs"], ["pdfWorker", "pdf.worker.mjs"]]) {
+    assert(hash(path.join(output, "foliate-reader/vendor/pdfjs", filename)) === resources.vendors[name].sha256,
+      `Foliate PDF engine mismatch: ${filename}`);
+  }
   for (const vendor of Object.values(resources.vendors)) {
     assert(
       hash(path.join(output, vendor.path)) === vendor.sha256,
