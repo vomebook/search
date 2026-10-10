@@ -46,6 +46,7 @@ const formatAdapters = VoiceOfMLReaderAdapters.createAdapterRegistry();
 readerRuntime.track(readerRequestManager);
 readerRuntime.track(formatAdapters);
 readerRuntime.track(window.__VOICE_PDF_PRELOAD__);
+readerRuntime.track(window.__VOICE_READER_CHAPTER_PRELOAD__);
 const readerAbortController = new AbortController();
 const readerResources = new Set();
 function readerAbortError() {
@@ -3413,22 +3414,25 @@ function createPdfShellWindow(total, firstShell, createShell, unobserve, default
   if (total <= 256) return null;
   const chunkSize = 32, chunks = [], ratios = new Map();
   let frame = 0, disposed = false;
-  const chunkHeight = (chunk) => {
+  const readWidth = () => {
     const style = getComputedStyle(content);
-    const width = (content.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) * documentState.zoom;
+    return (content.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) * documentState.zoom;
+  };
+  const chunkHeight = (chunk, width) => {
     let height = 0;
     for (let page = chunk.start; page <= chunk.end; page++)
       height += Math.max(160, width * (ratios.get(page) || defaultRatio)) + 18;
     return height;
   };
   const fragment = document.createDocumentFragment();
+  const initialWidth = readWidth();
   for (let start = 1; start <= total; start += chunkSize) {
     const element = document.createElement("div");
     element.className = "reader-pdf-chunk";
     element.setAttribute("aria-hidden", "true");
     const chunk = { element, start, end: Math.min(total, start + chunkSize - 1), mounted: false };
     chunks.push(chunk);
-    element.style.height = `${chunkHeight(chunk)}px`;
+    element.style.height = `${chunkHeight(chunk, initialWidth)}px`;
     fragment.appendChild(element);
   }
   content.appendChild(fragment);
@@ -3445,12 +3449,21 @@ function createPdfShellWindow(total, firstShell, createShell, unobserve, default
     chunk.element.appendChild(pages);
     chunk.mounted = true;
   }
-  function unmount(chunk) {
+  function canUnmount(chunk) {
+    return chunk.mounted && !chunk.element.contains(document.activeElement) &&
+      !pdfSelectionIntersects(chunk.element);
+  }
+  function measureChunk(chunk) {
+    for (const shell of chunk.element.children) {
+      const bounds = shell.getBoundingClientRect();
+      if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
+    }
+  }
+  function unmount(chunk, width) {
     if (!chunk.mounted || chunk.element.contains(document.activeElement) ||
         pdfSelectionIntersects(chunk.element)) return;
     for (const shell of chunk.element.children) {
-      const page = Number(shell.dataset.page), bounds = shell.getBoundingClientRect();
-      if (bounds.width && bounds.height) ratios.set(page, bounds.height / bounds.width);
+      const page = Number(shell.dataset.page);
       shell._textEpoch = (shell._textEpoch || 0) + 1;
       shell._renderCancel?.();
       unobserve(shell);
@@ -3458,7 +3471,7 @@ function createPdfShellWindow(total, firstShell, createShell, unobserve, default
       pdfManifestShells[page] = undefined;
     }
     chunk.element.replaceChildren();
-    chunk.element.style.height = `${chunkHeight(chunk)}px`;
+    chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
     chunk.element.setAttribute("aria-hidden", "true");
     chunk.mounted = false;
   }
@@ -3466,10 +3479,13 @@ function createPdfShellWindow(total, firstShell, createShell, unobserve, default
     if (disposed) return;
     const anchor = pageAtMarker();
     const before = isPdfPageVisible(anchor) ? anchor.getBoundingClientRect().top : undefined;
+    const retiring = chunks.filter((chunk, i) => Math.abs(i - index) > 2 && canUnmount(chunk));
+    const width = retiring.length ? readWidth() : 0;
+    // Capture all retiring page geometry before mounting or removing any chunks.
+    for (const chunk of retiring) measureChunk(chunk);
     for (let i = Math.max(0, index - 2); i <= Math.min(chunks.length - 1, index + 2); i++)
       mount(chunks[i]);
-    for (let i = 0; i < chunks.length; i++)
-      if (Math.abs(i - index) > 2) unmount(chunks[i]);
+    for (const chunk of retiring) unmount(chunk, width);
     if (anchor?.isConnected && before !== undefined)
       viewport.scrollTop += anchor.getBoundingClientRect().top - before;
   }
@@ -3487,7 +3503,8 @@ function createPdfShellWindow(total, firstShell, createShell, unobserve, default
     if (disposed) return;
     const anchor = pageAtMarker();
     const before = isPdfPageVisible(anchor) ? anchor.getBoundingClientRect().top : undefined;
-    for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk)}px`;
+    const width = readWidth();
+    for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
     if (anchor?.isConnected && before !== undefined)
       viewport.scrollTop += anchor.getBoundingClientRect().top - before;
     schedule();
@@ -4860,11 +4877,14 @@ async function renderChapterManifest(prepared) {
   assertReaderActive();
   const frame = document.createElement("div");
   frame.className = "epub-frame";
+  frame.style.overflowAnchor = "none";
+  const openingGeneration = readerRuntime.currentGeneration("navigation");
   content.appendChild(frame);
   const loaded = new Set(), retainedBytes = new Map(),
     manifestBase = trustedReaderAssetManifestUrl(chapterManifestUrl || sourceUrl);
   const chapterByIndex = new Map(manifest.chapters.map((chapter) => [chapter.index, chapter]));
   const chapterPrefetchCount = 6;
+  const chapterPrefetchMaxCount = 10, chapterPrefetchBytes = 128 * 1024;
   let chapterFocusIndex = 1, chapterWindowFrame = 0, chapterWindowReady = false;
   let chapterNavigating = 0;
   let chapterPreviousObserver = null;
@@ -4911,15 +4931,18 @@ async function renderChapterManifest(prepared) {
     if (existing) return existing;
     const next = nextChapterNode(Number(article.dataset.chapter), ".reader-epub-chapter");
     const marker = frame.querySelector(`.reader-chapter-sentinel[data-chapter="${article.dataset.chapter}"]`);
-    foliateScrollAnchors.preserve(() => {
+    const insert = () => {
       if (marker) {
         chapterManifestObserver.unobserve(marker);
         chapterPreviousObserver.unobserve(marker);
         marker.replaceWith(article);
       } else frame.insertBefore(article, next || null);
-    });
+    };
+    const preservePosition = chapterWindowReady || !isReaderGenerationCurrent("navigation", openingGeneration);
+    if (preservePosition) foliateScrollAnchors.preserve(insert);
+    else insert();
     chapterManifestObserver.observe(article);
-    foliateScrollAnchors.observe(article);
+    if (preservePosition) foliateScrollAnchors.observe(article);
     return article;
   };
   const ensureSentinel = (chapter, previous = false) => {
@@ -4996,6 +5019,11 @@ async function renderChapterManifest(prepared) {
         article.dataset.chapter = String(chapter.index);
         if (doc.body?.id) article.id = doc.body.id;
         article.innerHTML = doc.body ? doc.body.innerHTML : "";
+        for (const image of article.querySelectorAll("img")) {
+          image.loading = priority === "high" ? "eager" : "lazy";
+          image.fetchPriority = priority;
+          image.decoding = "async";
+        }
         // The generated text index includes head text (e.g. the chapter title).
         article._chapterSearchHead = doc.head ? document.importNode(doc.head, true) : null;
         insertChapter(article);
@@ -5131,6 +5159,21 @@ async function renderChapterManifest(prepared) {
   function trimChapterWindow() {
     if (chapterWindowReady) chapterVirtualizer.trim(chapterFocusIndex);
   }
+  function chapterPrefetchIndices() {
+    if (document.hidden) return [];
+    // A fixed opening prefix keeps extra front matter within the DOM retention target.
+    const forwardCount = Math.max(chapterPrefetchCount, chapterPrefetchMaxCount + 1 - chapterFocusIndex);
+    const nearby = manifest.chapters.slice(Math.max(0, chapterFocusIndex - 2),
+      chapterFocusIndex + forwardCount);
+    const indices = [];
+    let bytes = 0;
+    for (const chapter of nearby) {
+      bytes += chapter.bytes;
+      if (chapter.index > chapterFocusIndex + chapterPrefetchCount && bytes > chapterPrefetchBytes) break;
+      if (!loaded.has(chapter.index)) indices.push(chapter.index);
+    }
+    return indices;
+  }
   function refreshChapterWindow() {
     chapterWindowFrame = 0;
     if (!chapterWindowReady || readerAbortController.signal.aborted) return;
@@ -5144,10 +5187,7 @@ async function renderChapterManifest(prepared) {
     if (!chapterNavigating && current?.classList.contains("reader-chapter-sentinel") &&
         current.getBoundingClientRect().top < view.bottom)
       fetchChapter(chapterAt(chapterFocusIndex)).catch(() => {});
-    const indices = document.hidden ? [] : manifest.chapters
-      .slice(Math.max(0, chapterFocusIndex - 2), chapterFocusIndex + chapterPrefetchCount)
-      .filter(chapter => !loaded.has(chapter.index)).map(chapter => chapter.index);
-    chapterScheduler.prefetch(indices);
+    chapterScheduler.prefetch(chapterPrefetchIndices());
     foliateScrollAnchors.whenIdle(trimChapterWindow);
   }
   function scheduleChapterWindow() {
@@ -5162,7 +5202,7 @@ async function renderChapterManifest(prepared) {
     { root: viewport, rootMargin: "800px 0px" }
   );
   chapterPreviousObserver = new IntersectionObserver((entries) => {
-    if (readerAbortController.signal.aborted) return;
+    if (!chapterWindowReady || readerAbortController.signal.aborted) return;
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
       const chapter = chapterAt(Number(entry.target.dataset.chapter));
@@ -5210,7 +5250,9 @@ async function renderChapterManifest(prepared) {
   chapterFocusIndex = manifest.chapters[initialChapter].index;
   if (initialChapter > 0) ensureSentinel(manifest.chapters[initialChapter - 1], true);
   try {
-    await fetchChapter(manifest.chapters[initialChapter]);
+    const firstChapter = fetchChapter(manifest.chapters[initialChapter]);
+    chapterScheduler.prefetch(chapterPrefetchIndices());
+    await firstChapter;
   } catch (error) {
     if (readerRestorationEntry?.chapterIndex == null) throw error;
     throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。", { cause: error }), {
@@ -5218,6 +5260,9 @@ async function renderChapterManifest(prepared) {
     });
   }
   chapterWindowReady = true;
+  if (isReaderGenerationCurrent("navigation", openingGeneration)) foliateScrollAnchors.invalidate();
+  for (const article of frame.querySelectorAll(".reader-epub-chapter")) foliateScrollAnchors.observe(article);
+  frame.style.removeProperty("overflow-anchor");
   scheduleChapterWindow();
   assertReaderActive();
   markReaderContentReady();
@@ -5934,7 +5979,13 @@ function loadImageDocument(target = sourceUrl) {
   });
 }
 function loadChapterManifestDocument() {
-  return fetchReaderUrl(chapterManifestUrl || sourceUrl);
+  const target = chapterManifestUrl || sourceUrl, early = window.__VOICE_READER_CHAPTER_PRELOAD__;
+  if (early?.manifest && early.manifestUrl === new URL(target, location.href).href) {
+    const pending = early.manifest;
+    early.manifest = null;
+    return pending.then(response => response.ok ? response : fetchReaderUrl(target), () => fetchReaderUrl(target));
+  }
+  return fetchReaderUrl(target);
 }
 
 // Foliate keeps a source-to-rendered text mapping because CFI addresses the

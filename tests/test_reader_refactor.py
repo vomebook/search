@@ -2648,6 +2648,101 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertIsNone(self.page.locator("#escape").get_attribute("src"))
                 self.assertIsNone(self.page.locator("#external").get_attribute("src"))
 
+    def test_bucket_chapter_manifest_loads_before_reader_module_and_is_consumed_once(self):
+        held, manifests = [], []
+        root = 'chapters/ebook/epub/' + 'a' * 64 + '/' + 'b' * 16
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':root + '/chapter-manifest.json'})
+        manifest = {'version':1, 'kind':'epub-chapters', 'chapters':[
+            {'index':1, 'path':'chapters/chapter-0001.xhtml', 'bytes':100}]}
+        def resource(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            if path.endswith('/chapter-manifest.json'):
+                manifests.append(route.request.url)
+                route.fulfill(json=manifest)
+            else:
+                route.fulfill(content_type='text/html', body='<h1>Copyright</h1><p>Immediately readable text</p>')
+        self.page.route('**/api/reader-bucket-resource?*', resource)
+        self.page.route('**/static/reader.js?*', lambda route: held.append((route, route.fetch())))
+        self.page.goto(self.reader_url('epub-chapters', url=source), wait_until='commit')
+        self.page.wait_for_function('() => !!window.__VOICE_READER_CHAPTER_PRELOAD__?.manifest')
+        self.page.wait_for_function('async () => (await window.__VOICE_READER_CHAPTER_PRELOAD__.manifest).ok')
+        self.assertEqual(len(manifests), 1)
+        self.assertEqual(len(held), 1)
+        route, response = held[0]
+        route.fulfill(response=response)
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(len(manifests), 1)
+        self.assertIsNone(self.page.evaluate('window.__VOICE_READER_CHAPTER_PRELOAD__.manifest'))
+        self.assertTrue(self.page.locator('.reader-epub-chapter p').is_visible())
+
+    def test_chapter_open_overlaps_first_page_and_prefetches_past_small_front_matter(self):
+        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
+        for width, chapter_bytes, last_expected in ((390, 100, 11), (1100, 1000000, 7)):
+            with self.subTest(width=width, chapter_bytes=chapter_bytes):
+                self.page.set_viewport_size(dict(width=width, height=800))
+                requested, first = [], []
+                manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
+                    {"index": i, "path": f"chapter-{i}.xhtml", "bytes": chapter_bytes}
+                    for i in range(1, 21)
+                ]}
+                def resource(route):
+                    url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("url", [""])[0]
+                    if url.endswith("chapter-manifest.json"):
+                        route.fulfill(json=manifest)
+                        return
+                    number = int(url.rsplit("chapter-", 1)[1].split(".", 1)[0])
+                    requested.append(number)
+                    if number == 1:
+                        first.append(route)
+                    else:
+                        route.fulfill(content_type="text/html", body=f'<h1>Chapter {number}</h1><p style="height:1000px">Readable {number}</p><img src="picture.png"/>')
+                self.page.route("**/api/reader-content**", resource)
+                self.page.goto(self.reader_url("epub-chapters", url=root + "/chapter-manifest.json"))
+                self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state="attached")
+                self.assertEqual(requested[0], 1)
+                self.assertEqual(len(first), 1)
+                self.assertEqual(self.page.locator('.reader-epub-chapter[data-chapter="1"]').count(), 0)
+                first[0].fulfill(content_type="text/html", body='<h1>Copyright</h1><p style="height:1000px">Opening page</p>')
+                self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+                self.page.locator(f'.reader-epub-chapter[data-chapter="{last_expected}"]').wait_for(state="attached")
+                self.page.wait_for_timeout(100)
+                self.assertEqual(set(requested), set(range(1, last_expected + 1)), requested)
+                self.assertEqual(self.page.locator('#viewport').evaluate('node => node.scrollTop'), 0)
+                image = self.page.locator('.reader-epub-chapter[data-chapter="3"] img')
+                self.assertEqual(image.evaluate('node => node.loading'), 'lazy')
+                self.assertEqual(image.evaluate('node => node.fetchPriority'), 'low')
+                self.page.unroute("**/api/reader-content**", resource)
+
+    def test_chapter_navigation_during_delayed_open_keeps_user_target(self):
+        root = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64
+        manifest = {'version':1, 'kind':'epub-chapters', 'chapters':[
+            {'index':i, 'path':f'chapter-{i}.xhtml', 'bytes':100} for i in range(1,21)]}
+        first = []
+        def resource(route):
+            url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('url',[''])[0]
+            if url.endswith('chapter-manifest.json'):
+                route.fulfill(json=manifest)
+                return
+            number = int(url.rsplit('chapter-',1)[1].split('.',1)[0])
+            if number == 1:
+                first.append(route)
+            else:
+                route.fulfill(content_type='text/html', body=f'<h1>Chapter {number}</h1><p style="height:1600px">Readable {number}</p>')
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '\nwindow.__earlyChapter = index => navigationState.tocEntries[index-1].activate(beginReaderNavigation());\n')
+        self.page.route('**/api/reader-content**',resource)
+        self.page.route('**/static/reader.js?*',instrument)
+        self.page.goto(self.reader_url('epub-chapters',url=root+'/chapter-manifest.json'))
+        self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state='attached')
+        self.assertTrue(self.page.evaluate('__earlyChapter(15)'))
+        target = self.page.locator('.reader-epub-chapter[data-chapter="15"]')
+        before = target.evaluate('node => node.getBoundingClientRect().top')
+        first[0].fulfill(content_type='text/html',body='<h1>Copyright</h1><p style="height:1600px">Opening page</p>')
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.page.wait_for_function('top => Math.abs(document.querySelector(\'.reader-epub-chapter[data-chapter="15"]\').getBoundingClientRect().top-top)<3',arg=before)
+        self.assertTrue(target.is_visible())
+
 
 if __name__ == "__main__":
     unittest.main()

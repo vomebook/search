@@ -30,7 +30,8 @@ class ReaderOptimizationTests(unittest.TestCase):
                 pending: chapterScheduler.pendingCount, bytes: chapterBudget.used});
               chapterManifestCleanup = () => {''')
             route.fulfill(response=response, body=script + '''
-              window.__snapshot = () => fullSearchDomSnapshot;
+               window.__chunkWindow = createPdfShellWindow;
+               window.__snapshot = () => fullSearchDomSnapshot;
               window.__markerPage = () => pageAtMarker()?.dataset.page;
               window.__restoreText = top => restoreProgressState({scrollTop:top});
               window.__cancelNavigation = () => beginReaderNavigation();
@@ -619,6 +620,67 @@ class ReaderOptimizationTests(unittest.TestCase):
           return {reads,index,actual:__headingTools.index(),expected};}''')
         self.assertEqual(data['reads'],0,data)
         self.assertEqual(data['actual'],data['expected'],data)
+
+    def test_pdf_chunk_layout_batches_reads_and_preserves_protected_pages(self):
+        self.expose()
+        self.serve('chunk layout fixture')
+        self.open(self.reader_url('txt'))
+        for width in (1100, 390):
+            self.page.set_viewport_size(dict(width=width, height=800))
+            result = self.page.evaluate('''() => {
+              const root = document.querySelector('#content'); root.replaceChildren();
+              const nativeStyle = window.getComputedStyle;
+              let reads = 0, owner;
+              window.getComputedStyle = (...args) => {
+                if (args[0] === root) reads++;
+                return nativeStyle(...args);
+              };
+              const create = page => {
+                const shell = document.createElement('section'); shell.className='reader-page';
+                shell.dataset.page=String(page); shell.tabIndex=0;
+                shell.style.aspectRatio='1 / 1.414';
+                const text=document.createElement('span');text.style.userSelect='text';text.textContent='page '+page;
+                shell.append(text);
+                return shell;
+              };
+              try {
+                const first=create(1); root.append(first);
+                owner=__chunkWindow(10000,first,create,()=>{},1.414);
+                const initialReads=reads;
+                const before=[...root.querySelectorAll('.reader-pdf-chunk')].map(n=>n.style.height);
+                reads=0; owner.resize();
+                const resizeReads=reads;
+                const unchanged=before.every((height,i)=>height===root.querySelectorAll('.reader-pdf-chunk')[i].style.height);
+                const selected=owner.ensure(10), range=document.createRange();
+                range.selectNodeContents(selected.firstChild); getSelection().removeAllRanges();getSelection().addRange(range);
+                reads=0; owner.ensure(9000);
+                const jumpReads=reads, selectionKept=selected.isConnected && getSelection().toString()==='page 10';
+                getSelection().removeAllRanges(); owner.ensure(10000);
+                const released=!selected.isConnected;
+                const focused=owner.ensure(9000);
+                const measured=[...focused.parentElement.children].map(shell=>{
+                  const bounds=shell.getBoundingClientRect();return bounds.height/bounds.width;
+                });
+                focused.focus({preventScroll:true});owner.ensure(1);
+                const focusKept=focused.isConnected && document.activeElement===focused;
+                focused.blur();owner.ensure(1);
+                const focusReleased=!focused.isConnected;
+                const chunk=root.querySelectorAll('.reader-pdf-chunk')[281];
+                const style=nativeStyle(root), zoom=Number(document.querySelector('#zoom').value)/100;
+                const pageWidth=(root.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight))*zoom;
+                const expected=measured.reduce((sum,ratio)=>sum+Math.max(160,pageWidth*ratio)+18,0);
+                return {initialReads,resizeReads,jumpReads,unchanged,selectionKept,released,focusKept,focusReleased,
+                  heightError:Math.abs(parseFloat(chunk.style.height)-expected)};
+              } finally {
+                owner?.dispose();getSelection().removeAllRanges();root.replaceChildren();window.getComputedStyle=nativeStyle;
+              }
+            }''')
+            self.assertEqual(result['initialReads'], 1, result)
+            self.assertEqual(result['resizeReads'], 1, result)
+            self.assertLessEqual(result['jumpReads'], 1, result)
+            for key in ('unchanged', 'selectionKept', 'released', 'focusKept', 'focusReleased'):
+                self.assertTrue(result[key], result)
+            self.assertLess(result['heightError'], 2, result)
 
 
 if __name__ == '__main__':
