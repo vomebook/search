@@ -1501,7 +1501,7 @@ class ReaderPerformanceTest(unittest.TestCase):
 
     def test_full_text_search_lists_highlighted_snippets_and_jumps(self):
         self.page.unroute("https://voiceofml-search.hf.space/api/reader-content**")
-        text = ("开头内容。" * 80) + "正文目标词出现在这里，前后都有上下文。" + ("中间内容。" * 120) + "正文目标词再次出现。"
+        text = ("开头内容。" * 800) + "正文目标词出现在这里，前后都有上下文。" + ("中间内容。" * 1200) + "正文目标词再次出现。"
         self.page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/plain", body=text.encode()))
         source = urllib.parse.quote("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/full-search.txt", safe="")
         self.page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=txt&title=FullSearch", wait_until="domcontentloaded")
