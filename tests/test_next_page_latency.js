@@ -2,7 +2,6 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 const assert = require("assert");
-const {execFileSync} = require("child_process");
 const {test, run} = require("./test_harness");
 
 function install(source, context, names) {
@@ -27,12 +26,15 @@ function fixture(source) {
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
     recentSearchPages:new Map(), searchResponseCache:new Map(),
+    pendingSearchCacheWrites:new Map(), searchResponseCacheIdentities:new WeakMap(),
+    searchCacheWriteFrame:0, searchCacheWriteTimer:null, SEARCH_CACHE_TTL:60000,
     searchPositionDB:{objectStoreNames:{contains:()=>true},transaction:()=>({objectStore:()=>({
       get(){const request = {}; reads.push(request); return request;}
     })})},
     setTimeout(fn, delay){const id = ++timerId; timers.set(id,{fn,at:clock + delay}); return id;},
     clearTimeout(id){timers.delete(id);},
     requestAnimationFrame(fn){frames.push(fn); return frames.length;},
+    cancelAnimationFrame(id){frames[id-1]=()=>{};},
     getSearchViewKey:()=>context.queryKey || "query",
     stableSearchStringify:JSON.stringify,
     getCachedSearchResponse:()=>null,
@@ -53,7 +55,8 @@ function fixture(source) {
   };
   vm.createContext(context);
   install(source,context,["readRecentSearchPage","prefetchSearchPages","scheduleBottomLoad",
-    "maybeLoadNextPage","scheduleVirtualRender"]);
+    "maybeLoadNextPage","scheduleVirtualRender","cloneSearchData","getCachedSearchResponse",
+    "setCachedSearchResponse","cancelPendingSearchCacheWrites","cancelSearchPrefetch"]);
   const flush = async () => {for (let i=0;i<16;i++) await Promise.resolve();};
   async function advance(to) {
     await flush();
@@ -85,6 +88,75 @@ for (const project of ["github-Search","huggingface-Search"]) {
       ...f.data(page),key:"query",savedAt:Date.now()});
     f.start(); await f.flush(); assert.strictEqual(f.calls.length,0);
     assert.deepStrictEqual(Object.keys(f.context.STATE._pageCache),["2","3","4"]);
+  });
+  test(project + " later page promotion ends disk wait and late disk data cannot replace transport",async()=>{
+    const f=fixture(source); f.start(); await f.advance(25);
+    f.context.STATE._loadedPage=2;
+    f.context.prefetchSearchPages("/api/search",{q:"query",page:1,page_size:100});
+    await f.flush();
+    assert.strictEqual(f.calls.find(c=>c.page===3).at,25);
+    assert.strictEqual(f.calls.filter(c=>c.page===3).length,1);
+    const network=f.data(3); f.calls.find(c=>c.page===3).resolve(network); await f.flush();
+    f.reads[1].result={...f.data(3),key:"query",savedAt:Date.now()}; f.reads[1].onsuccess();
+    await f.advance(150);
+    assert.strictEqual(f.context.STATE._pageCache[3],network.results);
+    assert(f.context.searchPrefetchAbortController.active.size<=2);
+  });
+  test(project + " shared page caches only once after a frame and stays readable before maintenance",async()=>{
+    const f=fixture(source), c=f.context, data=f.data(2), original=c.searchResponseCache.set;
+    let writes=0;
+    c.searchResponseCache.set=function(...args){writes++;return original.apply(this,args);};
+    c.setCachedSearchResponse("page",data,true);
+    c.setCachedSearchResponse("page",c.cloneSearchData(data),true);
+    assert.strictEqual(writes,0);
+    assert.strictEqual(c.getCachedSearchResponse("page").results[0],data.results[0]);
+    const length=data.results.length;
+    data.results.push({File:"appended-live-only"});
+    assert.strictEqual(c.getCachedSearchResponse("page").results.length,length);
+    assert.strictEqual(f.frames.length,1);
+    f.frames[0](); assert.strictEqual(writes,0);
+    await f.advance(0); assert.strictEqual(writes,1);
+    c.setCachedSearchResponse("page",c.getCachedSearchResponse("page"),true);
+    assert.strictEqual(writes,1); assert.strictEqual(f.frames.length,1);
+    const changed={...f.data(2),results:[data.results[0],...f.data(2).results.slice(1)],anchor_index:77};
+    c.setCachedSearchResponse("page",changed,true);
+    f.frames[1]();await f.advance(0);
+    assert.strictEqual(writes,2);assert.strictEqual(c.getCachedSearchResponse("page").anchor_index,77);
+  });
+  test(project + " deferred cache writes are bounded and cancelled before and after the frame",async()=>{
+    for (const afterFrame of [false,true]) {
+      const f=fixture(source),c=f.context;
+      for(let page=2;page<=6;page++) c.setCachedSearchResponse(String(page),f.data(page),true);
+      assert.strictEqual(c.pendingSearchCacheWrites.size,3);
+      if(afterFrame) f.frames[0]();
+      c.cancelSearchPrefetch();
+      f.frames[0](); await f.advance(0);
+      assert.strictEqual(c.pendingSearchCacheWrites.size,0);assert.strictEqual(c.searchResponseCache.size,0);
+    }
+  });
+  test(project + " stale deferred cache writes cannot cross query boundaries",async()=>{
+    const f=fixture(source),c=f.context;
+    c.setCachedSearchResponse("page",f.data(2),true);
+    c.queryKey="different";assert.strictEqual(c.getCachedSearchResponse("page"),null);
+    f.frames[0]();await f.advance(0);assert.strictEqual(c.searchResponseCache.size,0);
+  });
+  test(project + " offscreen appends preserve window but near-boundary appends render",()=>{
+    for(const near of [false,true]) {
+      const f=fixture(source),c=f.context;
+      Object.assign(c,{positionRestore:null,resultWindow:null,rememberDisplayedSearchView(){},
+        DOM:{resultsContainer:{clientHeight:600},resultsList:{querySelector:()=>({})}},
+        ensureVirtualHeights(len){c.VSCROLL.heights.length=len;},ensureHeightTree(){},
+        fenwickSum:(_,n)=>n*60,getVirtualOffset:n=>n*60,
+        layoutResultScrollSegment(){},resultScrollOrigin:0});
+      c.STATE.results.length=300;c.VSCROLL.heights=new Array(200);c.VSCROLL.heightTree=[];
+      c.VSCROLL.estimatedHeight=60;c.VSCROLL.renderStart=near?180:0;c.VSCROLL.renderEnd=near?200:30;
+      f.setScroll(near?11400:0);
+      install(source,c,["refreshVirtualAfterAppend"]);
+      c.refreshVirtualAfterAppend();
+      assert.strictEqual(f.frames.length,near?1:0);
+      assert.strictEqual(c.VSCROLL.renderEnd,near?-1:30);
+      assert.strictEqual(c.VSCROLL.heights.length,300);
+    }
   });
   test(project + " ready next page honors 5 percent without draining the buffer",async()=>{
     const f=fixture(source); f.context.searchPositionDB=null; f.start(); await f.flush();
@@ -148,25 +220,4 @@ for (const project of ["github-Search","huggingface-Search"]) {
   }
 }
 
-async function compare() {
-  for (const project of ["github-Search","huggingface-Search"]) {
-    const root=path.resolve(__dirname,"../../",project);
-    const baseline=execFileSync("git",["-c","safe.directory="+root,"show",
-      "refs/baselines/next-page-20261009:static/app.js"],{cwd:root,encoding:"utf8",maxBuffer:2*1024*1024});
-    const current=fs.readFileSync(path.join(root,"static/app.js"),"utf8");
-    const observations=[];
-    for (const [version,source] of [["baseline",baseline],["current",current]]) {
-      const f=fixture(source); f.start(); await f.advance(150);
-      const render=fixture(source); render.setScroll(400); render.context.scheduleVirtualRender(true);
-      const immediate=render.appended.length;
-      if (!immediate) {await render.advance(16); render.frames[0]();}
-      const ready=fixture(source); ready.setScroll(400); ready.context.scheduleBottomLoad(0,2); await ready.advance(0);
-      observations.push({version,nextPageTransportStartMs:f.calls.find(c=>c.page===2).at,
-        scrollRequestBeforeFrame:!!immediate,readyPageAppendsWithoutAnotherScroll:ready.appended.length});
-    }
-    console.log(JSON.stringify({project,fixture:"stalled IndexedDB; threshold crossed; not at bottom",observations}));
-  }
-}
-
-if (process.argv.includes("--compare-baseline")) compare().catch(error=>{console.error(error);process.exitCode=1;});
-else run("next-page-latency");
+run("next-page-latency");
