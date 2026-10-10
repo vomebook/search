@@ -576,6 +576,7 @@ let foliateContinuous = false,
   foliateScrollFrame = 0,
   foliateWindowFrame = 0;
 let initialReaderTargetSection = null;
+let chapterManifestCleanup = null;
 const FOLIATE_PREFETCH_SECTIONS = 6;
 const FOLIATE_PREFETCH_MARGIN = 4000;
 const FOLIATE_LOADED_SECTION_LIMIT = 12;
@@ -2645,6 +2646,7 @@ function fetchReaderUrl(rawUrl, requestInit = {}) {
     throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
   }).catch((error) => {
     assertReaderActive();
+    requestInit.signal?.throwIfAborted();
     if (retryableReaderProxyError(error)) throw error;
     return fetchWithReaderTimeout(rawUrl, READER_PROXY_TIMEOUT_MS, requestInit);
   });
@@ -4423,11 +4425,12 @@ async function renderChapterManifest(prepared) {
   const frame = document.createElement("div");
   frame.className = "epub-frame";
   content.appendChild(frame);
-  const loaded = new Set(),
-    pending = new Map(),
+  const loaded = new Set(), retainedBytes = new Map(),
     manifestBase = trustedReaderAssetManifestUrl(chapterManifestUrl || sourceUrl);
   const chapterByIndex = new Map(manifest.chapters.map((chapter) => [chapter.index, chapter]));
   const chapterPrefetchCount = 6;
+  let chapterFocusIndex = 1, chapterWindowFrame = 0, chapterWindowReady = false;
+  let chapterNavigating = 0;
   let chapterPreviousObserver = null;
   const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
   if (!manifestBase) throw new Error("EPUB_INVALID_MANIFEST_PATH");
@@ -4471,7 +4474,15 @@ async function renderChapterManifest(prepared) {
     );
     if (existing) return existing;
     const next = nextChapterNode(Number(article.dataset.chapter), ".reader-epub-chapter");
-    foliateScrollAnchors.preserve(() => frame.insertBefore(article, next || null));
+    const marker = frame.querySelector(`.reader-chapter-sentinel[data-chapter="${article.dataset.chapter}"]`);
+    foliateScrollAnchors.preserve(() => {
+      if (marker) {
+        chapterManifestObserver.unobserve(marker);
+        chapterPreviousObserver.unobserve(marker);
+        marker.replaceWith(article);
+      } else frame.insertBefore(article, next || null);
+    });
+    chapterManifestObserver.observe(article);
     foliateScrollAnchors.observe(article);
     return article;
   };
@@ -4514,14 +4525,13 @@ async function renderChapterManifest(prepared) {
         activate: (generation) => activateChapter(manifest.chapters[item.chapter - 1], generation, item.fragment)
       }))
     );
-  const fetchChapter = async (chapter) => {
-    assertReaderActive();
-    if (loaded.has(chapter.index)) return;
-    if (pending.has(chapter.index)) return pending.get(chapter.index);
-    const task = (async () => {
+  const chapterScheduler = VoiceOfMLReaderChapters.createChapterScheduler({
+    create: async (index, signal, priority) => {
+      const chapter = chapterAt(index);
+      assertReaderActive();
       const url = chapterUrl(chapter);
       if (!url) throw new Error("EPUB_INVALID_PATH");
-      const result = await fetchReaderUrl(url);
+      const result = await fetchReaderUrl(url, { signal, priority });
       if (!result.ok) throw new Error(`HTTP ${result.status}`);
       const bytes = await VoiceOfMLReaderSecurity.readBytes(
         result,
@@ -4531,6 +4541,7 @@ async function renderChapterManifest(prepared) {
       let inserted = false;
       try {
         assertReaderActive();
+        signal.throwIfAborted();
         const doc = parseChapterDocument(new TextDecoder().decode(bytes));
         for (const element of doc.querySelectorAll("*")) {
           for (const name of ["src", "href", "poster", "xlink:href"])
@@ -4551,16 +4562,9 @@ async function renderChapterManifest(prepared) {
         article.innerHTML = doc.body ? doc.body.innerHTML : "";
         // The generated text index includes head text (e.g. the chapter title).
         article._chapterSearchHead = doc.head ? document.importNode(doc.head, true) : null;
-        const marker = frame.querySelector(
-          `.reader-chapter-sentinel[data-chapter="${chapter.index}"]`
-        );
-        if (marker) {
-          chapterManifestObserver.unobserve(marker);
-          chapterPreviousObserver.unobserve(marker);
-          marker.remove();
-        }
         insertChapter(article);
         loaded.add(chapter.index);
+        retainedBytes.set(chapter.index, bytes.byteLength);
         inserted = true;
         for (const entry of navigationState.tocEntries)
           if (entry.chapterIndex === chapter.index)
@@ -4569,19 +4573,32 @@ async function renderChapterManifest(prepared) {
         if (next) ensureSentinel(next);
         const previous = chapterAt(chapter.index - 1);
         if (previous) ensureSentinel(previous, true);
+        scheduleChapterWindow();
       } catch (error) {
         if (!inserted) chapterBudget.release(bytes.byteLength);
         throw error;
       }
-    })().finally(() => {
-      pending.delete(chapter.index);
-      if (!loaded.has(chapter.index)) ensureSentinel(chapter);
+    }
+  });
+  const fetchChapter = (chapter, demand = true) => {
+    assertReaderActive();
+    if (loaded.has(chapter.index)) return Promise.resolve();
+    return chapterScheduler.load(chapter.index, demand).then(() => {
+      foliateScrollAnchors.whenIdle(trimChapterWindow);
+    }).catch(error => {
+      if (error.name !== "AbortError" && !readerAbortController.signal.aborted) {
+        const marker = ensureSentinel(chapter);
+        marker?.classList.add("reader-chapter-load-error");
+        marker?.removeAttribute("aria-hidden");
+      }
+      throw error;
     });
-    pending.set(chapter.index, task);
-    return task;
   };
   const activateChapter = async (chapter, generation, fragment = "") => {
-    await fetchChapter(chapter);
+    chapterFocusIndex = chapter.index;
+    chapterNavigating++;
+    try { await fetchChapter(chapter); }
+    finally { chapterNavigating--; }
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
     let id = fragment.replace(/^#/, "");
@@ -4638,22 +4655,75 @@ async function renderChapterManifest(prepared) {
       reportNavigationError(error, generation);
     }
   });
-  const prefetchChapters = (startIndex) => {
-    const tasks = manifest.chapters
-      .slice(startIndex, startIndex + chapterPrefetchCount)
-      .map((chapter) => fetchChapter(chapter).catch(() => null));
-    if (tasks.length) Promise.all(tasks).catch(() => {});
-  };
+  const chapterVirtualizer = VoiceOfMLReaderVirtual.createSectionVirtualizer({
+    limit: 12,
+    getLoaded: () => [...frame.querySelectorAll(":scope > .reader-epub-chapter")],
+    getIndex: article => Number(article.dataset.chapter),
+    getHeight: article => article.getBoundingClientRect().height,
+    canVirtualize: article => {
+      const rect = article.getBoundingClientRect(), view = viewport.getBoundingClientRect();
+      const selection = window.getSelection();
+      return (rect.bottom < view.top - 800 || rect.top > view.bottom + 800) &&
+        !article.contains(document.activeElement) &&
+        !article.querySelector("mark.full-search-highlight") &&
+        !(selection && !selection.isCollapsed &&
+          selection.containsNode(article, true));
+    },
+    virtualize: (article, index, height) => {
+      loaded.delete(index);
+      const marker = ensureSentinel(chapterAt(index));
+      const style = getComputedStyle(article);
+      marker.classList.add("reader-chapter-placeholder");
+      marker.style.height = `${height}px`;
+      marker.style.marginTop = style.marginTop;
+      marker.style.marginBottom = style.marginBottom;
+      marker.setAttribute("aria-hidden", "true");
+      chapterManifestObserver.unobserve(article);
+      foliateScrollAnchors.unobserve(article);
+      for (const entry of navigationState.tocEntries)
+        if (entry.chapterIndex === index) entry.target = null;
+      for (const image of article.querySelectorAll("img")) image.removeAttribute("src");
+      article.replaceWith(marker);
+      article._chapterSearchHead = null;
+    },
+    release: index => {
+      chapterBudget.release(retainedBytes.get(index));
+      retainedBytes.delete(index);
+    },
+    preserve: change => foliateScrollAnchors.preserve(change)
+  });
+  function trimChapterWindow() {
+    if (chapterWindowReady) chapterVirtualizer.trim(chapterFocusIndex);
+  }
+  function refreshChapterWindow() {
+    chapterWindowFrame = 0;
+    if (!chapterWindowReady || readerAbortController.signal.aborted) return;
+    const view = viewport.getBoundingClientRect();
+    const rows = [...frame.querySelectorAll(":scope > [data-chapter]")];
+    const current = rows.find(row => {
+      const rect = row.getBoundingClientRect();
+      return rect.top <= view.top + 80 && rect.bottom > view.top + 80;
+    }) || rows.find(row => row.getBoundingClientRect().top > view.top);
+    if (current && !chapterNavigating) chapterFocusIndex = Number(current.dataset.chapter);
+    if (!chapterNavigating && current?.classList.contains("reader-chapter-sentinel") &&
+        current.getBoundingClientRect().top < view.bottom)
+      fetchChapter(chapterAt(chapterFocusIndex)).catch(() => {});
+    const indices = document.hidden ? [] : manifest.chapters
+      .slice(Math.max(0, chapterFocusIndex - 2), chapterFocusIndex + chapterPrefetchCount)
+      .filter(chapter => !loaded.has(chapter.index)).map(chapter => chapter.index);
+    chapterScheduler.prefetch(indices);
+    foliateScrollAnchors.whenIdle(trimChapterWindow);
+  }
+  function scheduleChapterWindow() {
+    if (!chapterWindowFrame) chapterWindowFrame = requestAnimationFrame(refreshChapterWindow);
+  }
+  function handleChapterVisibility() {
+    if (document.hidden) chapterScheduler.prefetch([]);
+    else scheduleChapterWindow();
+  }
   chapterManifestObserver = new IntersectionObserver(
-    (entries) =>
-      entries
-        .filter((entry) => entry.isIntersecting)
-        .forEach((entry) => {
-          if (readerAbortController.signal.aborted) return;
-          const chapter = chapterAt(Number(entry.target.dataset.chapter));
-          if (chapter) prefetchChapters(chapter.index - 1);
-        }),
-    { root: viewport, rootMargin: "4000px 0px" }
+    scheduleChapterWindow,
+    { root: viewport, rootMargin: "800px 0px" }
   );
   chapterPreviousObserver = new IntersectionObserver((entries) => {
     if (readerAbortController.signal.aborted) return;
@@ -4663,16 +4733,36 @@ async function renderChapterManifest(prepared) {
       if (chapter) fetchChapter(chapter).catch(() => {});
     }
   }, { root: viewport });
-  trackReaderResource(() => {
+  viewport.addEventListener("scroll", scheduleChapterWindow, { passive: true });
+  window.addEventListener("resize", scheduleChapterWindow);
+  document.addEventListener("visibilitychange", handleChapterVisibility);
+  let chapterCleaned = false;
+  chapterManifestCleanup = () => {
+    if (chapterCleaned) return;
+    chapterCleaned = true;
+    chapterWindowReady = false;
+    cancelAnimationFrame(chapterWindowFrame);
+    viewport.removeEventListener("scroll", scheduleChapterWindow);
+    window.removeEventListener("resize", scheduleChapterWindow);
+    document.removeEventListener("visibilitychange", handleChapterVisibility);
+    chapterScheduler.dispose();
+    chapterVirtualizer.dispose();
     chapterManifestObserver?.disconnect();
     chapterPreviousObserver?.disconnect();
     chapterManifestObserver = null;
     chapterManifestLoader = null;
-  });
+    for (const bytes of retainedBytes.values()) chapterBudget.release(bytes);
+    retainedBytes.clear();
+    loaded.clear();
+  };
+  trackReaderResource(chapterManifestCleanup);
   chapterManifestLoader = async (index) => {
     const chapter = chapterAt(index);
     if (!chapter) return null;
-    await fetchChapter(chapter);
+    chapterFocusIndex = index;
+    chapterNavigating++;
+    try { await fetchChapter(chapter); }
+    finally { chapterNavigating--; }
     return frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`);
   };
   setChapterToc();
@@ -4681,6 +4771,7 @@ async function renderChapterManifest(prepared) {
   const initialChapter = Number.isInteger(savedChapter)
     ? Math.max(0, Math.min(manifest.chapters.length - 1, savedChapter))
     : 0;
+  chapterFocusIndex = manifest.chapters[initialChapter].index;
   if (initialChapter > 0) ensureSentinel(manifest.chapters[initialChapter - 1], true);
   try {
     await fetchChapter(manifest.chapters[initialChapter]);
@@ -4690,7 +4781,8 @@ async function renderChapterManifest(prepared) {
       code: "READER_RESTORE"
     });
   }
-  prefetchChapters(initialChapter + 1);
+  chapterWindowReady = true;
+  scheduleChapterWindow();
   assertReaderActive();
   markReaderContentReady();
   status.textContent = `EPUB · ${manifest.chapters.length} 章`;
@@ -4712,12 +4804,12 @@ async function renderDocx(prepared) {
   const body = document.createElement("div");
   body.className = "docx-body";
   content.append(styles, body);
-  await docx.renderAsync(bytes, body, styles, {
+  const options = {
     className: "reader-docx",
     inWrapper: true,
     breakPages: true,
     ignoreLastRenderedPageBreak: false,
-    useBase64URL: true,
+    useBase64URL: false,
     renderHeaders: true,
     renderFooters: true,
     renderFootnotes: true,
@@ -4726,11 +4818,45 @@ async function renderDocx(prepared) {
     renderComments: false,
     renderAltChunks: false,
     debug: false
-  });
+  };
+  const docxDocument = await docx.parseAsync(bytes, options);
+  assertReaderActive();
+  const urls = new Set(), urlsByPath = new Map(), blobToURL = docxDocument.blobToURL.bind(docxDocument);
+  let released = false;
+  const release = () => {
+    released = true;
+    for (const url of urls) URL.revokeObjectURL(url);
+    urls.clear();
+    urlsByPath.clear();
+  };
+  const untrack = trackReaderResource(release);
+  // Own this parsed document's images, fonts and numbering assets only.
+  docxDocument.blobToURL = (blob, path) => {
+    if (released) return null;
+    if (path && urlsByPath.has(path)) return urlsByPath.get(path);
+    const url = blobToURL(blob, path);
+    if (typeof url === "string" && url.startsWith("blob:")) {
+      urls.add(url);
+      if (path) urlsByPath.set(path, url);
+    }
+    return url;
+  };
+  try {
+    const nodes = await docx.renderDocument(docxDocument, options);
+    assertReaderActive();
+    for (const node of nodes) (node.nodeName === "STYLE" ? styles : body).appendChild(node);
+  } catch (error) {
+    release();
+    untrack();
+    throw error;
+  }
   assertReaderActive();
   body.classList.toggle("reader-document-dark", readerTheme === "dark");
-  if (!(body.textContent || "").trim() && !body.querySelector("img, table, svg, canvas"))
+  if (!(body.textContent || "").trim() && !body.querySelector("img, table, svg, canvas")) {
+    release();
+    untrack();
     throw new Error("DOCX rendered no supported content");
+  }
   const pages = [...body.querySelectorAll(":scope > .reader-docx-wrapper > section.reader-docx")];
   if (pages.length) {
     updateDocumentState({ pageCount: pages.length });
@@ -4761,6 +4887,10 @@ function renderImageDocument(image) {
   status.textContent = "图片";
 }
 function disposeFormatResources(mode) {
+  if (mode === "epub-chapters") {
+    chapterManifestCleanup?.();
+    chapterManifestCleanup = null;
+  }
   if (mode === "swf") {
     swfPlayer?.remove();
     swfPlayer = null;
@@ -6274,6 +6404,42 @@ function fullSearchEscape(value) {
 }
 let fullSearchActiveMarks = [];
 let fullSearchDomLocator = null;
+let fullSearchDomSnapshot = null;
+const DOM_SEARCH_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+function createDomSearchSnapshot(root) {
+  fullSearchDomSnapshot?.dispose();
+  let valid = true, disposed = false, value = null;
+  const invalidate = () => { valid = false; value = null; };
+  const observer = new MutationObserver(invalidate);
+  const current = () => {
+    if (observer.takeRecords().length) invalidate();
+    return valid && !disposed;
+  };
+  const resume = () => {
+    if (!disposed) observer.observe(root, {
+      subtree: true, childList: true, characterData: true,
+      attributes: true, attributeFilter: ["class", "data-page"]
+    });
+  };
+  const snapshot = {
+    root, current, resume,
+    get value() { return current() ? value : null; },
+    set(data) {
+      if (!current()) return;
+      if (data.offsets.length > 32768 || data.text.length * 2 + data.offsets.length * 64 > DOM_SEARCH_SNAPSHOT_BYTES) {
+        snapshot.dispose();
+        return;
+      }
+      // Owned highlights replace text nodes but leave these parent boundaries intact.
+      value = { ...data, offsets: data.offsets.map(({ parent, start, end }) => ({ parent, start, end })) };
+    },
+    pause() { current(); observer.disconnect(); },
+    dispose() { disposed = true; invalidate(); observer.disconnect(); }
+  };
+  resume();
+  fullSearchDomSnapshot = snapshot;
+  return snapshot;
+}
 readerRuntime.events.on("generation", ({ name }) => {
   if (name === "search") {
     fullSearchDomLocator?.dispose();
@@ -6283,6 +6449,8 @@ readerRuntime.events.on("generation", ({ name }) => {
 trackReaderResource(() => {
   fullSearchDomLocator?.dispose();
   fullSearchDomLocator = null;
+  fullSearchDomSnapshot?.dispose();
+  fullSearchDomSnapshot = null;
 });
 function createFullSearchDomLocator(root, generation) {
   fullSearchDomLocator?.dispose();
@@ -6301,6 +6469,8 @@ function createFullSearchDomLocator(root, generation) {
   };
   const locator = {
     current,
+    boundaries() { return current() ? checkpoints.slice() : []; },
+    seed(boundaries) { if (current()) checkpoints.push(...boundaries); },
     build(offsets) {
       if (!current()) return;
       const stride = Math.max(128, Math.ceil(offsets.length / 2048));
@@ -6338,6 +6508,7 @@ function createFullSearchDomLocator(root, generation) {
 }
 function clearFullSearchMarks() {
   fullSearchDomLocator?.pause();
+  fullSearchDomSnapshot?.pause();
   try {
     content.querySelectorAll(".reader-text-hit-box").forEach((node) => node.remove());
     const changedParents = new Set();
@@ -6353,6 +6524,7 @@ function clearFullSearchMarks() {
     content.querySelectorAll(".reader-chapter-search-heading").forEach(node => node.remove());
   } finally {
     fullSearchDomLocator?.resume();
+    fullSearchDomSnapshot?.resume();
   }
 }
 async function fullSearchTextNodes(root, generation, endOffset = Infinity, checkpoint = null) {
@@ -6377,6 +6549,7 @@ async function fullSearchTextNodes(root, generation, endOffset = Infinity, check
 }
 function highlightTextParts(parts) {
   fullSearchDomLocator?.pause();
+  fullSearchDomSnapshot?.pause();
   const marks = [];
   try {
     for (const { node, start, end } of [...parts].reverse()) {
@@ -6391,6 +6564,7 @@ function highlightTextParts(parts) {
     }
   } finally {
     fullSearchDomLocator?.resume();
+    fullSearchDomSnapshot?.resume();
   }
   return marks;
 }
@@ -6476,10 +6650,13 @@ function fullSearchLocation(node, fallback, offset, total, headingLookup = null,
 async function fullSearchDomMatches(root, fallback, query, generation, progressive = false,
                                     occurrence = null, navigationGeneration = readerRuntime.currentGeneration("navigation")) {
   root = foliateSectionRoot(root);
+  const cached = progressive && fullSearchDomSnapshot?.root === root &&
+    fullSearchDomSnapshot.value?.toc === navigationState.tocEntries ? fullSearchDomSnapshot.value : null;
+  const snapshot = progressive ? (cached ? fullSearchDomSnapshot : createDomSearchSnapshot(root)) : null;
   const locator = progressive ? createFullSearchDomLocator(root, generation) : null;
-  const nodes = await fullSearchTextNodes(root, generation);
+  const nodes = cached ? [] : await fullSearchTextNodes(root, generation);
   if (!nodes || !isReaderGenerationCurrent("search", generation)) return [];
-  const offsets = [],
+  const offsets = cached ? cached.offsets : [],
     chunks = [];
   let length = 0;
   for (const [index, node] of nodes.entries()) {
@@ -6491,24 +6668,28 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
       if (!isReaderGenerationCurrent("search", generation)) return [];
     }
   }
-  locator?.build(offsets);
-  const headingLookup = createFullSearchHeadingLookup(root, offsets);
-  const text = chunks.join(""), groups = [], firstHits = [];
+  if (cached) locator?.seed(cached.checkpoints);
+  else locator?.build(offsets);
+  const headingLookup = cached ? cached.headingLookup : createFullSearchHeadingLookup(root, offsets);
+  const text = cached ? cached.text : chunks.join(""), groups = [], firstHits = [];
+  if (!cached && snapshot && (headingLookup || !navigationState.tocEntries.some(entry => entry.target)))
+    snapshot.set({ text, offsets, headingLookup, checkpoints: locator.boundaries(), toc: navigationState.tocEntries });
+  let highlightOffsets = offsets;
   const patternText = fullSearchEscape(query);
   let nextStart = 0, total = 0;
-  const locateIndex = (index) => {
-    let low = 0, high = offsets.length - 1;
+  const locateIndex = (index, parts = offsets) => {
+    let low = 0, high = parts.length - 1;
     while (low < high) {
       const middle = (low + high) >> 1;
-      if (offsets[middle].end <= index) low = middle + 1;
+      if (parts[middle].end <= index) low = middle + 1;
       else high = middle;
     }
     return low;
   };
   const partsFor = (start, end) => {
     const parts = [];
-    for (let index = locateIndex(start); index < offsets.length && offsets[index].start < end; index++)
-      parts.push(offsets[index]);
+    for (let index = locateIndex(start, highlightOffsets); index < highlightOffsets.length && highlightOffsets[index].start < end; index++)
+      parts.push(highlightOffsets[index]);
     return parts;
   };
   const matchesIn = function* (group) {
@@ -6522,7 +6703,7 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
   const resultFor = (match) => {
     const part = offsets[locateIndex(match.index)];
     return {
-      location: fullSearchLocation(part.node, fallback, match.index, text.length, headingLookup, part.parent),
+      location: fullSearchLocation(part.node || part.parent, fallback, match.index, text.length, headingLookup, part.parent),
       snippet: fullSearchSnippet(text, match.index, match.value.length),
       async activate(navigationGeneration = readerRuntime.currentGeneration("navigation")) {
         if (!isReaderGenerationCurrent("navigation", navigationGeneration)) return false;
@@ -6599,6 +6780,22 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
     return [{ target: fullSearchActiveMarks[0] }];
   }
   const fallbackResults = progressive ? null : firstHits.map(resultFor);
+  if (cached && !snapshot.current())
+    return fullSearchDomMatches(root, fallback, query, generation, progressive, occurrence, navigationGeneration);
+  if (cached && firstHits.length && navigationGeneration === readerRuntime.currentGeneration("navigation")) {
+    const checkpoint = locator.checkpoint(firstHits[0].index);
+    const end = firstHits[firstHits.length - 1].index + firstHits[firstHits.length - 1].value.length;
+    const markNodes = await fullSearchTextNodes(root, generation, end, checkpoint);
+    if (!markNodes || !isReaderGenerationCurrent("search", generation)) return [];
+    if (!snapshot.current())
+      return fullSearchDomMatches(root, fallback, query, generation, progressive, occurrence, navigationGeneration);
+    let position = checkpoint?.start || 0;
+    highlightOffsets = markNodes.map(node => {
+      const part = { node, start: position, end: position + node.data.length };
+      position = part.end;
+      return part;
+    });
+  }
   if (navigationGeneration === readerRuntime.currentGeneration("navigation")) {
     for (let i = firstHits.length - 1; i >= 0; i--) {
       const match = firstHits[i], end = match.index + match.value.length;
