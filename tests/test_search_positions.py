@@ -216,6 +216,60 @@ class SearchPositionTests(unittest.TestCase):
         }''')
         self.assertEqual(result, dict(cancelled=True,stable=True,complete=True,latest=True))
 
+    def test_snapshot_restore_renders_target_once_without_jump_velocity(self):
+        self.page.add_style_tag(content='.result-item {height:160px!important;min-height:0!important;box-sizing:border-box}')
+        self.prepare_deep_snapshot()
+        result = self.page.evaluate('''async () => {
+          const original=reconcileVirtualRows;const windows=[];
+          reconcileVirtualRows=(...args)=>{windows.push([args[1],args[2]]);return original(...args)};
+          try {restoreSearchViewSnapshot(deepKey);} finally {reconcileVirtualRows=original;}
+          const initialIndex=findVirtualIndex(getResultScrollTop()),initialVelocity=VSCROLL.scrollVelocity;
+          const normalRows=3*Math.max(10,Math.floor(DOM.resultsContainer.clientHeight/VSCROLL.estimatedHeight))+
+            Math.ceil(DOM.resultsContainer.clientHeight/VSCROLL.estimatedHeight)+1;
+          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          const finalIndex=findVirtualIndex(getResultScrollTop()),offset=getResultScrollTop()-getVirtualOffset(finalIndex);
+          DOM.resultsContainer.scrollTop+=4000;renderVisible();
+          return {windows,bounded:windows.every(([a,b])=>b-a<=normalRows),initialIndex,finalIndex,
+            initialVelocity,offset,expectedOffset:deepSnapshot.scroll.offset,
+            realScrollVelocity:VSCROLL.scrollVelocity,complete:Object.keys(STATE.results).length===5000};
+        }''')
+        self.assertEqual(len(result['windows']), 1)
+        self.assertEqual([result['initialIndex'], result['finalIndex']], [4000,4000])
+        self.assertTrue(result['bounded'])
+        self.assertLess(result['initialVelocity'], 1.5)
+        self.assertGreater(result['realScrollVelocity'], 0)
+        self.assertAlmostEqual(result['offset'], result['expectedOffset'], delta=2)
+        self.assertTrue(result['complete'])
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_background_snapshot_heights_preserve_anchor_outside_prepared_pages(self):
+        self.prepare_deep_snapshot()
+        result = self.page.evaluate('''async () => {
+          const key=getHeightMeasurementKey(),base=VSCROLL.estimatedHeight;
+          for(const [index,extra] of [[150,37],[350,61]]) {
+            VSCROLL.heights[index]=base+extra;
+            VSCROLL.heightCache.set(getResultStableId(STATE.results[index]),{height:base+extra,measurementKey:key});
+          }
+          measuredHeightRevision++;VSCROLL.heightsDirty=true;
+          setResultScrollTop(getVirtualOffset(4000)+11);renderVisible();
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          deepSnapshot=saveSearchViewSnapshot();const offset=deepSnapshot.scroll.offset;
+          restoreSearchViewSnapshot(deepKey);const initiallyMissing=!STATE.results[150] && !STATE.results[350];
+          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          const index=findVirtualIndex(getResultScrollTop());
+          return {initiallyMissing,index,offset,actualOffset:getResultScrollTop()-getVirtualOffset(index),
+            heights:[VSCROLL.heights[150],VSCROLL.heights[350]],expected:[base+37,base+61],
+            complete:Object.keys(STATE.results).length===5000};
+        }''')
+        self.assertTrue(result['initiallyMissing'])
+        self.assertEqual(result['index'], 4000)
+        self.assertAlmostEqual(result['actualOffset'], result['offset'], delta=2)
+        self.assertEqual(result['heights'], result['expected'])
+        self.assertTrue(result['complete'])
+        self.assertEqual(self.fixture.errors, [])
+
     def test_unchanged_controls_reuse_snapshot_and_do_not_scan_storage(self):
         result = self.page.evaluate('''async () => {
           const first=saveSearchViewSnapshot(), results=first.results;

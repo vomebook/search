@@ -376,7 +376,7 @@ function captureReaderReturnScroll() {
   }
   return { route: location.href, viewKey: getSearchViewKey(), top: top, index: index, offset: offset };
 }
-function restoreReaderReturnScroll() {
+function restoreReaderReturnScroll(windowRendered = false) {
   var saved = readerReturnScrollState;
   if (!saved) return;
   if (saved.route && saved.route !== location.href) { readerReturnScrollState = null; return; }
@@ -395,9 +395,12 @@ function restoreReaderReturnScroll() {
     var max = Math.max(0, getVirtualTotalHeight() - DOM.resultsContainer.clientHeight);
     readerReturnRestoreActive = true;
     setResultScrollTop(Math.min(target, max));
-    VSCROLL.renderStart = -1;
-    VSCROLL.renderEnd = -1;
+    if (!windowRendered) {
+      VSCROLL.renderStart = -1;
+      VSCROLL.renderEnd = -1;
+    }
     renderVisible();
+    windowRendered = false;
     updateScrollTrack();
     readerReturnRestoreActive = false;
     if (++attempts < 4 && Math.abs(getResultScrollTop() - target) > 1) requestAnimationFrame(restore);
@@ -695,12 +698,14 @@ function renderDownloadBatch() {
 }
 
 function getSelectedFiles() {
-  return Object.keys(selectedIndices).map(Number).flatMap(index => {
-    if (snapshotCloneTask) materializeSnapshotRange(snapshotCloneTask, index, index + 1);
+  const files = Object.keys(selectedIndices).map(Number).flatMap(index => {
+    if (snapshotCloneTask) materializeSnapshotRange(snapshotCloneTask, index, index + 1, true);
     const record = STATE.results[index];
     if (!record) return [];
     return [{ filename: record.File + (record.Extension ? "." + record.Extension : ""), link: getRecordLink(record) }];
   });
+  if (snapshotCloneTask) applySnapshotCloneHeights(snapshotCloneTask);
+  return files;
 }
 
 function startDownloadBatch(items) {
@@ -805,8 +810,9 @@ function saveHistory(list) {
 }
 
 function mergeFolderFilters(selfs, subtrees) {
+  const selfSet = new Set(selfs || []);
   return (selfs || []).concat((subtrees || []).filter(function(path) {
-    return (selfs || []).indexOf(path) < 0;
+    return !selfSet.has(path);
   }));
 }
 
@@ -882,6 +888,10 @@ function updateSelectionUI() {
     selectedIndices = {};
     lastSelectedIndex = -1;
   }
+  updateVisibleSelection();
+}
+
+function updateVisibleSelection() {
   var cbs = DOM.resultsList.querySelectorAll(".result-checkbox");
   for (var ci = 0; ci < cbs.length; ci++) {
     var idx = parseInt(cbs[ci].dataset.index);
@@ -3289,7 +3299,7 @@ function cancelSnapshotClone() {
   if (task.frame) cancelAnimationFrame(task.frame);
 }
 
-function materializeSnapshotRange(task, start, end) {
+function materializeSnapshotRange(task, start, end, deferHeights = false) {
   for (let index = Math.max(0, start); index < Math.min(end, task.results.length); index++) {
     if (index in task.results || !(index in task.snapshot.results)) continue;
     task.results[index] = cloneSearchResult(task.snapshot.results[index]);
@@ -3300,9 +3310,30 @@ function materializeSnapshotRange(task, start, end) {
     }
     const cached = VSCROLL.heightCache.get(getResultStableId(task.results[index]));
     if (cached?.measurementKey === getHeightMeasurementKey() && VSCROLL.heights[index] !== cached.height) {
-      VSCROLL.heights[index] = cached.height; VSCROLL.heightsDirty = true;
+      if (!task.heightAnchor) {
+        const top = getResultScrollTop(), anchorIndex = findVirtualIndex(top);
+        task.heightAnchor = { index: anchorIndex, offset: top - getVirtualOffset(anchorIndex) };
+      }
+      const previous = VSCROLL.heights[index] || VSCROLL.heightBase || VSCROLL.estimatedHeight;
+      VSCROLL.heights[index] = cached.height;
+      if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
+        fenwickAdd(VSCROLL.heightTree, index + 1, cached.height - previous);
+      } else VSCROLL.heightsDirty = true;
     }
   }
+  if (!deferHeights) applySnapshotCloneHeights(task);
+}
+
+function applySnapshotCloneHeights(task) {
+  const anchor = task.heightAnchor;
+  task.heightAnchor = null;
+  if (!anchor || STATE.results !== task.results) return;
+  // Apply all cached height changes in this batch with one scroll compensation.
+  refreshVirtualAfterAppend(false);
+  const height = VSCROLL.heights[anchor.index] || VSCROLL.heightBase;
+  const target = getVirtualOffset(anchor.index) + Math.min(anchor.offset, height - 1);
+  if (Math.abs(getResultScrollTop() - target) > 0.5) setResultScrollTop(Math.max(0, target));
+  VSCROLL.lastScrollTop = getResultScrollTop();
 }
 
 function prepareSnapshotClone(snapshot, key, restoreScroll) {
@@ -3330,8 +3361,9 @@ function startSnapshotClone() {
     const count = task.keys ? task.keys.length : task.results.length, started = performance.now();
     for (let batch = 0; task.cursor < count && batch < 256 && performance.now() - started < 4; batch++) {
       const index = task.keys ? Number(task.keys[task.cursor++]) : task.cursor++;
-      materializeSnapshotRange(task, index, index + 1);
+      materializeSnapshotRange(task, index, index + 1, true);
     }
+    applySnapshotCloneHeights(task);
     if (task.cursor < count) { task.timer = setTimeout(step, 0); return; }
     snapshotCloneTask = null;
     searchSnapshotCloneSources.delete(task.results);
@@ -4015,11 +4047,9 @@ function renderResults(animate = false) {
   VSCROLL.renderEnd = 0;
   pendingResultEntrance = animate;
   if (readerReturnScrollState && !readerOverlay) {
-    reconcileVirtualRows(STATE.results, 0, 0, 0, getVirtualTotalHeight());
-    setResultScrollTop(getVirtualOffset(readerReturnScrollState.index) + readerReturnScrollState.offset);
-  }
-  renderVisible();
-  if (readerReturnScrollState && !readerOverlay) restoreReaderReturnScroll();
+    setResultScrollTop(getVirtualOffset(readerReturnScrollState.index) + readerReturnScrollState.offset, true);
+    restoreReaderReturnScroll(true);
+  } else renderVisible();
 }
 
 function animateVisibleResultRows() {
@@ -4119,9 +4149,9 @@ function getResultsHTMLCacheKey() {
   ].join("|");
 }
 
-function clearResultTemplateCache() {
+function clearResultTemplateCache(key = getResultsHTMLCacheKey()) {
   VSCROLL.templateCache.clear();
-  VSCROLL.templateCacheKey = getResultsHTMLCacheKey();
+  VSCROLL.templateCacheKey = key;
   VSCROLL.contentVersion++;
   VSCROLL.measuredWindowKey = "";
   VSCROLL.measuredRowKeys = [];
@@ -4129,12 +4159,11 @@ function clearResultTemplateCache() {
 
 function ensureResultTemplateCache() {
   const key = getResultsHTMLCacheKey();
-  if (VSCROLL.templateCacheKey !== key) clearResultTemplateCache();
+  if (VSCROLL.templateCacheKey !== key) clearResultTemplateCache(key);
 }
 
 function createResultRow(rec, idx) {
   if (!rec) return createResultWindowPlaceholder(idx);
-  ensureResultTemplateCache();
   let template = VSCROLL.templateCache.get(idx);
   if (!template) {
     template = document.createElement("div");
@@ -4165,16 +4194,22 @@ function getResultScrollTop() {
   return resultScrollTarget ?? (resultScrollOrigin + DOM.resultsContainer.scrollTop);
 }
 
-function setResultScrollTop(value) {
+function setResultScrollTop(value, restoreWindow = false) {
   const total = getVirtualTotalHeight(), viewport = DOM.resultsContainer.clientHeight;
   const target = Math.max(0, Math.min(value, Math.max(0, total - viewport)));
   const physical = target - resultScrollOrigin;
-  if (physical >= 0 && physical <= DOM.resultsContainer.scrollHeight - viewport) {
+  if (!restoreWindow && physical >= 0 && physical <= DOM.resultsContainer.scrollHeight - viewport) {
     // Native scrolling rounds subpixels. Round toward the requested row so
     // an exact boundary cannot land on the previous record after restoration.
     DOM.resultsContainer.scrollTop = Math.ceil(physical);
     updateCurrentResultPosition();
     return;
+  }
+  if (restoreWindow) {
+    // Seed restored windows without velocity overscan from the position jump.
+    VSCROLL.lastScrollTop = target;
+    VSCROLL.lastScrollTime = 0;
+    VSCROLL.scrollVelocity = 0;
   }
   resultScrollTarget = target;
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
@@ -4197,6 +4232,8 @@ function layoutResultScrollSegment(topH, endH, totalH, logicalTop) {
 }
 
 function reconcileVirtualRows(items, start, end, topH, bottomH) {
+  // Validate once before reusing rows, not once for every new row.
+  ensureResultTemplateCache();
   const logicalTop = getResultScrollTop();
   const previousOrigin = resultScrollOrigin;
   let topSpacer = DOM.resultsList.querySelector(".virtual-spacer-top");
@@ -4312,7 +4349,7 @@ function renderVisible() {
   const anchorIndex = findVirtualIndex(scrollTop);
   const anchor = { index: anchorIndex, offset: scrollTop - getVirtualOffset(anchorIndex) };
   reconcileVirtualRows(items, start, end, topH, bottomH);
-  if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateSelectionUI();
+  if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateVisibleSelection();
   // Correct the rendered window before paint, using one content anchor.
   // A deferred measurement can otherwise run against another window/query.
   if (!VSCROLL.isDraggingThumb && measureHeights(start, end, anchor)) {
@@ -5405,10 +5442,7 @@ function persistFolderSelection(subtreeSet, selfSet) {
   }
   STATE.filterFolderSubtrees = Array.from(subtreeSet);
   STATE.filterFolderSelfs = Array.from(selfSet);
-  const merged = [];
-  selfSet.forEach(function(path) { if (!merged.includes(path)) merged.push(path); });
-  subtreeSet.forEach(function(path) { if (path && !merged.includes(path)) merged.push(path); });
-  STATE.filterFolders = merged;
+  STATE.filterFolders = mergeFolderFilters(STATE.filterFolderSelfs, STATE.filterFolderSubtrees.filter(Boolean));
   updateFilterCancelButtons();
   scheduleFilterSearch();
 }
