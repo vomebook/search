@@ -707,10 +707,11 @@ class ReaderRefactorTest(unittest.TestCase):
                 const failure = await loadPdfTextContent(999, page).catch(error => error.message);
                 const text = await loadPdfTextContent(999, page);
                 const settled = pdfTextContentPromises.size;
-                let release;
-                const pending = loadPdfTextContent(999, {getTextContent: () =>
-                  new Promise(resolve => { release = resolve; })}).catch(error => error.name);
-                await Promise.resolve();
+                let release, started;
+                const startedPromise = new Promise(resolve => { started = resolve; });
+                const pending = loadPdfTextContent(1000, {getTextContent: () =>
+                  new Promise(resolve => { release = resolve; started(); })}).catch(error => error.name);
+                await startedPromise;
                 readerRuntime.dispose();
                 const disposed = pdfTextContentPromises.size;
                 const outcome = await pending;
