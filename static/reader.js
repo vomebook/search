@@ -2147,6 +2147,12 @@ function pageAtMarker() {
   const y = bookmarkRibbon.getBoundingClientRect().bottom,
     pages = docxPageNodes.length ? docxPageNodes : [...content.querySelectorAll(".reader-page, .reader-docx-page")];
   if (!pages.length) return null;
+  const end = viewport.scrollHeight - viewport.clientHeight;
+  if (["pdf", "pdf-pages"].includes(capability.mode) && end > 2 && viewport.scrollTop > 0 &&
+      end - viewport.scrollTop <= 2) {
+    const last = pages[pages.length - 1], rect = last.getBoundingClientRect(), view = viewport.getBoundingClientRect();
+    if (rect.bottom > view.top && rect.top < view.bottom) return last;
+  }
   let low = 0, high = pages.length;
   while (low < high) {
     const middle = (low + high) >> 1;
