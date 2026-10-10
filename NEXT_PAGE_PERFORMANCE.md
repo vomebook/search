@@ -1,8 +1,194 @@
 # Next-Page Performance
 
+## Selection Scroll Follow-Up (2026-10-10, Local Only)
+
+Prepared for publication on 2026-10-10 after the deep-restore follow-up.
+This section records local implementation and measurements; production acceptance
+is recorded separately after publication.
+
+- Virtual-window updates call `updateVisibleSelection`, touching only rendered
+  checkboxes/row classes. Full `updateSelectionUI` remains on selection, mode,
+  query-reset and snapshot-reset events, keeping exact counts and toolbar state.
+  No selection-count cache or new retained index is introduced. HF also updates
+  the reset selection UI immediately when beginning a fresh query.
+- In a 50,000-record synthetic fixture with all records selected, 20 window
+  updates previously enumerated 1,000,000 selected keys. Current window updates
+  enumerate zero selected keys and do not rewrite count/button text. All visible
+  rows still reflect current membership; full selection remains accessible.
+
+Three local Chromium samples/site, median selection-sync time for 20 updates:
+
+| Site | Before | Current |
+| --- | ---: | ---: |
+| Pages | 75.4 ms | 2.8 ms |
+| HF | 63.2 ms | 3.6 ms |
+
+These timings isolate the selection function inside synchronous window updates;
+they are not complete scroll/paint latency, network performance or real-phone
+guarantees. Whole-window timing varies substantially with DOM/layout/JIT work.
+Counts are synthetic, not production corpus sizes. Runner:
+`/tmp/opencode/search_selection_profile.py`.
+
+Verification: Pages scroll/positions/sparse-window Chromium 52/52; HF 50/50;
+four additional 390px/320px selection cases pass. The new regression checks zero
+key scans/toolbar text mutations during scrolling, all visible selected rows,
+50,000/49,999 counts, clear, selected filename/link pairing and immediate fresh-query
+reset. Existing cases retain sparse/deep selection, anchor/offset, cancellation,
+generation and drag behavior. App syntax and diff checks pass. Static checks are
+Pages 34/35 and HF 28/29, with the same independent Reader TXT source-assertion gap;
+neither complete static suite passes. Mobile runner:
+`/tmp/opencode/search_selection_mobile.py`; screenshots:
+`/tmp/opencode/search-selection-{github,hf}-{390,320}.png`.
+
+Position saving already has offset/content reuse, bounded storage and pruning.
+Hidden-directory checkbox refresh remains a lower-priority measured candidate
+(see rendering/filter follow-up). Publishing the accumulated local changes and
+read-only production acceptance is the next useful verification layer.
+
+## Deep Restore Follow-Up (2026-10-10, Local Only)
+
+Prepared for publication on 2026-10-10 after the rendering/filter follow-up.
+Local measurements and production acceptance remain separate.
+
+- `renderResults` renders the restored logical target directly, without first
+  reconciling an empty list. `setResultScrollTop` has an explicit restore-window
+  option that seeds the target's scroll sample before rendering. A programmatic
+  jump no longer creates velocity-only overscan. Ordinary scrolling/dragging keeps
+  the existing direction/velocity rules and bounded native segment.
+- Reader-return restoration can reuse a window rendered immediately beforehand.
+  Standalone calls and subsequent retry frames retain explicit remeasurement;
+  legitimate height corrections can still require another render.
+- Background snapshot cloning now preserves a row/offset anchor when cached
+  heights outside the initial prepared neighborhood change. Apply Fenwick deltas
+  to the existing tree and compensate scroll once per batch. File actions batch
+  their materialization the same way; changed result ownership cannot mutate the
+  new view's geometry. Full copies, cancellation and existing budgets remain.
+
+Local stage profiling found DOM construction/layout to dominate the synchronous
+restore. For 30,000 records at index 24,000, preparing 600 independent records
+took about 0.2-0.8 ms; height initialization took about 0.9-3.5 ms. The sampled
+desktop window went from 60 rows and three reconciliation calls (including an
+empty window) to 38 rows and one call; 390px went from 58 to 37 rows. This is
+ordinary buffered rendering, not a restriction on accessible results. All 30,000
+records subsequently complete, with the same index and row offset.
+
+Three-sample current synchronous-call medians, milliseconds:
+
+| Records | Pages Desktop | HF Desktop |
+| --- | ---: | ---: |
+| 1,000 | 23.2 | 26.2 |
+| 10,000 | 27.8 | 16.2 |
+| 30,000 | 18.8 | 25.8 |
+
+At 30,000 records, the 390px medians were Pages 27.1 ms and HF 20.0 ms. These
+are instrumented local synthetic observations, not paint/end-to-end times or
+physical-phone guarantees. Scheduling/JIT/layout variation is substantial; no
+production percentage improvement is claimed. The pre-edit Pages profile also
+exposed offset drift and is not treated as a valid equivalent restoration oracle.
+Runner: `/tmp/opencode/search_restore_stages.py` (use `--brief`, `--mobile`).
+
+The deterministic regression caches taller rows 150/350 outside the prepared
+pages, then restores row 4,000. Disabling compensation only in a disposable
+desktop fixture reproduced row 3,998; current code keeps row 4,000 and its offset
+within two pixels. Shared geometry tests also verify independent clones, one
+batch/file-action compensation, smaller-row offset clamping, tree identity reuse,
+obsolete-layout rejection and stale-owner cleanup.
+
+Verification: shared geometry 8/8, snapshot budgets 10/10, latency 36/36 and
+state/filter contracts 10/10. Focused Chromium: Pages 94/94 and HF 83/83, plus
+eight explicit 390px/320px restore-window/height cases. Coverage includes complete
+deep copies, selections, cancellation, sparse previews, Return controls, recent
+pages, generation validation, prefetch/drag ownership and bounded-segment scrolling.
+Both app syntax and diff checks pass. Static checks still have the independent
+Reader TXT source assertion gap: Pages 34/35, HF 28/29; neither full suite passes.
+Mobile runner: `/tmp/opencode/search_restore_mobile_acceptance.py`; screenshots:
+`/tmp/opencode/search-restore-{github,hf}-{390,320}-{window,heights}.png`.
+
+## Rendering And Filter Follow-Up (2026-10-10, Local Only)
+
+Prepared for publication on 2026-10-10 after the interaction publication below.
+This section records local measurements, not production acceptance.
+
+- Result-template cache validation now belongs to `reconcileVirtualRows`, before
+  existing rows are checked for reuse. A 60-row batch builds the complete filter
+  key once rather than 60 times. Invalidated caches receive that same key instead
+  of encoding it again. Unchanged rows retain their nodes; changed query, aliased
+  filter contents and mirror settings invalidate all old row versions together.
+- `mergeFolderFilters` uses one Set of self paths for membership. It preserves
+  original self/subtree order, duplicates within each input, empty self paths and
+  input ownership. Persisted normalized selection reuses that projection while
+  excluding empty subtree paths. Root direct-file selection and the existing
+  10,000-item per-selection limit retain their behavior.
+
+Local Chromium, three samples/site, median synchronous time in milliseconds:
+
+| Fixture | Pages Before | Pages After | HF Before | HF After |
+| --- | ---: | ---: | ---: | ---: |
+| 60 new rows, 10,000 filter paths | 38.0 | 9.6 | 55.9 | 13.5 |
+| Merge 5,000 self + 5,000 subtree paths | 526.8 | 0.8 | 716.4 | 0.7 |
+| Persist the same flat-path selection | 163.3 | 4.2 | 136.0 | 5.0 |
+
+Measurements used the current checkout immediately before/after edits, not a
+retained old-version source or randomized A/B. First-call/JIT variance is large;
+these synthetic fixture sizes are not production counts. Row measurements include
+DOM construction but exclude eventual paint. Persistence uses an empty folder tree
+and suppressed search scheduling, isolating path work (HF retains URL sync). No
+end-to-end network or physical-phone performance guarantee is inferred. Runner:
+`/tmp/opencode/search_third_profile.py`.
+
+Verification: shared state/selection 10/10, latency 36/36, snapshot budgets 10/10;
+both folder-membership oracles pass all 2,048 combinations. Browser scroll/sidebar/
+positions/prefetch: Pages 49/49, HF 48/48; four additional 390px/320px row-cache
+cases pass. Ordered row indices, complete deep copies, query cancellation and
+generation/prefetch guards remain covered. Both app syntax and diff checks pass.
+Static checks: Pages 34/35 and HF 28/29. Each failure is the Reader TXT source
+assertion for `pre.textContent = new TextDecoder(...).decode(bytes)`, absent from
+the current independently edited Reader; it is not a full static-suite pass.
+An initial parallel HF browser run lost its temporary server; all seven affected
+scroll cases passed in a standalone rerun. Screenshots:
+`/tmp/opencode/search-third-{github,hf}-{390,320}.png`.
+
+Remaining candidates: checkbox refresh still visits already-created hidden rows;
+with 5,001 nodes under a collapsed parent, three samples took Pages 6.7-8.8 ms and
+HF 5.6-11.8 ms (`/tmp/opencode/search_folder_refresh_profile.py`). This is a lower
+priority than the eliminated quadratic merges. Deeper restore layout/height work
+needs a separate stage profile before another change. Ordinary append after a
+completed dense snapshot already inspects the new range, not every old result;
+the full enumeration branch is specific to sparse-window/active-clone growth.
+
+## Interaction Publication (2026-10-10)
+
+- Published/current remote revision: `6b7296c4c7d65f7ff9194bbb55996ca8dbc719d3`,
+  based on `f4eed9cfc416da39b0e87f485e2948f85c58d9f5`.
+- Pages workflow `38019258647`: completed/success. Deployed app:
+  `/search/static/app.5074b38232fd.js`.
+- Release merged seven scoped files in an isolated latest-remote worktree;
+  the current Reader resource/inversion release and generated index are retained.
+- Clean release validation: latency 36/36, state/selection 6/6, snapshot budget
+  10/10, static 35/35, folder-membership oracle (2,048 combinations), and
+  positions/sidebar Chromium 34/34. JavaScript syntax and diff checks passed.
+- Documented page/external-API production smoke: passed. Real desktop Worker and
+  mobile API queries preserve the first 200 ordered IDs/total and display row 101.
+  Worker anchor hit/miss reuse and prior 50,000-row snapshot/sidebar guards pass.
+- Disposable desktop/390px browser fixtures on deployed code confirm sparse
+  budgets 25/150 ms, one-time promotion/shared ownership/cancellation; 100 unchanged
+  view-key reads encode once, with an aliased edit causing a second encoding.
+- The 5,000-record snapshot fixture initially prepares 600 records at index 4,000,
+  then completes all independent records. Far jumps, full selection, file actions
+  and cancellation retain the complete source. Folder admission initially creates
+  32 child rows, then reaches all 1,000; collapse cancels and reopened descendants
+  resume with current selection. No browser page errors.
+- Acceptance scripts: `/tmp/opencode/interaction_production_acceptance.py` and
+  `/tmp/opencode/next_page_production_acceptance.py`. Screenshots:
+  `/tmp/opencode/interaction-production-github-{desktop,mobile}.png`.
+  Synthetic fixture sizes/timings are not production counts or phone guarantees.
+- This receipt was updated locally after acceptance. The published report contains
+  the implementation and local measurements below.
+
 ## Interaction Follow-Up (2026-10-10, Local Only)
 
-Implemented locally after the snapshot publication below; not yet deployed.
+Implemented after the snapshot publication below and published on 2026-10-10.
+Timing observations in this section remain local-only.
 
 - Sparse visible-page demand uses a 25 ms disk budget; speculative reads retain
   150 ms. Promotion aborts the speculative disk wait exactly once, retaining the

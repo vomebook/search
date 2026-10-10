@@ -32,6 +32,74 @@ class ScrollStabilityTests(unittest.TestCase):
     def tearDown(self):
         self.fixture.tearDown()
 
+    def test_large_multiselection_scroll_updates_only_visible_rows_and_events_keep_counts(self):
+        result = self.page.evaluate('''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();setReturnPositionTarget();
+          STATE.results=Array.from({length:50000},(_,i)=>({Repo:'VoiceOfML/Test',File:'bulk-'+i,Extension:'txt',Folder:[],Size:1}));
+          STATE.total=50000;STATE._loadedPage=500;STATE.page=500;STATE.hasMore=false;STATE.isLoading=false;
+          resetVirtualScrollState();renderResults();
+          DOM.multiSelectToggle.checked=true;updateSelectionUI();DOM.multiSelectAll.click();
+          const countLabel=()=>STATE.isMobile?DOM.mobileSelectedCount.textContent:DOM.multiSelectedCount.textContent;
+          const selectedCount=countLabel(),original=Object.keys;let scans=0;
+          const observer=new MutationObserver(()=>{});
+          for(const node of [DOM.multiSelectedCount,DOM.mobileSelectedCount,DOM.multiCopyLinks,DOM.multiDeselect])
+            if(node) observer.observe(node,{childList:true,characterData:true,subtree:true});
+          Object.keys=value=>{if(value===selectedIndices) scans++;return original(value)};
+          let toolbarWrites;
+          try {
+            for(let i=0;i<20;i++) {setResultScrollTop(getVirtualOffset(1000+i*30));renderVisible();}
+            toolbarWrites=observer.takeRecords().length;
+          } finally {Object.keys=original;observer.disconnect();}
+          const stableCount=countLabel()===selectedCount,rows=[...DOM.resultsList.querySelectorAll('.result-item')];
+          const checked=rows.every(row=>row.querySelector('.result-checkbox').checked && row.classList.contains('selected'));
+          rows[0].querySelector('.result-checkbox').click();
+          const singleRemoved=Object.keys(selectedIndices).length===49999 && countLabel().includes('49999');
+          DOM.multiDeselect.click();
+          const cleared=Object.keys(selectedIndices).length===0 && countLabel()==='' && !DOM.resultsList.querySelector('.result-checkbox:checked');
+          const checkbox=DOM.resultsList.querySelector('.result-checkbox');checkbox.click();
+          const index=Number(checkbox.dataset.index),files=getSelectedFiles();
+          const action=files.length===1 && files[0].filename==='bulk-'+index+'.txt' &&
+            files[0].link===checkbox.closest('.result-item').querySelector('[data-action="download"]').dataset.link;
+          STATE.query='paging-latest';const search=doSearch();
+          const resetImmediately=Object.keys(selectedIndices).length===0 && countLabel()==='';await search;
+          return {scans,toolbarWrites,stableCount,checked,singleRemoved,cleared,action,resetImmediately,
+            complete:rows.length>0 && selectedCount.includes('50000')};
+        }''')
+        self.assertEqual(result, dict(scans=0,toolbarWrites=0,stableCount=True,checked=True,
+                                      singleRemoved=True,cleared=True,action=True,resetImmediately=True,complete=True))
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_row_batch_checks_template_key_once_and_invalidates_reused_rows(self):
+        result = self.page.evaluate('''() => {
+          cancelSearchPrefetch();
+          if(VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
+          VSCROLL.renderFrame=0;
+          STATE.filterFolderSelfs=Array.from({length:1000},(_,i)=>'docs/'+i);
+          clearResultTemplateCache();DOM.resultsList.replaceChildren();
+          const original=getResultsHTMLCacheKey;let keys=0;
+          getResultsHTMLCacheKey=(...args)=>{keys++;return original(...args)};
+          const render=()=>reconcileVirtualRows(STATE.results,0,60,0,getVirtualTotalHeight()-getVirtualOffset(60));
+          const rows=()=>[...DOM.resultsList.querySelectorAll('.result-item')];
+          try {
+            render();const createdKeys=keys,first=rows(),version=VSCROLL.contentVersion;
+            keys=0;render();const reusedKeys=keys,stable=first.every((row,i)=>row===rows()[i]);
+            STATE.filterFolderSelfs[999]='edited';keys=0;render();
+            const editedKeys=keys,updated=rows(),allReplaced=first.every(row=>!row.isConnected),
+              versions=updated.every(row=>Number(row.dataset.contentVersion)===VSCROLL.contentVersion),
+              invalidated=VSCROLL.contentVersion===version+1;
+            STATE.query='row';keys=0;render();
+            const queryKeys=keys,highlighted=rows().every(row=>row.querySelector('.result-title mark')?.textContent==='row');
+            STATE.useMirrorLinks=!STATE.useMirrorLinks;keys=0;render();
+            return {createdKeys,reusedKeys,editedKeys,queryKeys,mirrorKeys:keys,stable,allReplaced,
+              versions,invalidated,highlighted,count:rows().length,
+              ids:rows().map(row=>Number(row.dataset.index))};
+          } finally {getResultsHTMLCacheKey=original;}
+        }''')
+        self.assertEqual(result, dict(createdKeys=1,reusedKeys=1,editedKeys=1,queryKeys=1,
+                                      mirrorKeys=1,stable=True,allReplaced=True,versions=True,
+                                      invalidated=True,highlighted=True,count=60,ids=list(range(60))))
+        self.assertEqual(self.fixture.errors, [])
+
     def test_far_append_preserves_rows_without_render_then_new_page_is_accessible(self):
         result = self.page.evaluate('''async () => {
           cancelSearchPrefetch();STATE.total=1100;STATE._loadedPage=10;

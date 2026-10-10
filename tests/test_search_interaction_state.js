@@ -64,5 +64,33 @@ for(const project of ['github-Search','huggingface-Search']) {
     assert.strictEqual(lookup.size,129);assert(reads<=129*5,reads);
     reads=0;c.normalizeFolderSelection(new Set(),new Set());assert(reads<=129*5,reads);
   });
+  test(project+' folder merging preserves path order and duplicates without repeated array scans',()=>{
+    const c=vm.createContext({Set});install(source,c,['mergeFolderFilters']);
+    const selfs=['','a','a','__proto__','\u6587\u5316'],subtrees=['a','ab','ab','','constructor','\u6587\u5316'];
+    const before=selfs.slice();
+    selfs.indexOf=selfs.includes=()=>{throw Error('linear membership scan')};
+    assert.deepStrictEqual(Array.from(c.mergeFolderFilters(selfs,subtrees)),
+      ['', 'a','a','__proto__','\u6587\u5316','ab','ab','constructor']);
+    assert.deepStrictEqual(selfs.slice(),before);
+    assert.deepStrictEqual(Array.from(c.mergeFolderFilters(null,subtrees)),subtrees);
+    assert.deepStrictEqual(Array.from(c.mergeFolderFilters(selfs,null)),before);
+    assert.deepStrictEqual(Array.from(c.mergeFolderFilters(null,null)),[]);
+  });
+  test(project+' persisted folder projection retains root files and normalized membership',()=>{
+    let searches=0,toasts=0;
+    const c=vm.createContext({Set,Map,STATE:{folderTree:[]},
+      updateFilterCancelButtons:()=>{},syncStateToURL:()=>{},scheduleFilterSearch:()=>{searches++},
+      showToast:()=>{toasts++}});
+    install(source,c,['mergeFolderFilters','folderPathCovered','createFolderSelectionLookup',
+      'normalizeFolderSelection','persistFolderSelection']);
+    c.persistFolderSelection(new Set(['a','a/b','ab','']),new Set(['','a','x']));
+    assert.deepStrictEqual(Array.from(c.STATE.filterFolderSubtrees),['a','ab','']);
+    assert.deepStrictEqual(Array.from(c.STATE.filterFolderSelfs),['','x']);
+    assert.deepStrictEqual(Array.from(c.STATE.filterFolders),['','x','a','ab']);
+    assert.strictEqual(searches,1);
+    const existing=c.STATE.filterFolders;
+    c.persistFolderSelection(new Set(Array.from({length:10001},(_,i)=>'p'+i)),new Set());
+    assert.strictEqual(c.STATE.filterFolders,existing);assert.strictEqual(searches,1);assert.strictEqual(toasts,1);
+  });
 }
 run('search/interaction-state');
