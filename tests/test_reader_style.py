@@ -156,12 +156,13 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.locator('.reader-page').first.evaluate("node => window.__themePage = node")
         text_layer = self.page.locator('.reader-pdf-text').first
         self.assertEqual(text_layer.evaluate("e => getComputedStyle(e).filter"), "none")
-        self.assertEqual(canvas.evaluate("e => getComputedStyle(e).filter"), "invert(0.9) hue-rotate(180deg)")
+        self.assertEqual(canvas.evaluate("e => getComputedStyle(e).filter"), "none")
         self.page.locator("#history").click()
+        self.page.locator("#page-invert-toggle").click()
         for theme in ('light', 'dark'):
             self.page.locator("#theme-toggle").click()
             self.settle()
-            self.assertEqual(canvas.evaluate("e => getComputedStyle(e).filter"), 'none' if theme == 'light' else 'invert(0.9) hue-rotate(180deg)')
+            self.assertEqual(canvas.evaluate("e => getComputedStyle(e).filter"), 'invert(0.9) hue-rotate(180deg)')
         self.page.locator("#history").click()
         for width in (1100, 390):
             self.page.set_viewport_size({"width": width, "height": 844})
@@ -170,7 +171,7 @@ class ReaderStyleTests(unittest.TestCase):
             self.assertEqual(selected, 'Reader PDF')
             original_pixels = canvas.evaluate("c => c.toDataURL()")
             for theme in ("dark", "light", "dark"):
-                self.page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+                self.page.evaluate("theme => {document.documentElement.dataset.theme = theme; document.documentElement.dataset.pageInverted = String(theme === 'dark');}", theme)
                 self.settle()
                 bounds = self.page.locator('.reader-page').first.bounding_box()
                 png = Image.open(io.BytesIO(self.page.screenshot())).convert("RGB")
@@ -203,10 +204,14 @@ class ReaderStyleTests(unittest.TestCase):
         image = self.page.locator('.reader-page img.ready').first
         image.wait_for()
         original = image.get_attribute('src')
+        self.assertEqual(image.evaluate('e => getComputedStyle(e).filter'), 'none')
+        self.page.locator('#history').click()
+        self.page.locator('#page-invert-toggle').click()
+        self.page.locator('#history').click()
         for width in (1100, 390):
             self.page.set_viewport_size({'width': width, 'height': 844})
             for theme in ('dark', 'light', 'dark'):
-                self.page.evaluate('theme => document.documentElement.dataset.theme = theme', theme)
+                self.page.evaluate("theme => {document.documentElement.dataset.theme = theme; document.documentElement.dataset.pageInverted = String(theme === 'dark');}", theme)
                 self.settle()
                 bounds = image.bounding_box()
                 png = Image.open(io.BytesIO(self.page.screenshot())).convert('RGB')
@@ -215,6 +220,49 @@ class ReaderStyleTests(unittest.TestCase):
                 self.assertEqual(image.get_attribute('src'), original)
         self.page.evaluate("document.querySelector('#content').dataset.mode = 'image-pages'")
         self.assertEqual(image.evaluate('e => getComputedStyle(e).filter'), 'none')
+
+    def test_page_inversion_remembers_explicit_choice_and_fits_sidebar(self):
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='application/pdf', body=support.minimal_pdf()))
+        source = urllib.parse.quote('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/inversion.pdf', safe='')
+        self.page.goto(f'{self.origin}/static/reader.html?url={source}&ext=pdf')
+        self.page.locator('.reader-page canvas.ready').first.wait_for()
+        button = self.page.locator('#page-invert-toggle')
+        self.assertEqual(button.get_attribute('aria-pressed'), 'false')
+        self.assertEqual(button.text_content(), '页面反色')
+        self.page.locator('#history').click()
+        button.click()
+        self.assertEqual(button.text_content(), '关闭页面反色')
+        self.assertEqual(self.page.evaluate("localStorage.getItem('reader-page-inversion')"), 'true')
+        for width in (1100, 390, 320):
+            self.page.set_viewport_size(dict(width=width, height=844))
+            self.page.locator('#full-search-toggle').click()
+            self.settle()
+            metrics = self.page.locator('#history-panel > header').evaluate('''header => {
+              const buttons = [...header.querySelectorAll('button')].filter(node => !node.hidden);
+              const bounds = header.getBoundingClientRect();
+              const boxes = buttons.map(node => node.getBoundingClientRect());
+              return {ids: buttons.map(node => node.id), fits: boxes.every(rect => rect.left >= bounds.left && rect.right <= bounds.right),
+                gaps: boxes.slice(1).map((rect, index) => rect.left - boxes[index].right), overflow: header.scrollWidth > header.clientWidth};
+            }''')
+            self.assertEqual(metrics['ids'], ['full-search-toggle', 'page-invert-toggle', 'theme-toggle', 'history-close'])
+            self.assertTrue(metrics['fits'], metrics)
+            self.assertFalse(metrics['overflow'], metrics)
+            self.assertTrue(all(gap >= 0 for gap in metrics['gaps']), metrics)
+        self.page.reload()
+        self.page.locator('.reader-page canvas.ready').first.wait_for()
+        self.assertEqual(button.get_attribute('aria-pressed'), 'true')
+        self.assertEqual(button.text_content(), '关闭页面反色')
+        self.page.locator('#history').click()
+        self.page.locator('#theme-toggle').click()
+        self.settle()
+        self.assert_contrast('#page-invert-toggle')
+        self.assertEqual(self.page.locator('canvas.ready').first.evaluate('e => getComputedStyle(e).filter'), 'invert(0.9) hue-rotate(180deg)')
+        button.click()
+        self.page.reload()
+        self.page.locator('.reader-page canvas.ready').first.wait_for()
+        self.assertEqual(button.get_attribute('aria-pressed'), 'false')
+        self.assertEqual(self.page.locator('canvas.ready').first.evaluate('e => getComputedStyle(e).filter'), 'none')
 
     def open_theme_fixture(self, extension, data):
         self.page.route("**/api/reader-content**", lambda route: route.fulfill(body=data))
