@@ -121,7 +121,7 @@ const renderFoliateSource = reader.match(/async\s+function\s+renderFoliate\s*\([
 assert.strictEqual(renderFoliateSource.includes('loaded = new Set'), false)
 assert.strictEqual(renderFoliateSource.includes('pending = new Map'), false)
 assert.match(reader, /stream\.insertBefore\(article, next \|\| null\)/)
-assert.match(reader, /foliateSectionLoader = \(index\)/)
+assert.match(reader, /foliateSectionLoader\s*=\s*(?:\(index\)|index)\s*=>/)
 assert.doesNotMatch(reader, /^let navigationGeneration\b/m)
 assert.doesNotMatch(reader, /syncReaderState/)
 assert.doesNotMatch(reader, /^(?:let|var|const)\s+title\b/m)
