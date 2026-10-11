@@ -57,6 +57,8 @@ jobs:
           node tests/test_service_worker.js
           python3 -B -m unittest -v tests.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_shell_does_not_wait_for_slow_revalidation
           python3 -B -m unittest -v tests.test_service_worker_integration.ServiceWorkerIntegrationTest.test_first_install_rewarms_shell_after_delayed_controller_claim
+      - name: Run Reader flow and cleanup regressions
+        run: python3 -B -m unittest -v tests.test_reader_ebook_flow tests.test_reader_toc_latency
       - name: Run chapter-bundle browser gate
         run: |
           node tests/test_reader_chapter_scheduler.js
@@ -108,9 +110,12 @@ jobs:
         run: |
           node tests/test_reader_request_manager.js
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
-      - name: Run multi-format preparation and navigation gates
-        working-directory: huggingface-search
-        run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+       - name: Run multi-format preparation and navigation gates
+         working-directory: huggingface-search
+         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+       - name: Run Reader flow and cleanup regressions
+         working-directory: huggingface-search
+         run: python3 -B -m unittest -v tests.test_reader_ebook_flow tests.test_reader_toc_latency
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
