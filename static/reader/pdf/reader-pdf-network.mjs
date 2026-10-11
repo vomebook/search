@@ -7,7 +7,7 @@ function abortable(promise, signal) {
   });
 }
 
-export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit}) {
+export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
   const chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
@@ -78,6 +78,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         failure.reject(error);
         stop(error);
         task?.destroy()?.catch?.(() => {});
+        onError?.(error);
       });
     };
     task = pdfjs.getDocument({...options, range:transport});

@@ -69,7 +69,7 @@ export function createReaderLifecycle(readerContext) {
   }
 
   function classifyReaderError(error, fallback = "READER_PARSE") {
-    if (["READER_ENGINE_NETWORK", "READER_RESTORE"].includes(error?.code)) return error.code;
+    if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT"].includes(error?.code)) return error.code;
     const value = `${error?.name || ""} ${error?.message || error || ""}`;
     if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK";
     if (
@@ -127,6 +127,7 @@ export function createReaderLifecycle(readerContext) {
     if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted) return;
     readerContext.updateDocumentState({ restorationReady: false });
     readerContext.readerRuntime.fail(code);
+    if (code === "READER_PDF_TRANSPORT") readerContext.setReaderPanelOpen(false);
     readerContext.stopReaderWork();
     readerContext.readerRequestManager.dispose();
     readerContext.formatAdapters.dispose();
@@ -137,14 +138,24 @@ export function createReaderLifecycle(readerContext) {
     const visibleMessage = `${message} [${readerContext.readerLifecycle.stage}]`;
     readerContext.content.innerHTML = `<div class="reader-error"></div>`;
     readerContext.content.querySelector(".reader-error").textContent = visibleMessage;
-    if (["READER_ENGINE_NETWORK", "READER_RESTORE"].includes(code)) {
+    if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT"].includes(code)) {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "text-button";
       retry.id = "reader-engine-retry";
       retry.textContent = "重试加载";
       // Reload clears the browser's failed module map and preserves this book URL.
-      retry.addEventListener("click", () => location.reload());
+      retry.addEventListener("click", async () => {
+        if (code === "READER_PDF_TRANSPORT") {
+          let timer;
+          try {
+            await Promise.race([readerContext.progressSaveChain,
+              new Promise(resolve => { timer = setTimeout(resolve, 500); })]);
+          } finally { clearTimeout(timer); }
+          if (readerContext.readerLifecycle.disposed) return;
+        }
+        location.reload();
+      });
       readerContext.content.querySelector(".reader-error").append(document.createElement("br"), retry);
     }
     readerContext.status.textContent = "无法打开";
