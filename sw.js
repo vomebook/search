@@ -66,10 +66,10 @@ self.addEventListener("fetch", (event) => {
   const generatedData = url.pathname.startsWith("/search/data/");
   const networkFirst = !readerShell && (searchNavigation || generatedData || READER_RUNTIME_PATHS.has(url.pathname));
   const cacheKey = readerShell ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
-  const cachePromise = caches.open(CACHE_NAME).catch(() => null);
-  const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey) : undefined).catch(() => undefined);
-  // Content-addressed assets never need a revalidation request on cache hits.
   const immutable = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname);
+  const cachePromise = caches.open(CACHE_NAME).catch(() => null);
+  // Pinned same-origin assets are identical across classic/module Origin headers.
+  const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey, { ignoreVary: immutable }) : undefined).catch(() => undefined);
   let cacheWrite;
   const networkPromise = Promise.all([cachePromise, immutable ? cachedPromise : null]).then(([cache, cached]) => cached || fetch(event.request).then(response => {
     if (cache && response.ok && response.status !== 206) {

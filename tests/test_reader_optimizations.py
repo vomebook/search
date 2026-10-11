@@ -23,6 +23,7 @@ class ReaderOptimizationTests(unittest.TestCase):
     search = fixtures.ReaderRefactorTest.search
 
     def expose(self):
+        fixtures.expose_dom_search_tools(self.page)
         def instrument(route):
             response = route.fetch()
             script = response.text().replace('chapterManifestCleanup = () => {', '''
@@ -31,7 +32,7 @@ class ReaderOptimizationTests(unittest.TestCase):
               chapterManifestCleanup = () => {''')
             route.fulfill(response=response, body=script + '''
                window.__chunkWindow = createPdfShellWindow;
-               window.__snapshot = () => fullSearchDomSnapshot;
+                window.__snapshot = () => window.__domSearchTools.snapshot();
               window.__markerPage = () => pageAtMarker()?.dataset.page;
               window.__restoreText = top => restoreProgressState({scrollTop:top});
               window.__cancelNavigation = () => beginReaderNavigation();

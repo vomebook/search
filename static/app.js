@@ -5738,6 +5738,28 @@ async function randomBook() {
 
 var randomReaderRequestId = 0;
 
+async function fetchRandomReaderRecord(url, requestId, returnUrl) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (requestId !== randomReaderRequestId || location.href !== returnUrl) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) {
+        await response.body?.cancel();
+        const error = new Error(`HTTP ${response.status}`);
+        error.permanent = response.status < 500 && ![408, 429].includes(response.status);
+        throw error;
+      }
+      return await response.json();
+    } catch (error) {
+      if (error.permanent || attempt || error instanceof SyntaxError || navigator.onLine === false) throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function openReaderRecord(rec, returnUrl) {
   returnUrl = returnUrl || location.href;
   if (!rec || location.href !== returnUrl) return false;
@@ -5768,10 +5790,11 @@ async function randomTxt() {
   var url = STATE.repoFull
     ? API_BASE + "/api/random-reader?repo=" + encodeURIComponent(STATE.repo)
     : API_BASE + "/api/random-reader";
-  fetchJsonWithTimeout(url, 10000, true).then(function(rec) {
+  return fetchRandomReaderRecord(url, requestId, returnUrl).then(function(rec) {
     if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
     if (!openReaderRecord(rec, returnUrl)) throw new Error("NO_READER");
   }).catch(function() {
+    if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
     async function fallback() {
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
