@@ -101,6 +101,7 @@
     "reader-format-adapters.js",
     "reader-security.js",
     "reader-search-controller.mjs",
+    "reader-dom-search.mjs",
     "reader-pdf-text.js",
     "reader-v3.mjs",
     "reader-book-text.js",

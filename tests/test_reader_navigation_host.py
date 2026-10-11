@@ -152,7 +152,8 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
             const path=new URL(document.querySelector('script[src*="reader-navigation.js"]').src).pathname.replace('reader-navigation.js','reader.html');
             navigateToReader(path+'?ext=txt');closeReaderOverlay();history.replaceState(null,'',previousUrl);
             await randomTxt();await new Promise(resolve=>originalTimer(resolve,100));
-            const recovered=aborted&&!readerOverlay;
+            const recovered=aborted&&!!readerOverlay;
+            closeReaderOverlay();history.replaceState(null,'',previousUrl);
             await randomTxt();await new Promise(resolve=>originalTimer(resolve,100));
             return {recovered,attempts,opened:!!readerOverlay};
           } finally {
@@ -160,7 +161,31 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
             if(localFallback)ensureLocalDataLoaded=localFallback;
           }
         }''')
-        self.assertEqual(result, {'recovered':True,'attempts':2,'opened':True})
+        self.assertEqual(result, {'recovered':True,'attempts':3,'opened':True})
+
+    def test_random_reader_retries_transient_http_but_not_permanent_or_stale_failure(self):
+        result = self.page.evaluate('''async () => {
+          const originalFetch=fetch, savedUrl=location.href;
+          const success={Repo:'VoiceOfML/Test',File:'next',Extension:'txt',
+            Link:'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/next.txt',Folder:[]};
+          const rows=[];
+          try {
+            for(const code of [503,429,404]) {
+              let requests=0;
+              window.fetch=()=>Promise.resolve(++requests===1
+                ? new Response('{}',{status:code}) : new Response(JSON.stringify(success)));
+              const id=++randomReaderRequestId;
+              try { await fetchRandomReaderRecord('/api/random-reader',id,savedUrl); } catch (_) {}
+              rows.push(requests);
+            }
+            let requests=0;
+            window.fetch=()=>{requests++;randomReaderRequestId++;return Promise.reject(new TypeError('network'));};
+            await fetchRandomReaderRecord('/api/random-reader',++randomReaderRequestId,savedUrl);
+            rows.push(requests);
+            return rows;
+          } finally {window.fetch=originalFetch;}
+        }''')
+        self.assertEqual(result, [2,2,1,1])
 
     def test_reader_folder_url_uses_current_filters(self):
         result = self.page.evaluate('''() => {

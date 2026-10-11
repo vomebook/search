@@ -60,6 +60,32 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertEqual(len(self.modules), 1)
         self.assertNotIn('reader-module-retry', self.modules[0])
 
+    def test_transient_worker_download_failure_recovers_without_reader_reload(self):
+        self.page.add_init_script('''const native = window.setTimeout.bind(window);
+          window.setTimeout = (fn, ms, ...args) => native(fn, ms === 20000 ? 300 : ms, ...args);''')
+        self.page.route(MODULE, lambda route: route.fulfill(content_type='text/javascript', body='''
+          export const GlobalWorkerOptions = {};
+          export class PDFWorker {
+            constructor() {
+              window.__workerAttempts = (window.__workerAttempts || 0) + 1;
+              (window.__workerUrls ||= []).push(GlobalWorkerOptions.workerSrc);
+              this.promise = window.__workerAttempts === 1 ? new Promise(() => {}) : Promise.resolve();
+            }
+            destroy() { window.__workerDestroys = (window.__workerDestroys || 0) + 1; }
+          }
+          export function getDocument() {
+            const page = {getViewport:({scale})=>({width:600*scale,height:800*scale}),
+              getTextContent:async()=>({items:[]}),render:()=>({promise:Promise.resolve()})};
+            return {promise:Promise.resolve({numPages:1,getPage:async()=>page,getOutline:async()=>null}),destroy(){}};
+          }
+        '''))
+        self.open()
+        self.ready()
+        self.assertEqual(self.page.evaluate('__workerAttempts'), 2)
+        self.assertEqual(self.page.evaluate('__workerDestroys'), 1)
+        self.assertIn('reader-worker-retry=1', self.page.evaluate('__workerUrls[1]'))
+        self.assertEqual(len(self.documents), 0)
+
     def test_pdf_range_policy_keeps_default_browser_cache_from_serializing_reads(self):
         payload = b''.join(bytes([index]) * 128 for index in range(16))
         metrics = {mode: {'active': 0, 'peak': 0} for mode in ('upstream', 'reader')}

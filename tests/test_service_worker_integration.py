@@ -97,6 +97,27 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.assertEqual(registration["script"], self.origin + "/search/sw.js")
         self.assertTrue(registration["controlled"])
 
+    def test_hashed_reader_asset_reuses_cache_across_duplicate_origin_vary_headers(self):
+        self.prime()
+        result = self.page.evaluate('''async () => {
+          const cache = await caches.open('vomebook-search-v1.0.0');
+          const url = new URL('/search/static/reader.123456789abc.js', location.origin).href;
+          await cache.put(new Request(url, {headers: {Origin: location.origin, 'X-Reader-Intent': 'warm'}}),
+            new Response('window.__cachedReaderExecutions = (window.__cachedReaderExecutions || 0) + 1;',
+              {headers: {'Content-Type': 'text/javascript',
+                Vary: 'Origin, origin, access-control-request-method, access-control-request-headers, X-Reader-Intent'}}));
+          const ordinary = !!await cache.match(url);
+          const load = crossorigin => new Promise((resolve, reject) => {
+            const script = document.createElement('script'); script.src = url;
+            if (crossorigin) script.crossOrigin = 'anonymous';
+            script.onload = resolve; script.onerror = reject; document.head.append(script);
+          });
+          await load(false); await load(true); await import(url);
+          return {ordinary, executions: window.__cachedReaderExecutions};
+        }''')
+        self.assertEqual(result, {"ordinary": False, "executions": 3})
+        self.assertEqual(self.server_state.count('/search/static/reader.123456789abc.js'), 0)
+
     def test_existing_cache_serves_immediately_then_persists_background_refresh(self):
         self.prime()
         self.page.evaluate("""async () => {

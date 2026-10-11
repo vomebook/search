@@ -1,0 +1,60 @@
+name: Reader Opening Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Opens per pinned sample
+        default: '2'
+        required: true
+      random_attempts:
+        description: Actual random-reader opens per site
+        default: '3'
+        required: true
+      max_ready_seconds:
+        description: Usable-content time budget in seconds
+        default: '45'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reader-opening-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      REPEAT: ${{ inputs.repeat }}
+      RANDOM_ATTEMPTS: ${{ inputs.random_attempts }}
+      MAX_READY: ${{ inputs.max_ready_seconds }}
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11.17'
+      - name: Get shared benchmark and install browser
+        run: |
+          git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
+          python -m pip install playwright==1.63.0
+          python -m playwright install --with-deps chromium
+      - name: Benchmark production HF
+        working-directory: huggingface-search
+        run: |
+          python -B scripts/benchmark_reader_open.py --base-url https://voiceofml-search.hf.space --samples scripts/reader-opening-samples.json --repeat "$REPEAT" --random-attempts "$RANDOM_ATTEMPTS" --max-ready-seconds "$MAX_READY" --output "$RUNNER_TEMP/reader-opening-hf.json"
+      - name: Benchmark production Pages
+        if: always()
+        working-directory: huggingface-search
+        run: |
+          python -B scripts/benchmark_reader_open.py --base-url https://vomebook.github.io --path-prefix /search --samples scripts/reader-opening-samples.json --repeat "$REPEAT" --random-attempts "$RANDOM_ATTEMPTS" --max-ready-seconds "$MAX_READY" --output "$RUNNER_TEMP/reader-opening-pages.json"
+      - name: Retain timings and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-opening-benchmark
+          path: ${{ runner.temp }}/reader-opening-*.json
+          if-no-files-found: warn
