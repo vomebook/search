@@ -6,6 +6,92 @@ function abortable(promise, signal) {
     Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
 }
+
+export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit}) {
+  if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
+  const chunkSize = options.rangeChunkSize;
+  const owner = new AbortController();
+  const active = AbortSignal.any([signal, owner.signal]);
+  let task = null, stopped = false;
+  const failure = Promise.withResolvers();
+  failure.promise.catch(() => {});
+  const stop = reason => {
+    if (stopped) return;
+    stopped = true;
+    owner.abort(reason);
+    signal.removeEventListener("abort", cancelled);
+  };
+  const cancelled = () => stop(signal.reason);
+  signal.addEventListener("abort", cancelled, {once:true});
+  const rangeError = () => new Error("PDF_RANGE_INVALID");
+  async function read(begin, end, expected = null) {
+    active.throwIfAborted();
+    const response = await fetch(options.url, {
+      headers: {Range: `bytes=${begin}-${end-1}`}, signal:active, credentials:"same-origin"
+    });
+    try {
+      if (!response.ok) throw Object.assign(new Error(`server response (${response.status})`), {status:response.status});
+      if (!expected && response.status === 200) {
+        const bytes = await readBytes(response, limit);
+        return {bytes, complete:true};
+      }
+      const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get("Content-Range") || "");
+      if (response.status !== 206 || !match || match.slice(1).some(value=>!Number.isSafeInteger(Number(value))))
+        throw rangeError();
+      const [start, last, total] = match.slice(1).map(Number);
+      if (total > limit) throw Object.assign(new Error("READER_RESOURCE_LIMIT"), {code:"READER_RESOURCE_LIMIT"});
+      if (start !== begin || last !== Math.min(end,total)-1 || total <= start) throw rangeError();
+      const etag = response.headers.get("ETag"), encoding = response.headers.get("Content-Encoding");
+      if (encoding && encoding !== "identity") throw rangeError();
+      if (expected && (total !== expected.total || etag !== expected.etag)) throw new Error("PDF_SOURCE_CHANGED");
+      if (!expected && !/^"[^"\r\n]+"$/.test(etag || "") && last+1 < total) {
+        await response.body?.cancel();
+        return null;
+      }
+      const bytes = await readBytes(response, last-start+1);
+      if (bytes.byteLength !== last-start+1) throw rangeError();
+      return {bytes, total, etag, complete:bytes.byteLength === total};
+    } catch (error) {
+      await response.body?.cancel().catch(() => {});
+      throw error;
+    }
+  }
+  try {
+    const first = await read(0, chunkSize);
+    active.throwIfAborted();
+    if (!first) {
+      stop();
+      return pdfjs.getDocument(options);
+    }
+    if (first.complete) {
+      stop();
+      return pdfjs.getDocument({...options, data:first.bytes});
+    }
+    // PDF.js owns parsing and range demand; the bootstrap is the first real range.
+    const transport = new pdfjs.PDFDataRangeTransport(first.total, first.bytes, true);
+    transport.abort = () => stop(new DOMException("PDF transport closed", "AbortError"));
+    transport.requestDataRange = (begin, end) => {
+      read(begin,end,first).then(result => {
+        if (!stopped) transport.onDataRange(begin,result.bytes);
+      }).catch(error => {
+        if (stopped) return;
+        failure.reject(error);
+        stop(error);
+        task?.destroy()?.catch?.(() => {});
+      });
+    };
+    task = pdfjs.getDocument({...options, range:transport});
+    task.promise.catch(error => stop(error));
+    return {
+      promise:Promise.race([task.promise,failure.promise]),
+      destroy() {transport.abort();return task.destroy();}
+    };
+  } catch (error) {
+    stop(error);
+    throw error;
+  }
+}
+
 export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
   initialIdleMs = 10000, initialTotalMs = 120000} = {}) {
   const documents = new Set();

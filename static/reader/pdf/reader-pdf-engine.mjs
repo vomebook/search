@@ -1,16 +1,18 @@
 export function createReaderPdfEngine(readerContext) {
   function loadPdfTaskWithTimeout(pdfjs, options, url) {
     readerContext.assertReaderActive();
-    const task = pdfjs.getDocument(options(url));
+    let task = null;
+    const owner = new AbortController();
     return new Promise((resolve, reject) => {
       let timeout = 0,
         destroyed = false;
       const destroy = () => {
         if (destroyed) return;
         destroyed = true;
+        owner.abort(readerContext.readerAbortError());
         clearTimeout(timeout);
         try {
-          task.destroy()?.catch?.(() => {});
+          task?.destroy()?.catch?.(() => {});
         } catch (_) {}
         reject(readerContext.readerAbortError());
       };
@@ -20,7 +22,14 @@ export function createReaderPdfEngine(readerContext) {
         untrack();
         destroy();
       }, readerContext.READER_PROXY_TIMEOUT_MS);
-      task.promise.then(
+      readerContext.openPdfRangeTask(pdfjs, options(url), {
+        signal:owner.signal, readBytes:VoiceOfMLReaderSecurity.readBytes,
+        limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes
+      }).then(opened => {
+        task = opened;
+        if (destroyed) {task.destroy()?.catch?.(() => {});throw readerContext.readerAbortError();}
+        return task.promise;
+      }).then(
         (document) => {
           clearTimeout(timeout);
           if (readerContext.readerAbortController.signal.aborted) {
