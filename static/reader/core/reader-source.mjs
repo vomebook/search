@@ -86,11 +86,12 @@ export function createReaderSource(readerContext) {
         await readerContext.waitForReader(350);
         continue;
       }
-      const response = await readerContext.readerRequestManager.request(endpoint, readerContext.READER_PROXY_TIMEOUT_MS);
+      const response = await readerContext.readerRequestManager.requestBuffered(
+        endpoint, readerContext.READER_PROXY_TIMEOUT_MS, VoiceOfMLReaderSecurity.LIMITS.manifestBytes);
       if (response.ok) return response.json();
+      await response.body?.cancel();
       if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt)
         throw new Error(`HTTP ${response.status}`);
-      await response.body?.cancel();
       await readerContext.waitForReader(350);
     }
     throw new Error("Reader ID resolution failed");
