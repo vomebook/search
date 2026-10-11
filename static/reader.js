@@ -2100,6 +2100,9 @@ async function seekFoliateProgress(percent, generation) {
       0,
       viewport.scrollTop + article.getBoundingClientRect().top - marker + offset
     );
+    await waitForReader(0, true);
+    if (!isReaderGenerationCurrent("navigation", generation)) return;
+    viewport.scrollTop += article.getBoundingClientRect().top - marker + offset;
     syncFoliateScrollLocation();
     updateTocCurrentMark();
     updateProgressTools();
