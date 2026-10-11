@@ -1118,6 +1118,10 @@ body {
   display: grid;
   place-items: center;
 }
+.reader-content[data-mode="audio"] .reader-loading-indicator,
+.reader-content[data-mode="video"] .reader-loading-indicator {
+  display: none;
+}
 .reader-audio {
   display: block;
   width: min(720px, calc(100% - 32px));
