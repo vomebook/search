@@ -82,14 +82,14 @@
       });
     }
 
-    function request(url, timeoutMs, requestInit = {}) {
+    function request(url, timeoutMs, requestInit = {}, bufferLimit = null) {
       if (disposed) return Promise.reject(new DOMException("Reader disposed", "AbortError"));
       const callerSignal = requestInit.signal;
       if (callerSignal?.aborted) return Promise.reject(callerSignal.reason);
       // Share plain GETs only. Other options can change the body, validators,
       // range or cancellation owner even when the URL is identical.
       const shareable = typeof url === "string" && Object.keys(requestInit).every((key) => key === "priority");
-      const key = shareable ? JSON.stringify([String(url), timeoutMs]) : {};
+      const key = shareable ? JSON.stringify([String(url), timeoutMs, bufferLimit]) : {};
       if (pending.has(key)) return responseForCaller(pending.get(key));
       const controller = new AbortControllerImpl();
       const recoverInitial = typeof url === "string" && timeoutMs > initialIdleMs * 2 &&
@@ -135,6 +135,37 @@
               ...(attempt ? { cache: "reload" } : {}), signal: transport.signal }),
               response => response.body?.cancel(transport.signal.reason).catch(() => {}));
             let firstChunk = null;
+            // Bounded metadata is unpublished until EOF, so a failed body can
+            // be replaced in full without replaying any caller-visible bytes.
+            if (bufferLimit !== null && response.ok && response.body?.getReader) {
+              const tooLarge = () => Object.assign(new Error("READER_RESOURCE_LIMIT"), {code:"READER_RESOURCE_LIMIT"});
+              if (Number(response.headers.get("Content-Length")) > bufferLimit) {
+                response.body.cancel().catch(() => {});
+                throw tooLarge();
+              }
+              sourceReader = response.body.getReader();
+              const chunks = [];
+              let length = 0;
+              while (true) {
+                arm();
+                const chunk = await owned(sourceReader.read());
+                if (chunk.done) break;
+                length += chunk.value.byteLength;
+                if (length > bufferLimit) throw tooLarge();
+                chunks.push(chunk.value);
+              }
+              controller.signal.throwIfAborted();
+              sourceReader.releaseLock();
+              sourceReader = null;
+              const bytes = new Uint8Array(length);
+              let offset = 0;
+              for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+              const complete = new root.Response(bytes, {
+                status:response.status, statusText:response.statusText, headers:response.headers
+              });
+              settle(record);
+              return complete;
+            }
             // Do not publish headers from a stalled attempt: a restart can then
             // replace the entire response without mixing versions or body bytes.
             if (recoverInitial && response.ok && response.body?.getReader) {
@@ -148,7 +179,10 @@
           } catch (error) {
             record.clearAttempt();
             transport.abort(error);
-            sourceReader?.cancel(error).catch(() => {});
+            if (sourceReader) {
+              const reader = sourceReader;
+              reader.cancel(error).catch(() => {}).finally(() => reader.releaseLock());
+            }
             controller.signal.throwIfAborted();
             if (!recoverInitial || attempt || !["TimeoutError", "TypeError"].includes(error?.name)) throw error;
           }
@@ -187,6 +221,10 @@
 
     return Object.freeze({
       request,
+      requestBuffered(url, timeoutMs, limit, requestInit = {}) {
+        if (!Number.isSafeInteger(limit) || limit < 0) return Promise.reject(new RangeError("Invalid response limit"));
+        return request(url, timeoutMs, requestInit, limit);
+      },
       dispose,
       get pendingCount() {
         return pending.size;

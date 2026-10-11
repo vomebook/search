@@ -272,6 +272,33 @@ class PdfLoadingTests(unittest.TestCase):
         self.ready()
         self.assertEqual(len(lookups), 2)
 
+    def test_demand_id_partial_body_stall_recovers_before_total_deadline(self):
+        self.page.set_default_timeout(2500)
+        self.page.add_init_script('''(() => {
+          const nativeFetch=fetch,nativeTimer=setTimeout;
+          window.__idLookups=0;window.__partialCancelled=false;
+          window.setTimeout=(callback,delay,...args)=>nativeTimer(callback,delay===10000?100:delay,...args);
+          window.fetch=(url,init)=>{
+            if(!String(url).includes('/api/reader-resolve?'))return nativeFetch(url,init);
+            __idLookups++;
+            if(__idLookups===1)return Promise.resolve(new Response('temporary',{status:503}));
+            if(__idLookups!==2)return nativeFetch(url,init);
+            return Promise.resolve(new Response(new ReadableStream({start(controller){
+              controller.enqueue(new TextEncoder().encode('{"url":"abandoned'));
+              init.signal.addEventListener('abort',()=>{
+                __partialCancelled=true;controller.error(init.signal.reason);
+              },{once:true});
+            }}),{headers:{'Content-Type':'application/json'}}));
+          };
+        })();''')
+        self.page.route('**/api/reader-resolve?**',lambda route:route.fulfill(
+            content_type='application/json',body=json.dumps({'url':SOURCE,'download':SOURCE,'extension':'pdf'})))
+        self.page.goto(self.origin+'/search/static/reader.html?id=398vk0yyy8m29&ext=pdf',wait_until='domcontentloaded')
+        self.ready()
+        self.assertEqual(self.page.evaluate('__idLookups'),3)
+        self.assertTrue(self.page.evaluate('__partialCancelled'))
+        self.assertEqual(len(self.documents),1)
+
     def test_disposal_terminates_prepared_worker_and_pending_resolve(self):
         self.page.add_init_script('''window.__lookupAborted = false;
           const nativeFetch = window.fetch;
