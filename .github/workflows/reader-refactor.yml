@@ -112,6 +112,8 @@ jobs:
         working-directory: huggingface-search
         run: |
           node tests/test_reader_request_manager.js
+          node tests/test_reader_initial_recovery.js
+          python3 -B -m unittest -v tests.test_reader_timeout
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
       - name: Run multi-format preparation and navigation gates
         working-directory: huggingface-search
