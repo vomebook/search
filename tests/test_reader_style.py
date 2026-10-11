@@ -1,6 +1,7 @@
 """Focused browser checks for reader CSS, independent of format-engine suites."""
 
 import io
+import os
 import unittest
 import urllib.parse
 import zipfile
@@ -28,7 +29,7 @@ class ReaderStyleTests(unittest.TestCase):
         cls.playwright = sync_playwright().start()
         cls.addClassCleanup(cls.playwright.stop)
         try:
-            cls.browser = cls.playwright.chromium.launch(headless=True)
+            cls.browser = getattr(cls.playwright, os.environ.get("READER_STYLE_BROWSER", "chromium")).launch(headless=True)
         except PlaywrightError as error:
             raise unittest.SkipTest(str(error))
         cls.addClassCleanup(cls.browser.close)
@@ -58,6 +59,49 @@ class ReaderStyleTests(unittest.TestCase):
             !document.documentElement.classList.contains('theme-transition') &&
             !document.getAnimations().some(animation => animation.playState === 'running')
         """)
+
+    def test_back_and_download_icons_have_stable_browser_independent_geometry(self):
+        self.page.evaluate("""() => {
+          document.querySelector('.page-controls').hidden = false;
+          document.querySelector('.zoom-controls').hidden = false;
+        }""")
+        for theme in ("dark", "light"):
+            self.page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+            for width in (1100, 390, 320):
+                self.page.set_viewport_size({"width": width, "height": 900})
+                for selector in ("#back", "#download"):
+                    with self.subTest(theme=theme, width=width, selector=selector):
+                        button = self.page.locator(selector)
+                        geometry = button.evaluate("""button => {
+                          const icon = button.querySelector('svg');
+                          if (!icon) return null;
+                          const b = button.getBoundingClientRect(), i = icon.getBoundingClientRect();
+                          const toolbar = button.closest('header').getBoundingClientRect();
+                          const style = getComputedStyle(button);
+                          return {width: b.width, height: b.height, iconWidth: i.width, iconHeight: i.height,
+                            dx: i.x + i.width / 2 - b.x - b.width / 2,
+                            dy: i.y + i.height / 2 - b.y - b.height / 2,
+                            fits: b.left >= 0 && b.right <= innerWidth && b.top >= toolbar.top && b.bottom <= toolbar.bottom,
+                            padding: style.padding, appearance: style.appearance,
+                            stroke: getComputedStyle(icon).stroke, color: style.color,
+                            hiddenIcon: icon.getAttribute('aria-hidden'), focusable: icon.getAttribute('focusable')};
+                        }""")
+                        self.assertIsNotNone(geometry)
+                        self.assertEqual((geometry["width"], geometry["height"]), (32, 32) if width > 600 else (26, 30))
+                        self.assertEqual((geometry["iconWidth"], geometry["iconHeight"]), (18, 18))
+                        self.assertAlmostEqual(geometry["dx"], 0, delta=0.5)
+                        self.assertAlmostEqual(geometry["dy"], 0, delta=0.5)
+                        self.assertTrue(geometry["fits"], geometry)
+                        self.assertEqual((geometry["padding"], geometry["appearance"]), ("0px", "none"))
+                        self.assertEqual(geometry["stroke"], geometry["color"])
+                        self.assertEqual((geometry["hiddenIcon"], geometry["focusable"]), ("true", "false"))
+                        self.assertTrue(button.get_attribute("title"))
+                        self.assertTrue(button.get_attribute("aria-label"))
+                        before = button.bounding_box()
+                        button.hover()
+                        button.focus()
+                        self.assertEqual(button.bounding_box(), before)
+                        self.assertEqual(button.evaluate("e => getComputedStyle(e).outlineStyle"), "solid")
 
     def assert_contrast(self, selector):
         result = self.page.locator(selector).first.evaluate("""element => {
