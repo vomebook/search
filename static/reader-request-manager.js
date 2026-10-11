@@ -115,7 +115,7 @@
           };
           const arm = () => {
             clearTimer(idle);
-            if (recoverInitial) idle = setTimer(() => transport.abort(
+            if (recoverInitial && attempt === 0) idle = setTimer(() => transport.abort(
               new DOMException("Reader initial response stalled", "TimeoutError")
             ), initialIdleMs);
           };
