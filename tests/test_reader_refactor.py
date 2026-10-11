@@ -360,6 +360,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertNotIn(1, requested)
         self.assertTrue(self.page.locator('.reader-epub-chapter[data-chapter="8"]').is_visible())
         self.page.locator('#history').click()
+        self.page.wait_for_function("() => navigationState.tocEntries.length >= 7")
         self.page.wait_for_function("() => document.querySelectorAll('#toc-list .panel-item-main').length >= 7")
         self.page.locator('#toc-list .panel-item-main').nth(6).click()
         self.page.locator('.reader-epub-chapter[data-chapter="7"]').wait_for(state="attached")
