@@ -1334,6 +1334,71 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
         self.assertEqual(requests, [book_path] * 3)
 
+    def test_media_waits_for_metadata_before_reporting_ready(self):
+        held = []
+        self.page.route('**/api/reader-content**', lambda route: held.append(route))
+        self.page.goto(self.reader_url('wav'), wait_until='domcontentloaded')
+        self.page.locator('audio').wait_for()
+        self.assertEqual(self.page.locator('audio').evaluate('m => m.readyState'), 0)
+        self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready')
+        self.assertTrue(held)
+        held[0].fulfill(content_type='audio/wav', body=support.minimal_wav())
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertGreaterEqual(self.page.locator('audio').evaluate('m => m.readyState'), 1)
+
+    def test_media_metadata_stall_recovers_without_reader_reload(self):
+        self.assert_media_metadata_stall(True)
+
+    def test_media_metadata_exhaustion_exposes_reload_and_can_recover(self):
+        self.assert_media_metadata_stall(False)
+
+    def test_disposal_cancels_pending_media_metadata_without_retry(self):
+        self.page.add_init_script('''const timer=window.setTimeout.bind(window);
+          window.setTimeout=(callback,delay,...args)=>timer(callback,delay===15000?200:delay,...args);''')
+        held, originals = [], []
+        self.page.route('**/api/reader-content**', lambda route: held.append(route))
+        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav',
+                        lambda route: (originals.append(route.request.url), route.abort()))
+        self.page.goto(self.reader_url('wav'),wait_until='domcontentloaded')
+        self.page.locator('audio').wait_for()
+        self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
+        self.page.wait_for_timeout(300)
+        self.assertEqual(originals, [])
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
+        self.assertFalse(self.page.locator('audio').get_attribute('src'))
+        for route in held:
+            try: route.abort()
+            except support.PlaywrightError: pass
+
+    def assert_media_metadata_stall(self, recover):
+        self.page.add_init_script('''const timer=window.setTimeout.bind(window);
+          window.setTimeout=(callback,delay,...args)=>timer(callback,delay===15000?150:delay,...args);''')
+        held, original_requests = [], []
+        allow = [recover]
+        self.page.route('**/api/reader-content**', lambda route:
+            route.fulfill(content_type='audio/wav',body=support.minimal_wav()) if allow[0] and not recover else held.append(route))
+        def original(route):
+            original_requests.append(route.request.url)
+            if allow[0]:
+                route.fulfill(content_type='audio/wav',body=support.minimal_wav())
+            else:
+                held.append(route)
+        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav', original)
+        self.page.goto(self.reader_url('wav'), wait_until='domcontentloaded')
+        if not recover:
+            self.page.locator('#reader-engine-retry').wait_for()
+            self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_MEDIA')
+            self.assertEqual(len(original_requests), 1)
+            allow[0] = True
+            self.page.locator('#reader-engine-retry').click()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('audio').readyState >= 1")
+        self.assertEqual(len(original_requests), 1)
+        self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
+        self.assertFalse(self.page.locator('audio').get_attribute('src'))
+        for route in held:
+            try: route.abort()
+            except support.PlaywrightError: pass
+
     def test_bucket_media_failure_retries_download_original_once(self):
         self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(status=503, body='unavailable'))
         self.assert_media_failure_retries_original_once(bucket=True)

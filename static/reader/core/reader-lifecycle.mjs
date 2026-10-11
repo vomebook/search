@@ -127,7 +127,7 @@ export function createReaderLifecycle(readerContext) {
     if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted) return;
     readerContext.updateDocumentState({ restorationReady: false });
     readerContext.readerRuntime.fail(code);
-    if (code === "READER_PDF_TRANSPORT") readerContext.setReaderPanelOpen(false);
+    if (["READER_PDF_TRANSPORT", "READER_MEDIA"].includes(code)) readerContext.setReaderPanelOpen(false);
     readerContext.stopReaderWork();
     readerContext.readerRequestManager.dispose();
     readerContext.formatAdapters.dispose();
@@ -138,7 +138,7 @@ export function createReaderLifecycle(readerContext) {
     const visibleMessage = `${message} [${readerContext.readerLifecycle.stage}]`;
     readerContext.content.innerHTML = `<div class="reader-error"></div>`;
     readerContext.content.querySelector(".reader-error").textContent = visibleMessage;
-    if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT"].includes(code)) {
+    if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT", "READER_MEDIA"].includes(code)) {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "text-button";
