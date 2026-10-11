@@ -6,7 +6,8 @@ function abortable(promise, signal) {
     Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
 }
-export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000} = {}) {
+export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
+  initialIdleMs = 10000, initialTotalMs = 120000} = {}) {
   const documents = new Set();
   const versions = new Map(), timings = [];
   const controller = new AbortController();
@@ -40,9 +41,12 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000} = {}) {
     const match = /^bytes=(\d+)-(\d+)$/.exec(headers.get("Range") || "");
     const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
     const start = Number(match?.[1]), end = Number(match?.[2]);
+    const conditional = ["If-Range","If-None-Match","If-Match","If-Modified-Since","If-Unmodified-Since"]
+      .some(name=>headers.has(name));
     const eligible = method === "GET" && match && Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
-      start <= end && end - start < 2 * 1024 * 1024 &&
-      !["If-Range","If-None-Match","If-Match","If-Modified-Since","If-Unmodified-Since"].some(name=>headers.has(name));
+      start <= end && end - start < 2 * 1024 * 1024 && !conditional;
+    const initialRecovery = method === "GET" && !headers.has("Range") && !conditional;
+    const initialAt = performance.now();
     let attempt = 0, record, response, reader, length = 0, delivered = 0, validator = null, stopped = false;
     function finish(error = null) {
       if (!record || record.finished) return;
@@ -67,12 +71,14 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000} = {}) {
       clearTimeout(record.idle); clearTimeout(record.deadline);
       const owner = record.owner;
       const timeout = () => owner.abort(new DOMException("PDF request stalled", "TimeoutError"));
-      record.idle = setTimeout(timeout,idleMs);
-      record.deadline = setTimeout(timeout,Math.max(0,attemptMs-(performance.now()-record.row.at)));
+      if (!initialRecovery || attempt === 0)
+        record.idle = setTimeout(timeout,initialRecovery ? initialIdleMs : idleMs);
+      record.deadline = setTimeout(timeout,Math.max(0,initialRecovery
+        ? initialTotalMs-(performance.now()-initialAt) : attemptMs-(performance.now()-record.row.at)));
     }
     function retryable(error) {
-      return !signal.aborted && eligible && attempt === 0 &&
-        (!delivered || validator) &&
+      return !signal.aborted && attempt === 0 && (initialRecovery
+        ? performance.now()-initialAt < initialTotalMs : eligible && (!delivered || validator)) &&
         (error?.retryable || error?.name === "TimeoutError" || error instanceof TypeError);
     }
     async function open() {
@@ -81,7 +87,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000} = {}) {
       const owner = new AbortController();
       record = {owner, active:AbortSignal.any([signal,owner.signal]),
         row:{at:performance.now(),attempt,range:match?[start,end]:null,headersMs:0,bodyMs:0,bytes:0}};
-      if (eligible) arm();
+      if (eligible || initialRecovery) arm();
       response = await abortable(Promise.resolve(nativeFetch.call(globalThis,input,{...init,cache:"no-store",signal:record.active}))
         .then(value => {
           if (owner.signal.aborted || signal.aborted) {value.body?.cancel().catch(() => {});throw record.active.reason;}
@@ -90,8 +96,10 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000} = {}) {
       record.row.headersMs = performance.now()-record.row.at;
       record.row.status = response.status;
       record.row.serverTiming = (response.headers.get("Server-Timing") || "").slice(0,512);
-      if (eligible && [408,429,500,502,503,504].includes(response.status))
+      if ((eligible || initialRecovery) && [408,429,500,502,503,504].includes(response.status))
         throw Object.assign(new Error("PDF temporary upstream failure"),{retryable:true});
+      // PDF.js needs headers immediately to cancel the full GET and demand ranges.
+      // Initial recovery must not read or wait for this potentially large body.
       if (response.ok) remember(response,url);
       if (!eligible || response.status !== 206) {
         if (delivered) throw new Error("PDF_RANGE_INVALID");
