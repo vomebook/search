@@ -17,7 +17,9 @@
           if (JSON.parse(sessionStorage.getItem(`reader-resolve:${id}`) || "null")?.url) return;
         } catch (_) {}
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 120000);
+        const timer = setTimeout(() => controller.abort(
+          new DOMException("Reader ID lookup stalled", "TimeoutError")
+        ), 10000);
         const dispose = () => {
           clearTimeout(timer);
           controller.abort();

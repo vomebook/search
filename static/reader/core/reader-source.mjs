@@ -74,6 +74,11 @@ export function createReaderSource(readerContext) {
         const untrack = readerContext.trackReaderResource(early.dispose);
         let result;
         try { result = await readerContext.awaitReader(early.promise); }
+        catch (error) {
+          readerContext.assertReaderActive();
+          if (!["TimeoutError", "TypeError"].includes(error?.name)) throw error;
+          continue;
+        }
         finally { untrack(); early.dispose(); }
         if (result.ok) return result.data;
         if (![408, 429, 500, 502, 503, 504].includes(result.status))
