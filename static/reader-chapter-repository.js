@@ -136,8 +136,11 @@
       scheduled = true;
       Promise.resolve().then(pump);
     }
-    function load(index, demand = true) {
+    function load(index, demand = true, exclusive = false) {
       if (disposed) return Promise.reject(abortError());
+      if (demand && exclusive)
+        for (const record of records.values())
+          if (record.demand && record.index !== index) cancel(record);
       let record = records.get(index);
       if (demand && !record) {
         for (const record of records.values())

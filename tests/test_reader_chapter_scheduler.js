@@ -41,6 +41,17 @@ async function main() {
   assert.strictEqual(await promoted, "promoted");
   held.get(30)("neighbor"); held.get(31)("neighbor");
   await tick();
+  const obsolete=scheduler.load(60);
+  const obsoleteRejected=assert.rejects(obsolete,error=>error.name==='AbortError');
+  await tick();
+  const latest=scheduler.load(61,true,true);
+  await obsoleteRejected;
+  await tick();
+  assert.ok(starts.find(item=>item.index===60).signal.aborted);
+  held.get(61)('latest');
+  assert.strictEqual(await latest,'latest');
+  held.get(60)('obsolete');
+  await tick();
   scheduler.prefetch([40, 41, 42]);
   await tick();
   scheduler.prefetch([41, 43]);

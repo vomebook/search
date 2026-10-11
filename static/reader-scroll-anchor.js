@@ -68,7 +68,7 @@
       if (disposed || !snapshot || restoreFrame) return;
       restoreFrame = requestFrame(() => {
         restoreFrame = 0;
-        restore(snapshot);
+        restore(anchor);
       });
     }
 
@@ -78,17 +78,19 @@
         cancelFrame(restoreFrame);
         restoreFrame = 0;
       }
-      if (captureFrame) return;
-      captureFrame = requestFrame(() => {
-        captureFrame = 0;
-        capture();
-      });
+      if (captureFrame) cancelFrame(captureFrame);
+      captureFrame = 0;
+      capture();
     }
 
     function preserve(change) {
       const snapshot = capture();
       const result = change();
-      if (scrolling) {
+      if (scrolling && snapshot?.node?.isConnected) {
+        // This synchronous layout change must not move the line under a moving finger.
+        const current = measure(snapshot.node);
+        if (current && snapshot.generation === generation)
+          viewport.scrollTop += current.offset - snapshot.offset;
         capture();
         return result;
       }

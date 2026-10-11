@@ -43,9 +43,12 @@ function main() {
   listeners.get("wheel")();
   listeners.get("scroll")();
   assert.strictEqual(manager.scrolling, true);
+  manager.capture();
+  manager.preserve(() => { paragraph.top += 25; });
+  assert.strictEqual(viewport.scrollTop, 315, "synchronous insertion preserves a line during scrolling");
   paragraph.top += 60;
   resizeCallback();
-  assert.strictEqual(viewport.scrollTop, 290);
+  assert.strictEqual(viewport.scrollTop, 315);
   let idleRuns = 0;
   manager.whenIdle(() => { idleRuns += 1; });
   assert.strictEqual(idleRuns, 0);
@@ -54,9 +57,9 @@ function main() {
   assert.strictEqual(idleRuns, 1);
 
   manager.preserve(() => { paragraph.top += 25; });
-  assert.strictEqual(viewport.scrollTop, 315);
+  assert.strictEqual(viewport.scrollTop, 340);
   manager.remember();
-  assert.strictEqual(frames.size, 1);
+  assert.strictEqual(frames.size, 0);
   manager.invalidate();
   assert.strictEqual(frames.size, 0);
   assert.strictEqual(manager.restore(anchor), false);
