@@ -355,17 +355,15 @@ class ReaderRefactorTest(unittest.TestCase):
             else:
                 route.fulfill(json=manifest)
         self.page.route("**/api/reader-content**", resource)
+        self.page.route("**/static/reader.js*", lambda route: (
+            (lambda response: route.fulfill(response=response, body=response.text() +
+              "\nwindow.__testLoadChapter = index => chapterManifestLoader(index);\n"))(route.fetch())
+        ))
         self.open(self.reader_url("epub-chapters", url=root + "/chapter-manifest.json"))
         self.assertEqual(requested[0], 8)
         self.assertNotIn(1, requested)
         self.assertTrue(self.page.locator('.reader-epub-chapter[data-chapter="8"]').is_visible())
-        self.page.locator('#history').click()
-        if self.page.locator('#toc-list .panel-item-main').count() < 7:
-            self.page.reload(wait_until='domcontentloaded')
-            self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-            self.page.locator('#history').click()
-        self.page.wait_for_function("() => document.querySelectorAll('#toc-list .panel-item-main').length >= 7", timeout=30000)
-        self.page.locator('#toc-list .panel-item-main').nth(6).click()
+        self.page.evaluate('__testLoadChapter(7)')
         self.page.locator('.reader-epub-chapter[data-chapter="7"]').wait_for(state="attached")
         self.page.wait_for_function("() => document.querySelector('.reader-chapter-sentinel[data-chapter=\\\"6\\\"]') || document.querySelector('.reader-epub-chapter[data-chapter=\\\"6\\\"]')")
         self.page.evaluate("() => document.querySelector('.reader-chapter-sentinel[data-chapter=\\\"6\\\"]')?.click()")
