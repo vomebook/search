@@ -6,6 +6,7 @@
     const AbortControllerImpl = options.AbortControllerImpl || root.AbortController;
     const setTimer = options.setTimer || root.setTimeout.bind(root);
     const clearTimer = options.clearTimer || root.clearTimeout.bind(root);
+    const initialIdleMs = options.initialIdleMs || 10000;
     const pending = new Map();
     const active = new Set();
     let disposed = false;
@@ -14,6 +15,7 @@
       if (record.settled) return;
       record.settled = true;
       clearTimer(record.timeout);
+      record.clearAttempt?.();
       record.removeCallerAbort?.();
       active.delete(record);
     }
@@ -35,7 +37,7 @@
       });
     }
 
-    function wrapResponse(record, response) {
+    function wrapResponse(record, response, sourceReader = null, firstChunk = null) {
       const ResponseImpl = root.Response || (typeof Response === "function" ? Response : null);
       const ReadableStreamImpl =
         root.ReadableStream || (typeof ReadableStream === "function" ? ReadableStream : null);
@@ -43,7 +45,7 @@
         settle(record);
         return response;
       }
-      const sourceReader = response.body.getReader();
+      sourceReader ||= response.body.getReader();
       const stream = new ReadableStreamImpl({
         start(controller) {
           record.abortBody = (reason) => {
@@ -53,7 +55,8 @@
         },
         async pull(controller) {
           try {
-            const result = await sourceReader.read();
+            const result = firstChunk || await sourceReader.read();
+            firstChunk = null;
             if (record.settled) return;
             if (result.done) {
               settle(record);
@@ -89,6 +92,8 @@
       const key = shareable ? JSON.stringify([String(url), timeoutMs]) : {};
       if (pending.has(key)) return responseForCaller(pending.get(key));
       const controller = new AbortControllerImpl();
+      const recoverInitial = typeof url === "string" && timeoutMs > initialIdleMs * 2 &&
+        Object.keys(requestInit).every(key => key === "priority" || key === "signal");
       const record = {
         controller,
         timeout: null,
@@ -97,6 +102,58 @@
         settled: false,
         abortBody: null
       };
+      async function open() {
+        for (let attempt = 0; ; attempt++) {
+          controller.signal.throwIfAborted();
+          const transport = new AbortControllerImpl();
+          let idle, sourceReader = null;
+          const cancel = () => transport.abort(controller.signal.reason);
+          controller.signal.addEventListener("abort", cancel, { once: true });
+          record.clearAttempt = () => {
+            clearTimer(idle);
+            controller.signal.removeEventListener("abort", cancel);
+          };
+          const arm = () => {
+            clearTimer(idle);
+            if (recoverInitial) idle = setTimer(() => transport.abort(
+              new DOMException("Reader initial response stalled", "TimeoutError")
+            ), initialIdleMs);
+          };
+          const owned = (promise, onLate) => new Promise((resolve, reject) => {
+            const signal = transport.signal;
+            const aborted = () => reject(signal.reason);
+            signal.addEventListener("abort", aborted, { once: true });
+            if (signal.aborted) aborted();
+            Promise.resolve(promise).then(value => {
+              if (signal.aborted) onLate?.(value);
+              else resolve(value);
+            }, reject).finally(() => signal.removeEventListener("abort", aborted));
+          });
+          try {
+            arm();
+            const response = await owned(fetchImpl(url, { ...requestInit,
+              ...(attempt ? { cache: "reload" } : {}), signal: transport.signal }),
+              response => response.body?.cancel(transport.signal.reason).catch(() => {}));
+            let firstChunk = null;
+            // Do not publish headers from a stalled attempt: a restart can then
+            // replace the entire response without mixing versions or body bytes.
+            if (recoverInitial && response.ok && response.body?.getReader) {
+              sourceReader = response.body.getReader();
+              arm();
+              firstChunk = await owned(sourceReader.read());
+            }
+            clearTimer(idle);
+            controller.signal.throwIfAborted();
+            return wrapResponse(record, response, sourceReader, firstChunk);
+          } catch (error) {
+            record.clearAttempt();
+            transport.abort(error);
+            sourceReader?.cancel(error).catch(() => {});
+            controller.signal.throwIfAborted();
+            if (!recoverInitial || attempt || !["TimeoutError", "TypeError"].includes(error?.name)) throw error;
+          }
+        }
+      }
       if (callerSignal) {
         const onAbort = () => abort(record, callerSignal.reason);
         callerSignal.addEventListener("abort", onAbort, { once: true });
@@ -108,20 +165,7 @@
       );
       active.add(record);
       record.promise = Promise.resolve()
-        .then(() => {
-          controller.signal.throwIfAborted();
-            return fetchImpl(url, { ...requestInit, signal: controller.signal });
-        })
-        .then(async (response) => {
-          if (controller.signal.aborted) {
-            const reason = controller.signal.reason;
-            try {
-              await response.body?.cancel?.(reason);
-            } catch (_) {}
-            throw reason;
-          }
-          return wrapResponse(record, response);
-        })
+        .then(open)
         .catch((error) => {
           settle(record);
           controller.signal.throwIfAborted();
