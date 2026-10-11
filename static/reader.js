@@ -349,7 +349,9 @@ content.dataset.mode = capability.mode || "unsupported";
 const status = document.querySelector("#status");
 const loadingStatus = document.querySelector("#loading-status");
 function markReaderContentReady() {
-  loadingIndicator.remove();
+  if (["foliate", "epub-chapters"].includes(capability?.mode) && loadingIndicator.isConnected)
+    foliateScrollAnchors.preserve(() => loadingIndicator.remove());
+  else loadingIndicator.remove();
   loadingStatus.hidden = true;
 }
 const downloadButton = document.querySelector("#download");
@@ -1593,18 +1595,7 @@ function syncFoliateScrollLocation() {
 }
 function refreshFoliateWindow() {
   foliateWindowFrame = 0;
-  if (!foliateChapterRepository) return;
-  const viewportRect = viewport.getBoundingClientRect();
-  for (const placeholder of document.querySelectorAll(
-    ".foliate-continuous article.foliate-section-placeholder[data-section]"
-  )) {
-    const rect = placeholder.getBoundingClientRect();
-    if (
-      rect.bottom > viewportRect.top - FOLIATE_PREFETCH_MARGIN &&
-      rect.top < viewportRect.bottom + FOLIATE_PREFETCH_MARGIN
-    )
-      foliateChapterRepository.load(Number(placeholder.dataset.section)).catch(() => {});
-  }
+  foliateSectionLoader?.refresh?.();
 }
 function scheduleFoliateWindowRefresh() {
   if (!foliateWindowFrame) foliateWindowFrame = requestAnimationFrame(refreshFoliateWindow);
@@ -2056,8 +2047,7 @@ async function restoreFoliateBookmarkPosition(entry, generation = beginReaderNav
       return false;
     let article = await foliateSectionLoader(entry.foliateSection);
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    if (foliateSectionSettler && initialReaderTargetSection !== entry.foliateSection)
-      await foliateSectionSettler();
+    await waitForReader(0, true);
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     if (!article?.isConnected) article = await foliateSectionLoader(entry.foliateSection);
     if (!article?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
@@ -2074,16 +2064,12 @@ async function restoreFoliateBookmarkPosition(entry, generation = beginReaderNav
         marker +
         offset
     );
-    if (
-      Number.isInteger(entry.foliateTocIndex) &&
-      entry.foliateTocIndex >= 0 &&
-      entry.foliateTocIndex < navigationState.tocEntries.length
-    )
-      updateNavigationState({ currentChapterIndex: entry.foliateTocIndex });
+    syncFoliateScrollLocation();
     updateTocCurrentMark();
     updateProgressTools();
     scheduleSave();
     setReaderPanelOpen(false, true);
+    foliateScrollAnchors.remember();
     return true;
   } catch (error) {
     reportNavigationError(error, generation);
@@ -2103,7 +2089,7 @@ async function seekFoliateProgress(percent, generation) {
       index = Math.min(sections.length - 1, Math.floor(position));
     let article = await foliateSectionLoader(index);
     if (!isReaderGenerationCurrent("navigation", generation)) return;
-    if (foliateSectionSettler) await foliateSectionSettler();
+    await waitForReader(0, true);
     if (!isReaderGenerationCurrent("navigation", generation)) return;
     if (!article?.isConnected) article = await foliateSectionLoader(index);
     if (!article?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return;
@@ -2118,6 +2104,7 @@ async function seekFoliateProgress(percent, generation) {
     updateTocCurrentMark();
     updateProgressTools();
     scheduleSave();
+    foliateScrollAnchors.remember();
   } catch (error) {
     reportNavigationError(error, generation);
   }
@@ -4585,9 +4572,17 @@ async function renderHtml(prepared) {
   frame.setAttribute("referrerpolicy", "no-referrer");
   frame.style.colorScheme = "only light";
   const frameLoaded = new Promise((resolve, reject) => {
-    let untrack = () => {};
-    const loaded = async () => {
+    let untrack = () => {}, frameTimer = 0, deadline = 0, started = false;
+    const cleanup = () => {
+      clearTimeout(frameTimer);
+      clearTimeout(deadline);
+      frame.removeEventListener("load", loaded);
       untrack();
+    };
+    const loaded = async () => {
+      if (started || frame.contentDocument?.URL !== "about:srcdoc" || frame.contentDocument.readyState === "loading") return;
+      started = true;
+      cleanup();
       try {
         assertReaderActive();
         repairHtmlContrast(frame);
@@ -4608,16 +4603,23 @@ async function renderHtml(prepared) {
       }
     };
     untrack = trackReaderResource(() => {
-      frame.removeEventListener("load", loaded);
+      cleanup();
       reject(readerAbortError());
     });
-    frame.addEventListener("load", loaded, { once: true });
+    const poll = () => {
+      if (started) return;
+      loaded();
+      if (!started) frameTimer = setTimeout(poll, 16);
+    };
+    frameTimer = setTimeout(poll, 0);
+    deadline = setTimeout(() => { cleanup(); reject(new Error("HTML document initialization timeout")); }, 20000);
+    frame.addEventListener("load", loaded);
   });
   frame.srcdoc = buildHtmlFrameSource(documentData);
   content.appendChild(frame);
   await frameLoaded;
   markReaderContentReady();
-  status.textContent = documentData.spreadsheet ? "表格" : "HTML";
+   status.textContent = documentData.spreadsheet ? "表格" : "HTML";
 }
 
 function detectHtmlEncoding(bytes, hint = "") {
@@ -4972,7 +4974,10 @@ async function renderChapterManifest(prepared) {
     });
     const next = nextChapterNode(chapter.index,
       ".reader-epub-chapter[data-chapter], .reader-chapter-sentinel[data-chapter]");
-    frame.insertBefore(marker, next || null);
+    const insert = () => frame.insertBefore(marker, next || null);
+    if (chapterWindowReady || !isReaderGenerationCurrent("navigation", openingGeneration))
+      foliateScrollAnchors.preserve(insert);
+    else insert();
     (previous ? chapterPreviousObserver : chapterManifestObserver).observe(marker);
     return marker;
   };
@@ -4981,7 +4986,7 @@ async function renderChapterManifest(prepared) {
       article.querySelector(`[id="${CSS.escape(fragment)}"], [name="${CSS.escape(fragment)}"]`);
   const setChapterToc = () =>
     setToc(
-      (manifest.toc?.length ? manifest.toc : manifest.chapters.map((item) => ({
+      (manifest.toc ?? manifest.chapters.map((item) => ({
         title: item.title || `章节 ${item.index}`, chapter: item.index, depth: 0, fragment: ""
       }))).map((item) => ({
         label: item.title,
@@ -5051,10 +5056,10 @@ async function renderChapterManifest(prepared) {
       }
     }
   });
-  const fetchChapter = (chapter, demand = true) => {
+  const fetchChapter = (chapter, demand = true, exclusive = false) => {
     assertReaderActive();
     if (loaded.has(chapter.index)) return Promise.resolve();
-    return chapterScheduler.load(chapter.index, demand).then(() => {
+    return chapterScheduler.load(chapter.index, demand, exclusive).then(() => {
       foliateScrollAnchors.whenIdle(trimChapterWindow);
     }).catch(error => {
       if (error.name !== "AbortError" && !readerAbortController.signal.aborted) {
@@ -5068,7 +5073,7 @@ async function renderChapterManifest(prepared) {
   const activateChapter = async (chapter, generation, fragment = "") => {
     chapterFocusIndex = chapter.index;
     chapterNavigating++;
-    try { await fetchChapter(chapter); }
+    try { await fetchChapter(chapter, true, chapterWindowReady); }
     finally { chapterNavigating--; }
     if (!isReaderGenerationCurrent("navigation", generation)) return false;
     const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
@@ -5194,7 +5199,7 @@ async function renderChapterManifest(prepared) {
     if (!chapterNavigating && current?.classList.contains("reader-chapter-sentinel") &&
         current.getBoundingClientRect().top < view.bottom)
       fetchChapter(chapterAt(chapterFocusIndex)).catch(() => {});
-    chapterScheduler.prefetch(chapterPrefetchIndices());
+    if (!chapterNavigating) chapterScheduler.prefetch(chapterPrefetchIndices());
     foliateScrollAnchors.whenIdle(trimChapterWindow);
   }
   function scheduleChapterWindow() {
@@ -5209,7 +5214,7 @@ async function renderChapterManifest(prepared) {
     { root: viewport, rootMargin: "800px 0px" }
   );
   chapterPreviousObserver = new IntersectionObserver((entries) => {
-    if (!chapterWindowReady || readerAbortController.signal.aborted) return;
+    if (!chapterWindowReady || chapterNavigating || readerAbortController.signal.aborted) return;
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
       const chapter = chapterAt(Number(entry.target.dataset.chapter));
@@ -5244,10 +5249,11 @@ async function renderChapterManifest(prepared) {
     if (!chapter) return null;
     chapterFocusIndex = index;
     chapterNavigating++;
-    try { await fetchChapter(chapter); }
+    try { await fetchChapter(chapter, true, chapterWindowReady); }
     finally { chapterNavigating--; }
     return frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`);
   };
+  chapterManifestLoader.count = manifest.chapters.length;
   setChapterToc();
   await getInitialReaderRestoration();
   const savedChapter = Number(readerRestorationEntry?.chapterIndex) - 1;
@@ -5269,7 +5275,7 @@ async function renderChapterManifest(prepared) {
   chapterWindowReady = true;
   if (isReaderGenerationCurrent("navigation", openingGeneration)) foliateScrollAnchors.invalidate();
   for (const article of frame.querySelectorAll(".reader-epub-chapter")) foliateScrollAnchors.observe(article);
-  frame.style.removeProperty("overflow-anchor");
+    frame.style.overflowAnchor = "none";
   scheduleChapterWindow();
   assertReaderActive();
   markReaderContentReady();
@@ -5472,6 +5478,7 @@ async function restoreChapterPosition(entry, generation) {
     viewport.getBoundingClientRect().top -
     8 +
     (Number(entry.chapterOffset) || 0);
+  foliateScrollAnchors.remember();
   syncHeadingLocation();
   updateProgressTools();
   scheduleSave();
@@ -6162,7 +6169,9 @@ function rewriteFoliateResources(doc, section) {
   }
 }
 async function createFoliateSection(section, index) {
-  const source = await section.createDocument();
+  const signal = arguments[2] || readerAbortController.signal;
+  const priority = arguments[3] || "high";
+  const source = await awaitReader(section.createDocument(), signal);
   const { doc, sourceNodes } = cloneFoliateDocument(source);
   assertReaderActive();
   rewriteFoliateResources(doc, section);
@@ -6198,52 +6207,65 @@ async function createFoliateSection(section, index) {
   `;
   sectionBody.className = "reader-section-body";
   const body = epubContentBody(doc);
-  // Import sanitized nodes directly. Serializing and reparsing legacy nested
-  // anchors can drop stylesheet behavior and reorder footnotes/citations.
+  // Import the sanitized nodes directly. Serializing and reparsing legacy
+  // nested anchors lets HTML's adoption rules reorder footnotes and citations.
   if (body)
     sectionBody.append(...[...body.childNodes].map((node) => document.importNode(node, true)));
   article._resolveSearchAnchor = foliateSearchAnchor(source, sourceNodes, body, sectionBody);
   shadow.append(baseStyle, ...styles, sectionBody);
-  await settleReaderImages(sectionBody);
+  for (const image of sectionBody.querySelectorAll("img")) {
+    image.loading = priority === "high" ? "eager" : "lazy";
+    image.fetchPriority = priority;
+    image.decoding = "async";
+  }
+  signal.throwIfAborted();
   assertReaderActive();
   article.classList.toggle("reader-document-dark", readerTheme === "dark");
   return article;
 }
 function setupFoliateWindow(stream, sections) {
-  const observer = new IntersectionObserver(
-    (entries) =>
-      entries
-        .filter((entry) => entry.isIntersecting)
-        .forEach((entry) => {
-          if (readerAbortController.signal.aborted || !foliateChapterRepository) return;
-          const index = Number(entry.target.dataset.section);
-          if (entry.target.classList.contains("foliate-section-placeholder")) {
-            foliateChapterRepository
-              .load(index)
-              .then(() => foliateScrollAnchors.whenIdle(trimFoliateSections))
-              .catch(() => {});
-            return;
-          }
-          const prefetchLoads = Array.from(
-            { length: FOLIATE_PREFETCH_SECTIONS + 1 },
-            (_, offset) => index + offset
-          )
-            .filter((prefetch) => sections[prefetch])
-            .map((prefetch) => foliateChapterRepository.load(prefetch));
-          if (prefetchLoads.length)
-            Promise.allSettled(prefetchLoads).then(() =>
-              foliateScrollAnchors.whenIdle(trimFoliateSections)
-            );
-        }),
-    { root: viewport, rootMargin: `${FOLIATE_PREFETCH_MARGIN}px` }
-  );
+  let focus = initialReaderTargetSection ?? 0, targetPending = false;
+  stream.style.overflowAnchor = "none";
+  const existing = index => stream.querySelector(`article[data-section="${index}"]:not(.foliate-section-placeholder)`);
+  const ensurePlaceholder = index => {
+    if (!sections[index] || stream.querySelector(`article[data-section="${index}"]`)) return;
+    const placeholder = document.createElement("article");
+    placeholder.className = "foliate-section-placeholder";
+    placeholder.dataset.section = String(index);
+    placeholder.style.setProperty("--foliate-placeholder-height", `${Math.max(400, viewport.clientHeight)}px`);
+    placeholder.setAttribute("aria-label", `加载第 ${index + 1} 节`);
+    const next = [...stream.children].find(node => Number(node.dataset.section) > index);
+    foliateScrollAnchors.preserve(() => stream.insertBefore(placeholder, next || null));
+    observer.observe(placeholder);
+  };
+  const warm = () => {
+    const indices = [];
+    for (const offset of [-1, 1, -2, 2, 3, 4, 5, 6]) {
+      const index = focus + offset;
+      if (sections[index] && !existing(index)) indices.push(index);
+    }
+    scheduler.prefetch(document.hidden ? [] : indices);
+  };
+  const refresh = () => {
+    if (readerAbortController.signal.aborted) return;
+    const marker = viewport.getBoundingClientRect().top + 80;
+    const rows = [...stream.children];
+    const current = rows.find(node => {
+      const rect = node.getBoundingClientRect();
+      return rect.top <= marker && rect.bottom > marker;
+    }) || rows.find(node => node.getBoundingClientRect().top > marker);
+    const index = current ? Number(current.dataset.section) : focus;
+    if (targetPending && index !== focus && !foliateScrollAnchors.scrolling) return;
+    targetPending = false;
+    focus = index;
+    if (current?.classList.contains("foliate-section-placeholder")) scheduler.load(index).catch(() => {});
+    warm();
+    foliateScrollAnchors.whenIdle(trimFoliateSections);
+  };
+  const observer = new IntersectionObserver(scheduleFoliateWindowRefresh,
+    { root: viewport, rootMargin: `${FOLIATE_PREFETCH_MARGIN}px` });
   foliateSectionObserver = observer;
-  foliateChapterRepository = VoiceOfMLReaderChapters.createChapterRepository({
-    count: sections.length,
-    find: (index) =>
-      stream.querySelector(`article[data-section="${index}"]:not(.foliate-section-placeholder)`),
-    create: (index) => createFoliateSection(sections[index], index),
-    commit: (index, article) =>
+  const commitSection = (index, article) =>
       foliateScrollAnchors.preserve(() => {
         const placeholder = stream.querySelector(
             `article.foliate-section-placeholder[data-section="${index}"]`
@@ -6257,9 +6279,20 @@ function setupFoliateWindow(stream, sections) {
         } else stream.insertBefore(article, next || null);
         observer.observe(article);
         foliateScrollAnchors.observe(article);
-        scheduleFoliateWindowRefresh();
+        ensurePlaceholder(index - 1);
+        ensurePlaceholder(index + 1);
         return article;
-      })
+      });
+  const scheduler = readerRuntime.track(VoiceOfMLReaderChapters.createChapterScheduler({
+    create: async (index, signal, priority) => {
+      const article = await createFoliateSection(sections[index], index, signal, priority);
+      signal.throwIfAborted();
+        if (existing(index)) return existing(index);
+        return commitSection(index, article);
+    }
+  }));
+  foliateChapterRepository = VoiceOfMLReaderChapters.createChapterRepository({
+    count: sections.length, find: existing, create: index => scheduler.load(index)
   });
   foliateSectionVirtualizer = VoiceOfMLReaderVirtual.createSectionVirtualizer({
     limit: FOLIATE_LOADED_SECTION_LIMIT,
@@ -6274,7 +6307,11 @@ function setupFoliateWindow(stream, sections) {
       return (
         rect.bottom < viewportRect.top - FOLIATE_PREFETCH_MARGIN ||
         rect.top > viewportRect.bottom + FOLIATE_PREFETCH_MARGIN
-      );
+      ) && !article.contains(document.activeElement) && !article.shadowRoot?.activeElement &&
+        !foliateSectionRoot(article).querySelector("mark.full-search-highlight") &&
+        ![window.getSelection(), article.shadowRoot?.getSelection?.()].some(selection =>
+          selection && !selection.isCollapsed && (selection.containsNode(article, true) ||
+            selection.anchorNode?.getRootNode() === article.shadowRoot));
     },
     virtualize: (article, index, height) => {
       const placeholder = document.createElement("article");
@@ -6284,6 +6321,11 @@ function setupFoliateWindow(stream, sections) {
       placeholder.setAttribute("aria-hidden", "true");
       observer.unobserve(article);
       foliateScrollAnchors.unobserve(article);
+      for (const image of foliateSectionRoot(article).querySelectorAll("img")) {
+        image.removeAttribute("src");
+        image.removeAttribute("srcset");
+      }
+      article._resolveSearchAnchor = null;
       article.replaceWith(placeholder);
       observer.observe(placeholder);
       return placeholder;
@@ -6291,27 +6333,22 @@ function setupFoliateWindow(stream, sections) {
     release: (index) => foliateChapterRepository.release(index),
     preserve: (change) => foliateScrollAnchors.preserve(change)
   });
-  foliateSectionLoader = (index) => foliateChapterRepository.load(index);
-  foliateSectionSettler = async () => {
-    assertReaderActive();
-    const repository = foliateChapterRepository,
-      indices = [
-        ...stream.querySelectorAll("article[data-section]:not(.foliate-section-placeholder)")
-      ].map((article) => Number(article.dataset.section));
-    await awaitReader(
-      Promise.allSettled(
-        indices
-          .flatMap((index) => [index - 1, index + 1])
-          .filter((index) => sections[index])
-          .map((index) => repository.load(index))
-      )
-    );
-    for (let attempt = 0; attempt < 4; attempt++) {
-      await waitForReader(0, true);
-      const tasks = repository.pending;
-      if (tasks.length) await awaitReader(Promise.allSettled(tasks));
-    }
+  foliateSectionLoader = index => {
+    focus = index;
+    targetPending = true;
+    const task = existing(index) ? Promise.resolve(existing(index)) : scheduler.load(index, true, true);
+    warm();
+    return task;
   };
+  foliateSectionLoader.refresh = refresh;
+  foliateSectionSettler = () => waitForReader(0, true);
+  const scroll = scheduleFoliateWindowRefresh;
+  viewport.addEventListener("scroll", scroll, { passive: true });
+  document.addEventListener("visibilitychange", scroll);
+  trackReaderResource(() => {
+    viewport.removeEventListener("scroll", scroll);
+    document.removeEventListener("visibilitychange", scroll);
+  });
 }
 async function foliateTocEntries(view, sections) {
   assertReaderActive();
@@ -6559,6 +6596,15 @@ function seekProgress(value, preserve = false) {
       epubSeekFrame = 0;
       epubSeekPromise = seekFoliateProgress(percent, generation);
     });
+  } else if (capability.mode === "epub-chapters" && chapterManifestLoader?.count) {
+    const position = Math.min(0.999999, percent / 100) * chapterManifestLoader.count;
+    epubSeekPromise = (async () => {
+      const index = Math.floor(position) + 1;
+      const article = await chapterManifestLoader(index);
+      if (!article?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
+      return restoreChapterPosition({chapterIndex:index,chapterManifest:chapterManifestUrl || sourceUrl,
+        chapterOffset:article.getBoundingClientRect().height * (position - Math.floor(position))}, generation);
+    })().catch(error => { reportNavigationError(error, generation); return false; });
   } else if (htmlFrame && htmlFrame.contentWindow)
     htmlFrame.contentWindow.scrollTo(
       0,
@@ -6771,6 +6817,8 @@ async function navigateChapterSearchResult(result, generation) {
   );
   let start = result.start;
   if (mapping.text.slice(start, start + result.length) !== match) {
+    // A browser may repair malformed source HTML differently from HTMLParser.
+    // Relocate only by a unique full excerpt; never guess between repeated hits.
     const found = mapping.text.indexOf(result.snippet.text);
     if (found < 0 || mapping.text.indexOf(result.snippet.text, found + 1) >= 0)
       throw new Error("已加载章节，但未能准确定位这处文字");
@@ -6786,7 +6834,9 @@ async function navigateChapterSearchResult(result, generation) {
     parts.unshift({ node: heading.firstChild, start, end: Math.min(start + result.length, headText.length) });
   }
   const [mark] = highlightTextParts(parts);
+  foliateScrollAnchors.invalidate();
   (mark || article).scrollIntoView({ block: "center" });
+  foliateScrollAnchors.remember();
   const tocIndex = navigationState.tocEntries.findIndex(
     (entry) => entry.chapterIndex === result.chapterIndex
   );
@@ -7338,7 +7388,7 @@ async function navigateFoliateSearchResult(result, generation) {
   if (visibleIndex < 0 || !foliateSectionLoader) return false;
   let node = await foliateSectionLoader(visibleIndex);
   if (!isReaderGenerationCurrent("navigation", generation)) return false;
-  if (foliateSectionSettler) await foliateSectionSettler();
+  await waitForReader(0, true);
   if (!isReaderGenerationCurrent("navigation", generation)) return false;
   if (!node?.isConnected) node = await foliateSectionLoader(visibleIndex);
   if (!node?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
@@ -7381,6 +7431,7 @@ async function navigateFoliateSearchResult(result, generation) {
   }
   updateProgressTools();
   scheduleSave();
+  foliateScrollAnchors.remember();
   return true;
 }
 async function ensurePdfBookSearchClient(manifest) {
