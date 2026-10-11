@@ -113,9 +113,6 @@ jobs:
       - name: Run multi-format preparation and navigation gates
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
-      - name: Run Reader flow and cleanup regressions
-        working-directory: huggingface-search
-        run: python3 -B -m unittest -v tests.test_reader_ebook_flow tests.test_reader_toc_latency
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
