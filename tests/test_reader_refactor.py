@@ -1346,6 +1346,32 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
         self.assertGreaterEqual(self.page.locator('audio').evaluate('m => m.readyState'), 1)
 
+    def test_pending_media_loading_feedback_does_not_displace_player(self):
+        for mode, extension in [('audio', 'wav'), ('video', 'mp4')]:
+            for width in (390, 1100):
+                with self.subTest(mode=mode, width=width):
+                    held = []
+                    self.page.set_viewport_size({'width': width, 'height': 844})
+                    self.page.route('**/api/reader-content**', lambda route: held.append(route))
+                    self.page.goto(self.reader_url(extension), wait_until='domcontentloaded')
+                    self.page.locator(mode).wait_for()
+                    self.assertNotEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready')
+                    self.assertTrue(self.page.locator('.reader-loading-indicator').is_hidden())
+                    geometry = self.page.locator(mode).evaluate('''m => {
+                      const a=m.getBoundingClientRect(),v=document.querySelector('#viewport').getBoundingClientRect();
+                      return {top:a.top,bottom:a.bottom,height:a.height,center:a.top+a.height/2,
+                        vtop:v.top,vbottom:v.bottom,vheight:v.height,vcenter:v.top+v.height/2};
+                    }''')
+                    self.assertAlmostEqual(geometry['center'], geometry['vcenter'], delta=1)
+                    if mode == 'video':
+                        self.assertAlmostEqual(geometry['height'], geometry['vheight'], delta=1)
+                    self.assertGreaterEqual(geometry['top'], geometry['vtop'] - 1)
+                    self.assertLessEqual(geometry['bottom'], geometry['vbottom'] + 1)
+                    self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
+                    for route in held:
+                        try: route.abort()
+                        except support.PlaywrightError: pass
+
     def test_media_metadata_stall_recovers_without_reader_reload(self):
         self.assert_media_metadata_stall(True)
 
