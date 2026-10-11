@@ -24,12 +24,19 @@ class ReaderOptimizationTests(unittest.TestCase):
 
     def expose(self):
         fixtures.expose_dom_search_tools(self.page)
-        def instrument(route):
+        def instrument_chapters(route):
             response = route.fetch()
-            script = response.text().replace('chapterManifestCleanup = () => {', '''
+            needle = 'readerContext.chapterManifestCleanup = () => {'
+            script = response.text()
+            self.assertIn(needle, script)
+            route.fulfill(response=response, body=script.replace(needle, '''
               window.__chapterStats = () => ({active: chapterScheduler.activeCount,
                 pending: chapterScheduler.pendingCount, bytes: chapterBudget.used});
-              chapterManifestCleanup = () => {''')
+            ''' + needle))
+        self.page.route('**/static/reader/formats/reader-chapter-format.mjs*', instrument_chapters)
+        def instrument(route):
+            response = route.fetch()
+            script = response.text()
             route.fulfill(response=response, body=script + '''
                window.__chunkWindow = createPdfShellWindow;
                 window.__snapshot = () => window.__domSearchTools.snapshot();
@@ -578,13 +585,13 @@ class ReaderOptimizationTests(unittest.TestCase):
             prefix='''const parse=JSON.parse;JSON.parse=(...args)=>{self.postMessage({parsing:true});
               const until=performance.now()+10000;while(performance.now()<until){}return parse(...args);};'''
             route.fulfill(response=response,body=(prefix if len(scripts)==1 else '')+response.text())
-        self.page.route('**/static/reader-pdf-book-search-worker.mjs',worker)
+        self.page.route('**/static/reader/search/workers/reader-pdf-book-search-worker.mjs',worker)
         self.page.evaluate('''async configuration=>{
           const Native=Worker;window.__workers=[];
           window.Worker=class extends Native{constructor(...args){super(...args);__workers.push(this);
             this.addEventListener('message',event=>{if(event.data.parsing)window.__parsing=true;});}
             terminate(){this.wasTerminated=true;super.terminate();}};
-          const {createPdfBookSearch}=await import('/static/reader-pdf-book-search.mjs');
+          const {createPdfBookSearch}=await import('/static/reader/search/reader-pdf-book-search.mjs');
           window.__ocr=createPdfBookSearch(configuration);
           window.__firstSearch=__ocr.search('needle').catch(error=>error.name);
         }''',configuration)

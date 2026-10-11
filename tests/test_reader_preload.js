@@ -42,13 +42,13 @@ function loadPreload({ chunks = [], header, security = true, blockRead = false, 
   };
   sandbox.self = sandbox;
   if (security) {
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-security.js"), "utf8"), sandbox);
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/core/reader-security.js"), "utf8"), sandbox);
     sandbox.VoiceOfMLReaderSecurity = {
       ...sandbox.VoiceOfMLReaderSecurity,
       LIMITS: { ...sandbox.VoiceOfMLReaderSecurity.LIMITS, manifestBytes: 8 },
     };
   }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-contract.js"), "utf8"), sandbox);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/core/reader-contract.js"), "utf8"), sandbox);
   return { sandbox, preload: sandbox.__VOICE_PDF_PRELOAD__, contract: sandbox.VoiceOfMLReader, timers, listeners, state, reading };
 }
 
@@ -76,7 +76,7 @@ async function main() {
 
   const image = loadPreload({ chunks: [Buffer.from("ok")], saveData: false });
   image.sandbox.VoiceOfMLReader = { pdfPageSource() {}, txtRelativePath() {} };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-contract.js"), "utf8"), image.sandbox);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/core/reader-contract.js"), "utf8"), image.sandbox);
   assert.strictEqual(typeof image.sandbox.VoiceOfMLReader.assetFields, "function");
   assert.strictEqual(image.sandbox.__VOICE_PDF_PRELOAD__, image.preload);
   assert.strictEqual(image.state.fetches, 1);

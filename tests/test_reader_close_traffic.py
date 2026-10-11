@@ -79,7 +79,7 @@ class ReaderCloseTrafficTests(unittest.TestCase):
                 return nativeFetch(url.pathname==='/api/reader-content'?location.origin+url.pathname+url.search:input,init);
               };''')
             page.goto(origin+'/search/manifest.json')
-            page.add_script_tag(url=origin+'/search/static/reader-navigation.js')
+            page.add_script_tag(url=origin+'/search/static/search/reader-navigation.js')
             page.evaluate('''url => {
               window.__navigation = VoiceOfMLReaderNavigation.createNavigation('/search/static/reader.html');
               window.__reader = __navigation.mount(new URL(url));

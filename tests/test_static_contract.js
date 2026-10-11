@@ -1,14 +1,14 @@
 const fs = require("fs");
 const assert = require("assert");
 const vm = require("vm");
-const { assertCode } = require("./reader_source_contract");
+const { assertCode, readReaderSource } = require("./reader_source_contract");
 const { test, run } = require("./test_harness");
 
 const app = fs.readFileSync("static/app.js", "utf8");
-const reader = fs.readFileSync("static/reader.js", "utf8");
-const worker = fs.readFileSync("static/index-worker.js", "utf8");
-const sw = fs.readFileSync("sw.js", "utf8");
-const html = fs.readFileSync("index.html", "utf8");
+const reader = readReaderSource(require("path").resolve("."));
+const worker = fs.readFileSync("static/search/index-worker.js", "utf8");
+const sw = fs.readFileSync("static/sw.js", "utf8");
+const html = fs.readFileSync("static/index.html", "utf8");
 const css = fs.readFileSync("static/style.css", "utf8");
 const readerCss = fs.readFileSync("static/reader.css", "utf8");
 const readerHtml = fs.readFileSync("static/reader.html", "utf8");
@@ -26,7 +26,7 @@ test("main thread retains stale-search and cancellation controls", () => {
   assert.match(app, /AbortController/);
 });
 test("Worker URL is static-root relative so the Pages build can hash it", () => {
-  assert.match(app, /new Worker\("static\/index-worker\.js"\)/);
+  assert.match(app, /new Worker\("static\/search\/index-worker\.js"\)/);
 });
 test("section filter cancel buttons clear only their selected state", () => {
   for (const id of ["repo-filter-cancel", "folder-filter-cancel", "ext-filter-cancel"]) {
@@ -96,8 +96,9 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(app, /var warmedReaderSources = new Set\(\)/);
   assert.match(app, /warmedReaderSources\.size >= 8/);
   assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
-  assertCode(reader, 'if (!fallback) { fallback = true; image.src = target; } else finish(new Error("image load failed"))');
-  assert.match(reader, /image\.src = readerContentUrl\(target\)/);
+  assertCode(reader, 'return await imageLoader.load(image, readerContentUrl(target), readerAbortController.signal, deadline)');
+  assertCode(reader, 'if (error?.code === "READER_RESOURCE_LIMIT") throw error');
+  assertCode(reader, 'return imageLoader.load(image, target, readerAbortController.signal, deadline)');
   assert.match(reader, /disableStream: true/);
   assert.match(reader, /capability = readerRuntime\.negotiate\(VoiceOfMLReader\.capability\(extension\)\)/);
   assert.match(reader, /resolved\.extension[\s\S]*content\.dataset\.mode = capability\.mode/);
@@ -107,12 +108,12 @@ test("reader intent prefetches the shell and format engines", () => {
     assert.match(imageRule[1], new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*${value}\\s*(?:;|$)`));
   }
   assert.match(readerCss, /prefers-contrast\s*:\s*more/);
-  assertCode(fs.readFileSync("static/reader-store.js", "utf8"), 'Number(existing.result.lastReadAt) > Number(entry.lastReadAt)');
-  assert.match(fs.readFileSync("static/reader-store.js", "utf8"), /BroadcastChannel/);
+  assertCode(fs.readFileSync("static/reader/core/reader-store.js", "utf8"), 'Number(existing.result.lastReadAt) > Number(entry.lastReadAt)');
+  assert.match(fs.readFileSync("static/reader/core/reader-store.js", "utf8"), /BroadcastChannel/);
   assert.match(reader, /VoiceOfMLReaderStore\.subscribe/);
   assert.match(reader, /VoiceOfMLReaderStore\.dispose/);
   assert.match(reader, /VoiceOfMLReaderSecurity\.readBytes/);
-  const pdfText = fs.readFileSync("static/reader-pdf-text.js", "utf8");
+  const pdfText = fs.readFileSync("static/reader/pdf/reader-pdf-text.js", "utf8");
   assert.match(pdfText, /reader-pdf-text-block/);
   assert.match(pdfText, /reader-pdf-text-run/);
   assert.match(pdfText, /reader-pdf-text-fallback/);
@@ -129,8 +130,8 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(readerCss, /\.reader-pdf-text-run::selection/);
   assert.match(readerCss, /\.reader-pdf-text-fallback/);
   assert.match(readerCss, /\.reader-pdf-text-run\.full-search-highlight/);
-  assert.ok(require('../static/reader-resources.js').runtimePaths('/search/static/').includes('/search/static/reader-security.js'));
-  assert.match(fs.readFileSync("static/reader-store.js", "utf8"), /function dispose\(\)/);
+  assert.ok(require('../static/reader-resources.js').runtimePaths('/search/static/').includes('/search/static/reader/core/reader-security.js'));
+  assert.match(fs.readFileSync("static/reader/core/reader-store.js", "utf8"), /function dispose\(\)/);
 });
 test("desktop random actions match their labels and empty-state behavior", () => {
   assert.match(html, /id="random-book-btn" class="random-txt-btn" title="随机下本书"/);
@@ -282,13 +283,13 @@ test("random and folder corpus fallbacks use Worker requests", () => {
   assert.strictEqual(/RECORDS\.filter|buildFilterFolderTree|getRandomTxtLocal/.test(app), false);
 });
 test("reader uses original files and lazy PDF canvas rendering", () => {
-  const contract = fs.readFileSync("static/reader-contract.js", "utf8");
-  const reader = fs.readFileSync("static/reader.js", "utf8");
+  const contract = fs.readFileSync("static/reader/core/reader-contract.js", "utf8");
+  const reader = readReaderSource(require("path").resolve("."));
   const readerCss = fs.readFileSync("static/reader.css", "utf8");
   const readerHtml = fs.readFileSync("static/reader.html", "utf8");
-  const readerStore = fs.readFileSync("static/reader-store.js", "utf8");
-  const searchController = fs.readFileSync("static/reader-search-controller.mjs", "utf8");
-  assertCode(reader, 'import { createReaderSearchController } from "./reader-search-controller.mjs"');
+  const readerStore = fs.readFileSync("static/reader/core/reader-store.js", "utf8");
+  const searchController = fs.readFileSync("static/reader/search/reader-search-controller.mjs", "utf8");
+  assertCode(reader, 'import { createReaderSearchController } from "./reader/search/reader-search-controller.mjs"');
   assert.strictEqual((searchController.match(/dataset\.panelView = "full-search"/g) || []).length, 1);
   assert.doesNotMatch(reader, /window\.find/);
   assert.match(searchController, /id="full-search-input"/);
@@ -329,15 +330,15 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /IntersectionObserver/);
   assert.match(reader, /Map\.prototype\.getOrInsertComputed/);
   assert.match(reader, /Math\.sumPrecise/);
-  const workerWrapper = fs.readFileSync("static/pdf-worker-wrapper.mjs", "utf8");
+  const workerWrapper = fs.readFileSync("static/reader/pdf/pdf-worker-wrapper.mjs", "utf8");
   assert.match(workerWrapper, /Map\.prototype\.getOrInsertComputed/);
   assert.match(workerWrapper, /Math\.sumPrecise/);
-  assertCode(workerWrapper, 'import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "./"))');
+  assertCode(workerWrapper, 'import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "../../"))');
   assert.match(workerWrapper, /pendingMessages/);
   assert.match(reader, /document\.createElement\("canvas"\)/);
   assert.doesNotMatch(reader, /previewUrls/);
   assert.doesNotMatch(contract, /ReaderPreview/);
-  assert.match(readerHtml, /\/search\/static\/reader-contract\.js/);
+  assert.match(readerHtml, /\/search\/static\/reader\/core\/reader-contract\.js/);
   assert.match(readerHtml, /id="download"/);
   assert.match(readerHtml, /id="download"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/);
   assert.doesNotMatch(readerHtml, /id=["']ocr["']/i);
@@ -421,7 +422,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /actionBtn\.dataset\.readerUrl = getReaderLink\(applyReaderAsset\(/);
   assert.match(app, /navigateToReader\(actionBtn\.dataset\.readerUrl\)/);
   assert.match(app, /navigateToReader\(readerLink\)/);
-  const navigation = fs.readFileSync('static/reader-navigation.js', 'utf8');
+  const navigation = fs.readFileSync('static/search/reader-navigation.js', 'utf8');
   assert.match(navigation, /url\.searchParams\.set\("return", returnUrl\)/);
   assert.match(navigation, /sessionStorage\.setItem\("reader-return:" \+ token/);
   assert.match(navigation, /crypto\.getRandomValues\(new Uint32Array\(4\)\)/);
@@ -512,7 +513,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(readerHtml, /Content-Security-Policy/);
   assert.match(readerHtml, /connect-src[^\"]*https:\/\/\*\.hf\.co/);
   assert.match(readerHtml, /script-src 'self'/);
-  const vendorScript = fs.readFileSync("scripts/copy_reader_vendor.mjs", "utf8") + fs.readFileSync("static/reader-resources.js", "utf8");
+  const vendorScript = fs.readFileSync("scripts/build/copy_reader_vendor.mjs", "utf8") + fs.readFileSync("static/reader-resources.js", "utf8");
   assert.match(vendorScript, /pdfjs-dist@6\.4\.299/);
   assert.match(vendorScript, /standard_fonts\//);
   assert.match(vendorScript, /cmaps\//);
@@ -540,7 +541,7 @@ test("Service Worker cache name remains fixed", () => {
   assert.match(sw, /vomebook-search-v1\.0\.0/);
 });
 test("Service Worker precaches the search Worker", () => {
-  assert.match(sw, /search\/static\/index-worker\.js/);
+  assert.match(sw, /search\/static\/search\/index-worker\.js/);
 });
 test("HTML registers Service Worker under search scope", () => {
   assert.match(html, /register\("\/search\/sw\.js", \{ scope: "\/search\/" \}\)/);
@@ -571,14 +572,15 @@ test("deployment workflow uses official checkout configure upload and deploy act
 test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.doesNotMatch(workflow, /node tests\//);
   assert.match(workflow, /node-version: '26\.11\.1'/);
-  assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader-pdf-text\.js/);
-  assert.match(workflow, /node scripts\/compose_app\.mjs/);
+  assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader\/pdf\/reader-pdf-text\.js/);
+  assert.match(workflow, /node scripts\/build\/compose_app\.mjs/);
   assert.match(workflow, /esbuild@0\.28\.2 "\$RUNNER_TEMP\/app-composed\.js" --minify --target=es2020/);
-  assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" --minify'));
-  assert.match(workflow, /node scripts\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
-  assert.match(workflow, /node scripts\/copy_reader_vendor\.mjs _site\/static\/vendor/);
+  assert.ok(workflow.includes('bundleArguments(process.argv[1])'));
+  assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" $flags --minify'));
+  assert.match(workflow, /node scripts\/data\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
+  assert.match(workflow, /node scripts\/build\/copy_reader_vendor\.mjs _site\/static\/vendor/);
   assert.ok(workflow.includes('.buildFiles("github")'));
-  assert.match(workflow, /esbuild@0\.28\.2 sw\.js --minify/);
+  assert.match(workflow, /esbuild@0\.28\.2 static\/sw\.js --minify/);
   assert.match(workflow, /uses: actions\/upload-pages-artifact@v5\s*\n\s*with:\s*[\s\S]*?path: '_site'/);
 });
 test("deployment workflow exposes deployment URL through github-pages environment", () => {

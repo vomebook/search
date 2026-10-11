@@ -6,7 +6,7 @@ const vm = require("vm");
 async function main() {
   const sandbox = { DOMException, AbortController };
   sandbox.self = sandbox;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-chapter-repository.js"), "utf8"), sandbox);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js"), "utf8"), sandbox);
   const starts = [], held = new Map();
   const scheduler = sandbox.VoiceOfMLReaderChapters.createChapterScheduler({
     create(index, signal, priority) {

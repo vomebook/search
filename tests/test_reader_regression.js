@@ -3,15 +3,15 @@ const path = require('path')
 const assert = require('assert')
 const vm = require('vm')
 const { TextEncoder } = require('util')
-const { assertCode } = require('./reader_source_contract')
+const { assertCode, readReaderSource } = require('./reader_source_contract')
 
 const root = path.resolve(__dirname, '..')
-const reader = fs.readFileSync(path.join(root, 'static/reader.js'), 'utf8')
-const contract = fs.readFileSync(path.join(root, 'static/reader-contract.js'), 'utf8')
+const reader = readReaderSource(root)
+const contract = fs.readFileSync(path.join(root, 'static/reader/core/reader-contract.js'), 'utf8')
 const sandbox = { self: {}, TextEncoder, URLSearchParams, URL }
 vm.runInNewContext(contract, sandbox)
 const pdfText = {}
-vm.runInNewContext(fs.readFileSync(path.join(root, 'static/reader-pdf-text.js'), 'utf8').replace(/^export /gm, ''), pdfText)
+vm.runInNewContext(fs.readFileSync(path.join(root, 'static/reader/pdf/reader-pdf-text.js'), 'utf8').replace(/^export /gm, ''), pdfText)
 for (const [raw, expected] of [
   ['', ''], ['hello world', 'hello world'], ['a\n b', 'a\n b'],
   ['\u624b \u673a', '\u624b\u673a'], ['\u624b\u3002\u673a', '\u624b\u3002\u673a'],

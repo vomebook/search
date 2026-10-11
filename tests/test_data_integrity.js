@@ -119,21 +119,21 @@ test("every repository sidebar payload has root folder and file arrays", () => {
   }
 });
 test("PWA manifest scope start URL and icons are deployable under search", () => {
-  const manifest = readJson("manifest.json");
+  const manifest = readJson("static/manifest.json");
   assert.strictEqual(manifest.start_url, "/search/");
   assert.strictEqual(manifest.scope, "/search/");
   assert.ok(Array.isArray(manifest.icons) && manifest.icons.length >= 3);
   for (const icon of manifest.icons) {
     assert.ok(icon.src.startsWith("/search/icons/"));
-    assert.ok(fs.statSync(icon.src.slice("/search/".length)).isFile(), `${icon.src}: missing icon`);
+    assert.ok(fs.statSync("static/" + icon.src.slice("/search/".length)).isFile(), `${icon.src}: missing icon`);
   }
 });
 test("HTML references existing PWA and runtime assets under expected paths", () => {
-  const html = fs.readFileSync("index.html", "utf8");
+  const html = fs.readFileSync("static/index.html", "utf8");
   assert.match(html, /href="\/search\/manifest\.json"/);
   assert.match(html, /src="static\/app\.js"/);
   assert.match(html, /register\("\/search\/sw\.js"/);
-  for (const file of ["static/style.css", "static/app.js", "static/index-worker.js", "sw.js", "manifest.json"]) assert.ok(fs.statSync(file).isFile());
+  for (const file of ["static/style.css", "static/app.js", "static/search/index-worker.js", "static/sw.js", "static/manifest.json"]) assert.ok(fs.statSync(file).isFile());
 });
 
 run("generated data");

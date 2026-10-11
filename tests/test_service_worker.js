@@ -3,7 +3,7 @@ const assert = require("assert");
 const vm = require("vm");
 const { test, run } = require("./test_harness");
 
-const source = fs.readFileSync("sw.js", "utf8");
+const source = fs.readFileSync("static/sw.js", "utf8");
 const CACHE_NAME = "vomebook-search-v1.0.0";
 
 function response(body, options) {
@@ -147,6 +147,8 @@ test("removes every retired hash and alias while preserving current assets and d
     const values = new Map(paths.map(path => ['https://example.test' + path, response('asset')]));
     values.set('https://example.test/data.json', response('data'));
     values.set('https://example.test' + prefix + 'app.js', response('retired alias'));
+    values.set('https://example.test' + prefix + 'reader/pdf/reader-pdf-search.mjs', response('nested alias'));
+    values.set('https://example.test' + prefix + 'reader/pdf/reader-pdf-search.555555555555.mjs', response('nested retired hash'));
     instance.stores.set(cacheName, values);
     await lifecycle(instance.listeners.activate);
     assert.ok(values.has('https://example.test' + paths[0]));
@@ -155,6 +157,8 @@ test("removes every retired hash and alias while preserving current assets and d
     assert.ok(values.has('https://example.test/data.json'));
     assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'app.555555555555.js'), undefined);
     assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'app.js'), undefined);
+    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'reader/pdf/reader-pdf-search.mjs'), undefined);
+    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'reader/pdf/reader-pdf-search.555555555555.mjs'), undefined);
     await Promise.all(instance.operations.lifetimes);
     assert.strictEqual(values.size, 2);
     assert.ok(values.has('https://example.test' + paths[0]));
@@ -165,7 +169,7 @@ test("install precaches only the search shell and global data", async () => {
   await lifecycle(instance.listeners.install);
   assert.strictEqual(instance.operations.addAll.length, 1);
   assert.ok(instance.operations.addAll[0].includes("/search/static/app.js"));
-  assert.ok(instance.operations.addAll[0].includes("/search/static/index-worker.js"));
+  assert.ok(instance.operations.addAll[0].includes("/search/static/search/index-worker.js"));
   assert.ok(instance.operations.addAll[0].includes("/search/data/initial/global.json"));
   assert.ok(instance.operations.addAll[0].includes("/search/data/sidebar/global.json"));
   assert.ok(!instance.operations.addAll[0].some(url => /\/repos\/|\/reader\.(?:html|js|css)$/.test(url)));

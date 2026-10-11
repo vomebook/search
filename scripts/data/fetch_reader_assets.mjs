@@ -114,7 +114,7 @@ export async function fetchReaderAssets(output, url = DEFAULT_READER_ASSETS_URL,
 
 async function main() {
   const output = process.argv[2];
-  if (!output) throw new Error("usage: node scripts/fetch_reader_assets.mjs OUTPUT [URL]");
+  if (!output) throw new Error("usage: node scripts/data/fetch_reader_assets.mjs OUTPUT [URL]");
   await fetchReaderAssets(output, process.argv[3] || DEFAULT_READER_ASSETS_URL);
 }
 

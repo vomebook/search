@@ -9,7 +9,7 @@ const { tmpdir } = os;
 const { join } = path;
 const { gzipSync } = zlib;
 
-import { fetchReaderAssets, validateReaderAssets } from "../scripts/fetch_reader_assets.mjs";
+import { fetchReaderAssets, validateReaderAssets } from "../scripts/data/fetch_reader_assets.mjs";
 
 const valid = gzipSync(Buffer.from(JSON.stringify({ v: 1, f: { "VoiceOfML/Test\0Book.docx": { s: 2, m: "d", p: "objects/aa/hash/profile/document.docx" } } })));
 assert.equal(validateReaderAssets(valid).v, 1);

@@ -5,12 +5,12 @@ import { pathToFileURL } from "node:url";
 // One ordered dependency list owns the production app and its shell scripts.
 // Keep classic-script globals for the host; each dependency owns its own scope.
 export const APP_DEPENDENCIES = Object.freeze([
-  "reader-resources.js", "reader-contract.js", "reader-navigation.js",
-  "search-session.js", "download-controller.js"
+  "reader-resources.js", "reader/core/reader-contract.js", "search/reader-navigation.js",
+  "search/search-session.js", "search/download-controller.js"
 ]);
 
 export function stripBundledScripts(html) {
-  return html.replace(/<script\s+src="(?:\/?(?:search\/)?static\/)([^"/]+)"\s*>\s*<\/script>\s*/g,
+  return html.replace(/<script\s+src="(?:\/?(?:search\/)?static\/)([^"\s]+)"\s*>\s*<\/script>\s*/g,
     (tag, filename) => APP_DEPENDENCIES.includes(filename) ? "" : tag);
 }
 

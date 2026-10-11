@@ -111,7 +111,7 @@ class PdfFollowupTests(unittest.TestCase):
     def test_range_headers_and_first_chunk_are_available_before_end_of_body(self):
         self.page.goto(self.origin+PREFIX+'/static/reader.html?ext=txt')
         result=self.page.evaluate('''async()=>{
-          const {createPdfFetchPolicy}=await import('./reader-pdf-network.mjs'),native=fetch;
+          const {createPdfFetchPolicy}=await import('./reader/pdf/reader-pdf-network.mjs'),native=fetch;
           let source;globalThis.fetch=async()=>new Response(new ReadableStream({start(c){source=c;c.enqueue(new Uint8Array([1,2]));}}),
             {status:206,headers:{'Content-Range':'bytes 0-3/4',ETag:'"A"'}});
           const policy=createPdfFetchPolicy({idleMs:1000});policy.add(['/stream.pdf']);
@@ -128,7 +128,7 @@ class PdfFollowupTests(unittest.TestCase):
     def test_initial_and_conditional_fetches_keep_their_existing_header_deadline(self):
         self.page.goto(self.origin+PREFIX+'/static/reader.html?ext=txt')
         result=self.page.evaluate('''async()=>{
-          const {createPdfFetchPolicy}=await import('./reader-pdf-network.mjs'),native=fetch;
+          const {createPdfFetchPolicy}=await import('./reader/pdf/reader-pdf-network.mjs'),native=fetch;
           let calls=0;globalThis.fetch=async(_url,init)=>{
             calls++;await new Promise(resolve=>setTimeout(resolve,70));init.signal.throwIfAborted();return new Response('complete');};
           const policy=createPdfFetchPolicy({idleMs:15,attemptMs:30});policy.add(['/slow.pdf']);
@@ -146,8 +146,8 @@ class PdfFollowupTests(unittest.TestCase):
         suffix=re.sub(rb'startxref\n\d+',b'startxref\n'+str(xref+len(extra)).encode(),suffix)
         packed=small[:xref]+extra+suffix
         self.page.unroute('**/static/vendor/pdf.min.*.mjs')
-        self.page.route('**/reader-pdf-network.mjs',lambda route:route.fulfill(content_type='text/javascript',body=
-            (ROOT/'static/reader-pdf-network.mjs').read_text().replace('idleMs = 15000','idleMs = 80')))
+        self.page.route('**/reader/pdf/reader-pdf-network.mjs',lambda route:route.fulfill(content_type='text/javascript',body=
+            (ROOT/'static/reader/pdf/reader-pdf-network.mjs').read_text().replace('idleMs = 15000','idleMs = 80')))
         prefix=small[:xref]+extra[:extra.index(b'stream\n')+7]
         tail=b'\nendstream\nendobj\n'+suffix
         setup=f'const source=new Uint8Array({len(packed)});source.set({json.dumps(list(prefix))});source.set({json.dumps(list(tail))},{len(packed)-len(tail)});'
@@ -192,7 +192,7 @@ class PdfFollowupTests(unittest.TestCase):
 
     def test_optional_cache_module_failure_does_not_block_opening_or_search(self):
         requested=[]
-        self.page.route('**/reader-pdf-text-store.mjs',lambda route:(requested.append(route.request.url),route.abort()))
+        self.page.route('**/reader/pdf/reader-pdf-text-store.mjs',lambda route:(requested.append(route.request.url),route.abort()))
         self.open()
         self.assertEqual(requested,[])
         self.search('needleA',12)
@@ -212,7 +212,7 @@ class PdfFollowupTests(unittest.TestCase):
     def test_range_recovery_is_bounded_and_never_mixes_versions(self):
         self.page.goto(self.origin+PREFIX+'/static/reader.html?ext=txt')
         result=self.page.evaluate('''async()=>{
-          const {createPdfFetchPolicy}=await import('./reader-pdf-network.mjs');
+          const {createPdfFetchPolicy}=await import('./reader/pdf/reader-pdf-network.mjs');
           const native=fetch,rows=[];
           const headers={'Content-Range':'bytes 0-3/4','ETag':'"A"'};
           async function run(mode){let calls=0,cancels=0;
@@ -250,7 +250,7 @@ class PdfFollowupTests(unittest.TestCase):
     def test_disk_store_preserves_unicode_bounds_expiry_and_failure_fallback(self):
         self.page.goto(self.origin+PREFIX+'/static/reader.html?ext=txt')
         result=self.page.evaluate('''async()=>{
-          const {createPdfTextStore,pdfTextStoreKey}=await import('./reader-pdf-text-store.mjs');
+          const {createPdfTextStore,pdfTextStoreKey}=await import('./reader/pdf/reader-pdf-text-store.mjs');
           const input={source:'https://example.test/book.pdf',version:'"A"',pageCount:12,engine:'engine1'};
           const key=await pdfTextStoreKey(input),other=await pdfTextStoreKey({...input,version:'"B"'});
           let clock=1000000;const options={now:()=>clock,limits:{bytes:600,entries:2,entryBytes:500,ttl:1000}};

@@ -39,7 +39,7 @@ class ReaderStyleTests(unittest.TestCase):
         self.addCleanup(context.close)
         self.page = context.new_page()
         self.page.add_init_script("localStorage.setItem('theme', 'dark')")
-        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(
             content_type="text/javascript", body=STORE_SCRIPT
         ))
         self.page.route("**/api/reader-content**", lambda route: route.fulfill(

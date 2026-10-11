@@ -1,5 +1,5 @@
-import "./reader-security.js";
-import { searchBookText, validateBookText } from "./reader-book-text.js";
+import "../../core/reader-security.js";
+import { searchBookText, validateBookText } from "../reader-book-text.js";
 
 const aborted = () => new DOMException("Search cancelled", "AbortError");
 const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;

@@ -45,12 +45,12 @@ jobs:
       - name: Benchmark production HF
         working-directory: huggingface-search
         run: |
-          python -B scripts/benchmark_reader_open.py --base-url https://voiceofml-search.hf.space --samples scripts/reader-opening-samples.json --repeat "$REPEAT" --random-attempts "$RANDOM_ATTEMPTS" --max-ready-seconds "$MAX_READY" --output "$RUNNER_TEMP/reader-opening-hf.json"
+          python -B scripts/benchmarks/benchmark_reader_open.py --base-url https://voiceofml-search.hf.space --samples scripts/benchmarks/reader-opening-samples.json --repeat "$REPEAT" --random-attempts "$RANDOM_ATTEMPTS" --max-ready-seconds "$MAX_READY" --output "$RUNNER_TEMP/reader-opening-hf.json"
       - name: Benchmark production Pages
         if: always()
         working-directory: huggingface-search
         run: |
-          python -B scripts/benchmark_reader_open.py --base-url https://vomebook.github.io --path-prefix /search --samples scripts/reader-opening-samples.json --repeat "$REPEAT" --random-attempts "$RANDOM_ATTEMPTS" --max-ready-seconds "$MAX_READY" --output "$RUNNER_TEMP/reader-opening-pages.json"
+          python -B scripts/benchmarks/benchmark_reader_open.py --base-url https://vomebook.github.io --path-prefix /search --samples scripts/benchmarks/reader-opening-samples.json --repeat "$REPEAT" --random-attempts "$RANDOM_ATTEMPTS" --max-ready-seconds "$MAX_READY" --output "$RUNNER_TEMP/reader-opening-pages.json"
       - name: Retain timings and failures
         if: always()
         uses: actions/upload-artifact@v4

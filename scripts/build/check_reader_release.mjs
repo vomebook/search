@@ -39,10 +39,11 @@ function staticRoot(root, artifact) {
 }
 
 function checkBehavior(root) {
-  const reader = fs.readFileSync(path.join(root, "static/reader.js"), "utf8");
-  for (const [, dependency] of reader.matchAll(/(?:\/static\/)([^/"']+\.(?:js|mjs))/g)) {
+  const reader = ["reader.js", ...resources.readerComponentFiles].map(file =>
+    fs.readFileSync(path.join(root, "static", file), "utf8")).join("\n").replace(/\breaderContext\./g, "");
+  for (const [, dependency] of reader.matchAll(/(?:\/static\/)([^"'\s]+\.(?:js|mjs))/g)) {
     assert(
-      resources.readerFiles.includes(dependency),
+      required.includes(dependency),
       `Reader dependency missing from inventory: ${dependency}`
     );
   }
@@ -118,11 +119,12 @@ function checkAssets(output, hashed = false) {
 function currentAsset(output, filename) {
   if (!resources.buildFiles("github").includes(filename)) return filename;
   assert(!fs.existsSync(path.join(output, filename)), `obsolete asset alias: ${filename}`);
-  const extension = path.extname(filename), stem = filename.slice(0, -extension.length);
-  const matches = fs.readdirSync(output).filter(file => file.startsWith(stem + ".") &&
+  const directory = path.dirname(filename), basename = path.basename(filename);
+  const extension = path.extname(basename), stem = basename.slice(0, -extension.length);
+  const matches = fs.readdirSync(path.join(output, directory)).filter(file => file.startsWith(stem + ".") &&
     file.endsWith(extension) && /^[0-9a-f]{12}$/.test(file.slice(stem.length + 1, -extension.length)));
   assert(matches.length === 1, `expected one current asset: ${filename}`);
-  return matches[0];
+  return path.join(directory, matches[0]);
 }
 
 function checkProject(root, artifact) {
@@ -138,7 +140,7 @@ function checkProject(root, artifact) {
   const output = staticRoot(root, artifact);
   checkAssets(output, !!artifact);
   if (artifact) {
-    const project = fs.existsSync(path.join(root, "index.html")) ? "github" : "hf";
+    const project = args.project || (fs.existsSync(path.join(root, "Dockerfile")) ? "hf" : "github");
     for (const file of resources.buildFiles(project)) currentAsset(output, file);
     const shellPath = fs.existsSync(path.join(output, "index.html"))
       ? path.join(output, "index.html") : path.join(output, "../index.html");
@@ -167,24 +169,30 @@ function checkProject(root, artifact) {
 function crossCheck(githubRoot, hfRoot) {
   const exact = [
     "reader-resources.js",
-    "reader-store.js",
-    "reader-pdf-text.js",
-    "reader-pdf-book-search-worker.mjs",
-    "reader-pdf-book-search.mjs",
-    "search-session.js",
-    "download-controller.js",
-    "reader-navigation.js",
+    "reader/core/reader-store.js",
+    "reader/pdf/reader-pdf-text.js",
+    "reader/search/workers/reader-pdf-book-search-worker.mjs",
+    "reader/search/reader-pdf-book-search.mjs",
+    "search/search-session.js",
+    "search/download-controller.js",
+    "search/reader-navigation.js",
     "reader.css",
-    "reader-request-manager.js",
-    "reader-chapter-repository.js",
-    "reader-scroll-anchor.js",
-    "reader-section-virtualizer.js",
-    "reader-runtime.js",
-    "reader-format-adapters.js",
-    "reader-security.js",
-    "reader-search-controller.mjs",
-    "reader-dom-search.mjs",
-    "pdf-worker-wrapper.mjs"
+    "reader/core/reader-request-manager.js",
+    "reader/formats/reader-chapter-repository.js",
+    "reader/ui/reader-scroll-anchor.js",
+    "reader/formats/reader-section-virtualizer.js",
+    "reader/core/reader-runtime.js",
+    "reader/formats/reader-format-adapters.js",
+    "reader/core/reader-security.js",
+    "reader/search/reader-search-controller.mjs",
+    "reader/search/reader-dom-search.mjs",
+    "reader/formats/reader-image-loader.mjs",
+    "reader/reader-components.mjs",
+    "reader/ui/reader-document-styles.mjs",
+    "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/ui/reader-bookmarks.mjs",
+    "reader/formats/reader-media-format.mjs", "reader/core/reader-document-loader.mjs", "reader/formats/reader-html-format.mjs",
+    "reader/formats/reader-text-format.mjs", "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-docx-format.mjs",
+    "reader/pdf/pdf-worker-wrapper.mjs"
   ];
   for (const file of exact) {
     assert(
@@ -194,8 +202,8 @@ function crossCheck(githubRoot, hfRoot) {
   }
   for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "check_reader_release.mjs"]) {
     assert(
-      hash(path.join(githubRoot, "scripts", file)) === hash(path.join(hfRoot, "scripts", file)),
-      `cross-project drift: scripts/${file}`
+      hash(path.join(githubRoot, "scripts/build", file)) === hash(path.join(hfRoot, "scripts/build", file)),
+      `cross-project drift: scripts/build/${file}`
     );
   }
   for (const root of [githubRoot, hfRoot]) checkBehavior(root);
