@@ -172,14 +172,19 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
           try {
             for(const code of [503,429,404]) {
               let requests=0;
-              window.fetch=()=>Promise.resolve(++requests===1
-                ? new Response('{}',{status:code}) : new Response(JSON.stringify(success)));
+              window.fetch=(input,options)=>String(input).includes('/api/random-reader')
+                ? Promise.resolve(++requests===1
+                  ? new Response('{}',{status:code}) : new Response(JSON.stringify(success)))
+                : originalFetch(input,options);
               const id=++randomReaderRequestId;
               try { await fetchRandomReaderRecord('/api/random-reader',id,savedUrl); } catch (_) {}
               rows.push(requests);
             }
             let requests=0;
-            window.fetch=()=>{requests++;randomReaderRequestId++;return Promise.reject(new TypeError('network'));};
+            window.fetch=(input,options)=>{
+              if (!String(input).includes('/api/random-reader')) return originalFetch(input,options);
+              requests++;randomReaderRequestId++;return Promise.reject(new TypeError('network'));
+            };
             await fetchRandomReaderRecord('/api/random-reader',++randomReaderRequestId,savedUrl);
             rows.push(requests);
             return rows;
