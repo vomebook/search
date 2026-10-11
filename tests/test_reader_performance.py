@@ -695,6 +695,10 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page.wait_for_function("expected => document.querySelector('#status').textContent === expected", arg=status)
                 self.assertEqual(page.locator(".reader-content").get_attribute("data-mode"), mode)
                 page.locator(content_selector).wait_for(state="attached")
+                if mode == "audio":
+                    self.assertEqual(page.locator(".reader-loading-indicator").evaluate(
+                        "node => getComputedStyle(node).display"), "none")
+                    self.assertGreater(page.locator(".reader-audio").bounding_box()["width"], 300)
                 self.assertTrue(page.locator("#bookmark-ribbon").is_visible())
                 ribbon = page.locator("#bookmark-ribbon").bounding_box()
                 self.assertIsNotNone(ribbon)
