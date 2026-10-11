@@ -19,7 +19,8 @@ export function createReaderProgress(readerContext) {
       readerContext.readerLifecycle.disposed ||
       !readerContext.documentState.restorationReady ||
       !readerContext.validSource(readerContext.sourceUrl) ||
-      readerContext.historySuppressed
+      readerContext.historySuppressed ||
+      readerContext.mediaElement?._readerSourceRetry
     )
       return;
     if (event?.type !== "pagehide" && document.visibilityState !== "hidden")
