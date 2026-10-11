@@ -182,6 +182,7 @@ function crossCheck(githubRoot, hfRoot) {
     "reader-runtime.js",
     "reader-format-adapters.js",
     "reader-security.js",
+    "reader-search-controller.mjs",
     "pdf-worker-wrapper.mjs"
   ];
   for (const file of exact) {

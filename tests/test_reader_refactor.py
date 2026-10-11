@@ -1313,7 +1313,14 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
         self.assertEqual(requests, [book_path] * 3)
 
+    def test_bucket_media_failure_retries_download_original_once(self):
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(status=503, body='unavailable'))
+        self.assert_media_failure_retries_original_once(bucket=True)
+
     def test_media_proxy_failure_retries_original_once(self):
+        self.assert_media_failure_retries_original_once()
+
+    def assert_media_failure_retries_original_once(self, bucket=False):
         buffer = io.BytesIO()
         with wave.open(buffer, 'wb') as audio:
             audio.setparams((1, 2, 8000, 8000, 'NONE', 'not compressed'))
@@ -1327,11 +1334,15 @@ class ReaderRefactorTest(unittest.TestCase):
             route.fulfill(status=206, content_type='audio/wav', body=data[start:],
                           headers={'Accept-Ranges': 'bytes', 'Content-Range': f'bytes {start}-{len(data)-1}/{len(data)}'})
         self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav', original)
-        self.open(self.reader_url('wav'))
+        options = {}
+        if bucket:
+            options = dict(url='https://voiceofml-search.hf.space/api/reader-bucket-resource?path=media/audio/native/' + 'a' * 64 + '/audio.wav',
+                           download='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav')
+        self.open(self.reader_url('wav', **options))
         self.page.wait_for_function("() => document.querySelector('audio').readyState >= 1")
         self.assertEqual(len(requests), 1)
         self.assertEqual(self.page.locator('audio').evaluate('node => node.duration'), 1)
-        self.page.evaluate("async () => { const media = document.querySelector('audio'); media.currentTime = 0.5; await VoiceOfMLReaderStore.put({url: media.src, mediaTime: 0.5}); }")
+        self.page.evaluate("async () => { const media = document.querySelector('audio'); media.currentTime = 0.5; await VoiceOfMLReaderStore.put({url: new URL(location.href).searchParams.get('url'), mediaTime: 0.5}); }")
         self.page.reload()
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('audio').currentTime === 0.5")
         self.assertEqual(len(requests), 2)
@@ -2139,6 +2150,27 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertTrue(self.page.locator(".full-search-pagination").is_hidden())
         self.assertTrue(self.page.locator("#full-search-next").is_disabled())
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+
+    def test_disposal_cancels_debounced_full_search(self):
+        self.page.add_init_script("""const nativeTimeout = window.setTimeout.bind(window);
+          window.__searchDebounceCallbacks = 0;
+          window.setTimeout = (callback, delay, ...args) => nativeTimeout(
+            delay === 180 ? (...values) => {
+              window.__searchDebounceCallbacks++;
+              callback(...values);
+            } : callback, delay, ...args);""")
+        self.serve("needle " * 100)
+        self.open(self.reader_url())
+        self.page.evaluate("""() => {
+          const input = document.querySelector('#full-search-input');
+          input.value = 'needle';
+          input.dispatchEvent(new Event('input', {bubbles: true}));
+          window.dispatchEvent(new Event('voice-reader-dispose'));
+        }""")
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
+        self.assertEqual(self.page.evaluate('window.__searchDebounceCallbacks'), 0)
+        self.assertEqual(self.page.locator('.full-search-result').count(), 0)
 
     def test_pending_text_result_cannot_highlight_after_new_search(self):
         def hold_activation(route):

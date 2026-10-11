@@ -58,15 +58,15 @@ class ReaderOptimizationTests(unittest.TestCase):
                 window.__pdfProbeTask = fullSearchPdfMatches('needle', generation);
                 window.__pdfProbeTask.catch(() => {});
               };
-              window.__pdfProbePage = offset => pdfSearchPageLoader(offset);
-              window.__pdfProbeTotal = () => chapterSearchPage.total;
-              window.__cancelPdfProbe = () => {nextReaderGeneration('search'); chapterSearchPage = {total:123};};
+              window.__pdfProbePage = offset => fullSearchSession.pageLoader(offset);
+              window.__pdfProbeTotal = () => fullSearchSession.page.total;
+              window.__cancelPdfProbe = () => {nextReaderGeneration('search'); fullSearchSession.page = {total:123};};
               window.__retryCancelledPageProbe = () => loadPdfTextContent(2, {
                 getTextContent:async()=>({items:[{str:'fresh demand'}],styles:{}})});
               window.__query = async query => {
                 fullSearchInput.value = query;
                 await runFullSearch();
-                return chapterSearchPage?.total || 0;
+                return fullSearchSession.page?.total || 0;
               };
               window.__goChapter = index => navigationState.tocEntries[index-1].activate(beginReaderNavigation());
               window.__walkProbe = () => {

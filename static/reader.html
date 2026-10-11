@@ -59,7 +59,12 @@
   </head>
   <body>
     <header class="reader-toolbar">
-      <button id="back" class="icon-button" type="button">&#8592;</button>
+      <button id="back" class="icon-button" type="button" aria-label="返回" title="返回">
+        <!-- Lucide arrow-left, ISC; see icons/LICENSE-lucide -->
+        <svg class="lucide lucide-arrow-left" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
+        </svg>
+      </button>
       <div class="reader-heading">
         <strong id="title">在线阅读</strong>
         <button id="reader-path" class="reader-path" type="button" hidden></button>
@@ -89,8 +94,13 @@
           title="下载原文件"
           target="_blank"
           rel="noopener noreferrer"
-          >&#8681;</a
         >
+          <!-- Lucide download, ISC; see icons/LICENSE-lucide -->
+          <svg class="lucide lucide-download" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" />
+          </svg>
+        </a>
         <span id="download-feedback" role="status" hidden></span>
       </div>
       <button id="history" class="icon-button" type="button">&#9776;</button>
