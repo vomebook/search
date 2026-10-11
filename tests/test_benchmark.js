@@ -21,7 +21,7 @@ var gzData = fs.readFileSync("data/search_data.json.gz");
 var rawData = zlib.gunzipSync(gzData);
 var payload = JSON.parse(rawData);
 
-var source = fs.readFileSync("static/index-worker.js", "utf8");
+var source = fs.readFileSync("static/search/index-worker.js", "utf8");
 
 async function makeWorker() {
   var listeners = {};
@@ -34,7 +34,7 @@ async function makeWorker() {
     },
   };
   vm.createContext(context);
-  vm.runInContext(source, context, { filename: "static/index-worker.js" });
+  vm.runInContext(source, context, { filename: "static/search/index-worker.js" });
 
   async function send(data) {
     var before = messages.length;

@@ -4,7 +4,7 @@ const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 let cachePruning = Promise.resolve();
 function isRetiredAsset(pathname) {
   return CURRENT_HASHED_ASSETS.length > 0 &&
-    (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/[^/]+\.(js|mjs|css)$/.test(pathname)) &&
+    (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
     !CURRENT_HASHED_ASSETS.includes(pathname);
 }
 function pruneHashedAssets(cache, resetShell = false) {
@@ -21,10 +21,10 @@ const PRECACHE_URLS = [
   "/search/",
   "/search/static/style.css",
   "/search/static/reader-resources.js",
-  "/search/static/reader-contract.js",
-  "/search/static/reader-navigation.js",
+  "/search/static/reader/core/reader-contract.js",
+  "/search/static/search/reader-navigation.js",
   "/search/static/app.js",
-  "/search/static/index-worker.js",
+  "/search/static/search/index-worker.js",
   "/search/data/initial/manifest.json",
   "/search/data/sidebar/manifest.json",
   "/search/data/initial/global.json",

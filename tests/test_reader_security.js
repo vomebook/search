@@ -5,7 +5,7 @@ const vm = require("vm");
 const { deflateRawSync } = require("zlib");
 const sandbox = { self: {}, TextDecoder, Uint8Array, DataView };
 sandbox.self = sandbox;
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-security.js"), "utf8"), sandbox);
+vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/core/reader-security.js"), "utf8"), sandbox);
 const security = sandbox.VoiceOfMLReaderSecurity;
 
 function crc32(bytes) {

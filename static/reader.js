@@ -1,38 +1,696 @@
-import { createReaderDomSearch, fullSearchEscape, fullSearchSnippet, fullSearchPageOffset } from "./reader-dom-search.mjs";
-import { createReaderSearchController } from "./reader-search-controller.mjs";
+import { createReaderDomSearch, fullSearchEscape, fullSearchSnippet, fullSearchPageOffset } from "./reader/search/reader-dom-search.mjs";
+import { createReaderSearchController } from "./reader/search/reader-search-controller.mjs";
+import { createReaderImageLoader } from "./reader/formats/reader-image-loader.mjs";
 import "/search/static/reader-resources.js";
-import "/search/static/reader-contract.js";
-import "/search/static/reader-request-manager.js";
-import "/search/static/reader-chapter-repository.js";
-import "/search/static/reader-scroll-anchor.js";
-import "/search/static/reader-section-virtualizer.js";
-import "/search/static/reader-runtime.js";
-import "/search/static/reader-format-adapters.js";
-import "/search/static/reader-security.js";
-import { paintTextHit, hitBoxes } from "/search/static/reader-book-text.js";
-import { createPdfFetchPolicy } from "./reader-pdf-network.mjs";
-import { createV3Repository, validateResource, validateReadingManifest, validatePageMap } from "./reader-v3.mjs";
-import { populateIndependentTextLayer, independentTextCaret } from "./reader-pdf-text.js";
+import "/search/static/reader/core/reader-contract.js";
+import "/search/static/reader/core/reader-request-manager.js";
+import "/search/static/reader/formats/reader-chapter-repository.js";
+import "/search/static/reader/ui/reader-scroll-anchor.js";
+import "/search/static/reader/formats/reader-section-virtualizer.js";
+import "/search/static/reader/core/reader-runtime.js";
+import "/search/static/reader/formats/reader-format-adapters.js";
+import "/search/static/reader/core/reader-security.js";
+import { paintTextHit, hitBoxes } from "/search/static/reader/search/reader-book-text.js";
+import { createPdfFetchPolicy } from "./reader/pdf/reader-pdf-network.mjs";
+import { createV3Repository, validateResource, validateReadingManifest, validatePageMap } from "./reader/pdf/reader-v3.mjs";
+import { populateIndependentTextLayer, independentTextCaret } from "./reader/pdf/reader-pdf-text.js";
 let pdfFetchPolicy = null;
-import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText, pdfSourceOffset } from "/search/static/reader-pdf-text.js";
+import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText, pdfSourceOffset } from "/search/static/reader/pdf/reader-pdf-text.js";
+import {
+  EPUB_HTML_TAGS,
+  EPUB_HTML_VOID_TAGS,
+  HTML_FRAME_STYLE,
+  DISCOURSE_POST_SELECTOR,
+  DISCOURSE_TITLE_SELECTOR,
+  DISCOURSE_HTML_STYLE,
+  SPREADSHEET_HTML_STYLE,
+  createReaderBindings,
+  createReaderDiagnostics,
+  createReaderLifecycle,
+  createReaderSource,
+  createReaderUi,
+  createReaderToc,
+  createReaderSearchBackends,
+  createReaderPdfScheduler,
+  createReaderNavigation,
+  createReaderFoliateFormat,
+  createReaderProgress,
+  createReaderBookmarks,
+  createReaderMediaFormat,
+  createReaderDocumentLoader,
+  createReaderPdfPageWindow,
+  createReaderPdfTextRuntime,
+  createReaderHtmlFormat,
+  createReaderPdfRenderer,
+  createReaderTextFormat,
+  createReaderChapterFormat,
+  createReaderDocxFormat,
+  createReaderFormatController,
+  createReaderPdfEngine,
+  createReaderPdfSearch
+} from "./reader/reader-components.mjs";
+
+const readerContext = {
+  get DISCOURSE_HTML_STYLE() { return DISCOURSE_HTML_STYLE; },
+  get DISCOURSE_POST_SELECTOR() { return DISCOURSE_POST_SELECTOR; },
+  get DISCOURSE_TITLE_SELECTOR() { return DISCOURSE_TITLE_SELECTOR; },
+  get DOCX_PREVIEW_URL() { return DOCX_PREVIEW_URL; },
+  get EPUB_HTML_TAGS() { return EPUB_HTML_TAGS; },
+  get EPUB_HTML_VOID_TAGS() { return EPUB_HTML_VOID_TAGS; },
+  get FOLIATE_LOADED_SECTION_LIMIT() { return FOLIATE_LOADED_SECTION_LIMIT; },
+  get FOLIATE_PREFETCH_MARGIN() { return FOLIATE_PREFETCH_MARGIN; },
+  get HTML_FRAME_STYLE() { return HTML_FRAME_STYLE; },
+  get JSZIP_URL() { return JSZIP_URL; },
+  get MARKED_URL() { return MARKED_URL; },
+  get PDFJS_CMAP_URL() { return PDFJS_CMAP_URL; },
+  get PDFJS_STANDARD_FONT_URL() { return PDFJS_STANDARD_FONT_URL; },
+  get PDFJS_URL() { return PDFJS_URL; },
+  get PDFJS_WASM_URL() { return PDFJS_WASM_URL; },
+  get PDFJS_WORKER_URL() { return PDFJS_WORKER_URL; },
+  get PDF_BOOK_SEARCH_PREFETCH_DELAY() { return PDF_BOOK_SEARCH_PREFETCH_DELAY; },
+  get PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES() { return PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES; },
+  get PDF_MANIFEST_PREFETCH_CONCURRENCY() { return PDF_MANIFEST_PREFETCH_CONCURRENCY; },
+  get PDF_MANIFEST_PREFETCH_LIMIT() { return PDF_MANIFEST_PREFETCH_LIMIT; },
+  get PDF_MANIFEST_PREFETCH_MAX_PAGES() { return PDF_MANIFEST_PREFETCH_MAX_PAGES; },
+  get PDF_OCR_PAGE_CACHE_BYTES() { return PDF_OCR_PAGE_CACHE_BYTES; },
+  get PDF_PREFETCH_MARGIN() { return PDF_PREFETCH_MARGIN; },
+  get PDF_SEARCH_TEXT_CACHE_BYTES() { return PDF_SEARCH_TEXT_CACHE_BYTES; },
+  get PDF_TEXT_CONTENT_CACHE_BYTES() { return PDF_TEXT_CONTENT_CACHE_BYTES; },
+  get PURIFY_URL() { return PURIFY_URL; },
+  get READER_PROXY_TIMEOUT_MS() { return READER_PROXY_TIMEOUT_MS; },
+  get RUFFLE_URL() { return RUFFLE_URL; },
+  get SPREADSHEET_HTML_STYLE() { return SPREADSHEET_HTML_STYLE; },
+  get THEME_MOON_ICON() { return THEME_MOON_ICON; },
+  get THEME_SUN_ICON() { return THEME_SUN_ICON; },
+  get TOC_VIRTUALIZATION_THRESHOLD() { return TOC_VIRTUALIZATION_THRESHOLD; },
+  get TOC_VIRTUAL_ROW_HEIGHT() { return TOC_VIRTUAL_ROW_HEIGHT; },
+  get acquirePdfRenderSlot() { return acquirePdfRenderSlot; }, set acquirePdfRenderSlot(value) { acquirePdfRenderSlot = value; },
+  get acquirePdfTextSlot() { return acquirePdfTextSlot; }, set acquirePdfTextSlot(value) { acquirePdfTextSlot = value; },
+  get activateFoliateTocEntry() { return activateFoliateTocEntry; }, set activateFoliateTocEntry(value) { activateFoliateTocEntry = value; },
+  get applyChapterSearchPage() { return applyChapterSearchPage; },
+  get applyInitialRestoration() { return applyInitialRestoration; }, set applyInitialRestoration(value) { applyInitialRestoration = value; },
+  get applyReaderMetadata() { return applyReaderMetadata; }, set applyReaderMetadata(value) { applyReaderMetadata = value; },
+  get assertReaderActive() { return assertReaderActive; }, set assertReaderActive(value) { assertReaderActive = value; },
+  get awaitReader() { return awaitReader; }, set awaitReader(value) { awaitReader = value; },
+  get beginReaderNavigation() { return beginReaderNavigation; }, set beginReaderNavigation(value) { beginReaderNavigation = value; },
+  get bookmarkExcerptInput() { return bookmarkExcerptInput; },
+  get bookmarkInertSiblings() { return bookmarkInertSiblings; },
+  get bookmarkInvoker() { return bookmarkInvoker; }, set bookmarkInvoker(value) { bookmarkInvoker = value; },
+  get bookmarkLabelInput() { return bookmarkLabelInput; },
+  get bookmarkPopover() { return bookmarkPopover; },
+  get bookmarkRibbon() { return bookmarkRibbon; },
+  get cachedReaderData() { return cachedReaderData; }, set cachedReaderData(value) { cachedReaderData = value; },
+  get cancelSpeculativePdfRenders() { return cancelSpeculativePdfRenders; }, set cancelSpeculativePdfRenders(value) { cancelSpeculativePdfRenders = value; },
+  get capability() { return capability; }, set capability(value) { capability = value; },
+  get captureChapterPosition() { return captureChapterPosition; }, set captureChapterPosition(value) { captureChapterPosition = value; },
+  get captureFoliateBookmarkPosition() { return captureFoliateBookmarkPosition; }, set captureFoliateBookmarkPosition(value) { captureFoliateBookmarkPosition = value; },
+  get chapterManifestCleanup() { return chapterManifestCleanup; }, set chapterManifestCleanup(value) { chapterManifestCleanup = value; },
+  get chapterManifestLoader() { return chapterManifestLoader; }, set chapterManifestLoader(value) { chapterManifestLoader = value; },
+  get chapterManifestObserver() { return chapterManifestObserver; }, set chapterManifestObserver(value) { chapterManifestObserver = value; },
+  get chapterManifestUrl() { return chapterManifestUrl; }, set chapterManifestUrl(value) { chapterManifestUrl = value; },
+  get chapterNext() { return chapterNext; },
+  get chapterPrev() { return chapterPrev; },
+  get chapterSearchClient() { return chapterSearchClient; }, set chapterSearchClient(value) { chapterSearchClient = value; },
+  get chapterSearchConfiguration() { return chapterSearchConfiguration; }, set chapterSearchConfiguration(value) { chapterSearchConfiguration = value; },
+  get chapterSearchModulePromise() { return chapterSearchModulePromise; }, set chapterSearchModulePromise(value) { chapterSearchModulePromise = value; },
+  get classifyReaderError() { return classifyReaderError; }, set classifyReaderError(value) { classifyReaderError = value; },
+  get clearFullSearchMarks() { return clearFullSearchMarks; },
+  get clearPdfManifestPrefetches() { return clearPdfManifestPrefetches; }, set clearPdfManifestPrefetches(value) { clearPdfManifestPrefetches = value; },
+  get clearSearchHighlights() { return clearSearchHighlights; }, set clearSearchHighlights(value) { clearSearchHighlights = value; },
+  get consumeBookmarkHandoff() { return consumeBookmarkHandoff; }, set consumeBookmarkHandoff(value) { consumeBookmarkHandoff = value; },
+  get content() { return content; },
+  get contentSanitizerObserver() { return contentSanitizerObserver; }, set contentSanitizerObserver(value) { contentSanitizerObserver = value; },
+  get contentUrl() { return contentUrl; }, set contentUrl(value) { contentUrl = value; },
+  get createPdfFetchPolicy() { return createPdfFetchPolicy; },
+  get createPdfV3Repository() { return createPdfV3Repository; }, set createPdfV3Repository(value) { createPdfV3Repository = value; },
+  get createV3Repository() { return createV3Repository; },
+  get detectTextEncoding() { return detectTextEncoding; }, set detectTextEncoding(value) { detectTextEncoding = value; },
+  get documentState() { return documentState; },
+  get docxPageNodes() { return docxPageNodes; }, set docxPageNodes(value) { docxPageNodes = value; },
+  get domSearch() { return domSearch; },
+  get downloadButton() { return downloadButton; },
+  get downloadFeedback() { return downloadFeedback; },
+  get downloadFeedbackTimer() { return downloadFeedbackTimer; }, set downloadFeedbackTimer(value) { downloadFeedbackTimer = value; },
+  get downloadUrl() { return downloadUrl; }, set downloadUrl(value) { downloadUrl = value; },
+  get drainPdfTextWaiters() { return drainPdfTextWaiters; }, set drainPdfTextWaiters(value) { drainPdfTextWaiters = value; },
+  get emptyPanel() { return emptyPanel; }, set emptyPanel(value) { emptyPanel = value; },
+  get epubBook() { return epubBook; }, set epubBook(value) { epubBook = value; },
+  get epubContentBody() { return epubContentBody; }, set epubContentBody(value) { epubContentBody = value; },
+  get epubRendition() { return epubRendition; }, set epubRendition(value) { epubRendition = value; },
+  get epubSeekFrame() { return epubSeekFrame; }, set epubSeekFrame(value) { epubSeekFrame = value; },
+  get epubSeekPromise() { return epubSeekPromise; }, set epubSeekPromise(value) { epubSeekPromise = value; },
+  get epubSeekTarget() { return epubSeekTarget; }, set epubSeekTarget(value) { epubSeekTarget = value; },
+  get extension() { return extension; }, set extension(value) { extension = value; },
+  get fail() { return fail; }, set fail(value) { fail = value; },
+  get fallbackUrl() { return fallbackUrl; }, set fallbackUrl(value) { fallbackUrl = value; },
+  get fetchReaderResponse() { return fetchReaderResponse; }, set fetchReaderResponse(value) { fetchReaderResponse = value; },
+  get fetchReaderUrl() { return fetchReaderUrl; }, set fetchReaderUrl(value) { fetchReaderUrl = value; },
+  get filterPanel() { return filterPanel; }, set filterPanel(value) { filterPanel = value; },
+  get folderNavigationTarget() { return folderNavigationTarget; }, set folderNavigationTarget(value) { folderNavigationTarget = value; },
+  get folderReturnUrl() { return folderReturnUrl; },
+  get foliateChapterRepository() { return foliateChapterRepository; }, set foliateChapterRepository(value) { foliateChapterRepository = value; },
+  get foliateContinuous() { return foliateContinuous; }, set foliateContinuous(value) { foliateContinuous = value; },
+  get foliateScrollAnchors() { return foliateScrollAnchors; },
+  get foliateScrollFrame() { return foliateScrollFrame; }, set foliateScrollFrame(value) { foliateScrollFrame = value; },
+  get foliateSectionLoader() { return foliateSectionLoader; }, set foliateSectionLoader(value) { foliateSectionLoader = value; },
+  get foliateSectionObserver() { return foliateSectionObserver; }, set foliateSectionObserver(value) { foliateSectionObserver = value; },
+  get foliateSectionRoot() { return foliateSectionRoot; }, set foliateSectionRoot(value) { foliateSectionRoot = value; },
+  get foliateSectionSettler() { return foliateSectionSettler; }, set foliateSectionSettler(value) { foliateSectionSettler = value; },
+  get foliateSectionVirtualizer() { return foliateSectionVirtualizer; }, set foliateSectionVirtualizer(value) { foliateSectionVirtualizer = value; },
+  get foliateWindowFrame() { return foliateWindowFrame; }, set foliateWindowFrame(value) { foliateWindowFrame = value; },
+  get formatAdapters() { return formatAdapters; },
+  get formatMediaTime() { return formatMediaTime; }, set formatMediaTime(value) { formatMediaTime = value; },
+  get fullSearchButton() { return fullSearchButton; },
+  get fullSearchDomMatches() { return fullSearchDomMatches; },
+  get fullSearchEscape() { return fullSearchEscape; },
+  get fullSearchInput() { return fullSearchInput; },
+  get fullSearchPageOffset() { return fullSearchPageOffset; },
+  get fullSearchPdfMatches() { return fullSearchPdfMatches; }, set fullSearchPdfMatches(value) { fullSearchPdfMatches = value; },
+  get fullSearchSession() { return fullSearchSession; },
+  get fullSearchSnippet() { return fullSearchSnippet; },
+  get fullSearchStatus() { return fullSearchStatus; },
+  get getInitialReaderRestoration() { return getInitialReaderRestoration; }, set getInitialReaderRestoration(value) { getInitialReaderRestoration = value; },
+  get goToPage() { return goToPage; }, set goToPage(value) { goToPage = value; },
+  get handlePageNavigationFailure() { return handlePageNavigationFailure; },
+  get handleReaderKeydown() { return handleReaderKeydown; }, set handleReaderKeydown(value) { handleReaderKeydown = value; },
+  get handleReaderPositionChange() { return handleReaderPositionChange; }, set handleReaderPositionChange(value) { handleReaderPositionChange = value; },
+  get headingLocationCache() { return headingLocationCache; }, set headingLocationCache(value) { headingLocationCache = value; },
+  get headingTocEntries() { return headingTocEntries; }, set headingTocEntries(value) { headingTocEntries = value; },
+  get highlightPdfText() { return highlightPdfText; }, set highlightPdfText(value) { highlightPdfText = value; },
+  get highlightTextParts() { return highlightTextParts; },
+  get historySuppressed() { return historySuppressed; }, set historySuppressed(value) { historySuppressed = value; },
+  get hitBoxes() { return hitBoxes; },
+  get htmlFrame() { return htmlFrame; }, set htmlFrame(value) { htmlFrame = value; },
+  get imageLoader() { return imageLoader; },
+  get independentTextCaret() { return independentTextCaret; },
+  get initialReaderPage() { return initialReaderPage; }, set initialReaderPage(value) { initialReaderPage = value; },
+  get initialReaderTargetSection() { return initialReaderTargetSection; }, set initialReaderTargetSection(value) { initialReaderTargetSection = value; },
+  get installReaderTapSelectionClear() { return installReaderTapSelectionClear; }, set installReaderTapSelectionClear(value) { installReaderTapSelectionClear = value; },
+  get isPdfPageVisible() { return isPdfPageVisible; }, set isPdfPageVisible(value) { isPdfPageVisible = value; },
+  get isReaderGenerationCurrent() { return isReaderGenerationCurrent; }, set isReaderGenerationCurrent(value) { isReaderGenerationCurrent = value; },
+  get lastSavedProgress() { return lastSavedProgress; }, set lastSavedProgress(value) { lastSavedProgress = value; },
+  get loadChapterManifestDocument() { return loadChapterManifestDocument; }, set loadChapterManifestDocument(value) { loadChapterManifestDocument = value; },
+  get loadDocxDocument() { return loadDocxDocument; }, set loadDocxDocument(value) { loadDocxDocument = value; },
+  get loadHtmlDocument() { return loadHtmlDocument; }, set loadHtmlDocument(value) { loadHtmlDocument = value; },
+  get loadImageDocument() { return loadImageDocument; }, set loadImageDocument(value) { loadImageDocument = value; },
+  get loadMarkdownDocument() { return loadMarkdownDocument; }, set loadMarkdownDocument(value) { loadMarkdownDocument = value; },
+  get loadMediaDocument() { return loadMediaDocument; }, set loadMediaDocument(value) { loadMediaDocument = value; },
+  get loadPdfDocument() { return loadPdfDocument; }, set loadPdfDocument(value) { loadPdfDocument = value; },
+  get loadPdfOcrManifest() { return loadPdfOcrManifest; }, set loadPdfOcrManifest(value) { loadPdfOcrManifest = value; },
+  get loadPdfOcrPage() { return loadPdfOcrPage; }, set loadPdfOcrPage(value) { loadPdfOcrPage = value; },
+  get loadPdfTextContent() { return loadPdfTextContent; }, set loadPdfTextContent(value) { loadPdfTextContent = value; },
+  get loadReaderRestoration() { return loadReaderRestoration; }, set loadReaderRestoration(value) { loadReaderRestoration = value; },
+  get loadScript() { return loadScript; }, set loadScript(value) { loadScript = value; },
+  get loadSwfDocument() { return loadSwfDocument; }, set loadSwfDocument(value) { loadSwfDocument = value; },
+  get loadTextDocument() { return loadTextDocument; }, set loadTextDocument(value) { loadTextDocument = value; },
+  get loadingIndicator() { return loadingIndicator; },
+  get loadingStatus() { return loadingStatus; },
+  get localReaderData() { return localReaderData; }, set localReaderData(value) { localReaderData = value; },
+  get markReaderContentReady() { return markReaderContentReady; }, set markReaderContentReady(value) { markReaderContentReady = value; },
+  get markerFrame() { return markerFrame; }, set markerFrame(value) { markerFrame = value; },
+  get measurePdf() { return measurePdf; }, set measurePdf(value) { measurePdf = value; },
+  get mediaElement() { return mediaElement; }, set mediaElement(value) { mediaElement = value; },
+  get mediaPanel() { return mediaPanel; },
+  get mediaTab() { return mediaTab; },
+  get navigateReader() { return navigateReader; }, set navigateReader(value) { navigateReader = value; },
+  get navigateTocEntry() { return navigateTocEntry; }, set navigateTocEntry(value) { navigateTocEntry = value; },
+  get navigationState() { return navigationState; },
+  get nextReaderGeneration() { return nextReaderGeneration; }, set nextReaderGeneration(value) { nextReaderGeneration = value; },
+  get normalizePdfPriority() { return normalizePdfPriority; }, set normalizePdfPriority(value) { normalizePdfPriority = value; },
+  get normalizePdfSearchText() { return normalizePdfSearchText; },
+  get normalizeSourceUrl() { return normalizeSourceUrl; }, set normalizeSourceUrl(value) { normalizeSourceUrl = value; },
+  get ocrManifestUrl() { return ocrManifestUrl; }, set ocrManifestUrl(value) { ocrManifestUrl = value; },
+  get ocrUrl() { return ocrUrl; },
+  get pageAtMarker() { return pageAtMarker; }, set pageAtMarker(value) { pageAtMarker = value; },
+  get pageInput() { return pageInput; },
+  get pageInvertToggle() { return pageInvertToggle; },
+  get pageInverted() { return pageInverted; }, set pageInverted(value) { pageInverted = value; },
+  get pageNavigationLockUntil() { return pageNavigationLockUntil; }, set pageNavigationLockUntil(value) { pageNavigationLockUntil = value; },
+  get paintTextHit() { return paintTextHit; },
+  get panelAnimationTimer() { return panelAnimationTimer; }, set panelAnimationTimer(value) { panelAnimationTimer = value; },
+  get panelState() { return panelState; },
+  get params() { return params; },
+  get parseChapterDocument() { return parseChapterDocument; }, set parseChapterDocument(value) { parseChapterDocument = value; },
+  get pdfActiveRenders() { return pdfActiveRenders; }, set pdfActiveRenders(value) { pdfActiveRenders = value; },
+  get pdfActiveSearchTextLoads() { return pdfActiveSearchTextLoads; }, set pdfActiveSearchTextLoads(value) { pdfActiveSearchTextLoads = value; },
+  get pdfActiveTextLoads() { return pdfActiveTextLoads; }, set pdfActiveTextLoads(value) { pdfActiveTextLoads = value; },
+  get pdfBookSearchClient() { return pdfBookSearchClient; }, set pdfBookSearchClient(value) { pdfBookSearchClient = value; },
+  get pdfBookSearchModulePromise() { return pdfBookSearchModulePromise; }, set pdfBookSearchModulePromise(value) { pdfBookSearchModulePromise = value; },
+  get pdfBookSearchPrefetchPromise() { return pdfBookSearchPrefetchPromise; }, set pdfBookSearchPrefetchPromise(value) { pdfBookSearchPrefetchPromise = value; },
+  get pdfBookSearchPrefetchTimer() { return pdfBookSearchPrefetchTimer; }, set pdfBookSearchPrefetchTimer(value) { pdfBookSearchPrefetchTimer = value; },
+  get pdfDocument() { return pdfDocument; }, set pdfDocument(value) { pdfDocument = value; },
+  get pdfEnginePreload() { return pdfEnginePreload; }, set pdfEnginePreload(value) { pdfEnginePreload = value; },
+  get pdfFetchPolicy() { return pdfFetchPolicy; }, set pdfFetchPolicy(value) { pdfFetchPolicy = value; },
+  get pdfFirstPagePreload() { return pdfFirstPagePreload; }, set pdfFirstPagePreload(value) { pdfFirstPagePreload = value; },
+  get pdfFirstPagePreloadPage() { return pdfFirstPagePreloadPage; }, set pdfFirstPagePreloadPage(value) { pdfFirstPagePreloadPage = value; },
+  get pdfHybridDocumentPromise() { return pdfHybridDocumentPromise; }, set pdfHybridDocumentPromise(value) { pdfHybridDocumentPromise = value; },
+  get pdfHybridUrl() { return pdfHybridUrl; }, set pdfHybridUrl(value) { pdfHybridUrl = value; },
+  get pdfLastScrollTop() { return pdfLastScrollTop; }, set pdfLastScrollTop(value) { pdfLastScrollTop = value; },
+  get pdfManifestPrefetchActive() { return pdfManifestPrefetchActive; },
+  get pdfManifestPrefetchCount() { return pdfManifestPrefetchCount; }, set pdfManifestPrefetchCount(value) { pdfManifestPrefetchCount = value; },
+  get pdfManifestPrefetchNext() { return pdfManifestPrefetchNext; }, set pdfManifestPrefetchNext(value) { pdfManifestPrefetchNext = value; },
+  get pdfManifestPrefetchOrigin() { return pdfManifestPrefetchOrigin; }, set pdfManifestPrefetchOrigin(value) { pdfManifestPrefetchOrigin = value; },
+  get pdfManifestPrefetchTimer() { return pdfManifestPrefetchTimer; }, set pdfManifestPrefetchTimer(value) { pdfManifestPrefetchTimer = value; },
+  get pdfManifestPrefetchWrapped() { return pdfManifestPrefetchWrapped; }, set pdfManifestPrefetchWrapped(value) { pdfManifestPrefetchWrapped = value; },
+  get pdfManifestPrefetches() { return pdfManifestPrefetches; },
+  get pdfManifestShells() { return pdfManifestShells; },
+  get pdfOcrManifest() { return pdfOcrManifest; }, set pdfOcrManifest(value) { pdfOcrManifest = value; },
+  get pdfOcrManifestPromise() { return pdfOcrManifestPromise; }, set pdfOcrManifestPromise(value) { pdfOcrManifestPromise = value; },
+  get pdfOcrPageCache() { return pdfOcrPageCache; },
+  get pdfOcrPageCacheBytes() { return pdfOcrPageCacheBytes; }, set pdfOcrPageCacheBytes(value) { pdfOcrPageCacheBytes = value; },
+  get pdfOcrPagePromises() { return pdfOcrPagePromises; },
+  get pdfOcrSource() { return pdfOcrSource; }, set pdfOcrSource(value) { pdfOcrSource = value; },
+  get pdfPageEntry() { return pdfPageEntry; }, set pdfPageEntry(value) { pdfPageEntry = value; },
+  get pdfPageManifest() { return pdfPageManifest; }, set pdfPageManifest(value) { pdfPageManifest = value; },
+  get pdfPagePriority() { return pdfPagePriority; }, set pdfPagePriority(value) { pdfPagePriority = value; },
+  get pdfPageTimings() { return pdfPageTimings; },
+  get pdfPersistentTextOpening() { return pdfPersistentTextOpening; }, set pdfPersistentTextOpening(value) { pdfPersistentTextOpening = value; },
+  get pdfPersistentTextStore() { return pdfPersistentTextStore; }, set pdfPersistentTextStore(value) { pdfPersistentTextStore = value; },
+  get pdfPersistentTextVersion() { return pdfPersistentTextVersion; }, set pdfPersistentTextVersion(value) { pdfPersistentTextVersion = value; },
+  get pdfPrimarySource() { return pdfPrimarySource; }, set pdfPrimarySource(value) { pdfPrimarySource = value; },
+  get pdfRenderWaiters() { return pdfRenderWaiters; },
+  get pdfScrollDirection() { return pdfScrollDirection; }, set pdfScrollDirection(value) { pdfScrollDirection = value; },
+  get pdfSearchText() { return pdfSearchText; },
+  get pdfSearchTextCache() { return pdfSearchTextCache; },
+  get pdfSearchTextCacheBytes() { return pdfSearchTextCacheBytes; }, set pdfSearchTextCacheBytes(value) { pdfSearchTextCacheBytes = value; },
+  get pdfSelectionIntersects() { return pdfSelectionIntersects; }, set pdfSelectionIntersects(value) { pdfSelectionIntersects = value; },
+  get pdfShellWindow() { return pdfShellWindow; }, set pdfShellWindow(value) { pdfShellWindow = value; },
+  get pdfShellsReady() { return pdfShellsReady; }, set pdfShellsReady(value) { pdfShellsReady = value; },
+  get pdfSourceOffset() { return pdfSourceOffset; },
+  get pdfTextContent() { return pdfTextContent; },
+  get pdfTextContentCache() { return pdfTextContentCache; },
+  get pdfTextContentCacheBytes() { return pdfTextContentCacheBytes; }, set pdfTextContentCacheBytes(value) { pdfTextContentCacheBytes = value; },
+  get pdfTextContentPromises() { return pdfTextContentPromises; },
+  get pdfTextLayerRepository() { return pdfTextLayerRepository; }, set pdfTextLayerRepository(value) { pdfTextLayerRepository = value; },
+  get pdfTextWaiters() { return pdfTextWaiters; },
+  get pdfUserHasScrolled() { return pdfUserHasScrolled; }, set pdfUserHasScrolled(value) { pdfUserHasScrolled = value; },
+  get pdfV3BlobReleases() { return pdfV3BlobReleases; },
+  get pdfV3Manifest() { return pdfV3Manifest; }, set pdfV3Manifest(value) { pdfV3Manifest = value; },
+  get pdfV3Map() { return pdfV3Map; }, set pdfV3Map(value) { pdfV3Map = value; },
+  get pdfV3Repository() { return pdfV3Repository; }, set pdfV3Repository(value) { pdfV3Repository = value; },
+  get pdfWorker() { return pdfWorker; }, set pdfWorker(value) { pdfWorker = value; },
+  get pendingBookmarkSnapshot() { return pendingBookmarkSnapshot; }, set pendingBookmarkSnapshot(value) { pendingBookmarkSnapshot = value; },
+  get populateIndependentTextLayer() { return populateIndependentTextLayer; },
+  get populateOcrTextLayer() { return populateOcrTextLayer; },
+  get populatePdfTextLayer() { return populatePdfTextLayer; },
+  get preloadPdfEngine() { return preloadPdfEngine; }, set preloadPdfEngine(value) { preloadPdfEngine = value; },
+  get prepareReaderDocument() { return prepareReaderDocument; }, set prepareReaderDocument(value) { prepareReaderDocument = value; },
+  get previousProgressState() { return previousProgressState; }, set previousProgressState(value) { previousProgressState = value; },
+  get prioritizePdfManifestPrefetch() { return prioritizePdfManifestPrefetch; }, set prioritizePdfManifestPrefetch(value) { prioritizePdfManifestPrefetch = value; },
+  get progressPercent() { return progressPercent; },
+  get progressRange() { return progressRange; },
+  get progressSaveChain() { return progressSaveChain; }, set progressSaveChain(value) { progressSaveChain = value; },
+  get progressSeeking() { return progressSeeking; }, set progressSeeking(value) { progressSeeking = value; },
+  get progressTools() { return progressTools; },
+  get progressUndo() { return progressUndo; },
+  get promotePdfRenderWaiter() { return promotePdfRenderWaiter; }, set promotePdfRenderWaiter(value) { promotePdfRenderWaiter = value; },
+  get queuePdfManifestPrefetch() { return queuePdfManifestPrefetch; }, set queuePdfManifestPrefetch(value) { queuePdfManifestPrefetch = value; },
+  get readPreparedBytes() { return readPreparedBytes; }, set readPreparedBytes(value) { readPreparedBytes = value; },
+  get readerAbortController() { return readerAbortController; },
+  get readerAbortError() { return readerAbortError; }, set readerAbortError(value) { readerAbortError = value; },
+  get readerContentUrl() { return readerContentUrl; }, set readerContentUrl(value) { readerContentUrl = value; },
+  get readerDownloadApiUrl() { return readerDownloadApiUrl; }, set readerDownloadApiUrl(value) { readerDownloadApiUrl = value; },
+  get readerDownloadUrl() { return readerDownloadUrl; }, set readerDownloadUrl(value) { readerDownloadUrl = value; },
+  get readerId() { return readerId; },
+  get readerLifecycle() { return readerLifecycle; },
+  get readerPageScrollTop() { return readerPageScrollTop; }, set readerPageScrollTop(value) { readerPageScrollTop = value; },
+  get readerPanelInteractionSerial() { return readerPanelInteractionSerial; }, set readerPanelInteractionSerial(value) { readerPanelInteractionSerial = value; },
+  get readerPath() { return readerPath; },
+  get readerPathLabel() { return readerPathLabel; },
+  get readerProgressPercent() { return readerProgressPercent; }, set readerProgressPercent(value) { readerProgressPercent = value; },
+  get readerRequestManager() { return readerRequestManager; },
+  get readerResources() { return readerResources; },
+  get readerRestorationEntry() { return readerRestorationEntry; }, set readerRestorationEntry(value) { readerRestorationEntry = value; },
+  get readerRestorationLoaded() { return readerRestorationLoaded; }, set readerRestorationLoaded(value) { readerRestorationLoaded = value; },
+  get readerRestorationPromise() { return readerRestorationPromise; }, set readerRestorationPromise(value) { readerRestorationPromise = value; },
+  get readerRuntime() { return readerRuntime; },
+  get readerSourcePromise() { return readerSourcePromise; }, set readerSourcePromise(value) { readerSourcePromise = value; },
+  get readerTheme() { return readerTheme; }, set readerTheme(value) { readerTheme = value; },
+  get readerThemeToggle() { return readerThemeToggle; },
+  get readerUiHistoryState() { return readerUiHistoryState; }, set readerUiHistoryState(value) { readerUiHistoryState = value; },
+  get readingProgressSummary() { return readingProgressSummary; },
+  get refreshNearbyPdfPages() { return refreshNearbyPdfPages; }, set refreshNearbyPdfPages(value) { refreshNearbyPdfPages = value; },
+  get releasePdfRenderSlot() { return releasePdfRenderSlot; }, set releasePdfRenderSlot(value) { releasePdfRenderSlot = value; },
+  get releasePdfTextSlot() { return releasePdfTextSlot; }, set releasePdfTextSlot(value) { releasePdfTextSlot = value; },
+  get releasePdfWorker() { return releasePdfWorker; }, set releasePdfWorker(value) { releasePdfWorker = value; },
+  get renderBookmarks() { return renderBookmarks; }, set renderBookmarks(value) { renderBookmarks = value; },
+  get renderChapterManifest() { return renderChapterManifest; }, set renderChapterManifest(value) { renderChapterManifest = value; },
+  get renderDocx() { return renderDocx; }, set renderDocx(value) { renderDocx = value; },
+  get renderFoliate() { return renderFoliate; }, set renderFoliate(value) { renderFoliate = value; },
+  get renderFullSearchResults() { return renderFullSearchResults; },
+  get renderHtml() { return renderHtml; }, set renderHtml(value) { renderHtml = value; },
+  get renderImageDocument() { return renderImageDocument; }, set renderImageDocument(value) { renderImageDocument = value; },
+  get renderImagePages() { return renderImagePages; }, set renderImagePages(value) { renderImagePages = value; },
+  get renderMarkdownDocument() { return renderMarkdownDocument; }, set renderMarkdownDocument(value) { renderMarkdownDocument = value; },
+  get renderMedia() { return renderMedia; }, set renderMedia(value) { renderMedia = value; },
+  get renderPdf() { return renderPdf; }, set renderPdf(value) { renderPdf = value; },
+  get renderPdfInBackground() { return renderPdfInBackground; }, set renderPdfInBackground(value) { renderPdfInBackground = value; },
+  get renderPdfManifestShell() { return renderPdfManifestShell; }, set renderPdfManifestShell(value) { renderPdfManifestShell = value; },
+  get renderPdfOcrText() { return renderPdfOcrText; }, set renderPdfOcrText(value) { renderPdfOcrText = value; },
+  get renderPdfPages() { return renderPdfPages; }, set renderPdfPages(value) { renderPdfPages = value; },
+  get renderPdfShell() { return renderPdfShell; }, set renderPdfShell(value) { renderPdfShell = value; },
+  get renderPdfText() { return renderPdfText; }, set renderPdfText(value) { renderPdfText = value; },
+  get renderPlainText() { return renderPlainText; }, set renderPlainText(value) { renderPlainText = value; },
+  get renderSwf() { return renderSwf; }, set renderSwf(value) { renderSwf = value; },
+  get renderText() { return renderText; }, set renderText(value) { renderText = value; },
+  get renderTextDocument() { return renderTextDocument; }, set renderTextDocument(value) { renderTextDocument = value; },
+  get reportNavigationError() { return reportNavigationError; }, set reportNavigationError(value) { reportNavigationError = value; },
+  get rerenderVisiblePdfPages() { return rerenderVisiblePdfPages; }, set rerenderVisiblePdfPages(value) { rerenderVisiblePdfPages = value; },
+  get resolveReaderId() { return resolveReaderId; }, set resolveReaderId(value) { resolveReaderId = value; },
+  get resolvedReaderData() { return resolvedReaderData; }, set resolvedReaderData(value) { resolvedReaderData = value; },
+  get restorationFailed() { return restorationFailed; }, set restorationFailed(value) { restorationFailed = value; },
+  get restoreChapterPosition() { return restoreChapterPosition; }, set restoreChapterPosition(value) { restoreChapterPosition = value; },
+  get restoreFoliateBookmarkPosition() { return restoreFoliateBookmarkPosition; }, set restoreFoliateBookmarkPosition(value) { restoreFoliateBookmarkPosition = value; },
+  get restoreFormat() { return restoreFormat; }, set restoreFormat(value) { restoreFormat = value; },
+  get retryReaderProxy() { return retryReaderProxy; }, set retryReaderProxy(value) { retryReaderProxy = value; },
+  get retryableReaderProxyError() { return retryableReaderProxyError; }, set retryableReaderProxyError(value) { retryableReaderProxyError = value; },
+  get returnHistoryKey() { return returnHistoryKey; },
+  get runFullSearch() { return runFullSearch; },
+  get sanitizeEpubDocument() { return sanitizeEpubDocument; }, set sanitizeEpubDocument(value) { sanitizeEpubDocument = value; },
+  get saveDeadline() { return saveDeadline; }, set saveDeadline(value) { saveDeadline = value; },
+  get saveProgress() { return saveProgress; }, set saveProgress(value) { saveProgress = value; },
+  get saveTimer() { return saveTimer; }, set saveTimer(value) { saveTimer = value; },
+  get scheduleFoliateScrollSync() { return scheduleFoliateScrollSync; }, set scheduleFoliateScrollSync(value) { scheduleFoliateScrollSync = value; },
+  get scheduleMarkerSync() { return scheduleMarkerSync; }, set scheduleMarkerSync(value) { scheduleMarkerSync = value; },
+  get schedulePdfBookSearchPrefetch() { return schedulePdfBookSearchPrefetch; }, set schedulePdfBookSearchPrefetch(value) { schedulePdfBookSearchPrefetch = value; },
+  get schedulePdfManifestPrefetch() { return schedulePdfManifestPrefetch; }, set schedulePdfManifestPrefetch(value) { schedulePdfManifestPrefetch = value; },
+  get scheduleSave() { return scheduleSave; }, set scheduleSave(value) { scheduleSave = value; },
+  get searchConcentratedPdf() { return searchConcentratedPdf; }, set searchConcentratedPdf(value) { searchConcentratedPdf = value; },
+  get searchState() { return searchState; },
+  get seekFoliateProgress() { return seekFoliateProgress; }, set seekFoliateProgress(value) { seekFoliateProgress = value; },
+  get selectPanel() { return selectPanel; }, set selectPanel(value) { selectPanel = value; },
+  get setPdfPageLoadingState() { return setPdfPageLoadingState; }, set setPdfPageLoadingState(value) { setPdfPageLoadingState = value; },
+  get setReaderPanelOpen() { return setReaderPanelOpen; }, set setReaderPanelOpen(value) { setReaderPanelOpen = value; },
+  get setReaderPhase() { return setReaderPhase; }, set setReaderPhase(value) { setReaderPhase = value; },
+  get setReaderStage() { return setReaderStage; }, set setReaderStage(value) { setReaderStage = value; },
+  get setToc() { return setToc; }, set setToc(value) { setToc = value; },
+  get setZoom() { return setZoom; }, set setZoom(value) { setZoom = value; },
+  get settleReaderImages() { return settleReaderImages; }, set settleReaderImages(value) { settleReaderImages = value; },
+  get showDownloadFeedback() { return showDownloadFeedback; }, set showDownloadFeedback(value) { showDownloadFeedback = value; },
+  get sourceName() { return sourceName; },
+  get sourceUrl() { return sourceUrl; }, set sourceUrl(value) { sourceUrl = value; },
+  get status() { return status; },
+  get swfPlayer() { return swfPlayer; }, set swfPlayer(value) { swfPlayer = value; },
+  get syncCurrentPageFromMarker() { return syncCurrentPageFromMarker; }, set syncCurrentPageFromMarker(value) { syncCurrentPageFromMarker = value; },
+  get syncFoliateScrollLocation() { return syncFoliateScrollLocation; }, set syncFoliateScrollLocation(value) { syncFoliateScrollLocation = value; },
+  get syncHeadingLocation() { return syncHeadingLocation; }, set syncHeadingLocation(value) { syncHeadingLocation = value; },
+  get takePdfManifestPrefetch() { return takePdfManifestPrefetch; }, set takePdfManifestPrefetch(value) { takePdfManifestPrefetch = value; },
+  get themeAnimationTimer() { return themeAnimationTimer; }, set themeAnimationTimer(value) { themeAnimationTimer = value; },
+  get tocVirtualState() { return tocVirtualState; }, set tocVirtualState(value) { tocVirtualState = value; },
+  get trackReaderResource() { return trackReaderResource; }, set trackReaderResource(value) { trackReaderResource = value; },
+  get trimPdfCanvases() { return trimPdfCanvases; }, set trimPdfCanvases(value) { trimPdfCanvases = value; },
+  get trimPdfManifestImages() { return trimPdfManifestImages; }, set trimPdfManifestImages(value) { trimPdfManifestImages = value; },
+  get trustedChapterReferenceUrl() { return trustedChapterReferenceUrl; }, set trustedChapterReferenceUrl(value) { trustedChapterReferenceUrl = value; },
+  get trustedChapterResourceUrl() { return trustedChapterResourceUrl; }, set trustedChapterResourceUrl(value) { trustedChapterResourceUrl = value; },
+  get trustedChapterUrl() { return trustedChapterUrl; }, set trustedChapterUrl(value) { trustedChapterUrl = value; },
+  get trustedReaderAssetManifestUrl() { return trustedReaderAssetManifestUrl; }, set trustedReaderAssetManifestUrl(value) { trustedReaderAssetManifestUrl = value; },
+  get updateDocumentState() { return updateDocumentState; }, set updateDocumentState(value) { updateDocumentState = value; },
+  get updateNavigationState() { return updateNavigationState; }, set updateNavigationState(value) { updateNavigationState = value; },
+  get updatePanelState() { return updatePanelState; }, set updatePanelState(value) { updatePanelState = value; },
+  get updateProgressTools() { return updateProgressTools; }, set updateProgressTools(value) { updateProgressTools = value; },
+  get updateSearchState() { return updateSearchState; }, set updateSearchState(value) { updateSearchState = value; },
+  get updateTocCurrentMark() { return updateTocCurrentMark; }, set updateTocCurrentMark(value) { updateTocCurrentMark = value; },
+  get v3ResourceUrl() { return v3ResourceUrl; }, set v3ResourceUrl(value) { v3ResourceUrl = value; },
+  get validFallback() { return validFallback; }, set validFallback(value) { validFallback = value; },
+  get validOcr() { return validOcr; }, set validOcr(value) { validOcr = value; },
+  get validSource() { return validSource; }, set validSource(value) { validSource = value; },
+  get validatePageMap() { return validatePageMap; },
+  get validateReadingManifest() { return validateReadingManifest; },
+  get validateResource() { return validateResource; },
+  get viewport() { return viewport; },
+  get waitForReader() { return waitForReader; }, set waitForReader(value) { waitForReader = value; },
+  get zoomChangedByUser() { return zoomChangedByUser; }, set zoomChangedByUser(value) { zoomChangedByUser = value; },
+  get zoomInput() { return zoomInput; },
+  get activateChapter() { return activateChapter; }, set activateChapter(value) { activateChapter = value; },
+  get applyPageInversion() { return applyPageInversion; }, set applyPageInversion(value) { applyPageInversion = value; },
+  get applyReaderTheme() { return applyReaderTheme; }, set applyReaderTheme(value) { applyReaderTheme = value; },
+  get bookmarkEditFields() { return bookmarkEditFields; },
+  get bookmarksAllButton() { return bookmarksAllButton; },
+  get bookmarksHeader() { return bookmarksHeader; },
+  get bookmarksHeaderActions() { return bookmarksHeaderActions; },
+  get bookmarksSearchButton() { return bookmarksSearchButton; },
+  get canReturnWithHistory() { return canReturnWithHistory; }, set canReturnWithHistory(value) { canReturnWithHistory = value; },
+  get captureBookmarkSnapshot() { return captureBookmarkSnapshot; }, set captureBookmarkSnapshot(value) { captureBookmarkSnapshot = value; },
+  get captureProgressState() { return captureProgressState; }, set captureProgressState(value) { captureProgressState = value; },
+  get clearReturnNavigation() { return clearReturnNavigation; }, set clearReturnNavigation(value) { clearReturnNavigation = value; },
+  get closeBookmarkPopover() { return closeBookmarkPopover; }, set closeBookmarkPopover(value) { closeBookmarkPopover = value; },
+  get closeFullSearchView() { return closeFullSearchView; },
+  get correctPdfCrossPageSelection() { return correctPdfCrossPageSelection; }, set correctPdfCrossPageSelection(value) { correctPdfCrossPageSelection = value; },
+  get currentReaderUrl() { return currentReaderUrl; }, set currentReaderUrl(value) { currentReaderUrl = value; },
+  get disposeReader() { return disposeReader; }, set disposeReader(value) { disposeReader = value; },
+  get flushEpubSeek() { return flushEpubSeek; }, set flushEpubSeek(value) { flushEpubSeek = value; },
+  get fullSearchController() { return fullSearchController; },
+  get fullSearchView() { return fullSearchView; },
+  get navigateReaderFolder() { return navigateReaderFolder; }, set navigateReaderFolder(value) { navigateReaderFolder = value; },
+  get normalizeReaderReturnUrl() { return normalizeReaderReturnUrl; }, set normalizeReaderReturnUrl(value) { normalizeReaderReturnUrl = value; },
+  get notePdfScrollIntent() { return notePdfScrollIntent; }, set notePdfScrollIntent(value) { notePdfScrollIntent = value; },
+  get openBookmarkPopover() { return openBookmarkPopover; }, set openBookmarkPopover(value) { openBookmarkPopover = value; },
+  get pdfDiagnostics() { return pdfDiagnostics; },
+  get pdfSelectionBoundaryUpdate() { return pdfSelectionBoundaryUpdate; }, set pdfSelectionBoundaryUpdate(value) { pdfSelectionBoundaryUpdate = value; },
+  get pdfSelectionPointer() { return pdfSelectionPointer; }, set pdfSelectionPointer(value) { pdfSelectionPointer = value; },
+  get registerReaderFormatAdapters() { return registerReaderFormatAdapters; }, set registerReaderFormatAdapters(value) { registerReaderFormatAdapters = value; },
+  get renderHistory() { return renderHistory; }, set renderHistory(value) { renderHistory = value; },
+  get restoreProgressState() { return restoreProgressState; }, set restoreProgressState(value) { restoreProgressState = value; },
+  get returnNavigationToken() { return returnNavigationToken; }, set returnNavigationToken(value) { returnNavigationToken = value; },
+  get returnNeedsReload() { return returnNeedsReload; }, set returnNeedsReload(value) { returnNeedsReload = value; },
+  get returnUrl() { return returnUrl; }, set returnUrl(value) { returnUrl = value; },
+  get seekProgress() { return seekProgress; }, set seekProgress(value) { seekProgress = value; },
+  get setPanelSearchOpen() { return setPanelSearchOpen; }, set setPanelSearchOpen(value) { setPanelSearchOpen = value; },
+  get start() { return start; }, set start(value) { start = value; },
+  get startReaderDownload() { return startReaderDownload; }, set startReaderDownload(value) { startReaderDownload = value; },
+  get stopPdfManifestPrefetch() { return stopPdfManifestPrefetch; }, set stopPdfManifestPrefetch(value) { stopPdfManifestPrefetch = value; },
+  get stopReaderWork() { return stopReaderWork; }, set stopReaderWork(value) { stopReaderWork = value; },
+  get syncCapabilityControls() { return syncCapabilityControls; }, set syncCapabilityControls(value) { syncCapabilityControls = value; },
+  get syncTocTab() { return syncTocTab; }, set syncTocTab(value) { syncTocTab = value; },
+  get turnViewport() { return turnViewport; }, set turnViewport(value) { turnViewport = value; },
+  get updateReadingProgressSummary() { return updateReadingProgressSummary; }, set updateReadingProgressSummary(value) { updateReadingProgressSummary = value; },
+  get appendShellsBatched() { return appendShellsBatched; }, set appendShellsBatched(value) { appendShellsBatched = value; },
+  get applyReaderPathMetadata() { return applyReaderPathMetadata; }, set applyReaderPathMetadata(value) { applyReaderPathMetadata = value; },
+  get bookmarkExcerpt() { return bookmarkExcerpt; }, set bookmarkExcerpt(value) { bookmarkExcerpt = value; },
+  get buildDiscourseDocument() { return buildDiscourseDocument; }, set buildDiscourseDocument(value) { buildDiscourseDocument = value; },
+  get buildHtmlFrameSource() { return buildHtmlFrameSource; }, set buildHtmlFrameSource(value) { buildHtmlFrameSource = value; },
+  get cachePdfOcrPage() { return cachePdfOcrPage; }, set cachePdfOcrPage(value) { cachePdfOcrPage = value; },
+  get cachePdfSearchText() { return cachePdfSearchText; }, set cachePdfSearchText(value) { cachePdfSearchText = value; },
+  get cachePdfTextContent() { return cachePdfTextContent; }, set cachePdfTextContent(value) { cachePdfTextContent = value; },
+  get cachedPdfOcrPage() { return cachedPdfOcrPage; }, set cachedPdfOcrPage(value) { cachedPdfOcrPage = value; },
+  get cachedPdfTextContent() { return cachedPdfTextContent; }, set cachedPdfTextContent(value) { cachedPdfTextContent = value; },
+  get canPrefetchPdfImages() { return canPrefetchPdfImages; }, set canPrefetchPdfImages(value) { canPrefetchPdfImages = value; },
+  get cancelPdfManifestPrefetch() { return cancelPdfManifestPrefetch; }, set cancelPdfManifestPrefetch(value) { cancelPdfManifestPrefetch = value; },
+  get chapterSearchModule() { return chapterSearchModule; }, set chapterSearchModule(value) { chapterSearchModule = value; },
+  get cleanTocLabel() { return cleanTocLabel; }, set cleanTocLabel(value) { cleanTocLabel = value; },
+  get cloneFoliateDocument() { return cloneFoliateDocument; }, set cloneFoliateDocument(value) { cloneFoliateDocument = value; },
+  get createFoliateSection() { return createFoliateSection; }, set createFoliateSection(value) { createFoliateSection = value; },
+  get createHeadingLocationCache() { return createHeadingLocationCache; }, set createHeadingLocationCache(value) { createHeadingLocationCache = value; },
+  get createPdfShellWindow() { return createPdfShellWindow; }, set createPdfShellWindow(value) { createPdfShellWindow = value; },
+  get createTocRow() { return createTocRow; }, set createTocRow(value) { createTocRow = value; },
+  get detectHtmlEncoding() { return detectHtmlEncoding; }, set detectHtmlEncoding(value) { detectHtmlEncoding = value; },
+  get disposeFormatResources() { return disposeFormatResources; }, set disposeFormatResources(value) { disposeFormatResources = value; },
+  get ensurePdfBookSearchClient() { return ensurePdfBookSearchClient; }, set ensurePdfBookSearchClient(value) { ensurePdfBookSearchClient = value; },
+  get estimatePdfOcrPageBytes() { return estimatePdfOcrPageBytes; }, set estimatePdfOcrPageBytes(value) { estimatePdfOcrPageBytes = value; },
+  get estimatePdfTextContentBytes() { return estimatePdfTextContentBytes; }, set estimatePdfTextContentBytes(value) { estimatePdfTextContentBytes = value; },
+  get excerptFromCaret() { return excerptFromCaret; }, set excerptFromCaret(value) { excerptFromCaret = value; },
+  get fetchWithReaderTimeout() { return fetchWithReaderTimeout; }, set fetchWithReaderTimeout(value) { fetchWithReaderTimeout = value; },
+  get foliateSearchAnchor() { return foliateSearchAnchor; }, set foliateSearchAnchor(value) { foliateSearchAnchor = value; },
+  get foliateSectionQuery() { return foliateSectionQuery; }, set foliateSectionQuery(value) { foliateSectionQuery = value; },
+  get foliateTocEntries() { return foliateTocEntries; }, set foliateTocEntries(value) { foliateTocEntries = value; },
+  get fullSearchFoliateMatches() { return fullSearchFoliateMatches; }, set fullSearchFoliateMatches(value) { fullSearchFoliateMatches = value; },
+  get getPdfPersistentTextStore() { return getPdfPersistentTextStore; }, set getPdfPersistentTextStore(value) { getPdfPersistentTextStore = value; },
+  get highlightPanelItem() { return highlightPanelItem; }, set highlightPanelItem(value) { highlightPanelItem = value; },
+  get loadPdfEngine() { return loadPdfEngine; }, set loadPdfEngine(value) { loadPdfEngine = value; },
+  get loadPdfSearchText() { return loadPdfSearchText; }, set loadPdfSearchText(value) { loadPdfSearchText = value; },
+  get loadPdfTaskWithTimeout() { return loadPdfTaskWithTimeout; }, set loadPdfTaskWithTimeout(value) { loadPdfTaskWithTimeout = value; },
+  get loadPdfWithTimeout() { return loadPdfWithTimeout; }, set loadPdfWithTimeout(value) { loadPdfWithTimeout = value; },
+  get makePdfSearchPageLoader() { return makePdfSearchPageLoader; }, set makePdfSearchPageLoader(value) { makePdfSearchPageLoader = value; },
+  get memoizeDocxAssets() { return memoizeDocxAssets; }, set memoizeDocxAssets(value) { memoizeDocxAssets = value; },
+  get memoizeDocxResource() { return memoizeDocxResource; }, set memoizeDocxResource(value) { memoizeDocxResource = value; },
+  get normalizeEpubDocument() { return normalizeEpubDocument; }, set normalizeEpubDocument(value) { normalizeEpubDocument = value; },
+  get notifyReaderUiState() { return notifyReaderUiState; }, set notifyReaderUiState(value) { notifyReaderUiState = value; },
+  get pdfManifestPrefetchConcurrency() { return pdfManifestPrefetchConcurrency; }, set pdfManifestPrefetchConcurrency(value) { pdfManifestPrefetchConcurrency = value; },
+  get pdfManifestPrefetchMaxPages() { return pdfManifestPrefetchMaxPages; }, set pdfManifestPrefetchMaxPages(value) { pdfManifestPrefetchMaxPages = value; },
+  get pdfManifestSource() { return pdfManifestSource; }, set pdfManifestSource(value) { pdfManifestSource = value; },
+  get pdfPixelBudget() { return pdfPixelBudget; }, set pdfPixelBudget(value) { pdfPixelBudget = value; },
+  get pdfRetainedPixels() { return pdfRetainedPixels; }, set pdfRetainedPixels(value) { pdfRetainedPixels = value; },
+  get pdfStage() { return pdfStage; }, set pdfStage(value) { pdfStage = value; },
+  get pdfSurfacePixels() { return pdfSurfacePixels; }, set pdfSurfacePixels(value) { pdfSurfacePixels = value; },
+  get placeReadingProgress() { return placeReadingProgress; }, set placeReadingProgress(value) { placeReadingProgress = value; },
+  get prefetchPdfBookSearch() { return prefetchPdfBookSearch; }, set prefetchPdfBookSearch(value) { prefetchPdfBookSearch = value; },
+  get preloadPdfFirstPage() { return preloadPdfFirstPage; }, set preloadPdfFirstPage(value) { preloadPdfFirstPage = value; },
+  get prepareHtmlDocument() { return prepareHtmlDocument; }, set prepareHtmlDocument(value) { prepareHtmlDocument = value; },
+  get preparePdfWorker() { return preparePdfWorker; }, set preparePdfWorker(value) { preparePdfWorker = value; },
+  get preparePdfWorkerAttempt() { return preparePdfWorkerAttempt; }, set preparePdfWorkerAttempt(value) { preparePdfWorkerAttempt = value; },
+  get publishPdfSearchProgress() { return publishPdfSearchProgress; }, set publishPdfSearchProgress(value) { publishPdfSearchProgress = value; },
+  get publishSearchResults() { return publishSearchResults; }, set publishSearchResults(value) { publishSearchResults = value; },
+  get readPdfOcrJson() { return readPdfOcrJson; }, set readPdfOcrJson(value) { readPdfOcrJson = value; },
+  get readerAssetObjectFamily() { return readerAssetObjectFamily; }, set readerAssetObjectFamily(value) { readerAssetObjectFamily = value; },
+  get refreshFoliateWindow() { return refreshFoliateWindow; }, set refreshFoliateWindow(value) { refreshFoliateWindow = value; },
+  get renderHybridPdfCanvas() { return renderHybridPdfCanvas; }, set renderHybridPdfCanvas(value) { renderHybridPdfCanvas = value; },
+  get renderPdfImageShell() { return renderPdfImageShell; }, set renderPdfImageShell(value) { renderPdfImageShell = value; },
+  get renderVirtualToc() { return renderVirtualToc; }, set renderVirtualToc(value) { renderVirtualToc = value; },
+  get repairHtmlContrast() { return repairHtmlContrast; }, set repairHtmlContrast(value) { repairHtmlContrast = value; },
+  get resolveReaderSource() { return resolveReaderSource; }, set resolveReaderSource(value) { resolveReaderSource = value; },
+  get restoreInitialPosition() { return restoreInitialPosition; }, set restoreInitialPosition(value) { restoreInitialPosition = value; },
+  get rewriteFoliateResources() { return rewriteFoliateResources; }, set rewriteFoliateResources(value) { rewriteFoliateResources = value; },
+  get sanitizeOfflineHtml() { return sanitizeOfflineHtml; }, set sanitizeOfflineHtml(value) { sanitizeOfflineHtml = value; },
+  get sanitizeReaderDocument() { return sanitizeReaderDocument; }, set sanitizeReaderDocument(value) { sanitizeReaderDocument = value; },
+  get scheduleFoliateWindowRefresh() { return scheduleFoliateWindowRefresh; }, set scheduleFoliateWindowRefresh(value) { scheduleFoliateWindowRefresh = value; },
+  get searchChapterBook() { return searchChapterBook; }, set searchChapterBook(value) { searchChapterBook = value; },
+  get setBookmarkDialogModal() { return setBookmarkDialogModal; }, set setBookmarkDialogModal(value) { setBookmarkDialogModal = value; },
+  get setupFoliateWindow() { return setupFoliateWindow; }, set setupFoliateWindow(value) { setupFoliateWindow = value; },
+  get trimFoliateSections() { return trimFoliateSections; }, set trimFoliateSections(value) { trimFoliateSections = value; },
+  get trimPdfManifestPrefetches() { return trimPdfManifestPrefetches; }, set trimPdfManifestPrefetches(value) { trimPdfManifestPrefetches = value; },
+  get trimPdfSurfaces() { return trimPdfSurfaces; }, set trimPdfSurfaces(value) { trimPdfSurfaces = value; },
+  get waitForSpreadsheetImages() { return waitForSpreadsheetImages; }, set waitForSpreadsheetImages(value) { waitForSpreadsheetImages = value; }
+};
+const readerBindings = createReaderBindings(readerContext);
+
+let {
+  pdfStage, measurePdf
+} = createReaderDiagnostics(readerContext);
+
+let {
+  readerAbortError, assertReaderActive, trackReaderResource, stopReaderWork,
+  awaitReader, waitForReader, setReaderPhase, setReaderStage,
+  classifyReaderError, markReaderContentReady, nextReaderGeneration, isReaderGenerationCurrent,
+  reportNavigationError, disposeReader, fail
+} = createReaderLifecycle(readerContext);
+
+let {
+  readerContentUrl, readerDownloadApiUrl, readerDownloadUrl, startReaderDownload,
+  normalizeSourceUrl, resolveReaderId, applyReaderMetadata, normalizeReaderReturnUrl,
+  applyReaderPathMetadata, validSource, validOcr, validFallback,
+  readerAssetObjectFamily, trustedReaderAssetManifestUrl, trustedChapterUrl, trustedChapterReferenceUrl,
+  trustedChapterResourceUrl
+} = createReaderSource(readerContext);
+
+let {
+  showDownloadFeedback, updateDocumentState, updatePanelState, applyPageInversion,
+  applyReaderTheme, setZoom, emptyPanel, highlightPanelItem,
+  filterPanel, notifyReaderUiState, setReaderPanelOpen, setPanelSearchOpen,
+  selectPanel, renderHistory
+} = createReaderUi(readerContext);
+
+let {
+  updateNavigationState, headingTocEntries, createHeadingLocationCache, syncHeadingLocation,
+  navigateTocEntry, createTocRow, renderVirtualToc, setToc,
+  cleanTocLabel, updateTocCurrentMark, syncTocTab
+} = createReaderToc(readerContext);
+
+let {
+  updateSearchState, publishSearchResults, clearSearchHighlights, chapterSearchModule,
+  searchChapterBook, navigateChapterSearchResult, fullSearchFoliateMatches, navigateFoliateSearchResult,
+  searchReaderText
+} = createReaderSearchBackends(readerContext);
+
+let {
+  pdfManifestPrefetchConcurrency, pdfManifestPrefetchMaxPages, canPrefetchPdfImages, cancelPdfManifestPrefetch,
+  stopPdfManifestPrefetch, trimPdfManifestPrefetches, pdfPixelBudget, pdfSurfacePixels,
+  pdfRetainedPixels, trimPdfSurfaces, clearPdfManifestPrefetches, takePdfManifestPrefetch,
+  queuePdfManifestPrefetch, prioritizePdfManifestPrefetch, schedulePdfManifestPrefetch, trimPdfManifestImages,
+  refreshNearbyPdfPages, cancelSpeculativePdfRenders, promotePdfRenderWaiter, acquirePdfRenderSlot,
+  releasePdfRenderSlot, acquirePdfTextSlot, drainPdfTextWaiters, releasePdfTextSlot,
+  trimPdfCanvases, rerenderVisiblePdfPages
+} = createReaderPdfScheduler(readerContext);
+
+let {
+  beginReaderNavigation, clearReturnNavigation, navigateReaderFolder, turnViewport,
+  handleReaderKeydown, readerPageScrollTop, goToPage, handleReaderPositionChange,
+  navigateReader, notePdfScrollIntent, installReaderTapSelectionClear
+} = createReaderNavigation(readerContext);
+
+let {
+  foliateSectionRoot, foliateSectionQuery, foliateSectionCandidates, syncFoliateScrollLocation,
+  refreshFoliateWindow, scheduleFoliateWindowRefresh, trimFoliateSections, scheduleFoliateScrollSync,
+  activateFoliateTocEntry, cloneFoliateDocument, foliateSearchAnchor, settleReaderImages,
+  rewriteFoliateResources, createFoliateSection, setupFoliateWindow, foliateTocEntries,
+  renderFoliate
+} = createReaderFoliateFormat(readerContext);
+
+let {
+  scheduleSave, saveProgress, placeReadingProgress, currentReaderUrl,
+  loadReaderRestoration, getInitialReaderRestoration, initialReaderPage, readerProgressPercent,
+  pageAtMarker, syncCurrentPageFromMarker, scheduleMarkerSync, restoreFormat,
+  restoreInitialPosition, applyInitialRestoration, updateReadingProgressSummary, updateProgressTools,
+  captureProgressState, restoreProgressState, flushEpubSeek, seekProgress,
+  activateChapter
+} = createReaderProgress(readerContext);
+
+let {
+  consumeBookmarkHandoff, excerptFromCaret, bookmarkExcerpt, captureFoliateBookmarkPosition,
+  restoreFoliateBookmarkPosition, seekFoliateProgress, renderBookmarks, captureBookmarkSnapshot,
+  setBookmarkDialogModal, openBookmarkPopover, closeBookmarkPopover
+} = createReaderBookmarks(readerContext);
+
+let {
+  formatMediaTime, renderImageDocument, renderMedia, loadSwfDocument,
+  renderSwf
+} = createReaderMediaFormat(readerContext);
+
+let {
+  loadScript, fetchWithReaderTimeout, retryableReaderProxyError, retryReaderProxy,
+  fetchReaderUrl, fetchReaderResponse, prepareReaderDocument, readPreparedBytes,
+  loadTextDocument, loadMarkdownDocument, loadHtmlDocument, loadDocxDocument,
+  loadMediaDocument, loadImageDocument, loadChapterManifestDocument
+} = createReaderDocumentLoader(readerContext);
+
+let {
+  preloadPdfFirstPage, pdfManifestSource, pdfPageEntry, appendShellsBatched,
+  pdfSelectionIntersects, correctPdfCrossPageSelection, createPdfShellWindow, renderPdfPages,
+  renderImagePages, renderPdf
+} = createReaderPdfPageWindow(readerContext);
+
+let {
+  pdfOcrSource, v3ResourceUrl, createPdfV3Repository, readPdfOcrJson,
+  loadPdfOcrManifest, loadPdfOcrPage, estimatePdfTextContentBytes, cachePdfTextContent,
+  cachedPdfTextContent, loadPdfTextContent, estimatePdfOcrPageBytes, cachePdfOcrPage,
+  cachedPdfOcrPage, renderPdfOcrText, renderPdfText, highlightPdfText
+} = createReaderPdfTextRuntime(readerContext);
+
+let {
+  normalizeEpubDocument, sanitizeReaderDocument, sanitizeEpubDocument, parseChapterDocument,
+  epubContentBody, renderText, sanitizeOfflineHtml, buildDiscourseDocument,
+  prepareHtmlDocument, buildHtmlFrameSource, waitForSpreadsheetImages, renderHtml,
+  detectHtmlEncoding, repairHtmlContrast
+} = createReaderHtmlFormat(readerContext);
+
+let {
+  setPdfPageLoadingState, isPdfPageVisible, pdfPagePriority, normalizePdfPriority,
+  renderPdfInBackground, pdfPrimarySource, renderPdfManifestShell, renderHybridPdfCanvas,
+  renderPdfImageShell, renderPdfShell
+} = createReaderPdfRenderer(readerContext);
+
+let {
+  renderPlainText, detectTextEncoding, renderTextDocument, renderMarkdownDocument
+} = createReaderTextFormat(readerContext);
+
+let {
+  renderChapterManifest, captureChapterPosition, restoreChapterPosition
+} = createReaderChapterFormat(readerContext);
+
+let {
+  renderDocx, memoizeDocxResource, memoizeDocxAssets
+} = createReaderDocxFormat(readerContext);
+
+let {
+  disposeFormatResources, registerReaderFormatAdapters, resolveReaderSource, start,
+  syncCapabilityControls
+} = createReaderFormatController(readerContext);
+
+let {
+  loadPdfTaskWithTimeout, loadPdfWithTimeout, preloadPdfEngine, preparePdfWorker,
+  preparePdfWorkerAttempt, loadPdfEngine, loadPdfDocument
+} = createReaderPdfEngine(readerContext);
+
+let {
+  ensurePdfBookSearchClient, prefetchPdfBookSearch, schedulePdfBookSearchPrefetch, searchConcentratedPdf,
+  makePdfSearchPageLoader, publishPdfSearchProgress, getPdfPersistentTextStore, cachePdfSearchText,
+  loadPdfSearchText, fullSearchPdfMatches
+} = createReaderPdfSearch(readerContext);
+
 const pdfPageTimings = [];
-function pdfStage(stage, page = 0) {
-  const started = performance.now();
-  return (outcome = "ready") => {
-    if (readerAbortController.signal.aborted) return;
-    pdfPageTimings.push({at:started, stage, page, outcome, ms:performance.now()-started});
-    if (pdfPageTimings.length > 64) pdfPageTimings.shift();
-  };
-}
-function measurePdf(promise, stage, page = 0) {
-  const finish = pdfStage(stage,page);
-  return Promise.resolve(promise).then(value => { finish(); return value; }, error => {
-    finish(error?.name === "AbortError" ? "cancelled" : "failed"); throw error;
-  });
-}
+
 // Engines and Reader lifecycle.
 const PDFJS_URL = VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/");
-const PDFJS_WORKER_URL = "/search/static/pdf-worker-wrapper.mjs";
+const PDFJS_WORKER_URL = "/search/static/reader/pdf/pdf-worker-wrapper.mjs";
 const PDFJS_WASM_URL = "/search/static/vendor/wasm/";
 const PDFJS_CMAP_URL = "/search/static/vendor/cmaps/";
 const PDFJS_STANDARD_FONT_URL = "/search/static/vendor/standard_fonts/";
@@ -45,168 +703,27 @@ const READER_PROXY_TIMEOUT_MS = 120000;
 const readerRequestManager = VoiceOfMLReaderRequests.createReaderRequestManager();
 const readerRuntime = VoiceOfMLReaderRuntime.createReaderRuntime();
 const formatAdapters = VoiceOfMLReaderAdapters.createAdapterRegistry();
-readerRuntime.track(readerRequestManager);
-readerRuntime.track(formatAdapters);
-readerRuntime.track(window.__VOICE_PDF_PRELOAD__);
-readerRuntime.track(window.__VOICE_READER_CHAPTER_PRELOAD__);
+readerBindings.trackStartupOwners();
 const readerAbortController = new AbortController();
 const readerResources = new Set();
-function readerAbortError() {
-  return new DOMException("Reader work cancelled", "AbortError");
-}
-function assertReaderActive() {
-  if (readerAbortController.signal.aborted || readerRuntime.state.lifecycle.disposed)
-    throw readerAbortError();
-}
-function trackReaderResource(cleanup) {
-  if (readerAbortController.signal.aborted) cleanup();
-  else readerResources.add(cleanup);
-  return () => readerResources.delete(cleanup);
-}
-function stopReaderWork() {
-  readerAbortController.abort();
-  for (const cleanup of readerResources) {
-    try {
-      cleanup();
-    } catch (_) {}
-  }
-  readerResources.clear();
-}
-readerRuntime.track(stopReaderWork);
-trackReaderResource(() => window.__VOICE_READER_RESOLVE__?.dispose());
-const pdfDiagnostics = Object.freeze({snapshot:() => ({pages:pdfPageTimings.map(row=>({...row})), requests:pdfFetchPolicy?.timings || [], cache:pdfPersistentTextStore?.stats || null})});
-window.VoiceOfMLReaderPdfDiagnostics = pdfDiagnostics;
-trackReaderResource(() => {
-  pdfPageTimings.length = 0;
-  if (window.VoiceOfMLReaderPdfDiagnostics === pdfDiagnostics) delete window.VoiceOfMLReaderPdfDiagnostics;
+
+readerBindings.trackWorkCancellation();
+const imageLoader = createReaderImageLoader({
+  assertActive: assertReaderActive, abortError: readerAbortError, trackResource: trackReaderResource,
+  request: fetchWithReaderTimeout, readBytes: response => VoiceOfMLReaderSecurity.readBytes(response),
+  timeoutMs: READER_PROXY_TIMEOUT_MS
 });
-function awaitReader(promise, extraSignal = null) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const signals = extraSignal ? [readerAbortController.signal, extraSignal] : [readerAbortController.signal];
-    const finish = (callback, value) => {
-      if (settled) return;
-      settled = true;
-      signals.forEach(signal => signal.removeEventListener("abort", abort));
-      callback(value);
-    };
-    const abort = () => finish(reject, readerAbortError());
-    Promise.resolve(promise)
-      .then(value => finish(resolve, value), error => finish(reject, error));
-    if (signals.some(signal => signal.aborted)) abort();
-    else signals.forEach(signal => signal.addEventListener("abort", abort, { once: true }));
-  });
-}
-function waitForReader(delay = 0, animationFrame = false) {
-  return new Promise((resolve, reject) => {
-    assertReaderActive();
-    const signal = readerAbortController.signal;
-    const abort = () => {
-      if (animationFrame) cancelAnimationFrame(handle);
-      else clearTimeout(handle);
-      reject(readerAbortError());
-    };
-    const done = () => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    };
-    const handle = animationFrame ? requestAnimationFrame(done) : setTimeout(done, delay);
-    signal.addEventListener("abort", abort, { once: true });
-  });
-}
-// Polyfills for vendor engines (pdf.js, foliate): neither helper has a direct
-// caller in first-party code, but both are required by pinned vendor bundles.
-if (!Map.prototype.getOrInsertComputed) {
-  Map.prototype.getOrInsertComputed = function (key, callback) {
-    if (this.has(key)) return this.get(key);
-    const value = callback(key);
-    this.set(key, value);
-    return value;
-  };
-}
-if (!Math.sumPrecise) {
-  Math.sumPrecise = function (values) {
-    let sum = 0;
-    let correction = 0;
-    for (const value of values) {
-      const next = sum + value;
-      correction += Math.abs(sum) >= Math.abs(value) ? sum - next + value : value - next + sum;
-      sum = next;
-    }
-    return sum + correction;
-  };
-}
+readerBindings.trackEarlySourceResolution();
+const pdfDiagnostics = Object.freeze({snapshot:() => ({pages:pdfPageTimings.map(row=>({...row})), requests:pdfFetchPolicy?.timings || [], cache:pdfPersistentTextStore?.stats || null})});
+readerBindings.publishDiagnosticsAndInstallCompatibility();
 // Source metadata and session navigation.
 // GitHub Pages serves assets under /search/ and delegates document requests to HF.
 // Folder returns use hash routes; explicit folder URLs take precedence over resolved metadata.
-function readerContentUrl(url) {
-  try {
-    const parsed = new URL(url, "https://voiceofml-search.hf.space");
-    if (parsed.origin === "https://voiceofml-search.hf.space" &&
-        parsed.pathname === "/api/reader-bucket-resource")
-      return parsed.href;
-    if (parsed.origin === "https://huggingface.co" && !parsed.username && !parsed.password && !parsed.search && !parsed.hash) {
-      const prefix = /^\/buckets\/(vomebook\/(?:pdf-pages-v2|reader-assets-v2))\/resolve\//.exec(parsed.pathname);
-      const path = prefix && decodeURIComponent(parsed.pathname.slice(prefix[0].length));
-      if (path && VoiceOfMLReader.isBucketPath(path, true, prefix[1]))
-        return `https://voiceofml-search.hf.space/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
-    }
-  } catch (_) {}
-  return `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url)}`;
-}
-function readerDownloadApiUrl(path) {
-  return `https://voiceofml-search.hf.space${path}`;
-}
-function readerDownloadUrl(filename, link) {
-  return readerDownloadApiUrl(`/api/download?file=${encodeURIComponent(filename || "file")}&link=${encodeURIComponent(link || "")}`);
-}
-async function startReaderDownload(event) {
-  event.preventDefault();
-  const button = event.currentTarget;
-  if (button.hasAttribute("aria-busy")) return;
-  showDownloadFeedback("正在准备下载…", 0);
-  const controller = new AbortController();
-  let timer;
-  button.setAttribute("aria-busy", "true");
-  try {
-    // ID-only links share the Reader's in-flight resolution, not its render phase.
-    if (!downloadUrl) await readerSourcePromise;
-    if (!downloadUrl) throw new Error("无法获取原文件地址");
-    const filename = documentState.title || "file";
-    const checkUrl = readerDownloadApiUrl(`/api/download/check?link=${encodeURIComponent(downloadUrl)}`);
-    timer = setTimeout(() => controller.abort(), 8000);
-    const response = await fetch(checkUrl, { signal: controller.signal, cache: "no-store" });
-    const result = await response.json().catch(() => null);
-    if (!response.ok || result?.ok !== true) throw new Error(result?.error || "下载检查失败，请重试");
-    if (readerLifecycle.disposed) return;
-    const frame = document.createElement("iframe");
-    frame.hidden = true;
-    frame.setAttribute("aria-hidden", "true");
-    frame.src = readerDownloadUrl(filename, downloadUrl);
-    document.body.appendChild(frame);
-    setTimeout(() => frame.remove(), 60000);
-    showDownloadFeedback("已发起下载");
-  } catch (error) {
-    if (!readerLifecycle.disposed) {
-      showDownloadFeedback(error?.name === "AbortError" ? "下载检查超时，请重试" : (error.message || "下载失败，请重试"));
-    }
-  } finally {
-    clearTimeout(timer);
-    button.removeAttribute("aria-busy");
-  }
-}
-function normalizeSourceUrl(url) {
-  return url.startsWith("/api/reader-bucket-resource?")
-    ? new URL(url, "https://voiceofml-search.hf.space").href
-    : url;
-}
+
 const params = new URLSearchParams(location.search);
 const readerId = params.get("id") || "";
 let localReaderData = null;
-try {
-  localReaderData = JSON.parse(sessionStorage.getItem(`reader-source:${readerId}`) || "null");
-  if (localReaderData) sessionStorage.removeItem(`reader-source:${readerId}`);
-} catch (_) {}
+readerBindings.readSelectedSourceSession();
 let sourceUrl = normalizeSourceUrl(
   params.get("url") || (!readerId && localReaderData && localReaderData.url) || ""
 );
@@ -216,14 +733,7 @@ let downloadUrl =
 let extension = (params.get("ext") || "").toLowerCase();
 let chapterManifestUrl = params.get("chapter_manifest") || "";
 let capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
-if (
-  extension === "pdf" &&
-  /\/api\/reader-bucket-resource\?/.test(sourceUrl) &&
-  new URL(sourceUrl, location.href).searchParams.get("path")?.endsWith("page-manifest.json")
-) {
-  extension = "pdf-pages";
-  capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
-}
+readerBindings.normalizeConvertedPdfMode();
 let resolvedReaderData = localReaderData;
 let cachedReaderData = null;
 let pdfFirstPagePreload = null;
@@ -231,131 +741,16 @@ let pdfFirstPagePreloadPage = 1;
 let pdfEnginePreload = null;
 let pdfWorker = null;
 let releasePdfWorker = null;
-if (localReaderData) {
-  if (localReaderData.title) params.set("title", localReaderData.title);
-  if (localReaderData.extension) params.set("ext", localReaderData.extension);
-  if (localReaderData.repo)
-    params.set("path", [localReaderData.repo, ...(localReaderData.folder || [])].join("/"));
-}
-try {
-  const cached = sessionStorage.getItem(`reader-resolve:${readerId}`);
-  if (cached) {
-    cachedReaderData = JSON.parse(cached);
-    resolvedReaderData = cachedReaderData;
-    sessionStorage.removeItem(`reader-resolve:${readerId}`);
-  }
-} catch (_) {}
+readerBindings.applySourceSessionAndCachedMetadata();
 const readerLifecycle = readerRuntime.state.lifecycle;
-readerRuntime.update("source", {
-  id: readerId,
-  url: sourceUrl,
-  contentUrl,
-  downloadUrl,
-  extension,
-  metadata: resolvedReaderData
-});
-readerRuntime.events.on("phase", ({ phase }) => {
-  document.documentElement.dataset.readerPhase = phase;
-});
-readerRuntime.track(
-  VoiceOfMLReaderStore.subscribe?.((change) => {
-    if (!change?.remote || readerLifecycle.disposed) return;
-    if (
-      change.type === "history-clear" ||
-      (change.type === "history-remove" && change.url === sourceUrl)
-    ) {
-      historySuppressed = true;
-      readerRuntime.cancel(saveTimer);
-      saveTimer = saveDeadline = 0;
-    }
-    if (
-      ["history", "history-clear", "history-remove"].includes(change.type) &&
-      !document.querySelector("#history-panel").hidden
-    )
-      renderHistory();
-    if (
-      ["bookmark", "bookmark-remove"].includes(change.type) &&
-      (panelState.showingAllBookmarks || !change.url || change.url === sourceUrl) &&
-      !document.querySelector("#bookmarks-panel").hidden
-    )
-      renderBookmarks();
-  })
-);
-function setReaderPhase(phase) {
-  return readerRuntime.setPhase(phase);
-}
-function setReaderStage(stage) {
-  return readerRuntime.setStage(stage);
-}
-async function resolveReaderId(id) {
-  const endpoint = `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const early = window.__VOICE_READER_RESOLVE__;
-    if (!attempt && early?.id === id) {
-      window.__VOICE_READER_RESOLVE__ = null;
-      const untrack = trackReaderResource(early.dispose);
-      let result;
-      try { result = await awaitReader(early.promise); }
-      finally { untrack(); early.dispose(); }
-      if (result.ok) return result.data;
-      if (![408, 429, 500, 502, 503, 504].includes(result.status))
-        throw new Error(`HTTP ${result.status}`);
-      await waitForReader(350);
-      continue;
-    }
-    const response = await readerRequestManager.request(endpoint, READER_PROXY_TIMEOUT_MS);
-    if (response.ok) return response.json();
-    if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt)
-      throw new Error(`HTTP ${response.status}`);
-    await response.body?.cancel();
-    await waitForReader(350);
-  }
-  throw new Error("Reader ID resolution failed");
-}
-function classifyReaderError(error, fallback = "READER_PARSE") {
-  if (["READER_ENGINE_NETWORK", "READER_RESTORE"].includes(error?.code)) return error.code;
-  const value = `${error?.name || ""} ${error?.message || error || ""}`;
-  if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK";
-  if (
-    /EPUB_INVALID|corrupt|damage|truncated|central directory|end of data|invalid zip/i.test(value)
-  )
-    return "READER_CORRUPT";
-  return fallback;
-}
-setReaderPhase("startup");
-window.fetchFile = async (url) => {
-  const requestUrl = String(url) === sourceUrl ? contentUrl : url;
-  const response = await readerRequestManager.request(requestUrl, READER_PROXY_TIMEOUT_MS);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  const fileName = new URL(url, location.href).pathname.split("/").pop() || "book";
-  return new File(
-    [
-      await VoiceOfMLReaderSecurity.readBytes(
-        response,
-        VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes
-      )
-    ],
-    fileName,
-    { type: response.headers.get("content-type") || "application/octet-stream" }
-  );
-};
+readerBindings.publishSourceAndSubscribeToStore();
 const content = document.querySelector("#content");
-document.querySelector(".reader-panel-tabs")?.setAttribute("role", "tablist");
+readerBindings.initializePanelAccessibility();
 const loadingIndicator = document.createElement("div");
-loadingIndicator.className = "reader-loading-indicator";
-loadingIndicator.setAttribute("role", "status");
-loadingIndicator.innerHTML =
-  '<span class="reader-loading-spinner" aria-hidden="true"></span><span>正在加载正文...</span>';
-content.appendChild(loadingIndicator);
-content.dataset.mode = capability.mode || "unsupported";
+readerBindings.mountInitialLoadingFeedback();
 const status = document.querySelector("#status");
 const loadingStatus = document.querySelector("#loading-status");
-function markReaderContentReady() {
-  if (["foliate", "epub-chapters"].includes(capability?.mode) && loadingIndicator.isConnected)
-    foliateScrollAnchors.preserve(() => loadingIndicator.remove());
-  else loadingIndicator.remove();
-  loadingStatus.hidden = true;
-}
+
 const downloadButton = document.querySelector("#download");
 const downloadFeedback = document.querySelector("#download-feedback");
 let readerSourcePromise = null;
@@ -363,14 +758,8 @@ let readerRestorationPromise = null;
 let readerRestorationEntry = null;
 let readerRestorationLoaded = false;
 let downloadFeedbackTimer = 0;
-function showDownloadFeedback(message, duration = 4000) {
-  clearTimeout(downloadFeedbackTimer);
-  downloadFeedback.textContent = message;
-  downloadFeedback.hidden = !message;
-  if (message && duration) downloadFeedbackTimer = setTimeout(() => showDownloadFeedback(""), duration);
-}
-downloadButton.addEventListener("click", startReaderDownload);
-loadingStatus.textContent = "";
+
+readerBindings.bindDownloadAction();
 const sourceName = (() => {
   try {
     const name = decodeURIComponent(
@@ -387,97 +776,22 @@ const documentState = readerRuntime.state.document,
   navigationState = readerRuntime.state.navigation,
   searchState = readerRuntime.state.search,
   panelState = readerRuntime.state.panel;
-function updateDocumentState(patch) {
-  return readerRuntime.update("document", patch);
-}
-function updateNavigationState(patch) {
-  return readerRuntime.update("navigation", patch);
-}
-function updateSearchState(patch) {
-  return readerRuntime.update("search", patch);
-}
-function publishSearchResults(generation, results) {
-  return isReaderGenerationCurrent("search", generation) && updateSearchState({ results });
-}
-function updatePanelState(patch) {
-  return readerRuntime.update("panel", patch);
-}
-updateDocumentState({
-  title:
-    String(
-      params.get("title") || (localReaderData && localReaderData.title) || sourceName
-    ).trim() || sourceName,
-  zoom: Math.min(4, Math.max(0.25, Number(localStorage.getItem("reader-zoom") || 100) / 100))
-});
-function applyReaderMetadata(data) {
-  if (data) resolvedReaderData = { ...(resolvedReaderData || {}), ...data };
-  if (data?.ReaderOcrManifest || data?.ocr_manifest) {
-    ocrManifestUrl = data.ReaderOcrManifest || data.ocr_manifest;
-    params.set("ocr_manifest", ocrManifestUrl);
-  }
-  readerRuntime.update("source", { metadata: resolvedReaderData });
-  const title = String(resolvedReaderData?.title || params.get("title") || sourceName).trim();
-  const suffix = String(
-    resolvedReaderData?.original_extension || (extension === "pdf-pages" ? "pdf" : extension)
-  )
-    .toLowerCase()
-    .replace(/^\./, "");
-  const value = title + (suffix && !title.toLowerCase().endsWith(`.${suffix}`) ? `.${suffix}` : "");
-  updateDocumentState({ title: value });
-  document.querySelector("#title").textContent = value;
-  document.title = `${value} - VoiceOfML Reader`;
-  applyReaderPathMetadata(resolvedReaderData);
-}
+
+readerBindings.initializeDocumentTitle();
+
 let fallbackUrl = params.get("fallback") || "";
 const ocrUrl = params.get("ocr") || "";
 let ocrManifestUrl = params.get("ocr_manifest") || "";
-function normalizeReaderReturnUrl(rawUrl) {
-  try {
-    const target = new URL(rawUrl || "/search/", location.origin);
-    if (target.origin === location.origin && target.pathname === "/")
-      return new URL("/search/", location.origin).href;
-    return target.href;
-  } catch (_) {
-    return new URL("/search/", location.origin).href;
-  }
-}
+
 let returnUrl = params.get("return") || "";
 const readerPathLabel = params.get("path") || "";
 const folderReturnUrl = params.get("folder_url") || "";
 let returnNavigationToken = params.get("nav") || "";
 let returnNeedsReload = false;
-try {
-  const state = history.state;
-  const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
-  let stateUrl =
-    state && state.voiceReaderOverlay && state.readerUrl
-      ? new URL(state.readerUrl, location.origin)
-      : null;
-  if (!stateUrl && saved && saved.shareUrl === location.href && saved.readerUrl)
-    stateUrl = new URL(saved.readerUrl, location.origin);
-  const cleanStateUrl = stateUrl && new URL(stateUrl.href);
-  if (cleanStateUrl) {
-    cleanStateUrl.searchParams.delete("return");
-    cleanStateUrl.searchParams.delete("nav");
-  }
-  if (
-    stateUrl &&
-    stateUrl.origin === location.origin &&
-    stateUrl.pathname === "/search/static/reader.html" &&
-    cleanStateUrl.href === location.href
-  ) {
-    if (!returnUrl) returnUrl = stateUrl.searchParams.get("return") || "";
-    if (!returnNavigationToken) returnNavigationToken = stateUrl.searchParams.get("nav") || "";
-    returnNeedsReload = true;
-  }
-} catch (_) {}
+readerBindings.restoreReturnNavigation();
 const returnHistoryKey = returnNavigationToken ? `reader-return:${returnNavigationToken}` : "";
 let canReturnWithHistory = false;
-try {
-  const target = new URL(returnUrl, location.origin);
-  const storedReturnUrl = returnHistoryKey ? sessionStorage.getItem(returnHistoryKey) : "";
-  canReturnWithHistory = !!returnHistoryKey && storedReturnUrl === target.href;
-} catch (_) {}
+readerBindings.validateReturnHistory();
 let saveTimer = 0;
 let saveDeadline = 0;
 let chapterManifestLoader = null;
@@ -485,25 +799,19 @@ let chapterSearchConfiguration = null;
 let chapterSearchModulePromise = null;
 let chapterSearchClient = null;
 
-trackReaderResource(() => {
-  chapterSearchClient?.dispose();
-  chapterSearchClient = null;
-});
+readerBindings.ownChapterSearchClient();
 let folderNavigationTarget = null;
 let bookmarkInvoker = null;
 const bookmarkInertSiblings = new Map();
 let pdfDocument = null;
 let docxPageNodes = [];
-trackReaderResource(() => { docxPageNodes = []; });
+readerBindings.ownDocxPageNodes();
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;
 let pdfV3Manifest = null, pdfV3Map = null, pdfV3Repository = null, pdfTextLayerRepository = null;
 const pdfV3BlobReleases = new Set();
-trackReaderResource(() => {
-  for (const release of [...pdfV3BlobReleases]) release();
-  pdfV3Repository?.dispose(); pdfTextLayerRepository?.dispose();
-});
+readerBindings.ownIndependentPdfResources();
 let pdfHybridUrl = "", pdfHybridDocumentPromise = null;
 const pdfOcrPagePromises = new Map();
 const pdfTextContentCache = new Map();
@@ -521,13 +829,7 @@ let pdfBookSearchPrefetchPromise = null;
 // Do not silently download large full-book indexes just because a reader opened.
 const PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES = 8 * 1024 * 1024;
 const PDF_BOOK_SEARCH_PREFETCH_DELAY = 6000;
-trackReaderResource(() => {
-  pdfBookSearchClient?.dispose();
-  pdfBookSearchClient = null;
-  clearTimeout(pdfBookSearchPrefetchTimer);
-  pdfBookSearchPrefetchTimer = 0;
-  pdfBookSearchPrefetchPromise = null;
-});
+readerBindings.ownPdfBookSearchClient();
 let pdfActiveRenders = 0;
 let pdfShellsReady = Promise.resolve();
 let pdfShellWindow = null;
@@ -550,119 +852,8 @@ let pdfManifestPrefetchOrigin = 0;
 const pdfManifestPrefetchActive = new Set();
 let pdfManifestPrefetchCount = 0;
 let pdfManifestPrefetchWrapped = false;
-function pdfManifestPrefetchConcurrency() {
-  const type = navigator.connection?.effectiveType;
-  if (type === "slow-2g" || type === "2g") return 1;
-  if (type === "3g") return 1;
-  if (matchMedia("(max-width: 700px)").matches) return 2;
-  return PDF_MANIFEST_PREFETCH_CONCURRENCY;
-}
-function pdfManifestPrefetchMaxPages() {
-  const type = navigator.connection?.effectiveType;
-  if (type === "slow-2g" || type === "2g") return 8;
-  if (type === "3g") return 16;
-  return matchMedia("(max-width: 700px)").matches ? 24 : PDF_MANIFEST_PREFETCH_MAX_PAGES;
-}
-function canPrefetchPdfImages() {
-  const connection = navigator.connection;
-  return !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType);
-}
-function cancelPdfManifestPrefetch(record) {
-  if (!record) return;
-  pdfManifestPrefetchActive.delete(record);
-  clearTimeout(record.timeout);
-  if (pdfManifestPrefetches.get(record.url) === record) pdfManifestPrefetches.delete(record.url);
-  record.image.onload = record.image.onerror = null;
-  record.image.removeAttribute("src");
-}
-function stopPdfManifestPrefetch() {
-  clearTimeout(pdfManifestPrefetchTimer);
-  pdfManifestPrefetchTimer = 0;
-  for (const record of [...pdfManifestPrefetchActive]) cancelPdfManifestPrefetch(record);
-}
-function trimPdfManifestPrefetches() {
-  while (pdfManifestPrefetches.size > PDF_MANIFEST_PREFETCH_LIMIT || pdfRetainedPixels() > pdfPixelBudget()) {
-    const victim = [...pdfManifestPrefetches.values()].find((record) => !pdfManifestPrefetchActive.has(record));
-    if (!victim) return;
-    pdfManifestPrefetches.delete(victim.url);
-    victim.image.onload = victim.image.onerror = null;
-    victim.image.removeAttribute("src");
-  }
-}
-function pdfPixelBudget() {
-  const lowMemory = Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 2;
-  return (lowMemory ? 32 : matchMedia("(max-width: 700px)").matches ? 48 : 96) * 1024 * 1024 / 4;
-}
-function pdfSurfacePixels(surface) {
-  return surface?.tagName === "CANVAS" ? surface.width * surface.height :
-    (surface?.naturalWidth || 0) * (surface?.naturalHeight || 0);
-}
-function pdfRetainedPixels() {
-  let pixels = 0;
-  for (const surface of content.querySelectorAll(".reader-page > canvas, .reader-page > img"))
-    pixels += pdfSurfacePixels(surface);
-  for (const record of pdfManifestPrefetches.values()) pixels += pdfSurfacePixels(record.image);
-  return pixels;
-}
-function trimPdfSurfaces(protectedShell) {
-  trimPdfManifestPrefetches();
-  const shells = [...content.querySelectorAll('.reader-page[data-render-state="rendered"]')];
-  const canvasLimit = matchMedia("(max-width: 700px)").matches ? 7 : 11;
-  let canvases = shells.filter(shell => shell.querySelector("canvas.ready")).length;
-  let images = shells.filter(shell => shell.querySelector("img.ready")).length;
-  let pixels = pdfRetainedPixels();
-  const retentionPage = Number(pageAtMarker()?.dataset.page) || documentState.page;
-  const distance = shell => {
-    const delta = Number(shell.dataset.page) - retentionPage;
-    return Math.abs(delta) * (delta * pdfScrollDirection < 0 ? 2 : 1);
-  };
-  shells.sort((a, b) => distance(b) - distance(a) ||
-    Number(a.dataset.renderUsedAt || 0) - Number(b.dataset.renderUsedAt || 0));
-  for (const shell of shells) {
-    const canvas = shell.querySelector("canvas.ready"), image = shell.querySelector("img.ready");
-    if (pixels <= pdfPixelBudget() && !(canvas && canvases > canvasLimit) && !(image && images > 25)) continue;
-    if (isPdfPageVisible(shell) || Number(shell.dataset.page) === retentionPage || pdfSelectionIntersects(shell)) continue;
-    shell._textEpoch = (shell._textEpoch || 0) + 1;
-    if (canvas) {
-      pixels -= pdfSurfacePixels(canvas);
-      canvas.width = canvas.height = 0;
-      canvas.classList.remove("ready");
-      canvases--;
-    }
-    if (image) {
-      pixels -= pdfSurfacePixels(image);
-      image.removeAttribute("src");
-      image.remove();
-      shell._v3PreviewRelease?.();
-      images--;
-    }
-    shell.querySelector(".reader-pdf-text")?.replaceChildren();
-    shell._bookmarkTextItems = [];
-    shell.dataset.textReady = "0";
-    shell.dataset.renderState = "idle";
-    const pageState = shell.querySelector(".reader-page-state");
-    if (pageState) setPdfPageLoadingState(pageState, shell.dataset.page);
-  }
-  domSearch.pruneMarks();
-}
-function clearPdfManifestPrefetches() {
-  stopPdfManifestPrefetch();
-  pdfManifestPrefetchNext = 0;
-  pdfManifestPrefetchOrigin = 0;
-  pdfManifestPrefetchCount = 0;
-  pdfManifestPrefetchWrapped = false;
-  pdfManifestShells.length = 0;
-  for (const { image } of pdfManifestPrefetches.values()) {
-    image.onload = image.onerror = null;
-    image.removeAttribute("src");
-  }
-  pdfManifestPrefetches.clear();
-}
-trackReaderResource(clearPdfManifestPrefetches);
-trackReaderResource(() => {
-  for (const waiter of pdfRenderWaiters.splice(0)) waiter.reject(readerAbortError());
-  for (const waiter of pdfTextWaiters.splice(0)) waiter.reject(readerAbortError());
-});
+
+readerBindings.ownPdfPrefetchAndQueues();
 let epubRendition = null;
 let epubBook = null;
 let foliateContinuous = false,
@@ -692,170 +883,38 @@ let pageNavigationLockUntil = 0;
 let pendingBookmarkSnapshot = null;
 let mediaElement = null;
 let swfPlayer = null;
-function nextReaderGeneration(name) {
-  const generation = readerRuntime.nextGeneration(name);
-  if (name === "search") drainPdfTextWaiters();
-  return generation;
-}
-function isReaderGenerationCurrent(name, value) {
-  return !readerAbortController.signal.aborted && readerRuntime.isCurrent(name, value);
-}
-for (const generationName of ["navigation", "search", "bookmarks", "history", "pdf"])
-  nextReaderGeneration(generationName);
-function beginReaderNavigation() {
-  if (epubSeekFrame) cancelAnimationFrame(epubSeekFrame);
-  epubSeekFrame = 0;
-  foliateScrollAnchors.invalidate();
-  return nextReaderGeneration("navigation");
-}
-function reportNavigationError(error, generation) {
-  if (isReaderGenerationCurrent("navigation", generation) && error?.name !== "AbortError")
-    console.warn("Reader navigation failed", error);
-}
+
+readerBindings.initializeGenerations();
+
 const viewport = document.querySelector("#viewport");
 const zoomInput = document.querySelector("#zoom");
 const pageInput = document.querySelector("#page-number");
 const readerPath = document.querySelector("#reader-path");
 const bookmarkRibbon = document.querySelector("#bookmark-ribbon");
 const bookmarkPopover = document.querySelector("#bookmark-popover");
-for (const [selector, label] of [
-  ["#back", "返回"],
-  ["#page-prev", "上一页"],
-  ["#page-next", "下一页"],
-  ["#page-number", "页码"],
-  ["#zoom-out", "缩小"],
-  ["#zoom-in", "放大"],
-  ["#zoom", "缩放百分比"],
-  ["#bookmark-ribbon", "添加书签"],
-  ["#history", "阅读选项"]
-])
-  document.querySelector(selector)?.setAttribute("aria-label", label);
-function foliateSectionRoot(article) {
-  return article?.shadowRoot || article;
-}
-function foliateSectionQuery(article, selector) {
-  return foliateSectionRoot(article)?.querySelector(selector) || null;
-}
-function foliateSectionCandidates() {
-  return [
-    ...content.querySelectorAll(
-      ".foliate-continuous > article[data-section]:not(.foliate-section-placeholder), .reader-epub-chapter"
-    )
-  ].flatMap((article) => [
-    article,
-    ...foliateSectionRoot(article).querySelectorAll(
-      ":is(h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,img,table)"
-    )
-  ]);
-}
+readerBindings.labelToolbarControls();
+
 const foliateScrollAnchors = readerRuntime.track(
   VoiceOfMLReaderScroll.createScrollAnchorManager({
     viewport,
     candidates: foliateSectionCandidates
   })
 );
-function applyReaderPathMetadata(data) {
-  const folder = Array.isArray(data?.folder) ? data.folder.join("/") : String(data?.folder || "");
-  const value = String(
-    data?.path || [data?.repo, folder].filter(Boolean).join("/") || readerPathLabel
-  ).replace(/^\/+|\/+$/g, "");
-  folderNavigationTarget = null;
-  try {
-    const target = new URL(folderReturnUrl, location.origin);
-    if (
-      folderReturnUrl &&
-      target.origin === location.origin &&
-      target.pathname === "/search/" &&
-      target.hash.startsWith("#/")
-    )
-      folderNavigationTarget = target;
-  } catch (_) {}
-  if (!folderNavigationTarget && data?.repo) {
-    folderNavigationTarget = new URL("/search/", location.origin);
-    const query = new URLSearchParams();
-    if (folder) query.set("folder_self", folder);
-    folderNavigationTarget.hash =
-      "#/" + encodeURIComponent(data.repo) + (query.size ? "?" + query.toString() : "");
-  }
-  readerPath.textContent = value;
-  readerPath.hidden = !value;
-  readerPath.disabled = !folderNavigationTarget;
-  readerPath.setAttribute("aria-label", `筛选文件夹：${value}`);
-}
-applyReaderMetadata(resolvedReaderData);
-contentSanitizerObserver = new MutationObserver(() => {
-  const seen = new Set();
-  for (const article of document.querySelectorAll(".foliate-continuous > article[data-section]")) {
-    article.querySelectorAll("style,link[rel=stylesheet]").forEach((node) => node.remove());
-    const index = article.dataset.section;
-    if (seen.has(index)) article.remove();
-    else seen.add(index);
-  }
-});
-contentSanitizerObserver.observe(content, { childList: true, subtree: true });
-bookmarkPopover.className = "bookmark-popover";
-bookmarkPopover.setAttribute("role", "dialog");
-bookmarkPopover.setAttribute("aria-modal", "true");
-bookmarkPopover.setAttribute("aria-labelledby", "bookmark-prompt");
+
+readerBindings.applyMetadataAndWatchSanitizedContent();
 const bookmarkLabelInput = document.createElement("input"),
   bookmarkExcerptInput = document.createElement("textarea"),
   bookmarkEditFields = document.createElement("div");
-bookmarkLabelInput.id = "bookmark-label";
-bookmarkLabelInput.maxLength = 120;
-bookmarkExcerptInput.id = "bookmark-excerpt-input";
-bookmarkExcerptInput.maxLength = 500;
-bookmarkExcerptInput.rows = 3;
-bookmarkEditFields.className = "bookmark-edit-fields";
-bookmarkEditFields.innerHTML = "<label>标题</label><label>摘要</label>";
-bookmarkEditFields.children[0].appendChild(bookmarkLabelInput);
-bookmarkEditFields.children[1].appendChild(bookmarkExcerptInput);
-bookmarkPopover.insertBefore(bookmarkEditFields, bookmarkPopover.querySelector("div"));
+readerBindings.initializeBookmarkEditor();
 const bookmarksAllButton = document.createElement("button");
-if (!document.querySelector("#bookmarks-panel .panel-search-toggle")) {
-  const button = document.createElement("button");
-  button.className = "panel-search-toggle";
-  button.type = "button";
-  document.querySelector("#bookmarks-panel .panel-view-header").appendChild(button);
-}
-bookmarksAllButton.id = "bookmarks-all";
-bookmarksAllButton.className = "text-action";
-bookmarksAllButton.type = "button";
-bookmarksAllButton.textContent = "全部书签";
-bookmarksAllButton.setAttribute("aria-pressed", "false");
+readerBindings.initializeBookmarkSearchControls();
 const bookmarksHeader = document.querySelector("#bookmarks-panel .panel-view-header"),
   bookmarksSearchButton = bookmarksHeader.querySelector(".panel-search-toggle"),
   bookmarksHeaderActions = document.createElement("span");
-bookmarksHeaderActions.append(bookmarksAllButton, bookmarksSearchButton);
-bookmarksHeader.appendChild(bookmarksHeaderActions);
+readerBindings.mountBookmarkHeaderActions();
 const mediaTab = document.createElement("button"),
   mediaPanel = document.createElement("section");
-mediaTab.id = "media-tab";
-mediaTab.type = "button";
-mediaTab.role = "tab";
-mediaTab.dataset.panel = "media";
-mediaTab.textContent = "播放";
-mediaTab.hidden = !capability.features.media;
-mediaPanel.id = "media-panel";
-mediaPanel.className = "reader-panel-view";
-mediaPanel.dataset.panelView = "media";
-mediaPanel.hidden = true;
-mediaPanel.innerHTML =
-  '<div class="media-panel-content"><strong>播放状态</strong><span class="media-panel-time">尚未播放</span><button class="text-action media-panel-bookmark" type="button">在当前时间添加书签</button></div>';
-document.querySelector(".reader-panel-tabs").prepend(mediaTab);
-document
-  .querySelector("#history-panel")
-  .insertBefore(mediaPanel, document.querySelector("#toc-panel"));
-mediaPanel
-  .querySelector(".media-panel-bookmark")
-  .addEventListener("click", (event) => openBookmarkPopover(event.currentTarget));
-document.querySelector(".page-controls").hidden = !capability.features.pagination;
-document.querySelector(".zoom-controls").hidden = !capability.features.zoom;
-
-status.hidden = true;
-mediaTab.setAttribute("aria-controls", "media-panel");
-mediaTab.setAttribute("aria-selected", "false");
-mediaPanel.setAttribute("role", "tabpanel");
-mediaPanel.setAttribute("aria-labelledby", "media-tab");
+readerBindings.mountMediaPanel();
 // Theme, toolbar, and document navigation.
 let readerTheme = localStorage.getItem("theme") === "light" ? "light" : "dark";
 const THEME_SUN_ICON =
@@ -865,5638 +924,42 @@ const THEME_MOON_ICON =
 const readerThemeToggle = document.querySelector("#theme-toggle");
 const pageInvertToggle = document.querySelector("#page-invert-toggle");
 let pageInverted = false;
-try { pageInverted = localStorage.getItem("reader-page-inversion") === "true"; } catch (_) {}
-function applyPageInversion(persist = false) {
-  document.documentElement.dataset.pageInverted = String(pageInverted);
-  pageInvertToggle.textContent = pageInverted ? "关闭页面反色" : "页面反色";
-  pageInvertToggle.title = pageInvertToggle.textContent;
-  pageInvertToggle.setAttribute("aria-label", pageInvertToggle.textContent);
-  pageInvertToggle.setAttribute("aria-pressed", String(pageInverted));
-  if (persist) {
-    try { localStorage.setItem("reader-page-inversion", String(pageInverted)); } catch (_) {}
-  }
-}
-pageInvertToggle.addEventListener("click", () => {
-  pageInverted = !pageInverted;
-  applyPageInversion(true);
-});
-applyPageInversion();
+readerBindings.restoreAndBindPageInversion();
 let themeAnimationTimer = 0;
-readerThemeToggle.className = "theme-toggle";
-function applyReaderTheme(theme, persist = true, animate = true) {
-  const anchor = foliateScrollAnchors.capture();
-  if (animate) {
-    clearTimeout(themeAnimationTimer);
-    document.documentElement.classList.add("theme-transition");
-    void document.documentElement.offsetWidth;
-  }
-  readerTheme = theme === "light" ? "light" : "dark";
-  document.documentElement.dataset.theme = readerTheme;
-  readerThemeToggle.innerHTML = readerTheme === "dark" ? THEME_MOON_ICON : THEME_SUN_ICON;
-  if (animate) {
-    readerThemeToggle.classList.remove("is-changing");
-    void readerThemeToggle.offsetWidth;
-    readerThemeToggle.classList.add("is-changing");
-    themeAnimationTimer = setTimeout(() => {
-      document.documentElement.classList.remove("theme-transition");
-      readerThemeToggle.classList.remove("is-changing");
-    }, 280);
-  }
-  readerThemeToggle.title = readerTheme === "dark" ? "切换到白天模式" : "切换到夜间模式";
-  readerThemeToggle.setAttribute("aria-label", readerThemeToggle.title);
-  readerThemeToggle.setAttribute("aria-pressed", String(readerTheme === "light"));
-  const docxBody = content.querySelector(".docx-body");
-  if (docxBody) docxBody.classList.toggle("reader-document-dark", readerTheme === "dark");
-  for (const article of content.querySelectorAll(".foliate-continuous > article"))
-    article.classList.toggle("reader-document-dark", readerTheme === "dark");
-  if (persist) localStorage.setItem("theme", readerTheme);
-  foliateScrollAnchors.restore(anchor);
-}
-applyReaderTheme(readerTheme, false, false);
-function clearReturnNavigation() {
-  try {
-    if (returnHistoryKey) sessionStorage.removeItem(returnHistoryKey);
-    const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
-    if (saved && (saved.readerUrl === location.href || saved.shareUrl === location.href))
-      sessionStorage.removeItem("reader-navigation-current");
-  } catch (_) {}
-}
-function navigateReaderFolder() {
-  if (!folderNavigationTarget) return;
-  if (window.parent !== window)
-    window.parent.postMessage(
-      { type: "voice-reader-navigate", url: folderNavigationTarget.href },
-      location.origin
-    );
-  else {
-    clearReturnNavigation();
-    location.assign(folderNavigationTarget.href);
-  }
-}
-readerPath.addEventListener("click", navigateReaderFolder);
-document.querySelector("#back").addEventListener("click", async () => {
-  clearTimeout(saveTimer);
-  await Promise.race([saveProgress(), new Promise((resolve) => setTimeout(resolve, 300))]);
-  if (window.parent !== window) {
-    window.parent.postMessage({ type: "voice-reader-close" }, location.origin);
-    return;
-  }
-  clearReturnNavigation();
-  try {
-    const target = new URL(normalizeReaderReturnUrl(returnUrl), location.origin);
-    if (target.origin === location.origin) {
-      if (returnNeedsReload) location.replace(target.href);
-      else if (canReturnWithHistory && history.length > 2) {
-        history.go(-2);
-      } else location.assign(target.href);
-      return;
-    }
-  } catch (_) {}
-  location.assign("/search/");
-});
+readerBindings.restoreReaderThemeAndBindReturn();
 let zoomChangedByUser = false;
-function setZoom(percent, persist = true) {
-  const anchor = foliateScrollAnchors.capture();
-  const normalized = VoiceOfMLReader.clampNumber(percent, 25, 400, 100);
-  const horizontalCenter = viewport.scrollWidth
-    ? (viewport.scrollLeft + viewport.clientWidth / 2) / viewport.scrollWidth
-    : 0;
-  updateDocumentState({ zoom: normalized / 100 });
-  content.style.setProperty("--reader-zoom", String(documentState.zoom));
-  zoomInput.value = String(normalized);
-  pdfShellWindow?.resize();
-  if (htmlFrame && htmlFrame.contentDocument)
-    htmlFrame.contentDocument.documentElement.style.zoom = String(documentState.zoom);
-  if (pdfDocument) rerenderVisiblePdfPages();
-  if (capability.mode === "foliate")
-    content.style.setProperty("--reader-zoom", String(documentState.zoom));
-  viewport.scrollLeft = horizontalCenter * viewport.scrollWidth - viewport.clientWidth / 2;
-  if (persist) {
-    zoomChangedByUser = true;
-    localStorage.setItem("reader-zoom", String(normalized));
-  }
-  foliateScrollAnchors.restore(anchor);
-  if (persist) scheduleSave();
-}
+
 const handlePageNavigationFailure = (error, generation) => {
   if (isReaderGenerationCurrent("navigation", generation) && error?.name !== "AbortError")
     fail("原文件加载失败，请检查网络后重试，或下载原文件。", "READER_NAVIGATION");
 };
-setZoom(documentState.zoom * 100, false);
-for (const [id, delta] of [
-  ["#zoom-out", -10],
-  ["#zoom-in", 10]
-]) {
-  document.querySelector(id).addEventListener("click", () => {
-    setZoom(Number(zoomInput.value) + delta);
-  });
-}
-zoomInput.addEventListener("change", () => setZoom(zoomInput.value));
-zoomInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    setZoom(zoomInput.value);
-    zoomInput.blur();
-  }
-});
-pageInput.addEventListener("change", () => goToPage(pageInput.value));
-pageInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    goToPage(pageInput.value);
-    pageInput.blur();
-  }
-});
-function turnViewport(direction) {
-  beginReaderNavigation();
-  const target = htmlFrame?.contentWindow || viewport;
-  target.scrollBy({
-    top:
-      Math.max(160, (htmlFrame?.contentWindow?.innerHeight || viewport.clientHeight) * 0.86) *
-      direction,
-    behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth"
-  });
-}
-function handleReaderKeydown(event) {
-  if (
-    event.defaultPrevented ||
-    event.isComposing ||
-    event.altKey ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.target.closest?.(
-      "input,textarea,select,button,a,audio,video,[contenteditable]:not([contenteditable=false])"
-    )
-  )
-    return;
-  if (["PageDown", " ", "ArrowDown", "PageUp", "ArrowUp"].includes(event.key)) {
-    event.preventDefault();
-    turnViewport(
-      ["PageUp", "ArrowUp"].includes(event.key) || (event.key === " " && event.shiftKey) ? -1 : 1
-    );
-  }
-}
-document.addEventListener("keydown", handleReaderKeydown);
-document
-  .querySelector("#page-prev")
-  .addEventListener("click", () =>
-    documentState.pageCount ? goToPage(documentState.page - 1) : turnViewport(-1)
-  );
-document
-  .querySelector("#page-next")
-  .addEventListener("click", () =>
-    documentState.pageCount ? goToPage(documentState.page + 1) : turnViewport(1)
-  );
+readerBindings.bindZoomAndPageControls();
 
-function readerPageScrollTop(shell) {
-  return viewport.scrollTop + shell.getBoundingClientRect().top -
-    viewport.getBoundingClientRect().top - viewport.clientTop;
-}
-async function goToPage(value, generation = beginReaderNavigation()) {
-  try {
-    if (!documentState.pageCount || !isReaderGenerationCurrent("navigation", generation))
-      return false;
-    const page = VoiceOfMLReader.clampNumber(value, 1, documentState.pageCount, 1);
-    pdfShellWindow?.ensure(page);
-    // The first page is usable before the background shell queue finishes.
-    // Only wait when the requested shell has not been materialized yet.
-    let shell = content.querySelector(
-      `.reader-page[data-page="${page}"], .reader-docx-page[data-page="${page}"]`
-    );
-    if (!shell && ["pdf-pages", "image-pages"].includes(capability.mode)) {
-      await pdfShellsReady;
-      shell = content.querySelector(`.reader-page[data-page="${page}"]`);
-    }
-    if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    if (!shell) return false;
-    const imagePage = ["pdf-pages", "image-pages"].includes(capability.mode);
-    if (imagePage && shell.dataset.renderState !== "rendered")
-      prioritizePdfManifestPrefetch(pdfPageManifest?.pageUrl(page));
-    const pendingPdf =
-      !imagePage && shell.classList.contains("reader-page")
-        ? renderPdfInBackground(shell, false, true)
-        : null;
-    if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    viewport.scrollTop = readerPageScrollTop(shell);
-    if (imagePage && shell.dataset.renderState === "rendered") renderPdfOcrText(shell);
-    pageNavigationLockUntil = performance.now() + 500;
-    if (pendingPdf) cancelSpeculativePdfRenders(shell);
-    const pendingImage = imagePage ? renderPdfInBackground(shell, false, true) : null;
-    if (imagePage && shell.dataset.renderState !== "rendered") cancelSpeculativePdfRenders(shell);
-    updateDocumentState({ page });
-    pageInput.value = String(page);
-    updateTocCurrentMark();
-    updateProgressTools();
-    pendingPdf?.catch(() => {});
-    pendingImage?.catch(() => {});
-    if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    scheduleSave();
-    return true;
-  } catch (error) {
-    handlePageNavigationFailure(error, generation);
-    return false;
-  }
-}
-function scheduleSave() {
-  if (readerLifecycle.disposed || readerAbortController.signal.aborted) return;
-  const now = performance.now();
-  if (!saveDeadline) saveDeadline = now + 2000;
-  readerRuntime.cancel(saveTimer);
-  saveTimer = readerRuntime.schedule(
-    () => {
-      saveTimer = 0;
-      saveDeadline = 0;
-      saveProgress();
-    },
-    Math.max(0, Math.min(500, saveDeadline - now))
-  );
-}
-async function saveProgress(event) {
-  if (
-    readerLifecycle.disposed ||
-    !documentState.restorationReady ||
-    !validSource(sourceUrl) ||
-    historySuppressed
-  )
-    return;
-  if (event?.type !== "pagehide" && document.visibilityState !== "hidden")
-    syncCurrentPageFromMarker();
-  const shell = documentState.pageCount
-    ? content.querySelector(
-        `.reader-page[data-page="${documentState.page}"], .reader-docx-page[data-page="${documentState.page}"]`
-      )
-    : null;
-  const pageOffset = shell ? Math.max(0, viewport.scrollTop - readerPageScrollTop(shell)) : 0;
-  const htmlScrollTop = htmlFrame && htmlFrame.contentWindow ? htmlFrame.contentWindow.scrollY : 0;
-  const readerUrl = currentReaderUrl();
-  const foliatePosition = captureFoliateBookmarkPosition() || captureChapterPosition();
-  const progress = {
-    url: sourceUrl,
-    title: documentState.title,
-    extension,
-    readerUrl: readerUrl.href,
-    page: documentState.page,
-    pageCount: documentState.pageCount,
-    pageOffset,
-    mediaTime:
-      mediaElement && Number.isFinite(mediaElement.currentTime) ? mediaElement.currentTime : 0,
-    scrollTop: viewport.scrollTop,
-    htmlScrollTop,
-    zoom: Math.round(documentState.zoom * 100),
-    ...(foliatePosition || {})
-  };
-  const signature = JSON.stringify(progress);
-  if (signature === lastSavedProgress) return progressSaveChain;
-  lastSavedProgress = signature;
-  progressSaveChain = progressSaveChain
-    .catch(() => {})
-    .then(() => {
-      if (!historySuppressed)
-        return VoiceOfMLReaderStore.put({ ...progress, lastReadAt: Date.now() });
-    })
-    .catch((error) => {
-      if (lastSavedProgress === signature) lastSavedProgress = "";
-      console.warn("Reader progress was not saved", error);
-    });
-  return progressSaveChain;
-}
-function emptyPanel(list, message) {
-  list.innerHTML = `<div class="panel-empty">${message}</div>`;
-}
-function clearSearchHighlights(view) {
-  for (const mark of view.querySelectorAll("mark.search-match")) mark.replaceWith(mark.textContent);
-  view.normalize();
-}
-function highlightPanelItem(item, query) {
-  const nodes = [];
-  const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode())
-    if (!walker.currentNode.parentElement.closest(".panel-item-remove"))
-      nodes.push(walker.currentNode);
-  const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
-  for (const node of nodes) {
-    const text = node.data,
-      matches = [...text.matchAll(pattern)];
-    if (!matches.length) continue;
-    let start = 0;
-    const fragment = document.createDocumentFragment();
-    for (const match of matches) {
-      fragment.append(text.slice(start, match.index));
-      const mark = document.createElement("mark");
-      mark.className = "search-match";
-      mark.textContent = match[0];
-      fragment.append(mark);
-      start = match.index + match[0].length;
-    }
-    fragment.append(text.slice(start));
-    node.replaceWith(fragment);
-  }
-}
-function filterPanel(view) {
-  clearSearchHighlights(view);
-  const query = (view.querySelector(".panel-search").value || "").trim().toLowerCase();
-  for (const item of view.querySelectorAll(".panel-item")) {
-    const searchableText = [...item.children]
-      .filter((child) => !child.classList.contains("panel-item-remove"))
-      .map((child) => child.textContent)
-      .join(" ")
-      .toLowerCase();
-    item.hidden = !!query && !searchableText.includes(query);
-    if (query && !item.hidden) highlightPanelItem(item, query);
-  }
-}
 let panelAnimationTimer = 0;
 let readerPanelInteractionSerial = 0;
 let readerUiHistoryState = "base";
-if (window.parent === window) {
-  history.replaceState({ ...history.state, voiceReaderBase: true }, "", location.href);
-  history.pushState({ voiceReaderGuard: true }, "", location.href);
-  window.addEventListener("popstate", (event) => {
-    if (!event.state?.voiceReaderBase || readerLifecycle.disposed) return;
-    if (document.querySelector("#history-panel").classList.contains("is-open") && !fullSearchView.hidden)
-      closeFullSearchView();
-    else if (document.querySelector("#history-panel").classList.contains("is-open"))
-      setReaderPanelOpen(false, true);
-    else {
-      history.back();
-      return;
-    }
-    history.pushState({ voiceReaderGuard: true }, "", location.href);
-  });
-}
-function notifyReaderUiState(state) {
-  readerUiHistoryState = state;
-  if (window.parent !== window)
-    window.parent.postMessage({ type: "voice-reader-ui-state", state }, location.origin);
-}
-function setReaderPanelOpen(open, restoreFocus = false) {
-  readerRuntime.update("panel", { open });
-  const panel = document.querySelector("#history-panel");
-  clearTimeout(panelAnimationTimer);
-  document.querySelector("#history").setAttribute("aria-expanded", String(open));
-  if (open) {
-    readerPanelInteractionSerial++;
-    panel.hidden = false;
-    void panel.offsetWidth;
-    panel.classList.add("is-open");
-    selectPanel(panelState.selected === "full-search" ? "full-search" : mediaElement ? "media" : "toc");
-    updateTocCurrentMark();
-    notifyReaderUiState(panelState.selected === "full-search" ? "full-search" : "panel");
-    return;
-  }
-  panel.classList.remove("is-open");
-  panelAnimationTimer = setTimeout(() => {
-    if (!panel.classList.contains("is-open")) panel.hidden = true;
-  }, 250);
-  notifyReaderUiState("base");
-  if (restoreFocus) document.querySelector("#history").focus({ preventScroll: true });
-}
-function setPanelSearchOpen(button, open) {
-  const input = button.closest(".reader-panel-view").querySelector(".panel-search");
-  button.setAttribute("aria-expanded", String(open));
-  if (open) {
-    input.hidden = false;
-    void input.offsetWidth;
-    input.classList.add("is-open");
-    input.focus();
-    return;
-  }
-  input.classList.remove("is-open");
-  setTimeout(() => {
-    if (!input.classList.contains("is-open")) input.hidden = true;
-  }, 190);
-  button.focus();
-}
-function selectPanel(name) {
-  if (name === "media" && mediaTab.hidden) name = "bookmarks";
-  updatePanelState({ selected: name });
-  if (progressTools) progressTools.hidden = !["toc", "media"].includes(name);
-  for (const button of document.querySelectorAll(".reader-panel-tabs button")) {
-    const selected = button.dataset.panel === name;
-    button.setAttribute("aria-selected", String(selected));
-    button.tabIndex = selected ? 0 : -1;
-  }
-  for (const view of document.querySelectorAll(".reader-panel-view"))
-    view.hidden = view.dataset.panelView !== name;
-  if (name === "full-search") notifyReaderUiState("full-search");
-  else if (panelState.open) notifyReaderUiState("panel");
-  if (name === "bookmarks") renderBookmarks();
-  if (name === "history") renderHistory();
-  if (name === "media" && mediaElement)
-    mediaPanel.querySelector(".media-panel-time").textContent =
-      `${formatMediaTime(mediaElement.currentTime)} / ${formatMediaTime(mediaElement.duration)}`;
-  updateProgressTools();
-}
-function headingTocEntries(root) {
-  return [...root.querySelectorAll("h1,h2,h3,h4,h5,h6")]
-    .filter((heading) => heading.textContent.trim())
-    .map((target) => ({
-      label: target.textContent.trim(),
-      depth: Number(target.tagName.slice(1)) - 1,
-      target,
-      activate: () => target.scrollIntoView({ block: "start" })
-    }));
-}
+readerBindings.bindReaderUiHistory();
+
 let headingLocationCache = null;
-trackReaderResource(() => { headingLocationCache?.dispose(); headingLocationCache = null; });
-function createHeadingLocationCache(root, entries) {
-  let positions = null, targets = [], width = -1, extent = -1, zoom = -1, wasAnimating = false, live = false;
-  const invalidate = () => { positions = null; };
-  const mutations = new MutationObserver(invalidate), resize = new ResizeObserver(invalidate);
-  mutations.observe(root, {subtree:true, childList:true, characterData:true,
-    attributes:true, attributeFilter:["style", "class", "hidden", "width", "height"]});
-  resize.observe(root);
-  root.addEventListener("load", invalidate, true);
-  root.ownerDocument.fonts?.addEventListener("loadingdone", invalidate);
-  return { root, entries,
-    at(marker, scroll) {
-      if (mutations.takeRecords().length) invalidate();
-      const nextWidth = root.clientWidth, nextExtent = root.scrollHeight, nextZoom = documentState.zoom;
-      const animating = root.getAnimations?.({subtree:true}).some(animation => animation.playState === "running" || animation.pending) || false;
-      if (live || animating || wasAnimating || nextWidth !== width || nextExtent !== extent || nextZoom !== zoom ||
-          targets.some(row => row.target !== row.entry.target || row.connected !== !!row.target?.isConnected)) invalidate();
-      wasAnimating = animating;
-      if (!positions) {
-        targets = entries.map((entry, index) => ({entry, index, target:entry.target, connected:!!entry.target?.isConnected}));
-        const fixed = new WeakMap();
-        const scrollDependent = target => {
-          const ancestors = [];
-          let value = false;
-          for (let node = target; node; node = node.parentElement) {
-            if (fixed.has(node)) { value = fixed.get(node); break; }
-            ancestors.push(node);
-            const position = root.ownerDocument.defaultView?.getComputedStyle(node).position;
-            if (position === "fixed" || position === "sticky") { value = true; break; }
-            if (node === root) break;
-          }
-          for (const node of ancestors) fixed.set(node, value);
-          return value;
-        };
-        // Source CSS may pin headings while scrolling; keep their live geometry.
-        live = targets.some(row => row.connected && scrollDependent(row.target));
-        positions = targets.filter(row => row.connected).map(row => ({index:row.index,
-          top:row.target.getBoundingClientRect().top + scroll - marker})).sort((a,b) => a.top-b.top || a.index-b.index);
-        width = root.clientWidth; extent = root.scrollHeight; zoom = nextZoom;
-      }
-      let low = 0, high = positions.length;
-      while (low < high) {
-        const middle = (low + high) >> 1;
-        if (positions[middle].top <= scroll) low = middle + 1;
-        else high = middle;
-      }
-      return positions[low ? low - 1 : 0]?.index ?? -1;
-    },
-    dispose() {
-      mutations.disconnect(); resize.disconnect();
-      root.removeEventListener("load", invalidate, true);
-      root.ownerDocument.fonts?.removeEventListener("loadingdone", invalidate);
-      positions = null; targets = [];
-    }
-  };
-}
-function syncHeadingLocation() {
-  const marker = htmlFrame ? 8 : viewport.getBoundingClientRect().top + 8;
-  const root = htmlFrame?.contentDocument?.body || content;
-  if (!["foliate", "epub-chapters"].includes(capability.mode)) {
-    if (headingLocationCache?.root !== root || headingLocationCache?.entries !== navigationState.tocEntries) {
-      headingLocationCache?.dispose();
-      headingLocationCache = createHeadingLocationCache(root, navigationState.tocEntries);
-    }
-    const current = headingLocationCache.at(marker, htmlFrame ? htmlFrame.contentWindow.scrollY : viewport.scrollTop);
-    if (current >= 0 && current !== navigationState.currentChapterIndex) {
-      updateNavigationState({currentChapterIndex:current});
-      updateTocCurrentMark();
-    }
-    return;
-  }
-  let current = -1,
-    currentPosition = -Infinity,
-    first = -1,
-    firstPosition = Infinity;
-  for (const [index, entry] of navigationState.tocEntries.entries()) {
-    if (!entry.target?.isConnected) continue;
-    const position = entry.target.getBoundingClientRect().top;
-    if (position <= marker && (position > currentPosition || (position === currentPosition && index > current))) {
-      current = index;
-      currentPosition = position;
-    }
-    if (position > marker && position < firstPosition) {
-      first = index;
-      firstPosition = position;
-    }
-  }
-  if (current < 0) current = first;
-  if (current >= 0 && current !== navigationState.currentChapterIndex) {
-    updateNavigationState({ currentChapterIndex: current });
-    updateTocCurrentMark();
-  }
-}
-function handleReaderPositionChange() {
-  if (readerAbortController.signal.aborted) return;
-  if (viewport.scrollTop !== pdfLastScrollTop) pdfScrollDirection = viewport.scrollTop > pdfLastScrollTop ? 1 : -1;
-  pdfLastScrollTop = viewport.scrollTop;
-  pdfShellWindow?.schedule();
-  scheduleMarkerSync();
-  scheduleFoliateScrollSync();
-  foliateScrollAnchors.remember();
-}
-async function navigateTocEntry(index) {
-  if (index < 0 || index >= navigationState.tocEntries.length) return;
-  const generation = beginReaderNavigation(),
-    entry = navigationState.tocEntries[index];
-  try {
-    const activated = foliateContinuous
-      ? await activateFoliateTocEntry(entry, generation)
-      : await entry.activate(generation);
-    if (activated === false || !isReaderGenerationCurrent("navigation", generation)) return;
-    updateNavigationState({ currentChapterIndex: index });
-    updateTocCurrentMark();
-    updateProgressTools();
-    setReaderPanelOpen(false, true);
-  } catch (error) {
-    reportNavigationError(error, generation);
-  }
-}
-function createTocRow(entry, index) {
-  const row = document.createElement("div");
-  row.className = "panel-item toc-item";
-  row.dataset.tocIndex = String(index);
-  row.style.setProperty("--toc-depth", String(entry.depth || 0));
-  const link = document.createElement("div");
-  link.className = "panel-item-main";
-  link.tabIndex = 0;
-  link.setAttribute("role", "link");
-  link.textContent = entry.label;
-  const activate = (event) => {
-    const selection = getSelection();
-    if (event?.type === "click" && selection?.toString() && selection.containsNode(link, true)) return;
-    navigateTocEntry(index);
-  };
-  link.addEventListener("click", activate);
-  link.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      activate();
-    }
-  });
-  row.appendChild(link);
-  return row;
-}
-function renderVirtualToc() {
-  const state = tocVirtualState;
-  if (!state) return;
-  const height = Math.max(320, state.panelView.clientHeight),
-    start = Math.max(0, Math.floor(state.panelView.scrollTop / TOC_VIRTUAL_ROW_HEIGHT) - 12),
-    end = Math.min(state.entries.length, start + Math.ceil(height / TOC_VIRTUAL_ROW_HEIGHT) + 24),
-    fragment = document.createDocumentFragment();
-  state.list.replaceChildren();
-  for (let index = start; index < end; index++) {
-    const row = createTocRow(state.entries[index], index);
-    row.classList.add("toc-virtual-row");
-    row.style.top = `${index * TOC_VIRTUAL_ROW_HEIGHT}px`;
-    fragment.appendChild(row);
-  }
-  state.list.appendChild(fragment);
-  updateTocCurrentMark();
-}
-function setToc(entries) {
-  const normalizedEntries = (entries || []).map((entry) => ({
-    ...entry,
-    href: String(entry.href || ""),
-    label: cleanTocLabel(entry.label)
-  }));
-  updateNavigationState({
-    tocEntries: normalizedEntries,
-    currentChapterIndex: normalizedEntries.length ? 0 : -1
-  });
-  const tocTab = document.querySelector("#toc-tab");
-  tocTab.hidden = false;
-  tocTab.textContent = normalizedEntries.length ? "目录" : "阅读";
-  const previousList = document.querySelector("#toc-list"),
-    list = previousList.cloneNode(false);
-  tocVirtualState?.destroy();
-  tocVirtualState = null;
-  previousList.replaceWith(list);
-  const virtualizationThreshold = chapterManifestUrl ? 2000 : TOC_VIRTUALIZATION_THRESHOLD;
-  if (normalizedEntries.length > virtualizationThreshold) {
-    const panelView = list.parentElement;
-    list.classList.add("toc-list-virtualized");
-    list.style.height = `${normalizedEntries.length * TOC_VIRTUAL_ROW_HEIGHT}px`;
-    let frame = 0;
-    const onScroll = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        renderVirtualToc();
-      });
-    };
-    panelView.addEventListener("scroll", onScroll, { passive: true });
-    tocVirtualState = {
-      entries: normalizedEntries,
-      list,
-      panelView,
-      render: renderVirtualToc,
-      destroy: () => {
-        panelView.removeEventListener("scroll", onScroll);
-        if (frame) cancelAnimationFrame(frame);
-      }
-    };
-    renderVirtualToc();
-  } else {
-    for (const [index, entry] of normalizedEntries.entries())
-      list.appendChild(createTocRow(entry, index));
-  }
-  updateTocCurrentMark();
-}
-function cleanTocLabel(value) {
-  return (
-    String(value || "未命名章节")
-      .replace(/[\uFFFD\u2610-\u2612\u25a1\u0000-\u001F\u007F]/gu, "")
-      .replace(/\s{2,}/gu, " ")
-      .trim() || "未命名章节"
-  );
-}
-function updateTocCurrentMark() {
-  const rows = [...document.querySelectorAll("#toc-list .toc-item")];
-  if (documentState.pageCount > 1 && documentState.page > 0) {
-    let pageIndex = -1;
-    for (const [index, entry] of navigationState.tocEntries.entries()) {
-      const match = entry.label.match(/第\s*(\d+)\s*页/u);
-      if (match && Number(match[1]) <= documentState.page) pageIndex = index;
-    }
-    if (pageIndex >= 0) updateNavigationState({ currentChapterIndex: pageIndex });
-  }
-  for (const row of rows) {
-    const index = Number(row.dataset.tocIndex);
-    let mark = row.querySelector(".toc-current-mark");
-    if (!mark) {
-      mark = document.createElement("span");
-      mark.className = "toc-current-mark";
-      mark.textContent = "✓";
-      row.appendChild(mark);
-    }
-    mark.hidden = index !== navigationState.currentChapterIndex;
-    row.classList.toggle("is-current", index === navigationState.currentChapterIndex);
-  }
-}
-function syncFoliateScrollLocation() {
-  if (!foliateContinuous || !navigationState.tocEntries.length) return;
-  const rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")],
-    top = viewport.getBoundingClientRect().top + 80;
-  let sectionIndex = -1,
-    sectionNode = null;
-  for (const row of rows)
-    if (row.getBoundingClientRect().top <= top) {
-      sectionIndex = Number(row.dataset.section);
-      sectionNode = row;
-    }
-  if (!sectionNode) return;
-  let best = -1;
-  let bestPosition = -Infinity;
-  for (const [index, entry] of navigationState.tocEntries.entries()) {
-    if (entry.sectionIndex !== sectionIndex) continue;
-    let position = sectionNode.getBoundingClientRect().top;
-    if (entry.anchor) {
-      const root = foliateSectionRoot(sectionNode);
-      const anchor = entry.anchor({
-        getElementById: (id) => root.querySelector(`[id="${CSS.escape(id)}"]`),
-        querySelector: (selector) => root.querySelector(selector)
-      });
-      if (anchor) position = anchor.getBoundingClientRect().top;
-    }
-    if (entry.fragment) {
-      const anchor = foliateSectionQuery(
-        sectionNode,
-        `[id="${CSS.escape(entry.fragment)}"], [name="${CSS.escape(entry.fragment)}"]`
-      );
-      if (anchor) position = anchor.getBoundingClientRect().top;
-    }
-    if (position <= top && (position > bestPosition || (position === bestPosition && index > best))) {
-      best = index;
-      bestPosition = position;
-    }
-  }
-  if (best < 0) {
-    let firstPosition = Infinity;
-    for (const [index, entry] of navigationState.tocEntries.entries()) {
-      if (entry.sectionIndex !== sectionIndex) continue;
-      const position = entry.target?.getBoundingClientRect?.().top;
-      if (Number.isFinite(position) && position < firstPosition) {
-        best = index;
-        firstPosition = position;
-      }
-    }
-  }
-  if (best >= 0 && best !== navigationState.currentChapterIndex) {
-    updateNavigationState({ currentChapterIndex: best });
-    updateTocCurrentMark();
-    updateProgressTools();
-  }
-}
-function refreshFoliateWindow() {
-  foliateWindowFrame = 0;
-  foliateSectionLoader?.refresh?.();
-}
-function scheduleFoliateWindowRefresh() {
-  if (!foliateWindowFrame) foliateWindowFrame = requestAnimationFrame(refreshFoliateWindow);
-}
-function trimFoliateSections() {
-  if (!foliateContinuous || !foliateSectionVirtualizer) return;
-  const marker = viewport.getBoundingClientRect().top + 80,
-    rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")],
-    current =
-      rows.find((row) => {
-        const rect = row.getBoundingClientRect();
-        return rect.top <= marker && rect.bottom > marker;
-      }) || rows.find((row) => row.getBoundingClientRect().top > marker);
-  if (current) foliateSectionVirtualizer.trim(Number(current.dataset.section));
-}
-function scheduleFoliateScrollSync() {
-  if (foliateScrollFrame) return;
-  foliateScrollFrame = requestAnimationFrame(() => {
-    foliateScrollFrame = 0;
-    syncFoliateScrollLocation();
-    foliateScrollAnchors.whenIdle(trimFoliateSections);
-  });
-}
-async function activateFoliateTocEntry(entry, generation = beginReaderNavigation()) {
-  const book = epubRendition?.book,
-    href = String(entry.href || ""),
-    target = await epubRendition?.book?.resolveHref(href);
-  if (!book || !isReaderGenerationCurrent("navigation", generation)) return false;
-  const section = target && book.sections[target.index],
-    sections = book.sections.filter((item) => item.linear !== "no"),
-    visibleIndex = section ? sections.indexOf(section) : -1;
-  if (!section || visibleIndex < 0 || !foliateSectionLoader) return false;
-  let node = await foliateSectionLoader(visibleIndex);
-  if (!isReaderGenerationCurrent("navigation", generation)) return false;
-  // Background neighbors are not part of a demanded TOC destination.
-  await waitForReader(0, true);
-  if (!isReaderGenerationCurrent("navigation", generation)) return false;
-  if (!node?.isConnected) node = await foliateSectionLoader(visibleIndex);
-  if (!node?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
-  const root = foliateSectionRoot(node),
-    anchorDocument = {
-      getElementById: (id) => root.querySelector(`[id="${CSS.escape(id)}"]`),
-      querySelector: (selector) => root.querySelector(selector)
-    };
-  let anchor = null;
-  try {
-    anchor = typeof target.anchor === "function" ? target.anchor(anchorDocument) : null;
-  } catch (_) {}
-  if (!anchor) {
-    const fragment = href.split("#")[1] || "",
-      id = fragment ? decodeURIComponent(fragment) : "";
-    anchor = id ? root.querySelector(`[id="${CSS.escape(id)}"], [name="${CSS.escape(id)}"]`) : null;
-  }
-  const destination = anchor || node;
-  foliateScrollAnchors.invalidate();
-  viewport.scrollTop = Math.max(
-    0,
-    viewport.scrollTop +
-      destination.getBoundingClientRect().top -
-      viewport.getBoundingClientRect().top -
-      8
-  );
-  syncFoliateScrollLocation();
-  updateTocCurrentMark();
-  updateProgressTools();
-  scheduleSave();
-  setReaderPanelOpen(false, true);
-  foliateScrollAnchors.remember();
-  return true;
-}
-document.addEventListener("click", async (event) => {
-  const path = event.composedPath(),
-    link = path.find((node) => node instanceof Element && node.matches?.("a[href]")),
-    article = path.find(
-      (node) =>
-        node instanceof Element && node.matches?.(".foliate-continuous article[data-section]")
-    );
-  if (!link || !article || !epubRendition?.book) return;
-  const raw = link.getAttribute("href") || "";
-  if (!raw || epubRendition.book.isExternal?.(raw) || /^(?:https?:|mailto:|tel:)/i.test(raw))
-    return;
-  event.preventDefault();
-  const generation = beginReaderNavigation(),
-    index = Number(article.dataset.section),
-    section = epubRendition.book.sections.filter((item) => item.linear !== "no")[index];
-  let href = raw;
-  try {
-    href = section?.resolveHref?.(raw) || raw;
-  } catch (_) {}
-  try {
-    await activateFoliateTocEntry({ href }, generation);
-  } catch (error) {
-    reportNavigationError(error, generation);
-  }
-});
-function placeReadingProgress() {
-  const panel = document.querySelector("#history-panel"),
-    tocPanel = document.querySelector("#toc-panel"),
-    tocList = tocPanel.querySelector(".panel-list"),
-    noToc = loadingStatus.hidden && !navigationState.tocEntries.length && !mediaElement;
-  progressTools.classList.toggle("reader-no-toc", noToc);
-  tocPanel.querySelector(".panel-view-header strong").textContent = noToc ? "阅读状态" : "目录";
-  if (
-    noToc &&
-    (progressTools.parentElement !== tocPanel || progressTools.nextElementSibling !== tocList)
-  )
-    tocPanel.insertBefore(progressTools, tocList);
-  else if (!noToc && panel.lastElementChild !== progressTools) panel.appendChild(progressTools);
-}
-function currentReaderUrl() {
-  const url = new URL(location.href);
-  for (const key of ["return", "nav", "bookmark", "bookmark_source"]) url.searchParams.delete(key);
-  return url;
-}
-async function loadReaderRestoration() {
-  const currentEntry = (entry) => {
-    if (
-      capability.mode === "epub-chapters" &&
-      /-epub-chapters-v5\//.test(chapterManifestUrl || sourceUrl) &&
-      entry?.chapterManifest !== (chapterManifestUrl || sourceUrl)
-    ) return null;
-    return entry;
-  };
-  try {
-    const bookmarkId = params.get("bookmark"),
-      bookmarkSource = params.get("bookmark_source");
-    if (bookmarkId && bookmarkSource === sourceUrl) {
-      const entries = await VoiceOfMLReaderStore.listBookmarks(sourceUrl);
-      const bookmark = entries.find((entry) => entry.id === bookmarkId && entry.url === sourceUrl);
-      if (bookmark) return currentEntry(bookmark);
-    }
-    return currentEntry(await VoiceOfMLReaderStore.get(sourceUrl));
-  } catch (_) {
-    restorationFailed = true;
-    return null;
-  }
-}
-async function getInitialReaderRestoration() {
-  if (!readerRestorationPromise) return null;
-  if (!readerRestorationLoaded) {
-    readerRestorationEntry = await awaitReader(Promise.race([
-      readerRestorationPromise,
-      waitForReader(150).then(() => null)
-    ]));
-    readerRestorationLoaded = true;
-  }
-  return readerRestorationEntry;
-}
-function initialReaderPage(total) {
-  const page = Number(readerRestorationEntry?.page);
-  return Number.isInteger(page) ? Math.max(1, Math.min(total, page)) : 1;
-}
-function consumeBookmarkHandoff(entry) {
-  if (!entry || entry.id !== params.get("bookmark") || entry.url !== params.get("bookmark_source"))
-    return;
-  const opening = new URL(location.href);
-  const shareKey = (url) => {
-    const key = new URL(url);
-    key.searchParams.delete("return");
-    key.searchParams.delete("nav");
-    return key.href;
-  };
-  const cleanMatchingUrl = (raw) => {
-    if (typeof raw !== "string" || !raw) return null;
-    try {
-      const url = new URL(raw, location.origin);
-      if (
-        url.origin !== location.origin ||
-        url.pathname !== opening.pathname ||
-        shareKey(url) !== shareKey(opening)
-      )
-        return null;
-      url.searchParams.delete("bookmark");
-      url.searchParams.delete("bookmark_source");
-      return url.href;
-    } catch (_) {
-      return null;
-    }
-  };
-  const cleanHistory = (owner) => {
-    const url = cleanMatchingUrl(owner.location.href);
-    if (!url) return;
-    const state = owner.history.state;
-    const readerUrl = state?.voiceReaderOverlay && cleanMatchingUrl(state.readerUrl);
-    owner.history.replaceState(readerUrl ? { ...state, readerUrl } : state, "", url);
-  };
-  // Clean only this navigation, not a bookmark-ID cache. A new deliberate click
-  // can reuse the same bookmark; overlay reload/Back uses the cleaned records.
-  try {
-    if (
-      window.parent !== window &&
-      window.parent.location.origin === location.origin &&
-      window.frameElement?.matches("iframe.reader-overlay") &&
-      window.parent.history.state?.voiceReaderOverlay === true &&
-      cleanMatchingUrl(window.parent.history.state.readerUrl)
-    )
-      cleanHistory(window.parent);
-  } catch (_) {}
-  try {
-    const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
-    const readerUrl = cleanMatchingUrl(saved?.readerUrl),
-      shareUrl = cleanMatchingUrl(saved?.shareUrl);
-    if (readerUrl && shareUrl)
-      sessionStorage.setItem(
-        "reader-navigation-current",
-        JSON.stringify({ ...saved, readerUrl, shareUrl })
-      );
-  } catch (_) {}
-  try {
-    cleanHistory(window);
-  } catch (_) {}
-  params.delete("bookmark");
-  params.delete("bookmark_source");
-}
-async function navigateReader(rawUrl, bookmark = null) {
-  let target;
-  try {
-    target = new URL(rawUrl, location.origin);
-    if (
-      target.origin !== location.origin ||
-      target.pathname !== "/search/static/reader.html" ||
-      target.username ||
-      target.password
-    )
-      return;
-    target.searchParams.delete("bookmark");
-    target.searchParams.delete("bookmark_source");
-    if (bookmark) {
-      if (
-        typeof bookmark.id !== "string" ||
-        !bookmark.id ||
-        typeof bookmark.url !== "string" ||
-        !bookmark.url
-      )
-        return;
-      target.searchParams.set("bookmark", bookmark.id);
-      target.searchParams.set("bookmark_source", bookmark.url);
-    }
-  } catch (_) {
-    return;
-  }
-  const generation = beginReaderNavigation();
-  await saveProgress();
-  if (!isReaderGenerationCurrent("navigation", generation)) return;
-  if (window.parent !== window)
-    window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin);
-  else location.assign(target.href);
-}
-async function renderHistory() {
-  const list = document.querySelector("#history-list"),
-    generation = nextReaderGeneration("history");
-  try {
-    const entries = await VoiceOfMLReaderStore.list();
-    if (!isReaderGenerationCurrent("history", generation)) return;
-    list.textContent = "";
-    for (const entry of entries) {
-      const row = document.createElement("div");
-      row.className = "panel-item";
-      if (entry.mediaTime != null) row.dataset.mediaTime = String(entry.mediaTime);
-      const link = document.createElement("button");
-      link.type = "button";
-      link.className = "panel-item-main";
-      link.textContent = entry.title || entry.url;
-      link.addEventListener("click", () => navigateReader(entry.readerUrl));
-      const meta = document.createElement("small");
-      meta.textContent = `${entry.pageCount ? `第 ${entry.page || 1} / ${entry.pageCount} 页 · ` : ""}${new Date(entry.lastReadAt).toLocaleString()}`;
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "panel-item-remove";
-      remove.textContent = "删除";
-      remove.addEventListener("click", async () => {
-        if (entry.url === sourceUrl) {
-          historySuppressed = true;
-          await progressSaveChain;
-        }
-        await VoiceOfMLReaderStore.remove(entry.url);
-        renderHistory();
-      });
-      row.append(link, remove, meta);
-      list.appendChild(row);
-    }
-    if (!list.childElementCount) emptyPanel(list, "暂无阅读记录");
-    filterPanel(document.querySelector("#history-view"));
-  } catch (_) {
-    if (isReaderGenerationCurrent("history", generation)) emptyPanel(list, "无法读取本地记录");
-  }
-}
-function readerProgressPercent() {
-  if (mediaElement)
-    return mediaElement.duration
-      ? Math.round((mediaElement.currentTime / mediaElement.duration) * 1000) / 10
-      : 0;
-  if (foliateContinuous) {
-    const position = captureFoliateBookmarkPosition(),
-      count = epubBook?.sections?.filter((section) => section.linear !== "no").length || 0,
-      article =
-        position &&
-        document.querySelector(
-          `.foliate-continuous article[data-section="${position.foliateSection}"]`
-        ),
-      fraction = article
-        ? Math.max(
-            0,
-            Math.min(
-              1,
-              position.foliateOffset / Math.max(1, article.getBoundingClientRect().height)
-            )
-          )
-        : 0;
-    return count && position
-      ? Math.round(((position.foliateSection + fraction) / count) * 1000) / 10
-      : 0;
-  }
-  if (htmlFrame && htmlFrame.contentDocument) {
-    const doc = htmlFrame.contentDocument.documentElement,
-      win = htmlFrame.contentWindow;
-    return (
-      Math.round(
-        Math.max(0, Math.min(1, win.scrollY / Math.max(1, doc.scrollHeight - win.innerHeight))) *
-          1000
-      ) / 10
-    );
-  }
-  return (
-    Math.round(
-      Math.max(
-        0,
-        Math.min(1, viewport.scrollTop / Math.max(1, viewport.scrollHeight - viewport.clientHeight))
-      ) * 1000
-    ) / 10
-  );
-}
-function excerptFromCaret(doc, root, x, y) {
-  let node,
-    offset = 0;
-  const position = doc.caretPositionFromPoint ? doc.caretPositionFromPoint(x, y) : null;
-  if (position) {
-    node = position.offsetNode;
-    offset = position.offset;
-  } else if (doc.caretRangeFromPoint) {
-    const range = doc.caretRangeFromPoint(x, y);
-    if (range) {
-      node = range.startContainer;
-      offset = range.startOffset;
-    }
-  }
-  if (!node || !root.contains(node)) return "";
-  if (node.nodeType !== Node.TEXT_NODE) {
-    const first = doc.createTreeWalker(node, NodeFilter.SHOW_TEXT).nextNode();
-    if (!first) return "";
-    node = first;
-    offset = 0;
-  }
-  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  walker.currentNode = node;
-  let excerpt = node.data.slice(offset);
-  while (excerpt.length < 220 && walker.nextNode()) excerpt += ` ${walker.currentNode.data}`;
-  return excerpt.replace(/\s+/g, " ").trim().slice(0, 160);
-}
-function bookmarkExcerpt() {
-  if (["image", "audio", "video", "pdf-pages"].includes(capability.mode)) return "";
-  if (capability.mode === "pdf") {
-    const shell = pageAtMarker(),
-      items = shell && shell._bookmarkTextItems;
-    if (items && items.length) {
-      const rect = shell.getBoundingClientRect(),
-        targetY =
-          Math.max(0, bookmarkRibbon.getBoundingClientRect().bottom - rect.top) /
-          Math.max(1, rect.height);
-      let nearest = 0,
-        distance = Infinity;
-      items.forEach((item, index) => {
-        const nextDistance = Math.abs(item.y - targetY);
-        if (nextDistance < distance) {
-          nearest = index;
-          distance = nextDistance;
-        }
-      });
-      return items
-        .slice(nearest)
-        .map((item) => item.text)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 160);
-    }
-    // A scanned/unloaded page has no excerpt. Never fall back to other pages' UI text.
-    return "";
-  }
-  const x = Math.round(viewport.getBoundingClientRect().width / 2),
-    y = Math.round(bookmarkRibbon.getBoundingClientRect().bottom + 8);
-  const frames = [...document.querySelectorAll("iframe")].filter((frame) => {
-    const rect = frame.getBoundingClientRect();
-    return rect.left <= x && rect.right >= x && rect.top <= y && rect.bottom >= y;
-  });
-  const frame = frames[frames.length - 1];
-  try {
-    if (frame && frame.contentDocument && frame.contentDocument.body) {
-      const rect = frame.getBoundingClientRect();
-      return excerptFromCaret(
-        frame.contentDocument,
-        frame.contentDocument.body,
-        x - rect.left,
-        y - rect.top
-      );
-    }
-  } catch (_) {}
-  const exact = excerptFromCaret(document, content, x, y);
-  if (exact) return exact;
-  const sourceText = foliateContinuous
-      ? [
-          ...content.querySelectorAll(
-            ".foliate-continuous article[data-section]:not(.foliate-section-placeholder)"
-          )
-        ]
-          .map((article) => foliateSectionRoot(article).textContent)
-          .join(" ")
-      : content.textContent,
-    text = sourceText.replace(/\s+/g, " ").trim(),
-    start = Math.floor((text.length * readerProgressPercent()) / 100);
-  return text.slice(start, start + 160).trim();
-}
-function captureFoliateBookmarkPosition() {
-  if (!foliateContinuous) return null;
-  const marker = viewport.getBoundingClientRect().top + 8,
-    rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")];
-  const article =
-    rows.find((row) => {
-      const rect = row.getBoundingClientRect();
-      return rect.top <= marker && rect.bottom > marker;
-    }) ||
-    rows.find((row) => row.getBoundingClientRect().top > marker) ||
-    rows[rows.length - 1];
-  return article
-    ? {
-        foliateSection: Number(article.dataset.section),
-        foliateOffset: marker - article.getBoundingClientRect().top,
-        foliateTocIndex: navigationState.currentChapterIndex
-      }
-    : null;
-}
-async function restoreFoliateBookmarkPosition(entry, generation = beginReaderNavigation()) {
-  try {
-    if (
-      !foliateSectionLoader ||
-      !Number.isInteger(entry.foliateSection) ||
-      !isReaderGenerationCurrent("navigation", generation)
-    )
-      return false;
-    let article = await foliateSectionLoader(entry.foliateSection);
-    if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    await waitForReader(0, true);
-    if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    if (!article?.isConnected) article = await foliateSectionLoader(entry.foliateSection);
-    if (!article?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
-    const marker = viewport.getBoundingClientRect().top + 8;
-    const offset = Number(entry.foliateOffset) || 0;
-    const start = !offset
-      ? foliateSectionRoot(article).querySelector("h1,h2,h3,h4,h5,h6,p,li,blockquote,pre") || article
-      : article;
-    foliateScrollAnchors.invalidate();
-    viewport.scrollTop = Math.max(
-      0,
-      viewport.scrollTop +
-        start.getBoundingClientRect().top -
-        marker +
-        offset
-    );
-    syncFoliateScrollLocation();
-    updateTocCurrentMark();
-    updateProgressTools();
-    scheduleSave();
-    setReaderPanelOpen(false, true);
-    foliateScrollAnchors.remember();
-    return true;
-  } catch (error) {
-    reportNavigationError(error, generation);
-    return false;
-  }
-}
-async function seekFoliateProgress(percent, generation) {
-  try {
-    const sections = epubBook?.sections?.filter((section) => section.linear !== "no") || [];
-    if (
-      !sections.length ||
-      !foliateSectionLoader ||
-      !isReaderGenerationCurrent("navigation", generation)
-    )
-      return;
-    const position = Math.max(0, Math.min(0.999999, Number(percent) / 100)) * sections.length,
-      index = Math.min(sections.length - 1, Math.floor(position));
-    let article = await foliateSectionLoader(index);
-    if (!isReaderGenerationCurrent("navigation", generation)) return;
-    await waitForReader(0, true);
-    if (!isReaderGenerationCurrent("navigation", generation)) return;
-    if (!article?.isConnected) article = await foliateSectionLoader(index);
-    if (!article?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return;
-    const marker = viewport.getBoundingClientRect().top + 8,
-      offset = article.getBoundingClientRect().height * (position - index);
-    foliateScrollAnchors.invalidate();
-    viewport.scrollTop = Math.max(
-      0,
-      viewport.scrollTop + article.getBoundingClientRect().top - marker + offset
-    );
-    await waitForReader(0, true);
-    if (!isReaderGenerationCurrent("navigation", generation)) return;
-    viewport.scrollTop += article.getBoundingClientRect().top - marker + offset + 4;
-    syncFoliateScrollLocation();
-    updateTocCurrentMark();
-    updateProgressTools();
-    scheduleSave();
-    foliateScrollAnchors.remember();
-  } catch (error) {
-    reportNavigationError(error, generation);
-  }
-}
-async function renderBookmarks() {
-  const list = document.querySelector("#bookmarks-list"),
-    generation = nextReaderGeneration("bookmarks");
-  try {
-    const entries = panelState.showingAllBookmarks
-      ? await VoiceOfMLReaderStore.listAllBookmarks()
-      : await VoiceOfMLReaderStore.listBookmarks(sourceUrl);
-    if (!isReaderGenerationCurrent("bookmarks", generation)) return;
-    list.textContent = "";
-    for (const entry of entries) {
-      const row = document.createElement("div");
-      row.className = "panel-item";
-      row.dataset.bookmarkId = entry.id;
-      const open = document.createElement("button");
-      open.type = "button";
-      open.className = "panel-item-main";
-      open.textContent = panelState.showingAllBookmarks
-        ? `${entry.title || "未命名书籍"} · ${entry.label}`
-        : entry.label;
-      open.addEventListener("click", () =>
-        entry.url !== sourceUrl
-          ? navigateReader(entry.readerUrl, entry)
-          : restoreFormat(capability.mode, entry)
-      );
-      const excerpt = document.createElement("p");
-      excerpt.className = "bookmark-excerpt";
-      excerpt.textContent = entry.excerpt || "";
-      excerpt.hidden = !entry.excerpt;
-      const meta = document.createElement("small");
-      meta.textContent = new Date(entry.createdAt).toLocaleString();
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "panel-item-remove";
-      remove.textContent = "删除";
-      remove.addEventListener("click", async () => {
-        await VoiceOfMLReaderStore.removeBookmark(entry.id);
-        row.remove();
-        if (!list.querySelector(".panel-item")) emptyPanel(list, "暂无书签");
-      });
-      const edit = document.createElement("button");
-      edit.type = "button";
-      edit.className = "panel-item-edit";
-      edit.textContent = "编辑";
-      edit.addEventListener("click", () => openBookmarkPopover(edit, entry));
-      row.append(open, edit, remove, excerpt, meta);
-      list.appendChild(row);
-    }
-    if (!list.childElementCount) emptyPanel(list, "暂无书签");
-    filterPanel(document.querySelector("#bookmarks-panel"));
-  } catch (_) {
-    if (isReaderGenerationCurrent("bookmarks", generation)) emptyPanel(list, "无法读取书签");
-  }
-}
-function pageAtMarker() {
-  const y = bookmarkRibbon.getBoundingClientRect().bottom,
-    pages = docxPageNodes.length ? docxPageNodes : [...content.querySelectorAll(".reader-page, .reader-docx-page")];
-  if (!pages.length) return null;
-  const end = viewport.scrollHeight - viewport.clientHeight;
-  if (["pdf", "pdf-pages"].includes(capability.mode) && end > 2 && viewport.scrollTop > 0 &&
-      end - viewport.scrollTop <= 2) {
-    const last = pages[pages.length - 1], rect = last.getBoundingClientRect(), view = viewport.getBoundingClientRect();
-    if (rect.bottom > view.top && rect.top < view.bottom) return last;
-  }
-  let low = 0, high = pages.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    if (pages[middle].getBoundingClientRect().bottom > y) high = middle;
-    else low = middle + 1;
-  }
-  return pages[Math.min(low, pages.length - 1)];
-}
-function syncCurrentPageFromMarker() {
-  if (performance.now() < pageNavigationLockUntil) return;
-  const page = pageAtMarker();
-  if (!page) return;
-  const next = Number(page.dataset.page);
-  if (!next || next === documentState.page) return;
-  updateDocumentState({ page: next });
-  if (document.activeElement !== pageInput) pageInput.value = String(next);
-  updateTocCurrentMark();
-  updateProgressTools();
-}
-function scheduleMarkerSync() {
-  if (markerFrame) return;
-  markerFrame = requestAnimationFrame(() => {
-    markerFrame = 0;
-    if (readerAbortController.signal.aborted) return;
-    syncCurrentPageFromMarker();
-    refreshNearbyPdfPages();
-    syncHeadingLocation();
-    updateProgressTools();
-    scheduleSave();
-  });
-}
-function formatMediaTime(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
-  const total = Math.floor(seconds),
-    hours = Math.floor(total / 3600),
-    minutes = Math.floor((total % 3600) / 60),
-    secs = total % 60;
-  return `${hours ? `${String(hours).padStart(2, "0")}:` : ""}${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-}
-function captureBookmarkSnapshot() {
-  if (mediaElement) {
-    const time = Number.isFinite(mediaElement.currentTime) ? mediaElement.currentTime : 0;
-    return {
-      locator: `media:${Math.round(time * 10) / 10}`,
-      label: `时间 ${formatMediaTime(time)}`,
-      excerpt: "",
-      progress: mediaElement.duration ? Math.round((time / mediaElement.duration) * 1000) / 10 : 0,
-      mediaTime: time,
-      page: 0,
-      pageOffset: 0,
-      scrollTop: 0,
-      htmlScrollTop: 0
-    };
-  }
-  syncCurrentPageFromMarker();
-  const foliatePosition = captureFoliateBookmarkPosition() || captureChapterPosition();
-  const shell = documentState.pageCount ? pageAtMarker() : null;
-  const pageOffset = shell ? Math.max(0, viewport.scrollTop - readerPageScrollTop(shell)) : 0;
-  const progress = readerProgressPercent();
-  const htmlScrollTop = htmlFrame && htmlFrame.contentWindow ? htmlFrame.contentWindow.scrollY : 0;
-  const scrollTop = viewport.scrollTop;
-  const pagedDocument = documentState.pageCount && !["text", "markdown"].includes(capability.mode);
-  const locator = Number.isInteger(foliatePosition?.chapterIndex)
-    ? `chapter:${foliatePosition.chapterIndex}:${Math.round(foliatePosition.chapterOffset)}`
-    : foliatePosition
-      ? `foliate:${foliatePosition.foliateSection}:${Math.round(foliatePosition.foliateOffset)}`
-      : pagedDocument
-        ? `page:${documentState.page}:${Math.round(pageOffset)}`
-        : `progress:${progress}:${Math.round(htmlFrame ? htmlScrollTop : scrollTop)}`;
-  return {
-    locator,
-    label: pagedDocument
-      ? `第 ${documentState.page} / ${documentState.pageCount} 页`
-      : `阅读进度 ${progress.toFixed(1)}%`,
-    excerpt: bookmarkExcerpt(),
-    progress,
-    page: pagedDocument ? documentState.page : 0,
-    pageOffset,
-    scrollTop,
-    htmlScrollTop,
-    ...(foliatePosition || {})
-  };
-}
-// Bookmark dialog owns focus and temporarily makes only its siblings inert.
-function setBookmarkDialogModal(open) {
-  document.documentElement.classList.toggle("bookmark-dialog-open", open);
-  if (open) {
-    for (let node = bookmarkPopover; node && node !== document.body; node = node.parentElement) {
-      for (const sibling of node.parentElement.children)
-        if (sibling !== node && !bookmarkInertSiblings.has(sibling)) {
-          bookmarkInertSiblings.set(sibling, sibling.inert);
-          sibling.inert = true;
-        }
-    }
-  } else {
-    for (const [node, inert] of bookmarkInertSiblings) node.inert = inert;
-    bookmarkInertSiblings.clear();
-  }
-}
-function openBookmarkPopover(invoker = bookmarkRibbon, entry = null) {
-  if (!bookmarkPopover.hidden) return;
-  bookmarkInvoker = invoker;
-  pendingBookmarkSnapshot = entry ? null : captureBookmarkSnapshot();
-  updatePanelState({ editingBookmark: entry ? { ...entry } : null });
-  const snapshot = entry || pendingBookmarkSnapshot;
-  document.querySelector("#bookmark-prompt").textContent = entry
-    ? `编辑书签 · ${entry.label}`
-    : `在${snapshot.label}添加书签？`;
-  bookmarkLabelInput.value = snapshot.label || "";
-  bookmarkExcerptInput.value = snapshot.excerpt || "";
-  document.querySelector("#bookmark-add").textContent = entry ? "保存书签" : "添加书签";
-  bookmarkPopover.hidden = false;
-  invoker.setAttribute("aria-expanded", "true");
-  invoker.setAttribute("aria-controls", bookmarkPopover.id);
-  bookmarkLabelInput.focus();
-  setBookmarkDialogModal(true);
-}
-function closeBookmarkPopover() {
-  pendingBookmarkSnapshot = null;
-  updatePanelState({ editingBookmark: null });
-  bookmarkPopover.hidden = true;
-  setBookmarkDialogModal(false);
-  bookmarkInvoker?.setAttribute("aria-expanded", "false");
-  (bookmarkInvoker?.isConnected ? bookmarkInvoker : bookmarkRibbon).focus({ preventScroll: true });
-  bookmarkInvoker = null;
-}
-bookmarkRibbon.addEventListener("click", () => openBookmarkPopover(bookmarkRibbon));
-document.querySelector("#bookmark-cancel").addEventListener("click", closeBookmarkPopover);
-document.querySelector("#bookmark-add").addEventListener("click", async (event) => {
-  const button = event.currentTarget,
-    editing = panelState.editingBookmark;
-  const snapshot = pendingBookmarkSnapshot || editing || captureBookmarkSnapshot();
-  const label = bookmarkLabelInput.value.trim() || snapshot.label,
-    excerpt = bookmarkExcerptInput.value.trim();
-  button.disabled = true;
-  try {
-    await VoiceOfMLReaderStore.putBookmark(
-      editing
-        ? { ...editing, label, excerpt }
-        : {
-            ...snapshot,
-            id: `${sourceUrl}\0${snapshot.locator}`,
-            url: sourceUrl,
-            title: documentState.title,
-            extension,
-            readerUrl: currentReaderUrl().href,
-            label,
-            excerpt,
-            createdAt: Date.now()
-          }
-    );
-    const invoker = bookmarkInvoker;
-    closeBookmarkPopover();
-    if (!document.querySelector("#bookmarks-panel").hidden) {
-      await renderBookmarks();
-      if (editing && invoker && !invoker.isConnected && document.activeElement === document.body)
-        (
-          document.querySelector(
-            `#bookmarks-list [data-bookmark-id="${CSS.escape(editing.id)}"] .panel-item-edit`
-          ) || bookmarksAllButton
-        ).focus();
-    }
-  } catch (_) {
-    document.querySelector("#bookmark-prompt").textContent = "书签保存失败，请重试。";
-  } finally {
-    button.disabled = false;
-  }
-});
-bookmarkPopover.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    closeBookmarkPopover();
-    return;
-  }
-  if (event.key !== "Tab") return;
-  const controls = [
-    ...bookmarkPopover.querySelectorAll("input,textarea,select,button,a[href],[tabindex]")
-  ].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
-  const first = controls[0],
-    last = controls[controls.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-});
-for (const button of document.querySelectorAll(".reader-panel-tabs button"))
-  button.addEventListener("click", () => selectPanel(button.dataset.panel));
-document.querySelector(".reader-panel-tabs").addEventListener("keydown", (event) => {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  const tabs = [...document.querySelectorAll(".reader-panel-tabs button:not([hidden])")],
-    current = tabs.indexOf(document.activeElement);
-  if (current < 0) return;
-  event.preventDefault();
-  const next =
-    event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? tabs.length - 1
-        : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-  selectPanel(tabs[next].dataset.panel);
-  tabs[next].focus();
-});
-bookmarksAllButton.addEventListener("click", () => {
-  updatePanelState({ showingAllBookmarks: !panelState.showingAllBookmarks });
-  bookmarksAllButton.textContent = panelState.showingAllBookmarks ? "本书书签" : "全部书签";
-  bookmarksAllButton.setAttribute("aria-pressed", String(panelState.showingAllBookmarks));
-  renderBookmarks();
-});
-for (const button of document.querySelectorAll(".panel-search-toggle")) {
-  button.classList.remove("icon-button");
-  button.classList.add("text-action");
-  button.textContent = "搜索";
-  button.hidden = false;
-  button.setAttribute("aria-expanded", "false");
-  button.addEventListener("click", () =>
-    setPanelSearchOpen(button, button.getAttribute("aria-expanded") !== "true")
-  );
-}
-for (const input of document.querySelectorAll(".panel-search")) {
-  const view = input.closest(".reader-panel-view");
-  input.type = "search";
-  input.setAttribute(
-    "aria-label",
-    `搜索${view.querySelector(".panel-view-header strong")?.textContent || "列表"}`
-  );
-  input.addEventListener("input", (event) => {
-    if (!event.isComposing) filterPanel(view);
-  });
-  input.addEventListener("compositionend", () => filterPanel(view));
-}
-document.querySelector("#history-clear").addEventListener("click", async () => {
-  if (!confirm("清空全部阅读历史？")) return;
-  historySuppressed = true;
-  await progressSaveChain;
-  await VoiceOfMLReaderStore.clearHistory();
-  renderHistory();
-});
-readerThemeToggle.addEventListener("click", () => {
-  const theme = readerTheme === "dark" ? "light" : "dark";
-  applyReaderTheme(theme);
-  if (window.parent !== window)
-    window.parent.postMessage({ type: "voice-reader-theme", theme }, location.origin);
-});
-window.addEventListener("storage", (event) => {
-  if (event.key === "theme" && event.newValue) applyReaderTheme(event.newValue, false);
-});
-window.addEventListener("voice-reader-dispose", () => {
-  saveProgress();
-  disposeReader();
-});
-window.addEventListener("message", (event) => {
-  if (
-    event.origin === location.origin &&
-    event.source === window.parent &&
-    event.data?.type === "voice-reader-abort"
-  ) {
-    saveProgress();
-    disposeReader();
-    return;
-  }
-  if (
-    event.origin === location.origin &&
-    event.source === window.parent &&
-    event.data &&
-    event.data.type === "voice-reader-theme-state"
-  )
-    applyReaderTheme(event.data.theme, false);
-  if (event.origin === location.origin && event.source === window.parent &&
-      event.data?.type === "voice-reader-system-back") {
-    if (readerUiHistoryState === "full-search") closeFullSearchView();
-    else if (readerUiHistoryState === "panel") setReaderPanelOpen(false, true);
-  }
-});
-document
-  .querySelector("#history")
-  .addEventListener("click", () =>
-    setReaderPanelOpen(document.querySelector("#history").getAttribute("aria-expanded") !== "true")
-  );
-document
-  .querySelector("#history-close")
-  .addEventListener("click", () => setReaderPanelOpen(false, true));
-viewport.addEventListener("scroll", handleReaderPositionChange, { passive: true });
-function notePdfScrollIntent() {
-  pdfUserHasScrolled = true;
-  beginReaderNavigation();
-}
-for (const type of ["wheel", "touchstart", "pointerdown"])
-  viewport.addEventListener(type, notePdfScrollIntent, { passive: true });
+readerBindings.bindPanelBookmarkAndLifecycleControls();
 let pdfSelectionPointer = null;
-function installReaderTapSelectionClear(region, eventRoot = region.ownerDocument) {
-  let tap = null;
-  const down = (event) => {
-    tap = null;
-    if (event.pointerType !== "touch" || !event.isPrimary) return;
-    const target = event.composedPath()[0];
-    if (target.closest?.("a,button,input,textarea,select,[contenteditable]")) return;
-    const root = target.getRootNode();
-    const selection = root.getSelection?.() || eventRoot.getSelection();
-    if (!selection || selection.isCollapsed || !selection.rangeCount) return;
-    tap = { id: event.pointerId, x: event.clientX, y: event.clientY, time: performance.now(),
-      selection, anchor: selection.anchorNode, anchorOffset: selection.anchorOffset,
-      focus: selection.focusNode, focusOffset: selection.focusOffset };
-  };
-  const move = (event) => {
-    if (tap && event.pointerId === tap.id && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 8)
-      tap = null;
-  };
-  const up = (event) => {
-    const start = tap;
-    tap = null;
-    if (!start || event.pointerId !== start.id || performance.now() - start.time > 300 ||
-        Math.hypot(event.clientX - start.x, event.clientY - start.y) > 8) return;
-    const selection = start.selection;
-    if (selection.anchorNode === start.anchor && selection.anchorOffset === start.anchorOffset &&
-        selection.focusNode === start.focus && selection.focusOffset === start.focusOffset)
-      selection.removeAllRanges();
-  };
-  const cancel = () => { tap = null; };
-  region.addEventListener("pointerdown", down, { passive: true });
-  eventRoot.addEventListener("pointermove", move, { passive: true });
-  eventRoot.addEventListener("pointerup", up, { passive: true });
-  eventRoot.addEventListener("pointercancel", cancel, { passive: true });
-  trackReaderResource(() => {
-    region.removeEventListener("pointerdown", down);
-    eventRoot.removeEventListener("pointermove", move);
-    eventRoot.removeEventListener("pointerup", up);
-    eventRoot.removeEventListener("pointercancel", cancel);
-    tap = null;
-  });
-}
-installReaderTapSelectionClear(viewport);
-viewport.addEventListener("pointerdown", (event) => {
-  if (event.pointerType !== "mouse") {
-    pdfSelectionPointer = null;
-    return;
-  }
-  const run = event.target.closest?.(".reader-pdf-text-run");
-  const selection = document.getSelection();
-  const selectedRun = !selection?.isCollapsed && event.target.closest?.(".reader-page")
-    ? selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run") : null;
-  const origin = run || selectedRun;
-  const caret = !event.shiftKey && event.button === 0 ? independentTextCaret(document, event.clientX, event.clientY) : null;
-  pdfSelectionPointer = origin
-    ? { id: event.pointerId, x: event.clientX, y: event.clientY, frame: 0,
-        page: origin.closest(".reader-page"), anchorNode: caret?.node || (run ? null : selection.anchorNode),
-        anchorOffset: caret?.offset ?? (run ? 0 : selection.anchorOffset) } : null;
-}, { passive: true });
-document.addEventListener("pointermove", (event) => {
-  const start = pdfSelectionPointer;
-  if (event.pointerType !== "mouse" || !start || start.id !== event.pointerId ||
-      Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
-  const selection = document.getSelection();
-  if (!start.anchorNode && selection?.rangeCount && start.page.contains(selection.anchorNode) &&
-      selection.anchorNode.parentElement?.closest(".reader-pdf-text-run")) {
-    start.anchorNode = selection.anchorNode;
-    start.anchorOffset = selection.anchorOffset;
-  }
-  if (start.anchorNode) {
-    start.endX = event.clientX;
-    start.endY = event.clientY;
-    if (!start.frame) start.frame = requestAnimationFrame(() => {
-      start.frame = 0;
-      if (pdfSelectionPointer === start)
-        correctPdfCrossPageSelection(start.endX, start.endY, start);
-    });
-  }
-}, { passive: true });
-document.addEventListener("pointerup", (event) => {
-  const start = pdfSelectionPointer;
-  pdfSelectionPointer = null;
-  if (event.pointerType !== "mouse" || !["pdf", "pdf-pages"].includes(capability.mode) ||
-      !start || start.id !== event.pointerId ||
-      Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6) return;
-  const x = event.clientX, y = event.clientY;
-  requestAnimationFrame(() => correctPdfCrossPageSelection(x, y, start));
-}, { passive: true });
-document.addEventListener("pointercancel", () => { pdfSelectionPointer = null; }, { passive: true });
+
+readerBindings.bindPdfPointerSelection();
 let pdfSelectionBoundaryUpdate = false;
-document.addEventListener("selectionchange", () => {
-  if (pdfSelectionBoundaryUpdate ||
-      !["pdf", "pdf-pages"].includes(capability.mode)) return;
-  const selection = document.getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount) return;
-  const runs = [...content.querySelectorAll(".reader-pdf-text-run")]
-    .filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
-  if (!runs.length) return;
-  const anchorRun = selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run");
-  const focusRun = selection.focusNode?.parentElement?.closest(".reader-pdf-text-run");
-  if (!anchorRun && !focusRun) return;
-  if (focusRun) return;
-  const beforeAnchor = selection.focusNode && selection.anchorNode &&
-    (selection.focusNode === selection.anchorNode
-      ? selection.focusOffset < selection.anchorOffset
-      : Boolean(selection.focusNode.compareDocumentPosition(selection.anchorNode) & Node.DOCUMENT_POSITION_FOLLOWING));
-  const target = beforeAnchor ? runs[0] : runs[runs.length - 1];
-  const node = target.firstChild;
-  pdfSelectionBoundaryUpdate = true;
-  try {
-    selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, node,
-      beforeAnchor ? 0 : node.length);
-  } finally {
-    pdfSelectionBoundaryUpdate = false;
-  }
-}, { passive: true });
-window.addEventListener("pagehide", (event) => {
-  saveProgress(event);
-  if (!event.persisted) disposeReader();
-});
-window.addEventListener("pageshow", (event) => {
-  if (event.persisted && !readerLifecycle.disposed) {
-    scheduleFoliateScrollSync();
-    updateProgressTools();
-  }
-});
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") saveProgress();
-  if (document.hidden) stopPdfManifestPrefetch();
-  else queuePdfManifestPrefetch();
-});
-window.addEventListener("offline", stopPdfManifestPrefetch);
-window.addEventListener("online", () => queuePdfManifestPrefetch());
+readerBindings.bindSelectionAndPageLifecycle();
 
-function validSource(raw) {
-  try {
-    const url = new URL(raw);
-    if (url.username || url.password || url.hash) return false;
-    const bucketPath = url.searchParams.get("path") || "";
-    if (
-      url.origin === "https://voiceofml-search.hf.space" &&
-      url.pathname === "/api/reader-bucket-resource" &&
-      url.searchParams.getAll("path").length === 1 &&
-      [...url.searchParams.keys()].every((key) => key === "path") &&
-       (VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/pdf-pages-v2") ||
-        VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/reader-assets-v2"))
-    )
-      return true;
-    if (url.protocol === "https:" && url.hostname === "huggingface.co" &&
-        (url.pathname.startsWith("/buckets/vomebook/pdf-pages-v2/resolve/") ||
-         url.pathname.startsWith("/buckets/vomebook/reader-assets-v2/resolve/")) && !url.search) {
-      const prefix = url.pathname.startsWith("/buckets/vomebook/pdf-pages-v2/resolve/")
-        ? "/buckets/vomebook/pdf-pages-v2/resolve/"
-        : "/buckets/vomebook/reader-assets-v2/resolve/";
-      const path = decodeURIComponent(url.pathname.slice(prefix.length));
-      const bucket = prefix.includes("pdf-pages-v2") ? "vomebook/pdf-pages-v2" : "vomebook/reader-assets-v2";
-      return VoiceOfMLReader.isBucketPath(path, true, bucket);
-    }
-    if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname))
-      return false;
-    const readerAsset = VoiceOfMLReader.isAssetSourcePath(url.pathname);
-    if (extension === "docx") return readerAsset;
-    return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset;
-  } catch (_) {
-    return false;
-  }
-}
-function validOcr(raw) {
-  try {
-    const url = new URL(raw);
-    return (
-      url.protocol === "https:" &&
-      url.hostname === "voiceofml-search.hf.space" &&
-      url.pathname.startsWith("/txt/")
-    );
-  } catch (_) {
-    return false;
-  }
-}
-function validFallback(raw) {
-  try {
-    const url = new URL(raw);
-    return (
-      url.protocol === "https:" &&
-      ["huggingface.co", "hf-mirror.com"].includes(url.hostname) &&
-      /\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[a-z0-9-]+\/)?document\.pdf)$/.test(
-        url.pathname
-      )
-    );
-  } catch (_) {
-    return false;
-  }
-}
-function readerAssetObjectFamily(raw, base = location.href) {
-  try {
-    const url = new URL(raw, base);
-    if (url.origin === "https://voiceofml-search.hf.space" && url.pathname === "/api/reader-bucket-resource") {
-      const bucketPath = url.searchParams.get("path") || "";
-       const match = bucketPath.match(/^(chapters\/ebook\/(?:epub|mobi|azw3|fb2|chm)\/[0-9a-f]{64}\/[0-9a-f]{16}\/)/);
-      if (url.hash || url.searchParams.getAll("path").length !== 1 ||
-           [...url.searchParams.keys()].some((key) => key !== "path") || !match ||
-           !VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/reader-assets-v2")) return null;
-      return { url, prefix: match[1], bucket: true, bucketPath };
-    }
-    if (
-      url.protocol !== "https:" ||
-      !["huggingface.co", "hf-mirror.com"].includes(url.hostname) ||
-      url.username ||
-      url.password
-    )
-      return null;
-    const match = url.pathname.match(
-      /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?)/
-    );
-    return match
-      ? { url, prefix: url.pathname.slice(0, url.pathname.indexOf(match[1])) + match[1], bucket: false }
-      : null;
-  } catch (_) {
-    return null;
-  }
-}
-function trustedReaderAssetManifestUrl(raw) {
-  const family = readerAssetObjectFamily(raw);
-  const manifestPath = family?.bucket ? family.bucketPath : family?.url.pathname;
-  return family &&
-    (family.bucket || family.url.search === "") &&
-    (family.bucket || !family.url.hash) &&
-    /\/chapter-manifest\.json$/i.test(manifestPath || "")
-    ? family.url.href
-    : null;
-}
-function trustedChapterUrl(raw, base) {
-  const manifest = readerAssetObjectFamily(base);
-  const manifestPath = manifest?.bucket ? manifest.bucketPath : new URL(base, location.href).pathname;
-  if (!manifest || !/\/chapter-manifest\.json$/i.test(manifestPath))
-    return null;
-  try {
-    if (manifest.bucket) {
-      const url = new URL(String(raw || ""), `https://bucket.invalid/${manifest.bucketPath}`);
-      const path = decodeURIComponent(url.pathname.slice(1));
-      if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
-          !path.startsWith(manifest.prefix) ||
-          !/(?:\/chapters\/chapter-[0-9]{4}\.xhtml|\/epub-search-index\.json\.gz)$/i.test(path) ||
-           !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
-      return `${manifest.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
-    }
-    const url = new URL(raw, base);
-    return !url.search &&
-      !url.hash &&
-      url.origin === manifest.url.origin &&
-      url.pathname.startsWith(manifest.prefix) &&
-       /(?:\.(?:xhtml?|html?)|\/epub-search-index\.json\.gz)$/i.test(url.pathname)
-      ? url.href
-      : null;
-  } catch (_) {
-    return null;
-  }
-}
-function trustedChapterReferenceUrl(raw, base, manifestBase) {
-  const family = readerAssetObjectFamily(manifestBase);
-  if (!family) return null;
-  try {
-    if (family.bucket) {
-      const current = readerAssetObjectFamily(base);
-      if (!current?.bucket) return null;
-      const url = new URL(String(raw || ""), `https://bucket.invalid/${current.bucketPath}`);
-      const path = decodeURIComponent(url.pathname.slice(1));
-      if (url.origin !== "https://bucket.invalid" || url.search ||
-           !path.startsWith(family.prefix) || !/\/chapters\/chapter-[0-9]{4}\.xhtml$/i.test(path) ||
-           !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
-      return { url: `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`,
-               fragment: url.hash };
-    }
-    const url = new URL(raw, base);
-    return !url.search && url.origin === family.url.origin && url.pathname.startsWith(family.prefix) &&
-      /\/(?:chapters\/)?[^/]+\.xhtml?$/i.test(url.pathname)
-      ? { url: url.href, fragment: url.hash } : null;
-  } catch (_) {
-    return null;
-  }
-}
-function trustedChapterResourceUrl(raw, base, attribute, manifestBase) {
-  const value = String(raw || "").trim();
-  if (!value || /^(?:data:|mailto:|tel:|javascript:)/i.test(value)) return null;
-  // Chapters and resources can be siblings within the manifest's asset directory.
-  const family = readerAssetObjectFamily(manifestBase);
-  if (!family) return null;
-  try {
-    if (family.bucket) {
-      const current = readerAssetObjectFamily(base);
-      if (!current?.bucket) return null;
-      const url = new URL(value, `https://bucket.invalid/${current.bucketPath}`);
-      const path = decodeURIComponent(url.pathname.slice(1));
-      if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
-           !path.startsWith(family.prefix) || !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
-      return `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
-    }
-    const url = new URL(value, base),
-      path = url.pathname.toLowerCase();
-    if (url.origin !== family.url.origin || !url.pathname.startsWith(family.prefix)) return null;
-    const allowed =
-      attribute === "href"
-        ? /\.(?:x?html?|css|svg|png|jpe?g|gif|webp|woff2?|ttf|otf|mp3|mp4|m4a|webm|ogg)$/i.test(
-            path
-          )
-        : /\.(?:svg|png|jpe?g|gif|webp|woff2?|ttf|otf|mp3|mp4|m4a|webm|ogg)$/i.test(path);
-    return allowed ? url.href : null;
-  } catch (_) {
-    return null;
-  }
-}
-function loadScript(url) {
-  assertReaderActive();
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    let settled = false, timeout = 0, untrack = () => {};
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      untrack();
-      script.onload = script.onerror = null;
-      if (error) {
-        script.remove();
-        reject(error);
-      } else resolve();
-    };
-    const networkError = () => Object.assign(
-      new Error("阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
-      { code: "READER_ENGINE_NETWORK" }
-    );
-    untrack = trackReaderResource(() => finish(readerAbortError()));
-    // Download sibling engines concurrently, execute in dependency order.
-    script.async = false;
-    script.src = url;
-    script.onload = () => finish();
-    script.onerror = () => finish(networkError());
-    timeout = setTimeout(() => finish(networkError()), 20000);
-    document.head.appendChild(script);
-  });
-}
-function fetchWithReaderTimeout(url, timeoutMs = READER_PROXY_TIMEOUT_MS, requestInit = {}) {
-  return readerRequestManager.request(url, timeoutMs, requestInit);
-}
-function retryableReaderProxyError(error) {
-  return [408, 429, 500, 502, 503, 504].includes(error?.status) ||
-    ["TypeError", "TimeoutError"].includes(error?.name) ||
-    /failed to fetch|network|timeout|HTTP\s*(?:408|429|5\d\d)|server response\s*\((?:408|429|5\d\d)\)/i.test(error?.message || "");
-}
-async function retryReaderProxy(open) {
-  for (let attempt = 0; ; attempt++) {
-    assertReaderActive();
-    try {
-      return await open();
-    } catch (error) {
-      if (attempt >= 2 || !retryableReaderProxyError(error)) throw error;
-      await waitForReader(350 * (attempt + 1));
-    }
-  }
-}
-function fetchReaderUrl(rawUrl, requestInit = {}) {
-  if (String(rawUrl).includes("/api/reader-bucket-resource?"))
-    return fetchWithReaderTimeout(rawUrl, READER_PROXY_TIMEOUT_MS, requestInit);
-  const proxyUrl = readerContentUrl(rawUrl);
-  return retryReaderProxy(async () => {
-      const response = await fetchWithReaderTimeout(proxyUrl, READER_PROXY_TIMEOUT_MS, requestInit);
-    if (response.ok) return response;
-    await response.body?.cancel();
-    throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
-  }).catch((error) => {
-    assertReaderActive();
-    requestInit.signal?.throwIfAborted();
-    if (retryableReaderProxyError(error)) throw error;
-    return fetchWithReaderTimeout(rawUrl, READER_PROXY_TIMEOUT_MS, requestInit);
-  });
-}
-function fetchReaderResponse() {
-  const early = window.__VOICE_PDF_PRELOAD__;
-  if (early?.manifest && early.manifestUrl === new URL(sourceUrl, location.href).href) {
-    const pending = early.manifest;
-    early.manifest = null;
-    return pending.then(
-      (response) => (response?.ok ? response : fetchReaderUrl(sourceUrl)),
-      () => fetchReaderUrl(sourceUrl)
-    );
-  }
-  return fetchReaderUrl(sourceUrl);
-}
-async function preloadPdfFirstPage(total) {
-  if (pdfV3Manifest) return;
-  await getInitialReaderRestoration();
-  try {
-    const source = pdfManifestSource();
-    if (!source) return;
-    const page = initialReaderPage(total);
-    pdfFirstPagePreloadPage = page;
-    const pageUrl = new URL(source.pageUrl(page));
-    const early = window.__VOICE_PDF_PRELOAD__;
-    if (early?.image && early.pageUrl === pageUrl.href) {
-      pdfFirstPagePreload = early.image;
-      // Reuse an existing request at demand priority when available.
-      pdfFirstPagePreload.fetchPriority = "high";
-    }
-    else if (!navigator.connection?.saveData) {
-      pdfFirstPagePreload = new Image();
-      pdfFirstPagePreload.decoding = "async";
-      pdfFirstPagePreload.fetchPriority = "high";
-      pdfFirstPagePreload.src = pageUrl.href;
-    }
-  } catch (_) {}
-}
-function pdfManifestSource() {
-  if (String(sourceUrl).includes("reading-manifest.json"))
-    return VoiceOfMLReader.pdfPageSource(sourceUrl, location.href, location.origin, "reading-manifest.json");
-  return capability.mode === "image-pages"
-    ? VoiceOfMLReader.imagePageSource(sourceUrl, location.href, "https://voiceofml-search.hf.space")
-    : VoiceOfMLReader.pdfPageSource(
-        sourceUrl,
-        location.href,
-        "https://voiceofml-search.hf.space"
-      );
-}
-function pdfPageEntry(page) {
-  if (!pdfPageManifest || page < 1 || page > pdfPageManifest.pageCount) return null;
-  const pageEntry = (
-    pdfPageManifest.entries?.[page - 1] || {
-      page,
-      path: `${pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.webp`
-    }
-  );
-  const ocrEntry = pdfPageManifest.ocr?.[page - 1];
-  return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
-}
-function takePdfManifestPrefetch(target) {
-  const record = pdfManifestPrefetches.get(target);
-  if (!record) return null;
-  pdfManifestPrefetches.delete(target);
-  pdfManifestPrefetchActive.delete(record);
-  clearTimeout(record.timeout);
-  record.image.onload = record.image.onerror = null;
-  return record.image;
-}
-function queuePdfManifestPrefetch(delay = 250) {
-  if (readerAbortController.signal.aborted || !pdfManifestPrefetchOrigin || !canPrefetchPdfImages()) return;
-  clearTimeout(pdfManifestPrefetchTimer);
-  pdfManifestPrefetchTimer = setTimeout(() => {
-    pdfManifestPrefetchTimer = 0;
-    if (readerAbortController.signal.aborted || document.hidden || !navigator.onLine ||
-        pdfManifestPrefetchActive.size >= pdfManifestPrefetchConcurrency() ||
-        pdfManifestPrefetchCount >= pdfManifestPrefetchMaxPages() ||
-        (pdfActiveRenders && content.querySelector('.reader-page[data-render-visible="1"][data-render-state="rendering"]'))) return;
-    while (pdfManifestPrefetchActive.size < pdfManifestPrefetchConcurrency()) {
-      if (pdfManifestPrefetchCount >= pdfManifestPrefetchMaxPages()) return;
-      if (pdfManifestPrefetchWrapped && pdfManifestPrefetchNext >= pdfManifestPrefetchOrigin) return;
-      if (pdfManifestPrefetchNext > documentState.pageCount) {
-        pdfManifestPrefetchNext = 1;
-        pdfManifestPrefetchWrapped = true;
-      }
-      const next = pdfManifestPrefetchNext++;
-      const shell = pdfManifestShells[next];
-      if (shell && ["rendering", "rendered"].includes(shell.dataset.renderState)) continue;
-      const url = pdfPageManifest.pageUrl(next);
-      if (pdfManifestPrefetches.has(url)) continue;
-      const image = new Image();
-      const record = { image, url, timeout: 0 };
-      image.decoding = "async";
-      image.fetchPriority = "low";
-      const finish = (failed) => {
-        if (!pdfManifestPrefetchActive.has(record)) return;
-        pdfManifestPrefetchActive.delete(record);
-        clearTimeout(record.timeout);
-        image.onload = image.onerror = null;
-        if (failed) {
-          pdfManifestPrefetches.delete(url);
-          image.removeAttribute("src");
-        }
-        trimPdfManifestPrefetches();
-        queuePdfManifestPrefetch();
-      };
-      image.onload = () => finish(false);
-      image.onerror = () => finish(true);
-      pdfManifestPrefetches.set(url, record);
-      pdfManifestPrefetchActive.add(record);
-      pdfManifestPrefetchCount++;
-      record.timeout = setTimeout(() => finish(true), 15000);
-      image.src = url;
-      trimPdfManifestPrefetches();
-    }
-  }, delay);
-}
-function prioritizePdfManifestPrefetch(target) {
-  for (const record of [...pdfManifestPrefetchActive]) {
-    if (record.url !== target) cancelPdfManifestPrefetch(record);
-  }
-  const record = pdfManifestPrefetches.get(target);
-  if (record && pdfManifestPrefetchActive.has(record)) record.image.fetchPriority = "high";
-}
-function schedulePdfManifestPrefetch(page) {
-  if (pdfV3Manifest) return;
-  if (!["pdf-pages", "image-pages"].includes(capability.mode) || !pdfPageManifest) return;
-  const origin = Math.max(1, Math.min(documentState.pageCount + 1, page + 1));
-  if (pdfManifestPrefetchOrigin === origin && pdfManifestPrefetchNext) {
-    if (!pdfManifestPrefetchActive.size && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
-    return;
-  }
-  stopPdfManifestPrefetch();
-  pdfManifestPrefetchOrigin = pdfManifestPrefetchNext = origin;
-  pdfManifestPrefetchWrapped = false;
-  queuePdfManifestPrefetch();
-}
-
-function pdfOcrSource() {
-  return VoiceOfMLReader.pdfPageSource(ocrManifestUrl, location.href,
-    "https://voiceofml-search.hf.space", "ocr-manifest.json");
-}
-function v3ResourceUrl(ref) {
-  validateResource(ref);
-  return new URL(readerDownloadApiUrl(`/api/reader-bucket-resource?path=${encodeURIComponent(ref.path)}`), location.href).href;
-}
-function createPdfV3Repository(sourceSha, pageCount) {
-  return createV3Repository({ sourceSha, pageCount, signal: readerAbortController.signal,
-    resourceUrl: v3ResourceUrl,
-    readJson: (url, ref) => readPdfOcrJson(url, VoiceOfMLReaderSecurity.LIMITS.chapterBytes, ref.sha256, ref.bytes),
-    readBytes: async (url, ref) => {
-      const response = await fetchReaderUrl(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const packed = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.chapterBytes);
-      const actual = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
-        .map(value => value.toString(16).padStart(2, "0")).join("");
-      if (packed.byteLength !== ref.bytes || actual !== ref.sha256) throw new Error("PDF_V3_HASH_MISMATCH");
-      return packed;
-    }
-  });
-}
-async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0, priority = "auto") {
-  const response = await fetchReaderUrl(url, { priority });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  let bytes = await VoiceOfMLReaderSecurity.readBytes(response, limit);
-  if (size && bytes.byteLength !== size) throw new Error("PDF_OCR_SIZE_MISMATCH");
-  if (digest) {
-    const actual = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
-      .map((value) => value.toString(16).padStart(2, "0")).join("");
-    if (actual !== digest) throw new Error("PDF_OCR_HASH_MISMATCH");
-  }
-  const parsed = new URL(url, location.href);
-  if (/\.gz$/i.test(parsed.searchParams.get("path") || parsed.pathname)) {
-    if (typeof DecompressionStream !== "function") throw new Error("PDF_OCR_GZIP_UNSUPPORTED");
-    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-    bytes = await VoiceOfMLReaderSecurity.readBytes(new Response(stream), limit);
-  }
-  return JSON.parse(new TextDecoder().decode(bytes));
-}
-
-async function loadPdfOcrManifest() {
-  if (pdfOcrManifest) return pdfOcrManifest;
-  if (!ocrManifestUrl) return null;
-  if (!pdfOcrManifestPromise) {
-    if (!pdfOcrSource()) throw new Error("PDF_OCR_SOURCE_INVALID");
-    pdfOcrManifestPromise = readPdfOcrJson(ocrManifestUrl, VoiceOfMLReaderSecurity.LIMITS.manifestBytes, "", 0, "high").then((manifest) => {
-      assertReaderActive();
-      if (manifest.page_count !== documentState.pageCount) throw new Error("PDF_OCR_PAGE_COUNT_MISMATCH");
-      pdfOcrManifest = VoiceOfMLReaderSecurity.validatePdfOcrManifest(manifest);
-      return pdfOcrManifest;
-    });
-  }
-  try { return await pdfOcrManifestPromise; }
-  catch (error) { pdfOcrManifestPromise = null; throw error; }
-}
-function loadPdfOcrPage(page, priority = "high") {
-  const cached = cachedPdfOcrPage(page);
-  if (cached) return Promise.resolve(cached);
-  const pending = pdfOcrPagePromises.get(page);
-  if (pending) return pending;
-  const task = Promise.resolve().then(() => {
-    // OCR is published as its own manifest. The image page manifest may be
-    // intentionally lean and contain only page_count.
-    return loadPdfOcrManifest().then((manifest) => {
-      if (manifest?.text_layer) {
-        pdfTextLayerRepository ||= createPdfV3Repository(manifest.source_sha256, manifest.page_count);
-        return pdfTextLayerRepository.textPage(manifest.text_layer, page).then(payload => {
-          if (pdfV3Map) {
-            const geometry = pdfV3Map.pages[page - 1];
-            if (Math.abs((payload.geometry.width / payload.geometry.height) / (geometry.width / geometry.height) - 1) > .01)
-              throw new Error("PDF_V3_TEXT_GEOMETRY_MISMATCH");
-          }
-          assertReaderActive(); cachePdfOcrPage(page, payload); return payload;
-        });
-      }
-      const entry = manifest?.pages?.[page - 1];
-      if (!entry || entry.p !== page) throw new Error("PDF_OCR_PAGE_MISSING");
-      return readPdfOcrJson(pdfOcrSource().assetUrl(entry.o),
-        VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob, priority).then((payload) => {
-          VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-          cachePdfOcrPage(page, payload);
-          return payload;
-        });
-    });
-  }).finally(() => pdfOcrPagePromises.delete(page));
-  pdfOcrPagePromises.set(page, task);
-  return task;
-}
-function estimatePdfTextContentBytes(content) {
-  let bytes = 0;
-  for (const item of content?.items || [])
-    bytes += String(item.str || "").length * 2 + (item.transform?.length || 0) * 8 + 64;
-  for (const style of Object.values(content?.styles || {}))
-    bytes += Object.entries(style || {}).reduce(
-      (total, [key, value]) => total + key.length + String(value).length * 2 + 16, 0
-    );
-  return Math.max(128, bytes);
-}
-function cachePdfTextContent(page, content) {
-  const bytes = estimatePdfTextContentBytes(content);
-  if (bytes > PDF_TEXT_CONTENT_CACHE_BYTES) return;
-  const previous = pdfTextContentCache.get(page);
-  if (previous) pdfTextContentCacheBytes -= previous.bytes;
-  pdfTextContentCache.delete(page);
-  pdfTextContentCache.set(page, { content, bytes });
-  pdfTextContentCacheBytes += bytes;
-  while (pdfTextContentCacheBytes > PDF_TEXT_CONTENT_CACHE_BYTES) {
-    const oldest = pdfTextContentCache.keys().next().value;
-    const removed = pdfTextContentCache.get(oldest);
-    pdfTextContentCacheBytes -= removed.bytes;
-    pdfTextContentCache.delete(oldest);
-  }
-}
-function cachedPdfTextContent(page) {
-  const record = pdfTextContentCache.get(page);
-  if (!record) return null;
-  pdfTextContentCache.delete(page);
-  pdfTextContentCache.set(page, record);
-  return record.content;
-}
-function loadPdfTextContent(page, pdfPage, generation = null) {
-  assertReaderActive();
-  const cached = cachedPdfTextContent(page);
-  if (cached) return Promise.resolve(cached);
-  const pending = pdfTextContentPromises.get(page);
-  if (pending) {
-    if (generation === null) pending.request.demanded = true;
-    else pending.request.generation = generation;
-    drainPdfTextWaiters();
-    return pending;
-  }
-  // Rendering and search share extraction, but retain their own cancellation
-  // and result ownership. Only active work lives here, not another text cache.
-  const request = { demanded: generation === null, generation, page };
-  const task = Promise.resolve().then(async () => {
-    const background = await acquirePdfTextSlot(request.demanded, request);
-    try {
-      assertReaderActive();
-      if (!request.demanded && !isReaderGenerationCurrent("search", request.generation)) throw readerAbortError();
-      const text = await awaitReader(pdfPage.getTextContent());
-      cachePdfTextContent(page, text);
-      return text;
-    } finally {
-      releasePdfTextSlot(background);
-    }
-  })
-    .finally(() => {
-      if (pdfTextContentPromises.get(page) === task) pdfTextContentPromises.delete(page);
-    });
-  task.request = request;
-  pdfTextContentPromises.set(page, task);
-  return task;
-}
-function estimatePdfOcrPageBytes(payload) {
-  if (payload?.kind === "pdf-text-layer") return Math.max(128, JSON.stringify(payload).length * 2);
-  return Math.max(128, (payload?.blocks || []).reduce(
-    (total, block) => total + String(block?.t || "").length * 2 + 48, 0
-  ));
-}
-function cachePdfOcrPage(page, payload) {
-  const bytes = estimatePdfOcrPageBytes(payload);
-  if (bytes > PDF_OCR_PAGE_CACHE_BYTES) return;
-  const previous = pdfOcrPageCache.get(page);
-  if (previous) pdfOcrPageCacheBytes -= previous.bytes;
-  pdfOcrPageCache.delete(page);
-  pdfOcrPageCache.set(page, { payload, bytes });
-  pdfOcrPageCacheBytes += bytes;
-  while (pdfOcrPageCacheBytes > PDF_OCR_PAGE_CACHE_BYTES) {
-    const oldest = pdfOcrPageCache.keys().next().value;
-    const removed = pdfOcrPageCache.get(oldest);
-    pdfOcrPageCacheBytes -= removed.bytes;
-    pdfOcrPageCache.delete(oldest);
-  }
-}
-function cachedPdfOcrPage(page) {
-  const record = pdfOcrPageCache.get(page);
-  if (!record) return null;
-  pdfOcrPageCache.delete(page);
-  pdfOcrPageCache.set(page, record);
-  return record.payload;
-}
-
-async function renderPdfOcrText(shell) {
-  if (shell.dataset.textReady === "1" || !ocrManifestUrl) return;
-  if (shell._ocrPromise) return shell._ocrPromise;
-  const layer = shell.querySelector(".reader-pdf-text");
-  if (!layer) return;
-  const epoch = shell._textEpoch || 0;
-  const task = (async () => {
-    try {
-       const page = Number(shell.dataset.page);
-       await acquirePdfTextSlot(isPdfPageVisible(shell));
-      try {
-        if (epoch !== (shell._textEpoch || 0)) return;
-        const payload = await loadPdfOcrPage(page, isPdfPageVisible(shell) ? "high" : "low");
-        assertReaderActive();
-        if (epoch !== (shell._textEpoch || 0)) return;
-        if (payload.kind === "pdf-text-layer") {
-          populateIndependentTextLayer(layer, payload);
-          shell._bookmarkTextItems = payload.regions.map(region => ({ text: region.text, y: region.box[1] }));
-        } else {
-          VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-          populateOcrTextLayer(layer, payload.blocks, payload.layout);
-          shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
-        }
-        shell.dataset.textReady = "1";
-        highlightPdfText(shell);
-      } finally {
-        releasePdfTextSlot();
-      }
-    } catch (error) {
-      if (!readerAbortController.signal.aborted)
-        console.warn(`PDF page ${shell.dataset.page} OCR text failed`, error);
-    }
-  })().finally(() => { if (shell._ocrPromise === task) delete shell._ocrPromise; });
-  shell._ocrPromise = task;
-  return task;
-}
-function trimPdfManifestImages(protectedShell) {
-  trimPdfSurfaces(protectedShell);
-}
-const EPUB_HTML_TAGS = new Set(
-  "a,abbr,address,area,article,aside,audio,b,base,bdi,bdo,blockquote,body,br,button,canvas,caption,cite,code,col,colgroup,data,datalist,dd,del,details,dfn,dialog,div,dl,dt,em,fieldset,figcaption,figure,footer,form,h1,h2,h3,h4,h5,h6,head,header,hgroup,hr,html,i,iframe,img,input,ins,kbd,label,legend,li,link,main,map,mark,menu,meta,meter,nav,noscript,object,ol,optgroup,option,output,p,picture,pre,progress,q,rb,rp,rt,rtc,ruby,s,samp,script,search,section,select,slot,small,source,span,strong,style,sub,summary,sup,table,tbody,td,template,textarea,tfoot,th,thead,time,title,tr,track,u,ul,var,video,wbr".split(
-    ","
-  )
-);
-const EPUB_HTML_VOID_TAGS = new Set(
-  "area,base,br,col,embed,hr,img,input,link,meta,param,source,track,wbr".split(",")
-);
-
-function normalizeEpubDocument(doc) {
-  // Legacy CHM conversions can use an XHTML prefix even in HTML content.
-  for (const element of [...doc.querySelectorAll("*")]) {
-    const tagName = String(element.tagName || "").toLowerCase();
-    const localName = tagName.includes(":") ? tagName.slice(tagName.lastIndexOf(":") + 1) : tagName;
-    if (tagName === localName || !EPUB_HTML_TAGS.has(localName)) continue;
-    const replacement = doc.createElementNS("http://www.w3.org/1999/xhtml", localName);
-    for (const attribute of [...element.attributes]) {
-      if (!attribute.name.toLowerCase().startsWith("xmlns:"))
-        replacement.setAttribute(attribute.name, attribute.value);
-    }
-    // HTML parsing treats prefixed void tags as containers. Keep the following
-    // content as siblings: serializing real <br>/<hr>/<img> drops their children.
-    // Move the existing text nodes so Foliate's source/CFI mapping stays intact.
-    const fragment = doc.createDocumentFragment();
-    fragment.appendChild(replacement);
-    if (EPUB_HTML_VOID_TAGS.has(localName)) {
-      while (element.firstChild) fragment.appendChild(element.firstChild);
-    } else {
-      while (element.firstChild) replacement.appendChild(element.firstChild);
-    }
-    element.replaceWith(fragment);
-  }
-  return doc;
-}
-
-function sanitizeReaderDocument(doc, { preserveEpubStyles = false } = {}) {
-  const blocked = preserveEpubStyles
-    ? "script,iframe,object,embed,base,form"
-    : "script,iframe,object,embed,base,form,link,style";
-  for (const node of doc.querySelectorAll(blocked)) node.remove();
-  if (preserveEpubStyles) {
-    for (const link of doc.querySelectorAll("link")) {
-      const rel = (link.getAttribute("rel") || "").toLowerCase().split(/\s+/);
-      if (!rel.includes("stylesheet") || !/^blob:/i.test(link.getAttribute("href") || ""))
-        link.remove();
-    }
-    for (const style of doc.querySelectorAll("style")) {
-      if (
-        /(?:@import\s+|url\s*\(\s*[\"']?)(?:https?:|\/\/|javascript:)/i.test(
-          style.textContent || ""
-        )
-      )
-        style.remove();
-    }
-  }
-  for (const element of doc.querySelectorAll("*"))
-    for (const attribute of [...element.attributes]) {
-      const name = attribute.name.toLowerCase(),
-        value = String(attribute.value || "").trim();
-      if (
-        name.startsWith("on") ||
-        name === "srcdoc" ||
-        ((name === "href" || name === "xlink:href" || name === "src") &&
-          /^javascript:/i.test(value))
-      )
-        element.removeAttribute(attribute.name);
-    }
-  return doc;
-}
-
-function sanitizeEpubDocument(doc) {
-  return sanitizeReaderDocument(normalizeEpubDocument(doc), { preserveEpubStyles: true });
-}
-function parseChapterDocument(text) {
-  // Parse generated XHTML before HTML's void-element rules can swallow children
-  // of prefixed elements such as <html:meta/> (including the following title).
-  const xml = new DOMParser().parseFromString(text, "application/xhtml+xml");
-  if (!xml.querySelector("parsererror"))
-    text = new XMLSerializer().serializeToString(normalizeEpubDocument(xml));
-  return sanitizeEpubDocument(new DOMParser().parseFromString(text, "text/html"));
-}
-
-function epubContentBody(doc) {
-  const nestedBody = [...doc.querySelectorAll("body")].find((body) => body !== doc.body);
-  return nestedBody || doc.body || doc.documentElement;
-}
-function disposeReader() {
-  if (readerLifecycle.disposed) return;
-  updateDocumentState({ restorationReady: false });
-  readerRuntime.dispose();
-  contentSanitizerObserver?.disconnect();
-  contentSanitizerObserver = null;
-  clearTimeout(saveTimer);
-  clearTimeout(themeAnimationTimer);
-  clearTimeout(panelAnimationTimer);
-  for (const frame of [markerFrame, foliateScrollFrame, foliateWindowFrame, epubSeekFrame])
-    if (frame) cancelAnimationFrame(frame);
-  saveTimer =
-    themeAnimationTimer =
-    panelAnimationTimer =
-    markerFrame =
-    foliateScrollFrame =
-    foliateWindowFrame =
-    epubSeekFrame =
-      0;
-  VoiceOfMLReaderStore.dispose?.();
-}
-function fail(message, code = "READER_PARSE") {
-  if (readerLifecycle.disposed || readerAbortController.signal.aborted) return;
-  updateDocumentState({ restorationReady: false });
-  readerRuntime.fail(code);
-  stopReaderWork();
-  readerRequestManager.dispose();
-  formatAdapters.dispose();
-  window.__VOICE_PDF_PRELOAD__?.dispose();
-  content.dataset.errorCode = code;
-  loadingStatus.hidden = true;
-  markReaderContentReady();
-  const visibleMessage = `${message} [${readerLifecycle.stage}]`;
-  content.innerHTML = `<div class="reader-error"></div>`;
-  content.querySelector(".reader-error").textContent = visibleMessage;
-  if (["READER_ENGINE_NETWORK", "READER_RESTORE"].includes(code)) {
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "text-button";
-    retry.id = "reader-engine-retry";
-    retry.textContent = "重试加载";
-    // Reload clears the browser's failed module map and preserves this book URL.
-    retry.addEventListener("click", () => location.reload());
-    content.querySelector(".reader-error").append(document.createElement("br"), retry);
-  }
-  status.textContent = "无法打开";
-}
-
-async function appendShellsBatched(createShell, total, batchSize) {
-  for (let start = 2; start <= total; start += batchSize) {
-    assertReaderActive();
-    const fragment = document.createDocumentFragment();
-    for (let page = start; page < Math.min(start + batchSize, total + 1); page++)
-      fragment.appendChild(createShell(page));
-    content.appendChild(fragment);
-    await waitForReader();
-  }
-}
-function pdfSelectionIntersects(element) {
-  const selection = document.getSelection();
-  if (!selection?.rangeCount) return false;
-  if (element.contains(selection.anchorNode) || element.contains(selection.focusNode)) return true;
-  return !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(element);
-}
-function correctPdfCrossPageSelection(x, y, start = null) {
-  const selection = document.getSelection();
-  if (!selection?.rangeCount) return;
-  const anchorNode = start?.anchorNode || selection.anchorNode;
-  const anchorOffset = start?.anchorNode ? start.anchorOffset : selection.anchorOffset;
-  if (!start?.anchorNode && selection.isCollapsed) return;
-  const origin = anchorNode?.parentElement?.closest(".reader-page");
-  let target = document.elementFromPoint(x, y)?.closest(".reader-page");
-  const caret = start?.anchorNode && independentTextCaret(document, x, y);
-  if (caret && origin?.contains(anchorNode) && content.contains(caret.node)) {
-    selection.setBaseAndExtent(anchorNode, anchorOffset, caret.node, caret.offset);
-    return;
-  }
-  if (!target) {
-    let distance = Infinity;
-    for (const shell of content.querySelectorAll(".reader-page")) {
-      const rect = shell.getBoundingClientRect();
-      const gap = Math.max(rect.top - y, y - rect.bottom, 0);
-      if (gap < distance) { distance = gap; target = shell; }
-    }
-  }
-  if (!origin || !target || origin === target || !content.contains(origin) || !content.contains(target)) return;
-  const runs = [...target.querySelectorAll(".reader-pdf-text-run")].filter((run) => run.firstChild?.nodeType === Node.TEXT_NODE);
-  if (!runs.length) return;
-  let nearest = null, distance = Infinity;
-  for (const run of runs) {
-    const rect = run.getBoundingClientRect();
-    const dx = Math.max(rect.left - x, x - rect.right, 0);
-    const dy = Math.max(rect.top - y, y - rect.bottom, 0);
-    const gap = Math.hypot(dx, dy);
-    if (gap < distance) { nearest = run; distance = gap; }
-  }
-  const node = nearest.firstChild, rect = nearest.getBoundingClientRect();
-  let offset;
-  if (y < rect.top || y > rect.bottom) {
-    offset = y < rect.top ? 0 : node.length;
-  } else {
-    const range = document.createRange();
-    const vertical = getComputedStyle(nearest).writingMode.startsWith("vertical");
-    const position = vertical ? y : x;
-    let low = 0, high = node.length;
-    while (low < high) {
-      const mid = Math.floor((low + high) / 2);
-      range.setStart(node, mid);
-      range.setEnd(node, mid + 1);
-      const glyph = range.getBoundingClientRect();
-      const center = vertical ? (glyph.top + glyph.bottom) / 2 : (glyph.left + glyph.right) / 2;
-      if (center < position) low = mid + 1;
-      else high = mid;
-    }
-    offset = low;
-  }
-  selection.setBaseAndExtent(anchorNode, anchorOffset, node, offset);
-}
-function createPdfShellWindow(total, firstShell, createShell, unobserve, defaultRatio) {
-  if (total <= 256) return null;
-  const chunkSize = 32, chunks = [], ratios = new Map();
-  let frame = 0, disposed = false;
-  const readWidth = () => {
-    const style = getComputedStyle(content);
-    return (content.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) * documentState.zoom;
-  };
-  const chunkHeight = (chunk, width) => {
-    let height = 0;
-    for (let page = chunk.start; page <= chunk.end; page++)
-      height += Math.max(160, width * (ratios.get(page) || defaultRatio)) + 18;
-    return height;
-  };
-  const fragment = document.createDocumentFragment();
-  const initialWidth = readWidth();
-  for (let start = 1; start <= total; start += chunkSize) {
-    const element = document.createElement("div");
-    element.className = "reader-pdf-chunk";
-    element.setAttribute("aria-hidden", "true");
-    const chunk = { element, start, end: Math.min(total, start + chunkSize - 1), mounted: false };
-    chunks.push(chunk);
-    element.style.height = `${chunkHeight(chunk, initialWidth)}px`;
-    fragment.appendChild(element);
-  }
-  content.appendChild(fragment);
-  function mount(chunk) {
-    if (chunk.mounted) return;
-    const pages = document.createDocumentFragment();
-    for (let page = chunk.start; page <= chunk.end; page++) {
-      const shell = page === 1 && firstShell.isConnected ? firstShell : createShell(page);
-      if (ratios.has(page)) shell.style.aspectRatio = `1 / ${ratios.get(page)}`;
-      pages.appendChild(shell);
-    }
-    chunk.element.style.height = "";
-    chunk.element.removeAttribute("aria-hidden");
-    chunk.element.appendChild(pages);
-    chunk.mounted = true;
-  }
-  function canUnmount(chunk) {
-    return chunk.mounted && !chunk.element.contains(document.activeElement) &&
-      !pdfSelectionIntersects(chunk.element);
-  }
-  function measureChunk(chunk) {
-    for (const shell of chunk.element.children) {
-      const bounds = shell.getBoundingClientRect();
-      if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
-    }
-  }
-  function unmount(chunk, width) {
-    if (!chunk.mounted || chunk.element.contains(document.activeElement) ||
-        pdfSelectionIntersects(chunk.element)) return;
-    for (const shell of chunk.element.children) {
-      const page = Number(shell.dataset.page);
-      shell._textEpoch = (shell._textEpoch || 0) + 1;
-      shell._renderCancel?.();
-      unobserve(shell);
-      shell._hybridCancel?.(); shell._v3PreviewRelease?.();
-      pdfManifestShells[page] = undefined;
-    }
-    chunk.element.replaceChildren();
-    chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
-    chunk.element.setAttribute("aria-hidden", "true");
-    chunk.mounted = false;
-  }
-  function show(index) {
-    if (disposed) return;
-    const anchor = pageAtMarker();
-    const before = isPdfPageVisible(anchor) ? anchor.getBoundingClientRect().top : undefined;
-    const retiring = chunks.filter((chunk, i) => Math.abs(i - index) > 2 && canUnmount(chunk));
-    const width = retiring.length ? readWidth() : 0;
-    // Capture all retiring page geometry before mounting or removing any chunks.
-    for (const chunk of retiring) measureChunk(chunk);
-    for (let i = Math.max(0, index - 2); i <= Math.min(chunks.length - 1, index + 2); i++)
-      mount(chunks[i]);
-    for (const chunk of retiring) unmount(chunk, width);
-    if (anchor?.isConnected && before !== undefined)
-      viewport.scrollTop += anchor.getBoundingClientRect().top - before;
-  }
-  function sync() {
-    frame = 0;
-    if (disposed) return;
-    const marker = viewport.scrollTop + viewport.clientHeight / 2;
-    const index = chunks.findIndex((chunk) => chunk.element.offsetTop + chunk.element.offsetHeight > marker);
-    show(index < 0 ? chunks.length - 1 : index);
-  }
-  mount(chunks[0]);
-  const resizeObserver = new ResizeObserver(() => resize());
-  resizeObserver.observe(viewport);
-  function resize() {
-    if (disposed) return;
-    const anchor = pageAtMarker();
-    const before = isPdfPageVisible(anchor) ? anchor.getBoundingClientRect().top : undefined;
-    const width = readWidth();
-    for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
-    if (anchor?.isConnected && before !== undefined)
-      viewport.scrollTop += anchor.getBoundingClientRect().top - before;
-    schedule();
-  }
-  function schedule() {
-    if (!disposed && !frame) frame = requestAnimationFrame(sync);
-  }
-  const window = {
-    ensure(page) {
-      const index = Math.floor((page - 1) / chunkSize);
-      show(index);
-      return chunks[index].element.querySelector(`.reader-page[data-page="${page}"]`);
-    },
-    remember(shell) {
-      if (!shell.isConnected) return;
-      const bounds = shell.getBoundingClientRect();
-      if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
-    },
-    schedule,
-    resize,
-    dispose() {
-      disposed = true;
-      if (frame) cancelAnimationFrame(frame);
-      resizeObserver.disconnect();
-      chunks.length = 0;
-      ratios.clear();
-      pdfShellWindow = null;
-    }
-  };
-  trackReaderResource(() => window.dispose());
-  return window;
-}
-async function renderPdfPages(prepared) {
-  const response = await prepared;
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const decoded = JSON.parse(await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes));
-  const manifest = decoded?.kind === "pdf-reading"
-    ? validateReadingManifest(decoded, VoiceOfMLReaderSecurity.LIMITS.pdfPages)
-    : VoiceOfMLReaderSecurity.validatePdfPageManifest(decoded);
-  if (manifest.kind === "pdf-reading") {
-    if (pdfManifestSource()?.root.split("/").slice(0, 3).join("/") !==
-        `objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}`)
-      throw new Error("PDF_V3_SOURCE_MISMATCH");
-    pdfV3Repository = createPdfV3Repository(manifest.source_sha256, manifest.page_count);
-    pdfV3Map = validatePageMap(await pdfV3Repository.read(manifest.page_map), manifest);
-    pdfV3Manifest = manifest;
-    pdfOcrManifest = manifest.text_layer ? manifest : null;
-    ocrManifestUrl = manifest.text_layer ? sourceUrl : "";
-  }
-  assertReaderActive();
-  const source = pdfManifestSource();
-  const totalPages = manifest.page_count;
-  if (!source) throw new Error("PDF_MANIFEST_INVALID");
-  pdfPageManifest = { ...source, pageCount: totalPages };
-  if (pdfV3Manifest) {
-    pdfPageManifest.pageUrl = () => "";
-    pdfHybridUrl = v3ResourceUrl(manifest.primary.resource);
-    pdfHybridDocumentPromise = loadPdfDocument(pdfHybridUrl).then(pdf => {
-      assertReaderActive();
-      if (pdf.numPages !== totalPages) throw new Error("PDF_PRIMARY_PAGE_COUNT_MISMATCH");
-      pdfDocument = pdf; return pdf;
-    });
-    pdfHybridDocumentPromise.catch(() => {});
-  }
-  updateDocumentState({ pageCount: totalPages });
-  pageInput.max = String(totalPages);
-  document.querySelector("#page-total").textContent = `/ ${totalPages}`;
-  status.textContent = `${totalPages} 页`;
-  await getInitialReaderRestoration();
-  const initialPage = initialReaderPage(totalPages);
-  // Start the manifest and first OCR page while the first image is loading.
-  // The page renderer reuses these promises, so visible text does not wait for
-  // a second sequential request after the image has painted.
-  if (ocrManifestUrl && !navigator.connection?.saveData) {
-    loadPdfOcrPage(initialPage).catch(() => {});
-  }
-  await preloadPdfFirstPage(totalPages);
-  let initialRenderGate = true;
-  if (Array.isArray(manifest.toc) && manifest.toc.length)
-    setToc(
-      manifest.toc.map((item) => ({
-        label: `${item.title} · 第 ${item.page} 页`,
-        depth: item.depth,
-        activate: (generation) => goToPage(item.page, generation)
-      }))
-    );
-  const observer = new IntersectionObserver(
-    (items) => {
-      if (readerAbortController.signal.aborted) return;
-      for (const entry of items) if (entry.isIntersecting) {
-        entry.target.dataset.renderVisible = isPdfPageVisible(entry.target) ? "1" : "0";
-        renderPdfInBackground(entry.target);
-      }
-    },
-    { root: viewport, rootMargin: `${PDF_PREFETCH_MARGIN}px 0px` }
-  );
-  const visibleObserver = new IntersectionObserver(
-    (items) => {
-      if (readerAbortController.signal.aborted) return;
-      for (const entry of items) {
-        entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0";
-        if (entry.isIntersecting) {
-          promotePdfRenderWaiter(entry.target);
-          renderPdfInBackground(entry.target, false, pdfPagePriority(entry.target));
-          if (entry.target.dataset.renderState === "rendered") renderPdfOcrText(entry.target);
-        }
-      }
-    },
-    { root: viewport, threshold: 0 }
-  );
-  const observeShell = (shell) => {
-    if (initialRenderGate) {
-      shell._pdfObserversPending = true;
-      return;
-    }
-    observer.observe(shell);
-    visibleObserver.observe(shell);
-  };
-  const releaseInitialRenderGate = () => {
-    initialRenderGate = false;
-    for (const shell of content.querySelectorAll(".reader-page")) {
-      if (!shell._pdfObserversPending) continue;
-      delete shell._pdfObserversPending;
-      observeShell(shell);
-    }
-  };
-  trackReaderResource(() => {
-    observer.disconnect();
-    visibleObserver.disconnect();
-  });
-  const createShell = (page) => {
-    const shell = document.createElement("section");
-    shell.className = "reader-page";
-    shell.dataset.page = String(page);
-    shell.style.aspectRatio = "1 / 1.414";
-    if (pdfV3Map) {
-      const geometry = pdfV3Map.pages[page - 1];
-      shell.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
-    }
-    pdfManifestShells[page] = shell;
-    shell.tabIndex = 0;
-    shell.setAttribute("role", "region");
-    shell.setAttribute("aria-label", `第 ${page} 页`);
-    const pageState = document.createElement("div");
-    pageState.className = "reader-page-state";
-    setPdfPageLoadingState(pageState, page);
-    pageState.hidden = true;
-    const textLayer = document.createElement("div");
-    textLayer.className = "reader-pdf-text";
-    textLayer.setAttribute("role", "document");
-    textLayer.setAttribute("aria-label", `第 ${page} 页正文`);
-    shell.append(pageState, textLayer);
-    if (
-      page === pdfFirstPagePreloadPage &&
-      pdfFirstPagePreload &&
-      (!pdfFirstPagePreload.complete || pdfFirstPagePreload.naturalWidth)
-    )
-      shell.appendChild(pdfFirstPagePreload);
-    shell.addEventListener("focus", () => renderPdfInBackground(shell));
-    observeShell(shell);
-    return shell;
-  };
-  const firstShell = createShell(1);
-  content.appendChild(firstShell);
-  markReaderContentReady();
-  pdfShellWindow = createPdfShellWindow(totalPages, firstShell, createShell, (shell) => {
-    observer.unobserve(shell);
-    visibleObserver.unobserve(shell);
-  }, 1.414);
-  pdfShellsReady = pdfShellWindow ? Promise.resolve() : appendShellsBatched(createShell, totalPages, 250);
-  pdfShellsReady.catch(() => {});
-  try {
-    const targetShell = pdfShellWindow
-      ? pdfShellWindow.ensure(initialPage)
-      : (await pdfShellsReady, content.querySelector(`.reader-page[data-page="${initialPage}"]`));
-    if (!targetShell) throw new Error("PDF initial page shell missing");
-    viewport.scrollTop = readerPageScrollTop(targetShell);
-    await renderPdfManifestShell(targetShell, false, true);
-    markReaderContentReady();
-    viewport.scrollTop = readerPageScrollTop(targetShell);
-  } finally {
-    releaseInitialRenderGate();
-  }
-}
-async function renderImagePages(prepared) {
-  const response = await prepared;
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const manifest = JSON.parse(
-    await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)
-  );
-  if (!manifest || manifest.version !== 1 || manifest.kind !== "image-page-stream" ||
-      !Number.isInteger(manifest.page_count) || manifest.page_count < 1 ||
-      !Array.isArray(manifest.pages) || manifest.pages.length !== manifest.page_count)
-    throw new Error("IMAGE_MANIFEST_INVALID");
-  const normalized = {
-    version: 2,
-    kind: "pdf-pages",
-    page_count: manifest.page_count,
-    entries: manifest.pages.map((entry, index) => ({
-      page: index + 1,
-      path: entry.path,
-      bytes: entry.bytes,
-      sha256: entry.sha256
-    }))
-  };
-  return renderPdfPages(Promise.resolve(new Response(JSON.stringify(normalized), {
-    headers: { "Content-Type": "application/json" }
-  })));
-}
-async function renderPdf(prepared) {
-  const pdf = await prepared;
-  assertReaderActive();
-  pdfDocument = pdf;
-  updateDocumentState({ pageCount: pdf.numPages });
-  pageInput.max = String(documentState.pageCount);
-  document.querySelector("#page-total").textContent = `/ ${documentState.pageCount}`;
-  status.textContent = `${pdf.numPages} 页`;
-  await getInitialReaderRestoration();
-  const initialPage = initialReaderPage(pdf.numPages);
-  let initialRenderGate = true;
-  const firstPage = await measurePdf(awaitReader(pdf.getPage(initialPage)), "page", initialPage);
-  assertReaderActive();
-  const firstViewport = firstPage.getViewport({ scale: 1 });
-  const observer = new IntersectionObserver(
-    (entries) =>
-      entries.forEach((entry) => {
-        if (readerAbortController.signal.aborted) return;
-        entry.target.dataset.renderVisible = entry.isIntersecting && isPdfPageVisible(entry.target) ? "1" : "0";
-        if (entry.isIntersecting) renderPdfInBackground(entry.target);
-      }),
-    { root: document.querySelector("#viewport"), rootMargin: `${PDF_PREFETCH_MARGIN}px 0px` }
-  );
-  const visibleObserver = new IntersectionObserver(
-    (entries) =>
-      entries.forEach((entry) => {
-        if (readerAbortController.signal.aborted) return;
-        entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0";
-        if (entry.isIntersecting) {
-          promotePdfRenderWaiter(entry.target);
-          if (pdfUserHasScrolled || entry.target.dataset.renderState !== "rendering")
-            renderPdfInBackground(entry.target, false, pdfPagePriority(entry.target));
-        }
-      }),
-    { root: document.querySelector("#viewport"), threshold: 0 }
-  );
-  const pageObserver = new IntersectionObserver(() => scheduleMarkerSync(), {
-    root: document.querySelector("#viewport"),
-    threshold: [0, 0.5, 1]
-  });
-  const observeShell = (shell) => {
-    if (initialRenderGate) {
-      shell._pdfObserversPending = true;
-      return;
-    }
-    observer.observe(shell);
-    visibleObserver.observe(shell);
-    pageObserver.observe(shell);
-  };
-  const releaseInitialRenderGate = () => {
-    initialRenderGate = false;
-    for (const shell of content.querySelectorAll(".reader-page")) {
-      if (!shell._pdfObserversPending) continue;
-      delete shell._pdfObserversPending;
-      observeShell(shell);
-    }
-  };
-  trackReaderResource(() => {
-    observer.disconnect();
-    visibleObserver.disconnect();
-    pageObserver.disconnect();
-  });
-  const createShell = (page) => {
-    const shell = document.createElement("section");
-    shell.className = "reader-page";
-    shell.dataset.page = String(page);
-    shell.style.aspectRatio = `${firstViewport.width} / ${firstViewport.height}`;
-    shell.tabIndex = 0;
-    shell.setAttribute("role", "region");
-    shell.setAttribute("aria-label", `第 ${page} 页`);
-    const canvas = document.createElement("canvas");
-    canvas.setAttribute("aria-hidden", "true");
-    const textLayer = document.createElement("div");
-    textLayer.className = "reader-pdf-text";
-    textLayer.setAttribute("role", "document");
-    textLayer.setAttribute("aria-label", `第 ${page} 页正文`);
-    shell.append(canvas, textLayer);
-    const pageState = document.createElement("div");
-    pageState.className = "reader-page-state";
-    setPdfPageLoadingState(pageState, page);
-    shell.appendChild(pageState);
-    shell.addEventListener("focus", () => renderPdfInBackground(shell));
-    observeShell(shell);
-    return shell;
-  };
-  const firstShell = createShell(1);
-  content.appendChild(firstShell);
-  pdfShellWindow = createPdfShellWindow(pdf.numPages, firstShell, createShell, (shell) => {
-    observer.unobserve(shell);
-    visibleObserver.unobserve(shell);
-    pageObserver.unobserve(shell);
-  }, firstViewport.height / firstViewport.width);
-  pdfShellsReady = pdfShellWindow ? Promise.resolve() : appendShellsBatched(createShell, pdf.numPages, 24);
-  try {
-    const targetShell = pdfShellWindow
-      ? pdfShellWindow.ensure(initialPage)
-      : (await pdfShellsReady, content.querySelector(`.reader-page[data-page="${initialPage}"]`));
-    if (!targetShell) throw new Error("PDF initial page shell missing");
-    markReaderContentReady();
-    viewport.scrollTop = readerPageScrollTop(targetShell);
-    await renderPdfShell(targetShell, false, true);
-    markReaderContentReady();
-    viewport.scrollTop = readerPageScrollTop(targetShell);
-  } finally {
-    releaseInitialRenderGate();
-  }
-  const outlineReady = (async () => {
-    if (typeof pdf.getOutline !== "function") return;
-    try {
-      const outline = await awaitReader(pdf.getOutline()),
-        entries = [];
-      const cleanLabel = (value) =>
-        String(value || "未命名章节")
-          .replace(/[\u2610-\u2612\u25a1]\s*[xX×]?\s*$/u, "")
-          .trim() || "未命名章节";
-      const append = async (items, depth = 0) => {
-        for (const item of items || []) {
-          assertReaderActive();
-          let destination = item.dest,
-            page = 0;
-          if (typeof destination === "string") destination = await pdf.getDestination(destination);
-          if (destination && destination[0]) {
-            try {
-              page = (await pdf.getPageIndex(destination[0])) + 1;
-            } catch (_) {}
-          }
-          entries.push({
-            label: page ? `${cleanLabel(item.title)} · 第 ${page} 页` : cleanLabel(item.title),
-            depth,
-            activate: (generation) => (page ? goToPage(page, generation) : false)
-          });
-          await append(item.items, depth + 1);
-        }
-      };
-      await append(outline);
-      assertReaderActive();
-      if (entries.length) setToc(entries);
-    } catch (error) {
-      if (!readerAbortController.signal.aborted)
-        console.warn("PDF outline could not be loaded", error);
-    }
-  })();
-  outlineReady.catch(() => {});
-  await pdfShellsReady;
-  assertReaderActive();
-}
-
-function setPdfPageLoadingState(pageState, page) {
-  pageState.dataset.state = "loading";
-  pageState.setAttribute("role", "status");
-  pageState.setAttribute("aria-label", `正在加载第 ${page} 页`);
-  pageState.replaceChildren();
-  pageState.hidden = false;
-}
-function isPdfPageVisible(shell) {
-  const pageRect = shell?.getBoundingClientRect?.();
-  const viewportRect = viewport?.getBoundingClientRect?.();
-  return !!pageRect && !!viewportRect && pageRect.bottom > viewportRect.top && pageRect.top < viewportRect.bottom;
-}
-function pdfPagePriority(shell) {
-  const pageRect = shell?.getBoundingClientRect?.();
-  const viewportRect = viewport?.getBoundingClientRect?.();
-  if (!pageRect || !viewportRect) return 0;
-  if (pageRect.top >= viewportRect.top && pageRect.bottom <= viewportRect.bottom) return 3;
-  if (pageRect.bottom > viewportRect.top && pageRect.top < viewportRect.bottom) return 2;
-  return pageRect.bottom > viewportRect.top - PDF_PREFETCH_MARGIN &&
-    pageRect.top < viewportRect.bottom + PDF_PREFETCH_MARGIN ? 1 : 0;
-}
-function refreshNearbyPdfPages() {
-  if (!documentState.restorationReady || !["pdf", "pdf-pages", "image-pages"].includes(capability.mode)) return;
-  const page = documentState.page;
-  for (const offset of [0, 1, 2, 3, -1]) {
-    const candidate = page + offset * pdfScrollDirection;
-    const shell = content.querySelector(`.reader-page[data-page="${candidate}"]`);
-    if (shell && shell.dataset.renderState !== "rendered") renderPdfInBackground(shell);
-  }
-}
-function normalizePdfPriority(priority) {
-  return priority === true ? 3 : Math.max(0, Math.min(3, Number(priority) || 0));
-}
-function renderPdfInBackground(shell, force = false, priority = pdfPagePriority(shell)) {
-  priority = normalizePdfPriority(priority);
-  if (readerAbortController.signal.aborted) return;
-  if (!force && shell.dataset.renderFailed === "1") return;
-  if (priority >= 2 && (force || shell.dataset.renderState !== "rendered") &&
-      pdfActiveRenders >= (matchMedia("(max-width: 700px)").matches ? 1 : 2))
-    cancelSpeculativePdfRenders(shell);
-  if (priority) {
-    shell.dataset.renderPriority = "1";
-    promotePdfRenderWaiter(shell);
-  }
-  if (shell._backgroundRender) {
-    if (priority >= 2 && shell._pdfRenderCancelled) shell._resumePdfDemand = true;
-    if (priority && ["pdf-pages", "image-pages"].includes(capability.mode)) {
-      const image = shell.querySelector("img");
-      if (image) image.fetchPriority = priority >= 3 ? "high" : "auto";
-    }
-    if (force) {
-      shell.dataset.pendingRerender = "1";
-      if (pdfHybridUrl) shell.dataset.pendingHybridRerender = "1";
-    }
-    return shell._backgroundRender;
-  }
-  const task =
-      ["pdf-pages", "image-pages"].includes(capability.mode)
-      ? renderPdfManifestShell(shell, force, priority)
-      : renderPdfShell(shell, force, priority);
-  shell._backgroundRender = task;
-  task
-    .then(() => { delete shell.dataset.renderRetries; delete shell.dataset.renderFailed; })
-    .catch((error) => {
-      if (readerAbortController.signal.aborted || error?.name === "AbortError") return;
-      console.warn(`PDF page ${shell.dataset.page} render failed`, error);
-      const retries = Number(shell.dataset.renderRetries || 0);
-      const pageState = shell.querySelector(".reader-page-state");
-      if (pageState && !shell.querySelector("canvas.ready, img.ready")) {
-        pageState.dataset.state = "error";
-        pageState.removeAttribute("aria-label");
-        pageState.hidden = false;
-        pageState.textContent = retries < 3 ? "页面加载失败，正在重试..." : "页面加载失败";
-      }
-      if (retries < 3) {
-        shell.dataset.renderRetries = String(retries + 1);
-        waitForReader(400 * (retries + 1))
-          .then(() => {
-            if (shell.isConnected) renderPdfInBackground(shell);
-          })
-          .catch(() => {});
-      } else {
-        shell.dataset.renderFailed = "1";
-        if (pageState && !pageState.hidden) {
-          const retry = document.createElement("button");
-          retry.type = "button";
-          retry.textContent = "重试";
-          retry.title = "重试加载此页";
-          retry.addEventListener("click", () => {
-            delete shell.dataset.renderFailed;
-            delete shell.dataset.renderRetries;
-            setPdfPageLoadingState(pageState, shell.dataset.page);
-            renderPdfInBackground(shell, true, 3);
-          }, {once:true});
-          pageState.append(retry);
-        }
-      }
-    })
-    .finally(() => {
-      if (shell._backgroundRender === task) delete shell._backgroundRender;
-      delete shell._pdfRenderCancelled;
-      if (shell._resumePdfDemand) {
-        delete shell._resumePdfDemand;
-        if (!readerAbortController.signal.aborted && shell.isConnected && isPdfPageVisible(shell))
-          queueMicrotask(() => renderPdfInBackground(shell));
-      }
-    });
-  return task;
-}
-function pdfPrimarySource() {
-  return pdfV3Manifest ? v3ResourceUrl(pdfV3Manifest.primary.resource) : "";
-}
-function renderPdfManifestShell(shell, force = false, priority = false) {
-  if (!pdfHybridUrl) return renderPdfImageShell(shell, force, priority);
-  if (!force && shell.querySelector("canvas.ready")) return Promise.resolve();
-  if (shell._hybridRenderPromise) {
-    if (force) shell.dataset.pendingHybridRerender = "1";
-    return shell._hybridReadyPromise;
-  }
-  const controller = new AbortController();
-  shell._hybridCancel = () => { controller.abort(); shell._renderCancel?.(); };
-  const pdfTask = renderHybridPdfCanvas(shell, controller.signal, priority);
-  const previewTask = (async () => {
-    if (pdfDocument || shell.dataset.pdfPresented === "1") await waitForReader(250);
-    if (controller.signal.aborted || !shell.isConnected) throw readerAbortError();
-    if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
-    return renderPdfImageShell(shell, false, priority);
-  })();
-  const ready = Promise.any([pdfTask, previewTask]).catch(error => {
-    if (controller.signal.aborted || readerAbortController.signal.aborted) throw readerAbortError();
-    throw error.errors?.[1] || error.errors?.[0] || error;
-  });
-  shell._hybridReadyPromise = ready;
-  const complete = Promise.allSettled([pdfTask, previewTask]).finally(() => {
-    if (shell._hybridRenderPromise === complete) {
-      delete shell._hybridRenderPromise; delete shell._hybridReadyPromise; delete shell._hybridCancel;
-      if (shell.dataset.pendingHybridRerender && shell.isConnected && !readerLifecycle.disposed) {
-        delete shell.dataset.pendingHybridRerender;
-        renderPdfInBackground(shell, true);
-      }
-    }
-  });
-  shell._hybridRenderPromise = complete;
-  return ready;
-}
-async function renderHybridPdfCanvas(shell, signal, priority) {
-  let acquired = false, canvas = null, rendering = null;
-  const cancel = () => rendering?.cancel?.();
-  const untrack = trackReaderResource(() => { rendering?.cancel?.(); shell._hybridCancel?.(); });
-  signal.addEventListener("abort", cancel, { once: true });
-  try {
-    const pdf = await awaitReader(pdfHybridDocumentPromise, signal);
-    do {
-      const generation = readerRuntime.currentGeneration("pdf");
-      if (signal.aborted || !shell.isConnected) throw readerAbortError();
-      const page = await measurePdf(awaitReader(pdf.getPage(Number(shell.dataset.page)), signal), "page", Number(shell.dataset.page));
-      if (!acquired) { await measurePdf(acquirePdfRenderSlot(priority, shell, signal), "queue", Number(shell.dataset.page)); acquired = true; shell._pdfRenderOwnsSlot = true; }
-      const base = page.getViewport({ scale: 1 });
-      const geometry = pdfV3Map.pages[Number(shell.dataset.page) - 1];
-      if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
-        throw new Error("PDF_V3_DOCUMENT_GEOMETRY_MISMATCH");
-      const view = page.getViewport({ scale: Math.min(3, shell.clientWidth / base.width) });
-      const outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
-      canvas = document.createElement("canvas"); canvas.setAttribute("aria-hidden", "true");
-      canvas.width = Math.ceil(view.width * outputScale); canvas.height = Math.ceil(view.height * outputScale);
-      rendering = page.render({ canvasContext: canvas.getContext("2d"), viewport: view,
-        transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0] });
-      await measurePdf(awaitReader(rendering.promise, signal), "draw", Number(shell.dataset.page)); rendering = null;
-      while (!pdfV3Manifest && pdfSelectionIntersects(shell) && !signal.aborted) await waitForReader(100);
-      if (signal.aborted || !shell.isConnected) throw readerAbortError();
-      if (!isReaderGenerationCurrent("pdf", generation)) { canvas.width = canvas.height = 0; continue; }
-      const anchor = content.querySelector(`.reader-page[data-page="${documentState.page}"]`);
-      const oldTop = anchor?.getBoundingClientRect().top;
-      canvas.classList.add("ready");
-      const previous = shell.querySelector("canvas");
-      if (previous) { previous.replaceWith(canvas); previous.width = previous.height = 0; }
-      else shell.prepend(canvas);
-      shell.style.aspectRatio = `${base.width} / ${base.height}`;
-      shell._renderCancel?.(); shell.querySelector("img")?.remove(); shell._v3PreviewRelease?.();
-      const state = shell.querySelector(".reader-page-state"); if (state) state.hidden = true;
-      shell.dataset.pdfPresented = "1"; shell.dataset.renderState = "rendered";
-      delete shell.dataset.pendingHybridRerender;
-      shell.dataset.renderUsedAt = String(Date.now());
-      if (anchor) viewport.scrollTop += anchor.getBoundingClientRect().top - oldTop;
-      pdfShellWindow?.remember(shell); trimPdfCanvases(shell);
-      (ocrManifestUrl ? renderPdfOcrText(shell) : renderPdfText(page, shell, signal)).catch(() => {});
-      scheduleMarkerSync(); canvas = null; return;
-    } while (true);
-  } finally {
-    rendering?.cancel?.(); if (canvas) canvas.width = canvas.height = 0;
-    if (acquired) { delete shell._pdfRenderOwnsSlot; releasePdfRenderSlot(); }
-    signal.removeEventListener("abort", cancel); untrack();
-  }
-}
-function renderPdfImageShell(shell, force = false, priority = false) {
-  if (!shell) return Promise.reject(new Error("PDF page shell missing"));
-  if (shell._renderPromise) return shell._renderPromise;
-  if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
-  shell.dataset.renderState = "rendering";
-  const renderController = new AbortController();
-  shell._renderCancel = () => renderController.abort();
-  shell._renderStarted = false;
-  priority = normalizePdfPriority(priority || pdfPagePriority(shell));
-  shell._renderActivePriority = String(priority);
-  const task = (async () => {
-    let acquired = false;
-    try {
-      await measurePdf(acquirePdfRenderSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
-      acquired = true;
-      shell._renderStarted = true;
-      assertReaderActive();
-      const entry = pdfPageEntry(Number(shell.dataset.page));
-      if (!entry) throw new Error("PDF page entry missing");
-       let target = pdfPageManifest.pageUrl(entry.page);
-       if (pdfV3Manifest) {
-         const preview = await pdfV3Repository.preview(pdfV3Manifest, pdfV3Map, entry.page);
-         shell._v3PreviewEntry = preview.entry;
-         assertReaderActive();
-         if (renderController.signal.aborted) throw readerAbortError();
-         shell._v3PreviewRelease?.();
-         target = URL.createObjectURL(preview.blob);
-         const release = () => { URL.revokeObjectURL(target); pdfV3BlobReleases.delete(release); delete shell._v3PreviewRelease; };
-         shell._v3PreviewRelease = release;
-         pdfV3BlobReleases.add(release);
-       }
-      let loadText = null;
-      let image = shell.querySelector("img");
-       const pageState = shell.querySelector(".reader-page-state");
-       if (!image) {
-        image = takePdfManifestPrefetch(target) || new Image();
-        image.alt = `第 ${entry.page} 页`;
-        image.decoding = "async";
-        shell.appendChild(image);
-      }
-      image.fetchPriority = priority >= 3 ? "high" : priority >= 1 ? "auto" : "low";
-      if (priority >= 2 && ocrManifestUrl && !navigator.connection?.saveData)
-        loadText = renderPdfOcrText(shell);
-      loadText?.catch(() => {});
-      await loadReaderImage(image, target, renderController.signal);
-      assertReaderActive();
-       if (shell.dataset.pdfPresented === "1") return;
-       if (pdfV3Manifest) {
-         const geometry = pdfV3Map.pages[entry.page - 1];
-         if (image.naturalWidth !== shell._v3PreviewEntry.width || image.naturalHeight !== shell._v3PreviewEntry.height ||
-             Math.abs((image.naturalWidth / image.naturalHeight) / (geometry.width / geometry.height) - 1) > .01)
-           throw new Error("PDF_V3_PREVIEW_GEOMETRY_MISMATCH");
-       }
-       shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
-       if (priority >= 2 && ocrManifestUrl && !navigator.connection?.saveData)
-         loadText ||= renderPdfOcrText(shell);
-      loadText?.catch(() => {});
-      image.classList.add("ready");
-      if (pageState) pageState.hidden = true;
-      shell.dataset.renderState = "rendered";
-      delete shell.dataset.renderRetries;
-      delete shell.dataset.renderFailed;
-      shell.dataset.renderUsedAt = String(Date.now());
-      pdfShellWindow?.remember(shell);
-      if (isPdfPageVisible(shell) || !pdfManifestPrefetchOrigin) schedulePdfManifestPrefetch(entry.page);
-      else if (!pdfManifestPrefetchActive.size && !pdfManifestPrefetchTimer) queuePdfManifestPrefetch();
-      trimPdfManifestImages(shell);
-      scheduleMarkerSync();
-    } catch (error) {
-       shell.querySelector("img")?.remove();
-       shell._v3PreviewRelease?.();
-      const pageState = shell.querySelector(".reader-page-state");
-      if (pageState && shell.dataset.pdfPresented !== "1") {
-        pageState.dataset.state = "error";
-        pageState.removeAttribute("aria-label");
-        pageState.hidden = false;
-        pageState.textContent = "页面加载失败，正在重试…";
-      }
-      if (shell.dataset.pdfPresented !== "1") shell.dataset.renderState = "idle";
-      throw error;
-    } finally {
-      if (acquired) releasePdfRenderSlot();
-    }
-  })().finally(() => {
-    if (shell._renderPromise === task) delete shell._renderPromise;
-    if (shell._renderCancel) delete shell._renderCancel;
-    delete shell._renderStarted;
-    delete shell._renderActivePriority;
-  });
-  shell._renderPromise = task;
-  return task;
-}
-function cancelSpeculativePdfRenders(protectedShell) {
-  for (const shell of content.querySelectorAll('.reader-page')) {
-    if (!shell._hybridRenderPromise && shell.dataset.renderState !== "rendering") continue;
-    if (!shell._pdfRenderOwnsSlot && !shell._renderStarted) continue;
-    if (
-      shell === protectedShell ||
-      isPdfPageVisible(shell) || pdfSelectionIntersects(shell)
-    )
-      continue;
-    shell._pdfRenderCancelled = true;
-    shell._renderCancel?.();
-    shell._hybridCancel?.();
-  }
-}
-function renderPdfShell(shell, force = false, priority = false) {
-  if (shell._renderPromise) {
-    if (force) shell.dataset.pendingRerender = "1";
-    return shell._renderPromise;
-  }
-  if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
-  shell.dataset.renderState = "rendering";
-  const loadingState = shell.querySelector(".reader-page-state");
-  if (loadingState && !shell.querySelector("canvas.ready, img.ready"))
-    setPdfPageLoadingState(loadingState, shell.dataset.page);
-  const renderController = new AbortController();
-  priority = normalizePdfPriority(priority || pdfPagePriority(shell));
-  let activeRendering = null;
-  shell._renderCancel = () => {
-    renderController.abort();
-    activeRendering?.cancel?.();
-  };
-  const task = (async () => {
-    let acquired = false;
-    try {
-      await measurePdf(acquirePdfRenderSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
-      acquired = true;
-      shell._pdfRenderOwnsSlot = true;
-      assertReaderActive();
-      if (renderController.signal.aborted) throw readerAbortError();
-      const pdf = pdfDocument;
-      if (!pdf) throw readerAbortError();
-      do {
-        delete shell.dataset.pendingRerender;
-        const generation = readerRuntime.currentGeneration("pdf"),
-          pageNumber = Number(shell.dataset.page),
-          page = await measurePdf(awaitReader(pdf.getPage(pageNumber), renderController.signal), "page", pageNumber);
-        assertReaderActive();
-        if (renderController.signal.aborted) throw readerAbortError();
-        const base = page.getViewport({ scale: 1 }),
-          scale = Math.min(3, shell.clientWidth / base.width),
-          viewport = page.getViewport({ scale }),
-          outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
-        const canvas = shell.querySelector("canvas");
-        canvas.width = Math.ceil(viewport.width * outputScale);
-        canvas.height = Math.ceil(viewport.height * outputScale);
-        canvas.style.width = "100%";
-        canvas.style.height = "auto";
-        shell.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
-        const rendering = page.render({
-          canvasContext: canvas.getContext("2d"),
-          viewport,
-          transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0]
-        });
-        activeRendering = rendering;
-        const untrack = trackReaderResource(() => rendering.cancel?.());
-        const textTask = renderPdfText(page, shell, renderController.signal);
-        textTask.catch(() => {});
-        try {
-          // The canvas is the first visible result. Text extraction can need a
-          // separate range and must not delay the visual first page.
-          await measurePdf(awaitReader(rendering.promise, renderController.signal), "draw", Number(shell.dataset.page));
-        } finally {
-          untrack();
-          activeRendering = null;
-        }
-        assertReaderActive();
-        if (renderController.signal.aborted) throw readerAbortError();
-        if (!isReaderGenerationCurrent("pdf", generation)) shell.dataset.pendingRerender = "1";
-      } while (shell.dataset.pendingRerender);
-      shell.querySelector("canvas").classList.add("ready");
-      const pageState = shell.querySelector(".reader-page-state");
-      if (pageState) pageState.hidden = true;
-      shell.dataset.renderState = "rendered";
-      shell.dataset.renderUsedAt = String(Date.now());
-      pdfShellWindow?.remember(shell);
-      trimPdfCanvases(shell);
-      delete shell.dataset.renderRetries;
-      delete shell.dataset.renderFailed;
-    } catch (error) {
-      shell.dataset.renderState = "idle";
-      throw error;
-    } finally {
-      if (acquired) { delete shell._pdfRenderOwnsSlot; releasePdfRenderSlot(); }
-    }
-  })().finally(() => {
-    if (shell._renderPromise === task) delete shell._renderPromise;
-    if (shell._renderCancel) delete shell._renderCancel;
-  });
-  shell._renderPromise = task;
-  return task;
-}
-
-async function renderPdfText(page, shell, signal = null) {
-  if (ocrManifestUrl && pdfV3Manifest) return renderPdfOcrText(shell);
-  if (shell.dataset.textReady === "1") return;
-  const layer = shell.querySelector(".reader-pdf-text");
-  if (!layer || typeof page.getTextContent !== "function") return;
-  const epoch = shell._textEpoch || 0;
-  try {
-    const pageNumber = Number(shell.dataset.page);
-    const text = await loadPdfTextContent(pageNumber, page);
-    assertReaderActive();
-    if (signal?.aborted) return;
-    cachePdfTextContent(pageNumber, text);
-    if (epoch !== (shell._textEpoch || 0) || !shell.isConnected) return;
-    const pdfViewport = page.getViewport({ scale: 1 });
-    shell._bookmarkTextItems = text.items
-      .filter((item) => item.str && item.str.trim())
-      .map((item) => {
-        const point =
-          item.transform && pdfViewport.convertToViewportPoint
-            ? pdfViewport.convertToViewportPoint(item.transform[4], item.transform[5])
-            : null;
-        return {
-          text: item.str,
-          y: point ? Math.max(0, Math.min(1, point[1] / Math.max(1, pdfViewport.height))) : 0
-        };
-      });
-    populatePdfTextLayer(layer, text.items, pdfViewport, text.styles);
-    shell.dataset.textReady = "1";
-    highlightPdfText(shell);
-  } catch (error) {
-    if (!readerAbortController.signal.aborted && !signal?.aborted)
-      console.warn(`PDF page ${shell.dataset.page} text extraction failed`, error);
-  }
-}
-function highlightPdfText(shell, query = searchState.query) {
-  if (!shell || readerAbortController.signal.aborted || !query) return;
-  const layer = shell.querySelector(".reader-pdf-text");
-  if (!layer || layer.querySelector("mark")) return;
-  const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT), runs = [];
-  let raw = "";
-  while (walker.nextNode()) {
-    const node = walker.currentNode, start = raw.length;
-    raw += node.data;
-    runs.push({ node, start, end: raw.length });
-  }
-  const mapping = pdfSearchText(raw);
-  const hits = [];
-  for (const hit of mapping.text.matchAll(new RegExp(fullSearchEscape(normalizePdfSearchText(query)), "giu"))) {
-    hits.push(hit);
-    if (hits.length === 100) break;
-  }
-  for (const hit of hits.reverse()) {
-    const start = pdfSourceOffset(mapping, hit.index), end = pdfSourceOffset(mapping, hit.index + hit[0].length - 1) + 1;
-    highlightTextParts(runs.filter((run) => run.end > start && run.start < end).map((run) => ({
-      node: run.node, start: Math.max(start, run.start) - run.start, end: Math.min(end, run.end) - run.start
-    })));
-  }
-}
-
-function promotePdfRenderWaiter(shell) {
-  for (const waiter of pdfRenderWaiters) {
-    if (waiter.shell === shell) waiter.priority = Math.max(waiter.priority, pdfPagePriority(shell));
-  }
-}
-function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
-  if (readerAbortController.signal.aborted) return Promise.reject(readerAbortError());
-  if (signal?.aborted) return Promise.reject(readerAbortError());
-  const limit = matchMedia("(max-width: 700px)").matches ? 1 : 2;
-  if (pdfActiveRenders < limit) {
-    pdfActiveRenders++;
-    return Promise.resolve();
-  }
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const remove = () => {
-      const index = pdfRenderWaiters.indexOf(waiter);
-      if (index >= 0) pdfRenderWaiters.splice(index, 1);
-      signal?.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      if (settled) return;
-      settled = true;
-      remove();
-      reject(readerAbortError());
-    };
-    priority = normalizePdfPriority(priority);
-    const waiter = {
-      shell,
-      priority,
-      resolve: () => {
-        if (settled) return;
-        settled = true;
-        signal?.removeEventListener("abort", abort);
-        pdfActiveRenders++;
-        resolve();
-      },
-      reject: (error) => {
-        if (settled) return;
-        settled = true;
-        signal?.removeEventListener("abort", abort);
-        reject(error);
-      }
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-    const index = pdfRenderWaiters.findIndex((item) => item.priority < priority);
-    if (index < 0) pdfRenderWaiters.push(waiter);
-    else pdfRenderWaiters.splice(index, 0, waiter);
-  });
-}
-function releasePdfRenderSlot() {
-  pdfActiveRenders = Math.max(0, pdfActiveRenders - 1);
-  if (readerAbortController.signal.aborted) return;
-  let index = -1, best = -1, nearest = Infinity;
-  for (let i = 0; i < pdfRenderWaiters.length; i++) {
-    const waiter = pdfRenderWaiters[i], value = waiter.shell ? pdfPagePriority(waiter.shell) : waiter.priority;
-    const rect = waiter.shell?.getBoundingClientRect(), bounds = viewport.getBoundingClientRect();
-    const distance = rect ? Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0) : Infinity;
-    if (value > best || (value === best && distance < nearest)) {
-      best = value; nearest = distance; index = i;
-    }
-  }
-  if (index < 0) index = 0;
-  const waiter = pdfRenderWaiters.splice(index, 1)[0];
-  if (waiter) waiter.resolve();
-}
-function acquirePdfTextSlot(priority = false, request = null) {
-  if (readerAbortController.signal.aborted) return Promise.reject(readerAbortError());
-  return new Promise((resolve, reject) => {
-    pdfTextWaiters.push({ priority, request, resolve, reject });
-    drainPdfTextWaiters();
-  });
-}
-function drainPdfTextWaiters() {
-  if (readerAbortController.signal.aborted) return;
-  const limit = matchMedia("(max-width: 700px)").matches ? 2 : 3;
-  for (let index = pdfTextWaiters.length - 1; index >= 0; index--) {
-    const request = pdfTextWaiters[index].request;
-    if (request && !request.demanded && !isReaderGenerationCurrent("search", request.generation)) {
-      if (pdfTextContentPromises.get(request.page)?.request === request)
-        pdfTextContentPromises.delete(request.page);
-      pdfTextWaiters.splice(index, 1)[0].reject(readerAbortError());
-    }
-  }
-  while (pdfActiveTextLoads < limit) {
-    let index = pdfTextWaiters.findIndex(waiter => waiter.priority || waiter.request?.demanded);
-    if (index < 0) index = pdfTextWaiters.findIndex(waiter =>
-      !waiter.request || pdfActiveSearchTextLoads < limit - 1);
-    if (index < 0) return;
-    const waiter = pdfTextWaiters.splice(index, 1)[0];
-    const background = !!waiter.request && !waiter.request.demanded;
-    pdfActiveTextLoads++;
-    if (background) pdfActiveSearchTextLoads++;
-    waiter.resolve(background);
-  }
-}
-function releasePdfTextSlot(background = false) {
-  pdfActiveTextLoads = Math.max(0, pdfActiveTextLoads - 1);
-  if (background) pdfActiveSearchTextLoads = Math.max(0, pdfActiveSearchTextLoads - 1);
-  drainPdfTextWaiters();
-}
-function trimPdfCanvases(protectedShell) {
-  trimPdfSurfaces(protectedShell);
-}
-
-function rerenderVisiblePdfPages() {
-  nextReaderGeneration("pdf");
-  for (const shell of content.querySelectorAll(".reader-page")) {
-    const rect = shell.getBoundingClientRect();
-    if (rect.bottom >= -1200 && rect.top <= innerHeight + 1200) {
-      if (shell._renderPromise) shell.dataset.pendingRerender = "1";
-      else renderPdfInBackground(shell, true);
-    }
-  }
-}
-async function renderText(markdown, prepared) {
-  let response = await prepared.response;
-  if (!response.ok) response = await fetchReaderResponse();
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  if (!markdown) await renderPlainText(response);
-  else {
-    const bytes = await readPreparedBytes(response, prepared.engines);
-    const text = new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes);
-    const article = document.createElement("article");
-    article.className = "reader-markdown";
-    article.innerHTML = DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } });
-    content.appendChild(article);
-    setToc(headingTocEntries(article));
-  }
-  markReaderContentReady();
-  status.textContent = "已加载";
-}
 // HTML documents retain an isolated, script-free scroll window.
-const HTML_FRAME_STYLE =
-  '<meta name="color-scheme" content="only light"><style>:root{color-scheme:only light!important;background:#fff!important}html,body{min-height:100%;background:#fff!important;color:#111!important}</style>';
-const DISCOURSE_POST_SELECTOR = ".topic-post .cooked";
-const DISCOURSE_TITLE_SELECTOR = "#topic-title .fancy-title, .topic-link, title";
 
-function sanitizeOfflineHtml(text) {
-  const clean = DOMPurify.sanitize(text, {
-    USE_PROFILES: { html: true },
-    ADD_TAGS: ["style"],
-    FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
-    FORBID_ATTR: ["action", "formaction", "srcdoc"],
-     ALLOWED_URI_REGEXP: /^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i
-  });
-  const template = document.createElement("template");
-  template.innerHTML = clean;
-  const stripUrls = (value) => value.replace(/@import[^;]+;|url\s*\([^)]*\)/gi, "");
-  for (const style of template.content.querySelectorAll("style"))
-    style.textContent = stripUrls(style.textContent);
-  for (const element of template.content.querySelectorAll("[style]"))
-    element.setAttribute("style", stripUrls(element.getAttribute("style")));
-  return template.innerHTML;
-}
-
-function buildDiscourseDocument(text) {
-  try {
-    const source = new DOMParser().parseFromString(text, "text/html");
-    const posts = [...source.querySelectorAll(DISCOURSE_POST_SELECTOR)];
-    if (!source.querySelector(".post-stream") || !posts.length) return null;
-    const article = source.createElement("article");
-    article.className = "reader-forum-document";
-    const titleNode = source.querySelector(DISCOURSE_TITLE_SELECTOR);
-    const title = titleNode?.textContent?.trim();
-    if (title) {
-      const heading = source.createElement("h1");
-      heading.textContent = title;
-      article.appendChild(heading);
-    }
-    posts.forEach((post, index) => {
-      const section = source.createElement("section");
-      section.className = "reader-forum-post";
-      section.dataset.post = String(index + 1);
-      section.innerHTML = post.innerHTML;
-      article.appendChild(section);
-    });
-    return article.outerHTML;
-  } catch (_) {
-    return null;
-  }
-}
-
-function prepareHtmlDocument(text) {
-  const discourse = buildDiscourseDocument(text);
-  const html = sanitizeOfflineHtml(discourse || text);
-  return {
-    html,
-    discourse: !!discourse,
-    spreadsheet: !discourse && html.includes("reader-spreadsheet-sheet")
-  };
-}
-
-function buildHtmlFrameSource(documentData) {
-  return documentData.html + HTML_FRAME_STYLE +
-    (documentData.discourse ? DISCOURSE_HTML_STYLE : "") +
-    (documentData.spreadsheet ? SPREADSHEET_HTML_STYLE : "");
-}
-
-const DISCOURSE_HTML_STYLE = `<style>
-html,body{min-height:100%;margin:0;background:#fff;color:#202124}
-body{box-sizing:border-box;padding:clamp(18px,4vw,48px);font:16px/1.8 system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;overflow-wrap:anywhere}
-.reader-forum-document{max-width:900px;margin:0 auto}
-.reader-forum-document>h1{margin:0 0 1.8em;padding:0 0 .7em;border-bottom:1px solid #d9dde3;font-size:clamp(1.5rem,3vw,2.25rem);line-height:1.35}
-.reader-forum-post{margin:0 0 2.5em;padding:0 0 2em;border-bottom:1px solid #e1e5ea}
-.reader-forum-post:last-child{margin-bottom:0;border-bottom:0}
-.reader-forum-post p{margin:.8em 0}
-.reader-forum-post a{color:#185abc}
-.reader-forum-post img,.reader-forum-post svg,.reader-forum-post video{max-width:100%;height:auto}
-.reader-forum-post table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse}
-.reader-forum-post blockquote{margin:1em 0;padding:.5em 1em;border-left:3px solid #c5ccd6;background:#f6f8fa}
-.reader-forum-post pre{max-width:100%;overflow:auto;white-space:pre-wrap}
-@media(max-width:600px){body{padding:16px 14px}.reader-forum-document>h1{font-size:1.5rem}}
-</style>`;
-const SPREADSHEET_HTML_STYLE = `<style>
-html,body{min-height:100%;margin:0;background:#fff;color:#16191c}
-html{width:max-content;min-width:100%;overflow:auto}
-body{box-sizing:border-box;width:max-content;min-width:100%;padding:12px;font:14px/1.35 Arial,"Noto Sans",sans-serif}
-.reader-spreadsheet-sheet{width:max-content;min-width:100%;margin:0 0 24px}
-.reader-spreadsheet-sheet h2{position:sticky;left:0;width:max-content;margin:0 0 8px;font-size:16px}
-.reader-spreadsheet-sheet table{width:max-content;min-width:max-content;border-collapse:collapse;border-spacing:0}
-.reader-spreadsheet-sheet th,.reader-spreadsheet-sheet td{white-space:nowrap;vertical-align:top;padding:4px 8px;border:1px solid #c8ccd1}
-.reader-spreadsheet-sheet img,.reader-spreadsheet-sheet svg{max-width:none;height:auto}
-</style>`;
-
-async function waitForSpreadsheetImages(frame) {
-  if (frame.contentDocument)
-    await settleReaderImages(frame.contentDocument, 30000);
-}
-
-async function renderHtml(prepared) {
-  const bytes = await readPreparedBytes(prepared.response, prepared.engine);
-  const text = new TextDecoder(detectHtmlEncoding(bytes, documentState.title)).decode(bytes);
-  assertReaderActive();
-  const documentData = prepareHtmlDocument(text);
-  const frame = document.createElement("iframe");
-  htmlFrame = frame;
-  frame.className = "html-frame";
-  content.classList.toggle("reader-content--spreadsheet", documentData.spreadsheet);
-  if (documentData.spreadsheet) frame.classList.add("spreadsheet-html-frame");
-  frame.title = `${documentState.title} 正文`;
-  frame.setAttribute("sandbox", "allow-same-origin");
-  frame.setAttribute("referrerpolicy", "no-referrer");
-  frame.style.colorScheme = "only light";
-  const frameLoaded = new Promise((resolve, reject) => {
-    let untrack = () => {}, frameTimer = 0, deadline = 0, started = false;
-    const cleanup = () => {
-      clearTimeout(frameTimer);
-      clearTimeout(deadline);
-      frame.removeEventListener("load", loaded);
-      untrack();
-    };
-    const loaded = async () => {
-      if (started || frame.contentDocument?.URL !== "about:srcdoc" || frame.contentDocument.readyState === "loading") return;
-      started = true;
-      cleanup();
-      try {
-        assertReaderActive();
-        repairHtmlContrast(frame);
-        frame.contentDocument.documentElement.style.zoom = String(documentState.zoom);
-        frame.contentWindow.addEventListener("scroll", handleReaderPositionChange, {
-          passive: true
-        });
-        frame.contentDocument.addEventListener("keydown", handleReaderKeydown);
-        installReaderTapSelectionClear(frame.contentDocument.body, frame.contentDocument);
-        for (const type of ["wheel", "touchstart", "pointerdown"])
-          frame.contentDocument.addEventListener(type, beginReaderNavigation, { passive: true });
-        setToc(headingTocEntries(frame.contentDocument));
-        if (documentData.spreadsheet) await waitForSpreadsheetImages(frame);
-        assertReaderActive();
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    };
-    untrack = trackReaderResource(() => {
-      cleanup();
-      reject(readerAbortError());
-    });
-    const poll = () => {
-      if (started) return;
-      loaded();
-      if (!started) frameTimer = setTimeout(poll, 16);
-    };
-    frameTimer = setTimeout(poll, 0);
-    deadline = setTimeout(() => { cleanup(); reject(new Error("HTML document initialization timeout")); }, 20000);
-    frame.addEventListener("load", loaded);
-  });
-  frame.srcdoc = buildHtmlFrameSource(documentData);
-  content.appendChild(frame);
-  await frameLoaded;
-  markReaderContentReady();
-   status.textContent = documentData.spreadsheet ? "表格" : "HTML";
-}
-
-function detectHtmlEncoding(bytes, hint = "") {
-  const probe = String.fromCharCode(...bytes.subarray(0, 8192));
-  const match = probe.match(/charset\s*=\s*["']?\s*([a-z0-9._:-]+)/i);
-  if (match) {
-    const label =
-      { gb2312: "gb18030", "gb-2312": "gb18030", gbk: "gb18030", "x-gbk": "gb18030" }[
-        match[1].toLowerCase()
-      ] || match[1];
-    try {
-      new TextDecoder(label);
-      return label;
-    } catch (_) {}
-  }
-  return detectTextEncoding(bytes, hint);
-}
-
-function repairHtmlContrast(frame) {
-  const doc = frame.contentDocument;
-  if (!doc || !doc.body) return;
-  const parseColor = (value) => {
-    const parts = String(value).match(/[\d.]+/g);
-    return parts && parts.length >= 3
-      ? [
-          Number(parts[0]),
-          Number(parts[1]),
-          Number(parts[2]),
-          parts[3] === undefined ? 1 : Number(parts[3])
-        ]
-      : null;
-  };
-  const luminance = (color) => {
-    const channels = color.slice(0, 3).map((value) => {
-      const normalized = value / 255;
-      return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
-    });
-    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
-  };
-  const backgrounds = new Map();
-  const background = (element, style) => {
-    const pending = [];
-    let light = 1;
-    for (let current = element; current; current = current.parentElement) {
-      if (backgrounds.has(current)) {
-        light = backgrounds.get(current);
-        break;
-      }
-      pending.push(current);
-      const color = parseColor((current === element ? style :
-        frame.contentWindow.getComputedStyle(current)).backgroundColor);
-      if (color && color[3] > 0.1) {
-        light = luminance(color);
-        break;
-      }
-    }
-    for (const current of pending) backgrounds.set(current, light);
-    return light;
-  };
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-  const elements = new Set();
-  while (walker.nextNode() && elements.size < 10000)
-    if (walker.currentNode.data.trim()) elements.add(walker.currentNode.parentElement);
-  for (const element of elements) {
-    const style = frame.contentWindow.getComputedStyle(element);
-    const foreground = parseColor(style.color);
-    const dark = background(element, style);
-    if (!foreground) continue;
-    const light = luminance(foreground);
-    const contrast = (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
-    if (contrast < 3) {
-      element.style.setProperty("color", dark > 0.45 ? "#111" : "#f5f5f5", "important");
-      // Inherited color and currentColor backgrounds can change after a repair.
-      backgrounds.clear();
-    }
-  }
-}
-async function renderPlainText(response) {
-  assertReaderActive();
-  const pre = document.createElement("div");
-  pre.className = "reader-text";
-  content.appendChild(pre);
-  let block = null, blockLength = 0;
-  const appendDecoded = async value => {
-    const text = value.replace(/\ufffd/g, "");
-    let offset = 0, deadline = performance.now() + 8;
-    while (offset < text.length) {
-      if (!block) {
-        block = document.createElement("pre");
-        block.className = "reader-text-block";
-        pre.appendChild(block);
-      }
-      let end = Math.min(text.length, offset + 32768 - blockLength);
-      if (end < text.length) {
-        const newline = text.lastIndexOf("\n", end - 1);
-        if (newline >= offset) end = newline + 1;
-        const previous = text.charCodeAt(end - 1), next = text.charCodeAt(end);
-        if ((previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) ||
-            (previous === 13 && next === 10)) end--;
-      }
-      if (end === offset) { block = null; blockLength = 0; continue; }
-      const tail = block.lastChild;
-      if (tail?.nodeType === Node.TEXT_NODE) tail.appendData(text.slice(offset, end));
-      else block.appendChild(document.createTextNode(text.slice(offset, end)));
-      if (text.length) markReaderContentReady();
-      blockLength += end - offset;
-      offset = end;
-      if (offset < text.length || blockLength >= 32768) { block = null; blockLength = 0; }
-      if (offset < text.length && performance.now() >= deadline) {
-        await waitForReader();
-        assertReaderActive();
-        deadline = performance.now() + 8;
-      }
-    }
-  };
-  const limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes;
-  VoiceOfMLReaderSecurity.assertResponseSize(response, limit);
-  if (!response.body?.getReader) {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > limit) {
-      const error = new Error("READER_RESOURCE_LIMIT");
-      error.code = "READER_RESOURCE_LIMIT";
-      throw error;
-    }
-    assertReaderActive();
-    await appendDecoded(new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes));
-    return;
-  }
-  const reader = response.body.getReader(),
-    sampleChunks = [],
-    previewDecoder = new TextDecoder("utf-8");
-  const untrack = trackReaderResource(() => {
-    reader.cancel(readerAbortError()).catch(() => {});
-  });
-  let length = 0,
-    sampleLength = 0,
-    displayedSampleSize = 0,
-    previewChunkIndex = 0,
-    previewChunkOffset = 0,
-    decoder = null,
-    asciiPreviewPossible = true,
-    asciiPrefixLength = 0;
-  const startDecoder = async () => {
-    const sample = new Uint8Array(sampleLength);
-    let offset = 0;
-    for (const chunk of sampleChunks) {
-      sample.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    decoder = new TextDecoder(detectTextEncoding(sample, documentState.title));
-    await appendDecoded(decoder.decode(sample.subarray(displayedSampleSize), { stream: true }));
-    sampleChunks.length = 0;
-  };
-  try {
-    while (true) {
-      const { value, done } = await awaitReader(reader.read());
-      assertReaderActive();
-      if (done) break;
-      if (!value?.byteLength) continue;
-      length += value.byteLength;
-      if (length > limit) {
-        const error = new Error("READER_RESOURCE_LIMIT");
-        error.code = "READER_RESOURCE_LIMIT";
-        throw error;
-      }
-      if (!decoder) {
-        sampleChunks.push(value);
-        sampleLength += value.byteLength;
-        if (asciiPreviewPossible) {
-          let asciiLength = 0;
-          while (asciiLength < value.length && value[asciiLength] > 0 && value[asciiLength] < 128)
-            asciiLength++;
-          asciiPrefixLength += asciiLength;
-          if (value[asciiLength] === 0) {
-            // A split UTF-16 prefix must not leave an ASCII preview behind.
-            pre.textContent = "";
-            block = null;
-            blockLength = 0;
-            displayedSampleSize = 0;
-            asciiPrefixLength = 0;
-            asciiPreviewPossible = false;
-          } else if (asciiLength < value.length) asciiPreviewPossible = false;
-        }
-        if (asciiPrefixLength >= 4 && asciiPrefixLength > displayedSampleSize) {
-          // The full sample remains for encoding detection; preview only its
-          // unseen ASCII prefix instead of revisiting all previous chunks.
-          while (displayedSampleSize < asciiPrefixLength) {
-            const chunk = sampleChunks[previewChunkIndex];
-            const end = Math.min(chunk.length, previewChunkOffset + asciiPrefixLength - displayedSampleSize);
-            await appendDecoded(previewDecoder.decode(chunk.subarray(previewChunkOffset, end)));
-            displayedSampleSize += end - previewChunkOffset;
-            previewChunkOffset = end;
-            if (end === chunk.length) {
-              previewChunkIndex++;
-              previewChunkOffset = 0;
-            }
-          }
-        }
-        if (sampleLength < 65540) continue;
-        await startDecoder();
-      } else {
-        await appendDecoded(decoder.decode(value, { stream: true }));
-      }
-    }
-    if (!decoder) await startDecoder();
-    await appendDecoded(decoder.decode());
-  } catch (reason) {
-    try {
-      await reader.cancel(reason);
-    } catch (_) {}
-    throw reason;
-  } finally {
-    untrack();
-    reader.releaseLock();
-  }
-}
-function detectTextEncoding(bytes, hint = "") {
-  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
-  const evenNulls = bytes.filter((value, index) => !value && index % 2 === 0).length;
-  const oddNulls = bytes.filter((value, index) => !value && index % 2 === 1).length;
-  if (oddNulls > bytes.length / 8 && oddNulls > evenNulls * 4) return "utf-16le";
-  if (evenNulls > bytes.length / 8 && evenNulls > oddNulls * 4) return "utf-16be";
-  try {
-    new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true });
-    return "utf-8";
-  } catch (_) {}
-  if (/[\u0400-\u04ff]/.test(hint)) return "windows-1251";
-  const candidates = /[\u3400-\u9fff]/.test(hint)
-    ? ["gb18030", "big5"]
-    : ["gb18030", "big5", "windows-1251", "windows-1252"];
-  let best = "gb18030",
-    bestScore = -Infinity;
-  for (const encoding of candidates) {
-    try {
-      const text = new TextDecoder(encoding).decode(bytes);
-      const controls = (text.match(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g) || []).length;
-      const replacements = (text.match(/\ufffd/g) || []).length;
-      const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
-      const cyrillic = (text.match(/[\u0400-\u04ff]/g) || []).length;
-      const commonCjk = (
-        text.match(
-          /[的一是在不了有和人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经之进着等部家自理起现实都体制当本性应开合因由然前外政社义事相全与关各重新内正反明原利质向道命此变结解问意建公系军情者立代通题党程展料员革文总品活长求老基资级图统知组别期论运农指区战任处理世]/g
-        ) || []
-      ).length;
-      const score = Math.max(cjk + commonCjk * 5, cyrillic) - controls * 20 - replacements * 40;
-      if (score > bestScore) {
-        best = encoding;
-        bestScore = score;
-      }
-    } catch (_) {}
-  }
-  return best;
-}
-async function renderChapterManifest(prepared) {
-  const response = await prepared;
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const manifest = VoiceOfMLReaderSecurity.validateChapterManifest(
-    JSON.parse(
-      await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)
-    )
-  );
-  assertReaderActive();
-  const frame = document.createElement("div");
-  frame.className = "epub-frame";
-  frame.style.overflowAnchor = "none";
-  const openingGeneration = readerRuntime.currentGeneration("navigation");
-  content.appendChild(frame);
-  const loaded = new Set(), retainedBytes = new Map(),
-    manifestBase = trustedReaderAssetManifestUrl(chapterManifestUrl || sourceUrl);
-  const chapterByIndex = new Map(manifest.chapters.map((chapter) => [chapter.index, chapter]));
-  const chapterPrefetchCount = 6;
-  const chapterPrefetchMaxCount = 10, chapterPrefetchBytes = 128 * 1024;
-  let chapterFocusIndex = 1, chapterWindowFrame = 0, chapterWindowReady = false;
-  let chapterNavigating = 0;
-  let chapterPreviousObserver = null;
-  const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
-  if (!manifestBase) throw new Error("EPUB_INVALID_MANIFEST_PATH");
-  const searchIndex = manifest.search_index;
-  chapterSearchConfiguration =
-    searchIndex?.path === "epub-search-index.json.gz" &&
-    Number.isSafeInteger(searchIndex.bytes) &&
-    searchIndex.bytes > 0 &&
-    /^[0-9a-f]{64}$/.test(searchIndex.sha256 || "")
-      ? {
-        chapters: manifest.chapters,
-        index: {
-          ...searchIndex,
-          url: (() => {
-            const resolved = trustedChapterUrl(searchIndex.path, manifestBase);
-            if (!resolved) return "";
-            const target = new URL(resolved, location.href);
-            const bucketUrl = target.origin === "https://voiceofml-search.hf.space" &&
-              target.pathname === "/api/reader-bucket-resource"
-              ? target.pathname + target.search : resolved;
-            return readerContentUrl(bucketUrl);
-          })()
-        }
-        }
-      : null;
-  const chapterUrl = (chapter) => trustedChapterUrl(chapter.path, manifestBase);
-  const chapterAt = (index) => chapterByIndex.get(index) || null;
-  const nextChapterNode = (index, selector) => {
-    for (const node of frame.querySelectorAll(selector))
-      if (Number(node.dataset.chapter) > index) return node;
-    return null;
-  };
-  const resourceUrl = (raw, base, attribute) => {
-    const value = String(raw || "").trim();
-    if (!value || value.startsWith("#")) return null;
-    return trustedChapterResourceUrl(value, base, attribute, manifestBase);
-  };
-  const insertChapter = (article) => {
-    const existing = frame.querySelector(
-      `.reader-epub-chapter[data-chapter="${article.dataset.chapter}"]`
-    );
-    if (existing) return existing;
-    const next = nextChapterNode(Number(article.dataset.chapter), ".reader-epub-chapter, .reader-chapter-sentinel");
-    const marker = frame.querySelector(`.reader-chapter-sentinel[data-chapter="${article.dataset.chapter}"]`);
-    const insert = () => {
-      if (marker) {
-        chapterManifestObserver.unobserve(marker);
-        chapterPreviousObserver.unobserve(marker);
-        marker.replaceWith(article);
-      } else frame.insertBefore(article, next || null);
-    };
-    const preservePosition = chapterWindowReady || !isReaderGenerationCurrent("navigation", openingGeneration);
-    if (preservePosition) foliateScrollAnchors.preserve(insert);
-    else insert();
-    chapterManifestObserver.observe(article);
-    if (preservePosition) foliateScrollAnchors.observe(article);
-    return article;
-  };
-  const ensureSentinel = (chapter, previous = false) => {
-    if (readerAbortController.signal.aborted || loaded.has(chapter.index)) return null;
-    const selector = `.reader-chapter-sentinel[data-chapter="${chapter.index}"]`;
-    const existing = frame.querySelector(selector);
-    if (existing) return existing;
-    const marker = document.createElement("button");
-    marker.type = "button";
-    marker.className = "reader-chapter-sentinel";
-    marker.dataset.chapter = String(chapter.index);
-    marker.textContent = `加载第 ${chapter.index} 章`;
-    marker.setAttribute("aria-label", `重试加载第 ${chapter.index} 章`);
-    marker.addEventListener("click", () => {
-      marker.disabled = true;
-      fetchChapter(chapter).catch((error) => {
-        marker.disabled = false;
-        console.warn("EPUB chapter could not be loaded", error);
-      });
-    });
-    const next = nextChapterNode(chapter.index,
-      ".reader-epub-chapter[data-chapter], .reader-chapter-sentinel[data-chapter]");
-    const insert = () => frame.insertBefore(marker, next || null);
-    if (chapterWindowReady || !isReaderGenerationCurrent("navigation", openingGeneration))
-      foliateScrollAnchors.preserve(insert);
-    else insert();
-    (previous ? chapterPreviousObserver : chapterManifestObserver).observe(marker);
-    return marker;
-  };
-  const chapterTarget = (article, fragment) =>
-    !fragment || article.id === fragment ? article :
-      article.querySelector(`[id="${CSS.escape(fragment)}"], [name="${CSS.escape(fragment)}"]`);
-  const setChapterToc = () =>
-    setToc(
-      (manifest.toc ?? manifest.chapters.map((item) => ({
-        title: item.title || `章节 ${item.index}`, chapter: item.index, depth: 0, fragment: ""
-      }))).map((item) => ({
-        label: item.title,
-        chapterIndex: item.chapter,
-        fragment: item.fragment,
-        depth: item.depth,
-        activate: (generation) => activateChapter(manifest.chapters[item.chapter - 1], generation, item.fragment)
-      }))
-    );
-  const chapterScheduler = VoiceOfMLReaderChapters.createChapterScheduler({
-    create: async (index, signal, priority) => {
-      const chapter = chapterAt(index);
-      assertReaderActive();
-      const url = chapterUrl(chapter);
-      if (!url) throw new Error("EPUB_INVALID_PATH");
-      const result = await fetchReaderUrl(url, { signal, priority });
-      if (!result.ok) throw new Error(`HTTP ${result.status}`);
-      const bytes = await VoiceOfMLReaderSecurity.readBytes(
-        result,
-        VoiceOfMLReaderSecurity.LIMITS.chapterBytes,
-        chapterBudget
-      );
-      let inserted = false;
-      try {
-        assertReaderActive();
-        signal.throwIfAborted();
-        const doc = parseChapterDocument(new TextDecoder().decode(bytes));
-        for (const element of doc.querySelectorAll("*")) {
-          for (const name of ["src", "href", "poster", "xlink:href"])
-            if (element.hasAttribute(name)) {
-              const value = element.getAttribute(name) || "";
-              if (name === "href" && element.localName === "a" &&
-                  trustedChapterReferenceUrl(value, url, manifestBase)) continue;
-              const resolved = resourceUrl(value, url, name === "href" ? "href" : "resource");
-              if (resolved) element.setAttribute(name, resolved);
-              else if (!(name === "href" && value.startsWith("#"))) element.removeAttribute(name);
-            }
-          if (element.hasAttribute("srcset")) element.removeAttribute("srcset");
-        }
-        const article = document.createElement("article");
-        article.className = "reader-markdown reader-epub-chapter";
-        article.dataset.chapter = String(chapter.index);
-        if (doc.body?.id) article.id = doc.body.id;
-        article.innerHTML = doc.body ? doc.body.innerHTML : "";
-        for (const image of article.querySelectorAll("img")) {
-          image.loading = priority === "high" ? "eager" : "lazy";
-          image.fetchPriority = priority;
-          image.decoding = "async";
-        }
-        // The generated text index includes head text (e.g. the chapter title).
-        article._chapterSearchHead = doc.head ? document.importNode(doc.head, true) : null;
-        insertChapter(article);
-        loaded.add(chapter.index);
-        retainedBytes.set(chapter.index, bytes.byteLength);
-        inserted = true;
-        for (const entry of navigationState.tocEntries)
-          if (entry.chapterIndex === chapter.index)
-            entry.target = chapterTarget(article, entry.fragment);
-        const next = chapterAt(chapter.index + 1);
-        if (next) ensureSentinel(next);
-        const previous = chapterAt(chapter.index - 1);
-        if (previous) ensureSentinel(previous, true);
-        scheduleChapterWindow();
-      } catch (error) {
-        if (!inserted) chapterBudget.release(bytes.byteLength);
-        throw error;
-      }
-    }
-  });
-  const fetchChapter = (chapter, demand = true, exclusive = false) => {
-    assertReaderActive();
-    if (loaded.has(chapter.index)) return Promise.resolve();
-    return chapterScheduler.load(chapter.index, demand, exclusive).then(() => {
-      foliateScrollAnchors.whenIdle(trimChapterWindow);
-    }).catch(error => {
-      if (error.name !== "AbortError" && !readerAbortController.signal.aborted) {
-        const marker = ensureSentinel(chapter);
-        marker?.classList.add("reader-chapter-load-error");
-        marker?.removeAttribute("aria-hidden");
-      }
-      throw error;
-    });
-  };
-  const activateChapter = async (chapter, generation, fragment = "") => {
-    chapterFocusIndex = chapter.index;
-    chapterNavigating++;
-    try { await fetchChapter(chapter, true, chapterWindowReady); }
-    finally { chapterNavigating--; }
-    if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
-    let id = fragment.replace(/^#/, "");
-    try {
-      id = decodeURIComponent(id);
-    } catch (_) {}
-    const anchor = chapterTarget(node, id);
-    if (!anchor) throw new Error("EPUB_MISSING_ANCHOR");
-    foliateScrollAnchors.invalidate();
-    anchor.scrollIntoView({ block: "start" });
-    foliateScrollAnchors.remember();
-    syncHeadingLocation();
-    updateProgressTools();
-    scheduleSave();
-    return true;
-  };
-  frame.addEventListener("click", async (event) => {
-    const link = event.target.closest?.("a[href]");
-    const article = link?.closest(".reader-epub-chapter");
-    if (
-      !article ||
-      event.button !== 0 ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      event.altKey
-    )
-      return;
-    const current = chapterAt(Number(article.dataset.chapter));
-    const destination = trustedChapterReferenceUrl(link.getAttribute("href"), chapterUrl(current), manifestBase);
-    const target = destination ? new URL(destination.url) : null;
-    const fragment = destination?.fragment || "";
-    const chapter = target && manifest.chapters.find((item) => chapterUrl(item) === target.href);
-    if (!chapter) {
-      // A stale or missing book document must not navigate out to an asset 404.
-      if (/\.(?:xhtml?|html?)(?:$|#)/i.test(link.getAttribute("href") || "")) {
-        event.preventDefault();
-        let message = link.nextElementSibling;
-        if (!message?.classList.contains("reader-chapter-link-error")) {
-          message = document.createElement("span");
-          message.className = "reader-chapter-link-error";
-          message.setAttribute("role", "status");
-          message.textContent = "（无法定位此书内链接）";
-          link.after(message);
-        }
-      }
-      return;
-    }
-    event.preventDefault();
-    const generation = beginReaderNavigation();
-    try {
-      await activateChapter(chapter, generation, fragment);
-    } catch (error) {
-      reportNavigationError(error, generation);
-    }
-  });
-  const chapterVirtualizer = VoiceOfMLReaderVirtual.createSectionVirtualizer({
-    limit: 12,
-    getLoaded: () => [...frame.querySelectorAll(":scope > .reader-epub-chapter")],
-    getIndex: article => Number(article.dataset.chapter),
-    getHeight: article => article.getBoundingClientRect().height,
-    canVirtualize: article => {
-      const rect = article.getBoundingClientRect(), view = viewport.getBoundingClientRect();
-      const selection = window.getSelection();
-      return (rect.bottom < view.top - 800 || rect.top > view.bottom + 800) &&
-        !article.contains(document.activeElement) &&
-        !article.querySelector("mark.full-search-highlight") &&
-        !(selection && !selection.isCollapsed &&
-          selection.containsNode(article, true));
-    },
-    virtualize: (article, index, height) => {
-      loaded.delete(index);
-      const marker = ensureSentinel(chapterAt(index));
-      const style = getComputedStyle(article);
-      marker.classList.add("reader-chapter-placeholder");
-      marker.style.height = `${height}px`;
-      marker.style.marginTop = style.marginTop;
-      marker.style.marginBottom = style.marginBottom;
-      marker.setAttribute("aria-hidden", "true");
-      chapterManifestObserver.unobserve(article);
-      foliateScrollAnchors.unobserve(article);
-      for (const entry of navigationState.tocEntries)
-        if (entry.chapterIndex === index) entry.target = null;
-      for (const image of article.querySelectorAll("img")) image.removeAttribute("src");
-      article.replaceWith(marker);
-      article._chapterSearchHead = null;
-    },
-    release: index => {
-      chapterBudget.release(retainedBytes.get(index));
-      retainedBytes.delete(index);
-    },
-    preserve: change => foliateScrollAnchors.preserve(change)
-  });
-  function trimChapterWindow() {
-    if (chapterWindowReady) chapterVirtualizer.trim(chapterFocusIndex);
-  }
-  function chapterPrefetchIndices() {
-    if (document.hidden) return [];
-    // A fixed opening prefix keeps extra front matter within the DOM retention target.
-    const forwardCount = Math.max(chapterPrefetchCount, chapterPrefetchMaxCount + 1 - chapterFocusIndex);
-    const nearby = manifest.chapters.slice(Math.max(0, chapterFocusIndex - 2),
-      chapterFocusIndex + forwardCount);
-    const indices = [];
-    let bytes = 0;
-    for (const chapter of nearby) {
-      bytes += chapter.bytes;
-      if (chapter.index > chapterFocusIndex + chapterPrefetchCount && bytes > chapterPrefetchBytes) break;
-      if (!loaded.has(chapter.index)) indices.push(chapter.index);
-    }
-    return indices;
-  }
-  function refreshChapterWindow() {
-    chapterWindowFrame = 0;
-    if (!chapterWindowReady || readerAbortController.signal.aborted) return;
-    const view = viewport.getBoundingClientRect();
-    const rows = [...frame.querySelectorAll(":scope > [data-chapter]")];
-    const current = rows.find(row => {
-      const rect = row.getBoundingClientRect();
-      return rect.top <= view.top + 80 && rect.bottom > view.top + 80;
-    }) || rows.find(row => row.getBoundingClientRect().top > view.top);
-    if (current && !chapterNavigating) chapterFocusIndex = Number(current.dataset.chapter);
-    if (!chapterNavigating && current?.classList.contains("reader-chapter-sentinel") &&
-        current.getBoundingClientRect().top < view.bottom)
-      fetchChapter(chapterAt(chapterFocusIndex)).catch(() => {});
-    if (!chapterNavigating) chapterScheduler.prefetch(chapterPrefetchIndices());
-    foliateScrollAnchors.whenIdle(trimChapterWindow);
-  }
-  function scheduleChapterWindow() {
-    if (!chapterWindowFrame) chapterWindowFrame = requestAnimationFrame(refreshChapterWindow);
-  }
-  function handleChapterVisibility() {
-    if (document.hidden) chapterScheduler.prefetch([]);
-    else scheduleChapterWindow();
-  }
-  chapterManifestObserver = new IntersectionObserver(
-    scheduleChapterWindow,
-    { root: viewport, rootMargin: "800px 0px" }
-  );
-  chapterPreviousObserver = new IntersectionObserver((entries) => {
-    if (!chapterWindowReady || chapterNavigating || readerAbortController.signal.aborted) return;
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const chapter = chapterAt(Number(entry.target.dataset.chapter));
-      if (chapter) fetchChapter(chapter).catch(() => {});
-    }
-  }, { root: viewport });
-  viewport.addEventListener("scroll", scheduleChapterWindow, { passive: true });
-  window.addEventListener("resize", scheduleChapterWindow);
-  document.addEventListener("visibilitychange", handleChapterVisibility);
-  let chapterCleaned = false;
-  chapterManifestCleanup = () => {
-    if (chapterCleaned) return;
-    chapterCleaned = true;
-    chapterWindowReady = false;
-    cancelAnimationFrame(chapterWindowFrame);
-    viewport.removeEventListener("scroll", scheduleChapterWindow);
-    window.removeEventListener("resize", scheduleChapterWindow);
-    document.removeEventListener("visibilitychange", handleChapterVisibility);
-    chapterScheduler.dispose();
-    chapterVirtualizer.dispose();
-    chapterManifestObserver?.disconnect();
-    chapterPreviousObserver?.disconnect();
-    chapterManifestObserver = null;
-    chapterManifestLoader = null;
-    for (const bytes of retainedBytes.values()) chapterBudget.release(bytes);
-    retainedBytes.clear();
-    loaded.clear();
-  };
-  trackReaderResource(chapterManifestCleanup);
-  chapterManifestLoader = async (index) => {
-    const chapter = chapterAt(index);
-    if (!chapter) return null;
-    chapterFocusIndex = index;
-    chapterNavigating++;
-    try { await fetchChapter(chapter, true, chapterWindowReady); }
-    finally { chapterNavigating--; }
-    return frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`);
-  };
-  chapterManifestLoader.count = manifest.chapters.length;
-  setChapterToc();
-  await getInitialReaderRestoration();
-  const savedChapter = Number(readerRestorationEntry?.chapterIndex) - 1;
-  const initialChapter = Number.isInteger(savedChapter)
-    ? Math.max(0, Math.min(manifest.chapters.length - 1, savedChapter))
-    : 0;
-  chapterFocusIndex = manifest.chapters[initialChapter].index;
-  if (initialChapter > 0) ensureSentinel(manifest.chapters[initialChapter - 1], true);
-  try {
-    const firstChapter = fetchChapter(manifest.chapters[initialChapter]);
-    chapterScheduler.prefetch(chapterPrefetchIndices());
-    await firstChapter;
-  } catch (error) {
-    if (readerRestorationEntry?.chapterIndex == null) throw error;
-    throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。", { cause: error }), {
-      code: "READER_RESTORE"
-    });
-  }
-  chapterWindowReady = true;
-  if (isReaderGenerationCurrent("navigation", openingGeneration)) foliateScrollAnchors.invalidate();
-  for (const article of frame.querySelectorAll(".reader-epub-chapter")) foliateScrollAnchors.observe(article);
-    frame.style.overflowAnchor = "none";
-  scheduleChapterWindow();
-  assertReaderActive();
-  markReaderContentReady();
-  status.textContent = `EPUB · ${manifest.chapters.length} 章`;
-}
-async function renderDocx(prepared) {
-  const bytes = await readPreparedBytes(prepared.response, prepared.engines);
-  assertReaderActive();
-  VoiceOfMLReaderSecurity.inspectZip(bytes, {
-    ...VoiceOfMLReaderSecurity.LIMITS,
-    archiveCompressedBytes: VoiceOfMLReaderSecurity.LIMITS.documentBytes
-  });
-  const styles = document.createElement("div");
-  styles.className = "docx-styles";
-  const body = document.createElement("div");
-  body.className = "docx-body";
-  content.append(styles, body);
-  const options = {
-    className: "reader-docx",
-    inWrapper: true,
-    breakPages: true,
-    ignoreLastRenderedPageBreak: false,
-    useBase64URL: false,
-    renderHeaders: true,
-    renderFooters: true,
-    renderFootnotes: true,
-    renderEndnotes: true,
-    renderChanges: false,
-    renderComments: false,
-    renderAltChunks: false,
-    debug: false
-  };
-  const docxDocument = await awaitReader(docx.parseAsync(bytes, options));
-  assertReaderActive();
-  const urls = new Set(), urlsByPath = new Map(), contentTypes = docxDocument.contentTypes || [];
-  let released = false;
-  const release = () => {
-    released = true;
-    for (const url of urls) URL.revokeObjectURL(url);
-    urls.clear();
-    urlsByPath.clear();
-  };
-  const untrack = trackReaderResource(release);
-  memoizeDocxAssets(docxDocument, () => released);
-  // Own this parsed document's images, fonts and numbering assets only.
-  docxDocument.blobToURL = (blob, path) => {
-    if (released || !blob) return null;
-    if (path && urlsByPath.has(path)) return urlsByPath.get(path);
-    const type = path && contentTypes.find(entry => entry.partName === path ||
-      (entry.extension && path.endsWith(`.${entry.extension}`)));
-    const url = URL.createObjectURL(type ? new Blob([blob], {type:type.contentType}) : blob);
-    if (typeof url === "string" && url.startsWith("blob:")) {
-      urls.add(url);
-      if (path) urlsByPath.set(path, url);
-    }
-    return url;
-  };
-  try {
-    const nodes = await awaitReader(docx.renderDocument(docxDocument, options));
-    assertReaderActive();
-    for (const node of nodes) (node.nodeName === "STYLE" ? styles : body).appendChild(node);
-  } catch (error) {
-    release();
-    untrack();
-    throw error;
-  }
-  assertReaderActive();
-  body.classList.toggle("reader-document-dark", readerTheme === "dark");
-  if (!(body.textContent || "").trim() && !body.querySelector("img, table, svg, canvas")) {
-    release();
-    untrack();
-    throw new Error("DOCX rendered no supported content");
-  }
-  const pages = [...body.querySelectorAll(":scope > .reader-docx-wrapper > section.reader-docx")];
-  docxPageNodes = pages;
-  if (pages.length) {
-    updateDocumentState({ pageCount: pages.length });
-    pageInput.max = String(documentState.pageCount);
-    document.querySelector("#page-total").textContent = `/ ${documentState.pageCount}`;
-    document.querySelector(".page-controls").hidden = false;
-    pages.forEach((page, index) => {
-      page.classList.add("reader-docx-page");
-      page.dataset.page = String(index + 1);
-      page.style.setProperty("--reader-docx-height", page.style.minHeight || page.style.height || "1123px");
-    });
-    setToc(headingTocEntries(body));
-  }
-  for (const link of body.querySelectorAll("a[href]")) {
-    const href = link.getAttribute("href") || "";
-    if (!href.startsWith("#") && !/^https?:\/\//i.test(href)) link.removeAttribute("href");
-    else if (!href.startsWith("#")) {
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-    }
-  }
-  markReaderContentReady();
-  status.textContent = documentState.pageCount ? `${documentState.pageCount} 页` : "DOCX";
-}
-function renderImageDocument(image) {
-  assertReaderActive();
-  content.appendChild(image);
-  markReaderContentReady();
-  status.textContent = "图片";
-}
-function disposeFormatResources(mode) {
-  if (mode === "epub-chapters") {
-    chapterManifestCleanup?.();
-    chapterManifestCleanup = null;
-  }
-  if (mode === "swf") {
-    swfPlayer?.remove();
-    swfPlayer = null;
-  }
-  if (["pdf", "pdf-pages", "image-pages"].includes(mode)) {
-    pdfDocument = null;
-    pdfPageManifest = null;
-    pdfOcrManifest = null;
-    pdfOcrManifestPromise = null;
-    pdfV3Repository?.dispose(); pdfTextLayerRepository?.dispose();
-    for (const shell of pdfManifestShells) shell?._v3PreviewRelease?.();
-    pdfV3Repository = pdfTextLayerRepository = null;
-    pdfV3Manifest = pdfV3Map = null;
-    pdfHybridUrl = ""; pdfHybridDocumentPromise = null;
-    pdfTextContentCache.clear();
-    pdfTextContentPromises.clear();
-    pdfTextContentCacheBytes = 0;
-    pdfOcrPageCache.clear();
-    pdfOcrPageCacheBytes = 0;
-    clearPdfManifestPrefetches();
-    pdfBookSearchClient?.dispose();
-    pdfBookSearchClient = null;
-    pdfShellWindow?.dispose();
-    pdfFirstPagePreload?.removeAttribute("src");
-    pdfFirstPagePreload = null;
-    for (const canvas of content.querySelectorAll(".reader-page canvas")) {
-      canvas.width = 0;
-      canvas.height = 0;
-    }
-    for (const image of content.querySelectorAll(".reader-page img")) image.removeAttribute("src");
-  }
-  if (mode === "foliate") {
-    foliateSectionObserver?.disconnect();
-    foliateSectionObserver = null;
-    foliateSectionVirtualizer?.dispose();
-    foliateChapterRepository?.dispose();
-    foliateSectionVirtualizer = null;
-    foliateChapterRepository = null;
-    foliateSectionLoader = null;
-    foliateSectionSettler = null;
-    try {
-      const closing = epubRendition?.close?.();
-      closing?.catch?.(() => {});
-    } catch (_) {}
-    epubRendition = null;
-    epubBook = null;
-  }
-  if (mode === "html") {
-    htmlFrame?.remove();
-    htmlFrame = null;
-    content.classList.remove("reader-content--spreadsheet");
-  }
-  if (["audio", "video"].includes(mode) && mediaElement) {
-    mediaElement.pause();
-    mediaElement.removeAttribute("src");
-    mediaElement.load();
-    mediaElement = null;
-  }
-}
-function renderTextDocument(prepared) {
-  return renderText(false, prepared);
-}
-function renderMarkdownDocument(prepared) {
-  return renderText(true, prepared);
-}
-function captureChapterPosition() {
-  if (capability.mode !== "epub-chapters") return null;
-  const marker = viewport.getBoundingClientRect().top + 8;
-  const chapters = [...content.querySelectorAll(".reader-epub-chapter")];
-  const chapter =
-    chapters.find((node) => node.getBoundingClientRect().bottom > marker) ||
-    chapters[chapters.length - 1];
-  return chapter
-    ? {
-        chapterIndex: Number(chapter.dataset.chapter),
-        chapterManifest: chapterManifestUrl || sourceUrl,
-        chapterOffset: marker - chapter.getBoundingClientRect().top
-      }
-    : null;
-}
-async function restoreChapterPosition(entry, generation) {
-  if (
-    /-epub-chapters-v5\//.test(chapterManifestUrl || sourceUrl) &&
-    entry.chapterManifest !== (chapterManifestUrl || sourceUrl)
-  ) return false;
-  if (!chapterManifestLoader || !Number.isInteger(entry.chapterIndex)) return false;
-  const chapter = await chapterManifestLoader(entry.chapterIndex);
-  if (!chapter?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
-  viewport.scrollTop +=
-    chapter.getBoundingClientRect().top -
-    viewport.getBoundingClientRect().top -
-    8 +
-    (Number(entry.chapterOffset) || 0);
-  foliateScrollAnchors.remember();
-  syncHeadingLocation();
-  updateProgressTools();
-  scheduleSave();
-  return true;
-}
-async function restoreFormat(mode, entry, generation = beginReaderNavigation()) {
-  try {
-    if (!entry || !isReaderGenerationCurrent("navigation", generation)) return false;
-    if (mode === "epub-chapters") {
-      if (Number.isInteger(entry.chapterIndex)) {
-        if (!(await restoreChapterPosition(entry, generation))) return false;
-      } else if (!(await restoreProgressState(entry, generation))) return false;
-    } else if (mode === "foliate" && Number.isInteger(entry.foliateSection)) {
-      if (!(await restoreFoliateBookmarkPosition(entry, generation))) return false;
-    } else if (documentState.pageCount && entry.page) {
-      if (
-        !(await goToPage(entry.page, generation)) ||
-        !isReaderGenerationCurrent("navigation", generation)
-      )
-        return false;
-      const shell = content.querySelector(
-        `.reader-page[data-page="${documentState.page}"], .reader-docx-page[data-page="${documentState.page}"]`
-      );
-      if (shell && Number.isFinite(entry.pageOffset))
-        viewport.scrollTop = readerPageScrollTop(shell) + entry.pageOffset;
-      updateProgressTools();
-      scheduleSave();
-    } else if (!(await restoreProgressState(entry, generation))) return false;
-    if (!isReaderGenerationCurrent("navigation", generation)) return false;
-    consumeBookmarkHandoff(entry);
-    return true;
-  } catch (error) {
-    reportNavigationError(error, generation);
-    return false;
-  }
-}
-async function restoreInitialPosition(entry, generation) {
-  if (!entry || !isReaderGenerationCurrent("navigation", generation)) return;
-  const restored = await formatAdapters.active.restore(entry, generation);
-  if (!restored && isReaderGenerationCurrent("navigation", generation))
-    throw Object.assign(new Error("阅读位置恢复失败，原进度已保留，请重试加载。"), {
-      code: "READER_RESTORE"
-    });
-}
-async function applyInitialRestoration(entry, generation) {
-  updateDocumentState({ restoredEntry: entry });
-  if (entry?.zoom && !zoomChangedByUser && isReaderGenerationCurrent("navigation", generation))
-    setZoom(entry.zoom, false);
-  await restoreInitialPosition(entry, generation);
-}
-function registerReaderFormatAdapters() {
-  const formats = {
-    "pdf-pages": [
-      () => {
-        return fetchReaderResponse();
-      },
-      renderPdfPages
-    ],
-    "image-pages": [
-      () => fetchReaderResponse(),
-      renderImagePages
-    ],
-    pdf: [loadPdfDocument, renderPdf],
-    image: [loadImageDocument, renderImageDocument],
-    text: [loadTextDocument, renderTextDocument],
-    markdown: [loadMarkdownDocument, renderMarkdownDocument],
-    html: [loadHtmlDocument, renderHtml],
-    "epub-chapters": [loadChapterManifestDocument, renderChapterManifest],
-    docx: [loadDocxDocument, renderDocx],
-    audio: [loadMediaDocument, () => renderMedia("audio")],
-    video: [loadMediaDocument, () => renderMedia("video")],
-    swf: [loadSwfDocument, renderSwf],
-    foliate: [loadMediaDocument, renderFoliate]
-  };
-  for (const [mode, [open, render]] of Object.entries(formats))
-    formatAdapters.register(mode, {
-      open,
-      render,
-      restore: (entry, generation) => restoreFormat(mode, entry, generation),
-      dispose: () => disposeFormatResources(mode)
-    });
-}
-function renderMedia(mode) {
-  assertReaderActive();
-  const media = document.createElement(mode);
-  media.className = mode === "audio" ? "reader-audio" : "reader-video";
-  media.controls = true;
-  media.setAttribute("aria-label", `${documentState.title} ${mode === "audio" ? "音频" : "视频"}`);
-  media.preload = "metadata";
-  if (mode === "video") media.playsInline = true;
-  const refresh = () => {
-    if (readerAbortController.signal.aborted) return;
-    mediaPanel.querySelector(".media-panel-time").textContent =
-      `${formatMediaTime(media.currentTime)} / ${formatMediaTime(media.duration)}`;
-    scheduleMarkerSync();
-  };
-  for (const type of ["timeupdate", "durationchange", "loadedmetadata"])
-    media.addEventListener(type, refresh, { passive: true });
-  for (const type of ["pause", "ended", "seeked"])
-    media.addEventListener(type, () => {
-      refresh();
-      saveProgress();
-    });
-  mediaElement = media;
-  let sourceRetried = false;
-  const originalMode = VoiceOfMLReader.capability(resolvedReaderData?.original_extension || extension).mode;
-  const retryUrl = originalMode === mode && validSource(downloadUrl) ? downloadUrl : sourceUrl;
-  media.addEventListener("error", () => {
-    if (readerAbortController.signal.aborted) return;
-    if (!sourceRetried && retryUrl !== media.src && validSource(retryUrl)) {
-      sourceRetried = true;
-      media._readerSourceRetry = true;
-      media.src = retryUrl;
-      media.load();
-      return;
-    }
-    media._readerSourceRetry = false;
-    fail("媒体加载失败，请检查网络后重试，或下载原文件。", "READER_MEDIA");
-  });
-  media.src = contentUrl;
-  content.appendChild(media);
-  markReaderContentReady();
-  status.textContent = mode === "audio" ? "音频" : "视频";
-}
-async function loadSwfDocument() {
-  await loadScript(RUFFLE_URL);
-  const response = await fetchReaderResponse();
-  return new Uint8Array(await response.arrayBuffer());
-}
-async function renderSwf(data) {
-  assertReaderActive();
-  const factory = window.RufflePlayer?.newest?.();
-  if (!factory) throw Object.assign(new Error("Ruffle 未加载"), { code: "READER_SWF_ENGINE" });
-  const player = factory.createPlayer();
-  player.className = "reader-swf";
-  player.setAttribute("aria-label", `${documentState.title} Flash 内容`);
-  player.style.width = "100%";
-  player.style.minHeight = "360px";
-  content.appendChild(player);
-  swfPlayer = player;
-  await player.ruffle().load({ data });
-  markReaderContentReady();
-  status.textContent = "Flash 内容";
-}
 // Resolve once, then keep source URLs, capability, and presentation in sync.
-async function resolveReaderSource() {
-  if (!readerId || sourceUrl) return;
-  setReaderStage("resolve");
-  let resolved = cachedReaderData;
-  if (!resolved?.url) {
-    try {
-      resolved = await resolveReaderId(readerId);
-    } catch (error) {
-      assertReaderActive();
-      if (!localReaderData?.url) throw error;
-      resolved = localReaderData;
-    }
-  }
-  assertReaderActive();
-  sourceUrl = normalizeSourceUrl(resolved.url || "");
-  contentUrl = readerContentUrl(sourceUrl);
-  downloadUrl = resolved.download || sourceUrl;
-  chapterManifestUrl = resolved.chapter_manifest || "";
-  fallbackUrl = resolved.fallback || "";
-  if (resolved.extension) extension = String(resolved.extension).toLowerCase();
-  if (
-    extension === "pdf" &&
-    sourceUrl.includes("/api/reader-bucket-resource?") &&
-    new URL(sourceUrl).searchParams.get("path")?.endsWith("page-manifest.json")
-  )
-    extension = "pdf-pages";
-  capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
-  if (capability.mode !== "pdf") releasePdfWorker?.();
-  readerRuntime.update("source", {
-    url: sourceUrl,
-    contentUrl,
-    downloadUrl,
-    extension,
-    metadata: resolved
-  });
-  applyReaderMetadata(resolved);
-}
-async function start() {
-  const generation = readerRuntime.currentGeneration("navigation");
-  // Resolve the original source and import its known engine concurrently.
-  if (extension === "pdf" || /\.pdf(?:$|[?#])/i.test(sourceUrl)) preloadPdfEngine().catch(() => {});
-  readerSourcePromise = measurePdf(resolveReaderSource(), "resolve");
-  await readerSourcePromise;
-  assertReaderActive();
-  if (readerId && /\/calibre-chm-epub-[^/]+\/document\.epub(?:$|\?)/i.test(sourceUrl)) {
-    extension = "epub";
-    readerRuntime.update("source", { extension });
-    capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
-    content.dataset.mode = capability.mode;
-    document.querySelector(".page-controls").hidden = true;
-  }
-  syncCapabilityControls();
-  downloadButton.href = readerDownloadUrl(documentState.title, downloadUrl);
-  if (
-    (!validSource(sourceUrl) && !validSource(chapterManifestUrl) && !readerId) ||
-    capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED
-  )
-    return fail("此文件暂不支持在线阅读，请下载原文件。", "READER_UNSUPPORTED");
-  formatAdapters.activate(capability.mode);
-  applyReaderMetadata(resolvedReaderData);
-  if (validOcr(ocrUrl)) {
-    const ocr = document.querySelector("#ocr") || document.createElement("a");
-    ocr.id = "ocr";
-    ocr.className = "text-button";
-    ocr.target = "_blank";
-    ocr.rel = "noopener noreferrer";
-    ocr.textContent = "OCR";
-    if (!ocr.parentElement) document.querySelector(".reader-actions")?.prepend(ocr);
-    ocr.href = ocrUrl;
-    ocr.hidden = false;
-  }
-  try {
-    if (capability.mode === "foliate") {
-      setReaderStage("foliate");
-      foliateContinuous = true;
-      const restorationPromise = loadReaderRestoration();
-      readerRestorationPromise = restorationPromise;
-      await awaitReader(renderFoliate());
-      assertReaderActive();
-      const restored = await awaitReader(restorationPromise);
-      await applyInitialRestoration(restored, generation);
-      initialReaderTargetSection = null;
-      assertReaderActive();
-      if (!setReaderPhase("ready")) return;
-      updateDocumentState({ restorationReady: !restorationFailed });
-      scheduleSave();
-      return;
-    }
-    setReaderStage("prepare");
-    const restorationPromise = loadReaderRestoration();
-    readerRestorationPromise = restorationPromise;
-    const prepareResources = new Set(readerResources);
-    try {
-      const prepared = await awaitReader(formatAdapters.active.open());
-      assertReaderActive();
-      await formatAdapters.active.render(prepared);
-    } catch (error) {
-      assertReaderActive();
-      const originalExtension = String(resolvedReaderData?.original_extension || "").toLowerCase();
-      if (capability.mode !== "image-pages" || !validSource(downloadUrl) ||
-          !["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(originalExtension)) throw error;
-      for (const cleanup of [...readerResources]) {
-        if (prepareResources.has(cleanup)) continue;
-        cleanup();
-        readerResources.delete(cleanup);
-      }
-      formatAdapters.dispose();
-      content.replaceChildren();
-      extension = originalExtension;
-      capability = readerRuntime.negotiate(VoiceOfMLReader.capability(extension));
-      readerRuntime.update("source", { extension });
-      updateDocumentState({ page: 1, pageCount: 0 });
-      formatAdapters.activate(capability.mode);
-      syncCapabilityControls();
-      await renderImageDocument(await loadImageDocument(downloadUrl));
-    }
-    assertReaderActive();
-    markReaderContentReady();
-    const restored = await awaitReader(restorationPromise);
-    await applyInitialRestoration(restored, generation);
-    assertReaderActive();
-    if (!setReaderPhase("ready")) return;
-    updateDocumentState({ restorationReady: !restorationFailed });
-    schedulePdfBookSearchPrefetch();
-    updateProgressTools();
-    if (fullSearchInput.value.trim()) runFullSearch();
-    scheduleSave();
-  } catch (error) {
-    if (readerAbortController.signal.aborted || error?.name === "AbortError") return;
-    console.error(error);
-    if (
-      error?.code !== "READER_RESTORE" &&
-      capability.mode === "epub-chapters" &&
-      validFallback(fallbackUrl)
-    ) {
-      const target = new URL(location.href);
-      target.searchParams.set("url", fallbackUrl);
-      target.searchParams.set("ext", "pdf");
-      target.searchParams.delete("chapter_manifest");
-      target.searchParams.delete("fallback");
-      if (window.parent !== window)
-        window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin);
-      else location.replace(target.href);
-      return;
-    }
-    fail(
-      error && error.message ? error.message : "原文件加载失败",
-      classifyReaderError(error, capability.mode === "foliate" ? "READER_CORRUPT" : "READER_PARSE")
-    );
-  }
-}
-function loadPdfTaskWithTimeout(pdfjs, options, url) {
-  assertReaderActive();
-  const task = pdfjs.getDocument(options(url));
-  return new Promise((resolve, reject) => {
-    let timeout = 0,
-      destroyed = false;
-    const destroy = () => {
-      if (destroyed) return;
-      destroyed = true;
-      clearTimeout(timeout);
-      try {
-        task.destroy()?.catch?.(() => {});
-      } catch (_) {}
-      reject(readerAbortError());
-    };
-    const untrack = trackReaderResource(destroy);
-    timeout = setTimeout(() => {
-      reject(new Error("reader PDF timeout"));
-      untrack();
-      destroy();
-    }, READER_PROXY_TIMEOUT_MS);
-    task.promise.then(
-      (document) => {
-        clearTimeout(timeout);
-        if (readerAbortController.signal.aborted) {
-          destroy();
-          return;
-        }
-        resolve(document);
-      },
-      (error) => {
-        clearTimeout(timeout);
-        reject(error);
-        untrack();
-        destroy();
-      }
-    );
-  });
-}
-function loadPdfWithTimeout(pdfjs, options, target = sourceUrl, proxy = contentUrl) {
-  return retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxy)).catch((error) => {
-    assertReaderActive();
-    if (error && error.name === "AbortError") throw error;
-    if (retryableReaderProxyError(error)) throw error;
-    return loadPdfTaskWithTimeout(pdfjs, options, target);
-  });
-}
-function preloadPdfEngine() {
-  if (!pdfEnginePreload) pdfEnginePreload = loadPdfEngine().then(preparePdfWorker);
-  return pdfEnginePreload;
-}
-async function preparePdfWorker(pdfjs) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    assertReaderActive();
-    if (attempt) await waitForReader(attempt * 500);
-    try {
-      return await preparePdfWorkerAttempt(pdfjs, attempt);
-    } catch (error) {
-      assertReaderActive();
-      if (error?.code !== "READER_ENGINE_NETWORK" || attempt === 2) throw error;
-    }
-  }
-}
-async function preparePdfWorkerAttempt(pdfjs, attempt) {
-  assertReaderActive();
-  if (capability.mode !== "pdf" && !pdfPrimarySource()) return pdfjs;
-  pdfjs.GlobalWorkerOptions.workerSrc = attempt
-    ? `${PDFJS_WORKER_URL}?reader-worker-retry=${attempt}` : PDFJS_WORKER_URL;
-  const worker = new pdfjs.PDFWorker();
-  pdfWorker = worker;
-  let timer, destroyed = false;
-  const destroy = () => {
-    if (destroyed) return;
-    destroyed = true;
-    clearTimeout(timer);
-    worker.destroy();
-    if (pdfWorker === worker) {
-      pdfWorker = null;
-      releasePdfWorker = null;
-    }
-  };
-  releasePdfWorker = destroy;
-  const untrack = trackReaderResource(destroy);
-  try {
-    await awaitReader(Promise.race([
-      worker.promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("PDF worker timeout")), 20000);
-      })
-    ]));
-    assertReaderActive();
-    return pdfjs;
-  } catch (error) {
-    untrack();
-    destroy();
-    assertReaderActive();
-    throw Object.assign(new Error("PDF 阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
-      { code: "READER_ENGINE_NETWORK", cause: error });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function loadPdfEngine() {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    assertReaderActive();
-    if (attempt) await waitForReader(attempt * 500);
-    assertReaderActive();
-    // Browsers can retain a rejected import for the life of this document.
-    // Use two bounded retry URLs for the same pinned bytes, never a random URL.
-    const url = attempt ? `${PDFJS_URL}?reader-module-retry=${attempt}` : PDFJS_URL;
-    let timer;
-    try {
-      const pdfjs = await awaitReader(
-        Promise.race([
-          import(url),
-          new Promise((_, reject) => {
-            timer = setTimeout(
-              () => reject(new DOMException("PDF engine timeout", "TimeoutError")),
-              20000
-            );
-          })
-        ])
-      );
-      assertReaderActive();
-      return pdfjs;
-    } catch (error) {
-      assertReaderActive();
-      const networkFailure =
-        error?.name === "TimeoutError" ||
-        /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(
-          error?.message || ""
-        );
-      if (!networkFailure) throw error;
-      if (attempt === 2)
-        throw Object.assign(
-          new Error("PDF 阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
-          { code: "READER_ENGINE_NETWORK", cause: error }
-        );
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-}
-function loadPdfDocument(target = sourceUrl) {
-  return measurePdf(preloadPdfEngine(), "engine").then((pdfjs) => {
-    assertReaderActive();
-    if (!pdfFetchPolicy) {
-      pdfFetchPolicy = createPdfFetchPolicy();
-      trackReaderResource(() => { pdfFetchPolicy?.dispose(); pdfFetchPolicy = null; });
-    }
-    pdfFetchPolicy.add([target, readerContentUrl(target)]);
-    pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
-    const options = (url) => ({
-      url,
-      worker: pdfWorker,
-      // Bound demand reads for original and converted PDFs alike. Streaming
-      // otherwise keeps the full download running alongside these ranges.
-      rangeChunkSize: 262144,
-      disableAutoFetch: true,
-      disableStream: true,
-      wasmUrl: PDFJS_WASM_URL,
-      cMapUrl: PDFJS_CMAP_URL,
-      cMapPacked: true,
-      standardFontDataUrl: PDFJS_STANDARD_FONT_URL,
-      withCredentials: false
-    });
-    return measurePdf(loadPdfWithTimeout(pdfjs, options, target, readerContentUrl(target)), "document");
-  });
-}
-function prepareReaderDocument(engineTasks) {
-  const engines = Promise.all(engineTasks);
-  const response = Promise.race([fetchReaderResponse(), engines.then(() => new Promise(() => {}))]);
-  // Rendering owns both promises; early rejection must not become unhandled.
-  response.catch(() => {});
-  engines.catch(() => {});
-  return {response, engines};
-}
-function readPreparedBytes(response, engines, limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes) {
-  return Promise.all([Promise.resolve(response).then(response => {
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return VoiceOfMLReaderSecurity.readBytes(response,limit);
-  }), engines]).then(([bytes]) => bytes);
-}
-function loadTextDocument() {
-  return fetchReaderResponse().then((response) => ({ response }));
-}
-function loadMarkdownDocument() {
-  return prepareReaderDocument([loadScript(MARKED_URL), loadScript(PURIFY_URL)]);
-}
-function loadHtmlDocument() {
-  const {response, engines} = prepareReaderDocument([loadScript(PURIFY_URL)]);
-  return {response, engine:engines};
-}
-function loadDocxDocument() {
-  return prepareReaderDocument([loadScript(JSZIP_URL), loadScript(DOCX_PREVIEW_URL)]);
-}
-function loadMediaDocument() {
-  return Promise.resolve(null);
-}
-function waitReaderImage(image, target, timeoutMs, signal) {
-  assertReaderActive();
-  return new Promise((resolve, reject) => {
-    let settled = false, timeout = 0, untrack = () => {};
-    const abort = () => finish(readerAbortError());
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      untrack();
-      signal?.removeEventListener("abort", abort);
-      image.onload = image.onerror = null;
-      if (error) {
-        image.removeAttribute("src");
-        reject(error);
-      } else resolve(image);
-    };
-    untrack = trackReaderResource(() => finish(readerAbortError()));
-    signal?.addEventListener("abort", abort, { once: true });
-    if (signal?.aborted) abort();
-    if (settled) return;
-    timeout = setTimeout(() => finish(new DOMException("Reader image stalled", "TimeoutError")), timeoutMs);
-    image.onload = () => finish();
-    image.onerror = () => finish(new Error("image load failed"));
-    if (image.src !== new URL(target, location.href).href) image.src = target;
-    if (image.complete && image.naturalWidth) finish();
-  });
-}
-async function loadReaderImage(image, target, signal, deadline = performance.now() + READER_PROXY_TIMEOUT_MS) {
-  const remaining = () => Math.max(1, deadline - performance.now());
-  const network = /^https?:$/.test(new URL(target, location.href).protocol);
-  try {
-    return await waitReaderImage(image, target, Math.min(network ? 15000 : READER_PROXY_TIMEOUT_MS, remaining()), signal);
-  } catch (error) {
-    assertReaderActive();
-    signal?.throwIfAborted();
-    if (!network || error?.name !== "TimeoutError" || !navigator.onLine) throw error;
-  }
-  const response = await fetchWithReaderTimeout(target, remaining(),
-    { signal, priority: image.fetchPriority || "auto" });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw Object.assign(new Error(`HTTP ${response.status}`), {status: response.status});
-  }
-  const bytes = await VoiceOfMLReaderSecurity.readBytes(response);
-  assertReaderActive();
-  signal?.throwIfAborted();
-  const blobUrl = URL.createObjectURL(new Blob([bytes], {type: response.headers.get("Content-Type") || ""}));
-  try {
-    return await waitReaderImage(image, blobUrl, Math.min(20000, remaining()), signal);
-  } finally {
-    URL.revokeObjectURL(blobUrl);
-  }
-}
-async function loadImageDocument(target = sourceUrl) {
-  const deadline = performance.now() + READER_PROXY_TIMEOUT_MS;
-  const image = new Image();
-  image.className = "reader-image";
-  image.alt = documentState.title;
-  image.decoding = "async";
-  try {
-    return await loadReaderImage(image, readerContentUrl(target), readerAbortController.signal, deadline);
-  } catch (error) {
-    assertReaderActive();
-    if (error?.code === "READER_RESOURCE_LIMIT") throw error;
-    return loadReaderImage(image, target, readerAbortController.signal, deadline);
-  }
-}
-function loadChapterManifestDocument() {
-  const target = chapterManifestUrl || sourceUrl, early = window.__VOICE_READER_CHAPTER_PRELOAD__;
-  if (early?.manifest && early.manifestUrl === new URL(target, location.href).href) {
-    const pending = early.manifest;
-    early.manifest = null;
-    return pending.then(response => response.ok ? response : fetchReaderUrl(target), () => fetchReaderUrl(target));
-  }
-  return fetchReaderUrl(target);
-}
 
 // Foliate keeps a source-to-rendered text mapping because CFI addresses the
 // original document, before sanitization and insertion into a shadow root.
-function cloneFoliateDocument(source) {
-  const doc = source.cloneNode(true),
-    original = source.createTreeWalker(source, NodeFilter.SHOW_TEXT),
-    cloned = doc.createTreeWalker(doc, NodeFilter.SHOW_TEXT);
-  const sourceNodes = new WeakMap();
-  while (original.nextNode() && cloned.nextNode())
-    sourceNodes.set(cloned.currentNode, original.currentNode);
-  return { doc: sanitizeEpubDocument(doc), sourceNodes };
-}
-function foliateSearchAnchor(source, sourceNodes, body, renderedBody) {
-  const sourceWalker = body.ownerDocument.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-  const pairs = [];
-  let offset = 0;
-  while (sourceWalker.nextNode()) {
-    const node = sourceWalker.currentNode;
-    const original = sourceNodes.get(node);
-    if (original) pairs.push({ original, offset });
-    offset += node.length;
-  }
-  return (anchor) => {
-    const range = anchor(source);
-    if (!range || typeof range.intersectsNode !== "function") return null;
-    const intervals = [];
-    for (const { original, offset } of pairs) {
-      if (!range.intersectsNode(original)) continue;
-      const start = range.startContainer === original ? range.startOffset : 0;
-      const end = range.endContainer === original ? range.endOffset : original.length;
-      if (end > start) intervals.push({ start: offset + start, end: offset + end });
-    }
-    const walker = document.createTreeWalker(renderedBody, NodeFilter.SHOW_TEXT),
-      selected = [];
-    let offset = 0;
-    while (walker.nextNode()) {
-      const node = walker.currentNode,
-        end = offset + node.length;
-      for (const interval of intervals)
-        if (interval.start < end && interval.end > offset)
-          selected.push({
-            node,
-            start: Math.max(0, interval.start - offset),
-            end: Math.min(node.length, interval.end - offset)
-          });
-      offset = end;
-    }
-    return selected;
-  };
-}
-async function settleReaderImages(root, timeoutMs = 2500) {
-  assertReaderActive();
-  const images = [...root.querySelectorAll("img[src],img[srcset]")];
-  if (!images.length) return;
-  let timeout = 0, active = true;
-  const cleanups = new Set();
-  const decoded = Promise.allSettled(
-    images.map(async (image) => {
-      // Sections are prepared off-DOM; lazy images cannot enter a viewport yet.
-      image.loading = "eager";
-      image.decoding = "async";
-      if (!image.complete) await new Promise((resolve) => {
-        const finish = () => {
-          image.removeEventListener("load", finish);
-          image.removeEventListener("error", finish);
-          cleanups.delete(finish);
-          resolve();
-        };
-        cleanups.add(finish);
-        image.addEventListener("load", finish, { once: true });
-        image.addEventListener("error", finish, { once: true });
-        if (image.complete) finish();
-      });
-      if (active) {
-        try { await image.decode?.(); } catch (_) {}
-      }
-    })
-  );
-  try {
-    await awaitReader(
-      Promise.race([
-        decoded,
-        new Promise((resolve) => {
-          timeout = setTimeout(resolve, timeoutMs);
-        })
-      ])
-    );
-  } finally {
-    active = false;
-    clearTimeout(timeout);
-    for (const cleanup of cleanups) cleanup();
-  }
-}
-function rewriteFoliateResources(doc, section) {
-  const safeEmbeddedValue = (value) =>
-    /^(?:blob:|data:image\/(?:gif|png|jpe?g|webp);)/i.test(String(value || "").trim());
-  const archiveResourceUrl = (value) => {
-    const raw = String(value || "").trim();
-    if (!raw || raw.startsWith("#") || raw.includes("#") || safeEmbeddedValue(raw))
-      return safeEmbeddedValue(raw) ? raw : null;
-    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(raw)) return null;
-    try {
-      const resolved = String(
-        (section.resolveResourceHref
-          ? section.resolveResourceHref(raw)
-          : section.resolveHref?.(raw)) || ""
-      );
-      if (
-        !resolved ||
-        /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(resolved) ||
-        /[\\\x00]/.test(resolved) ||
-        resolved.split("/").some((part) => !part || part === "." || part === "..")
-      )
-        return null;
-      return `https://voiceofml-search.hf.space/api/reader-resource?book=${encodeURIComponent(sourceUrl)}&path=${encodeURIComponent(resolved)}`;
-    } catch (_) {
-      return null;
-    }
-  };
-  for (const element of doc.querySelectorAll(
-    "img[src],source[src],audio[src],video[src],video[poster]"
-  )) {
-    for (const name of ["src", "poster"])
-      if (element.hasAttribute(name)) {
-        const safe = archiveResourceUrl(element.getAttribute(name));
-        if (safe) element.setAttribute(name, safe);
-        else element.removeAttribute(name);
-      }
-  }
-  for (const element of doc.querySelectorAll("[srcset]")) {
-    const value = element.getAttribute("srcset") || "";
-    const candidates = value
-      .split(",")
-      .map((part) => {
-        const [raw, ...descriptor] = part.trim().split(/\s+/);
-        const safe = archiveResourceUrl(raw);
-        return safe ? [safe, ...descriptor].join(" ") : null;
-      })
-      .filter(Boolean);
-    if (candidates.length) element.setAttribute("srcset", candidates.join(", "));
-    else element.removeAttribute("srcset");
-  }
-  for (const image of doc.querySelectorAll("image")) {
-    const value =
-      image.getAttributeNS("http://www.w3.org/1999/xlink", "href") ||
-      image.getAttribute("xlink:href") ||
-      image.getAttribute("href");
-    const safe = archiveResourceUrl(value);
-    if (safe) {
-      image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", safe);
-      image.setAttribute("href", safe);
-    } else {
-      image.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
-      image.removeAttribute("xlink:href");
-      image.removeAttribute("href");
-    }
-  }
-  for (const link of doc.querySelectorAll("a[href]")) {
-    const href = link.getAttribute("href") || "";
-    if (/^(?:https?:|mailto:|tel:)/i.test(href)) {
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-    }
-  }
-}
-async function createFoliateSection(section, index) {
-  const signal = arguments[2] || readerAbortController.signal;
-  const priority = arguments[3] || "high";
-  const source = await awaitReader(section.createDocument(), signal);
-  const { doc, sourceNodes } = cloneFoliateDocument(source);
-  assertReaderActive();
-  rewriteFoliateResources(doc, section);
-  const styles = [...doc.querySelectorAll("style,link")].map((node) => node.cloneNode(true));
-  for (const node of doc.querySelectorAll("style,link")) node.remove();
-  const article = document.createElement("article");
-  article.dataset.section = String(index);
-  const shadow = article.attachShadow({ mode: "open" }),
-    baseStyle = document.createElement("style"),
-    sectionBody = document.createElement("div");
-  // Chapter styles live in a shadow root, so document-level preferences cannot reach them.
-  baseStyle.textContent = `
-    :host { display: block; color: inherit; }
-    * { box-sizing: border-box; }
-    .reader-section-body { display: block; color: inherit; line-height: inherit; }
-    .reader-section-body > :first-child { margin-top: 0 !important; }
-    :host(.reader-document-dark) .reader-section-body,
-    :host(.reader-document-dark) .reader-section-body :where(:not(svg, svg *, img, canvas, video, audio, math, math *)) {
-      color: inherit !important;
-      background-color: transparent !important;
-      border-color: #4a5056 !important;
-      text-shadow: none !important;
-    }
-    a { color: var(--reader-book-link) !important; }
-    :host(.reader-document-dark) .reader-section-body a { color: var(--reader-book-link) !important; }
-    img, svg, video { max-width: 100%; height: auto; }
-    mark.full-search-highlight { background: #ffd54f; color: #111; }
-    :host(.reader-document-dark) .reader-section-body mark.full-search-highlight { background: #ffd54f !important; color: #111 !important; }
-    @media (prefers-contrast: more) {
-      .reader-section-body a[href] { text-decoration: underline !important; }
-      .reader-section-body mark.full-search-highlight { outline: 2px solid currentColor; }
-    }
-  `;
-  sectionBody.className = "reader-section-body";
-  const body = epubContentBody(doc);
-  // Import the sanitized nodes directly. Serializing and reparsing legacy
-  // nested anchors lets HTML's adoption rules reorder footnotes and citations.
-  if (body)
-    sectionBody.append(...[...body.childNodes].map((node) => document.importNode(node, true)));
-  article._resolveSearchAnchor = foliateSearchAnchor(source, sourceNodes, body, sectionBody);
-  shadow.append(baseStyle, ...styles, sectionBody);
-  for (const image of sectionBody.querySelectorAll("img")) {
-    image.loading = priority === "high" ? "eager" : "lazy";
-    image.fetchPriority = priority;
-    image.decoding = "async";
-  }
-  signal.throwIfAborted();
-  assertReaderActive();
-  article.classList.toggle("reader-document-dark", readerTheme === "dark");
-  return article;
-}
-function setupFoliateWindow(stream, sections) {
-  let focus = initialReaderTargetSection ?? 0, targetPending = false;
-  stream.style.overflowAnchor = "none";
-  const existing = index => stream.querySelector(`article[data-section="${index}"]:not(.foliate-section-placeholder)`);
-  const ensurePlaceholder = index => {
-    if (!sections[index] || stream.querySelector(`article[data-section="${index}"]`)) return;
-    const placeholder = document.createElement("article");
-    placeholder.className = "foliate-section-placeholder";
-    placeholder.dataset.section = String(index);
-    placeholder.style.setProperty("--foliate-placeholder-height", `${Math.max(400, viewport.clientHeight)}px`);
-    placeholder.setAttribute("aria-label", `加载第 ${index + 1} 节`);
-    const next = [...stream.children].find(node => Number(node.dataset.section) > index);
-    foliateScrollAnchors.preserve(() => stream.insertBefore(placeholder, next || null));
-    observer.observe(placeholder);
-  };
-  const warm = () => {
-    const indices = [];
-    for (const offset of [-1, 1, -2, 2, 3, 4, 5, 6]) {
-      const index = focus + offset;
-      if (sections[index] && !existing(index)) indices.push(index);
-    }
-    scheduler.prefetch(document.hidden ? [] : indices);
-  };
-  const refresh = () => {
-    if (readerAbortController.signal.aborted) return;
-    const marker = viewport.getBoundingClientRect().top + 80;
-    const rows = [...stream.children];
-    const current = rows.find(node => {
-      const rect = node.getBoundingClientRect();
-      return rect.top <= marker && rect.bottom > marker;
-    }) || rows.find(node => node.getBoundingClientRect().top > marker);
-    const index = current ? Number(current.dataset.section) : focus;
-    if (targetPending && index !== focus && !foliateScrollAnchors.scrolling) return;
-    targetPending = false;
-    focus = index;
-    if (current?.classList.contains("foliate-section-placeholder")) scheduler.load(index).catch(() => {});
-    warm();
-    foliateScrollAnchors.whenIdle(trimFoliateSections);
-  };
-  const observer = new IntersectionObserver(scheduleFoliateWindowRefresh,
-    { root: viewport, rootMargin: `${FOLIATE_PREFETCH_MARGIN}px` });
-  foliateSectionObserver = observer;
-  const commitSection = (index, article) =>
-      foliateScrollAnchors.preserve(() => {
-        const placeholder = stream.querySelector(
-            `article.foliate-section-placeholder[data-section="${index}"]`
-          ),
-          next = [...stream.querySelectorAll("article[data-section]")].find(
-            (item) => Number(item.dataset.section) > index
-          );
-        if (placeholder) {
-          observer.unobserve(placeholder);
-          placeholder.replaceWith(article);
-        } else stream.insertBefore(article, next || null);
-        observer.observe(article);
-        foliateScrollAnchors.observe(article);
-        ensurePlaceholder(index - 1);
-        ensurePlaceholder(index + 1);
-        return article;
-      });
-  const scheduler = readerRuntime.track(VoiceOfMLReaderChapters.createChapterScheduler({
-    create: async (index, signal, priority) => {
-      const article = await createFoliateSection(sections[index], index, signal, priority);
-      signal.throwIfAborted();
-        if (existing(index)) return existing(index);
-        return commitSection(index, article);
-    }
-  }));
-  foliateChapterRepository = VoiceOfMLReaderChapters.createChapterRepository({
-    count: sections.length, find: existing, create: index => scheduler.load(index)
-  });
-  foliateSectionVirtualizer = VoiceOfMLReaderVirtual.createSectionVirtualizer({
-    limit: FOLIATE_LOADED_SECTION_LIMIT,
-    getLoaded: () => [
-      ...stream.querySelectorAll("article[data-section]:not(.foliate-section-placeholder)")
-    ],
-    getIndex: (article) => Number(article.dataset.section),
-    getHeight: (article) => article.getBoundingClientRect().height,
-    canVirtualize: (article) => {
-      const rect = article.getBoundingClientRect(),
-        viewportRect = viewport.getBoundingClientRect();
-      return (
-        rect.bottom < viewportRect.top - FOLIATE_PREFETCH_MARGIN ||
-        rect.top > viewportRect.bottom + FOLIATE_PREFETCH_MARGIN
-      ) && !article.contains(document.activeElement) && !article.shadowRoot?.activeElement &&
-        !foliateSectionRoot(article).querySelector("mark.full-search-highlight") &&
-        ![window.getSelection(), article.shadowRoot?.getSelection?.()].some(selection =>
-          selection && !selection.isCollapsed && (selection.containsNode(article, true) ||
-            selection.anchorNode?.getRootNode() === article.shadowRoot));
-    },
-    virtualize: (article, index, height) => {
-      const placeholder = document.createElement("article");
-      placeholder.className = "foliate-section-placeholder";
-      placeholder.dataset.section = String(index);
-      placeholder.style.setProperty("--foliate-placeholder-height", `${height}px`);
-      placeholder.setAttribute("aria-hidden", "true");
-      observer.unobserve(article);
-      foliateScrollAnchors.unobserve(article);
-      for (const image of foliateSectionRoot(article).querySelectorAll("img")) {
-        image.removeAttribute("src");
-        image.removeAttribute("srcset");
-      }
-      article._resolveSearchAnchor = null;
-      article.replaceWith(placeholder);
-      observer.observe(placeholder);
-      return placeholder;
-    },
-    release: (index) => foliateChapterRepository.release(index),
-    preserve: (change) => foliateScrollAnchors.preserve(change)
-  });
-  foliateSectionLoader = index => {
-    focus = index;
-    targetPending = true;
-    const task = existing(index) ? Promise.resolve(existing(index)) : scheduler.load(index, true, true);
-    warm();
-    return task;
-  };
-  foliateSectionLoader.refresh = refresh;
-  foliateSectionSettler = () => waitForReader(0, true);
-  const scroll = scheduleFoliateWindowRefresh;
-  viewport.addEventListener("scroll", scroll, { passive: true });
-  document.addEventListener("visibilitychange", scroll);
-  trackReaderResource(() => {
-    viewport.removeEventListener("scroll", scroll);
-    document.removeEventListener("visibilitychange", scroll);
-  });
-}
-async function foliateTocEntries(view, sections) {
-  assertReaderActive();
-  const entries = [];
-  const append = (items, depth = 0) => {
-    for (const item of items || []) {
-      const href = item?.href ? String(item.href) : "";
-      if (href)
-        entries.push({
-          label: item.label || "未命名章节",
-          href,
-          depth,
-          activate: () => view.goTo(href)
-        });
-      append(item.subitems, depth + 1);
-    }
-  };
-  append(view.book.toc);
-  const sectionIndices = new Map();
-  for (const [index, section] of sections.entries())
-    if (!sectionIndices.has(section)) sectionIndices.set(section, index);
-  let next = 0, yieldDeadline = performance.now() + 8, yieldTask = null;
-  const resolveEntries = async () => {
-    while (next < entries.length) {
-      assertReaderActive();
-      if (yieldTask || performance.now() >= yieldDeadline) {
-        yieldTask ||= waitForReader().finally(() => {
-          yieldTask = null;
-          yieldDeadline = performance.now() + 8;
-        });
-        await yieldTask;
-        continue;
-      }
-      const entry = entries[next++];
-      try {
-        const target = await view.book.resolveHref(entry.href),
-          section = target && view.book.sections[target.index];
-        assertReaderActive();
-        entry.sectionIndex = section ? sectionIndices.get(section) ?? -1 : -1;
-        entry.anchor = typeof target?.anchor === "function" ? target.anchor : null;
-        const fragment = entry.href.split("#")[1] || "";
-        entry.fragment = fragment ? decodeURIComponent(fragment) : "";
-      } catch (_) {
-        assertReaderActive();
-        entry.sectionIndex = -1;
-        entry.fragment = "";
-      }
-    }
-  };
-  await awaitReader(Promise.all(Array.from({ length: Math.min(8, entries.length) }, resolveEntries)));
-  assertReaderActive();
-  return entries;
-}
-async function renderFoliate() {
-  const prepared = prepareReaderDocument([import("/search/static/foliate-reader/view.js?reader-v1")]);
-  const [response, bytes] = await Promise.all([prepared.response,readPreparedBytes(
-    prepared.response,prepared.engines,VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes)]);
-  assertReaderActive();
-  if (VoiceOfMLReaderSecurity.isZipContainer(extension, bytes))
-    VoiceOfMLReaderSecurity.inspectZip(bytes);
-  const view = document.createElement("foliate-view"),
-    stream = document.createElement("div");
-  view.className = "foliate-reader-view";
-  stream.className = "foliate-continuous";
-  content.replaceChildren(loadingIndicator, view, stream);
-  epubRendition = view;
-  await view.open(
-    new File([bytes], new URL(sourceUrl).pathname.split("/").pop() || "book.epub", {
-      type: response.headers.get("content-type") || "application/epub+zip"
-    })
-  );
-  assertReaderActive();
-  epubBook = view.book;
-  view.style.display = "none";
-  const sections = view.book.sections.filter((section) => section.linear !== "no");
-  await getInitialReaderRestoration();
-  const savedSection = Number(readerRestorationEntry?.foliateSection);
-  const initialSection = Number.isInteger(savedSection)
-    ? Math.max(0, Math.min(sections.length - 1, savedSection))
-    : 0;
-  initialReaderTargetSection = readerRestorationEntry?.foliateSection == null ? null : initialSection;
-  setupFoliateWindow(stream, sections);
-  if (sections[initialSection]) await foliateChapterRepository.load(initialSection);
-  if (initialSection > 0) await foliateChapterRepository.load(initialSection - 1);
-  assertReaderActive();
-  // Resolving every TOC href can be expensive for large books. The first
-  // chapter is already visible, so finish the opening path before enriching
-  // the navigation panel in the background.
-  foliateTocEntries(view, sections)
-    .then((entries) => {
-      if (entries.length && !readerAbortController.signal.aborted) setToc(entries);
-    })
-    .catch(() => {});
-  scheduleFoliateScrollSync();
-  markReaderContentReady();
-  status.textContent = "EPUB";
-}
+
 // Reading progress controls and undo.
 const progressTools = document.createElement("div");
-progressTools.className = "reader-progress-tools";
-progressTools.innerHTML =
-  '<div class="reader-progress-row"><button class="reader-chapter-prev" type="button" aria-label="上一章" title="上一章"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button><input class="reader-progress-range" type="range" min="0" max="100" step="0.1" value="0" aria-label="阅读进度"><span class="reader-progress-percent">0.0%</span><button class="reader-progress-undo" type="button" aria-label="撤销进度调整" title="撤销进度调整"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 8.3A6.5 6.5 0 1 1 6 16"/><path d="m7.2 8.3 3-.2"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg></button><button class="reader-chapter-next" type="button" aria-label="下一章" title="下一章"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button></div>';
-document.querySelector("#history-panel").appendChild(progressTools);
+readerBindings.mountProgressControls();
 const readingProgressSummary = document.createElement("div");
-readingProgressSummary.className = "reader-progress-summary";
-readingProgressSummary.innerHTML =
-  '<strong>阅读状态</strong><span class="reader-progress-summary-value">0.0%</span><button class="reader-progress-bookmark text-action" type="button">在当前位置添加书签</button>';
-progressTools.prepend(readingProgressSummary);
-readingProgressSummary
-  .querySelector(".reader-progress-bookmark")
-  .addEventListener("click", (event) => openBookmarkPopover(event.currentTarget));
-function updateReadingProgressSummary() {
-  const noToc = !navigationState.tocEntries.length && !mediaElement;
-  readingProgressSummary.hidden = !noToc;
-  if (noToc)
-    readingProgressSummary.querySelector(".reader-progress-summary-value").textContent =
-      `${readerProgressPercent().toFixed(1)}%`;
-}
-updateReadingProgressSummary();
-function syncTocTab() {
-  const tab = document.querySelector("#toc-tab");
-  if (!tab) return;
-  tab.hidden = !navigationState.tocEntries.length;
-  if (navigationState.tocEntries.length && navigationState.currentChapterIndex < 0)
-    updateNavigationState({ currentChapterIndex: 0 });
-}
-syncTocTab();
+readerBindings.mountProgressSummary();
 const progressRange = progressTools.querySelector(".reader-progress-range"),
   progressPercent = progressTools.querySelector(".reader-progress-percent"),
   progressUndo = progressTools.querySelector(".reader-progress-undo"),
@@ -6507,184 +970,8 @@ let previousProgressState = null,
   epubSeekFrame = 0,
   epubSeekTarget = null,
   epubSeekPromise = Promise.resolve();
-function updateProgressTools() {
-  if (progressSeeking) return;
-  const percent = readerProgressPercent();
-  progressRange.value = String(percent);
-  progressPercent.textContent = `${percent.toFixed(1)}%`;
-  const hasChapters = navigationState.tocEntries.length > 0,
-    hasPreviousChapter = hasChapters && navigationState.currentChapterIndex > 0,
-    hasNextChapter =
-      hasChapters &&
-      navigationState.currentChapterIndex >= 0 &&
-      navigationState.currentChapterIndex < navigationState.tocEntries.length - 1;
-  chapterPrev.hidden = !hasChapters;
-  chapterNext.hidden = !hasChapters;
-  chapterPrev.disabled = !hasPreviousChapter;
-  chapterNext.disabled = !hasNextChapter;
-  progressUndo.hidden = !previousProgressState;
-  updateReadingProgressSummary();
-  placeReadingProgress();
-}
-function captureProgressState() {
-  return foliateContinuous
-    ? captureFoliateBookmarkPosition()
-    : capability.mode === "epub-chapters"
-      ? captureChapterPosition()
-      : mediaElement
-        ? { mediaTime: mediaElement.currentTime }
-        : htmlFrame && htmlFrame.contentWindow
-          ? { htmlScrollTop: htmlFrame.contentWindow.scrollY }
-          : { scrollTop: viewport.scrollTop };
-}
-async function restoreProgressState(state, generation = beginReaderNavigation()) {
-  if (!state || !isReaderGenerationCurrent("navigation", generation)) return false;
-  if (foliateContinuous && Number.isInteger(state.foliateSection))
-    return restoreFoliateBookmarkPosition(state, generation);
-  if (capability.mode === "epub-chapters" && Number.isInteger(state.chapterIndex))
-    return restoreChapterPosition(state, generation);
-  try {
-    if (mediaElement && Number.isFinite(state.mediaTime)) {
-      const media = mediaElement;
-      if (!media.readyState)
-        await new Promise((resolve, reject) => {
-          const finish = (error) => {
-            media.removeEventListener("loadedmetadata", loaded);
-            media.removeEventListener("error", failed);
-            untrack();
-            if (error) reject(error);
-            else resolve();
-          };
-          const loaded = () => finish(),
-            failed = () => {
-              if (!media._readerSourceRetry) finish(new Error("Media metadata unavailable"));
-            };
-          const untrack = trackReaderResource(() => finish(readerAbortError()));
-          media.addEventListener("loadedmetadata", loaded, { once: true });
-          media.addEventListener("error", failed);
-        });
-      if (!isReaderGenerationCurrent("navigation", generation)) return false;
-      media.currentTime = state.mediaTime;
-    } else if (htmlFrame && htmlFrame.contentWindow && Number.isFinite(state.htmlScrollTop))
-      htmlFrame.contentWindow.scrollTo(0, state.htmlScrollTop);
-    else if (Number.isFinite(state.scrollTop)) {
-      if (capability.mode === "text") {
-        let measured = 0, batch = 0, started = performance.now();
-        for (const block of content.querySelectorAll(".reader-text-block")) {
-          if (!isReaderGenerationCurrent("navigation", generation)) return false;
-          block.style.contentVisibility = "visible";
-          const height = block.getBoundingClientRect().height;
-          block.style.containIntrinsicBlockSize = `auto ${height}px`;
-          block.style.contentVisibility = "auto";
-          measured += height;
-          if (measured > state.scrollTop + viewport.clientHeight) break;
-          if (++batch >= 8 || performance.now() - started >= 8) {
-            await waitForReader();
-            batch = 0;
-            started = performance.now();
-          }
-        }
-      }
-      if (!isReaderGenerationCurrent("navigation", generation)) return false;
-      viewport.scrollTop = state.scrollTop;
-    }
-    updateProgressTools();
-    scheduleSave();
-    return true;
-  } catch (error) {
-    reportNavigationError(error, generation);
-    return false;
-  }
-}
-function flushEpubSeek() {
-  if (epubSeekFrame) {
-    cancelAnimationFrame(epubSeekFrame);
-    epubSeekFrame = 0;
-    epubSeekPromise = seekFoliateProgress(epubSeekTarget.percent, epubSeekTarget.generation);
-  }
-  return epubSeekPromise;
-}
-function seekProgress(value, preserve = false) {
-  if (!preserve || !previousProgressState) previousProgressState = captureProgressState();
-  const generation = beginReaderNavigation(),
-    percent = Math.max(0, Math.min(100, Number(value)));
-  if (!isReaderGenerationCurrent("navigation", generation)) return;
-  if (mediaElement && mediaElement.duration)
-    mediaElement.currentTime = (mediaElement.duration * percent) / 100;
-  else if (foliateContinuous) {
-    epubSeekTarget = { percent, generation };
-    epubSeekFrame = requestAnimationFrame(() => {
-      epubSeekFrame = 0;
-      epubSeekPromise = seekFoliateProgress(percent, generation);
-    });
-  } else if (capability.mode === "epub-chapters" && chapterManifestLoader?.count) {
-    const position = Math.min(0.999999, percent / 100) * chapterManifestLoader.count;
-    epubSeekPromise = (async () => {
-      const index = Math.floor(position) + 1;
-      const article = await chapterManifestLoader(index);
-      if (!article?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
-      return restoreChapterPosition({chapterIndex:index,chapterManifest:chapterManifestUrl || sourceUrl,
-        chapterOffset:article.getBoundingClientRect().height * (position - Math.floor(position))}, generation);
-    })().catch(error => { reportNavigationError(error, generation); return false; });
-  } else if (htmlFrame && htmlFrame.contentWindow)
-    htmlFrame.contentWindow.scrollTo(
-      0,
-      (Math.max(
-        0,
-        htmlFrame.contentDocument.documentElement.scrollHeight - htmlFrame.contentWindow.innerHeight
-      ) *
-        percent) /
-        100
-    );
-  else
-    viewport.scrollTop =
-      (Math.max(0, viewport.scrollHeight - viewport.clientHeight) * percent) / 100;
-  updateProgressTools();
-  scheduleSave();
-}
-async function activateChapter(index) {
-  if (
-    index < 0 ||
-    index >= navigationState.tocEntries.length ||
-    index === navigationState.currentChapterIndex
-  )
-    return;
-  try {
-    await navigateTocEntry(index);
-  } finally {
-    updateProgressTools();
-  }
-}
-progressRange.addEventListener("pointerdown", () => {
-  beginReaderNavigation();
-  progressSeeking = true;
-  previousProgressState = captureProgressState();
-});
-progressRange.addEventListener("input", () => {
-  progressPercent.textContent = `${Number(progressRange.value).toFixed(1)}%`;
-  seekProgress(progressRange.value, true);
-});
-for (const type of ["pointerup", "pointercancel"])
-  progressRange.addEventListener(type, () => {
-    progressSeeking = false;
-    const generation = readerRuntime.currentGeneration("navigation");
-    flushEpubSeek().then(() => {
-      if (isReaderGenerationCurrent("navigation", generation)) updateProgressTools();
-    });
-  });
-progressUndo.addEventListener("click", () => {
-  const state = previousProgressState;
-  previousProgressState = null;
-  progressSeeking = false;
-  restoreProgressState(state);
-  updateProgressTools();
-});
-chapterPrev.addEventListener("click", () =>
-  activateChapter(navigationState.currentChapterIndex - 1)
-);
-chapterNext.addEventListener("click", () =>
-  activateChapter(navigationState.currentChapterIndex + 1)
-);
+
+readerBindings.bindProgressActions();
 const domSearch = createReaderDomSearch({
   content, runtime: readerRuntime, isCurrent: isReaderGenerationCurrent,
   yieldTask: waitForReader, getTocEntries: () => navigationState.tocEntries,
@@ -6699,7 +986,7 @@ const domSearch = createReaderDomSearch({
     }
   }
 });
-trackReaderResource(domSearch.dispose);
+readerBindings.ownDomSearchController();
 const {
   search: fullSearchDomMatches, clearMarks: clearFullSearchMarks,
   highlight: highlightTextParts
@@ -6734,7 +1021,7 @@ const fullSearchController = createReaderSearchController({
     focus: () => { readerPanelInteractionSerial++; }
   }
 });
-trackReaderResource(fullSearchController.dispose);
+readerBindings.ownSearchViewController();
 const fullSearchSession = fullSearchController.state;
 const {
   render: renderFullSearchResults, applyChapterPage: applyChapterSearchPage,
@@ -6746,570 +1033,10 @@ const {
 } = fullSearchController.elements;
 // Format-specific search backends publish through the shared controller.
 
-function chapterSearchModule() {
-  if (!chapterSearchModulePromise)
-    chapterSearchModulePromise = import("/search/static/reader-chapter-search.mjs").catch(
-      (error) => {
-        chapterSearchModulePromise = null;
-        throw error;
-      }
-    );
-  return chapterSearchModulePromise;
-}
-async function searchChapterBook(query, generation) {
-  if (!chapterSearchConfiguration) throw new Error("本书暂无完整全文搜索索引");
-  const module = await chapterSearchModule();
-  if (!isReaderGenerationCurrent("search", generation)) return;
-  if (chapterSearchClient?.failed) {
-    chapterSearchClient.dispose();
-    chapterSearchClient = null;
-  }
-  if (!chapterSearchClient)
-    chapterSearchClient = module.createChapterSearch(chapterSearchConfiguration);
-  const page = await chapterSearchClient.search(query, partial => {
-    if (!isReaderGenerationCurrent("search", generation)) return;
-    applyChapterSearchPage(partial);
-    renderFullSearchResults();
-    fullSearchStatus.textContent = partial.total
-      ? `${partial.total} 个结果（正在搜索… ${partial.scanned} / ${partial.chapters} 章）`
-      : `正在搜索正文… ${partial.scanned} / ${partial.chapters} 章`;
-  });
-  if (isReaderGenerationCurrent("search", generation)) applyChapterSearchPage(page);
-}
-
-async function navigateChapterSearchResult(result, generation) {
-  const article = await chapterManifestLoader?.(result.chapterIndex);
-  if (!article || !isReaderGenerationCurrent("navigation", generation)) return false;
-  const module = await chapterSearchModule();
-  if (!isReaderGenerationCurrent("navigation", generation)) return false;
-  clearFullSearchMarks();
-  const mapping = module.chapterTextMap([article._chapterSearchHead, article]);
-  const match = result.snippet.text.slice(
-    result.snippet.matchStart,
-    result.snippet.matchStart + result.snippet.matchLength
-  );
-  let start = result.start;
-  if (mapping.text.slice(start, start + result.length) !== match) {
-    // A browser may repair malformed source HTML differently from HTMLParser.
-    // Relocate only by a unique full excerpt; never guess between repeated hits.
-    const found = mapping.text.indexOf(result.snippet.text);
-    if (found < 0 || mapping.text.indexOf(result.snippet.text, found + 1) >= 0)
-      throw new Error("已加载章节，但未能准确定位这处文字");
-    start = found + result.snippet.matchStart;
-  }
-  const parts = mapping.parts(start, start + result.length, article);
-  const headText = module.chapterTextMap([article._chapterSearchHead]).text;
-  if (start < headText.length) {
-    const heading = document.createElement("p");
-    heading.className = "reader-chapter-search-heading";
-    heading.textContent = headText;
-    article.prepend(heading);
-    parts.unshift({ node: heading.firstChild, start, end: Math.min(start + result.length, headText.length) });
-  }
-  const [mark] = highlightTextParts(parts);
-  foliateScrollAnchors.invalidate();
-  (mark || article).scrollIntoView({ block: "center" });
-  foliateScrollAnchors.remember();
-  const tocIndex = navigationState.tocEntries.findIndex(
-    (entry) => entry.chapterIndex === result.chapterIndex
-  );
-  if (tocIndex >= 0) {
-    updateNavigationState({ currentChapterIndex: tocIndex });
-    updateTocCurrentMark();
-  }
-  updateProgressTools();
-  scheduleSave();
-  return true;
-}
-
-async function fullSearchFoliateMatches(query, generation) {
-  if (!epubRendition?.search) return [];
-  const groups = [], firstPage = [];
-  // Cache only visited pages for this query; never retain every match in the book.
-  const cachedPages = new Map();
-  let total = 0;
-  const toResult = (item, label, occurrence) => {
-    const excerpt = item.excerpt || { pre: "", match: query, post: "" };
-    return {
-      location: label || "电子书位置",
-      cfi: item.cfi,
-      occurrence,
-      snippet: {
-        text: `${excerpt.pre}${excerpt.match}${excerpt.post}`,
-        matchStart: excerpt.pre.length,
-        matchLength: excerpt.match.length,
-        prefix: "",
-        suffix: ""
-      }
-    };
-  };
-  fullSearchSession.pageLoader = async (requestedOffset, pageGeneration = readerRuntime.currentGeneration("search")) => {
-    const pageSize = 50;
-    const offset = fullSearchPageOffset(total, requestedOffset, pageSize);
-    if (!offset) return { total, offset, pageSize, results: firstPage.slice() };
-    const cached = cachedPages.get(offset);
-    if (cached) {
-      cachedPages.delete(offset);
-      cachedPages.set(offset, cached);
-      return cached;
-    }
-    const results = [];
-    let passed = 0;
-    for (const group of groups) {
-      if (passed + group.count <= offset) { passed += group.count; continue; }
-      const sectionOffset = Math.max(0, offset - passed);
-      const limit = Math.min(pageSize - results.length, group.count - sectionOffset);
-      for await (const batch of epubRendition.search({
-        query, index: group.index, offset: sectionOffset, limit, lean: true,
-        current: () => isReaderGenerationCurrent("search", pageGeneration)
-      }))
-        for (const [index, item] of batch.subitems.entries())
-          results.push(toResult(item, group.label, sectionOffset + index));
-      passed += group.count;
-      if (results.length === pageSize) break;
-    }
-    const page = { total, offset, pageSize, results };
-    if (isReaderGenerationCurrent("search", pageGeneration) && JSON.stringify(page).length <= 128 * 1024) {
-      cachedPages.set(offset, page);
-      if (cachedPages.size > 4) cachedPages.delete(cachedPages.keys().next().value);
-    }
-    return page;
-  };
-  for await (const group of epubRendition.search({
-    query, lean: true, limit: 50,
-    current: () => isReaderGenerationCurrent("search", generation)
-  })) {
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    if (group.count) groups.push({ index: group.index, count: group.count, label: group.label });
-    for (const [index, item] of group.subitems.entries()) {
-      if (firstPage.length === 50) break;
-      firstPage.push(toResult(item, group.label, index));
-    }
-    total += group.count;
-    fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-    updateSearchState({ results: fullSearchSession.page.results, index: -1 });
-    renderFullSearchResults();
-    fullSearchStatus.textContent = `${total} 个结果（正在搜索…）`;
-    await waitForReader();
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-  }
-  fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-  return firstPage;
-}
-async function navigateFoliateSearchResult(result, generation) {
-  const resolved = await epubRendition?.resolveNavigation?.(result.cfi);
-  if (!resolved || !isReaderGenerationCurrent("navigation", generation)) return false;
-  const section = epubBook?.sections?.[resolved.index],
-    sections = epubBook?.sections?.filter((item) => item.linear !== "no") || [],
-    visibleIndex = section ? sections.indexOf(section) : -1;
-  if (visibleIndex < 0 || !foliateSectionLoader) return false;
-  let node = await foliateSectionLoader(visibleIndex);
-  if (!isReaderGenerationCurrent("navigation", generation)) return false;
-  await waitForReader(0, true);
-  if (!isReaderGenerationCurrent("navigation", generation)) return false;
-  if (!node?.isConnected) node = await foliateSectionLoader(visibleIndex);
-  if (!node?.isConnected || !isReaderGenerationCurrent("navigation", generation)) return false;
-  clearFullSearchMarks();
-  let target;
-  if (typeof resolved.anchor === "function" && node._resolveSearchAnchor) {
-    const parts = node._resolveSearchAnchor(resolved.anchor);
-    if (!parts?.length) return false;
-    [target] = highlightTextParts(parts);
-  } else {
-    // Some non-CFI engines expose only a section locator.
-    const matches = await fullSearchDomMatches(
-      foliateSectionRoot(node),
-      "电子书位置",
-      searchState.query,
-      readerRuntime.currentGeneration("search"),
-      false,
-      result.occurrence || 0,
-      generation
-    );
-    target = matches[0]?.target;
-  }
-  if (!isReaderGenerationCurrent("navigation", generation) || !target) return false;
-  const targetRect = target.getBoundingClientRect(),
-    viewportRect = viewport.getBoundingClientRect();
-  foliateScrollAnchors.invalidate();
-  viewport.scrollTop = Math.max(
-    0,
-    viewport.scrollTop +
-      targetRect.top -
-      viewportRect.top -
-      (viewport.clientHeight - targetRect.height) / 2
-  );
-  const tocIndex = navigationState.tocEntries.findIndex(
-    (entry) => entry.sectionIndex === visibleIndex
-  );
-  if (tocIndex >= 0) {
-    updateNavigationState({ currentChapterIndex: tocIndex });
-    updateTocCurrentMark();
-  }
-  updateProgressTools();
-  scheduleSave();
-  foliateScrollAnchors.remember();
-  return true;
-}
-async function ensurePdfBookSearchClient(manifest) {
-  let textUrl = "";
-  let partitioned = null;
-  if (manifest?.text_layer) {
-    pdfTextLayerRepository ||= createPdfV3Repository(manifest.source_sha256, manifest.page_count);
-    const index = await pdfTextLayerRepository.textIndex(manifest.text_layer);
-    manifest = { ...manifest, book_text: index.book_text };
-    textUrl = v3ResourceUrl(index.book_text);
-    if (index.search_partitions) partitioned = {generation: index.generation,
-      partitions: index.search_partitions.map(part => ({start: part.start, end: part.end,
-        url: v3ResourceUrl(part.resource), bytes: part.resource.bytes, sha256: part.resource.sha256}))};
-  }
-  if (!manifest?.book_text?.path) throw new Error("本书集中全文尚未生成");
-  if (!pdfBookSearchModulePromise)
-    pdfBookSearchModulePromise = import("/search/static/reader-pdf-book-search.mjs").catch(error => {
-      pdfBookSearchModulePromise = null;
-      throw error;
-  });
-  const module = await pdfBookSearchModulePromise;
-  assertReaderActive();
-  if (pdfBookSearchClient?.failed) {
-    pdfBookSearchClient.dispose();
-    pdfBookSearchClient = null;
-  }
-  if (!pdfBookSearchClient)
-    pdfBookSearchClient = module.createPdfBookSearch({
-      url: textUrl || pdfOcrSource().assetUrl(manifest.book_text.path),
-      sha256: manifest.book_text.sha256,
-      bytes: manifest.book_text.bytes,
-      pageCount: documentState.pageCount,
-      sourceSha: manifest.source_sha256,
-      ...partitioned
-    });
-  return pdfBookSearchClient;
-}
-async function prefetchPdfBookSearch() {
-  if (readerAbortController.signal.aborted || pdfBookSearchPrefetchPromise || !ocrManifestUrl ||
-      !["pdf", "pdf-pages"].includes(capability.mode) || navigator.connection?.saveData) return;
-  const connection = navigator.connection;
-  if (["slow-2g", "2g"].includes(connection?.effectiveType)) return;
-  pdfBookSearchPrefetchPromise = (async () => {
-    const manifest = await loadPdfOcrManifest();
-    const bytes = Number(manifest?.book_text?.bytes);
-    if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > PDF_BOOK_SEARCH_PREFETCH_MAX_BYTES) return;
-    const client = await ensurePdfBookSearchClient(manifest);
-    await client.prefetch();
-  })().catch(() => {});
-}
-function schedulePdfBookSearchPrefetch() {
-  if (pdfBookSearchPrefetchTimer || pdfBookSearchPrefetchPromise || !ocrManifestUrl ||
-      !["pdf", "pdf-pages"].includes(capability.mode) || navigator.connection?.saveData) return;
-  pdfBookSearchPrefetchTimer = setTimeout(() => {
-    pdfBookSearchPrefetchTimer = 0;
-    const idle = window.requestIdleCallback || ((callback) => setTimeout(callback, 0));
-    idle(() => prefetchPdfBookSearch(), { timeout: 1500 });
-  }, PDF_BOOK_SEARCH_PREFETCH_DELAY);
-}
-async function searchConcentratedPdf(query, generation) {
-  const manifest = await loadPdfOcrManifest();
-  const client = await ensurePdfBookSearchClient(manifest);
-  let firstPageResults = [];
-  const attach = (page) => {
-    const results = page.results.map((hit, position) => {
-      const previous = page.offset === 0 ? firstPageResults[position] : null;
-      if (previous?.page === hit.page && previous.start === hit.start && previous.length === hit.length)
-        return previous;
-      return { ...hit, location: `第 ${hit.page} 页`, activate: async nav => {
-        if (!await goToPage(hit.page, nav) || !isReaderGenerationCurrent("navigation", nav))
-          return false;
-        content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
-        const shell = content.querySelector(`.reader-page[data-page="${hit.page}"]`);
-        if (shell && (hit.boxes.length || hit.textGeneration)) {
-          let boxes = hit.boxes;
-          if (hit.textGeneration) {
-            const layer = await pdfTextLayerRepository.textPage(manifest.text_layer, hit.page);
-            if (!isReaderGenerationCurrent("navigation", nav)) return false;
-            if (layer.generation !== hit.textGeneration) throw new Error("PDF_V3_GENERATION_CHANGED");
-            boxes = hitBoxes({text: layer.text, text_spans: layer.regions.map(region => ({
-              start: region.start, end: region.end, box: region.box, precision: region.mapping_precision
-            }))}, hit.start, hit.length);
-          }
-          if (pdfV3Manifest) {
-            await renderPdfOcrText(shell);
-            if (!isReaderGenerationCurrent("navigation", nav)) return false;
-          }
-          paintTextHit(shell, boxes, hit);
-          shell.querySelector(".reader-text-hit-box")?.scrollIntoView({ block: "center" });
-        }
-        return true;
-      } };
-    });
-    if (page.offset === 0) firstPageResults = results;
-    return { ...page, results };
-  };
-  fullSearchSession.pageLoader = async offset => attach(await client.page(offset));
-  const page = await client.search(query, partial => {
-    if (!isReaderGenerationCurrent("search", generation)) return;
-    fullSearchSession.page = attach(partial);
-    updateSearchState({ results: fullSearchSession.page.results, index: -1 });
-    renderFullSearchResults();
-    fullSearchStatus.textContent = partial.total
-      ? `${partial.total} 个结果（正在搜索… ${partial.scanned} / ${partial.pages} 页）`
-      : `正在搜索正文… ${partial.scanned} / ${partial.pages} 页`;
-  });
-  if (!isReaderGenerationCurrent("search", generation)) return [];
-  fullSearchSession.page = attach(page);
-  return fullSearchSession.page.results;
-}
-function makePdfSearchPageLoader(groups, total, pattern, firstPage) {
-  const pdf = pdfDocument;
-  return async (requestedOffset, generation = readerRuntime.currentGeneration("search")) => {
-    const pageSize = 50, results = [];
-    const offset = fullSearchPageOffset(total, requestedOffset, pageSize);
-    if (!offset) return { total, offset, pageSize, results: firstPage.slice() };
-    let skipped = 0;
-    for (const group of groups) {
-      if (skipped + group.count <= offset) {
-        skipped += group.count;
-        continue;
-      }
-      const text = await loadPdfSearchText(pdf, group.page, generation);
-      let examined = 0;
-      for (const match of text.matchAll(pattern)) {
-        if (++examined % 2048 === 0) {
-          await waitForReader();
-          if (!isReaderGenerationCurrent("search", generation))
-            throw new DOMException("Search cancelled", "AbortError");
-        }
-        if (skipped++ < offset) continue;
-        results.push({
-          location: `第 ${group.page} 页`,
-          snippet: fullSearchSnippet(text, match.index, match[0].length),
-          activate: (navigationGeneration) => goToPage(group.page, navigationGeneration)
-        });
-        if (results.length === pageSize) break;
-      }
-      if (results.length === pageSize) break;
-    }
-    return { total, offset, pageSize, results };
-  };
-}
-function publishPdfSearchProgress(generation, groups, total, pattern, firstPage, scanned, pages) {
-  if (!isReaderGenerationCurrent("search", generation)) return false;
-  fullSearchSession.pageLoader = makePdfSearchPageLoader(groups, total, pattern, firstPage);
-  fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-  updateSearchState({ results: fullSearchSession.page.results, index: -1 });
-  renderFullSearchResults();
-  fullSearchStatus.textContent = total
-    ? `${total} 个结果（正在搜索… ${scanned} / ${pages} 页）`
-    : `正在搜索正文… ${scanned} / ${pages} 页，暂未找到匹配`;
-  return true;
-}
 const pdfSearchTextCache = new Map();
 let pdfPersistentTextStore = null, pdfPersistentTextOpening = null, pdfPersistentTextVersion = null;
-async function getPdfPersistentTextStore(pdf) {
-  const version = pdfFetchPolicy?.identity;
-  if (!version || ocrManifestUrl || readerAbortController.signal.aborted) return null;
-  if (pdfPersistentTextVersion !== version) {
-    pdfPersistentTextStore?.dispose();
-    pdfPersistentTextStore = null;
-    pdfPersistentTextVersion = version;
-    const pending = (async () => {
-      let timer;
-      const module = await awaitReader(Promise.race([import("./reader-pdf-text-store.mjs"),
-        new Promise(resolve => {timer=setTimeout(()=>resolve(null),1000);})])).finally(()=>clearTimeout(timer));
-      if (!module) return null;
-      const key = await module.pdfTextStoreKey({source:sourceUrl,version,pageCount:pdf.numPages,
-        engine:VoiceOfMLReaderResources.vendors.pdf.sha256});
-      if (!key || readerAbortController.signal.aborted || pdfFetchPolicy?.identity !== version || pdfPersistentTextOpening !== pending) return null;
-      return pdfPersistentTextStore = module.createPdfTextStore(key,{signal:readerAbortController.signal});
-    })().catch(() => null);
-    pdfPersistentTextOpening = pending;
-  }
-  return pdfPersistentTextStore || pdfPersistentTextOpening;
-}
+
 const PDF_SEARCH_TEXT_CACHE_BYTES = 8 * 1024 * 1024;
 let pdfSearchTextCacheBytes = 0;
-function cachePdfSearchText(page, text) {
-  const bytes = text.length * 2;
-  if (bytes > PDF_SEARCH_TEXT_CACHE_BYTES) return;
-  const previous = pdfSearchTextCache.get(page);
-  if (previous !== undefined) {
-    pdfSearchTextCacheBytes -= previous.length * 2;
-    pdfSearchTextCache.delete(page);
-  }
-  pdfSearchTextCache.set(page, text);
-  pdfSearchTextCacheBytes += bytes;
-  while (pdfSearchTextCacheBytes > PDF_SEARCH_TEXT_CACHE_BYTES) {
-    const oldest = pdfSearchTextCache.keys().next().value;
-    pdfSearchTextCacheBytes -= pdfSearchTextCache.get(oldest).length * 2;
-    pdfSearchTextCache.delete(oldest);
-  }
-}
-trackReaderResource(() => {
-  pdfPersistentTextStore?.dispose();
-  pdfPersistentTextStore = pdfPersistentTextOpening = pdfPersistentTextVersion = null;
-  pdfSearchTextCache.clear();
-  pdfSearchTextCacheBytes = 0;
-});
-async function loadPdfSearchText(pdf, page, generation) {
-  if (!isReaderGenerationCurrent("search", generation))
-    throw new DOMException("Search cancelled", "AbortError");
-  let text = pdfSearchTextCache.get(page);
-  if (text !== undefined) {
-    pdfSearchTextCache.delete(page);
-    pdfSearchTextCache.set(page, text);
-    return text;
-  }
-  const store = await getPdfPersistentTextStore(pdf);
-  const version = pdfFetchPolicy?.identity;
-  const stored = store ? await store.get(page).catch(() => null) : null;
-  if (!isReaderGenerationCurrent("search", generation)) throw readerAbortError();
-  if (stored !== null && version && version === pdfFetchPolicy?.identity) {
-    cachePdfSearchText(page, stored);
-    return stored;
-  }
-  const pdfPage = await awaitReader(pdf.getPage(page));
-  if (!isReaderGenerationCurrent("search", generation))
-    throw new DOMException("Search cancelled", "AbortError");
-  const textContent = await loadPdfTextContent(page, pdfPage, generation);
-  if (!isReaderGenerationCurrent("search", generation))
-    throw new DOMException("Search cancelled", "AbortError");
-  text = normalizePdfSearchText(pdfTextContent(textContent.items));
-  cachePdfSearchText(page, text);
-  if (store && version && version === pdfFetchPolicy?.identity) store.put(page,text).catch(() => {});
-  return text;
-}
-async function fullSearchPdfMatches(query, generation) {
-  const pdf = pdfDocument, groups = [], firstPage = [],
-    pattern = new RegExp(fullSearchEscape(normalizePdfSearchText(query)), "giu");
-  if (!pdf) return [];
-  const pending = new Map();
-  let nextPage = 1;
-  const fill = () => {
-    while (pending.size < 2 && nextPage <= pdf.numPages && isReaderGenerationCurrent("search", generation)) {
-      const page = nextPage++;
-      pending.set(page, loadPdfSearchText(pdf, page, generation).then(
-        text => ({ text }), error => ({ error })));
-    }
-  };
-  fill();
-  let total = 0, hasText = false;
-  for (let page = 1; page <= pdf.numPages; page++) {
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    const result = await pending.get(page);
-    pending.delete(page);
-    if (!isReaderGenerationCurrent("search", generation)) return [];
-    if (result.error) throw result.error;
-    const text = result.text;
-    fill();
-    hasText ||= !!text.trim();
-    let count = 0;
-    for (const match of text.matchAll(pattern)) {
-      count++;
-      if (firstPage.length < 50) firstPage.push({
-        location: `第 ${page} 页`,
-        snippet: fullSearchSnippet(text, match.index, match[0].length),
-        activate: (navigationGeneration) => goToPage(page, navigationGeneration)
-      });
-      if (count % 2048 === 0) {
-        await waitForReader();
-        if (!isReaderGenerationCurrent("search", generation)) return [];
-      }
-    }
-    if (count) {
-      groups.push({ page, count });
-      total += count;
-      highlightPdfText(content.querySelector(`.reader-page[data-page="${page}"]`), query);
-    }
-    if (page === 1 || (count && total <= 50) || page % 8 === 0 || page === pdf.numPages) {
-      if (!publishPdfSearchProgress(generation, groups, total, pattern, firstPage, page, pdf.numPages)) return [];
-      await waitForReader(0, true);
-    }
-  }
-  if (!hasText) throw new Error("此 PDF 尚无可搜索文字层，需要完成 OCR 后才能搜索正文");
-  publishPdfSearchProgress(generation, groups, total, pattern, firstPage, pdf.numPages, pdf.numPages);
-  return fullSearchSession.page.results;
-}
 
-async function searchReaderText(query, generation) {
-  if (capability.mode === "pdf" && !ocrManifestUrl) {
-    await fullSearchPdfMatches(query, generation);
-  }
-  else if (["pdf", "pdf-pages"].includes(capability.mode)) {
-    publishSearchResults(generation, await searchConcentratedPdf(query, generation));
-  }
-  else if (capability.mode === "foliate")
-    publishSearchResults(generation, await fullSearchFoliateMatches(query, generation));
-  else if (capability.mode === "epub-chapters") await searchChapterBook(query, generation);
-  else if (["text", "markdown", "docx"].includes(capability.mode))
-    publishSearchResults(
-      generation,
-      await fullSearchDomMatches(content, "阅读位置", query, generation, true)
-    );
-  else if (capability.mode === "html")
-    publishSearchResults(
-      generation,
-      htmlFrame?.contentDocument?.body
-        ? await fullSearchDomMatches(
-            htmlFrame.contentDocument.body,
-            "HTML 阅读位置",
-            query,
-            generation,
-            true
-          )
-        : []
-    );
-  else throw new Error("此格式没有可搜索文本");
-}
-
-function syncCapabilityControls() {
-  content.dataset.mode = capability.mode || "unsupported";
-  pageInvertToggle.hidden = !["pdf", "pdf-pages"].includes(capability.mode);
-  document.querySelector(".page-controls").hidden = !capability.features.pagination;
-  document.querySelector(".zoom-controls").hidden = !capability.features.zoom;
-  mediaTab.hidden = !capability.features.media;
-  fullSearchButton.hidden = !capability.features.search;
-  bookmarkRibbon.hidden = !capability.features.bookmarks;
-  readingProgressSummary.querySelector(".reader-progress-bookmark").hidden =
-    !capability.features.bookmarks;
-  if (
-    (panelState.selected === "media" && mediaTab.hidden) ||
-    (panelState.selected === "full-search" && fullSearchButton.hidden)
-  )
-    selectPanel("toc");
-}
-registerReaderFormatAdapters();
-syncCapabilityControls();
-updateProgressTools();
-start().catch((error) => {
-  if (readerAbortController.signal.aborted || error?.name === "AbortError") return;
-  console.error(error);
-  fail("阅读文件解析失败，请刷新后重试，或下载原文件。", classifyReaderError(error));
-});
-
-function memoizeDocxResource(load, keyFor, isReleased) {
-  const pending = new Map();
-  return (...args) => {
-    if (isReleased()) return Promise.resolve(null);
-    const key = keyFor(...args);
-    if (!key) return load(...args);
-    if (!pending.has(key)) {
-      const task = Promise.resolve().then(() => isReleased() ? null : load(...args));
-      pending.set(key, task);
-      task.catch(() => { if (pending.get(key) === task) pending.delete(key); });
-    }
-    return pending.get(key);
-  };
-}
-
-function memoizeDocxAssets(doc, isReleased) {
-  if (typeof doc.getPathById !== "function") return;
-  for (const [name, part] of [["loadDocumentImage", "documentPart"],
-    ["loadNumberingImage", "numberingPart"], ["loadFont", "fontTablePart"]]) {
-    if (typeof doc[name] !== "function") continue;
-    const original = doc[name].bind(doc);
-    doc[name] = memoizeDocxResource(original, (id, parameter) => {
-      const path = doc.getPathById(name === "loadDocumentImage" ? parameter || doc[part] : doc[part], id);
-      return path ? (name === "loadFont" ? `${path}\u0000${parameter}` : path) : null;
-    }, isReleased);
-  }
-}
+readerBindings.ownPdfSearchStorageAndStart();

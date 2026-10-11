@@ -38,31 +38,32 @@ jobs:
       - name: Validate source JavaScript syntax
         run: |
           node --check static/app.js
-          node --check static/index-worker.js
+          node --check static/search/index-worker.js
           node --check static/reader.js
-          node --check static/reader-pdf-text.js
-          node --check sw.js
+          node --check static/reader/pdf/reader-pdf-text.js
+          node --check static/sw.js
       - name: Build static site
         run: |
           mkdir -p _site/static
-          cp index.html manifest.json sw.js _site/
-          cp -a icons data _site/
-          node scripts/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
-          node scripts/copy_reader_vendor.mjs _site/static/vendor
-          node scripts/compose_app.mjs > "$RUNNER_TEMP/app-composed.js"
+          cp static/index.html static/manifest.json static/sw.js _site/
+          cp -a static/icons _site/icons
+          cp -a data _site/
+          node scripts/data/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
+          node scripts/build/copy_reader_vendor.mjs _site/static/vendor
+          node scripts/build/compose_app.mjs > "$RUNNER_TEMP/app-composed.js"
           npx --yes esbuild@0.28.2 "$RUNNER_TEMP/app-composed.js" --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
           for file in $(node -e 'console.log(require("./static/reader-resources.js").buildFiles("github").filter(f => f !== "app.js").join(" "))'); do
-            npx --yes esbuild@0.28.2 "static/$file" --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile="_site/static/$file"
+            flags=$(node -e 'console.log(require("./static/reader-resources.js").bundleArguments(process.argv[1]).join(" "))' "$file")
+            npx --yes esbuild@0.28.2 "static/$file" $flags --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile="_site/static/$file"
           done
           cp static/reader.html _site/static/reader.html
-          cp -a static/icons _site/static/icons
           cp -a static/foliate-reader _site/static/foliate-reader
-          npx --yes esbuild@0.28.2 sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
+          npx --yes esbuild@0.28.2 static/sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
           node --check _site/static/app.js
-          node --check _site/static/index-worker.js
+          node --check _site/static/search/index-worker.js
           node --check _site/sw.js
-          node scripts/build_static_assets.mjs
-          node scripts/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
+          node scripts/build/build_static_assets.mjs
+          node scripts/build/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
       - name: Setup Pages
         uses: actions/configure-pages@v6
       - name: Upload artifact

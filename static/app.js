@@ -999,7 +999,7 @@ function ensureCorpusWorker() {
   if (corpusWorkerStartPromise) return corpusWorkerStartPromise;
   if (!window.Worker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Web Workers are unavailable"));
   corpusWorkerStartPromise = new Promise(function(resolve, reject) {
-    const worker = new Worker("static/index-worker.js");
+    const worker = new Worker("static/search/index-worker.js");
     corpusWorker = worker;
     worker.addEventListener("message", function(event) {
       const message = event.data || {};

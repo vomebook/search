@@ -3,10 +3,10 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
-import { createPdfBookSearch } from '../static/reader-pdf-book-search.mjs';
-import { validateBookText, searchBookText } from '../static/reader-book-text.js';
+import { createPdfBookSearch } from '../static/reader/search/reader-pdf-book-search.mjs';
+import { validateBookText, searchBookText } from '../static/reader/search/reader-book-text.js';
 
-const source=fs.readFileSync(new URL('../static/reader-pdf-book-search-worker.mjs',import.meta.url),'utf8');
+const source=fs.readFileSync(new URL('../static/reader/search/workers/reader-pdf-book-search-worker.mjs',import.meta.url),'utf8');
 const start=source.indexOf('async function readBounded('), end=source.indexOf('\nasync function loadBook()',start);
 const read=vm.runInNewContext('const limit=1024; const aborted=()=>new DOMException("cancelled","AbortError");'+
   source.slice(start,end)+';readBounded',{TextDecoder,Uint8Array,DOMException});

@@ -35,7 +35,7 @@ class ReaderVisualTests(unittest.TestCase):
                 with self.subTest(viewport=name, theme=theme):
                     context = self.browser.new_context(viewport={"width": width, "height": height}, color_scheme=theme)
                     page = context.new_page(); page.add_init_script(f"localStorage.setItem('theme', '{theme}')")
-                    page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                    page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                     page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/plain", body=("Reader visual fixture\n" * 80).encode()))
                     page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=txt&title=Visual", wait_until="domcontentloaded")
                     page.locator(".reader-text").wait_for(); page.add_style_tag(content="*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}")

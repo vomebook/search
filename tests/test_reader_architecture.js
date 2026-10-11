@@ -1,18 +1,21 @@
 const fs = require('fs')
 const path = require('path')
 const assert = require('assert')
-const { assertCode, codePattern } = require('./reader_source_contract')
+const { assertCode, codePattern, readReaderSource } = require('./reader_source_contract')
 
 const root = path.resolve(__dirname, '..')
-const reader = fs.readFileSync(path.join(root, 'static/reader.js'), 'utf8')
-const searchController = fs.readFileSync(path.join(root, 'static/reader-search-controller.mjs'), 'utf8')
-assertCode(reader, 'import { createReaderSearchController } from "./reader-search-controller.mjs"')
+const readerEntry = fs.readFileSync(path.join(root, 'static/reader.js'), 'utf8')
+const reader = readReaderSource(root)
+assert.doesNotMatch(readerEntry, /^\s*(?:async\s+)?function\s+/m)
+assertCode(readerEntry, 'from "./reader/reader-components.mjs"')
+const searchController = fs.readFileSync(path.join(root, 'static/reader/search/reader-search-controller.mjs'), 'utf8')
+assertCode(reader, 'import { createReaderSearchController } from "./reader/search/reader-search-controller.mjs"')
 assertCode(reader, 'trackReaderResource(fullSearchController.dispose)')
 assertCode(reader, 'backend: { mode: () => capability.mode, search: searchReaderText')
 assert.doesNotMatch(reader, /dataset\.panelView\s*=\s*"full-search"/)
 assert.doesNotMatch(searchController, /new Worker|\bfetch\(|import\(/)
-const domSearch = fs.readFileSync(path.join(root, 'static/reader-dom-search.mjs'), 'utf8')
-assertCode(reader, 'import { createReaderDomSearch, fullSearchEscape, fullSearchSnippet, fullSearchPageOffset } from "./reader-dom-search.mjs"')
+const domSearch = fs.readFileSync(path.join(root, 'static/reader/search/reader-dom-search.mjs'), 'utf8')
+assertCode(reader, 'import { createReaderDomSearch, fullSearchEscape, fullSearchSnippet, fullSearchPageOffset } from "./reader/search/reader-dom-search.mjs"')
 assertCode(reader, 'trackReaderResource(domSearch.dispose)')
 assertCode(reader, 'getTocEntries: () => navigationState.tocEntries')
 assertCode(reader, 'domSearch.pruneMarks()')
@@ -21,6 +24,12 @@ assert.doesNotMatch(domSearch, /new Worker|\bfetch\(|import\(|readerRuntime|navi
 assertCode(domSearch, 'const stopGeneration = runtime.events.on("generation"')
 assertCode(domSearch, 'function dispose() { stopGeneration()')
 assertCode(domSearch, 'publishPage(page(0), page, true)')
+const imageLoader = fs.readFileSync(path.join(root, 'static/reader/formats/reader-image-loader.mjs'), 'utf8')
+assertCode(reader, 'import { createReaderImageLoader } from "./reader/formats/reader-image-loader.mjs"')
+assertCode(reader, 'trackResource: trackReaderResource')
+assertCode(reader, 'await imageLoader.load(image, target, renderController.signal)')
+assert.doesNotMatch(reader, /function (?:waitReaderImage|loadReaderImage)\(/)
+assert.doesNotMatch(imageLoader, /readerRuntime|readerContentUrl|pdfPageManifest|documentState|new Image|import\(/)
 const css = fs.readFileSync(path.join(root, 'static/reader.css'), 'utf8')
 const view = fs.readFileSync(path.join(root, 'static/foliate-reader/view.js'), 'utf8')
 for (const marker of ["import('./epub.js')", "import('./mobi.js')", "import('./fb2.js')", "import('./pdf.js')", "isFBZ(file)", "isFB2(file)"]) assert.ok(view.includes(marker), marker)
@@ -80,7 +89,7 @@ assert.match(reader, /function schedulePdfManifestPrefetch\(page\)/)
 assert.match(reader, /image\.fetchPriority = "low"/)
 assert.match(reader, /pdfManifestPrefetchActive\.add\(record\)/)
 assert.match(reader, /queuePdfManifestPrefetch\(\)/)
-const pdfPageRender = reader.match(/function renderPdfManifestShell\(shell, force = false, priority = false\) \{[\s\S]*?\n\}\nfunction renderPdfShell/)[0]
+const pdfPageRender = reader.match(/function renderPdfManifestShell\(shell, force = false, priority = false\) \{[\s\S]*?\n\}\s+function renderPdfShell/)[0]
 assert.match(pdfPageRender, /(?:const|let) target = pdfPageManifest\.pageUrl\(entry\.page\)/)
 assert.doesNotMatch(pdfPageRender, /entry\.j|entry\.w|\.jxl/)
 assert.match(reader, /chapterManifestObserver\?\.disconnect\(\)/)
@@ -173,7 +182,7 @@ assert.match(css, /min-height:\s*0\s*!important;\s*height:\s*auto\s*!important;/
 assert.strictEqual(view.includes('.find(x => x.index = resolved.index)'), false)
 assert.strictEqual(view.includes('.find(x => x.index === resolved.index)'), true)
 const vm = require('vm')
-const priorityFunctions = reader.match(/function pdfPagePriority\(shell\) \{[\s\S]*?\n\}\nfunction normalizePdfPriority\(priority\) \{[\s\S]*?\n\}/)
+const priorityFunctions = reader.match(/function pdfPagePriority\(shell\) \{[\s\S]*?\n\}\s+function normalizePdfPriority\(priority\) \{[\s\S]*?\n\}/)
 assert.ok(priorityFunctions, 'PDF page priority functions')
 const priorityContext = { viewport: { getBoundingClientRect: () => ({ top: 0, bottom: 100 }) }, PDF_PREFETCH_MARGIN: 2400 }
 vm.runInNewContext(priorityFunctions[0], priorityContext)
@@ -182,8 +191,8 @@ for (const [top, bottom, expected] of [[10, 90, 3], [70, 160, 2], [110, 190, 1],
 assert.strictEqual(priorityContext.normalizePdfPriority(true), 3)
 const sandbox = { self: {} }; sandbox.self = sandbox;
 function loadExports(file, name) { vm.runInNewContext(fs.readFileSync(path.join(root, 'static', file), 'utf8'), sandbox); return sandbox[name]; }
-const contractFeatures = loadExports('reader-contract.js', 'VoiceOfMLReader').features
-const runtimeMatrix = loadExports('reader-runtime.js', 'VoiceOfMLReaderRuntime').FEATURE_MATRIX
+const contractFeatures = loadExports('reader/core/reader-contract.js', 'VoiceOfMLReader').features
+const runtimeMatrix = loadExports('reader/core/reader-runtime.js', 'VoiceOfMLReaderRuntime').FEATURE_MATRIX
 assert.strictEqual(runtimeMatrix, contractFeatures)
 for (const mode of Object.keys(contractFeatures)) assert.strictEqual(JSON.stringify(runtimeMatrix[mode]), JSON.stringify(contractFeatures[mode]), mode)
 assert.strictEqual(JSON.stringify(runtimeMatrix.unsupported), JSON.stringify({ toc: false, search: false, zoom: false, bookmarks: false, pagination: false, media: false }))
@@ -226,7 +235,7 @@ for (const [mode, adapter] of registered) {
   assert.deepStrictEqual(calls.splice(0), [['restoreFormat', mode, entry, 17], ['disposeFormatResources', mode]])
 }
 const html = fs.readFileSync(path.join(root, 'static/reader.html'), 'utf8')
-const securityScript = html.indexOf('src="/search/static/reader-security.js"')
-assert.ok(securityScript >= 0 && securityScript < html.indexOf('src="/search/static/reader-contract.js"'))
+const securityScript = html.indexOf('src="/search/static/reader/core/reader-security.js"')
+assert.ok(securityScript >= 0 && securityScript < html.indexOf('src="/search/static/reader/core/reader-contract.js"'))
 assertCode(reader, 'readerRuntime.track(window.__VOICE_PDF_PRELOAD__)')
 console.log('reader architecture contracts passed')

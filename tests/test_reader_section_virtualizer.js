@@ -6,7 +6,7 @@ const vm = require("vm");
 function loadVirtualizer(options) {
   const sandbox = { self: {} };
   sandbox.self = sandbox;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-section-virtualizer.js"), "utf8"), sandbox);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/formats/reader-section-virtualizer.js"), "utf8"), sandbox);
   return sandbox.VoiceOfMLReaderVirtual.createSectionVirtualizer(options);
 }
 

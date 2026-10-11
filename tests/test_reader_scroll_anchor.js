@@ -6,7 +6,7 @@ const vm = require("vm");
 function loadManager(options) {
   const sandbox = { self: {} };
   sandbox.self = sandbox;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-scroll-anchor.js"), "utf8"), sandbox);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/ui/reader-scroll-anchor.js"), "utf8"), sandbox);
   return sandbox.VoiceOfMLReaderScroll.createScrollAnchorManager(options);
 }
 

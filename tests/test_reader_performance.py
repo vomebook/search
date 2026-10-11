@@ -262,7 +262,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.context = self.browser.new_context(viewport={"width": 1440, "height": 900})
         self.page = self.context.new_page()
         self.pdf_requested_at = None
-        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         self.page.route("**/static/vendor/pdf.min.*.mjs", self.route_pdf)
         self.page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/pdf", body=b"pdf"))
 
@@ -602,7 +602,7 @@ class ReaderPerformanceTest(unittest.TestCase):
 
         mobile_context = self.browser.new_context(viewport={"width": 390, "height": 844})
         mobile_page = mobile_context.new_page()
-        mobile_page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        mobile_page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         mobile_page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PDF_MODULE))
         mobile_page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/pdf", body=b"pdf"))
         query = json.dumps(SOURCE_URL)[1:-1]
@@ -680,7 +680,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(extension=extension):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844})
                 page = context.new_page()
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 if extension == "md":
                     page.route("**/static/vendor/marked.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
                     page.route("**/static/vendor/purify.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
@@ -764,7 +764,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844})
                 page = context.new_page()
                 source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/page-manifest.json"
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route, _request, manifest=manifest: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
                 page.route("https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/**", lambda route: route.fulfill(status=404, body=b""))
                 page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages&title=Converted", wait_until="domcontentloaded")
@@ -780,7 +780,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
         root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 4}
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         def serve_page(route, _request):
             if not route.request.url.endswith("page-000004.webp"):
@@ -891,7 +891,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3, "toc": [{"title": "第一章", "page": 1, "depth": 0}, {"title": "第二章", "page": 2, "depth": 1}]}
         # Three wide pages must fit even the minimum retained-pixel budget.
         wide_page = b'<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="white"/></svg>'
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-resolve?id=wide-pages", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"url": source, "download": source, "extension": "pdf-pages", "original_extension": "pdf", "title": "Converted"})))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         page.route(f"{root}/pages/**", lambda route: route.fulfill(status=200, content_type="image/svg+xml", body=wide_page))
@@ -1368,7 +1368,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = root + "/page-manifest.json"
         manifest = {"version": 2, "kind": "pdf-pages", "source_sha256": "a" * 64,
                     "profile": "test", "page_count": 5000}
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route(source, lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         page.route(f"{root}/pages/**", lambda route: route.fulfill(status=200, content_type="image/webp", body=IMAGE_FIXTURES["webp"][1]))
@@ -1602,7 +1602,7 @@ class ReaderPerformanceTest(unittest.TestCase):
           listBookmarks: (url) => new Promise((resolve) => setTimeout(() => resolve([{id:'local', url, title:'Current book', label:'Current mark', createdAt:1}]), 180)),
           listAllBookmarks: () => new Promise((resolve) => setTimeout(() => resolve([{id:'all', url:'other', readerUrl:location.href, title:'All book', label:'All mark', createdAt:2}]), 10))
         });"""
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=store))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=store))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/plain", body=b"Reader"))
         source = urllib.parse.quote("https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/race.txt", safe="")
         page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=txt&title=Race", wait_until="domcontentloaded")
@@ -1619,7 +1619,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_truncated_epub_reports_source_damage(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=b"PK\x03\x04truncated"))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/damaged.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Damaged", wait_until="domcontentloaded")
@@ -1659,7 +1659,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(case=name):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844})
                 page = context.new_page()
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 def serve_limited(route, _request, manifest=manifest, headers=manifest_headers, chapter_headers=chapter_headers):
                     if chapter_headers and "chapter.xhtml" in route.request.url:
                         route.fulfill(status=200, content_type="text/html", headers=chapter_headers, body=b"<h1>chapter</h1>")
@@ -1684,7 +1684,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         for extension in ("docx", "epub"):
             with self.subTest(extension=extension):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844}); page = context.new_page()
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.route("**/static/vendor/jszip.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.JSZip=function(){window.__archiveParserStarted=true};"))
                 page.route("**/static/vendor/docx-preview.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.docx={parseAsync(){window.__archiveParserStarted=true}};"))
                 page.route("**/static/foliate-reader/view.js*", lambda route: route.fulfill(status=200, content_type="text/javascript", body="customElements.define('foliate-view', class extends HTMLElement { open() { window.__archiveParserStarted=true; throw new Error('parser must not start'); } });"))
@@ -1697,7 +1697,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 self.assertFalse(page.evaluate("window.__archiveParserStarted === true")); context.close()
 
     def test_actual_store_broadcasts_progress_and_bookmark_updates_between_readers(self):
-        self.page.unroute("**/static/reader-store.js")
+        self.page.unroute("**/static/reader/core/reader-store.js")
         self.page.unroute("https://voiceofml-search.hf.space/api/reader-content**")
         self.page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/plain", body=b"Shared reader"))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/shared.txt"
@@ -1722,7 +1722,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(extension=extension):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844})
                 page = context.new_page()
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 if extension == "md":
                     page.route("**/static/vendor/marked.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.marked={parse:()=>'<h1>Markdown one</h1><p style=\"height:1000px\"></p><h2>Markdown two</h2>'};"))
                     page.route("**/static/vendor/purify.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
@@ -1845,7 +1845,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.addCleanup(context.close)
         page = context.new_page()
         page.add_init_script("localStorage.setItem('theme', 'dark')")
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_navigation()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/e2e.epub"
         url = f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=E2E&path=Test%2Fbooks"
@@ -1887,7 +1887,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_rapid_toc_navigation_keeps_latest_destination(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/race.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Race", wait_until="domcontentloaded")
@@ -1911,7 +1911,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_failed_toc_section_can_retry(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/retry.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Retry", wait_until="domcontentloaded")
@@ -1933,7 +1933,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_duplicate_toc_navigation_shares_section_load(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/deduplicate.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Deduplicate", wait_until="domcontentloaded")
@@ -1955,7 +1955,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_chapter_buttons_use_continuous_reader_navigation(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/chapter-buttons.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Buttons", wait_until="domcontentloaded")
@@ -1975,7 +1975,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_scroll_updates_toc_on_animation_frame(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/scroll-toc.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=ScrollToc", wait_until="domcontentloaded")
@@ -1991,7 +1991,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_resize_keeps_current_text_anchor(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/scroll-anchor.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Anchor", wait_until="domcontentloaded")
@@ -2009,7 +2009,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_virtualizes_distant_sections_and_reloads_them(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/virtual.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Virtual", wait_until="domcontentloaded")
@@ -2031,7 +2031,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_large_foliate_toc_keeps_a_bounded_dom_window(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters(600)))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/large-toc.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=LargeToc", wait_until="domcontentloaded")
@@ -2046,7 +2046,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_full_search_uses_continuous_reader_navigation(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/search.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Search", wait_until="domcontentloaded")
@@ -2065,7 +2065,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_bookmark_restores_continuous_section_position(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bookmark.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Bookmark", wait_until="domcontentloaded")
@@ -2090,7 +2090,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_progress_slider_uses_continuous_viewport(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/progress.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Progress", wait_until="domcontentloaded")
@@ -2106,7 +2106,7 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_foliate_history_saves_structured_section_position(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/history.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=History", wait_until="domcontentloaded")
@@ -2123,7 +2123,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
         restored_store = STORE_SCRIPT.replace("get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),", "get: () => Promise.resolve({foliateSection: 10, foliateOffset: 0, foliateTocIndex: 9, zoom: 1}),")
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=restored_store))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=restored_store))
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/epub+zip", body=epub_with_many_chapters()))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/restore.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Restore", wait_until="domcontentloaded")
@@ -2175,7 +2175,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             viewport={"width": 390, "height": 844}, device_scale_factor=3
         )
         page = context.new_page()
-        page.route("**/search/static/reader-store.js", lambda route: route.fulfill(
+        page.route("**/search/static/reader/core/reader-store.js", lambda route: route.fulfill(
             status=200, content_type="text/javascript", body=STORE_SCRIPT
         ))
         page.route("**/search/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
@@ -2289,7 +2289,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(encoding=name):
                 context = self.browser.new_context(viewport={"width": 1440, "height": 900})
                 page = context.new_page()
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.add_init_script("""
                 window.__txtBytes = %s;
                 const nativeFetch = window.fetch.bind(window);
@@ -2318,7 +2318,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(expected=expected):
                 context = self.browser.new_context(viewport={"width": 1440, "height": 900})
                 page = context.new_page()
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.add_init_script("""
                 window.__txtBytes = new Uint8Array(%s);
                 window.__txtSplits = %s;
@@ -2373,7 +2373,7 @@ class ReaderPerformanceTest(unittest.TestCase):
           list: () => Promise.resolve([]), remove: () => Promise.resolve()
         });
         """
-        page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=store))
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=store))
         document = ("<p>line</p>" * 300).encode()
         page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/html", body=document))
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/progress.html"
@@ -2391,7 +2391,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(extension=extension):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844})
                 page = context.new_page()
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.route("**/static/vendor/marked.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
                 page.route("**/static/vendor/purify.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="text/markdown", body=b"# Markdown readable"))
@@ -2489,7 +2489,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                         route.fulfill(status=200, content_type=content_type, body=body)
                     return fulfill
 
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.route("**/static/vendor/marked.min.*.js", timed("marked", "text/javascript", MARKED_SCRIPT))
                 page.route("**/static/vendor/purify.min.*.js", timed("purify", "text/javascript", PURIFY_SCRIPT))
                 page.route("**/static/vendor/jszip.min.*.js", timed("jszip", "text/javascript", JSZIP_SCRIPT))
@@ -2610,7 +2610,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(extension=extension):
                 context = self.browser.new_context(viewport={"width": 1440, "height": 900})
                 page = context.new_page()
-                page.route("**/static/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.route("**/static/vendor/marked.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
                 page.route("**/static/vendor/purify.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
                 page.route("**/static/vendor/jszip.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=JSZIP_SCRIPT))

@@ -85,41 +85,55 @@
     }
   };
   for (const vendor of Object.values(foliateVendors)) Object.freeze(vendor);
+  const readerComponentFiles = Object.freeze([
+    "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/core/reader-source.mjs", "reader/ui/reader-ui.mjs",
+    "reader/ui/reader-toc.mjs", "reader/search/reader-search-backends.mjs", "reader/pdf/reader-pdf-scheduler.mjs", "reader/ui/reader-navigation.mjs",
+    "reader/formats/reader-foliate-format.mjs", "reader/ui/reader-progress.mjs", "reader/ui/reader-bookmarks.mjs", "reader/formats/reader-media-format.mjs",
+    "reader/core/reader-document-loader.mjs", "reader/pdf/reader-pdf-page-window.mjs", "reader/pdf/reader-pdf-text-runtime.mjs",
+    "reader/formats/reader-html-format.mjs", "reader/pdf/reader-pdf-renderer.mjs", "reader/formats/reader-text-format.mjs",
+    "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-docx-format.mjs", "reader/formats/reader-format-controller.mjs",
+    "reader/pdf/reader-pdf-engine.mjs", "reader/pdf/reader-pdf-search.mjs", "reader/core/reader-bindings.mjs", "reader/ui/reader-document-styles.mjs"
+  ]);
   const readerFiles = Object.freeze([
     "reader-resources.js",
-    "reader-engine-preload.js",
-    "reader-chapter-search-worker.mjs",
-    "reader-chapter-search.mjs",
-    "reader-contract.js",
-    "reader-navigation.js",
-    "reader-store.js",
-    "reader-request-manager.js",
-    "reader-chapter-repository.js",
-    "reader-scroll-anchor.js",
-    "reader-section-virtualizer.js",
-    "reader-runtime.js",
-    "reader-format-adapters.js",
-    "reader-security.js",
-    "reader-search-controller.mjs",
-    "reader-dom-search.mjs",
-    "reader-pdf-text.js",
-    "reader-v3.mjs",
-    "reader-book-text.js",
-    "reader-pdf-book-search-worker.mjs",
-    "reader-pdf-book-search.mjs",
-    "pdf-worker-wrapper.mjs",
-    "reader-pdf-network.mjs",
-    "reader-pdf-text-store.mjs",
+    "reader/pdf/reader-engine-preload.js",
+    "reader/search/workers/reader-chapter-search-worker.mjs",
+    "reader/search/reader-chapter-search.mjs",
+    "reader/core/reader-contract.js",
+    "search/reader-navigation.js",
+    "reader/core/reader-store.js",
+    "reader/core/reader-request-manager.js",
+    "reader/formats/reader-chapter-repository.js",
+    "reader/ui/reader-scroll-anchor.js",
+    "reader/formats/reader-section-virtualizer.js",
+    "reader/core/reader-runtime.js",
+    "reader/formats/reader-format-adapters.js",
+    "reader/core/reader-security.js",
+    "reader/search/reader-search-controller.mjs",
+    "reader/search/reader-dom-search.mjs",
+    "reader/formats/reader-image-loader.mjs",
+    "reader/pdf/reader-pdf-text.js",
+    "reader/pdf/reader-v3.mjs",
+    "reader/search/reader-book-text.js",
+    "reader/search/workers/reader-pdf-book-search-worker.mjs",
+    "reader/search/reader-pdf-book-search.mjs",
+    "reader/pdf/pdf-worker-wrapper.mjs",
+    "reader/pdf/reader-pdf-network.mjs",
+    "reader/pdf/reader-pdf-text-store.mjs",
     "reader.css",
+    ...readerComponentFiles,
+    "reader/reader-components.mjs",
     "reader.js"
   ]);
   const lazyFiles = new Set([
-    "reader-pdf-text-store.mjs",
-    "reader-chapter-search-worker.mjs",
-    "reader-chapter-search.mjs",
-    "reader-pdf-book-search-worker.mjs",
-    "reader-pdf-book-search.mjs",
-    "pdf-worker-wrapper.mjs"
+    ...readerComponentFiles,
+    "reader/reader-components.mjs",
+    "reader/pdf/reader-pdf-text-store.mjs",
+    "reader/search/workers/reader-chapter-search-worker.mjs",
+    "reader/search/reader-chapter-search.mjs",
+    "reader/search/workers/reader-pdf-book-search-worker.mjs",
+    "reader/search/reader-pdf-book-search.mjs",
+    "reader/pdf/pdf-worker-wrapper.mjs"
   ]);
   const vendorUrl = (name, base) => base + vendors[name].path;
   const runtimePaths = (base) => readerFiles.map((file) => base + file);
@@ -129,7 +143,7 @@
     if (extension === "pdf")
       return [
         vendorUrl("pdf", base),
-        base + "pdf-worker-wrapper.mjs",
+        base + "reader/pdf/pdf-worker-wrapper.mjs",
         vendorUrl("pdfWorker", base)
       ];
     if (["epub", "mobi", "azw", "azw3", "fb2", "fbz"].includes(extension))
@@ -142,12 +156,19 @@
   function buildFiles(project) {
     return [
       ...readerFiles,
-      "search-session.js",
-      "download-controller.js",
+      "search/search-session.js",
+      "search/download-controller.js",
       "style.css",
-      ...(project === "github" ? ["index-worker.js"] : []),
+      ...(project === "github" ? ["search/index-worker.js"] : []),
       "app.js"
     ];
+  }
+  function bundleArguments(filename) {
+    if (!["reader.js", "reader/reader-components.mjs"].includes(filename)) return [];
+    const external = readerFiles.filter(file => !readerComponentFiles.includes(file) &&
+      !["reader.js", "reader/reader-components.mjs"].includes(file) && /\.(?:js|mjs)$/.test(file));
+    return ["--bundle", "--format=esm", "--external:/static/*", "--external:/search/static/*",
+      ...external.map(file => "--external:./" + file)];
   }
   const resources = Object.freeze({
     vendors: Object.freeze(vendors),
@@ -155,11 +176,13 @@
     foliateRevision: "78914aef4466eb960965702401634c2cb348e9b1",
     pdfArchive,
     readerFiles,
+    readerComponentFiles,
     vendorUrl,
     runtimePaths,
     shellAssets,
     engineAssets,
-    buildFiles
+    buildFiles,
+    bundleArguments
   });
   if (typeof module !== "undefined" && module.exports) module.exports = resources;
   else root.VoiceOfMLReaderResources = resources;

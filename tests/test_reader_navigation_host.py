@@ -29,10 +29,10 @@ class ReaderNavigationHostTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         shell = subprocess.check_output(['node', '--input-type=module', '-e', '''
 import {readFileSync} from 'node:fs';
-import {stripBundledScripts} from './scripts/compose_app.mjs';
-process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
+import {stripBundledScripts} from './scripts/build/compose_app.mjs';
+process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8')));
 '''], cwd=root)
-        bundle = subprocess.check_output(['node', 'scripts/compose_app.mjs'], cwd=root)
+        bundle = subprocess.check_output(['node', 'scripts/build/compose_app.mjs'], cwd=root)
         with self.fixture.browser.new_context(service_workers='block') as context:
             page = context.new_page()
             page.on('pageerror', lambda error: self.fixture.errors.append(str(error)))
@@ -54,7 +54,7 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
           const trigger=document.createElement('button');document.body.append(trigger);trigger.focus();
           const existing=document.createElement('div');existing.setAttribute('inert','');
           existing.setAttribute('aria-hidden','false');document.body.append(existing);
-          const readerPath=new URL(document.querySelector('script[src*="reader-navigation.js"]').src).pathname.replace('reader-navigation.js','reader.html');
+          const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
           const target=readerPath+'?ext=txt&url=https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/a.txt';
           const returnUrl=location.href;
           navigateToReader(target);const first=readerOverlay;
@@ -149,7 +149,7 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
               Link:'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/next.txt',Folder:[]})));
           };
           try {
-            const path=new URL(document.querySelector('script[src*="reader-navigation.js"]').src).pathname.replace('reader-navigation.js','reader.html');
+            const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
             navigateToReader(path+'?ext=txt');closeReaderOverlay();history.replaceState(null,'',previousUrl);
             await randomTxt();await new Promise(resolve=>originalTimer(resolve,100));
             const recovered=aborted&&!!readerOverlay;
@@ -262,7 +262,7 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
 
     def test_untrusted_and_stale_messages_cannot_change_active_reader(self):
         result = self.page.evaluate('''() => {
-          const readerPath=new URL(document.querySelector('script[src*="reader-navigation.js"]').src).pathname.replace('reader-navigation.js','reader.html');
+          const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
           const target=readerPath+'?ext=txt';navigateToReader(target);
           const first=readerOverlay, oldSource=first.contentWindow, theme=STATE.isDark;
           const message={type:'voice-reader-open',url:target+'&title=bad'};
@@ -279,7 +279,7 @@ process.stdout.write(stripBundledScripts(readFileSync('index.html','utf8')));
 
     def test_unavailable_session_storage_does_not_block_replacement(self):
         result = self.page.evaluate('''() => {
-          const readerPath=new URL(document.querySelector('script[src*="reader-navigation.js"]').src).pathname.replace('reader-navigation.js','reader.html');
+          const readerPath=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
           const target=readerPath+'?ext=txt';navigateToReader(target);const first=readerOverlay;
           const original=Storage.prototype.setItem;
           try {

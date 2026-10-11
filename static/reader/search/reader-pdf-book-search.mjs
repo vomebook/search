@@ -6,7 +6,7 @@ export function createPdfBookSearch(configuration) {
     pending = null;
   }
   function startWorker() {
-    const owner = worker = new Worker(new URL("./reader-pdf-book-search-worker.mjs", import.meta.url), { type: "module" });
+    const owner = worker = new Worker(new URL("./workers/reader-pdf-book-search-worker.mjs", import.meta.url), { type: "module" });
     owner.onmessage = ({ data }) => {
       if (worker !== owner || disposed) return;
       if (data.bookReady) { bookReady = true; return; }

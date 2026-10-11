@@ -121,7 +121,7 @@ class PdfLoadingTests(unittest.TestCase):
                 self.browser.new_context(service_workers='block') as context:
             page = context.new_page()
             page.goto(self.origin + '/search/static/manifest.json')
-            page.evaluate("async () => { window.__pdfNetwork = await import('/search/static/reader-pdf-network.mjs'); }")
+            page.evaluate("async () => { window.__pdfNetwork = await import('/search/static/reader/pdf/reader-pdf-network.mjs'); }")
             for mode in ('upstream', 'reader'):
                 results = page.evaluate('''async mode => {
                   const url = '/cache-lock-probe.pdf?mode=' + mode;
@@ -145,7 +145,7 @@ class PdfLoadingTests(unittest.TestCase):
             page = context.new_page()
             page.goto(self.origin + '/search/static/manifest.json')
             result = page.evaluate('''async () => {
-              const {createPdfFetchPolicy} = await import('/search/static/reader-pdf-network.mjs');
+              const {createPdfFetchPolicy} = await import('/search/static/reader/pdf/reader-pdf-network.mjs');
               const native = fetch, calls = [], signal = new AbortController().signal;
               const init = {cache:'force-cache', signal, headers:{Range:'bytes=0-1'}};
               const spy = (input, options) => {calls.push({input, options}); return Promise.resolve(new Response('ok'));};
@@ -385,7 +385,7 @@ class PdfLoadingTests(unittest.TestCase):
 
     def test_engine_preload_starts_while_reader_dependency_is_still_pending(self):
         held=[]
-        self.page.route('**/static/reader-runtime.js',lambda route:held.append(route))
+        self.page.route('**/static/reader/core/reader-runtime.js',lambda route:held.append(route))
         self.page.goto(self.origin+'/static/reader.html?'+urllib.parse.urlencode(dict(url=SOURCE,ext='pdf')),wait_until='commit')
         self.page.locator('link[rel="modulepreload"][href*="pdf.min"]').wait_for(state='attached')
         for _ in range(100):
@@ -394,7 +394,7 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertGreaterEqual(len(self.modules),1)
         self.assertEqual(len(self.documents),0)
         self.assertEqual(len(held),1)
-        self.page.unroute('**/static/reader-runtime.js')
+        self.page.unroute('**/static/reader/core/reader-runtime.js')
         held[0].continue_()
         self.ready()
         self.assertEqual(len(self.modules),1)
