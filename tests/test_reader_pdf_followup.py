@@ -174,6 +174,77 @@ class PdfFollowupTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('__pdfRequests.filter(r=>r==="bytes=0-262143").length'),1)
         self.assertFalse(self.page.locator('.reader-loading-indicator').count())
 
+    def test_real_pdf_late_range_failure_can_reload_and_restore_target(self):
+        self.assert_late_range_failure(False)
+
+    def test_real_pdf_search_range_failure_can_reload_and_search_complete_book(self):
+        self.assert_late_range_failure(True)
+
+    def assert_late_range_failure(self, during_search):
+        objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'',
+                   b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']
+        kids = []
+        for number in range(1, 13):
+            page_id, stream_id = number + 3, number + 15
+            kids.append(f'{page_id} 0 R')
+            objects.append(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 3 0 R >> >> /Contents {stream_id} 0 R >>'.encode())
+        for number in range(1, 13):
+            stream = f'BT /F1 18 Tf 40 720 Td (needle page {number}) Tj ET\n'.encode() + b' ' * (300 * 1024)
+            objects.append(b'<< /Length ' + str(len(stream)).encode() + b' >>\nstream\n' + stream + b'\nendstream')
+        objects[1] = f'<< /Type /Pages /Count 12 /Kids [{" ".join(kids)}] >>'.encode()
+        payload, offsets = bytearray(b'%PDF-1.7\n'), [0]
+        for index, body in enumerate(objects, 1):
+            offsets.append(len(payload))
+            payload.extend(f'{index} 0 obj\n'.encode() + body + b'\nendobj\n')
+        xref = len(payload)
+        payload.extend(f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode())
+        for offset in offsets[1:]:
+            payload.extend(f'{offset:010d} 00000 n \n'.encode())
+        payload.extend(f'trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        failed, requests = [], []
+        fail_ranges = [False]
+        def serve(route):
+            match = re.fullmatch(r'bytes=(\d+)-(\d+)', route.request.headers.get('range', ''))
+            self.assertIsNotNone(match, 'normal opening must remain range-only')
+            start, end = int(match[1]), min(int(match[2]), len(payload) - 1)
+            requests.append((start, end))
+            if fail_ranges[0] and 2 * 1024 * 1024 <= start < 3 * 1024 * 1024:
+                failed.append((start, end))
+                route.fulfill(status=503, body='temporary range failure')
+                return
+            route.fulfill(status=206, content_type='application/pdf', body=bytes(payload[start:end+1]), headers={
+                'Content-Range': f'bytes {start}-{end}/{len(payload)}', 'ETag': '"late-range-fixture"',
+                'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'Content-Range,ETag,Content-Length'})
+        self.page.route('**/api/reader-content**', serve)
+        self.open()
+        fail_ranges[0] = True
+        if during_search:
+            self.page.locator('#history').click()
+            self.page.locator('#full-search-toggle').click()
+            self.page.locator('#full-search-input').fill('needle')
+        else:
+            self.page.locator('#page-number').fill('10')
+            self.page.locator('#page-number').press('Enter')
+        try:
+            self.page.locator('#reader-engine-retry').wait_for(timeout=6000)
+        except Exception:
+            self.fail(str({'failed_ranges': failed, 'requests': requests, 'state': self.page.evaluate("()=>({phase:document.documentElement.dataset.readerPhase,page:document.querySelector('#page-number').value,ready:[...document.querySelectorAll('.reader-page:has(canvas.ready)')].map(e=>e.dataset.page),states:[...document.querySelectorAll('.reader-page-state[data-state=error]')].map(e=>e.textContent)})")}))
+        self.assertTrue(failed)
+        self.assertLessEqual(len(failed), 4, 'transport retries remain bounded even with concurrent search')
+        if not during_search:
+            self.assertEqual(len(failed), 2)
+        self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_PDF_TRANSPORT')
+        self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'failed')
+        self.assertTrue(self.page.locator('#download').get_attribute('href'))
+        fail_ranges[0] = False
+        self.page.locator('#reader-engine-retry').click()
+        target = '1' if during_search else '10'
+        self.page.locator(f'.reader-page[data-page="{target}"] canvas.ready').wait_for(timeout=8000)
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.locator('#page-number').input_value(), target)
+        self.search('needle', 12)
+
     def test_complete_search_reuses_disk_text_on_reopen_and_invalidates_version(self):
         self.open()
         self.search('needleA',12)

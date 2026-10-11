@@ -1,7 +1,7 @@
 export function createReaderPdfEngine(readerContext) {
   function loadPdfTaskWithTimeout(pdfjs, options, url) {
     readerContext.assertReaderActive();
-    let task = null;
+    let task = null, documentReady = false;
     const owner = new AbortController();
     return new Promise((resolve, reject) => {
       let timeout = 0,
@@ -24,7 +24,14 @@ export function createReaderPdfEngine(readerContext) {
       }, readerContext.READER_PROXY_TIMEOUT_MS);
       readerContext.openPdfRangeTask(pdfjs, options(url), {
         signal:owner.signal, readBytes:VoiceOfMLReaderSecurity.readBytes,
-        limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes
+        limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
+        onError() {
+          if (!documentReady || readerContext.readerAbortController.signal.aborted || readerContext.capability.mode !== "pdf") return;
+          // Page retries cannot revive a destroyed PDF.js document. Capture an
+          // eligible position before failure stops work; reload owns recovery.
+          readerContext.saveProgress();
+          readerContext.fail("PDF 数据读取失败，请重试加载。", "READER_PDF_TRANSPORT");
+        }
       }).then(opened => {
         task = opened;
         if (destroyed) {task.destroy()?.catch?.(() => {});throw readerContext.readerAbortError();}
@@ -32,6 +39,7 @@ export function createReaderPdfEngine(readerContext) {
       }).then(
         (document) => {
           clearTimeout(timeout);
+          documentReady = true;
           if (readerContext.readerAbortController.signal.aborted) {
             destroy();
             return;
