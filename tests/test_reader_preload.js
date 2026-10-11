@@ -59,7 +59,7 @@ async function main() {
   assert.strictEqual(missing.contract.capability("pdf").mode, "pdf");
 
   const valid = loadPreload({ chunks: [Buffer.from("1234"), Buffer.from("5678")], header: "8" });
-  assert.strictEqual(valid.state.timeoutMs, 120000);
+  assert.strictEqual(valid.state.timeoutMs, 10000);
   const directUrl = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a".repeat(64) + "/1234567890abcdef/page-manifest.json";
   const direct = loadPreload({ url: directUrl, chunks: [Buffer.from("ok")] });
   assert.strictEqual(direct.state.timeoutMs, 1500);
