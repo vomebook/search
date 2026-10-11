@@ -8,12 +8,18 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture() {
   let now = 100000;
   const timers = new Map(), calls = [], stored = new Map(), events = {};
-  const context = {URL, Map, Set, Promise, AbortController, DOMException, encodeURIComponent,
+  const addEventListener = (name, listener) => {
+    const previous = events[name];
+    events[name] = previous
+      ? (...args) => { previous(...args); listener(...args); }
+      : listener;
+  };
+  const context = {URL, Map, Set, Promise, AbortController, AbortSignal, DOMException, encodeURIComponent,
     VoiceOfMLReaderResources: require('../static/reader-resources.js'),
     Date: {now: () => now}, API_BASE: 'https://api.test', location:{origin:'https://site.test'},
-    navigator:{onLine:true}, document:{hidden:false,createElement:()=>({}),head:{appendChild(){}},
-      addEventListener:(name,fn)=>events[name]=fn},
-    window:{addEventListener:(name,fn)=>events[name]=fn},
+    navigator:{onLine:true}, document:{hidden:false,createElement:()=>({addEventListener(){},remove(){}}),head:{appendChild(){}},
+      addEventListener},
+    window:{addEventListener},
     sessionStorage:{get length(){return stored.size;},key:i=>[...stored.keys()][i],
       getItem:key=>stored.get(key)||null,removeItem:key=>stored.delete(key),
       setItem:(key,value)=>stored.set(key,value)},warmConnection(){},
@@ -65,8 +71,9 @@ function fixture() {
     t.run(`warmReaderIntent('/reader?url=https://source.test/${i}')`);
     if(i<8){t.calls.at(-1).resolve({ok:true});await tick();}
   }
-  assert.strictEqual(t.calls.length,8);assert.ok(t.calls.every(call=>call.options.method==='HEAD'));
-  assert.strictEqual(t.timers.size,0);
+  const sourceCalls=t.calls.filter(call=>call.options.method==='HEAD');
+  assert.strictEqual(sourceCalls.length,8);assert.ok(sourceCalls.every(call=>call.options.method==='HEAD'));
+  assert.strictEqual(t.timers.size,1,'the delayed shell warmup remains scheduled');
   console.log('reader warming: cancellation, stale responses, invalid metadata, HEAD and eight-source bound passed');
 
   const cache=fixture();
