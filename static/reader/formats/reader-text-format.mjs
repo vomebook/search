@@ -5,8 +5,10 @@ export function createReaderTextFormat(readerContext) {
     pre.className = "reader-text";
     readerContext.content.appendChild(pre);
     let block = null, blockLength = 0;
-    const appendDecoded = async value => {
-      const text = value.replace(/\ufffd/g, "");
+    const appendDecoded = async (value, encoding = "utf-8") => {
+      // Unicode can contain a literal replacement character. Keep legacy
+      // damaged-codepage cleanup scoped to non-Unicode decoding.
+      const text = encoding.startsWith("utf-") ? value : value.replace(/\ufffd/g, "");
       let offset = 0, deadline = performance.now() + 8;
       while (offset < text.length) {
         if (!block) {
@@ -47,7 +49,8 @@ export function createReaderTextFormat(readerContext) {
         throw error;
       }
       readerContext.assertReaderActive();
-      await appendDecoded(new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title)).decode(bytes));
+      const decoder = new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title));
+      await appendDecoded(decoder.decode(bytes), decoder.encoding);
       return;
     }
     const reader = response.body.getReader(),
@@ -72,7 +75,7 @@ export function createReaderTextFormat(readerContext) {
         offset += chunk.byteLength;
       }
       decoder = new TextDecoder(readerContext.detectTextEncoding(sample, readerContext.documentState.title));
-      await appendDecoded(decoder.decode(sample.subarray(displayedSampleSize), { stream: true }));
+      await appendDecoded(decoder.decode(sample.subarray(displayedSampleSize), { stream: true }), decoder.encoding);
       sampleChunks.length = 0;
     };
     try {
@@ -123,11 +126,11 @@ export function createReaderTextFormat(readerContext) {
           if (sampleLength < 65540) continue;
           await startDecoder();
         } else {
-          await appendDecoded(decoder.decode(value, { stream: true }));
+          await appendDecoded(decoder.decode(value, { stream: true }), decoder.encoding);
         }
       }
       if (!decoder) await startDecoder();
-      await appendDecoded(decoder.decode());
+      await appendDecoded(decoder.decode(), decoder.encoding);
     } catch (reason) {
       try {
         await reader.cancel(reason);
