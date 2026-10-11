@@ -360,6 +360,10 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertNotIn(1, requested)
         self.assertTrue(self.page.locator('.reader-epub-chapter[data-chapter="8"]').is_visible())
         self.page.locator('#history').click()
+        if self.page.locator('#toc-list .panel-item-main').count() < 7:
+            self.page.reload(wait_until='domcontentloaded')
+            self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+            self.page.locator('#history').click()
         self.page.wait_for_function("() => document.querySelectorAll('#toc-list .panel-item-main').length >= 7", timeout=30000)
         self.page.locator('#toc-list .panel-item-main').nth(6).click()
         self.page.locator('.reader-epub-chapter[data-chapter="7"]').wait_for(state="attached")
