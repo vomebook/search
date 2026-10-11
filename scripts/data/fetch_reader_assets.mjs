@@ -15,7 +15,7 @@ const sha = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 const digest = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const MAX_V3_BYTES = 8 * 1024 * 1024;
 
-export function projectV3(base, pointer, bytes) {
+export function projectV3(base, pointer, bytes, packedBase) {
   const ref = pointer?.catalog, generation = pointer?.generation;
   if (pointer?.version !== 1 || pointer?.kind !== "reader-reading-pointer" || !sha(generation) ||
       ref?.bucket !== "vomebook/reader-assets-v2" || ref.role !== "runtime" ||
@@ -25,6 +25,12 @@ export function projectV3(base, pointer, bytes) {
   const catalog = JSON.parse(bytes.toString("utf8"));
   if (catalog.version !== 3 || catalog.kind !== "reader-reading-catalog" || catalog.generation !== generation ||
       !catalog.files || typeof catalog.files !== "object" || Array.isArray(catalog.files)) throw Error("invalid v3 catalog");
+  if (catalog.base_sidecar) {
+    const snapshot = validateBaseRef(catalog.base_sidecar);
+    if (!packedBase || packedBase.length !== snapshot.bytes || digest(packedBase) !== snapshot.sha256)
+      throw Error("unified sidecar checksum mismatch");
+    base = validateReaderAssets(packedBase);
+  }
   const files = { ...base.f };
   for (const [key, entry] of Object.entries(catalog.files)) {
     const resource = entry?.resource, source = entry?.source_sha256;
@@ -35,6 +41,14 @@ export function projectV3(base, pointer, bytes) {
     files[key] = { s: 2, m: "p", p: resource.path, b: resource.bucket };
   }
   return { ...base, f: files, v3: { generation, catalog_sha256: ref.sha256, files: Object.keys(catalog.files).length } };
+}
+
+function validateBaseRef(ref) {
+  if (ref?.bucket !== "vomebook/reader-assets-v2" || ref.role !== "runtime" || !sha(ref.sha256) ||
+      ref.path !== `reader-index/snapshots/${ref.sha256}/reader_assets.json.gz` ||
+      !Number.isSafeInteger(ref.bytes) || ref.bytes < 1 || ref.bytes > MAX_V3_BYTES)
+    throw Error("invalid unified sidecar reference");
+  return ref;
 }
 
 async function loadV3(signal) {
@@ -61,7 +75,10 @@ async function loadV3(signal) {
   const pointer = JSON.parse(packed.toString("utf8"));
   if (!sha(pointer.generation) || pointer.catalog?.path !== `reader-index/v3/generations/${pointer.generation}/catalog.json`)
     throw Error("invalid v3 catalog path");
-  return { pointer, bytes: await read(pointer.catalog.path) };
+  const bytes = await read(pointer.catalog.path);
+  const catalog = JSON.parse(bytes.toString("utf8"));
+  const packedBase = catalog.base_sidecar ? await read(validateBaseRef(catalog.base_sidecar).path) : null;
+  return { pointer, bytes, packedBase };
 }
 
 export function validateReaderAssets(bytes) {
@@ -86,7 +103,7 @@ export async function fetchReaderAssets(output, url = DEFAULT_READER_ASSETS_URL,
       if (url === DEFAULT_READER_ASSETS_URL) {
         const catalog = await loadV3(controller.signal);
         if (catalog) {
-          const projected = projectV3(base, catalog.pointer, catalog.bytes);
+          const projected = projectV3(base, catalog.pointer, catalog.bytes, catalog.packedBase);
           active = projected.v3;
           bytes = gzipSync(Buffer.from(JSON.stringify(projected)));
         } else if (base.v3) throw Error("previous v3 pointer disappeared");
