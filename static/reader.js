@@ -4088,38 +4088,10 @@ function renderPdfImageShell(shell, force = false, priority = false) {
         shell.appendChild(image);
       }
       image.fetchPriority = priority >= 3 ? "high" : priority >= 1 ? "auto" : "low";
-       await new Promise((resolve, reject) => {
-         let settled = false,
-           timeout = 0,
-           untrack = () => {};
-         const abort = () => finish(readerAbortError());
-         const finish = (error) => {
-          if (settled) return;
-          settled = true;
-           clearTimeout(timeout);
-           untrack();
-           renderController.signal.removeEventListener("abort", abort);
-           image.onload = image.onerror = null;
-          if (error) {
-            image.removeAttribute("src");
-            reject(error);
-          } else resolve();
-        };
-        untrack = trackReaderResource(() => finish(readerAbortError()));
-        renderController.signal.addEventListener("abort", abort, { once: true });
-        if (settled) return;
-        timeout = setTimeout(
-          () => finish(new Error("PDF page image timeout")),
-          READER_PROXY_TIMEOUT_MS
-        );
-         image.onload = () => finish();
-         image.onerror = () => finish(new Error(`PDF page ${entry.page} image failed`));
-          if (image.src !== target) image.src = target;
-           if (priority >= 2 && ocrManifestUrl && !navigator.connection?.saveData)
-             loadText = renderPdfOcrText(shell);
-          loadText?.catch(() => {});
-         if (image.complete && image.naturalWidth) finish();
-      });
+      if (priority >= 2 && ocrManifestUrl && !navigator.connection?.saveData)
+        loadText = renderPdfOcrText(shell);
+      loadText?.catch(() => {});
+      await loadReaderImage(image, target, renderController.signal);
       assertReaderActive();
        if (shell.dataset.pdfPresented === "1") return;
        if (pdfV3Manifest) {
@@ -5975,22 +5947,17 @@ function loadDocxDocument() {
 function loadMediaDocument() {
   return Promise.resolve(null);
 }
-function loadImageDocument(target = sourceUrl) {
+function waitReaderImage(image, target, timeoutMs, signal) {
   assertReaderActive();
   return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.className = "reader-image";
-    image.alt = documentState.title;
-    image.decoding = "async";
-    let fallback = false,
-      settled = false,
-      timeout = 0,
-      untrack = () => {};
+    let settled = false, timeout = 0, untrack = () => {};
+    const abort = () => finish(readerAbortError());
     const finish = (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
       untrack();
+      signal?.removeEventListener("abort", abort);
       image.onload = image.onerror = null;
       if (error) {
         image.removeAttribute("src");
@@ -5998,17 +5965,55 @@ function loadImageDocument(target = sourceUrl) {
       } else resolve(image);
     };
     untrack = trackReaderResource(() => finish(readerAbortError()));
-    timeout = setTimeout(() => finish(new Error("image load timeout")), READER_PROXY_TIMEOUT_MS);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    if (settled) return;
+    timeout = setTimeout(() => finish(new DOMException("Reader image stalled", "TimeoutError")), timeoutMs);
     image.onload = () => finish();
-    image.onerror = () => {
-      if (readerAbortController.signal.aborted) return finish(readerAbortError());
-      if (!fallback) {
-        fallback = true;
-        image.src = target;
-      } else finish(new Error("image load failed"));
-    };
-    image.src = readerContentUrl(target);
+    image.onerror = () => finish(new Error("image load failed"));
+    if (image.src !== new URL(target, location.href).href) image.src = target;
+    if (image.complete && image.naturalWidth) finish();
   });
+}
+async function loadReaderImage(image, target, signal, deadline = performance.now() + READER_PROXY_TIMEOUT_MS) {
+  const remaining = () => Math.max(1, deadline - performance.now());
+  const network = /^https?:$/.test(new URL(target, location.href).protocol);
+  try {
+    return await waitReaderImage(image, target, Math.min(network ? 15000 : READER_PROXY_TIMEOUT_MS, remaining()), signal);
+  } catch (error) {
+    assertReaderActive();
+    signal?.throwIfAborted();
+    if (!network || error?.name !== "TimeoutError" || !navigator.onLine) throw error;
+  }
+  const response = await fetchWithReaderTimeout(target, remaining(),
+    { signal, priority: image.fetchPriority || "auto" });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw Object.assign(new Error(`HTTP ${response.status}`), {status: response.status});
+  }
+  const bytes = await VoiceOfMLReaderSecurity.readBytes(response);
+  assertReaderActive();
+  signal?.throwIfAborted();
+  const blobUrl = URL.createObjectURL(new Blob([bytes], {type: response.headers.get("Content-Type") || ""}));
+  try {
+    return await waitReaderImage(image, blobUrl, Math.min(20000, remaining()), signal);
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+async function loadImageDocument(target = sourceUrl) {
+  const deadline = performance.now() + READER_PROXY_TIMEOUT_MS;
+  const image = new Image();
+  image.className = "reader-image";
+  image.alt = documentState.title;
+  image.decoding = "async";
+  try {
+    return await loadReaderImage(image, readerContentUrl(target), readerAbortController.signal, deadline);
+  } catch (error) {
+    assertReaderActive();
+    if (error?.code === "READER_RESOURCE_LIMIT") throw error;
+    return loadReaderImage(image, target, readerAbortController.signal, deadline);
+  }
 }
 function loadChapterManifestDocument() {
   const target = chapterManifestUrl || sourceUrl, early = window.__VOICE_READER_CHAPTER_PRELOAD__;
