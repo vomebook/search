@@ -170,7 +170,8 @@ class PdfFollowupTests(unittest.TestCase):
         self.open()
         self.page.locator('.reader-page canvas.ready').wait_for(state='attached')
         self.assertTrue(self.page.evaluate('!!window.__partialCancelled'))
-        self.assertEqual(self.page.evaluate('__pdfRequests.filter(r=>r===null).length'),1)
+        self.assertEqual(self.page.evaluate('__pdfRequests.filter(r=>r===null).length'),0)
+        self.assertEqual(self.page.evaluate('__pdfRequests.filter(r=>r==="bytes=0-262143").length'),1)
         self.assertFalse(self.page.locator('.reader-loading-indicator').count())
 
     def test_complete_search_reuses_disk_text_on_reopen_and_invalidates_version(self):
