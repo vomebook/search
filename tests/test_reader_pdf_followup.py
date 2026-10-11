@@ -218,14 +218,15 @@ class PdfFollowupTests(unittest.TestCase):
                 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'Content-Range,ETag,Content-Length'})
         self.page.route('**/api/reader-content**', serve)
         self.open()
-        fail_ranges[0] = True
         if during_search:
             self.page.locator('#history').click()
             self.page.locator('#full-search-toggle').click()
             self.page.locator('#full-search-input').fill('needle')
         else:
+            fail_ranges[0] = True
             self.page.locator('#page-number').fill('10')
             self.page.locator('#page-number').press('Enter')
+        fail_ranges[0] = True
         try:
             self.page.locator('#reader-engine-retry').wait_for(timeout=6000)
         except Exception:
