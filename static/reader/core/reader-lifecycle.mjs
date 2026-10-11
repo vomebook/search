@@ -146,7 +146,7 @@ export function createReaderLifecycle(readerContext) {
       retry.textContent = "重试加载";
       // Reload clears the browser's failed module map and preserves this book URL.
       retry.addEventListener("click", async () => {
-        if (code === "READER_PDF_TRANSPORT") {
+        if (["READER_PDF_TRANSPORT", "READER_MEDIA"].includes(code)) {
           let timer;
           try {
             await Promise.race([readerContext.progressSaveChain,

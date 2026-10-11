@@ -1334,6 +1334,16 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
         self.assertEqual(requests, [book_path] * 3)
 
+    def test_txt_preserves_literal_unicode_replacement_characters_and_search(self):
+        text = 'prefix \ufffd needle\n' * 3
+        self.serve(text.encode('utf-8'), 'text/plain; charset=utf-8')
+        self.open(self.reader_url('txt'))
+        self.assertEqual(self.page.locator('.reader-text').text_content(), text)
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('\ufffd')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='3 个结果'")
+
     def test_media_waits_for_metadata_before_reporting_ready(self):
         held = []
         self.page.route('**/api/reader-content**', lambda route: held.append(route))
@@ -1374,6 +1384,67 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_media_metadata_stall_recovers_without_reader_reload(self):
         self.assert_media_metadata_stall(True)
+
+    def test_media_original_retry_retains_position_and_paused_state(self):
+        self.assert_media_retry_position(False)
+
+    def test_media_original_retry_resumes_active_playback(self):
+        self.assert_media_retry_position(True)
+
+    def assert_media_retry_position(self, playing):
+        buffer = io.BytesIO()
+        with wave.open(buffer, 'wb') as audio:
+            audio.setparams((1, 2, 8000, 80000, 'NONE', 'not compressed'))
+            audio.writeframes(b'\0\0' * 80000)
+        data = buffer.getvalue()
+        def serve_audio(route):
+            start = int(route.request.headers.get('range', 'bytes=0-').split('=')[1].split('-')[0])
+            route.fulfill(status=206,content_type='audio/wav',body=data[start:],headers={
+                'Accept-Ranges':'bytes','Content-Range':f'bytes {start}-{len(data)-1}/{len(data)}'})
+        self.page.route('**/api/reader-content**',serve_audio)
+        originals = []
+        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav',
+                        lambda route: (originals.append(route.request.url), serve_audio(route)))
+        self.open(self.reader_url('wav'))
+        self.page.locator('audio').evaluate("m => { m.muted=true; return m.play(); }")
+        self.page.wait_for_function("()=>document.querySelector('audio').currentTime>.02")
+        self.page.locator('audio').evaluate('m=>m.pause()')
+        self.page.locator('audio').evaluate("m => { m.currentTime=.05; }")
+        self.page.wait_for_function("()=>!document.querySelector('audio').seeking")
+        self.assertAlmostEqual(self.page.locator('audio').evaluate('m=>m.currentTime'), .05)
+        self.page.locator('audio').evaluate('m=>{m.playbackRate=1.25;}')
+        if playing:
+            self.page.locator('audio').evaluate('m=>m.play()')
+        self.page.locator('audio').evaluate("m => m.dispatchEvent(new Event('error'))")
+        self.page.wait_for_function("playing=>{const m=document.querySelector('audio');return m.readyState>=1 && (playing ? !m.paused && m.currentTime>=.05 : m.paused && m.currentTime===.05);}",arg=playing)
+        self.assertEqual(len(originals), 1)
+        self.assertEqual(self.page.locator('audio').evaluate('m=>m.paused'),not playing)
+        self.assertEqual(self.page.locator('audio').evaluate('m=>m.playbackRate'),1.25)
+
+    def test_media_retry_does_not_save_reset_time_on_close(self):
+        buffer = io.BytesIO()
+        with wave.open(buffer, 'wb') as audio:
+            audio.setparams((1, 2, 8000, 80000, 'NONE', 'not compressed'))
+            audio.writeframes(b'\0\0' * 80000)
+        data = buffer.getvalue()
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(status=206,
+            content_type='audio/wav',body=data,headers={'Accept-Ranges':'bytes','Content-Range':f'bytes 0-{len(data)-1}/{len(data)}'}))
+        held = []
+        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav',lambda route:held.append(route))
+        self.open(self.reader_url('wav'))
+        self.page.locator('audio').evaluate("m => { m.muted=true; return m.play(); }")
+        self.page.wait_for_function("()=>document.querySelector('audio').currentTime>.02")
+        self.page.locator('audio').evaluate('m=>m.pause()')
+        self.page.locator('audio').evaluate("m => { m.currentTime=.05; }")
+        self.page.wait_for_function("()=>!document.querySelector('audio').seeking")
+        self.page.locator('audio').evaluate("m => m.dispatchEvent(new Event('error'))")
+        self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
+        self.page.wait_for_timeout(100)
+        entry = self.page.evaluate("async()=>await VoiceOfMLReaderStore.get(new URL(location.href).searchParams.get('url'))")
+        self.assertEqual(entry['mediaTime'], .05)
+        for route in held:
+            try:route.abort()
+            except support.PlaywrightError:pass
 
     def test_media_metadata_exhaustion_exposes_reload_and_can_recover(self):
         self.assert_media_metadata_stall(False)

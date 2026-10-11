@@ -24,7 +24,7 @@ export function createReaderMediaFormat(readerContext) {
     media.preload = "metadata";
     if (mode === "video") media.playsInline = true;
     const refresh = () => {
-      if (readerContext.readerAbortController.signal.aborted) return;
+      if (readerContext.readerAbortController.signal.aborted || media._readerSourceRetry) return;
       readerContext.mediaPanel.querySelector(".media-panel-time").textContent =
         `${readerContext.formatMediaTime(media.currentTime)} / ${readerContext.formatMediaTime(media.duration)}`;
       readerContext.scheduleMarkerSync();
@@ -37,7 +37,7 @@ export function createReaderMediaFormat(readerContext) {
         readerContext.saveProgress();
       });
     readerContext.mediaElement = media;
-    let sourceRetried = false, idle, deadline, settled = false, resolveMetadata, rejectMetadata;
+    let sourceRetried = false, retryPosition = null, idle, deadline, settled = false, resolveMetadata, rejectMetadata;
     const metadata = new Promise((resolve, reject) => { resolveMetadata = resolve; rejectMetadata = reject; });
     const clearDeadlines = () => { clearTimeout(idle); clearTimeout(deadline); idle = deadline = null; };
     const finish = (error) => {
@@ -49,6 +49,7 @@ export function createReaderMediaFormat(readerContext) {
     };
     const failMedia = (message) => {
       if (readerContext.readerAbortController.signal.aborted) return;
+      readerContext.saveProgress();
       media._readerSourceRetry = false;
       finish(readerContext.readerAbortError());
       readerContext.fail(message, "READER_MEDIA");
@@ -57,6 +58,9 @@ export function createReaderMediaFormat(readerContext) {
     const retryUrl = originalMode === mode && readerContext.validSource(readerContext.downloadUrl) ? readerContext.downloadUrl : readerContext.sourceUrl;
     const retryOriginal = () => {
       if (sourceRetried || retryUrl === media.src || !readerContext.validSource(retryUrl)) return false;
+      readerContext.saveProgress();
+      retryPosition = readerContext.documentState.restorationReady
+        ? {time:media.currentTime, playing:!media.paused, rate:media.playbackRate} : null;
       sourceRetried = true;
       media._readerSourceRetry = true;
       media.src = retryUrl;
@@ -73,7 +77,18 @@ export function createReaderMediaFormat(readerContext) {
         if (!retryOriginal()) failMedia("媒体信息加载停顿，请重试加载或下载原文件。");
       }, 15000);
     };
-    const loaded = () => { media._readerSourceRetry = false; finish(); };
+    const loaded = () => {
+      if (retryPosition) {
+        if (Number.isFinite(retryPosition.time)) media.currentTime = Number.isFinite(media.duration)
+          ? Math.min(retryPosition.time, media.duration) : retryPosition.time;
+        media.playbackRate = retryPosition.rate;
+        if (retryPosition.playing) media.play().catch(() => {});
+        retryPosition = null;
+      }
+      media._readerSourceRetry = false;
+      finish();
+      refresh();
+    };
     const failed = () => {
       if (readerContext.readerAbortController.signal.aborted) return;
       if (retryOriginal()) return;

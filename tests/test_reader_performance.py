@@ -2488,11 +2488,14 @@ class ReaderPerformanceTest(unittest.TestCase):
 
                 def timed(name, content_type, body):
                     def fulfill(route):
-                        requested_at[name] = page.evaluate("performance.now()")
+                        requested_at[name] = page.evaluate("() => !window.__historyReleased")
                         route.fulfill(status=200, content_type=content_type, body=body)
                     return fulfill
 
-                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+                held_store = STORE_SCRIPT.replace(
+                    "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
+                    "get: () => new Promise(resolve => { window.__releaseHistory = () => { window.__historyReleased = true; resolve(null); }; }),")
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=held_store))
                 page.route("**/static/vendor/marked.min.*.js", timed("marked", "text/javascript", MARKED_SCRIPT))
                 page.route("**/static/vendor/purify.min.*.js", timed("purify", "text/javascript", PURIFY_SCRIPT))
                 page.route("**/static/vendor/jszip.min.*.js", timed("jszip", "text/javascript", JSZIP_SCRIPT))
@@ -2513,13 +2516,15 @@ class ReaderPerformanceTest(unittest.TestCase):
                     f"{self.origin}/search/static/reader.html?url={json.dumps(source)[1:-1]}&ext={extension}&title=Performance",
                     wait_until="domcontentloaded",
                 )
+                deadline = time.perf_counter() + 10
+                while set(requested_at) != set(expected_requests) and time.perf_counter() < deadline:
+                    page.wait_for_timeout(20)
+                self.assertEqual(set(requested_at), set(expected_requests))
+                self.assertTrue(all(requested_at.values()), 'resources must start before history is released')
+                page.evaluate("window.__releaseHistory()")
                 page.wait_for_function("expected => document.querySelector('#status').textContent === expected", arg=ready_status)
                 page.locator(selector).wait_for(state="attached")
                 elapsed_by_format[extension] = (time.perf_counter() - started) * 1000
-                store_started = page.evaluate("window.__storeStartedAt")
-                self.assertEqual(set(requested_at), set(expected_requests))
-                for name in expected_requests:
-                    self.assertLess(requested_at[name] - store_started, 250, f"{extension} {name} waited for history restoration")
                 context.close()
         print("\n  Reader format load times: " + ", ".join(
             f"{name}={elapsed_by_format[name]:.1f}ms" for name in sorted(elapsed_by_format)
