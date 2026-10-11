@@ -15,6 +15,23 @@ import wave
 from tests import test_reader_performance as support
 
 
+def expose_dom_search_tools(page):
+    def instrument(route):
+        response = route.fetch()
+        script = response.text()
+        marker = "  function pruneMarks() {"
+        if marker not in script:
+            raise AssertionError("DOM search instrumentation boundary missing")
+        route.fulfill(response=response, body=script.replace(marker, '''
+          window.__domSearchTools = {
+            locator: () => fullSearchDomLocator, snapshot: () => fullSearchDomSnapshot,
+            textNodes: fullSearchTextNodes, headingLookup: createFullSearchHeadingLookup,
+            location: fullSearchLocation
+          };
+        ''' + marker))
+    page.route("**/static/reader-dom-search.mjs*", instrument)
+
+
 @unittest.skipIf(support.sync_playwright is None, "Playwright is unavailable")
 class ReaderRefactorTest(unittest.TestCase):
     @classmethod
@@ -922,9 +939,13 @@ class ReaderRefactorTest(unittest.TestCase):
               window.__fallbackHeld = true;
               await new Promise(resolve => { window.__releaseFallback = resolve; });
             } """ + needle)
-            route.fulfill(response=response, body=script.replace(
+            route.fulfill(response=response, body=script)
+        def finish_fallback(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text().replace(
                 "target = matches[0]?.target;", "target = matches[0]?.target; window.__fallbackDone = true;"))
-        self.page.route("**/static/reader.js*", hold_fallback)
+        self.page.route("**/static/reader-dom-search.mjs*", hold_fallback)
+        self.page.route("**/static/reader.js*", finish_fallback)
         self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
         self.open(self.reader_url("epub"))
         self.search("正文")
@@ -2181,7 +2202,7 @@ class ReaderRefactorTest(unittest.TestCase):
             route.fulfill(response=response, body=script.replace(needle,
                 "await new Promise(resolve => { window.__releaseActivation = resolve; }); " +
                 needle + " window.__activationSettled = true;"))
-        self.page.route("**/static/reader.js*", hold_activation)
+        self.page.route("**/static/reader-dom-search.mjs*", hold_activation)
         self.serve("oldword " * 70 + "freshword")
         self.open(self.reader_url())
         self.search("oldword")
@@ -2241,10 +2262,11 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertLessEqual(self.page.evaluate('window.__activationVisited'), 130)
 
     def expose_dom_search_locator(self):
+        expose_dom_search_tools(self.page)
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + '''
-              window.__domLocator = () => fullSearchDomLocator;
+              window.__domLocator = () => window.__domSearchTools.locator();
               window.__activateDomResult = async index => {
                 const doc = (htmlFrame?.contentDocument?.body || content).ownerDocument;
                 const native = doc.createTreeWalker.bind(doc);
@@ -2260,14 +2282,14 @@ class ReaderRefactorTest(unittest.TestCase):
               window.__headingOracle = async entries => {
                 const root = htmlFrame.contentDocument.body;
                 setToc(entries.map(entry => ({label:entry.label, target:root.querySelector(entry.selector)})));
-                const nodes = await fullSearchTextNodes(root, readerRuntime.currentGeneration('search'));
+                const nodes = await window.__domSearchTools.textNodes(root, readerRuntime.currentGeneration('search'));
                 let length = 0;
                 const offsets = nodes.map(node => {
                   const part = {node, start:length, end:length + node.data.length};
                   length = part.end;
                   return part;
                 });
-                const lookup = createFullSearchHeadingLookup(root, offsets);
+                const lookup = window.__domSearchTools.headingLookup(root, offsets);
                 const compare = () => offsets.map(part => {
                   const heading = [...navigationState.tocEntries].reverse().find(entry => entry.target &&
                     (entry.target === part.node.parentElement ||
@@ -2275,7 +2297,7 @@ class ReaderRefactorTest(unittest.TestCase):
                   const page = part.node.parentElement.closest('[data-page]');
                   const expected = page ? '第 ' + page.dataset.page + ' 页' :
                     heading ? heading.label : '正文 ' + Math.min(100, Math.floor(part.start / Math.max(1,length) * 100)) + '%';
-                  return [fullSearchLocation(part.node, '', part.start, length, lookup), expected];
+                  return [window.__domSearchTools.location(part.node, '', part.start, length, lookup), expected];
                 });
                 const pairs = compare();
                 setToc([...navigationState.tocEntries].reverse());

@@ -42,7 +42,10 @@ function harness(options) {
           if (settings.addAllError && operations.addAll.length === (settings.addAllFailureCall || 1)) return Promise.reject(settings.addAllError);
           return Promise.resolve();
         },
-        match(request) { return Promise.resolve(values.get(keyOf(request))); },
+        match(request, options) {
+          if (settings.match) return settings.match(request, options, values);
+          return Promise.resolve(values.get(keyOf(request)));
+        },
         keys() { return Promise.resolve(Array.from(values.keys(), url => ({url}))); },
         delete(request) { return Promise.resolve(values.delete(keyOf(request))); },
         put(request, value) {
@@ -115,6 +118,25 @@ function manifestsFetch(failPath) {
 test("registers install activate and fetch listeners", () => {
   const instance = harness();
   assert.deepStrictEqual(Object.keys(instance.listeners).sort(), ["activate", "fetch", "install"]);
+});
+test("only pinned static hashes ignore Origin Vary mismatches", async () => {
+  for (const [text, prefix] of [[source, '/search/static/']]) {
+    const calls = [];
+    const pinned = 'https://example.test' + prefix + 'reader.123456789abc.js';
+    const ordinary = 'https://example.test/data/payload.json';
+    const instance = harness({ source: text,
+      cacheEntries: [[pinned, response('cached pinned')], [ordinary, response('private variant')]],
+      match(request, options, values) {
+        calls.push([keyOf(request), options.ignoreVary]);
+        return Promise.resolve(options.ignoreVary ? values.get(keyOf(request)) : undefined);
+      }
+    });
+    assert.strictEqual((await dispatchFetch(instance, pinned)).body, 'cached pinned');
+    assert.strictEqual((await dispatchFetch(instance, ordinary)).body, 'network:' + ordinary);
+    await Promise.all(instance.operations.lifetimes);
+    assert.deepStrictEqual(calls, [[pinned, true], [ordinary, false]]);
+    assert.deepStrictEqual(instance.operations.fetch, [ordinary]);
+  }
 });
 test("removes every retired hash and alias while preserving current assets and data", async () => {
   for (const [text, prefix, cacheName] of [
