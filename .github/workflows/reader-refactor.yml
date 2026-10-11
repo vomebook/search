@@ -8,6 +8,7 @@ on:
     branches: ["main"]
     paths:
       - "static/reader*.js"
+      - "static/reader*.mjs"
       - "static/reader*.css"
       - "static/reader*.html"
       - "static/foliate-reader/**"
@@ -44,6 +45,7 @@ jobs:
           node scripts/copy_reader_vendor.mjs static/vendor
       - name: Run chapter-search unit tests
         run: |
+          node tests/test_reader_architecture.js
           node tests/test_reader_chapter_search.mjs
           node tests/test_reader_ocr_transport.mjs
       - name: Run Reader request and PDF loading regressions
@@ -100,6 +102,7 @@ jobs:
       - name: Run chapter-search unit tests
         working-directory: huggingface-search
         run: |
+          node tests/test_reader_architecture.js
           node tests/test_reader_chapter_search.mjs
           node tests/test_reader_ocr_transport.mjs
           node tests/test_reader_heading_cache.js

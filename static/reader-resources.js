@@ -100,6 +100,7 @@
     "reader-runtime.js",
     "reader-format-adapters.js",
     "reader-security.js",
+    "reader-search-controller.mjs",
     "reader-pdf-text.js",
     "reader-v3.mjs",
     "reader-book-text.js",

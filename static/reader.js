@@ -1,3 +1,4 @@
+import { createReaderSearchController } from "./reader-search-controller.mjs";
 import "/search/static/reader-resources.js";
 import "/search/static/reader-contract.js";
 import "/search/static/reader-request-manager.js";
@@ -482,10 +483,7 @@ let chapterManifestLoader = null;
 let chapterSearchConfiguration = null;
 let chapterSearchModulePromise = null;
 let chapterSearchClient = null;
-let chapterSearchPage = null;
-let failedSearchPage = null;
-let chapterSearchInProgress = false;
-let fullSearchComplete = false;
+
 trackReaderResource(() => {
   chapterSearchClient?.dispose();
   chapterSearchClient = null;
@@ -514,8 +512,7 @@ let pdfTextContentCacheBytes = 0;
 const pdfOcrPageCache = new Map();
 const PDF_OCR_PAGE_CACHE_BYTES = 4 * 1024 * 1024;
 let pdfOcrPageCacheBytes = 0;
-let pdfSearchPageLoader = null;
-let pdfSearchInProgress = false;
+
 let pdfBookSearchModulePromise = null;
 let pdfBookSearchClient = null;
 let pdfBookSearchPrefetchTimer = 0;
@@ -5587,12 +5584,14 @@ function renderMedia(mode) {
     });
   mediaElement = media;
   let sourceRetried = false;
+  const originalMode = VoiceOfMLReader.capability(resolvedReaderData?.original_extension || extension).mode;
+  const retryUrl = originalMode === mode && validSource(downloadUrl) ? downloadUrl : sourceUrl;
   media.addEventListener("error", () => {
     if (readerAbortController.signal.aborted) return;
-    if (!sourceRetried && sourceUrl !== contentUrl && validSource(sourceUrl)) {
+    if (!sourceRetried && retryUrl !== media.src && validSource(retryUrl)) {
       sourceRetried = true;
       media._readerSourceRetry = true;
-      media.src = sourceUrl;
+      media.src = retryUrl;
       media.load();
       return;
     }
@@ -6667,100 +6666,47 @@ chapterPrev.addEventListener("click", () =>
 chapterNext.addEventListener("click", () =>
   activateChapter(navigationState.currentChapterIndex + 1)
 );
-const fullSearchView = document.createElement("section");
-fullSearchView.id = "full-search-view";
-fullSearchView.className = "reader-panel-view full-search-view";
-fullSearchView.dataset.panelView = "full-search";
-fullSearchView.hidden = true;
-fullSearchView.innerHTML =
-  '<div class="full-search-bar"><input id="full-search-input" class="full-search-input" type="search" placeholder="搜索正文" aria-label="搜索正文"><button id="full-search-clear" class="icon-button" type="button" aria-label="清除全文搜索" title="清除">×</button></div><div id="full-search-status" class="full-search-status" role="status">输入关键词搜索正文</div><div class="full-search-nav"><button id="full-search-prev" type="button" disabled>上一个</button><button id="full-search-next" type="button" disabled>下一个</button></div><div id="full-search-results" class="full-search-results"></div>';
-document
-  .querySelector("#history-panel")
-  .insertBefore(fullSearchView, document.querySelector(".reader-panel-tabs"));
-const fullSearchButton = document.querySelector("#full-search-toggle");
-fullSearchButton.textContent = "全文搜索";
-fullSearchButton.setAttribute("aria-label", "全文搜索");
-fullSearchButton.hidden = !capability.features.search;
-const fullSearchInput = fullSearchView.querySelector("#full-search-input"),
-  fullSearchStatus = fullSearchView.querySelector("#full-search-status"),
-  fullSearchResultsNode = fullSearchView.querySelector("#full-search-results"),
-  fullSearchClear = fullSearchView.querySelector("#full-search-clear");
-let fullSearchInputTimer = 0;
-fullSearchClear.hidden = true;
-function updateFullSearchButton(open) {
-  fullSearchButton.textContent = open ? "关闭全文搜索" : "全文搜索";
-  fullSearchButton.setAttribute("aria-label", fullSearchButton.textContent);
-}
-function updateFullSearchClear() {
-  fullSearchClear.hidden = !fullSearchInput.value;
-}
-const chapterSearchPagination = document.createElement("div");
-chapterSearchPagination.className = "full-search-pagination";
-chapterSearchPagination.hidden = true;
-chapterSearchPagination.innerHTML =
-  '<button id="full-search-page-prev" type="button">上一页</button><label>第 <input id="full-search-page" type="number" min="1" value="1" aria-label="搜索结果页码"> 页 <span id="full-search-pages"></span></label><button id="full-search-page-next" type="button">下一页</button>';
-fullSearchResultsNode.before(chapterSearchPagination);
-const fullSearchCancel = document.createElement("button");
-fullSearchCancel.type = "button";
-fullSearchCancel.id = "full-search-cancel";
-fullSearchCancel.className = "text-action";
-fullSearchCancel.textContent = "取消搜索";
-fullSearchCancel.hidden = true;
-fullSearchStatus.after(fullSearchCancel);
-const fullSearchRetry = document.createElement("button");
-fullSearchRetry.type = "button";
-fullSearchRetry.id = "full-search-retry";
-fullSearchRetry.className = "text-action";
-fullSearchRetry.textContent = "重试搜索";
-fullSearchRetry.hidden = true;
-fullSearchCancel.after(fullSearchRetry);
-fullSearchRetry.addEventListener("click", async () => {
-  const failed = failedSearchPage;
-  if (!failed || searchState.query !== failed.query) return runFullSearch();
-  if (chapterSearchClient?.failed) {
-    await runFullSearch();
-    if (!fullSearchComplete || searchState.query !== failed.query) return;
+const fullSearchController = createReaderSearchController({
+  document, runtime: readerRuntime, signal: readerAbortController.signal,
+  nextGeneration: () => nextReaderGeneration("search"),
+  isCurrent: generation => isReaderGenerationCurrent("search", generation),
+  updateSearch: updateSearchState,
+  backend: {
+    mode: () => capability.mode,
+    search: searchReaderText,
+    clearMarks: clearFullSearchMarks,
+    chapterClient: () => chapterSearchClient,
+    pdfClient: () => pdfBookSearchClient,
+    chapterResult: result => ({ ...result,
+      activate: generation => navigateChapterSearchResult(result, generation) }),
+    activate: (result, generation) => result.cfi
+      ? navigateFoliateSearchResult(result, generation) : result.activate(generation)
+  },
+  navigation: {
+    begin: beginReaderNavigation,
+    current: generation => isReaderGenerationCurrent("navigation", generation),
+    reportError: reportNavigationError
+  },
+  panel: {
+    isOpen: () => document.querySelector("#history-panel").classList.contains("is-open"),
+    serial: () => readerPanelInteractionSerial,
+    show: () => { setReaderPanelOpen(true); selectPanel("full-search"); },
+    hide: () => selectPanel(mediaElement ? "media" : "toc"),
+    close: () => setReaderPanelOpen(false, true),
+    focus: () => { readerPanelInteractionSerial++; }
   }
-  return loadChapterSearchPage(failed.offset, failed.selectLast);
 });
-fullSearchCancel.addEventListener("click", () => {
-  nextReaderGeneration("search");
-  beginReaderNavigation();
-  chapterSearchClient?.cancel();
-  pdfBookSearchClient?.cancel();
-  pdfSearchInProgress = false;
-  chapterSearchInProgress = false;
-  chapterSearchPage = null;
-  failedSearchPage = null;
-  pdfSearchPageLoader = null;
-  fullSearchComplete = false;
-  updateSearchState({ results: [], index: -1 });
-  renderFullSearchResults();
-  fullSearchCancel.hidden = true;
-  fullSearchRetry.hidden = false;
-  fullSearchRetry.textContent = "重试搜索";
-  fullSearchStatus.textContent = "搜索已取消";
-});
-chapterSearchPagination
-  .querySelector("#full-search-page-prev")
-  .addEventListener("click", () =>
-    loadChapterSearchPage(chapterSearchPage.offset - chapterSearchPage.pageSize)
-  );
-chapterSearchPagination
-  .querySelector("#full-search-page-next")
-  .addEventListener("click", () =>
-    loadChapterSearchPage(chapterSearchPage.offset + chapterSearchPage.pageSize)
-  );
-chapterSearchPagination.querySelector("#full-search-page").addEventListener("change", (event) => {
-  if (!chapterSearchPage || !Number.isFinite(event.target.valueAsNumber)) return;
-  const page = Math.max(1, Math.min(
-    Math.ceil(chapterSearchPage.total / chapterSearchPage.pageSize),
-    Math.floor(event.target.valueAsNumber)
-  ));
-  const offset = (page - 1) * chapterSearchPage.pageSize;
-  if (offset !== chapterSearchPage.offset) loadChapterSearchPage(offset);
-});
-// Full-text search: format matching, result presentation, and navigation.
+trackReaderResource(fullSearchController.dispose);
+const fullSearchSession = fullSearchController.state;
+const {
+  render: renderFullSearchResults, applyChapterPage: applyChapterSearchPage,
+  run: runFullSearch, close: closeFullSearchView
+} = fullSearchController;
+const {
+  view: fullSearchView, button: fullSearchButton, input: fullSearchInput,
+  status: fullSearchStatus
+} = fullSearchController.elements;
+// Format-specific search backends publish through the shared controller.
 function fullSearchPageOffset(total, requestedOffset, pageSize = 50) {
   return Math.max(0, Math.min(
     Math.floor(Math.max(0, total - 1) / pageSize),
@@ -6797,16 +6743,7 @@ async function searchChapterBook(query, generation) {
   });
   if (isReaderGenerationCurrent("search", generation)) applyChapterSearchPage(page);
 }
-function applyChapterSearchPage(page) {
-  chapterSearchPage = page;
-  updateSearchState({
-    results: page.results.map((result) => ({
-      ...result,
-      activate: (generation) => navigateChapterSearchResult(result, generation)
-    })),
-    index: -1
-  });
-}
+
 async function navigateChapterSearchResult(result, generation) {
   const article = await chapterManifestLoader?.(result.chapterIndex);
   if (!article || !isReaderGenerationCurrent("navigation", generation)) return false;
@@ -6851,53 +6788,7 @@ async function navigateChapterSearchResult(result, generation) {
   scheduleSave();
   return true;
 }
-function updateChapterSearchPagination() {
-  const page = chapterSearchPage;
-  chapterSearchPagination.hidden = !page || !page.total;
-  if (!page) return;
-  const pages = Math.ceil(page.total / page.pageSize);
-  const input = chapterSearchPagination.querySelector("#full-search-page");
-  input.value = String(Math.floor(page.offset / page.pageSize) + 1);
-  input.max = String(Math.max(1, pages));
-  input.style.setProperty("--page-width", `${input.max.length}ch`);
-  chapterSearchPagination.querySelector("#full-search-pages").textContent = `/ ${pages}`;
-  chapterSearchPagination.querySelector("#full-search-page-prev").disabled =
-    pdfSearchInProgress || chapterSearchInProgress || page.offset === 0;
-  chapterSearchPagination.querySelector("#full-search-page-next").disabled =
-    pdfSearchInProgress || chapterSearchInProgress || page.offset + page.pageSize >= page.total;
-  input.disabled = pdfSearchInProgress || chapterSearchInProgress;
-}
-async function loadChapterSearchPage(offset, selectLast = null) {
-  if (pdfSearchInProgress || chapterSearchInProgress || !chapterSearchPage ||
-      (!chapterSearchClient && !pdfSearchPageLoader)) return;
-  failedSearchPage = null;
-  const generation = nextReaderGeneration("search");
-  beginReaderNavigation();
-  if (!["foliate", "epub-chapters"].includes(capability.mode)) fullSearchCancel.hidden = false;
-  fullSearchRetry.hidden = true;
-  fullSearchStatus.textContent = `${chapterSearchPage.total} 个结果`;
-  try {
-    const page = await (pdfSearchPageLoader ? pdfSearchPageLoader(offset, generation) : chapterSearchClient.page(offset));
-    if (!isReaderGenerationCurrent("search", generation)) return;
-    if (pdfSearchPageLoader) {
-      chapterSearchPage = page;
-      updateSearchState({ results: page.results, index: -1 });
-    } else applyChapterSearchPage(page);
-    renderFullSearchResults();
-    fullSearchStatus.textContent = `${page.total} 个结果`;
-    if (selectLast !== null)
-      await activateFullSearchResult(selectLast ? page.results.length - 1 : 0, false);
-  } catch (error) {
-    if (isReaderGenerationCurrent("search", generation)) {
-      fullSearchStatus.textContent = error.message || "搜索结果加载失败";
-      failedSearchPage = { offset, selectLast, query: searchState.query };
-      fullSearchRetry.textContent = "重试本页";
-      fullSearchRetry.hidden = false;
-    }
-  } finally {
-    if (isReaderGenerationCurrent("search", generation)) fullSearchCancel.hidden = true;
-  }
-}
+
 async function fullSearchFoliateMatches(query, generation) {
   if (!epubRendition?.search) return [];
   const groups = [], firstPage = [];
@@ -6919,7 +6810,7 @@ async function fullSearchFoliateMatches(query, generation) {
       }
     };
   };
-  pdfSearchPageLoader = async (requestedOffset, pageGeneration = readerRuntime.currentGeneration("search")) => {
+  fullSearchSession.pageLoader = async (requestedOffset, pageGeneration = readerRuntime.currentGeneration("search")) => {
     const pageSize = 50;
     const offset = fullSearchPageOffset(total, requestedOffset, pageSize);
     if (!offset) return { total, offset, pageSize, results: firstPage.slice() };
@@ -6962,14 +6853,14 @@ async function fullSearchFoliateMatches(query, generation) {
       firstPage.push(toResult(item, group.label, index));
     }
     total += group.count;
-    chapterSearchPage = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-    updateSearchState({ results: chapterSearchPage.results, index: -1 });
+    fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
+    updateSearchState({ results: fullSearchSession.page.results, index: -1 });
     renderFullSearchResults();
     fullSearchStatus.textContent = `${total} 个结果（正在搜索…）`;
     await waitForReader();
     if (!isReaderGenerationCurrent("search", generation)) return [];
   }
-  chapterSearchPage = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
+  fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
   return firstPage;
 }
 function fullSearchEscape(value) {
@@ -7156,21 +7047,7 @@ function fullSearchSnippet(text, index, length) {
     suffix: end < text.length ? "…" : ""
   };
 }
-function fullSearchSnippetDom(snippet) {
-  const node = document.createElement("span");
-  node.className = "full-search-snippet";
-  if (snippet.prefix) node.append(snippet.prefix);
-  node.append(snippet.text.slice(0, snippet.matchStart));
-  const mark = document.createElement("mark");
-  mark.className = "search-match";
-  mark.textContent = snippet.text.slice(
-    snippet.matchStart,
-    snippet.matchStart + snippet.matchLength
-  );
-  node.append(mark, snippet.text.slice(snippet.matchStart + snippet.matchLength));
-  if (snippet.suffix) node.append(snippet.suffix);
-  return node;
-}
+
 function createFullSearchHeadingLookup(root, offsets) {
   const entries = navigationState.tocEntries, boundaries = [];
   const headings = entries.filter(entry => entry.target);
@@ -7332,9 +7209,9 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
     groups.push(group);
     total += group.count;
     if (progressive && (start === 0 || (group.count && total <= 50) || groups.length % 8 === 0)) {
-      pdfSearchPageLoader = page;
-      chapterSearchPage = page(0);
-      updateSearchState({ results: chapterSearchPage.results, index: -1 });
+      fullSearchSession.pageLoader = page;
+      fullSearchSession.page = page(0);
+      updateSearchState({ results: fullSearchSession.page.results, index: -1 });
       renderFullSearchResults();
       fullSearchStatus.textContent = `${total} 个结果（正在搜索…）`;
     }
@@ -7342,8 +7219,8 @@ async function fullSearchDomMatches(root, fallback, query, generation, progressi
     if (!isReaderGenerationCurrent("search", generation)) return [];
   }
   if (progressive) {
-    pdfSearchPageLoader = page;
-    chapterSearchPage = page(0);
+    fullSearchSession.pageLoader = page;
+    fullSearchSession.page = page(0);
   }
   if (occurrence !== null) {
     if (!isReaderGenerationCurrent("navigation", navigationGeneration)) return [];
@@ -7531,19 +7408,19 @@ async function searchConcentratedPdf(query, generation) {
     if (page.offset === 0) firstPageResults = results;
     return { ...page, results };
   };
-  pdfSearchPageLoader = async offset => attach(await client.page(offset));
+  fullSearchSession.pageLoader = async offset => attach(await client.page(offset));
   const page = await client.search(query, partial => {
     if (!isReaderGenerationCurrent("search", generation)) return;
-    chapterSearchPage = attach(partial);
-    updateSearchState({ results: chapterSearchPage.results, index: -1 });
+    fullSearchSession.page = attach(partial);
+    updateSearchState({ results: fullSearchSession.page.results, index: -1 });
     renderFullSearchResults();
     fullSearchStatus.textContent = partial.total
       ? `${partial.total} 个结果（正在搜索… ${partial.scanned} / ${partial.pages} 页）`
       : `正在搜索正文… ${partial.scanned} / ${partial.pages} 页`;
   });
   if (!isReaderGenerationCurrent("search", generation)) return [];
-  chapterSearchPage = attach(page);
-  return chapterSearchPage.results;
+  fullSearchSession.page = attach(page);
+  return fullSearchSession.page.results;
 }
 function makePdfSearchPageLoader(groups, total, pattern, firstPage) {
   const pdf = pdfDocument;
@@ -7580,9 +7457,9 @@ function makePdfSearchPageLoader(groups, total, pattern, firstPage) {
 }
 function publishPdfSearchProgress(generation, groups, total, pattern, firstPage, scanned, pages) {
   if (!isReaderGenerationCurrent("search", generation)) return false;
-  pdfSearchPageLoader = makePdfSearchPageLoader(groups, total, pattern, firstPage);
-  chapterSearchPage = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-  updateSearchState({ results: chapterSearchPage.results, index: -1 });
+  fullSearchSession.pageLoader = makePdfSearchPageLoader(groups, total, pattern, firstPage);
+  fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
+  updateSearchState({ results: fullSearchSession.page.results, index: -1 });
   renderFullSearchResults();
   fullSearchStatus.textContent = total
     ? `${total} 个结果（正在搜索… ${scanned} / ${pages} 页）`
@@ -7713,260 +7590,40 @@ async function fullSearchPdfMatches(query, generation) {
   }
   if (!hasText) throw new Error("此 PDF 尚无可搜索文字层，需要完成 OCR 后才能搜索正文");
   publishPdfSearchProgress(generation, groups, total, pattern, firstPage, pdf.numPages, pdf.numPages);
-  return chapterSearchPage.results;
+  return fullSearchSession.page.results;
 }
-let fullSearchRenderedResults = [];
-let fullSearchRenderedOffset = -1;
-function renderFullSearchResults() {
-  updateChapterSearchPagination();
-  fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => {
-    button.disabled = !searchState.results.length;
-  });
-  const offset = chapterSearchPage?.offset || 0;
-  if (fullSearchRenderedOffset === offset &&
-      fullSearchResultsNode.childElementCount === searchState.results.length &&
-      fullSearchRenderedResults.length === searchState.results.length &&
-      searchState.results.every((result, index) => result === fullSearchRenderedResults[index])) return;
-  const fragment = document.createDocumentFragment();
-  for (const [index, result] of searchState.results.entries()) {
-    const row = document.createElement("button"),
-      location = document.createElement("small");
-    row.type = "button";
-    row.className = "full-search-result";
-    location.className = "full-search-location";
-    location.textContent = result.location;
-    const rank = document.createElement("span");
-    rank.className = "full-search-rank";
-    rank.textContent = `${offset + index + 1}.`;
-    row.append(rank, location, fullSearchSnippetDom(result.snippet));
-    row.addEventListener("click", () => activateFullSearchResult(index));
-    fragment.appendChild(row);
+
+async function searchReaderText(query, generation) {
+  if (capability.mode === "pdf" && !ocrManifestUrl) {
+    await fullSearchPdfMatches(query, generation);
   }
-  fullSearchResultsNode.replaceChildren(fragment);
-  fullSearchRenderedResults = searchState.results.slice();
-  fullSearchRenderedOffset = offset;
-}
-function closeFullSearchView() {
-  clearTimeout(fullSearchInputTimer);
-  fullSearchInputTimer = 0;
-  if (pdfSearchInProgress || chapterSearchInProgress) fullSearchComplete = false;
-  nextReaderGeneration("search");
-  if (chapterSearchInProgress) chapterSearchClient?.cancel();
-  if (pdfSearchInProgress) pdfBookSearchClient?.cancel();
-  pdfSearchInProgress = false;
-  chapterSearchInProgress = false;
-  fullSearchCancel.hidden = true;
-  fullSearchRetry.hidden = true;
-  selectPanel(mediaElement ? "media" : "toc");
-  updateFullSearchButton(false);
-}
-async function runFullSearch() {
-  clearTimeout(fullSearchInputTimer);
-  fullSearchInputTimer = 0;
-  const query = fullSearchInput.value.trim();
-  fullSearchComplete = false;
-  failedSearchPage = null;
-  const generation = nextReaderGeneration("search");
-  pdfBookSearchClient?.cancel();
-  beginReaderNavigation();
-  clearFullSearchMarks();
-  updateSearchState({ query, results: [], index: -1 });
-  chapterSearchPage = null;
-  updateChapterSearchPagination();
-  pdfSearchPageLoader = null;
-  pdfSearchInProgress = ["pdf", "pdf-pages", "foliate"].includes(capability.mode) && !!query;
-  chapterSearchInProgress = capability.mode === "epub-chapters" && !!query;
-  fullSearchRetry.hidden = true;
-  fullSearchRetry.textContent = "重试搜索";
-  fullSearchCancel.hidden = !["epub-chapters", "pdf", "pdf-pages", "foliate"].includes(capability.mode) || !query;
-  fullSearchResultsNode.textContent = "";
-  fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => {
-    button.disabled = true;
-  });
-  if (!query) {
-    chapterSearchClient?.cancel();
-    fullSearchStatus.textContent = "输入关键词搜索正文";
-    return;
+  else if (["pdf", "pdf-pages"].includes(capability.mode)) {
+    publishSearchResults(generation, await searchConcentratedPdf(query, generation));
   }
-  fullSearchStatus.textContent = "正在搜索正文…";
-  try {
-    if (capability.mode === "pdf" && !ocrManifestUrl) {
-      await fullSearchPdfMatches(query, generation);
-    }
-    else if (["pdf", "pdf-pages"].includes(capability.mode)) {
-      publishSearchResults(generation, await searchConcentratedPdf(query, generation));
-    }
-    else if (capability.mode === "foliate")
-      publishSearchResults(generation, await fullSearchFoliateMatches(query, generation));
-    else if (capability.mode === "epub-chapters") await searchChapterBook(query, generation);
-    else if (["text", "markdown", "docx"].includes(capability.mode))
-      publishSearchResults(
-        generation,
-        await fullSearchDomMatches(content, "阅读位置", query, generation, true)
-      );
-    else if (capability.mode === "html")
-      publishSearchResults(
-        generation,
-        htmlFrame?.contentDocument?.body
-          ? await fullSearchDomMatches(
-              htmlFrame.contentDocument.body,
-              "HTML 阅读位置",
-              query,
-              generation,
-              true
-            )
-          : []
-      );
-    else throw new Error("此格式没有可搜索文本");
-    if (!isReaderGenerationCurrent("search", generation)) return;
-    fullSearchComplete = true;
-    pdfSearchInProgress = false;
-    chapterSearchInProgress = false;
-    renderFullSearchResults();
-    fullSearchStatus.textContent = chapterSearchPage
-      ? chapterSearchPage.total
-        ? `${chapterSearchPage.total} 个结果`
-        : "未找到正文匹配"
-      : searchState.results.length
-        ? `${searchState.results.length}${searchState.results.length === 100 ? "+" : ""} 个结果`
-        : "未找到正文匹配";
-  } catch (error) {
-    if (isReaderGenerationCurrent("search", generation)) {
-      pdfSearchInProgress = false;
-      chapterSearchInProgress = false;
-      fullSearchStatus.textContent = error.message || "正文搜索不可用";
-      fullSearchRetry.hidden = !["epub-chapters", "pdf", "pdf-pages", "foliate"].includes(capability.mode);
-    }
-  } finally {
-    if (isReaderGenerationCurrent("search", generation)) {
-      pdfSearchInProgress = false;
-      chapterSearchInProgress = false;
-      updateChapterSearchPagination();
-    }
-    if (isReaderGenerationCurrent("search", generation)) fullSearchCancel.hidden = true;
-    if (isReaderGenerationCurrent("search", generation))
-      fullSearchView.querySelectorAll(".full-search-nav button").forEach((button) => {
-        button.disabled = !searchState.results.length;
-      });
-  }
-}
-async function activateFullSearchResult(index, closePanel = true) {
-  const result = searchState.results[index];
-  if (!result) return;
-  const previousIndex = searchState.index;
-  const panelSerial = readerPanelInteractionSerial;
-  const searchGeneration = readerRuntime.currentGeneration("search");
-  const generation = beginReaderNavigation();
-  updateSearchState({ index });
-  try {
-    const activated = result.cfi
-      ? await navigateFoliateSearchResult(result, generation)
-      : await result.activate(generation);
-    if (activated === false && isReaderGenerationCurrent("navigation", generation) &&
-        isReaderGenerationCurrent("search", searchGeneration) && searchState.results[index] === result) {
-      updateSearchState({ index: previousIndex });
-      fullSearchStatus.textContent = "搜索结果定位失败，请重试";
-      return;
-    }
-    if (
-      activated === false ||
-      !isReaderGenerationCurrent("navigation", generation) ||
-      searchState.results[index] !== result
-    )
-      return;
-    if (fullSearchStatus.textContent === "搜索结果定位失败，请重试")
-      fullSearchStatus.textContent = `${chapterSearchPage?.total ?? searchState.results.length} 个结果`;
-    if (closePanel && panelSerial === readerPanelInteractionSerial &&
-        isReaderGenerationCurrent("search", searchGeneration))
-      setReaderPanelOpen(false, true);
-    else if (!closePanel) fullSearchResultsNode.children[index]?.scrollIntoView({ block: "nearest" });
-  } catch (error) {
-    if (error?.name !== "AbortError" && isReaderGenerationCurrent("navigation", generation) &&
-        isReaderGenerationCurrent("search", searchGeneration) && searchState.results[index] === result) {
-      updateSearchState({ index: previousIndex });
-      fullSearchStatus.textContent = capability.mode === "epub-chapters"
-        ? error.message || "搜索结果定位失败，请重试"
-        : "搜索结果定位失败，请重试";
-    }
-    reportNavigationError(error, generation);
-  }
-}
-function moveFullSearch(step) {
-  if (chapterSearchPage?.total) {
-    const page = chapterSearchPage;
-    const next = searchState.index < 0 ? (step > 0 ? 0 : -1) : searchState.index + step;
-    if (next < 0)
-      return loadChapterSearchPage(
-        page.offset
-          ? page.offset - page.pageSize
-          : Math.floor((page.total - 1) / page.pageSize) * page.pageSize,
-        true
-      );
-    if (next >= searchState.results.length)
-      return loadChapterSearchPage(
-        page.offset + page.pageSize < page.total ? page.offset + page.pageSize : 0,
-        false
-      );
-    return activateFullSearchResult(next, false);
-  }
-  if (searchState.results.length)
-    return activateFullSearchResult(
-      (searchState.index + step + searchState.results.length) % searchState.results.length,
-      false
+  else if (capability.mode === "foliate")
+    publishSearchResults(generation, await fullSearchFoliateMatches(query, generation));
+  else if (capability.mode === "epub-chapters") await searchChapterBook(query, generation);
+  else if (["text", "markdown", "docx"].includes(capability.mode))
+    publishSearchResults(
+      generation,
+      await fullSearchDomMatches(content, "阅读位置", query, generation, true)
     );
+  else if (capability.mode === "html")
+    publishSearchResults(
+      generation,
+      htmlFrame?.contentDocument?.body
+        ? await fullSearchDomMatches(
+            htmlFrame.contentDocument.body,
+            "HTML 阅读位置",
+            query,
+            generation,
+            true
+          )
+        : []
+    );
+  else throw new Error("此格式没有可搜索文本");
 }
-function toggleFullSearch() {
-  const panel = document.querySelector("#history-panel");
-  if (panel.classList.contains("is-open") && !fullSearchView.hidden) {
-    closeFullSearchView();
-    return;
-  }
-  setReaderPanelOpen(true);
-  selectPanel("full-search");
-  updateFullSearchButton(true);
-  updateFullSearchClear();
-  fullSearchInput.focus();
-  if (searchState.query !== fullSearchInput.value.trim() || !fullSearchComplete) runFullSearch();
-  else if (failedSearchPage) fullSearchRetry.hidden = false;
-}
-fullSearchButton.addEventListener("click", toggleFullSearch);
-function queueFullSearch() {
-  clearTimeout(fullSearchInputTimer);
-  nextReaderGeneration("search");
-  beginReaderNavigation();
-  chapterSearchClient?.cancel();
-  pdfBookSearchClient?.cancel();
-  fullSearchComplete = false;
-  pdfSearchInProgress = false;
-  chapterSearchInProgress = false;
-  chapterSearchPage = null;
-  failedSearchPage = null;
-  pdfSearchPageLoader = null;
-  updateSearchState({ results: [], index: -1 });
-  renderFullSearchResults();
-  fullSearchCancel.hidden = true;
-  fullSearchRetry.hidden = true;
-  fullSearchStatus.textContent = fullSearchInput.value.trim() ? "正在搜索正文…" : "输入关键词搜索正文";
-  fullSearchInputTimer = setTimeout(runFullSearch, 180);
-}
-fullSearchInput.addEventListener("input", (event) => {
-  updateFullSearchClear();
-  if (!event.isComposing) queueFullSearch();
-});
-fullSearchInput.addEventListener("focus", () => { readerPanelInteractionSerial++; });
-fullSearchInput.addEventListener("compositionend", queueFullSearch);
-fullSearchView.querySelector("#full-search-clear").addEventListener("click", () => {
-  fullSearchInput.value = "";
-  updateFullSearchClear();
-  runFullSearch();
-  fullSearchInput.focus();
-});
-fullSearchView
-  .querySelector("#full-search-prev")
-  .addEventListener("click", () => moveFullSearch(-1));
-fullSearchView
-  .querySelector("#full-search-next")
-  .addEventListener("click", () => moveFullSearch(1));
+
 function syncCapabilityControls() {
   content.dataset.mode = capability.mode || "unsupported";
   pageInvertToggle.hidden = !["pdf", "pdf-pages"].includes(capability.mode);

@@ -55,6 +55,7 @@ jobs:
             npx --yes esbuild@0.28.2 "static/$file" --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile="_site/static/$file"
           done
           cp static/reader.html _site/static/reader.html
+          cp -a static/icons _site/static/icons
           cp -a static/foliate-reader _site/static/foliate-reader
           npx --yes esbuild@0.28.2 sw.js --minify --target=es2019 --charset=utf8 --legal-comments=none --outfile=_site/sw.js
           node --check _site/static/app.js
