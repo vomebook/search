@@ -1,8 +1,8 @@
 const assert = require("assert");
 const fs = require("fs");
-const { assertCode } = require("./reader_source_contract");
+const { assertCode, readReaderSource } = require("./reader_source_contract");
 
-const reader = fs.readFileSync("static/reader.js", "utf8");
+const reader = readReaderSource(require("path").resolve("."));
 const html = fs.readFileSync("static/reader.html", "utf8");
 const css = fs.readFileSync("static/reader.css", "utf8");
 for (const value of ['role="status"', 'id="page-number"', 'id="page-total"']) assert.ok(html.includes(value), value);

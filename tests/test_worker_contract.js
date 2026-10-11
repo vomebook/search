@@ -3,7 +3,7 @@ const assert = require("assert");
 const vm = require("vm");
 const { test, run } = require("./test_harness");
 
-const source = fs.readFileSync("static/index-worker.js", "utf8");
+const source = fs.readFileSync("static/search/index-worker.js", "utf8");
 const app = fs.readFileSync("static/app.js", "utf8");
 const PROTOCOL = 1;
 const records = [
@@ -60,7 +60,7 @@ function makeWorker(workerSource = source, options = {}) {
     },
   };
   vm.createContext(context);
-  vm.runInContext(workerSource, context, { filename: "static/index-worker.js" });
+  vm.runInContext(workerSource, context, { filename: "static/search/index-worker.js" });
   async function send(type, payload, options) {
     const settings = Object.assign({ protocol: PROTOCOL, id: "request" }, options || {});
     const before = messages.length;

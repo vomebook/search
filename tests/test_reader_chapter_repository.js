@@ -6,7 +6,7 @@ const vm = require("vm");
 function createRepository(options) {
   const sandbox = { self: {}, DOMException };
   sandbox.self = sandbox;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader-chapter-repository.js"), "utf8"), sandbox);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js"), "utf8"), sandbox);
   return sandbox.VoiceOfMLReaderChapters.createChapterRepository(options);
 }
 

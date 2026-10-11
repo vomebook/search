@@ -1,6 +1,7 @@
 import json
 import time
 import unittest
+from urllib.parse import parse_qs, urlsplit
 
 from tests.browser_support import local_server
 
@@ -124,7 +125,12 @@ class BrowserBehaviorTest(unittest.TestCase):
                 }""", [extension, repo, name, folder, digest])
                 self.assertTrue(rendered["readable"], extension)
                 self.assertEqual(rendered["readerExtension"], "html", extension)
-                self.assertIn("/buckets/vomebook/pdf-pages/resolve/", rendered["readerLink"], extension)
+                link = urlsplit(rendered["readerLink"])
+                self.assertEqual((link.scheme, link.netloc, link.path),
+                                 ("https", "voiceofml-search.hf.space", "/api/reader-bucket-resource"))
+                profile = f"calibre-{extension}-html-v1"
+                self.assertEqual(parse_qs(link.query),
+                                 {"path": [f"objects/{digest[:2]}/{digest}/{profile}/document.html"]})
                 self.assertIn('data-action="read"', rendered["html"], extension)
                 self.assertIn("在线阅读", rendered["html"], extension)
 

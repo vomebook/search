@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   chapterMayContainBigrams, countMatches, isSearchIndexProxyURL, queryBigramFilters, resultPage, scanText, validateIndex
-} from "../static/reader-chapter-search-worker.mjs";
+} from "../static/reader/search/workers/reader-chapter-search-worker.mjs";
 
 const origin = "https://voiceofml-search.hf.space";
 const indexURL = path => new URL(origin + "/api/reader-bucket-resource?path=" + encodeURIComponent(path));

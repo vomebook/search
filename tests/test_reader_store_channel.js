@@ -1,7 +1,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const vm = require("vm");
-const source = fs.readFileSync("static/reader-store.js", "utf8");
+const source = fs.readFileSync("static/reader/core/reader-store.js", "utf8");
 const channels = new Set();
 class BroadcastChannel {
   constructor(name) { this.name = name; this.closed = false; channels.add(this); }

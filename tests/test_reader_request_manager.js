@@ -24,7 +24,7 @@ function loadManager(fetchImpl) {
   };
   sandbox.self = sandbox;
   vm.runInNewContext(
-    fs.readFileSync(path.join(__dirname, "../static/reader-request-manager.js"), "utf8"),
+    fs.readFileSync(path.join(__dirname, "../static/reader/core/reader-request-manager.js"), "utf8"),
     sandbox
   );
   return { manager: sandbox.VoiceOfMLReaderRequests.createReaderRequestManager(), timers };

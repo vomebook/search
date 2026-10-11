@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { hitBoxes, searchBookText } from "../static/reader-book-text.js";
+import { hitBoxes, searchBookText } from "../static/reader/search/reader-book-text.js";
 
 const spans = [
   { start: 0, end: 1, box: [0, 0, 0.2, 1], block: 0 },

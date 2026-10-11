@@ -3,8 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const root = process.argv[2] ? path.resolve(process.argv[2]) : path.resolve(__dirname, '..');
-const contract = fs.readFileSync(path.join(root, 'static/reader-contract.js'), 'utf8');
-const security = fs.readFileSync(path.join(root, 'static/reader-security.js'), 'utf8');
+const contract = fs.readFileSync(path.join(root, 'static/reader/core/reader-contract.js'), 'utf8');
+const security = fs.readFileSync(path.join(root, 'static/reader/core/reader-security.js'), 'utf8');
 const source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + encodeURIComponent(
   'chapters/ebook/epub/' + 'a'.repeat(64) + '/' + 'b'.repeat(16) + '/chapter-manifest.json');
 

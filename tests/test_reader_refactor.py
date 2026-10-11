@@ -29,7 +29,7 @@ def expose_dom_search_tools(page):
             location: fullSearchLocation
           };
         ''' + marker))
-    page.route("**/static/reader-dom-search.mjs*", instrument)
+    page.route("**/static/reader/search/reader-dom-search.mjs*", instrument)
 
 
 @unittest.skipIf(support.sync_playwright is None, "Playwright is unavailable")
@@ -84,7 +84,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
             "get: () => new Promise(resolve => { window.__releaseRestore = () => resolve({url: location.href, page: 1, zoom: 220}); }),",
         )
-        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(
             content_type="text/javascript", body=store))
         self.page.route("**/api/reader-content**", lambda route: route.fulfill(
             content_type="application/pdf", body=support.minimal_pdf(),
@@ -106,7 +106,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
             "get: (url) => Promise.resolve(url.includes('refactor.pdf') ? {url, page: 1, zoom: 175} : null),",
         )
-        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(
             content_type="text/javascript", body=store))
         self.page.route("**/api/reader-content**", lambda route: route.fulfill(
             content_type="application/pdf", body=support.minimal_pdf(),
@@ -306,7 +306,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "getPage: () => Promise.resolve(page)",
             "getPage: (number) => { (window.__pdfPageRequests ||= []).push(number); return Promise.resolve(page); }",
         )
-        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(content_type="text/javascript", body=module))
         self.serve(b"pdf", "application/pdf")
         self.open(self.reader_url("pdf"))
@@ -322,7 +322,7 @@ class ReaderRefactorTest(unittest.TestCase):
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 24}
         root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
         requests = []
-        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
         self.serve(json.dumps(manifest), "application/json")
         self.page.route("**/page-manifest.json", lambda route: route.fulfill(json=manifest))
         def image(route):
@@ -362,7 +362,7 @@ class ReaderRefactorTest(unittest.TestCase):
             {"index": i, "path": f"chapter-{i}.xhtml", "bytes": 100} for i in range(1, 13)
         ]}
         requested = []
-        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
         def resource(route):
             url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("url", [""])[0]
             if "chapter-" in url and url.endswith(".xhtml"):
@@ -392,7 +392,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
             "get: () => Promise.resolve({foliateSection: 10, foliateOffset: 0, foliateTocIndex: 9}),",
         )
-        self.page.route("**/static/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
+        self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
         def instrument(route):
             response = route.fetch()
             body = response.text().replace(
@@ -400,7 +400,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 "async function createFoliateSection(section, index) { (window.__openedSections ||= []).push(index);",
             )
             route.fulfill(response=response, body=body)
-        self.page.route("**/static/reader.js*", instrument)
+        self.page.route("**/static/reader/formats/reader-foliate-format.mjs*", instrument)
         self.serve(support.epub_with_many_chapters(), "application/epub+zip")
         self.open(self.reader_url("epub"))
         self.assertEqual(self.page.evaluate("window.__openedSections[0]"), 10)
@@ -817,7 +817,7 @@ class ReaderRefactorTest(unittest.TestCase):
                   }"""
             )
             route.fulfill(response=response, body=script)
-        self.page.route("**/static/reader.js*", instrument)
+        self.page.route("**/static/reader/core/reader-lifecycle.mjs*", instrument)
         module = support.PDF_MODULE.replace("numPages: 30", "numPages: 2").replace(
             "getPage: () => Promise.resolve(page)", """getPage: () => Promise.resolve({ ...page,
               getTextContent() { return Promise.resolve({ items: [{ str: 'needle '.repeat(6000), hasEOL: false }] }); } })""")
@@ -847,7 +847,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 window.__failSearchPage = false;
                 throw new Error('temporary page load');
               }"""))
-        self.page.route("**/static/reader.js*", instrument)
+        self.page.route("**/static/reader/pdf/reader-pdf-search.mjs*", instrument)
         module = support.PDF_MODULE.replace("numPages: 30", "numPages: 3").replace(
             "getPage: () => Promise.resolve(page)", """getPage: () => Promise.resolve({ ...page,
               getTextContent() { return Promise.resolve({ items: [{ str: 'needle '.repeat(60), hasEOL: false }] }); } })""")
@@ -944,8 +944,8 @@ class ReaderRefactorTest(unittest.TestCase):
             response = route.fetch()
             route.fulfill(response=response, body=response.text().replace(
                 "target = matches[0]?.target;", "target = matches[0]?.target; window.__fallbackDone = true;"))
-        self.page.route("**/static/reader-dom-search.mjs*", hold_fallback)
-        self.page.route("**/static/reader.js*", finish_fallback)
+        self.page.route("**/static/reader/search/reader-dom-search.mjs*", hold_fallback)
+        self.page.route("**/static/reader/search/reader-search-backends.mjs*", finish_fallback)
         self.serve(support.epub_with_many_chapters(3), "application/epub+zip")
         self.open(self.reader_url("epub"))
         self.search("正文")
@@ -1652,7 +1652,7 @@ class ReaderRefactorTest(unittest.TestCase):
             self.assertIn(needle, script)
             route.fulfill(response=response, body=script.replace(needle,
                 "window.__breakChapterWorker = () => worker.onerror({ preventDefault() {} }); " + needle))
-        self.page.route("**/static/reader-chapter-search.mjs*", expose_worker_failure)
+        self.page.route("**/static/reader/search/reader-chapter-search.mjs*", expose_worker_failure)
         self.serve_chapter_search()
         self.search("needle")
         self.page.evaluate("window.__breakChapterWorker()")
@@ -1893,7 +1893,7 @@ class ReaderRefactorTest(unittest.TestCase):
         url = self.reader_url(name="remote-history")
         source = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["url"][0]
         peer = self.context.new_page()
-        store_path = urllib.parse.urlsplit(url).path.replace("reader.html", "reader-store.js")
+        store_path = urllib.parse.urlsplit(url).path.replace("reader.html", "reader/core/reader-store.js")
         peer.route("**/store-peer", lambda route: route.fulfill(content_type="text/html", body=f'<script src="{store_path}"></script>'))
         peer.goto(self.origin + "/store-peer")
         for event_type in ("history-remove", "history-clear"):
@@ -2028,7 +2028,7 @@ class ReaderRefactorTest(unittest.TestCase):
             self.assertIn(needle, script)
             route.fulfill(response=response, body=script.replace(needle,
                 needle + ' window.__sampleVisits = (window.__sampleVisits || 0) + 1;'))
-        self.page.route('**/static/reader.js*', instrument)
+        self.page.route('**/static/reader/formats/reader-text-format.mjs*', instrument)
         self.page.add_init_script('''const nativeFetch = window.fetch.bind(window), Decoder = window.TextDecoder;
           window.__previewDecoders = 0;
           window.TextDecoder = class extends Decoder {
@@ -2202,7 +2202,7 @@ class ReaderRefactorTest(unittest.TestCase):
             route.fulfill(response=response, body=script.replace(needle,
                 "await new Promise(resolve => { window.__releaseActivation = resolve; }); " +
                 needle + " window.__activationSettled = true;"))
-        self.page.route("**/static/reader-dom-search.mjs*", hold_activation)
+        self.page.route("**/static/reader/search/reader-dom-search.mjs*", hold_activation)
         self.serve("oldword " * 70 + "freshword")
         self.open(self.reader_url())
         self.search("oldword")
@@ -2404,11 +2404,15 @@ class ReaderRefactorTest(unittest.TestCase):
         def instrument(route):
             response = route.fetch()
             script = response.text()
-            self.assertIn('repairHtmlContrast(frame);', script)
-            route.fulfill(response=response, body=script.replace('repairHtmlContrast(frame);', '') + '''
+            self.assertIn('readerContext.repairHtmlContrast(frame);', script)
+            route.fulfill(response=response, body=script.replace('readerContext.repairHtmlContrast(frame);', ''))
+        self.page.route('**/static/reader/formats/reader-html-format.mjs*', instrument)
+        def expose(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '''
               window.__repairContrast = () => repairHtmlContrast(htmlFrame);
             ''')
-        self.page.route('**/static/reader.js*', instrument)
+        self.page.route('**/static/reader.js*', expose)
 
     def test_html_contrast_reuses_transparent_ancestors_and_refreshes_between_passes(self):
         self.expose_html_contrast()

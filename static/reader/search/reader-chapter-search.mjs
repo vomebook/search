@@ -1,5 +1,5 @@
 export function createChapterSearch(configuration) {
-  const worker = new Worker("/search/static/reader-chapter-search-worker.mjs", { type: "module" });
+  const worker = new Worker("/search/static/reader/search/workers/reader-chapter-search-worker.mjs", { type: "module" });
   let sequence = 0, pending = null, disposed = false, session = null, failure = null;
   const cancelPending = () => {
     pending?.reject(new DOMException("Search cancelled", "AbortError"));

@@ -13,10 +13,17 @@ class EbookFlowTests(unittest.TestCase):
     setUp = support.PdfFollowupTests.setUp
 
     def expose(self):
+        def instrument_foliate(route):
+            response = route.fetch()
+            needle = 'readerContext.foliateSectionLoader.refresh = refresh;'
+            script = response.text()
+            self.assertIn(needle, script)
+            route.fulfill(response=response, body=script.replace(needle,
+                needle + ' window.__nativeStats=()=>({active:scheduler.activeCount,pending:scheduler.pendingCount});'))
+        self.page.route('**/static/reader/formats/reader-foliate-format.mjs*', instrument_foliate)
         def instrument(route):
             response = route.fetch()
-            script=response.text().replace('foliateSectionLoader.refresh = refresh;',
-                'foliateSectionLoader.refresh = refresh; window.__nativeStats=()=>({active:scheduler.activeCount,pending:scheduler.pendingCount});')
+            script=response.text()
             route.fulfill(response=response, body=script+'''
               window.__ebook={restore:restoreFoliateBookmarkPosition,seek:seekFoliateProgress,
                 begin:beginReaderNavigation,anchor:foliateScrollAnchors,

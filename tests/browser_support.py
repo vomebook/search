@@ -51,6 +51,10 @@ class SearchHandler(http.server.SimpleHTTPRequestHandler):
             clean = "/search/"
         if clean.startswith("/search/"):
             clean = clean[len("/search") :]
+        if clean in ("/", "/index.html", "/sw.js", "/manifest.json"):
+            clean = "/static/" + ("index.html" if clean == "/" else clean.lstrip("/"))
+        elif clean.startswith("/icons/"):
+            clean = "/static" + clean
         return super().translate_path(clean)
 
     def guess_type(self, path):

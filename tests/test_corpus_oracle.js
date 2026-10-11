@@ -4,7 +4,7 @@ const vm = require("vm");
 const zlib = require("zlib");
 const { test, run } = require("./test_harness");
 
-const workerSource = fs.readFileSync("static/index-worker.js", "utf8");
+const workerSource = fs.readFileSync("static/search/index-worker.js", "utf8");
 const compact = JSON.parse(zlib.gunzipSync(fs.readFileSync("data/search_data.json.gz")).toString("utf8"));
 
 // This decoder intentionally does not use app.js or its compact-data helpers.
@@ -39,7 +39,7 @@ async function realWorkerSearch(params) {
     },
   };
   vm.createContext(context);
-  vm.runInContext(workerSource, context, { filename: "static/index-worker.js" });
+  vm.runInContext(workerSource, context, { filename: "static/search/index-worker.js" });
   await listener({ data: { protocol: 1, type: "replace-corpus", id: "load", payload: { data: clone(compact) } } });
   await listener({ data: { protocol: 1, type: "local-search", id: "oracle", payload: params } });
   return messages[messages.length - 1].result;

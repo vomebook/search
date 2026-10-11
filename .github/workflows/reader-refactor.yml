@@ -9,6 +9,9 @@ on:
     paths:
       - "static/reader*.js"
       - "static/reader*.mjs"
+      - "static/reader/**"
+      - "static/search/**"
+      - "scripts/build/**"
       - "static/reader*.css"
       - "static/reader*.html"
       - "static/foliate-reader/**"
@@ -42,7 +45,7 @@ jobs:
         run: |
           python -m pip install playwright==1.63.0 Pillow==12.3.0
           python -m playwright install --with-deps chromium
-          node scripts/copy_reader_vendor.mjs static/vendor
+          node scripts/build/copy_reader_vendor.mjs static/vendor
       - name: Run chapter-search unit tests
         run: |
           node tests/test_reader_architecture.js
@@ -77,7 +80,7 @@ jobs:
       - name: Check Reader JavaScript syntax
         run: |
           node --check static/reader.js
-          node --check static/reader-chapter-search-worker.mjs
+          node --check static/reader/search/workers/reader-chapter-search-worker.mjs
 
   huggingface-search:
     runs-on: ubuntu-latest
@@ -98,7 +101,7 @@ jobs:
         run: |
           python -m pip install -r requirements.txt playwright==1.63.0 Pillow==12.3.0
           python -m playwright install --with-deps chromium
-          node scripts/copy_reader_vendor.mjs static/vendor
+          node scripts/build/copy_reader_vendor.mjs static/vendor
       - name: Run chapter-search unit tests
         working-directory: huggingface-search
         run: |
@@ -146,4 +149,4 @@ jobs:
         working-directory: huggingface-search
         run: |
           node --check static/reader.js
-          node --check static/reader-chapter-search-worker.mjs
+          node --check static/reader/search/workers/reader-chapter-search-worker.mjs

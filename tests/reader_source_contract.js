@@ -1,4 +1,13 @@
 const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+
+function readReaderSource(root) {
+  const resources = require(path.join(root, "static/reader-resources.js"));
+  return ["reader.js", ...resources.readerComponentFiles].map(file =>
+    fs.readFileSync(path.join(root, "static", file), "utf8")
+      .replace(/\breaderContext\./g, "").replace(/^  /gm, "")).join("\n");
+}
 
 // Match code tokens across layout changes, preserving quoted values and operators.
 // This is a snippet matcher, not a JavaScript parser or a source minifier.
@@ -14,4 +23,4 @@ function assertCode(source, snippet) {
   assert.match(source, codePattern(snippet), snippet);
 }
 
-module.exports = { codePattern, assertCode };
+module.exports = { codePattern, assertCode, readReaderSource };
