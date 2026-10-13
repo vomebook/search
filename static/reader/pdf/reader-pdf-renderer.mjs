@@ -59,6 +59,8 @@ export function createReaderPdfRenderer(readerContext) {
       .then(() => { delete shell.dataset.renderRetries; delete shell.dataset.renderFailed; })
       .catch((error) => {
         if (readerContext.readerAbortController.signal.aborted || error?.name === "AbortError") return;
+        // Hybrid preview cancellation after PDF canvas completion is not a user-visible failure
+        if (shell.dataset.pdfPresented === "1") return;
         console.warn(`PDF page ${shell.dataset.page} render failed`, error);
         const retries = Number(shell.dataset.renderRetries || 0);
         const pageState = shell.querySelector(".reader-page-state");
@@ -95,10 +97,14 @@ export function createReaderPdfRenderer(readerContext) {
       .finally(() => {
         if (shell._backgroundRender === task) delete shell._backgroundRender;
         delete shell._pdfRenderCancelled;
-        if (shell._resumePdfDemand) {
+        if (shell._resumePdfDemand || shell._pdfRenderNeedsRequeue) {
           delete shell._resumePdfDemand;
-          if (!readerContext.readerAbortController.signal.aborted && shell.isConnected && readerContext.isPdfPageVisible(shell))
-            queueMicrotask(() => readerContext.renderPdfInBackground(shell));
+          if (!readerContext.readerAbortController.signal.aborted && shell.isConnected &&
+              readerContext.isPdfPageVisible(shell) && shell.dataset.renderState !== "rendered" &&
+              shell.dataset.renderFailed !== "1") {
+            delete shell._pdfRenderNeedsRequeue;
+            queueMicrotask(() => readerContext.renderPdfInBackground(shell, false, readerContext.pdfPagePriority(shell)));
+          }
         }
       });
     return task;
@@ -152,8 +158,15 @@ export function createReaderPdfRenderer(readerContext) {
       do {
         const generation = readerContext.readerRuntime.currentGeneration("pdf");
         if (signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
+        if (!acquired) {
+          // Admit page reads too: getPage can demand ranges before canvas rendering.
+          await readerContext.measurePdf(readerContext.acquirePdfRenderSlot(priority, shell, signal), "queue", Number(shell.dataset.page));
+          acquired = true;
+          shell._pdfRenderOwnsSlot = true;
+        }
+        if (signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
         const page = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(Number(shell.dataset.page)), signal), "page", Number(shell.dataset.page));
-        if (!acquired) { await readerContext.measurePdf(readerContext.acquirePdfRenderSlot(priority, shell, signal), "queue", Number(shell.dataset.page)); acquired = true; shell._pdfRenderOwnsSlot = true; }
+        if (signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
         const base = page.getViewport({ scale: 1 });
         const geometry = readerContext.pdfV3Map.pages[Number(shell.dataset.page) - 1];
         if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
@@ -241,7 +254,11 @@ export function createReaderPdfRenderer(readerContext) {
          if (shell.dataset.pdfPresented === "1") return;
          if (readerContext.pdfV3Manifest) {
            const geometry = readerContext.pdfV3Map.pages[entry.page - 1];
-           if (image.naturalWidth !== shell._v3PreviewEntry.width || image.naturalHeight !== shell._v3PreviewEntry.height ||
+           // Vector previews have fractional intrinsic sizes. The pipeline
+           // records math.ceil(width/height); browsers round naturalWidth.
+           const tolerance = shell._v3PreviewEntry.codec === "svg" ? 1 : 0;
+           if (Math.abs(image.naturalWidth - shell._v3PreviewEntry.width) > tolerance ||
+               Math.abs(image.naturalHeight - shell._v3PreviewEntry.height) > tolerance ||
                Math.abs((image.naturalWidth / image.naturalHeight) / (geometry.width / geometry.height) - 1) > .01)
              throw new Error("PDF_V3_PREVIEW_GEOMETRY_MISMATCH");
          }
@@ -261,15 +278,11 @@ export function createReaderPdfRenderer(readerContext) {
         readerContext.trimPdfManifestImages(shell);
         readerContext.scheduleMarkerSync();
       } catch (error) {
-         shell.querySelector("img")?.remove();
-         shell._v3PreviewRelease?.();
-        const pageState = shell.querySelector(".reader-page-state");
-        if (pageState && shell.dataset.pdfPresented !== "1") {
-          pageState.dataset.state = "error";
-          pageState.removeAttribute("aria-label");
-          pageState.hidden = false;
-          pageState.textContent = "页面加载失败，正在重试…";
-        }
+        shell.querySelector("img")?.remove();
+        shell._v3PreviewRelease?.();
+        // The outer background task owns the user-visible error/retry state.
+        // Preview cancellation is expected during the PDF handoff and must
+        // not flash a false page failure.
         if (shell.dataset.pdfPresented !== "1") shell.dataset.renderState = "idle";
         throw error;
       } finally {

@@ -363,7 +363,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /standardFontDataUrl: PDFJS_STANDARD_FONT_URL/);
   assert.match(readerHtml, /'wasm-unsafe-eval'/);
   assert.match(reader, /"gb18030", "big5", "windows-1251", "windows-1252"/);
-  assertCode(reader, 'appendDecoded(new TextDecoder(detectTextEncoding(bytes, documentState.title)).decode(bytes))');
+  assertCode(reader, 'appendDecoded(decoder.decode(bytes), decoder.encoding)');
   assertCode(reader, 'docx: [loadDocxDocument, renderDocx]');
   assertCode(reader, 'const docxDocument = await awaitReader(docx.parseAsync(bytes, options))');
   assertCode(reader, 'const nodes = await awaitReader(docx.renderDocument(docxDocument, options))');

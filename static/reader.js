@@ -375,6 +375,7 @@ const readerContext = {
   get scheduleMarkerSync() { return scheduleMarkerSync; }, set scheduleMarkerSync(value) { scheduleMarkerSync = value; },
   get schedulePdfBookSearchPrefetch() { return schedulePdfBookSearchPrefetch; }, set schedulePdfBookSearchPrefetch(value) { schedulePdfBookSearchPrefetch = value; },
   get schedulePdfManifestPrefetch() { return schedulePdfManifestPrefetch; }, set schedulePdfManifestPrefetch(value) { schedulePdfManifestPrefetch = value; },
+  get scheduleVisiblePdfRenderReconciliation() { return scheduleVisiblePdfRenderReconciliation; }, set scheduleVisiblePdfRenderReconciliation(value) { scheduleVisiblePdfRenderReconciliation = value; },
   get scheduleSave() { return scheduleSave; }, set scheduleSave(value) { scheduleSave = value; },
   get searchConcentratedPdf() { return searchConcentratedPdf; }, set searchConcentratedPdf(value) { searchConcentratedPdf = value; },
   get searchState() { return searchState; },
@@ -587,7 +588,7 @@ let {
   stopPdfManifestPrefetch, trimPdfManifestPrefetches, pdfPixelBudget, pdfSurfacePixels,
   pdfRetainedPixels, trimPdfSurfaces, clearPdfManifestPrefetches, takePdfManifestPrefetch,
   queuePdfManifestPrefetch, prioritizePdfManifestPrefetch, schedulePdfManifestPrefetch, trimPdfManifestImages,
-  refreshNearbyPdfPages, cancelSpeculativePdfRenders, promotePdfRenderWaiter, acquirePdfRenderSlot,
+  refreshNearbyPdfPages, scheduleVisiblePdfRenderReconciliation, cancelSpeculativePdfRenders, promotePdfRenderWaiter, acquirePdfRenderSlot,
   releasePdfRenderSlot, acquirePdfTextSlot, drainPdfTextWaiters, releasePdfTextSlot,
   trimPdfCanvases, rerenderVisiblePdfPages
 } = createReaderPdfScheduler(readerContext);
