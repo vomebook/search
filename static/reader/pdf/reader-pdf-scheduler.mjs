@@ -1,4 +1,6 @@
 export function createReaderPdfScheduler(readerContext) {
+  let pdfVisibleReconcileFrame = 0;
+
   function pdfManifestPrefetchConcurrency() {
     const type = navigator.connection?.effectiveType;
     if (type === "slow-2g" || type === "2g") return 1;
@@ -223,6 +225,7 @@ export function createReaderPdfScheduler(readerContext) {
       )
         continue;
       shell._pdfRenderCancelled = true;
+      shell._pdfRenderNeedsRequeue = true;
       shell._renderCancel?.();
       shell._hybridCancel?.();
     }
@@ -287,7 +290,9 @@ export function createReaderPdfScheduler(readerContext) {
     for (let i = 0; i < readerContext.pdfRenderWaiters.length; i++) {
       const waiter = readerContext.pdfRenderWaiters[i], value = waiter.shell ? readerContext.pdfPagePriority(waiter.shell) : waiter.priority;
       const rect = waiter.shell?.getBoundingClientRect(), bounds = readerContext.viewport.getBoundingClientRect();
-      const distance = rect ? Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0) : Infinity;
+      const gap = rect ? Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0) : Infinity;
+      const behind = rect && (readerContext.pdfScrollDirection < 0 ? rect.top >= bounds.bottom : rect.bottom <= bounds.top);
+      const distance = gap * (behind ? 2 : 1);
       if (value > best || (value === best && distance < nearest)) {
         best = value; nearest = distance; index = i;
       }
@@ -295,6 +300,7 @@ export function createReaderPdfScheduler(readerContext) {
     if (index < 0) index = 0;
     const waiter = readerContext.pdfRenderWaiters.splice(index, 1)[0];
     if (waiter) waiter.resolve();
+    scheduleVisiblePdfRenderReconciliation();
   }
 
   function acquirePdfTextSlot(priority = false, request = null) {
@@ -350,6 +356,25 @@ export function createReaderPdfScheduler(readerContext) {
     }
   }
 
+  function scheduleVisiblePdfRenderReconciliation(force = false) {
+    if (!["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability?.mode) ||
+        pdfVisibleReconcileFrame || readerContext.readerAbortController.signal.aborted ||
+        typeof readerContext.content?.querySelectorAll !== "function") return;
+    const enqueue = typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (callback) => setTimeout(callback, 0);
+    pdfVisibleReconcileFrame = enqueue(() => {
+      pdfVisibleReconcileFrame = 0;
+      if (readerContext.readerAbortController.signal.aborted) return;
+      for (const shell of readerContext.content.querySelectorAll('.reader-page:not([data-render-state="rendered"])')) {
+        if (!readerContext.isPdfPageVisible(shell) || shell._backgroundRender || shell.dataset.renderFailed === "1") continue;
+        if (!force && !shell._pdfRenderNeedsRequeue) continue;
+        delete shell._pdfRenderNeedsRequeue;
+        readerContext.renderPdfInBackground(shell, false, readerContext.pdfPagePriority(shell))?.catch?.(() => {});
+      }
+    });
+  }
+
   return {
     pdfManifestPrefetchConcurrency,
     pdfManifestPrefetchMaxPages,
@@ -368,6 +393,7 @@ export function createReaderPdfScheduler(readerContext) {
     schedulePdfManifestPrefetch,
     trimPdfManifestImages,
     refreshNearbyPdfPages,
+    scheduleVisiblePdfRenderReconciliation,
     cancelSpeculativePdfRenders,
     promotePdfRenderWaiter,
     acquirePdfRenderSlot,
