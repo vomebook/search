@@ -259,8 +259,19 @@ export function createReaderPdfPageWindow(readerContext) {
       if (readerContext.pdfManifestSource()?.root.split("/").slice(0, 3).join("/") !==
           `objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}`)
         throw new Error("PDF_V3_SOURCE_MISMATCH");
-      readerContext.pdfV3Repository = readerContext.createPdfV3Repository(manifest.source_sha256, manifest.page_count);
-      readerContext.pdfV3Map = readerContext.validatePageMap(await readerContext.pdfV3Repository.read(manifest.page_map), manifest);
+      const repository = readerContext.pdfV3Repository =
+        readerContext.createPdfV3Repository(manifest.source_sha256, manifest.page_count);
+      const pageMap = repository.read(manifest.page_map);
+      // The opening preview partition depends only on the validated reading
+      // manifest, so fetch it alongside the page map; preview() still
+      // validates it against the map. Text uses its own repository.
+      Promise.resolve(readerContext.readerRestorationPromise).then((entry) => {
+        const restored = Number(entry?.page);
+        const page = Number.isInteger(restored) ? Math.max(1, Math.min(manifest.page_count, restored)) : 1;
+        const part = manifest.preview.partitions.find((p) => p.start <= page && page <= p.end);
+        if (part) return repository.read(part.resource);
+      }).catch(() => {});
+      readerContext.pdfV3Map = readerContext.validatePageMap(await pageMap, manifest);
       readerContext.pdfV3Manifest = manifest;
       readerContext.pdfOcrManifest = manifest.text_layer ? manifest : null;
       readerContext.ocrManifestUrl = manifest.text_layer ? readerContext.sourceUrl : "";
