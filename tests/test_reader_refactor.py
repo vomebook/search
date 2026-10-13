@@ -2083,6 +2083,9 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertEqual(self.page.evaluate("window.__writes"), 1)
                 self.assertIsNone(peer.evaluate("source => VoiceOfMLReaderStore.get(source)", source))
                 self.page.reload()
+                # Wait for startup separately, as open() does, so a slow reload
+                # cannot consume the window for the reopened Reader's save.
+                self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
                 self.wait_for_store("async source => !!(await VoiceOfMLReaderStore.get(source))", source)
         peer.close()
 
