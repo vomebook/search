@@ -689,11 +689,27 @@ export function createReaderBindings(readerContext) {
       const focusRun = selection.focusNode?.parentElement?.closest(".reader-pdf-text-run");
       if (!anchorRun && !focusRun) return;
       if (focusRun) return;
+      // Separators (line ends, inter-block gaps) are selectable text nodes
+      // directly inside the layer; a focus there is already valid text.
+      const focusElement = selection.focusNode?.nodeType === Node.ELEMENT_NODE
+        ? selection.focusNode : selection.focusNode?.parentElement;
+      if (focusElement?.closest(".reader-pdf-text")) return;
       const beforeAnchor = selection.focusNode && selection.anchorNode &&
         (selection.focusNode === selection.anchorNode
           ? selection.focusOffset < selection.anchorOffset
           : Boolean(selection.focusNode.compareDocumentPosition(selection.anchorNode) & Node.DOCUMENT_POSITION_FOLLOWING));
-      const target = beforeAnchor ? runs[0] : runs[runs.length - 1];
+      // Clamp to the run nearest the focus in document order. Choosing the
+      // first/last run of the whole book jumps to a distant retained page
+      // when the focus lands on a page whose text layer is not loaded yet.
+      const focus = document.createRange();
+      focus.setStart(selection.focusNode, selection.focusOffset);
+      let low = 0, high = runs.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (focus.comparePoint(runs[middle].firstChild, 0) < 0) low = middle + 1;
+        else high = middle;
+      }
+      const target = beforeAnchor ? runs[Math.min(low, runs.length - 1)] : runs[Math.max(low - 1, 0)];
       const node = target.firstChild;
       readerContext.pdfSelectionBoundaryUpdate = true;
       try {

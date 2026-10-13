@@ -70,8 +70,21 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     // PDF.js owns parsing and range demand; the bootstrap is the first real range.
     const transport = new pdfjs.PDFDataRangeTransport(first.total, first.bytes, true);
     transport.abort = () => stop(new DOMException("PDF transport closed", "AbortError"));
+    // PDF.js parses non-linearized files from their end (trailer, then the
+    // cross-reference table), demanding those chunks one round trip at a
+    // time. Fetch the last two aligned chunks once, alongside its startup.
+    let tail = null;
+    if (first.total > chunkSize * 4) {
+      const begin = Math.floor((first.total - 1) / chunkSize) * chunkSize - chunkSize;
+      tail = {begin, promise:read(begin, first.total, first).catch(() => null)};
+    }
+    const fetchRange = (begin, end) => tail && begin >= tail.begin
+      ? tail.promise.then(result => result
+        ? {bytes:result.bytes.slice(begin - tail.begin, end - tail.begin)}
+        : read(begin, end, first))
+      : read(begin, end, first);
     transport.requestDataRange = (begin, end) => {
-      read(begin,end,first).then(result => {
+      fetchRange(begin,end).then(result => {
         if (!stopped) transport.onDataRange(begin,result.bytes);
       }).catch(error => {
         if (stopped) return;
