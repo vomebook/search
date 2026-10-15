@@ -111,10 +111,6 @@ export function createReaderDocumentLoader(readerContext) {
     return {response, engine:engines};
   }
 
-  function loadDocxDocument() {
-    return readerContext.prepareReaderDocument([readerContext.loadScript(readerContext.JSZIP_URL), readerContext.loadScript(readerContext.DOCX_PREVIEW_URL)]);
-  }
-
   function loadMediaDocument() {
     return Promise.resolve(null);
   }
@@ -156,7 +152,6 @@ export function createReaderDocumentLoader(readerContext) {
     loadTextDocument,
     loadMarkdownDocument,
     loadHtmlDocument,
-    loadDocxDocument,
     loadMediaDocument,
     loadImageDocument,
     loadChapterManifestDocument

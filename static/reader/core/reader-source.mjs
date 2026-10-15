@@ -184,7 +184,6 @@ export function createReaderSource(readerContext) {
       if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname))
         return false;
       const readerAsset = VoiceOfMLReader.isAssetSourcePath(url.pathname);
-      if (readerContext.extension === "docx") return readerAsset;
       return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset;
     } catch (_) {
       return false;

@@ -44,7 +44,6 @@ import {
   createReaderPdfRenderer,
   createReaderTextFormat,
   createReaderChapterFormat,
-  createReaderDocxFormat,
   createReaderFormatController,
   createReaderPdfEngine,
   createReaderPdfSearch
@@ -55,13 +54,11 @@ const readerContext = {
   get DISCOURSE_HTML_STYLE() { return DISCOURSE_HTML_STYLE; },
   get DISCOURSE_POST_SELECTOR() { return DISCOURSE_POST_SELECTOR; },
   get DISCOURSE_TITLE_SELECTOR() { return DISCOURSE_TITLE_SELECTOR; },
-  get DOCX_PREVIEW_URL() { return DOCX_PREVIEW_URL; },
   get EPUB_HTML_TAGS() { return EPUB_HTML_TAGS; },
   get EPUB_HTML_VOID_TAGS() { return EPUB_HTML_VOID_TAGS; },
   get FOLIATE_LOADED_SECTION_LIMIT() { return FOLIATE_LOADED_SECTION_LIMIT; },
   get FOLIATE_PREFETCH_MARGIN() { return FOLIATE_PREFETCH_MARGIN; },
   get HTML_FRAME_STYLE() { return HTML_FRAME_STYLE; },
-  get JSZIP_URL() { return JSZIP_URL; },
   get MARKED_URL() { return MARKED_URL; },
   get PDFJS_CMAP_URL() { return PDFJS_CMAP_URL; },
   get PDFJS_STANDARD_FONT_URL() { return PDFJS_STANDARD_FONT_URL; },
@@ -128,7 +125,6 @@ const readerContext = {
   get createV3Repository() { return createV3Repository; },
   get detectTextEncoding() { return detectTextEncoding; }, set detectTextEncoding(value) { detectTextEncoding = value; },
   get documentState() { return documentState; },
-  get docxPageNodes() { return docxPageNodes; }, set docxPageNodes(value) { docxPageNodes = value; },
   get domSearch() { return domSearch; },
   get downloadButton() { return downloadButton; },
   get downloadFeedback() { return downloadFeedback; },
@@ -192,7 +188,6 @@ const readerContext = {
   get isReaderGenerationCurrent() { return isReaderGenerationCurrent; }, set isReaderGenerationCurrent(value) { isReaderGenerationCurrent = value; },
   get lastSavedProgress() { return lastSavedProgress; }, set lastSavedProgress(value) { lastSavedProgress = value; },
   get loadChapterManifestDocument() { return loadChapterManifestDocument; }, set loadChapterManifestDocument(value) { loadChapterManifestDocument = value; },
-  get loadDocxDocument() { return loadDocxDocument; }, set loadDocxDocument(value) { loadDocxDocument = value; },
   get loadHtmlDocument() { return loadHtmlDocument; }, set loadHtmlDocument(value) { loadHtmlDocument = value; },
   get loadImageDocument() { return loadImageDocument; }, set loadImageDocument(value) { loadImageDocument = value; },
   get loadMarkdownDocument() { return loadMarkdownDocument; }, set loadMarkdownDocument(value) { loadMarkdownDocument = value; },
@@ -339,7 +334,6 @@ const readerContext = {
   get releasePdfWorker() { return releasePdfWorker; }, set releasePdfWorker(value) { releasePdfWorker = value; },
   get renderBookmarks() { return renderBookmarks; }, set renderBookmarks(value) { renderBookmarks = value; },
   get renderChapterManifest() { return renderChapterManifest; }, set renderChapterManifest(value) { renderChapterManifest = value; },
-  get renderDocx() { return renderDocx; }, set renderDocx(value) { renderDocx = value; },
   get renderFoliate() { return renderFoliate; }, set renderFoliate(value) { renderFoliate = value; },
   get renderFullSearchResults() { return renderFullSearchResults; },
   get renderHtml() { return renderHtml; }, set renderHtml(value) { renderHtml = value; },
@@ -506,8 +500,6 @@ const readerContext = {
   get loadPdfTaskWithTimeout() { return loadPdfTaskWithTimeout; }, set loadPdfTaskWithTimeout(value) { loadPdfTaskWithTimeout = value; },
   get loadPdfWithTimeout() { return loadPdfWithTimeout; }, set loadPdfWithTimeout(value) { loadPdfWithTimeout = value; },
   get makePdfSearchPageLoader() { return makePdfSearchPageLoader; }, set makePdfSearchPageLoader(value) { makePdfSearchPageLoader = value; },
-  get memoizeDocxAssets() { return memoizeDocxAssets; }, set memoizeDocxAssets(value) { memoizeDocxAssets = value; },
-  get memoizeDocxResource() { return memoizeDocxResource; }, set memoizeDocxResource(value) { memoizeDocxResource = value; },
   get normalizeEpubDocument() { return normalizeEpubDocument; }, set normalizeEpubDocument(value) { normalizeEpubDocument = value; },
   get notifyReaderUiState() { return notifyReaderUiState; }, set notifyReaderUiState(value) { notifyReaderUiState = value; },
   get pdfManifestPrefetchConcurrency() { return pdfManifestPrefetchConcurrency; }, set pdfManifestPrefetchConcurrency(value) { pdfManifestPrefetchConcurrency = value; },
@@ -633,7 +625,7 @@ let {
 let {
   loadScript, fetchWithReaderTimeout, retryableReaderProxyError, retryReaderProxy,
   fetchReaderUrl, fetchReaderResponse, prepareReaderDocument, readPreparedBytes,
-  loadTextDocument, loadMarkdownDocument, loadHtmlDocument, loadDocxDocument,
+  loadTextDocument, loadMarkdownDocument, loadHtmlDocument,
   loadMediaDocument, loadImageDocument, loadChapterManifestDocument
 } = createReaderDocumentLoader(readerContext);
 
@@ -672,10 +664,6 @@ let {
 } = createReaderChapterFormat(readerContext);
 
 let {
-  renderDocx, memoizeDocxResource, memoizeDocxAssets
-} = createReaderDocxFormat(readerContext);
-
-let {
   disposeFormatResources, registerReaderFormatAdapters, resolveReaderSource, start,
   syncCapabilityControls
 } = createReaderFormatController(readerContext);
@@ -701,8 +689,6 @@ const PDFJS_CMAP_URL = "/search/static/vendor/cmaps/";
 const PDFJS_STANDARD_FONT_URL = "/search/static/vendor/standard_fonts/";
 const MARKED_URL = VoiceOfMLReaderResources.vendorUrl("marked", "/search/static/");
 const PURIFY_URL = VoiceOfMLReaderResources.vendorUrl("purify", "/search/static/");
-const JSZIP_URL = VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/");
-const DOCX_PREVIEW_URL = VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/");
 const RUFFLE_URL = VoiceOfMLReaderResources.vendors.ruffle.url;
 const READER_PROXY_TIMEOUT_MS = 120000;
 const readerRequestManager = VoiceOfMLReaderRequests.createReaderRequestManager();
@@ -809,8 +795,6 @@ let folderNavigationTarget = null;
 let bookmarkInvoker = null;
 const bookmarkInertSiblings = new Map();
 let pdfDocument = null;
-let docxPageNodes = [];
-readerBindings.ownDocxPageNodes();
 let pdfPageManifest = null;
 let pdfOcrManifest = null;
 let pdfOcrManifestPromise = null;

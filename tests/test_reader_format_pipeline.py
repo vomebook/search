@@ -3,7 +3,7 @@ import unittest
 from urllib.parse import urlencode
 
 from tests import test_reader_pdf_followup as support
-from tests.test_reader_performance import minimal_docx, epub_with_navigation
+from tests.test_reader_performance import epub_with_navigation
 
 
 class ReaderFormatPipelineTests(unittest.TestCase):
@@ -25,11 +25,9 @@ class ReaderFormatPipelineTests(unittest.TestCase):
         engines={
             'marked':'window.marked={parse:t=>"<h1>Heading</h1><p>"+t+"</p>"};',
             'purify':'window.DOMPurify={sanitize:t=>t};',
-            'jszip':'window.JSZip=function(){};',
-            'docx-preview':'window.docx={parseAsync:async()=>({blobToURL:()=>null}),renderDocument:async()=>{const n=document.createElement("p");n.textContent="Document body";return [n];}};'
         }
         documents=[('md',b'Markdown body','text/plain'),('html',b'<h1>Heading</h1><p>HTML body</p>','text/html'),
-                   ('docx',minimal_docx(),'application/octet-stream'),('epub',epub_with_navigation(),'application/epub+zip')]
+                   ('epub',epub_with_navigation(),'application/epub+zip')]
         for ext,body,mime in documents:
             with self.subTest(format=ext):
                 held=[]
@@ -38,8 +36,7 @@ class ReaderFormatPipelineTests(unittest.TestCase):
                 self.page.route(pattern,engine)
                 self.page.route('**/api/reader-content**',lambda route,_request,body=body,mime=mime:route.fulfill(
                     content_type=mime,body=body,headers={'Access-Control-Allow-Origin':'*'}))
-                url=('https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/'+'a'*64+'/document.docx'
-                     if ext=='docx' else f'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/pipeline.{ext}')
+                url=f'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/pipeline.{ext}'
                 self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url=url,ext=ext)),wait_until='domcontentloaded')
                 self.page.wait_for_function('()=>window.__bodyReads>1',timeout=1500)
                 self.assertTrue(held)

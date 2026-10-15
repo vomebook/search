@@ -26,7 +26,6 @@ SAMPLES = ()
     ("video", f"{ASSET_ROOT}/objects/9b/9bd4e16a28936dbf9f0bf9dbcdb09b0dc9889743c5f314c0720019175181ca91/ffmpeg-video-mp4-h264-aac-v1/video.mp4", "mp4", "video", False),
     ("fb2", f"{ASSET_ROOT}/objects/79/794a61d8a31327c495e56313bdf19895b94885e9fcd2e2b8bd5f9fc5057b8608/foliate-original-v1/document.fb2", "fb2", "foliate", True),
     ("fb2-cn", f"{ASSET_ROOT}/objects/ab/ab658eeefdcfedf881cc93cff87d10a06d902af497328315460875038c769381/foliate-original-v1/document.fb2", "fb2", "foliate", True),
-    ("docx", f"{ASSET_ROOT}/objects/37/3795cbd583cbb49d3cef6e4518e7cde21b2de9295f8387327f10e44de3fa8a24/docx-native-v2/document.docx", "docx", "docx", False),
     ("html", f"{ASSET_ROOT}/objects/23/23e3eb7e0d93e496ce57e6c0a44d977a42b91991409b516b087e6a79b10bb4a7/sanitized-html-v5-e2f98d3c6dd02d16/document.html", "html", "html", True),
 )
 """
@@ -94,12 +93,12 @@ def _select_samples():
     print("Reader-Assets revision:", revision)
     root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main"
     ready = [v for v in manifest.get("files", {}).values() if v.get("status") == "ready" and v.get("path") and v.get("sha256")]
-    wanted = {"pdf": ("pdf",), "epub": ("epub",), "mobi": ("mobi",), "azw3": ("azw3",), "fb2": ("fb2",), "docx": ("docx", "doc"), "html": ("html", "htm"), "odt": ("odt",), "rtf": ("rtf",), "mht": ("mht", "mhtml")}
+    wanted = {"pdf": ("pdf",), "epub": ("epub",), "mobi": ("mobi",), "azw3": ("azw3",), "fb2": ("fb2",), "html": ("html", "htm"), "odt": ("odt",), "rtf": ("rtf",), "mht": ("mht", "mhtml")}
     selected = {}
 
     def reader_extension(item, fallback):
         mode = str(item.get("reader_mode") or "").lower()
-        return {"audio": "mp3", "video": "mp4", "docx": "docx", "html": "html"}.get(
+        return {"audio": "mp3", "video": "mp4", "html": "html"}.get(
             mode, item.get("source_extension", fallback)
         )
 
@@ -148,7 +147,7 @@ def _select_samples():
             raw_skips[name] = f"raw API selector failed: {error}"
     for name, reason in raw_skips.items():
         print(f"Raw {name} sample skipped: {reason}")
-    order = ("pdf", "pdf-pages", "epub", "mobi", "azw3", "audio", "video", "fb2", "docx", "html", "odt", "rtf", "mht", "txt", "md")
+    order = ("pdf", "pdf-pages", "epub", "mobi", "azw3", "audio", "video", "fb2", "html", "odt", "rtf", "mht", "txt", "md")
     return tuple(selected[name] for name in order if name in selected), revision, raw_skips
 
 
@@ -216,8 +215,6 @@ class ReaderLiveFormatTests(unittest.TestCase):
                 }""", timeout=30000)
                 broken = frame.locator("img").evaluate_all("images => images.filter(image => !image.complete || image.naturalWidth === 0).map(image => image.src)")
                 self.assertEqual(broken, [], name)
-        elif mode == "docx":
-            self.assertGreater(len(page.locator("#content").inner_text().strip()), 0, name)
         elif mode in {"text", "markdown"}:
             selector = ".reader-text" if mode == "text" else ".reader-markdown"
             content = page.locator(selector)

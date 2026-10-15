@@ -124,7 +124,7 @@ assert.doesNotMatch(reader, /Promise\.all\(\[loadReaderRestoration\(\)/)
 assert.strictEqual((reader.match(/function loadPdfDocument\(/g) || []).length, 1)
 for (const renderer of ['renderImageDocument', 'renderMedia']) assert.strictEqual((reader.match(new RegExp(`function ${renderer}\\s*\\(`,'g')) || []).length, 1)
 for (const renderer of ['renderTextDocument', 'renderMarkdownDocument']) assert.strictEqual((reader.match(new RegExp(`function ${renderer}\\(`,'g')) || []).length, 1)
-for (const loader of ['loadTextDocument', 'loadMarkdownDocument', 'loadHtmlDocument', 'loadDocxDocument']) assert.strictEqual((reader.match(new RegExp(`function ${loader}\\(`,'g')) || []).length, 1)
+for (const loader of ['loadTextDocument', 'loadMarkdownDocument', 'loadHtmlDocument']) assert.strictEqual((reader.match(new RegExp(`function ${loader}\\(`,'g')) || []).length, 1)
 for (const loader of ['loadMediaDocument', 'loadImageDocument', 'loadChapterManifestDocument']) assert.strictEqual((reader.match(new RegExp(`function ${loader}\\(`,'g')) || []).length, 1)
 assert.doesNotMatch(reader, /loadFoliateDocument/)
 assert.match(reader, /reader-chapter-repository\.js/)
@@ -204,7 +204,7 @@ const expected = {
   pdf: ['loadPdfDocument', 'renderPdf'], image: ['loadImageDocument', 'renderImageDocument'],
   text: ['loadTextDocument', 'renderTextDocument'], markdown: ['loadMarkdownDocument', 'renderMarkdownDocument'],
   html: ['loadHtmlDocument', 'renderHtml'], 'epub-chapters': ['loadChapterManifestDocument', 'renderChapterManifest'],
-  docx: ['loadDocxDocument', 'renderDocx'], foliate: ['loadMediaDocument', 'renderFoliate'],
+  foliate: ['loadMediaDocument', 'renderFoliate'],
   swf: ['loadSwfDocument', 'renderSwf'],
 }
 const registered = new Map(), calls = []

@@ -17,7 +17,6 @@ export { createReaderHtmlFormat } from "./formats/reader-html-format.mjs";
 export { createReaderPdfRenderer } from "./pdf/reader-pdf-renderer.mjs";
 export { createReaderTextFormat } from "./formats/reader-text-format.mjs";
 export { createReaderChapterFormat } from "./formats/reader-chapter-format.mjs";
-export { createReaderDocxFormat } from "./formats/reader-docx-format.mjs";
 export { createReaderFormatController } from "./formats/reader-format-controller.mjs";
 export { createReaderPdfEngine } from "./pdf/reader-pdf-engine.mjs";
 export { createReaderPdfSearch } from "./pdf/reader-pdf-search.mjs";
