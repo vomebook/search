@@ -134,7 +134,6 @@
     fb2: "foliate",
     fbz: "foliate",
     "epub-chapters": "epub-chapters",
-    docx: "docx",
     html: "html",
     htm: "html",
     txt: "text",
@@ -199,7 +198,6 @@
       pagination: false,
       media: false
     },
-    docx: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false },
     html: { toc: true, search: true, zoom: true, bookmarks: true, pagination: false, media: false },
     text: {
       toc: false,
@@ -283,7 +281,7 @@
   const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
   const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.(?:webp|jxl))`;
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
-  const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|docx|html|txt|md|webp|swf)|book\.epub|audio\.(?:mp3|wav|m4a|flac|mpga)|video\.(?:mp4|mov))`;
+  const assetDocument = String.raw`(?:linearized\.pdf|document\.(?:pdf|epub|mobi|azw|azw3|fb2|html|txt|md|webp|swf)|book\.epub|audio\.(?:mp3|wav|m4a|flac|mpga)|video\.(?:mp4|mov))`;
   const assetChapters = String.raw`(?:chapter-manifest\.json|epub-chapters/(?:chapter-manifest\.json|chapters/chapter-[0-9]{4}\.xhtml|resources/[A-Za-z0-9._~%+\-/]+|epub-search-index\.json\.gz))`;
   const v2ChapterPathPattern = new RegExp(`^chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz|chapters/chapter-[0-9]{4}\\.xhtml|resources/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*)$`);
   const ebookBucketPathPattern = new RegExp(`^ebook-chapters/${assetRoot}[a-z0-9-]+/[a-z0-9-]+-epub-chapters-v[0-9]+-bucket/epub-chapters/(?:chapter-manifest\\.json|chapters/chapter-[0-9]{4}\\.xhtml|resources/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*|epub-search-index\\.json\\.gz)$`);
@@ -295,13 +293,12 @@
   );
   const bucketPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
   const v2ObjectPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
-    const staticBucketPathPattern = new RegExp(`^(?:${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:docx|html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))|documents/(?:text|web|spreadsheet|office|pdf)/[a-z0-9_-]+/[0-9a-f]{64}/document\\.(?:txt|md|html|docx|pdf|vcf|ini)|media/(?:audio|video|swf)/[a-z0-9_-]+/[0-9a-f]{64}/(?:audio\\.[a-z0-9]+|video\\.[a-z0-9]+|document\\.swf)|pages/image/(?:jpg|jpeg|png|bmp|tif|tiff|webp)/[0-9a-f]{64}/(?:page-manifest\\.json|pages/page-[0-9]{6}\\.webp)|derived/[A-Za-z0-9._-]+/[a-z0-9]{32}/document\\.pdf|chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz))$`);
+  const staticBucketPathPattern = new RegExp(`^(?:${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))|documents/(?:text|web|spreadsheet|office|pdf)/[a-z0-9_-]+/[0-9a-f]{64}/document\\.(?:txt|md|html|pdf|vcf|ini)|media/(?:audio|video|swf)/[a-z0-9_-]+/[0-9a-f]{64}/(?:audio\\.[a-z0-9]+|video\\.[a-z0-9]+|document\\.swf)|pages/image/(?:jpg|jpeg|png|bmp|tif|tiff|webp)/[0-9a-f]{64}/(?:page-manifest\\.json|pages/page-[0-9]{6}\\.webp)|derived/[A-Za-z0-9._-]+/[a-z0-9]{32}/document\\.pdf|chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz))$`);
   const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:${assetPages}|${assetOcr})$`);
   const assetBase = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/";
   const assetModes = Object.freeze({
     p: "pdf",
     e: "epub",
-    d: "docx",
     h: "html",
     t: "txt",
     k: "md",

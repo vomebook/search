@@ -201,7 +201,7 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/ui/reader-document-styles.mjs",
     "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/ui/reader-bookmarks.mjs",
     "reader/formats/reader-media-format.mjs", "reader/core/reader-document-loader.mjs", "reader/formats/reader-html-format.mjs",
-    "reader/formats/reader-text-format.mjs", "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-docx-format.mjs",
+    "reader/formats/reader-text-format.mjs", "reader/formats/reader-chapter-format.mjs",
     "reader/pdf/pdf-worker-wrapper.mjs"
   ];
   for (const file of exact) {

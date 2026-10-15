@@ -73,7 +73,7 @@ export function createReaderNavigation(readerContext) {
       // The first page is usable before the background shell queue finishes.
       // Only wait when the requested shell has not been materialized yet.
       let shell = readerContext.content.querySelector(
-        `.reader-page[data-page="${page}"], .reader-docx-page[data-page="${page}"]`
+        `.reader-page[data-page="${page}"]`
       );
       if (!shell && ["pdf-pages", "image-pages"].includes(readerContext.capability.mode)) {
         await readerContext.pdfShellsReady;

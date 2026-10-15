@@ -152,21 +152,18 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
                 self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
 
-    def test_docx_engines_download_in_parallel_before_rendering(self):
-        held = []
-        self.page.route('**/static/vendor/jszip.min.*.js', lambda route: held.append(route))
-        self.serve(support.minimal_docx(), 'application/octet-stream')
-        source = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64 + '/document.docx'
-        with self.page.expect_request('**/static/vendor/docx-preview.min.*.js'):
-            self.page.goto(self.reader_url('docx', url=source), wait_until='domcontentloaded')
-        self.assertEqual(len(held), 1)
-        self.assertEqual(self.page.locator('.docx-body').count(), 0)
-        self.assertFalse(self.page.evaluate('!!window.docx'))
-        self.page.unroute('**/static/vendor/jszip.min.*.js')
-        held[0].continue_()
-        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-        self.assertEqual(self.page.locator('.reader-docx-page').count(), 1)
-        self.assertIn('DOCX readable', self.page.locator('.docx-body').text_content())
+    def test_unconverted_docx_is_download_only_without_loading_native_engines(self):
+        requests = []
+        self.page.on("request", lambda request: requests.append(request.url))
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/unconverted.docx'
+        self.page.goto(self.reader_url('docx', url=source), wait_until='domcontentloaded')
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'failed'")
+        self.assertIn("此文件暂不支持在线阅读", self.page.locator('.reader-error').text_content())
+        download = self.page.locator('#download').get_attribute('href')
+        download_url = urllib.parse.urlsplit(download)
+        self.assertEqual(download_url.path, '/api/download')
+        self.assertEqual(urllib.parse.parse_qs(download_url.query).get('link'), [source])
+        self.assertFalse(any('docx-preview' in url or 'jszip' in url.lower() for url in requests))
 
     def test_missing_image_manifest_or_page_recovers_original_without_changing_book_identity(self):
         prefix = 'pages/image/bmp/' + 'a' * 64 + '/'
@@ -2396,16 +2393,11 @@ class ReaderRefactorTest(unittest.TestCase):
               };
             """)
         self.page.route("**/static/reader.js*", instrument)
-        for extension in ('html', 'md', 'docx', 'txt'):
+        for extension in ('html', 'md', 'txt'):
             with self.subTest(extension=extension):
-                if extension == 'docx':
-                    self.page.route('**/static/vendor/docx-preview.min.*.js', lambda route: route.fulfill(
-                        content_type='text/javascript', body="window.docx = {parseAsync: async () => ({blobToURL:()=>null}), renderDocument: async () => {const body=document.createElement('div'); body.innerHTML = " + json.dumps(html) + ";return [body];}}"))
-                    self.serve(support.minimal_docx(), 'application/octet-stream')
-                else:
-                    self.serve('before needle after\n' + 'ordinary\n' * 8000 + 'last needle' if extension == 'txt' else html,
-                               'text/html' if extension == 'html' else 'text/plain')
-                source = self.reader_url(extension, url='https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64 + '/document.docx') if extension == 'docx' else self.reader_url(extension)
+                self.serve('before needle after\n' + 'ordinary\n' * 8000 + 'last needle' if extension == 'txt' else html,
+                           'text/html' if extension == 'html' else 'text/plain')
+                source = self.reader_url(extension)
                 self.open(source)
                 self.search('needle')
                 self.assertEqual(self.page.locator('#full-search-status').text_content(), '2 个结果')

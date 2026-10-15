@@ -230,7 +230,7 @@ export function createReaderSearchBackends(readerContext) {
     else if (readerContext.capability.mode === "foliate")
       readerContext.publishSearchResults(generation, await readerContext.fullSearchFoliateMatches(query, generation));
     else if (readerContext.capability.mode === "epub-chapters") await readerContext.searchChapterBook(query, generation);
-    else if (["text", "markdown", "docx"].includes(readerContext.capability.mode))
+    else if (["text", "markdown"].includes(readerContext.capability.mode))
       readerContext.publishSearchResults(
         generation,
         await readerContext.fullSearchDomMatches(readerContext.content, "阅读位置", query, generation, true)

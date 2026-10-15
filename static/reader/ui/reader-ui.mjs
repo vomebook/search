@@ -47,8 +47,6 @@ export function createReaderUi(readerContext) {
     readerContext.readerThemeToggle.title = readerContext.readerTheme === "dark" ? "切换到白天模式" : "切换到夜间模式";
     readerContext.readerThemeToggle.setAttribute("aria-label", readerContext.readerThemeToggle.title);
     readerContext.readerThemeToggle.setAttribute("aria-pressed", String(readerContext.readerTheme === "light"));
-    const docxBody = readerContext.content.querySelector(".docx-body");
-    if (docxBody) docxBody.classList.toggle("reader-document-dark", readerContext.readerTheme === "dark");
     for (const article of readerContext.content.querySelectorAll(".foliate-continuous > article"))
       article.classList.toggle("reader-document-dark", readerContext.readerTheme === "dark");
     if (persist) localStorage.setItem("theme", readerContext.readerTheme);

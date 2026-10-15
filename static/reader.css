@@ -1000,13 +1000,6 @@ body {
 @keyframes reader-page-loading-reveal {
   to { opacity: 1; }
 }
-.reader-docx-page {
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto var(--reader-docx-height, 1123px);
-}
-.reader-docx-page:focus-within {
-  content-visibility: visible;
-}
 .reader-page canvas {
   display: block;
   position: relative;
@@ -1255,7 +1248,7 @@ body {
   height: 100%;
   min-height: 320px;
 }
-/* Isolated HTML and vendor-generated DOCX */
+/* Isolated HTML */
 .html-frame {
   display: block;
   width: 100%;
@@ -1272,47 +1265,16 @@ body {
   max-width: none;
   padding: 0;
 }
-.docx-body {
-  overflow-x: auto;
-  color: #e7e9eb;
-}
-.docx-body .reader-docx-wrapper {
-  background: transparent;
-  padding: 0;
-  zoom: var(--reader-zoom);
-  width: 100%;
-  max-width: none;
-  align-items: stretch;
-}
-.docx-body .reader-docx-wrapper > section.reader-docx {
-  width: 100% !important;
-  max-width: none;
-  box-sizing: border-box;
-  padding-left: clamp(16px, 5vw, 2cm) !important;
-  padding-right: clamp(16px, 5vw, 2cm) !important;
-  margin: 0 auto 18px;
-  box-shadow: 0 2px 14px #0008;
-}
-.docx-body.reader-document-dark .reader-docx {
-  background: #181b1e !important;
-  color: #e7e9eb !important;
-}
-.docx-body.reader-document-dark .reader-docx :where(:not(svg, svg *, img, canvas, video, audio, math, math *)),
 :root[data-theme="dark"] .reader-epub-chapter :where(:not(svg, svg *, img, canvas, video, audio, math, math *)) {
   color: inherit !important;
   background-color: transparent !important;
   border-color: #4a5056 !important;
   text-shadow: none !important;
 }
-.docx-body.reader-document-dark .reader-docx :is(table, pre, code, blockquote) {
-  background-color: #202428 !important;
-}
-.docx-body.reader-document-dark .reader-docx a,
 :root[data-theme="dark"] .reader-epub-chapter a {
   color: #8ab4e8 !important;
 }
-:root[data-theme="dark"] .reader-epub-chapter mark.full-search-highlight,
-.docx-body.reader-document-dark .reader-docx mark.full-search-highlight {
+:root[data-theme="dark"] .reader-epub-chapter mark.full-search-highlight {
   background: #ffd54f !important;
   color: #111 !important;
 }
@@ -1391,13 +1353,8 @@ body {
   color: #202124;
 }
 :root[data-theme="light"] .reader-text,
-:root[data-theme="light"] .reader-markdown,
-:root[data-theme="light"] .docx-body {
+:root[data-theme="light"] .reader-markdown {
   color: #202124;
-}
-:root[data-theme="light"] .docx-body .reader-docx {
-  background: #fff !important;
-  color: #202124 !important;
 }
 :root[data-theme="light"] .full-search-input {
   background: #f3f5f6;
@@ -1455,9 +1412,7 @@ body {
 :root.theme-transition .bookmark-popover,
 :root.theme-transition .bookmark-popover button,
 :root.theme-transition .reader-text,
-:root.theme-transition .reader-markdown,
-:root.theme-transition .docx-body,
-:root.theme-transition .docx-body .reader-docx {
+:root.theme-transition .reader-markdown {
   transition:
     background-color 260ms ease,
     color 260ms ease,
@@ -1547,24 +1502,6 @@ body {
   }
   .foliate-continuous > article {
     overflow-wrap: anywhere;
-  }
-  .docx-body,
-  .docx-body .reader-docx-wrapper {
-    min-width: 0;
-    max-width: 100%;
-    box-sizing: border-box;
-  }
-  .docx-body .reader-docx-wrapper > section.reader-docx {
-    width: 100% !important;
-    max-width: none;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-  .docx-body .reader-docx-wrapper img,
-  .docx-body .reader-docx-wrapper svg,
-  .docx-body .reader-docx-wrapper video {
-    max-width: 100%;
-    height: auto;
   }
   .html-frame {
     height: calc(100dvh - var(--reader-toolbar-height));

@@ -136,7 +136,7 @@ for (const path of [assetRoot + '../linearized.pdf', assetRoot + 'private.json',
   assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + path), false)
 }
 
-for (const extension of ['pdf', 'pdf-pages', 'txt', 'md', 'markdown', 'html', 'htm', 'docx', 'epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz', 'jpg', 'png', 'mp3', 'm4a', 'flac', 'mpga', 'audio', 'mp4', 'mov', 'video']) {
+for (const extension of ['pdf', 'pdf-pages', 'txt', 'md', 'markdown', 'html', 'htm', 'epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz', 'jpg', 'png', 'mp3', 'm4a', 'flac', 'mpga', 'audio', 'mp4', 'mov', 'video']) {
   assert.ok(sandbox.self.VoiceOfMLReader.capability(extension).mode, extension)
 }
 for (const extension of ['epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz']) assert.strictEqual(sandbox.self.VoiceOfMLReader.capability(extension).mode, 'foliate')
@@ -147,6 +147,8 @@ assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('epub-chapters').feat
 for (const extension of ['mp3', 'm4a', 'flac', 'mpga', 'audio']) assert.strictEqual(sandbox.self.VoiceOfMLReader.capability(extension).mode, 'audio')
 for (const extension of ['mp4', 'mov', 'video']) assert.strictEqual(sandbox.self.VoiceOfMLReader.capability(extension).mode, 'video')
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('zip').mode, null)
+assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('docx').mode, null)
+assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('epub-chapters').mode, 'epub-chapters')
 const convertedUrl = sandbox.self.VoiceOfMLReader.readerUrl({
   Link: 'https://download.example.test/books/book.mobi',
   File: '原始书名', Extension: 'mobi', ReaderExtension: 'epub',
@@ -187,7 +189,8 @@ assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('PDF').readerMode, sa
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('PDF').article, true)
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('zip').readerMode, sandbox.self.VoiceOfMLReader.ReaderMode.UNSUPPORTED)
 assert.strictEqual(sandbox.self.VoiceOfMLReader.capability('zip').article, false)
-for (const extension of ['pdf', 'pdf-pages', 'epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz', 'docx', 'txt', 'md', 'html', 'jpg', 'png', 'webp', 'mp3', 'm4a', 'flac', 'mp4', 'mov']) assert.ok(sandbox.self.VoiceOfMLReader.articleExtensions.includes(extension), extension)
+for (const extension of ['pdf', 'pdf-pages', 'epub', 'epub-chapters', 'mobi', 'azw', 'azw3', 'fb2', 'fbz', 'txt', 'md', 'html', 'jpg', 'png', 'webp', 'mp3', 'm4a', 'flac', 'mp4', 'mov']) assert.ok(sandbox.self.VoiceOfMLReader.articleExtensions.includes(extension), extension)
+assert.ok(!sandbox.self.VoiceOfMLReader.articleExtensions.includes('docx'))
 assert.strictEqual(Object.isFrozen(sandbox.self.VoiceOfMLReader.articleExtensions), true)
 assert.strictEqual(Object.isFrozen(sandbox.self.VoiceOfMLReader.capability('pdf')), true)
 const immutableRecord = { Link: 'https://download.example.test/book.txt', File: 'book', Extension: 'txt' }

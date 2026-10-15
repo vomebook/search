@@ -82,7 +82,6 @@ export function createReaderFormatController(readerContext) {
       markdown: [readerContext.loadMarkdownDocument, readerContext.renderMarkdownDocument],
       html: [readerContext.loadHtmlDocument, readerContext.renderHtml],
       "epub-chapters": [readerContext.loadChapterManifestDocument, readerContext.renderChapterManifest],
-      docx: [readerContext.loadDocxDocument, readerContext.renderDocx],
       audio: [readerContext.loadMediaDocument, () => readerContext.renderMedia("audio")],
       video: [readerContext.loadMediaDocument, () => readerContext.renderMedia("video")],
       swf: [readerContext.loadSwfDocument, readerContext.renderSwf],
