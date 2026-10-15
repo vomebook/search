@@ -207,10 +207,6 @@ export function createReaderBindings(readerContext) {
     });
   }
 
-  function ownDocxPageNodes() {
-    readerContext.trackReaderResource(() => { readerContext.docxPageNodes = []; });
-  }
-
   function ownIndependentPdfResources() {
     readerContext.trackReaderResource(() => {
       for (const release of [...readerContext.pdfV3BlobReleases]) release();
@@ -834,7 +830,6 @@ export function createReaderBindings(readerContext) {
     restoreReturnNavigation,
     validateReturnHistory,
     ownChapterSearchClient,
-    ownDocxPageNodes,
     ownIndependentPdfResources,
     ownPdfBookSearchClient,
     ownPdfPrefetchAndQueues,

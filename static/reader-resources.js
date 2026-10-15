@@ -22,16 +22,6 @@
       file: "purify.min.js",
       sha256: "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2"
     },
-    jszip: {
-      url: "https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js",
-      file: "jszip.min.js",
-      sha256: "7f839b2d4688b845c105ebf5d2f9803075f91ea0fe72bdaac176c3a04dd3d2c1"
-    },
-    docx: {
-      url: "https://cdn.jsdelivr.net/npm/docx-preview@0.4.1/dist/docx-preview.min.js",
-      file: "docx-preview.min.js",
-      sha256: "c4a133c65a112799e35b143c572dfff9e923a3bf39b5fd3b07a06aa0f8f530c2"
-    },
     ruffle: {
       url: "https://unpkg.com/@ruffle-rs/ruffle@0.7.1/ruffle.js",
       file: "ruffle.js",
@@ -101,7 +91,7 @@
     "reader/formats/reader-foliate-format.mjs", "reader/ui/reader-progress.mjs", "reader/ui/reader-bookmarks.mjs", "reader/formats/reader-media-format.mjs",
     "reader/core/reader-document-loader.mjs", "reader/pdf/reader-pdf-page-window.mjs", "reader/pdf/reader-pdf-text-runtime.mjs",
     "reader/formats/reader-html-format.mjs", "reader/pdf/reader-pdf-renderer.mjs", "reader/formats/reader-text-format.mjs",
-    "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-docx-format.mjs", "reader/formats/reader-format-controller.mjs",
+    "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-format-controller.mjs",
     "reader/pdf/reader-pdf-engine.mjs", "reader/pdf/reader-pdf-search.mjs", "reader/core/reader-bindings.mjs", "reader/ui/reader-document-styles.mjs"
   ]);
   const readerFiles = Object.freeze([
@@ -158,7 +148,6 @@
       ];
     if (["epub", "mobi", "azw", "azw3", "fb2", "fbz"].includes(extension))
       return [base + "foliate-reader/view.js" + foliateSuffix];
-    if (extension === "docx") return [vendorUrl("jszip", base), vendorUrl("docx", base)];
     if (["md", "markdown", "html", "htm"].includes(extension))
       return [vendorUrl("marked", base), vendorUrl("purify", base)];
     return [];

@@ -18,7 +18,7 @@ const rewrite = (text, filename) => {
     return quote + pinned + quote;
   });
   text = text.replace(/VoiceOfMLReaderResources\.engineAssets\(([\w$]+),\s*"(\/search\/static\/)",\s*"(\?reader-v1)"\)/g,
-    (_, extension, base, suffix) => "(" + JSON.stringify(Object.fromEntries(["pdf", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "docx", "md", "markdown", "html", "htm"].map(ext => [ext, resources.engineAssets(ext, base, suffix)]))) + `[${extension}]||[])`);
+    (_, extension, base, suffix) => "(" + JSON.stringify(Object.fromEntries(["pdf", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "md", "markdown", "html", "htm"].map(ext => [ext, resources.engineAssets(ext, base, suffix)]))) + `[${extension}]||[])`);
   text = text.replace(/VoiceOfMLReaderResources\.(shellAssets|runtimePaths)\("(\/search\/static\/)"\)/g,
     (_, method, base) => JSON.stringify(resources[method](base)));
   for (const [original, versioned] of replacements) text = text.split(original).join(versioned);

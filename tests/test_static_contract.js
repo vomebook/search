@@ -305,9 +305,10 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'result.activate(generation)');
   const contractContext = { self: {} };
   vm.runInNewContext(contract, contractContext);
-  for (const [extension, mode] of Object.entries({ pdf: 'pdf', 'pdf-pages': 'pdf-pages', epub: 'foliate', mp3: 'audio', mp4: 'video', docx: 'docx' })) {
+  for (const [extension, mode] of Object.entries({ pdf: 'pdf', 'pdf-pages': 'pdf-pages', epub: 'foliate', mp3: 'audio', mp4: 'video', 'epub-chapters': 'epub-chapters' })) {
     assert.strictEqual(contractContext.self.VoiceOfMLReader.capability(extension).mode, mode, extension);
   }
+  assert.strictEqual(contractContext.self.VoiceOfMLReader.capability('docx').mode, null);
   assert.match(app, /VoiceOfMLReader\.readerUrl/);
   assert.match(app, /VoiceOfMLReader\.readerUrl/);
   assert.match(app, /OcrUrl/);
@@ -364,15 +365,10 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(readerHtml, /'wasm-unsafe-eval'/);
   assert.match(reader, /"gb18030", "big5", "windows-1251", "windows-1252"/);
   assertCode(reader, 'appendDecoded(decoder.decode(bytes), decoder.encoding)');
-  assertCode(reader, 'docx: [loadDocxDocument, renderDocx]');
-  assertCode(reader, 'const docxDocument = await awaitReader(docx.parseAsync(bytes, options))');
-  assertCode(reader, 'const nodes = await awaitReader(docx.renderDocument(docxDocument, options))');
-  assert.match(reader, /renderAltChunks: false/);
-  assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("jszip", "/search/static/")');
-  assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("docx", "/search/static/")');
+  assert.doesNotMatch(reader, /docx-preview|JSZip|renderDocx/);
   assert.match(app, /&& !rec\.ReaderLink\) return false/);
   assert.match(contract, /asset\?\.b && bucketName !== "vomebook\/pdf-pages-v2" && bucketName !== "vomebook\/reader-assets-v2"/);
-  assert.match(reader, /if \(extension === "docx"\) return readerAsset/);
+  assert.doesNotMatch(reader, /extension === "docx"/);
   assert.match(reader, /function fetchReaderResponse\(\)/);
   assertCode(reader, 'const READER_PROXY_TIMEOUT_MS = 120000;');
   assertCode(reader, '}, READER_PROXY_TIMEOUT_MS)');
@@ -384,8 +380,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'task.destroy()?.catch?.(() => {})');
   assert.match(app, /function warmReaderIntent/);
   assert.match(reader, /validatePdfPageManifest/);
-  assert.match(readerCss, /\.docx-body \.reader-docx-wrapper/);
-  assert.match(readerCss, /width: 100% !important/);
+  assert.doesNotMatch(readerCss, /docx-body|reader-docx-wrapper/);
   assert.match(reader, /pageState\.hidden = true/);
   assert.match(reader, /reader-spreadsheet-sheet/);
   assert.match(readerCss, /spreadsheet-html-frame/);
@@ -489,16 +484,14 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.doesNotMatch(reader, /epubRendition\.setReaderTheme\(readerTheme\)/);
   assert.match(reader, /function applyReaderTheme/);
   assert.match(reader, /readerThemeToggle\.innerHTML/);
-  assert.match(reader, /body\.classList\.toggle\("reader-document-dark"/);
   assert.match(readerHtml, /id="bookmark-ribbon"/);
   assert.match(readerHtml, /id="toc-tab"/);
   assert.match(readerHtml, /id="history-clear"/);
   assert.match(readerHtml, /id="theme-toggle"/);
   assert.match(readerCss, /\.reader-panel-tabs/);
   assert.match(reader, /function syncCurrentPageFromMarker/);
-  assert.match(reader, /\.reader-docx-page/);
   assert.match(app, /message\.type === "voice-reader-open"/);
-  assert.match(readerCss, /\.docx-body\.reader-document-dark \.reader-docx/);
+  assert.doesNotMatch(readerCss, /docx-body|reader-docx/);
   assert.match(reader, /function acquirePdfRenderSlot/);
   assert.match(reader, /function trimPdfCanvases/);
   assert.match(reader, /canvas\.width = 0/);

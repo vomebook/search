@@ -2,11 +2,9 @@
 
 import gzip
 import hashlib
-import io
 import json
 import unittest
 import urllib.parse
-import zipfile
 
 from tests import test_reader_refactor as fixtures
 
@@ -204,36 +202,6 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('__pdfProbeTotal()'), 123)
         self.assertEqual(self.page.evaluate('__extraction.calls'), [1, 2])
 
-    def test_large_docx_skips_offscreen_paint_but_searches_all_pages(self):
-        self.expose()
-        with zipfile.ZipFile(io.BytesIO(fixtures.support.minimal_docx())) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        paragraphs = ''.join(f'<w:p><w:r><w:t>needle page {page}</w:t></w:r></w:p>' +
-                             ('<w:p><w:r><w:br w:type="page"/></w:r></w:p>' if page < 20 else '')
-                             for page in range(1, 21))
-        files['word/document.xml'] = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + paragraphs + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>')
-        self.serve(fixtures.support.zip_bytes(files), 'application/octet-stream')
-        self.open(self.docx_url())
-        pages = self.page.locator('.reader-docx-page')
-        self.assertEqual(pages.count(), 20)
-        marker = self.page.evaluate('''()=>{let reads=0;const pages=[...document.querySelectorAll('.reader-docx-page')];
-          for(const page of pages){const native=page.getBoundingClientRect.bind(page);page.getBoundingClientRect=()=>{reads++;return native();};}
-          const actual=__markerPage();return {actual,reads};}''')
-        self.assertEqual(marker['actual'],'1')
-        self.assertLessEqual(marker['reads'],6)
-        self.assertEqual(pages.last.evaluate('e => getComputedStyle(e).contentVisibility'), 'auto')
-        self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
-        self.assertFalse(pages.last.evaluate('e => e.firstElementChild.checkVisibility({contentVisibilityAuto:true})'))
-        self.assertEqual(self.page.evaluate('__query("needle")'), 20)
-        self.search('needle')
-        self.page.locator('.full-search-result').last.click()
-        self.page.wait_for_function('() => document.querySelector(".reader-docx-page:last-child mark")')
-        self.assertEqual(pages.last.locator('mark').text_content(), 'needle')
-        self.page.locator('#history').click()
-        self.page.locator('#page-number').fill('1')
-        self.page.locator('#page-number').press('Enter')
-        self.page.wait_for_function('() => document.querySelector("#page-number").value === "1"')
-        self.assertEqual(self.page.evaluate('__query("needle")'), 20)
 
     def test_mobile_pdf_search_keeps_one_demand_slot_and_drops_queued_cancelled_work(self):
         self.expose()
@@ -352,91 +320,17 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(self.page.locator('mark.full-search-highlight').text_content(), 'needle')
         self.assertGreater(sum(url.endswith('chapter-1.xhtml') for url in requested), 1)
 
-    def docx_url(self):
-        return self.reader_url('docx', url='https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64 + '/document.docx')
 
-    def image_docx(self, image=None, repeats=3, font=None):
-        support = fixtures.support
-        with zipfile.ZipFile(io.BytesIO(support.minimal_docx())) as archive:
-            files = {name: archive.read(name) for name in archive.namelist()}
-        files['[Content_Types].xml'] = files['[Content_Types].xml'].decode().replace('</Types>', '<Default Extension="png" ContentType="image/png"/></Types>')
-        files['word/_rels/document.xml.rels'] = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image.png"/></Relationships>'
-        files['word/media/image.png'] = image if image is not None else support.PNG_BYTES
-        drawing = '''<w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="1524000" cy="762000"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="image"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1524000" cy="762000"/></a:xfrm><a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'''
-        files['word/document.xml'] = files['word/document.xml'].decode().replace('<w:sectPr/>', drawing * repeats + '<w:sectPr/>')
-        if font is not None:
-            files['[Content_Types].xml'] = files['[Content_Types].xml'].replace('</Types>', '<Default Extension="odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/><Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/></Types>')
-            files['word/_rels/document.xml.rels'] = files['word/_rels/document.xml.rels'].replace('</Relationships>', '<Relationship Id="fontTable" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/></Relationships>')
-            files['word/fontTable.xml'] = '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:font w:name="FixtureFont"><w:embedRegular r:id="font" w:fontKey="{00000000-0000-0000-0000-000000000000}"/></w:font></w:fonts>'
-            files['word/_rels/fontTable.xml.rels'] = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="font" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/font.odttf"/></Relationships>'
-            files['word/fonts/font.odttf'] = font
-            files['word/document.xml'] = files['word/document.xml'].replace('<w:r><w:t>', '<w:r><w:rPr><w:rFonts w:ascii="FixtureFont" w:hAnsi="FixtureFont"/></w:rPr><w:t>')
-        return support.zip_bytes(files)
 
-    def test_real_docx_images_use_owned_blob_urls_and_release_on_close(self):
-        self.page.add_init_script('window.__imageReads=0;')
-        def zip_engine(route):
-            response = route.fetch()
-            route.fulfill(response=response, body=response.text() + '''
-              const original=JSZip.loadAsync;
-              JSZip.loadAsync=async(...args)=>{const zip=await original(...args);
-                const file=zip.file('word/media/image.png'),read=file.async.bind(file);
-                file.async=(...args)=>{__imageReads++;return read(...args);};return zip;};''')
-        self.page.route('**/static/vendor/jszip.min.*.js', zip_engine)
-        self.page.add_init_script('''window.__created = []; window.__revoked = [];
-          const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
-          URL.createObjectURL = blob => { const url=create(blob); __created.push(url); return url; };
-          URL.revokeObjectURL = url => { __revoked.push(url); return revoke(url); };''')
-        font = (fixtures.support.ROOT / 'static/vendor/standard_fonts/LiberationSans-Regular.ttf').read_bytes()
-        self.serve(self.image_docx(font=font), 'application/octet-stream')
-        self.open(self.docx_url())
-        self.page.wait_for_function('() => document.querySelectorAll(".docx-body img").length === 3 && [...document.querySelectorAll(".docx-body img")].every(image => image.naturalWidth > 0)')
-        self.assertTrue(all(url.startswith('blob:') for url in self.page.locator('.docx-body img').evaluate_all('images => images.map(image => image.src)')))
-        self.assertEqual(self.page.evaluate('__revoked.length'), 0)
-        self.assertEqual(self.page.evaluate('async () => (await document.fonts.load("16px FixtureFont")).length'), 1)
-        self.assertTrue(self.page.evaluate('[...document.fonts].some(font => font.family === "FixtureFont" && font.status === "loaded")'))
-        self.assertEqual(self.page.evaluate('__created.length'), 2)
-        self.assertEqual(self.page.evaluate('__imageReads'), 1)
-        self.page.evaluate('window.dispatchEvent(new Event("voice-reader-dispose"))')
-        self.assertEqual(self.page.evaluate('__created.slice().sort()'), self.page.evaluate('__revoked.slice().sort()'))
 
-    def test_docx_failure_and_late_render_cannot_leak_blob_assets(self):
-        script = '''window.docx = {
-          parseAsync: async () => ({blobToURL: blob => URL.createObjectURL(blob)}),
-          renderDocument: async doc => {
-            window.__ownedUrl = doc.blobToURL(new Blob(['font']), 'font.ttf');
-            window.__lateBlob = () => doc.blobToURL(new Blob(['late']), 'image.png');
-            if (location.search.includes('hold=1')) await new Promise(resolve => {window.__releaseDocx = resolve;});
-            throw new Error('render fixture failure');
-          }
-        };'''
-        self.page.route('**/static/vendor/docx-preview.min.*.js', lambda route: route.fulfill(content_type='text/javascript', body=script))
-        self.page.add_init_script('''window.__revoked = []; const revoke=URL.revokeObjectURL.bind(URL);
-          URL.revokeObjectURL = url => {__revoked.push(url); revoke(url);};''')
-        self.serve(fixtures.support.minimal_docx(), 'application/octet-stream')
-        for hold in (False, True):
-            with self.subTest(hold=hold):
-                self.page.goto(self.docx_url() + ('&hold=1' if hold else ''))
-                self.page.wait_for_function('() => !!window.__ownedUrl')
-                if hold:
-                    self.page.evaluate('window.dispatchEvent(new Event("voice-reader-dispose")); __releaseDocx()')
-                else:
-                    self.page.wait_for_function('() => document.documentElement.dataset.readerPhase === "failed"')
-                self.assertEqual(self.page.evaluate('__revoked'), [self.page.evaluate('__ownedUrl')])
-                self.assertIsNone(self.page.evaluate('__lateBlob()'))
 
     def test_dom_snapshot_reuses_text_after_highlights_and_invalidates_external_edits(self):
         self.expose()
         body = '<p><span>nee</span><b>dle</b> otherword</p>' + '<p>ordinary</p>' * 4000 + '<p>tail needle</p>'
-        for extension in ('html', 'md', 'txt', 'docx'):
+        for extension in ('html', 'md', 'txt'):
             with self.subTest(extension=extension):
-                if extension == 'docx':
-                    self.page.route('**/static/vendor/docx-preview.min.*.js', lambda route: route.fulfill(content_type='text/javascript', body='window.docx={parseAsync:async()=>({blobToURL:()=>null}),renderDocument:async()=>{const node=document.createElement("div");node.innerHTML=' + json.dumps(body) + ';return [node];}};'))
-                    self.serve(fixtures.support.minimal_docx(), 'application/octet-stream')
-                    self.open(self.docx_url())
-                else:
-                    self.serve('needle otherword\n' + 'ordinary\n' * 4000 + 'tail needle' if extension == 'txt' else body)
-                    self.open(self.reader_url(extension))
+                self.serve('needle otherword\n' + 'ordinary\n' * 4000 + 'tail needle' if extension == 'txt' else body)
+                self.open(self.reader_url(extension))
                 self.assertEqual(self.page.evaluate('__query("needle")'), 2)
                 self.page.evaluate('window.__originalSnapshot = __snapshot(); __walkProbe()')
                 self.assertEqual(self.page.evaluate('__query("otherword")'), 1)

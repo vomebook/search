@@ -27,7 +27,7 @@ export function createReaderProgress(readerContext) {
       readerContext.syncCurrentPageFromMarker();
     const shell = readerContext.documentState.pageCount
       ? readerContext.content.querySelector(
-          `.reader-page[data-page="${readerContext.documentState.page}"], .reader-docx-page[data-page="${readerContext.documentState.page}"]`
+          `.reader-page[data-page="${readerContext.documentState.page}"]`
         )
       : null;
     const pageOffset = shell ? Math.max(0, readerContext.viewport.scrollTop - readerContext.readerPageScrollTop(shell)) : 0;
@@ -175,7 +175,7 @@ export function createReaderProgress(readerContext) {
 
   function pageAtMarker() {
     const y = readerContext.bookmarkRibbon.getBoundingClientRect().bottom,
-      pages = readerContext.docxPageNodes.length ? readerContext.docxPageNodes : [...readerContext.content.querySelectorAll(".reader-page, .reader-docx-page")];
+      pages = [...readerContext.content.querySelectorAll(".reader-page")];
     if (!pages.length) return null;
     const end = readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight;
     if (["pdf", "pdf-pages"].includes(readerContext.capability.mode) && end > 2 && readerContext.viewport.scrollTop > 0 &&
@@ -233,7 +233,7 @@ export function createReaderProgress(readerContext) {
         )
           return false;
         const shell = readerContext.content.querySelector(
-          `.reader-page[data-page="${readerContext.documentState.page}"], .reader-docx-page[data-page="${readerContext.documentState.page}"]`
+          `.reader-page[data-page="${readerContext.documentState.page}"]`
         );
         if (shell && Number.isFinite(entry.pageOffset))
           readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(shell) + entry.pageOffset;

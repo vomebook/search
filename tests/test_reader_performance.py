@@ -37,16 +37,12 @@ VENDOR_FILES = {
     "pdf_worker": vendor_name("pdfWorker", "pdf.worker.min.*.mjs"),
     "marked": vendor_name("marked", "marked.min.*.js"),
     "purify": vendor_name("purify", "purify.min.*.js"),
-    "jszip": vendor_name("jszip", "jszip.min.*.js"),
-    "docx": vendor_name("docx", "docx-preview.min.*.js"),
 }
 VENDOR_STEMS = {
     "pdf": "pdf.min.*.mjs",
     "pdf_worker": "pdf.worker.min.*.mjs",
     "marked": "marked.min.*.js",
     "purify": "purify.min.*.js",
-    "jszip": "jszip.min.*.js",
-    "docx": "docx-preview.min.*.js",
 }
 
 
@@ -113,7 +109,6 @@ window.VoiceOfMLReaderStore = Object.freeze({
 """
 MARKED_SCRIPT = "window.marked = { parse: (text) => '<p>' + text + '</p>' };"
 PURIFY_SCRIPT = "window.DOMPurify = { sanitize: (html) => html };"
-JSZIP_SCRIPT = "window.JSZip = function() {};"
 EPUB_SCRIPT = """
 window.ePub = () => ({ renderTo: (frame) => ({
   on() {}, prev() {}, next() {}, themes: { register() {}, select() {}, fontSize(value) { window.__epubFontSize = value; } },
@@ -121,12 +116,6 @@ window.ePub = () => ({ renderTo: (frame) => ({
     frame.textContent = 'EPUB readable'; resolve();
   }, 20)),
 }) });
-"""
-DOCX_SCRIPT = """
-window.docx = { parseAsync: async () => ({blobToURL: blob => URL.createObjectURL(blob)}),
-  renderDocument: () => new Promise(resolve => setTimeout(() => {
-    resolve([document.createTextNode('DOCX readable')]);
-  }, 20)) };
 """
 PNG_BYTES = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
@@ -218,14 +207,6 @@ def epub_with_many_chapters(count=14):
         "OEBPS/nav.xhtml": f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>{"".join(links)}</ol></nav></body></html>',
     })
     return zip_bytes(files, ("mimetype", "application/epub+zip"))
-
-
-def minimal_docx():
-    return zip_bytes({
-        "[Content_Types].xml": '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
-        "_rels/.rels": '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
-        "word/document.xml": '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>DOCX readable</w:t></w:r></w:p><w:sectPr/></w:body></w:document>',
-    })
 
 
 def minimal_wav():
@@ -674,7 +655,6 @@ class ReaderPerformanceTest(unittest.TestCase):
             ("md", "markdown", "已加载", ".reader-markdown", "text/markdown", b"# Markdown readable", True, False),
             ("html", "html", "HTML", "iframe.html-frame", "text/html", b"<p>HTML readable</p>", True, False),
             ("png", "image", "图片", ".reader-image", "image/png", PNG_BYTES, True, False),
-            ("docx", "docx", "DOCX", ".docx-body", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", minimal_docx(), False, False),
         ]
         for extension, mode, status, content_selector, content_type, body, page_hidden, zoom_hidden in cases:
             with self.subTest(extension=extension):
@@ -684,13 +664,8 @@ class ReaderPerformanceTest(unittest.TestCase):
                 if extension == "md":
                     page.route("**/static/vendor/marked.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
                     page.route("**/static/vendor/purify.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
-                if extension == "docx":
-                    page.route("**/static/vendor/jszip.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=JSZIP_SCRIPT))
-                    page.route("**/static/vendor/docx-preview.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=DOCX_SCRIPT))
                 page.route("**/api/reader-content**", lambda route, _request, content_type=content_type, body=body: route.fulfill(status=200, content_type=content_type, body=body))
                 source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/matrix.{extension}"
-                if extension == "docx":
-                    source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/docx-native-v1/document.docx"
                 page.goto(f"{self.origin}/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=Matrix", wait_until="domcontentloaded")
                 page.wait_for_function("expected => document.querySelector('#status').textContent === expected", arg=status)
                 self.assertEqual(page.locator(".reader-content").get_attribute("data-mode"), mode)
@@ -1678,26 +1653,22 @@ class ReaderPerformanceTest(unittest.TestCase):
                 self.assertEqual(page.evaluate("limit => { try { VoiceOfMLReaderSecurity.assertResponseSize({headers:{get:()=>String(limit + 1)}}, limit); return null; } catch (error) { return error.message; } }", expected_limit), "READER_RESOURCE_LIMIT")
                 context.close()
 
-    def test_zip_bomb_metadata_is_rejected_before_docx_and_foliate_parsers(self):
+    def test_zip_bomb_metadata_is_rejected_before_foliate_parser(self):
         payload = zip_bomb_metadata()
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             self.assertIsNone(archive.testzip())
             entry = archive.getinfo("bomb.txt")
             self.assertGreater(entry.file_size / entry.compress_size, 200)
-        for extension in ("docx", "epub"):
-            with self.subTest(extension=extension):
-                context = self.browser.new_context(viewport={"width": 390, "height": 844}); page = context.new_page()
-                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-                page.route("**/static/vendor/jszip.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.JSZip=function(){window.__archiveParserStarted=true};"))
-                page.route("**/static/vendor/docx-preview.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body="window.docx={parseAsync(){window.__archiveParserStarted=true}};"))
-                page.route("**/static/foliate-reader/view.js*", lambda route: route.fulfill(status=200, content_type="text/javascript", body="customElements.define('foliate-view', class extends HTMLElement { open() { window.__archiveParserStarted=true; throw new Error('parser must not start'); } });"))
-                page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/octet-stream", body=payload))
-                source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bomb.epub" if extension == "epub" else f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{'a' * 64}/docx-native-v1/document.docx"
-                page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=Bomb", wait_until="domcontentloaded")
-                page.locator(".reader-error").wait_for(timeout=10000)
-                self.assertIn("READER_ARCHIVE_LIMIT", page.locator(".reader-error").text_content())
-                self.assertEqual(page.locator("#content").get_attribute("data-error-code"), "READER_CORRUPT" if extension == "epub" else "READER_PARSE")
-                self.assertFalse(page.evaluate("window.__archiveParserStarted === true")); context.close()
+        context = self.browser.new_context(viewport={"width": 390, "height": 844}); page = context.new_page()
+        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
+        page.route("**/static/foliate-reader/view.js*", lambda route: route.fulfill(status=200, content_type="text/javascript", body="customElements.define('foliate-view', class extends HTMLElement { open() { window.__archiveParserStarted=true; throw new Error('parser must not start'); } });"))
+        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/octet-stream", body=payload))
+        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bomb.epub"
+        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Bomb", wait_until="domcontentloaded")
+        page.locator(".reader-error").wait_for(timeout=10000)
+        self.assertIn("READER_ARCHIVE_LIMIT", page.locator(".reader-error").text_content())
+        self.assertEqual(page.locator("#content").get_attribute("data-error-code"), "READER_CORRUPT")
+        self.assertFalse(page.evaluate("window.__archiveParserStarted === true")); context.close()
 
     def test_actual_store_broadcasts_progress_and_bookmark_updates_between_readers(self):
         self.page.unroute("**/static/reader/core/reader-store.js")
@@ -2476,7 +2447,6 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_supported_formats_start_loading_while_history_restores(self):
         cases = [
             ("md", "已加载", ".reader-markdown", ["content", "marked", "purify"]),
-            ("docx", "DOCX", ".docx-body", ["content", "jszip", "docx"]),
             ("png", "图片", ".reader-image", ["content"]),
         ]
         elapsed_by_format = {}
@@ -2498,17 +2468,11 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=held_store))
                 page.route("**/static/vendor/marked.min.*.js", timed("marked", "text/javascript", MARKED_SCRIPT))
                 page.route("**/static/vendor/purify.min.*.js", timed("purify", "text/javascript", PURIFY_SCRIPT))
-                page.route("**/static/vendor/jszip.min.*.js", timed("jszip", "text/javascript", JSZIP_SCRIPT))
                 page.route("**/static/vendor/epub.min.06eae1574510.js", timed("epub", "text/javascript", EPUB_SCRIPT))
-                page.route("**/static/vendor/docx-preview.min.*.js", timed("docx", "text/javascript", DOCX_SCRIPT))
                 content_type = "image/png" if extension == "png" else "application/octet-stream"
-                body = PNG_BYTES if extension == "png" else minimal_docx() if extension == "docx" else b"Reader benchmark content"
+                body = PNG_BYTES if extension == "png" else b"Reader benchmark content"
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", timed("content", content_type, body))
-                if extension == "docx":
-                    digest = "a" * 64
-                    source = f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{digest}/docx-native-v1/document.docx"
-                else:
-                    source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/performance.{extension}"
+                source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/performance.{extension}"
                 if extension == "png":
                     page.route(source, timed("content", content_type, body))
                 started = time.perf_counter()
@@ -2535,7 +2499,6 @@ class ReaderPerformanceTest(unittest.TestCase):
             ("txt", b"Cold TXT readable", "text/plain", "已加载", ".reader-text", []),
              ("md", b"# Cold Markdown", "text/markdown", "已加载", ".reader-markdown", [VENDOR_FILES["marked"], VENDOR_FILES["purify"]]),
             ("pdf", minimal_pdf(), "application/pdf", "1 页", ".reader-page canvas.ready", [VENDOR_FILES["pdf"], VENDOR_FILES["pdf_worker"]]),
-             ("docx", minimal_docx(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "1 页", ".docx-body", [VENDOR_FILES["jszip"], VENDOR_FILES["docx"]]),
             ("png", PNG_BYTES, "image/png", "图片", ".reader-image", []),
         ]
         results = []
@@ -2553,22 +2516,14 @@ class ReaderPerformanceTest(unittest.TestCase):
                         route.fulfill(status=200, content_type=content_type, body=document)
 
                     page.route("https://voiceofml-search.hf.space/api/reader-content**", serve_document)
-                    if extension == "docx":
-                        digest = "a" * 64
-                        source = f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{digest}/docx-native-v1/document.docx"
-                    else:
-                        source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/cold.{extension}"
+                    source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/cold.{extension}"
                     if extension == "png": page.route(source, serve_document)
                     started = time.perf_counter()
                     page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=Cold", wait_until="domcontentloaded")
                     page.wait_for_function("expected => document.querySelector('#status').textContent === expected", arg=ready_status, timeout=30000)
                     page.locator(selector).wait_for(state="attached", timeout=30000)
-                    if extension == "docx":
-                        self.assertTrue(page.locator(".page-controls").is_visible())
-                        self.assertEqual(page.locator(".reader-docx-page").count(), 1)
                     if extension in {"txt", "md"}: self.assertTrue(page.locator(selector).inner_text().strip())
                     elif extension == "epub": self.assertIn("EPUB readable", page.locator(selector).content_frame.locator("body").inner_text())
-                    elif extension == "docx": self.assertIn("DOCX readable", page.locator(selector).inner_text())
                     elif extension == "png": self.assertTrue(page.locator(selector).evaluate("image => image.naturalWidth > 0"))
                     elif extension == "pdf": self.assertGreater(page.locator(selector).evaluate("canvas => canvas.width * canvas.height"), 0)
                     elapsed = (time.perf_counter() - started) * 1000
@@ -2612,7 +2567,6 @@ class ReaderPerformanceTest(unittest.TestCase):
         cases = [
             ("txt", "已加载", ".reader-text"),
             ("md", "已加载", ".reader-markdown"),
-            ("docx", "DOCX", ".docx-body"),
         ]
         for extension, ready_status, selector in cases:
             with self.subTest(extension=extension):
@@ -2621,18 +2575,11 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.route("**/static/vendor/marked.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
                 page.route("**/static/vendor/purify.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
-                page.route("**/static/vendor/jszip.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=JSZIP_SCRIPT))
                 page.route("**/static/vendor/epub.min.06eae1574510.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=EPUB_SCRIPT))
-                page.route("**/static/vendor/docx-preview.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=DOCX_SCRIPT))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=403, body="forbidden", headers={"Access-Control-Allow-Origin": "*"}))
-                if extension == "docx":
-                    digest = "a" * 64
-                    source = f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{digest}/docx-native-v1/document.docx"
-                else:
-                    source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/fallback.{extension}"
+                source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/fallback.{extension}"
                 direct_requests = []
-                direct_body = minimal_docx() if extension == "docx" else b"Fallback readable"
-                page.route(source, lambda route, _request, body=direct_body: (direct_requests.append(route.request.url), route.fulfill(status=200, content_type="application/octet-stream", body=body)))
+                page.route(source, lambda route: (direct_requests.append(route.request.url), route.fulfill(status=200, content_type="application/octet-stream", body=b"Fallback readable")))
                 page.goto(
                     f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=Fallback",
                     wait_until="domcontentloaded",
