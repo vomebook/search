@@ -578,7 +578,10 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.ok(workflow.includes('bundleArguments(process.argv[1])'));
   assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" $flags --minify'));
   assert.match(workflow, /node scripts\/data\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
+  assert.match(workflow, /node scripts\/build\/fetch_foliate_reader\.mjs _site\/static\/foliate-reader/);
   assert.match(workflow, /node scripts\/build\/copy_reader_vendor\.mjs _site\/static\/vendor/);
+  assert.match(workflow, /--foliate-output _site\/static\/foliate-reader\/vendor/);
+  assert.doesNotMatch(workflow, /cp -a static\/foliate-reader/);
   assert.ok(workflow.includes('.buildFiles("github")'));
   assert.match(workflow, /esbuild@0\.28\.2 static\/sw\.js --minify/);
   assert.match(workflow, /uses: actions\/upload-pages-artifact@v5\s*\n\s*with:\s*[\s\S]*?path: '_site'/);

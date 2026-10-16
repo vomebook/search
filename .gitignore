@@ -1,5 +1,6 @@
 _site/
 static/vendor/
+static/foliate-reader/
 __pycache__/
 *.py[cod]
 tests/benchmark-results.json

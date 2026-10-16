@@ -52,6 +52,16 @@
     url: "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.4.299.tgz",
     sha256: "86269b40170eb41740ea05ad2102d71d33de4f122b34eb2f478be0ea7779c415"
   });
+  const foliateRevision = "78914aef4466eb960965702401634c2cb348e9b1";
+  const foliateArchive = Object.freeze({
+    url: `https://codeload.github.com/johnfactotum/foliate-js/tar.gz/${foliateRevision}`,
+    sha256: "4878cd5f04073af5046ea543da73a963a7f9e1a4b30ddc63ac86cea5adf02f38"
+  });
+  const foliateFiles = Object.freeze([
+    "LICENSE", "comic-book.js", "epub.js", "epubcfi.js", "fb2.js", "fixed-layout.js",
+    "mobi.js", "overlayer.js", "paginator.js", "pdf.js", "progress.js", "reader.html",
+    "reader.js", "search.js", "text-walker.js", "tts.js", "ui/menu.js", "ui/tree.js", "view.js"
+  ]);
   const foliateVendors = {
     fflateLicense: {
       url: "https://cdn.jsdelivr.net/npm/fflate@0.8.3/LICENSE",
@@ -173,7 +183,9 @@
   const resources = Object.freeze({
     vendors: Object.freeze(vendors),
     foliateVendors: Object.freeze(foliateVendors),
-    foliateRevision: "78914aef4466eb960965702401634c2cb348e9b1",
+    foliateRevision,
+    foliateArchive,
+    foliateFiles,
     pdfArchive,
     readerFiles,
     readerComponentFiles,
