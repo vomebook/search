@@ -17,7 +17,8 @@ const args = Object.fromEntries(
       []
     )
 );
-const required = ["reader.html", ...resources.readerFiles, "foliate-reader/view.js"];
+const sourceRequired = ["reader.html", ...resources.readerFiles];
+const required = [...sourceRequired, ...resources.foliateFiles.map(file => `foliate-reader/${file}`)];
 // Source smoke assertions, not a substitute for runtime behavior tests.
 const behavioral = [
   /\bVoiceOfMLReaderRuntime\s*\.\s*createReaderRuntime\s*\(/,
@@ -114,6 +115,12 @@ function checkAssets(output, hashed = false) {
       `missing or empty Reader vendor directory: ${directory}`
     );
   }
+  for (const directory of ["foliate-reader/vendor/pdfjs/cmaps", "foliate-reader/vendor/pdfjs/standard_fonts",
+    "foliate-reader/vendor/pdfjs/wasm"]) {
+    const target = path.join(output, directory);
+    assert(fs.existsSync(target) && fs.statSync(target).isDirectory() && fs.readdirSync(target).length > 0,
+      `missing or empty Foliate PDF.js directory: ${directory}`);
+  }
 }
 
 function currentAsset(output, filename) {
@@ -129,7 +136,7 @@ function currentAsset(output, filename) {
 
 function checkProject(root, artifact) {
   const source = path.join(root, "static");
-  for (const file of required) {
+  for (const file of sourceRequired) {
     const target = path.join(source, file);
     assert(
       fs.existsSync(target) && fs.statSync(target).isFile(),
@@ -162,7 +169,10 @@ function checkProject(root, artifact) {
       "unexpanded Reader cache inventory"
     );
   }
-  const manifest = required.map((file) => `${file}:${hash(path.join(source, file))}`).join("\n");
+  const manifest = [
+    ...sourceRequired.map(file => `${file}:${hash(path.join(source, file))}`),
+    ...resources.foliateFiles.map(file => `foliate-reader/${file}:${hash(path.join(output, "foliate-reader", file))}`)
+  ].join("\n");
   return crypto.createHash("sha256").update(manifest).digest("hex");
 }
 
@@ -200,7 +210,7 @@ function crossCheck(githubRoot, hfRoot) {
       `cross-project drift: ${file}`
     );
   }
-  for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "check_reader_release.mjs"]) {
+  for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "fetch_foliate_reader.mjs", "foliate-local.patch", "check_reader_release.mjs"]) {
     assert(
       hash(path.join(githubRoot, "scripts/build", file)) === hash(path.join(hfRoot, "scripts/build", file)),
       `cross-project drift: scripts/build/${file}`

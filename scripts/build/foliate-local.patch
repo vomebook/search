@@ -1,0 +1,477 @@
+diff --git a/epub.js b/epub.js
+index e8bd703..aeace46 100644
+--- a/epub.js
++++ b/epub.js
+@@ -350,7 +350,7 @@ const parseNCX = (doc, resolve = f => f) => {
+         const $label = $(el, 'navLabel')
+         const $content = $(el, 'content')
+         const label = getElementText($label)
+-        const href = resolveHref($content.getAttribute('src'))
++        const href = resolveHref($content?.getAttribute('src'))
+         if (el.localName === 'navPoint') {
+             const els = $$(el, 'navPoint')
+             return { label, href, subitems: els.length ? els.map(parseItem) : null }
+@@ -642,6 +642,7 @@ class Resources {
+         this.manifest = $$($manifest, 'item')
+             .map(getAttributes('href', 'id', 'media-type', 'properties', 'media-overlay'))
+             .map(item => {
++                item.rawHref = item.href
+                 item.href = resolveHref(item.href)
+                 item.properties = item.properties?.split(/\s/)
+                 return item
+@@ -993,6 +994,14 @@ ${doc.querySelector('parsererror').innerText}`)
+                 linear,
+                 pageSpread: getPageSpread(properties),
+                 resolveHref: href => resolveURL(href, item.href),
++                resolveResourceHref: href => {
++                    // Resolve raw URIs before decoding once to a literal ZIP member name.
++                    const root = 'https://invalid.invalid/'
++                    const base = new URL(item.rawHref, root + opfPath.split('/').map(encodeURIComponent).join('/'))
++                    const url = new URL(href, base)
++                    if (base.origin !== new URL(root).origin || url.origin !== base.origin || url.hash) return null
++                    return decodeURIComponent(url.pathname.slice(1))
++                },
+                 mediaOverlay: item.mediaOverlay
+                     ? this.resources.getItemByID(item.mediaOverlay) : null,
+             }
+@@ -1036,8 +1045,17 @@ ${doc.querySelector('parsererror').innerText}`)
+         return this
+     }
+     async loadDocument(item) {
+-        const str = await this.loadText(item.href)
+-        return this.parser.parseFromString(str, item.mediaType)
++        const url = await this.#loader.loadItem(item)
++        const response = await fetch(url)
++        const text = await response.text()
++        // CHM conversions may serialize XHTML with a namespace prefix. HTML
++        // parsing nests their self-closing anchors and void tags, then repairs
++        // that invalid tree by moving footnotes. Preserve the original XML tree.
++        if (item.mediaType === MIME.XHTML || /<[A-Za-z_][\w.-]*:html\b/.test(text)) {
++            const xml = this.parser.parseFromString(text, MIME.XHTML)
++            if (!xml.querySelector('parsererror')) return xml
++        }
++        return this.parser.parseFromString(text, MIME.HTML)
+     }
+     getMediaOverlay() {
+         return new MediaOverlay(this, this.#loadXML.bind(this))
+@@ -1046,7 +1064,7 @@ ${doc.querySelector('parsererror').innerText}`)
+         return this.resources.resolveCFI(cfi)
+     }
+     resolveHref(href) {
+-        const [path, hash] = href.split('#')
++        const [path, hash] = String(href ?? '').split('#')
+         const item = this.resources.getItemByHref(decodeURI(path))
+         if (!item) return null
+         const index = this.resources.spine.findIndex(({ idref }) => idref === item.id)
+diff --git a/mobi.js b/mobi.js
+index 20c77a8..d549044 100644
+--- a/mobi.js
++++ b/mobi.js
+@@ -724,8 +724,27 @@ class MOBI6 {
+         // because only then can they be referenced in the DOM
+         // NOTE: must be built BEFORE getGuide()/createDocument() so that sections
+         // cached during init() already have anchor elements inserted.
+-        this.#fileposList = [...new Set(
+-            Array.from(str.matchAll(fileposRegex), m => m[1]))]
++        let ncx
++        try {
++            ncx = await this.mobi.getNCX()
++        } catch (e) {
++            console.warn(e)
++        }
++        const offsets = []
++        const mapNCX = items => items?.map(({ label, offset, children }) => {
++            if (!Number.isSafeInteger(offset) || offset < 0 || offset >= totalLength)
++                throw new Error('Invalid MOBI navigation offset')
++            offsets.push(String(offset))
++            return { label: unescapeHTML(label), href: `filepos:${offset}`,
++                subitems: mapNCX(children) }
++        })
++        try {
++            this.toc = mapNCX(ncx)
++        } catch (e) {
++            console.warn(e)
++        }
++        this.#fileposList = [...new Set([
++            ...Array.from(str.matchAll(fileposRegex), m => m[1]), ...offsets])]
+             .map(filepos => ({ filepos, number: Number(filepos) }))
+             .sort((a, b) => a.number - b.number)
+
+@@ -733,7 +752,7 @@ class MOBI6 {
+             this.landmarks = await this.getGuide()
+             const tocHref = this.landmarks
+                 .find(({ type }) => type?.includes('toc'))?.href
+-            if (tocHref) {
++            if (tocHref && !this.toc?.length) {
+                 const { index } = this.resolveHref(tocHref)
+                 const doc = await this.sections[index].createDocument()
+                 let lastItem
+@@ -844,7 +863,9 @@ class MOBI6 {
+     }
+     async createDocument(section) {
+         const str = await this.loadText(section)
+-        return this.parser.parseFromString(str, this.#type)
++        const doc = this.parser.parseFromString(str, this.#type)
++        await this.replaceResources(doc)
++        return doc
+     }
+     async loadSection(section) {
+         if (this.#cache.has(section)) return this.#cache.get(section)
+@@ -1167,7 +1188,12 @@ class KF8 {
+     }
+     async createDocument(section) {
+         const str = await this.loadText(section)
+-        return this.parser.parseFromString(str, this.#type)
++        const replaced = await this.replaceResources(str)
++        const doc = this.parser.parseFromString(replaced, this.#type)
++        for (const [url, node] of this.#inlineMap)
++            for (const el of doc.querySelectorAll(`img[src="${url}"]`))
++                el.replaceWith(node)
++        return doc
+     }
+     async loadSection(section) {
+         if (this.#cache.has(section)) return this.#cache.get(section)
+diff --git a/paginator.js b/paginator.js
+index 7980c20..75648c0 100644
+--- a/paginator.js
++++ b/paginator.js
+@@ -268,7 +268,9 @@ class View {
+
+                 this.#contentRange.selectNodeContents(doc.body)
+                 const layout = beforeRender?.({ vertical, rtl, background })
+-                this.#iframe.style.display = 'block'
++                this.#iframe.style.setProperty('display', 'block', 'important')
++                this.#iframe.style.setProperty('visibility', 'visible', 'important')
++                this.#iframe.style.setProperty('opacity', '1', 'important')
+                 this.render(layout)
+                 this.#observer.observe(doc.body)
+
+diff --git a/pdf.js b/pdf.js
+index c998bf4..cf24b4a 100644
+--- a/pdf.js
++++ b/pdf.js
+@@ -6,10 +6,10 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsPath('pdf.worker.mjs')
+
+ const fetchText = async url => await (await fetch(url)).text()
+
+-// https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v5.5.207/web/text_layer_builder.css
++// https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v6.4.299/web/text_layer_builder.css
+ const textLayerBuilderCSS = await fetchText(pdfjsPath('text_layer_builder.css'))
+
+-// https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v5.5.207/web/annotation_layer_builder.css
++// https://raw.githubusercontent.com/mozilla/pdf.js/refs/tags/v6.4.299/web/annotation_layer_builder.css
+ const annotationLayerBuilderCSS = await fetchText(pdfjsPath('annotation_layer_builder.css'))
+
+ const render = async (page, doc, zoom) => {
+@@ -123,6 +123,7 @@ export const makePDF = async file => {
+         range: transport,
+         cMapUrl: pdfjsPath('cmaps/'),
+         standardFontDataUrl: pdfjsPath('standard_fonts/'),
++        wasmUrl: pdfjsPath('wasm/'),
+         isEvalSupported: false,
+     }).promise
+
+diff --git a/reader.html b/reader.html
+index 18d6b5b..4aaac01 100644
+--- a/reader.html
++++ b/reader.html
+@@ -301,4 +301,4 @@ body {
+         </svg>
+     </button>
+ </div>
+-<script src="reader.js" type="module"></script>
++<script src="reader.js?reader-v1" type="module"></script>
+diff --git a/reader.js b/reader.js
+index f62102c..f16ef59 100644
+--- a/reader.js
++++ b/reader.js
+@@ -1,4 +1,4 @@
+-import './view.js'
++import './view.js?reader-v1'
+ import { createTOCView } from './ui/tree.js'
+ import { createMenu } from './ui/menu.js'
+ import { Overlayer } from './overlayer.js'
+@@ -101,12 +101,62 @@ class Reader {
+         $('#menu-button').append(menu.element)
+         $('#menu-button > button').addEventListener('click', () =>
+             menu.element.classList.toggle('show'))
+-        menu.groups.layout.select('paginated')
++        menu.groups.layout.select('scrolled')
+     }
+     async open(file) {
+         this.view = document.createElement('foliate-view')
+         document.body.append(this.view)
+         await this.view.open(file)
++        this.view.renderer.setAttribute('flow', 'scrolled')
++        let moving = false
++        let previousStart = null
++        const moveSection = async direction => {
++            const renderer = this.view.renderer
++            if (moving || !renderer.scrolled || !direction) return
++            const start = renderer.start
++            const end = renderer.end
++            const viewSize = renderer.viewSize
++            if (direction > 0 && end < viewSize - 2) return
++            if (direction < 0 && start > 2) return
++            moving = true
++            try {
++                if (direction > 0) await this.view.next()
++                else await this.view.prev()
++            } finally {
++                moving = false
++                previousStart = null
++            }
++        }
++        const moveAcrossSections = () => {
++            const renderer = this.view.renderer
++            const start = renderer.start
++            const direction = previousStart == null ? 0 : start - previousStart
++            previousStart = start
++            moveSection(direction)
++        }
++        let boundContainer = null
++        const bindScrollContainer = () => {
++            const container = this.view.renderer.shadowRoot?.querySelector('#container') || this.view.renderer
++            if (container === boundContainer) return
++            boundContainer = container
++            container.addEventListener('scroll', moveAcrossSections)
++            container.addEventListener('wheel', event => {
++            if (event.deltaY) moveSection(event.deltaY > 0 ? 1 : -1)
++            }, { passive: true })
++        }
++        bindScrollContainer()
++        this.view.renderer.addEventListener('load', bindScrollContainer)
++        setInterval(bindScrollContainer, 200)
++        let touchStartY = null
++        this.view.renderer.addEventListener('touchstart', event => {
++            touchStartY = event.touches[0]?.clientY ?? null
++        }, { passive: true })
++        this.view.renderer.addEventListener('touchend', event => {
++            if (touchStartY == null) return
++            const delta = touchStartY - (event.changedTouches[0]?.clientY ?? touchStartY)
++            touchStartY = null
++            if (Math.abs(delta) > 24) moveSection(delta > 0 ? 1 : -1)
++        }, { passive: true })
+         this.view.addEventListener('load', this.#onLoad.bind(this))
+         this.view.addEventListener('relocate', this.#onRelocate.bind(this))
+
+@@ -118,7 +168,10 @@ class Reader {
+             })
+         })
+         this.view.renderer.setStyles?.(getCSS(this.style))
+-        this.view.renderer.next()
++        await Promise.race([
++            this.view.goTo(0),
++            new Promise(resolve => setTimeout(resolve, 3000)),
++        ])
+
+         $('#header-bar').style.visibility = 'visible'
+         $('#nav-bar').style.visibility = 'visible'
+@@ -151,6 +204,15 @@ class Reader {
+                 this.closeSideBar()
+             })
+             $('#toc-view').append(this.#tocView.element)
++            const entries = []
++            const append = (items, depth = 0) => {
++                for (const item of items || []) {
++                    entries.push({ label: item.label || '未命名章节', href: item.href, depth })
++                    append(item.subitems, depth + 1)
++                }
++            }
++            append(toc)
++            if (window.parent !== window) window.parent.postMessage({ type: 'voice-foliate-toc', entries }, location.origin)
+         }
+
+         // load and show highlights embedded in the file by Calibre
+@@ -195,7 +257,7 @@ class Reader {
+         doc.addEventListener('keydown', this.#handleKeydown.bind(this))
+     }
+     #onRelocate({ detail }) {
+-        const { fraction, location, tocItem, pageItem } = detail
++        const { fraction, location, tocItem, pageItem, cfi } = detail
+         const percent = percentFormat.format(fraction)
+         const loc = pageItem
+             ? `Page ${pageItem.label}`
+@@ -205,6 +267,10 @@ class Reader {
+         slider.value = fraction
+         slider.title = `${percent} · ${loc}`
+         if (tocItem?.href) this.#tocView?.setCurrentHref?.(tocItem.href)
++        if (window.parent !== window) window.parent.postMessage({
++            type: 'voice-foliate-relocate', fraction,
++            cfi: cfi || '', href: tocItem?.href || ''
++        }, globalThis.location.origin)
+     }
+ }
+
+@@ -235,5 +301,33 @@ $('#file-button').addEventListener('click', () => $('#file-input').click())
+
+ const params = new URLSearchParams(location.search)
+ const url = params.get('url')
+-if (url) open(url).catch(e => console.error(e))
++const proxy = params.get('proxy')
++if (params.get('embed') === '1') document.documentElement.classList.add('embedded')
++const fileNameHint = params.get('file_name') || ''
++globalThis.foliateFileNameHint = fileNameHint
++window.addEventListener('message', event => {
++    if (event.source !== window.parent || event.data?.type !== 'voice-foliate-goto') return
++    if (event.data.href) globalThis.reader?.view?.goTo(event.data.href).catch(e => console.error(e))
++})
++window.addEventListener('message', event => {
++    if (event.source !== window.parent) return
++    const type = event.data?.type
++    if (type === 'voice-foliate-seek') globalThis.reader?.view?.goToFraction(Number(event.data.percent) / 100)
++    else if (type === 'voice-foliate-prev') globalThis.reader?.view?.prev()
++    else if (type === 'voice-foliate-next') globalThis.reader?.view?.next()
++})
++window.addEventListener('message', event => {
++    if (event.source !== window.parent || event.data?.type !== 'voice-foliate-goto-cfi') return
++    if (event.data.cfi) globalThis.reader?.view?.goTo(event.data.cfi).catch(e => console.error(e))
++})
++window.addEventListener('message', async event => {
++    if (event.source !== window.parent || event.data?.type !== 'voice-foliate-search') return
++    const results = []
++    for await (const group of globalThis.reader?.view?.search?.({ query: event.data.query }) || []) {
++        for (const item of group.subitems || []) results.push({ label: group.label || '电子书位置', cfi: item.cfi, excerpt: item.excerpt || { pre: '', match: event.data.query, post: '' } })
++        if (results.length >= 100) break
++    }
++    window.parent.postMessage({ type: 'voice-foliate-search-results', results: results.slice(0, 100) }, location.origin)
++})
++if (url) open(proxy || url).then(() => window.parent !== window && window.parent.postMessage({ type: 'voice-foliate-ready' }, location.origin)).catch(e => { console.error(e); if (window.parent !== window) window.parent.postMessage({ type: 'voice-foliate-error', message: e?.message || 'FOLIATE_LOAD_FAILED' }, location.origin) })
+ else dropTarget.style.visibility = 'visible'
+diff --git a/search.js b/search.js
+index a6f176f..615ba65 100644
+--- a/search.js
++++ b/search.js
+@@ -6,10 +6,10 @@ const normalizeWhitespace = str => str.replace(/\s+/g, ' ')
+ const makeExcerpt = (strs, { startIndex, startOffset, endIndex, endOffset }) => {
+     const start = strs[startIndex]
+     const end = strs[endIndex]
+-    const match = start === end
++    const match = startIndex === endIndex
+         ? start.slice(startOffset, endOffset)
+         : start.slice(startOffset)
+-            + strs.slice(start + 1, end).join('')
++            + strs.slice(startIndex + 1, endIndex).join('')
+             + end.slice(0, endOffset)
+     const trimmedStart = normalizeWhitespace(start.slice(0, startOffset)).trimStart()
+     const trimmedEnd = normalizeWhitespace(end.slice(endOffset)).trimEnd()
+@@ -41,7 +41,7 @@ const simpleSearch = function* (strs, query, options = {}) {
+             const endIndex = strIndex
+             const endOffset = end - (sum - strs[strIndex].length)
+             const range = { startIndex, startOffset, endIndex, endOffset }
+-            yield { range, excerpt: makeExcerpt(strs, range) }
++            yield { range, get excerpt() { return makeExcerpt(strs, range) } }
+         }
+     } while (index > -1)
+ }
+@@ -94,7 +94,7 @@ const segmenterSearch = function* (strs, query, options = {}) {
+             const startIndex = substrArr[0].strIndex
+             const startOffset = substrArr[0].index
+             const range = { startIndex, startOffset, endIndex, endOffset }
+-            yield { range, excerpt: makeExcerpt(strs, range) }
++            yield { range, get excerpt() { return makeExcerpt(strs, range) } }
+         }
+         substrArr.shift()
+     }
+@@ -121,8 +121,15 @@ export const searchMatcher = (textWalker, opts) => {
+                 : 'base',
+             })) {
+                 const { startIndex, startOffset, endIndex, endOffset } = result.range
+-                result.range = makeRange(startIndex, startOffset, endIndex, endOffset)
+-                yield result
++                // Count every match without building excerpts or DOM ranges
++                // for results outside the requested page.
++                let range
++                yield {
++                    get range() {
++                        return range ??= makeRange(startIndex, startOffset, endIndex, endOffset)
++                    },
++                    get excerpt() { return result.excerpt },
++                }
+             }
+         }, acceptNode)
+         for (const result of iter) yield result
+diff --git a/view.js b/view.js
+index 9bdaf02..921be01 100644
+--- a/view.js
++++ b/view.js
+@@ -70,10 +70,12 @@ export class NotFoundError extends Error {}
+ export class UnsupportedTypeError extends Error {}
+
+ const fetchFile = async url => {
++    if (window.parent !== window && typeof window.parent.fetchFile === 'function')
++        return window.parent.fetchFile(url)
+     const res = await fetch(url)
+     if (!res.ok) throw new ResponseError(
+         `${res.status} ${res.statusText}`, { cause: res })
+-    return new File([await res.blob()], new URL(res.url).pathname)
++    return new File([await res.blob()], globalThis.foliateFileNameHint || new URL(res.url).pathname)
+ }
+
+ export const makeBook = async file => {
+@@ -258,6 +260,7 @@ export class View extends HTMLElement {
+             await import('./paginator.js')
+             this.renderer = document.createElement('foliate-paginator')
+         }
++        this.renderer.setAttribute('flow', 'scrolled')
+         this.renderer.setAttribute('exportparts', 'head,foot,filter')
+         this.renderer.addEventListener('load', e => this.#onLoad(e.detail))
+         this.renderer.addEventListener('relocate', e => this.#onRelocate(e.detail))
+@@ -276,7 +279,7 @@ export class View extends HTMLElement {
+                 this.renderer.goTo(resolved)
+                     .then(() => {
+                         const { doc } = this.renderer.getContents()
+-                            .find(x => x.index = resolved.index)
++                            .find(x => x.index === resolved.index)
+                         const el = resolved.anchor(doc)
+                         el.classList.add(activeClass)
+                         if (playbackActiveClass) el.ownerDocument
+@@ -307,9 +310,7 @@ export class View extends HTMLElement {
+         this.mediaOverlay = null
+     }
+     goToTextStart() {
+-        return this.goTo(this.book.landmarks
+-            ?.find(m => m.type.includes('bodymatter') || m.type.includes('text'))
+-            ?.href ?? this.book.sections.findIndex(s => s.linear !== 'no'))
++        return this.goTo(0)
+     }
+     async init({ lastLocation, showTextStart }) {
+         const resolved = lastLocation ? this.resolveNavigation(lastLocation) : null
+@@ -547,6 +548,37 @@ export class View extends HTMLElement {
+         const { query, index } = opts
+         const matcher = searchMatcher(textWalker,
+             { defaultLocale: this.language, ...opts })
++        if (opts.lean) {
++            const { sections } = this.book
++            const indices = index != null ? [index] : sections.map((_, i) => i)
++            const offset = Math.max(0, opts.offset || 0)
++            const limit = Math.max(0, Math.min(50, opts.limit ?? 50))
++            for (const sectionIndex of indices) {
++                if (opts.current?.() === false) return
++                const section = sections[sectionIndex]
++                if (!section?.createDocument) continue
++                const doc = await section.createDocument()
++                if (opts.current?.() === false) return
++                let count = 0
++                const subitems = []
++                for (const match of matcher(doc, query)) {
++                    if (count >= offset && subitems.length < limit) {
++                        const { range, excerpt } = match
++                        subitems.push({ cfi: this.getCFI(sectionIndex, range), excerpt })
++                    }
++                    count++
++                    if (count % 2048 === 0) {
++                        await new Promise(resolve => setTimeout(resolve, 0))
++                        if (opts.current?.() === false) return
++                    }
++                    if (index != null && subitems.length === limit) break
++                }
++                if (opts.current?.() === false) return
++                yield { index: sectionIndex, count, subitems,
++                    label: this.#tocProgress.getProgress(sectionIndex)?.label ?? '' }
++            }
++            return
++        }
+         const iter = index != null
+             ? this.#searchSection(matcher, query, index)
+             : this.#searchBook(matcher, query)

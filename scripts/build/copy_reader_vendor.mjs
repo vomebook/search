@@ -7,8 +7,13 @@ import { createRequire } from "node:module";
 const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 
 const output = process.argv[2] || "static/vendor";
-const foliateOutput = process.argv.includes("--refresh-foliate")
-  ? join(process.cwd(), "static/foliate-reader/vendor") : null;
+const foliateOutputArgument = process.argv.indexOf("--foliate-output");
+if (foliateOutputArgument >= 0 && !process.argv[foliateOutputArgument + 1])
+  throw new Error("--foliate-output requires a directory");
+const foliateOutput = foliateOutputArgument >= 0
+  ? process.argv[foliateOutputArgument + 1]
+  : process.argv.includes("--refresh-foliate")
+    ? join(process.cwd(), "static/foliate-reader/vendor") : null;
 mkdirSync(output, { recursive: true });
 function download(url, redirects = 0) {
   return new Promise((resolve, reject) => {
@@ -26,7 +31,7 @@ function download(url, redirects = 0) {
     response.on("end", () => resolve(Buffer.concat(chunks)));
     response.on("error", reject);
     });
-    request.setTimeout(60000, () => request.destroy(new Error(`${url}: request timed out`)));
+    request.setTimeout(180000, () => request.destroy(new Error(`${url}: request timed out`)));
     request.on("error", reject);
   });
 }
