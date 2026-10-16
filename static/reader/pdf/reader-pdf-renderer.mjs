@@ -125,7 +125,18 @@ export function createReaderPdfRenderer(readerContext) {
     shell._hybridCancel = () => { controller.abort(); shell._renderCancel?.(); };
     const pdfTask = readerContext.renderHybridPdfCanvas(shell, controller.signal, priority);
     const previewTask = (async () => {
-      if (readerContext.pdfDocument || shell.dataset.pdfPresented === "1") await readerContext.waitForReader(250);
+      if (readerContext.isPdfPageVisible(shell) && !readerContext.pdfDocument)
+        return readerContext.renderPdfImageShell(shell, false, priority);
+      const documentReady = await Promise.race([
+        readerContext.pdfHybridDocumentPromise?.then(() => true, () => false) || Promise.resolve(false),
+        readerContext.waitForReader(readerContext.PDF_HYBRID_DOCUMENT_GRACE_MS).then(() => false)
+      ]);
+      if (!documentReady) return readerContext.renderPdfImageShell(shell, false, priority);
+      const winner = await Promise.race([
+        pdfTask.then(() => "pdf", () => "preview"),
+        readerContext.waitForReader(150).then(() => "preview")
+      ]);
+      if (winner === "pdf") return pdfTask;
       if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
       if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
       return readerContext.renderPdfImageShell(shell, false, priority);
@@ -226,7 +237,7 @@ export function createReaderPdfRenderer(readerContext) {
         if (!entry) throw new Error("PDF page entry missing");
          let target = readerContext.pdfPageManifest.pageUrl(entry.page);
          if (readerContext.pdfV3Manifest) {
-           const preview = await readerContext.pdfV3Repository.preview(readerContext.pdfV3Manifest, readerContext.pdfV3Map, entry.page);
+            const preview = await readerContext.pdfV3Repository.preview(readerContext.pdfV3Manifest, readerContext.pdfV3Map, entry.page, renderController.signal);
            shell._v3PreviewEntry = preview.entry;
            readerContext.assertReaderActive();
            if (renderController.signal.aborted) throw readerContext.readerAbortError();
