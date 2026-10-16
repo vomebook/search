@@ -141,8 +141,9 @@ export function createV3Repository({ readJson, readBytes, resourceUrl, signal, p
       if (!entry.resource.path.endsWith(`/text/page-${String(page).padStart(6, "0")}.json.gz`)) invalid();
       return validateTextLayer(await read(entry.resource), entry, sourceSha);
     },
-    async preview(manifest, map, page) {
+    async preview(manifest, map, page, signal = null) {
       active();
+      signal?.throwIfAborted?.();
       const part = partitionFor(manifest.preview.partitions, page);
       if (!part) throw new Error("PDF_V3_PREVIEW_PENDING");
       const data = await read(part.resource);
@@ -164,8 +165,9 @@ export function createV3Repository({ readJson, readBytes, resourceUrl, signal, p
       if (part.complete && data.pages.length !== part.end - part.start + 1) invalid();
       const entry = data.pages.find(p => p.page === page);
       if (!entry) throw new Error("PDF_V3_PREVIEW_PENDING");
-      const packed = await readBytes(resourceUrl(entry.resource), entry.resource);
+      const packed = await readBytes(resourceUrl(entry.resource), entry.resource, signal);
       active();
+      signal?.throwIfAborted?.();
       return { entry, blob: new Blob([packed], { type: entry.codec === "svg" ? "image/svg+xml" : `image/${entry.codec}` }) };
     },
     dispose() { disposed = true; cache.clear(); bytes = 0; index = null; }
