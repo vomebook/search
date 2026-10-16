@@ -47,6 +47,21 @@ export function createReaderPdfPageWindow(readerContext) {
     return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
   }
 
+  function startPdfHybridDocument(totalPages = readerContext.documentState.pageCount) {
+    if (!readerContext.pdfV3Manifest || readerContext.pdfHybridDocumentPromise) return;
+    readerContext.pdfHybridUrl = readerContext.v3ResourceUrl(readerContext.pdfV3Manifest.primary.resource);
+    readerContext.pdfHybridDocumentPromise = readerContext.loadPdfDocument(readerContext.pdfHybridUrl).then((pdf) => {
+      readerContext.assertReaderActive();
+      if (pdf.numPages !== totalPages) throw new Error("PDF_PRIMARY_PAGE_COUNT_MISMATCH");
+      readerContext.pdfDocument = pdf;
+      readerContext.clearPdfManifestPrefetches();
+      readerContext.cancelSpeculativePdfRenders(readerContext.pageAtMarker?.());
+      readerContext.syncCapabilityControls();
+      return pdf;
+    });
+    readerContext.pdfHybridDocumentPromise.catch(() => {});
+  }
+
   async function appendShellsBatched(createShell, total, batchSize) {
     for (let start = 2; start <= total; start += batchSize) {
       readerContext.assertReaderActive();
@@ -261,6 +276,10 @@ export function createReaderPdfPageWindow(readerContext) {
         throw new Error("PDF_V3_SOURCE_MISMATCH");
       const repository = readerContext.pdfV3Repository =
         readerContext.createPdfV3Repository(manifest.source_sha256, manifest.page_count);
+      readerContext.pdfV3Manifest = manifest;
+      readerContext.pdfOcrManifest = manifest.text_layer ? manifest : null;
+      readerContext.ocrManifestUrl = manifest.text_layer ? readerContext.sourceUrl : "";
+      startPdfHybridDocument(manifest.page_count);
       const pageMap = repository.read(manifest.page_map);
       // The opening preview partition depends only on the validated reading
       // manifest, so fetch it alongside the page map; preview() still
@@ -272,9 +291,6 @@ export function createReaderPdfPageWindow(readerContext) {
         if (part) return repository.read(part.resource);
       }).catch(() => {});
       readerContext.pdfV3Map = readerContext.validatePageMap(await pageMap, manifest);
-      readerContext.pdfV3Manifest = manifest;
-      readerContext.pdfOcrManifest = manifest.text_layer ? manifest : null;
-      readerContext.ocrManifestUrl = manifest.text_layer ? readerContext.sourceUrl : "";
     }
     readerContext.assertReaderActive();
     const source = readerContext.pdfManifestSource();
@@ -283,13 +299,7 @@ export function createReaderPdfPageWindow(readerContext) {
     readerContext.pdfPageManifest = { ...source, pageCount: totalPages };
     if (readerContext.pdfV3Manifest) {
       readerContext.pdfPageManifest.pageUrl = () => "";
-      readerContext.pdfHybridUrl = readerContext.v3ResourceUrl(manifest.primary.resource);
-      readerContext.pdfHybridDocumentPromise = readerContext.loadPdfDocument(readerContext.pdfHybridUrl).then(pdf => {
-        readerContext.assertReaderActive();
-        if (pdf.numPages !== totalPages) throw new Error("PDF_PRIMARY_PAGE_COUNT_MISMATCH");
-        readerContext.pdfDocument = pdf; return pdf;
-      });
-      readerContext.pdfHybridDocumentPromise.catch(() => {});
+      startPdfHybridDocument(totalPages);
     }
     readerContext.updateDocumentState({ pageCount: totalPages });
     readerContext.pageInput.max = String(totalPages);

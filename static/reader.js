@@ -73,6 +73,7 @@ const readerContext = {
   get PDF_MANIFEST_PREFETCH_CONCURRENCY() { return PDF_MANIFEST_PREFETCH_CONCURRENCY; },
   get PDF_MANIFEST_PREFETCH_LIMIT() { return PDF_MANIFEST_PREFETCH_LIMIT; },
   get PDF_MANIFEST_PREFETCH_MAX_PAGES() { return PDF_MANIFEST_PREFETCH_MAX_PAGES; },
+  get PDF_HYBRID_DOCUMENT_GRACE_MS() { return PDF_HYBRID_DOCUMENT_GRACE_MS; },
   get PDF_OCR_PAGE_CACHE_BYTES() { return PDF_OCR_PAGE_CACHE_BYTES; },
   get PDF_PREFETCH_MARGIN() { return PDF_PREFETCH_MARGIN; },
   get PDF_SEARCH_TEXT_CACHE_BYTES() { return PDF_SEARCH_TEXT_CACHE_BYTES; },
@@ -848,6 +849,9 @@ const PDF_MANIFEST_PREFETCH_LIMIT = 12;
 const PDF_MANIFEST_PREFETCH_CONCURRENCY = 3;
 // Keep the 12-page render cache; background prefetch stays a nearby window.
 const PDF_MANIFEST_PREFETCH_MAX_PAGES = 48;
+// Let a primary PDF win speculative pages before starting image-stream I/O.
+// The visible page keeps its immediate image fallback.
+const PDF_HYBRID_DOCUMENT_GRACE_MS = 750;
 let pdfManifestPrefetchTimer = 0;
 let pdfManifestPrefetchNext = 0;
 let pdfManifestPrefetchOrigin = 0;
