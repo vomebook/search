@@ -2557,6 +2557,51 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator(".full-search-result").first.click()
         self.assertEqual(self.page.locator("#content mark.full-search-highlight").all_text_contents(), ["x"])
 
+    def test_html_preparation_reuses_sanitized_dom_without_changing_safe_output(self):
+        def expose(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '''
+              window.__sanitizeHtml = sanitizeOfflineHtml;
+            ''')
+        self.page.route('**/static/reader.js*', expose)
+        self.serve('<p>Ready</p>', 'text/html')
+        self.open(self.reader_url('html'))
+        result = self.page.evaluate(r'''() => {
+          const inputs = [
+            '<meta charset="utf-8"><title>Title</title><p>中文🌼 &amp; text <b>bold</b></p>',
+            '<style>@import "https://invalid.test/css";p{color:#111;background:url(https://invalid.test/bg)}</style><p style="margin:0">Text</p>',
+            '<p style="background:url(javascript:bad);color:#111">Content</p><img src="https://invalid.test/img" onerror="evil()">',
+            '<base href="https://invalid.test"><script>evil()</script><iframe srcdoc="evil()"></iframe><form><input formaction="x"></form><a href="javascript:bad" onclick="evil()">Link</a>',
+            '<table>before<tr><td>A<td>B</tr>after</table><p>a<b>b<i>c</b>d</i><hr><p>tail',
+            '<svg><foreignObject><p>Not HTML</p></foreignObject></svg><math><mtext><table><mglyph><style><!--</style><img title="--><img src=1 onerror=evil()>">',
+            '<template><p>template text</p></template><noscript><p>fallback</p></noscript><p id="__proto__">End</p>',
+            '<div class="reader-spreadsheet-sheet"><table><tr><td style="color:red">Cell</td></tr></table></div>',
+            '<div>' + '<p style="margin:0;color:#111">Complete <b>needle</b></p>'.repeat(500) + '</div>'
+          ];
+          const reference = text => {
+            const clean = DOMPurify.sanitize(text, {
+              USE_PROFILES:{html:true},ADD_TAGS:['style'],
+              FORBID_TAGS:['base','embed','form','iframe','object','script'],
+              FORBID_ATTR:['action','formaction','srcdoc'],
+              ALLOWED_URI_REGEXP:/^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i
+            });
+            const template=document.createElement('template');template.innerHTML=clean;
+            const strip=value=>value.replace(/@import[^;]+;|url\s*\([^)]*\)/gi,'');
+            for(const style of template.content.querySelectorAll('style'))style.textContent=strip(style.textContent);
+            for(const node of template.content.querySelectorAll('[style]'))node.setAttribute('style',strip(node.getAttribute('style')));
+            return template.innerHTML;
+          };
+          return inputs.map(text=>{
+            const actual=__sanitizeHtml(text),expected=reference(text),template=document.createElement('template');
+            template.innerHTML=actual;
+            const unsafe=!!template.content.querySelector('script,iframe,object,embed,base,form,[onclick],[onerror],[srcdoc],[formaction]');
+            const remote=!!template.content.querySelector('[src^="http"],[href^="http"],[href^="javascript"]');
+            const styles=[...template.content.querySelectorAll('style,[style]')].some(n=>/url\s*\(|@import/i.test(n.localName==='style'?n.textContent:n.getAttribute('style')));
+            return {equal:actual===expected,unsafe,remote,styles};
+          });
+        }''')
+        self.assertEqual(result, [dict(equal=True, unsafe=False, remote=False, styles=False)] * 9)
+
     def expose_html_contrast(self):
         def instrument(route):
             response = route.fetch()
