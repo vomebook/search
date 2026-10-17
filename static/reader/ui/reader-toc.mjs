@@ -170,6 +170,68 @@ export function createReaderToc(readerContext) {
     readerContext.updateTocCurrentMark();
   }
 
+  let tocHintShown = false, tocHintPending = false, tocHintTimer = 0;
+  let tocHintInteractionCleanup = null;
+  const cancelTocHint = () => {
+    clearTimeout(tocHintTimer);
+    tocHintTimer = 0;
+    tocHintPending = false;
+    tocHintInteractionCleanup?.();
+    tocHintInteractionCleanup = null;
+  };
+  const finishTocHint = () => {
+    tocHintTimer = 0;
+    if (readerContext.readerLifecycle.disposed || !tocHintPending) return;
+    if (readerContext.readerRuntime.state.lifecycle.phase !== "ready") return;
+    tocHintPending = false;
+    if (!readerContext.navigationState.tocEntries.length ||
+        readerContext.panelState.open || readerContext.readerPanelInteractionSerial > 0 ||
+        readerContext.readerUiHistoryState !== "base") {
+      tocHintShown = true;
+      return;
+    }
+    const panel = document.querySelector("#history-panel");
+    if (!panel) return;
+    tocHintShown = true;
+    readerContext.setReaderPanelOpen(true);
+    const autoSerial = readerContext.readerPanelInteractionSerial;
+    const markInteraction = () => { readerContext.readerPanelInteractionSerial++; };
+    const events = ["pointerdown", "keydown", "focusin"];
+    events.forEach(type => panel.addEventListener(type, markInteraction, true));
+    tocHintInteractionCleanup = () => {
+      events.forEach(type => panel.removeEventListener(type, markInteraction, true));
+      tocHintInteractionCleanup = null;
+    };
+    tocHintTimer = setTimeout(() => {
+      tocHintInteractionCleanup?.();
+      tocHintTimer = 0;
+      if (!readerContext.readerLifecycle.disposed && readerContext.panelState.open &&
+          readerContext.readerPanelInteractionSerial === autoSerial)
+        readerContext.setReaderPanelOpen(false);
+    }, 1600);
+  };
+  let phaseCleanup = null;
+  function ensureTocHintPhaseListener() {
+    if (phaseCleanup) return;
+    phaseCleanup = readerContext.readerRuntime.events.on("phase", ({ phase }) => {
+      if (phase === "ready" && tocHintPending && !tocHintTimer)
+        tocHintTimer = setTimeout(finishTocHint, 80);
+      else if (phase === "failed" || phase === "disposed") {
+        cancelTocHint();
+        phaseCleanup?.();
+        phaseCleanup = null;
+      }
+    });
+    readerContext.readerRuntime.track(() => { cancelTocHint(); phaseCleanup?.(); phaseCleanup = null; });
+  }
+  function hintReaderToc() {
+    if (tocHintShown || tocHintPending || !readerContext.navigationState.tocEntries.length) return;
+    ensureTocHintPhaseListener();
+    tocHintPending = true;
+    if (readerContext.readerRuntime.state.lifecycle.phase === "ready")
+      tocHintTimer = setTimeout(finishTocHint, 80);
+  }
+
   function setToc(entries) {
     const normalizedEntries = (entries || []).map((entry) => ({
       ...entry,
@@ -218,6 +280,7 @@ export function createReaderToc(readerContext) {
         list.appendChild(readerContext.createTocRow(entry, index));
     }
     readerContext.updateTocCurrentMark();
+    hintReaderToc();
   }
 
   function cleanTocLabel(value) {
