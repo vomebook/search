@@ -99,18 +99,23 @@ export function createReaderHtmlFormat(readerContext) {
   function sanitizeOfflineHtml(text) {
     const clean = DOMPurify.sanitize(text, {
       USE_PROFILES: { html: true },
+      RETURN_DOM_FRAGMENT: true,
       ADD_TAGS: ["style"],
       FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
       FORBID_ATTR: ["action", "formaction", "srcdoc"],
        ALLOWED_URI_REGEXP: /^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i
     });
     const template = document.createElement("template");
-    template.innerHTML = clean;
+    template.content.appendChild(clean);
     const stripUrls = (value) => value.replace(/@import[^;]+;|url\s*\([^)]*\)/gi, "");
-    for (const style of template.content.querySelectorAll("style"))
-      style.textContent = stripUrls(style.textContent);
-    for (const element of template.content.querySelectorAll("[style]"))
-      element.setAttribute("style", stripUrls(element.getAttribute("style")));
+    for (const style of template.content.querySelectorAll("style")) {
+      const value = style.textContent, stripped = stripUrls(value);
+      if (stripped !== value) style.textContent = stripped;
+    }
+    for (const element of template.content.querySelectorAll("[style]")) {
+      const value = element.getAttribute("style"), stripped = stripUrls(value);
+      if (stripped !== value) element.setAttribute("style", stripped);
+    }
     return template.innerHTML;
   }
 
