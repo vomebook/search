@@ -7,7 +7,46 @@ function abortable(promise, signal) {
   });
 }
 
-export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError, canPrefetchOpening = () => false}) {
+async function readPdfRange(options, begin, end, {signal, readBytes, limit}, expected = null) {
+  signal.throwIfAborted();
+  const response = await fetch(options.url, {
+    headers: {Range: `bytes=${begin}-${end-1}`}, signal, credentials:"same-origin"
+  });
+  const invalid = () => new Error("PDF_RANGE_INVALID");
+  try {
+    if (!response.ok) throw Object.assign(new Error(`server response (${response.status})`), {status:response.status});
+    if (!expected && response.status === 200) {
+      const bytes = await readBytes(response, limit);
+      return {bytes, complete:true};
+    }
+    const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get("Content-Range") || "");
+    if (response.status !== 206 || !match || match.slice(1).some(value=>!Number.isSafeInteger(Number(value))))
+      throw invalid();
+    const [start, last, total] = match.slice(1).map(Number);
+    if (total > limit) throw Object.assign(new Error("READER_RESOURCE_LIMIT"), {code:"READER_RESOURCE_LIMIT"});
+    if (start !== begin || last !== Math.min(end,total)-1 || total <= start) throw invalid();
+    const etag = response.headers.get("ETag"), encoding = response.headers.get("Content-Encoding");
+    if (encoding && encoding !== "identity") throw invalid();
+    if (expected && (total !== expected.total || etag !== expected.etag)) throw new Error("PDF_SOURCE_CHANGED");
+    if (!expected && !/^"[^"\r\n]+"$/.test(etag || "") && last+1 < total) {
+      await response.body?.cancel();
+      return null;
+    }
+    const bytes = await readBytes(response, last-start+1);
+    if (bytes.byteLength !== last-start+1) throw invalid();
+    return {bytes, total, etag, complete:bytes.byteLength === total};
+  } catch (error) {
+    await response.body?.cancel().catch(() => {});
+    throw error;
+  }
+}
+
+// The first existing demand can overlap engine preparation, never a larger read.
+export function preparePdfInitialRange(options, hooks) {
+  return readPdfRange(options, 0, options.rangeChunkSize, hooks);
+}
+
+export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError, initial = null, canPrefetchOpening = () => false}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
   const chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
@@ -23,41 +62,10 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   };
   const cancelled = () => stop(signal.reason);
   signal.addEventListener("abort", cancelled, {once:true});
-  const rangeError = () => new Error("PDF_RANGE_INVALID");
-  async function read(begin, end, expected = null) {
-    active.throwIfAborted();
-    const response = await fetch(options.url, {
-      headers: {Range: `bytes=${begin}-${end-1}`}, signal:active, credentials:"same-origin"
-    });
-    try {
-      if (!response.ok) throw Object.assign(new Error(`server response (${response.status})`), {status:response.status});
-      if (!expected && response.status === 200) {
-        const bytes = await readBytes(response, limit);
-        return {bytes, complete:true};
-      }
-      const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get("Content-Range") || "");
-      if (response.status !== 206 || !match || match.slice(1).some(value=>!Number.isSafeInteger(Number(value))))
-        throw rangeError();
-      const [start, last, total] = match.slice(1).map(Number);
-      if (total > limit) throw Object.assign(new Error("READER_RESOURCE_LIMIT"), {code:"READER_RESOURCE_LIMIT"});
-      if (start !== begin || last !== Math.min(end,total)-1 || total <= start) throw rangeError();
-      const etag = response.headers.get("ETag"), encoding = response.headers.get("Content-Encoding");
-      if (encoding && encoding !== "identity") throw rangeError();
-      if (expected && (total !== expected.total || etag !== expected.etag)) throw new Error("PDF_SOURCE_CHANGED");
-      if (!expected && !/^"[^"\r\n]+"$/.test(etag || "") && last+1 < total) {
-        await response.body?.cancel();
-        return null;
-      }
-      const bytes = await readBytes(response, last-start+1);
-      if (bytes.byteLength !== last-start+1) throw rangeError();
-      return {bytes, total, etag, complete:bytes.byteLength === total};
-    } catch (error) {
-      await response.body?.cancel().catch(() => {});
-      throw error;
-    }
-  }
+  const read = (begin, end, expected = null) => readPdfRange(options, begin, end,
+    {signal:active, readBytes, limit}, expected);
   try {
-    const first = await read(0, chunkSize);
+    const first = await (initial || read(0, chunkSize));
     active.throwIfAborted();
     if (!first) {
       stop();
