@@ -9,7 +9,10 @@ import { gunzipSync } from "node:zlib";
 const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 const output = resolve(process.argv[2] || "static/foliate-reader");
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const localPatch = readFileSync(join(scriptDir, "foliate-local.patch"), "utf8");
+const encodedPatch = readFileSync(join(scriptDir, "foliate-local.patch.b64"), "ascii").replace(/\s/g, "");
+if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encodedPatch))
+  throw new Error("Foliate local adaptation patch is not valid base64");
+const localPatch = Buffer.from(encodedPatch, "base64").toString("utf8");
 
 function download(url, redirects = 0) {
   return new Promise((resolvePromise, reject) => {
