@@ -1,5 +1,20 @@
 export function createReaderPdfScheduler(readerContext) {
   let pdfVisibleReconcileFrame = 0;
+  let pdfMotionAt = 0, pdfFastUntil = 0;
+
+  function notePdfViewportMotion() {
+    if (!readerContext.documentState.restorationReady || !["pdf", "pdf-pages"].includes(readerContext.capability.mode)) return;
+    const distance = Math.abs(readerContext.viewport.scrollTop - readerContext.pdfLastScrollTop);
+    if (!distance) return;
+    const now = performance.now(), elapsed = pdfMotionAt ? now - pdfMotionAt : Infinity;
+    if (distance > readerContext.viewport.clientHeight * .75 || (elapsed < 160 && distance / Math.max(1, elapsed) > 4))
+      pdfFastUntil = now + 160;
+    pdfMotionAt = now;
+  }
+
+  function pdfScrollActivity(fastOnly = false) {
+    return performance.now() < (fastOnly ? pdfFastUntil : pdfMotionAt + 160);
+  }
 
   function pdfManifestPrefetchConcurrency() {
     const type = navigator.connection?.effectiveType;
@@ -376,6 +391,8 @@ export function createReaderPdfScheduler(readerContext) {
   }
 
   return {
+    notePdfViewportMotion,
+    pdfScrollActivity,
     pdfManifestPrefetchConcurrency,
     pdfManifestPrefetchMaxPages,
     canPrefetchPdfImages,

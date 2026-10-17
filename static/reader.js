@@ -306,6 +306,8 @@ const readerContext = {
   get progressTools() { return progressTools; },
   get progressUndo() { return progressUndo; },
   get promotePdfRenderWaiter() { return promotePdfRenderWaiter; }, set promotePdfRenderWaiter(value) { promotePdfRenderWaiter = value; },
+  get notePdfViewportMotion() { return notePdfViewportMotion; },
+  get pdfScrollActivity() { return pdfScrollActivity; },
   get queuePdfManifestPrefetch() { return queuePdfManifestPrefetch; }, set queuePdfManifestPrefetch(value) { queuePdfManifestPrefetch = value; },
   get readPreparedBytes() { return readPreparedBytes; }, set readPreparedBytes(value) { readPreparedBytes = value; },
   get readerAbortController() { return readerAbortController; },
@@ -591,7 +593,7 @@ let {
   queuePdfManifestPrefetch, prioritizePdfManifestPrefetch, schedulePdfManifestPrefetch, trimPdfManifestImages,
   refreshNearbyPdfPages, scheduleVisiblePdfRenderReconciliation, cancelSpeculativePdfRenders, promotePdfRenderWaiter, acquirePdfRenderSlot,
   releasePdfRenderSlot, acquirePdfTextSlot, drainPdfTextWaiters, releasePdfTextSlot,
-  trimPdfCanvases, rerenderVisiblePdfPages
+  trimPdfCanvases, rerenderVisiblePdfPages, notePdfViewportMotion, pdfScrollActivity
 } = createReaderPdfScheduler(readerContext);
 
 let {

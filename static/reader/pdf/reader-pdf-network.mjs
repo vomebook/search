@@ -7,7 +7,7 @@ function abortable(promise, signal) {
   });
 }
 
-export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError}) {
+export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError, canPrefetchOpening = () => false}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
   const chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
@@ -78,7 +78,25 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       const begin = Math.floor((first.total - 1) / chunkSize) * chunkSize - chunkSize;
       tail = {begin, promise:read(begin, first.total, first).catch(() => null)};
     }
-    const fetchRange = (begin, end) => tail && begin >= tail.begin
+    // A conservative read-ahead hint, not a PDF parser: only a direct Length
+    // before the first stream, in the bounded opening header, can qualify.
+    // Missing/indirect/complete streams retain ordinary PDF.js range demand.
+    const header = new TextDecoder("latin1").decode(first.bytes.subarray(0, 4096));
+    const stream = /\bstream(?:\r\n|\r|\n)/.exec(header);
+    const length = stream && /\/Length\s+(\d+)(?:\s+\d+\s+R)?(?=[\s/>])/.exec(header.slice(0, stream.index));
+    const streamEnd = length && stream.index + stream[0].length + Number(length[1]);
+    const openingStreamContinues = length && !/\sR$/.test(length[0]) && Number.isSafeInteger(streamEnd) &&
+      streamEnd > first.bytes.byteLength && streamEnd <= first.total;
+    // One chunk only; deep restorations and non-v3/native URLs do not opt in.
+    const prefix = first.total > chunkSize * 4 && openingStreamContinues && canPrefetchOpening()
+      ? {begin:chunkSize, end:chunkSize * 2,
+        promise:read(chunkSize, chunkSize * 2, first).catch(() => null)}
+      : null;
+    const fetchRange = (begin, end) => prefix && begin >= prefix.begin && end <= prefix.end
+      ? prefix.promise.then(result => result
+        ? {bytes:result.bytes.slice(begin - prefix.begin, end - prefix.begin)}
+        : read(begin, end, first))
+      : tail && begin >= tail.begin
       ? tail.promise.then(result => result
         ? {bytes:result.bytes.slice(begin - tail.begin, end - tail.begin)}
         : read(begin, end, first))
