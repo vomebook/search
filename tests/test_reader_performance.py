@@ -219,6 +219,12 @@ def minimal_wav():
     return output.getvalue()
 
 
+def open_reader_panel(page):
+    # Workflow setup is idempotent now that TOC books open their drawer on load.
+    # Real pointer/keyboard dismissal is tested in test_reader_toc_latency.
+    page.locator('#history').evaluate("b=>{if(b.getAttribute('aria-expanded')!=='true')b.click()}")
+
+
 @unittest.skipIf(sync_playwright is None, "install requirements-test.txt to run Reader performance tests")
 class ReaderPerformanceTest(unittest.TestCase):
     @classmethod
@@ -888,7 +894,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             self.assertLessEqual(box["image"]["right"], box["shell"]["right"] + 1)
         for current, following in zip(boxes, boxes[1:]):
             self.assertGreaterEqual(following["shell"]["top"], current["image"]["bottom"])
-        page.locator("#history").click()
+        open_reader_panel(page)
         self.assertFalse(page.locator("#full-search-toggle").is_hidden())
         self.assertEqual(page.locator("#toc-list .toc-item").count(), 2)
         self.assertIn("第二章 · 第 2 页", page.locator("#toc-list .toc-item").nth(1).text_content())
@@ -1703,7 +1709,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route, _request, body=body: route.fulfill(status=200, content_type="text/html" if extension == "html" else "text/markdown", body=body))
                 source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/toc.{extension}"
                 page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=TOC", wait_until="domcontentloaded")
-                page.locator("#history").click(); page.locator("#toc-list .panel-item-main").nth(1).click()
+                open_reader_panel(page); page.locator("#toc-list .panel-item-main").nth(1).click()
                 if extension == "html":
                     page.wait_for_function("() => document.querySelector('iframe').contentWindow.scrollY > 0")
                 else:
@@ -1728,7 +1734,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.page.unroute("**/static/vendor/pdf.min.*.mjs")
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route, _request, module=module: route.fulfill(status=200, content_type="text/javascript", body=module))
         self.open_reader()
-        self.page.locator("#history").click(); self.page.locator("#toc-list .panel-item-main").click()
+        open_reader_panel(self.page); self.page.locator("#toc-list .panel-item-main").click()
         self.page.wait_for_function("() => document.querySelector('#page-number').value === '3'")
 
     def test_pdf_outline_jump_scrolls_before_target_render_finishes(self):
@@ -1736,7 +1742,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PDF_JUMP_MODULE))
         self.page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(SOURCE_URL, safe='')}&ext=pdf&title=Performance", wait_until="domcontentloaded")
         self.page.locator(".reader-page").nth(29).wait_for(state="attached")
-        self.page.locator("#history").click()
+        open_reader_panel(self.page)
         self.page.locator("#toc-list .panel-item-main").click()
         self.page.wait_for_function("""() => {
             const viewport = document.querySelector('#viewport');
@@ -1756,7 +1762,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.page.unroute("**/static/vendor/pdf.min.*.mjs")
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route, _request, module=module: route.fulfill(status=200, content_type="text/javascript", body=module))
         self.open_reader()
-        self.page.locator("#history").click()
+        open_reader_panel(self.page)
         self.page.locator("#toc-list .toc-item").nth(1).wait_for()
         self.assertTrue(self.page.locator("#toc-list .toc-item").nth(0).evaluate("row => row.classList.contains('is-current')"))
         self.page.evaluate("""() => {
@@ -1790,7 +1796,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         # The first six following chapters are now prefetched. A successful
         # preload removes its sentinel before this assertion can observe it.
         self.page.locator(".reader-epub-chapter[data-chapter='2']").wait_for()
-        self.page.locator("#history").click(); self.page.locator("#toc-list .panel-item-main").nth(2).click()
+        open_reader_panel(self.page); self.page.locator("#toc-list .panel-item-main").nth(2).click()
         self.page.locator(".reader-epub-chapter[data-chapter='3']").wait_for()
         self.assertEqual(self.page.locator(".reader-epub-chapter").evaluate_all(
             "nodes => nodes.map(node => Number(node.dataset.chapter))"), [1, 2, 3])
@@ -1833,7 +1839,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertEqual(page.locator("#title").evaluate("element => getComputedStyle(element).display"), title_display)
         self.assertEqual(link.evaluate("element => getComputedStyle(element).borderTopStyle"), "dotted")
         self.assertEqual(link.evaluate("element => getComputedStyle(element).color"), "rgb(138, 180, 232)")
-        page.locator("#history").click()
+        open_reader_panel(page)
         for theme, color in (("light", "rgb(1, 2, 3)"), ("dark", "rgb(138, 180, 232)")):
             page.locator("#theme-toggle").click()
             page.wait_for_function("() => !document.documentElement.classList.contains('theme-transition')")
@@ -1847,7 +1853,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.wait_for_function("() => document.querySelector('#viewport').scrollTop > 0")
         self.assertEqual(page.url, initial_url)
         self.assertAlmostEqual(page.locator("#one").evaluate("element => element.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top"), 8, delta=2)
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator("#toc-list .panel-item-main").nth(1).click()
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(2)').classList.contains('is-current')")
         page.wait_for_function("() => document.querySelectorAll('.foliate-continuous article[data-section]').length === 3")
@@ -1934,11 +1940,11 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/chapter-buttons.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Buttons", wait_until="domcontentloaded")
         page.wait_for_function("() => document.querySelectorAll('#toc-list .toc-item').length === 14")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator("#toc-list .panel-item-main").nth(9).click()
         page.locator("#chapter-10").wait_for(timeout=5000)
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(10)').classList.contains('is-current')")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator(".reader-chapter-next").click()
         page.locator("#chapter-11").wait_for(timeout=5000)
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(11)').classList.contains('is-current')")
@@ -1954,7 +1960,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/scroll-toc.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=ScrollToc", wait_until="domcontentloaded")
         page.wait_for_function("() => document.querySelectorAll('#toc-list .toc-item').length === 14")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator("#toc-list .panel-item-main").nth(9).click()
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(10)').classList.contains('is-current')")
         page.locator('.foliate-continuous article[data-section="11"] #chapter-11').wait_for(state='attached')
@@ -1970,7 +1976,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/scroll-anchor.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Anchor", wait_until="domcontentloaded")
         page.wait_for_function("() => document.querySelectorAll('#toc-list .toc-item').length === 14")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator("#toc-list .panel-item-main").nth(9).click()
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(10)').classList.contains('is-current')")
         page.evaluate("""() => { const viewport = document.querySelector('#viewport'); viewport.style.overflowAnchor = 'none'; viewport.dispatchEvent(new Event('scroll')); }""")
@@ -2010,7 +2016,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/large-toc.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=LargeToc", wait_until="domcontentloaded")
         page.wait_for_function("() => document.querySelector('#toc-list')?.classList.contains('toc-list-virtualized')")
-        page.locator("#history").click()
+        open_reader_panel(page)
         self.assertLess(page.locator("#toc-list .toc-item").count(), 100)
         page.evaluate("""() => { const panel = document.querySelector('#toc-panel'); panel.scrollTop = 20000; panel.dispatchEvent(new Event('scroll')); }""")
         page.wait_for_function("() => [...document.querySelectorAll('#toc-list .toc-item')].some(row => row.textContent.includes('章节 501'))")
@@ -2025,7 +2031,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/search.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Search", wait_until="domcontentloaded")
         page.wait_for_function("() => document.querySelectorAll('#toc-list .toc-item').length === 14")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator("#full-search-toggle").click()
         page.locator("#full-search-input").fill("正文 10")
         page.locator("#full-search-results .full-search-result").first.wait_for(timeout=10000)
@@ -2044,7 +2050,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bookmark.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Bookmark", wait_until="domcontentloaded")
         page.wait_for_function("() => document.querySelectorAll('#toc-list .toc-item').length === 14")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator("#toc-list .panel-item-main").nth(9).click()
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(10)').classList.contains('is-current')")
         page.locator("#bookmark-ribbon").click()
@@ -2053,7 +2059,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         bookmark = page.evaluate("window.__readerBookmarks[0]")
         self.assertEqual(bookmark.get("foliateSection"), 10)
         page.locator("#viewport").evaluate("element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); }")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator("#bookmarks-tab").click()
         page.locator("#bookmarks-list .panel-item-main").click()
         page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open')")
@@ -2069,7 +2075,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/progress.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=Progress", wait_until="domcontentloaded")
         page.wait_for_function("() => document.querySelectorAll('#toc-list .toc-item').length === 14")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator(".reader-progress-range").dispatch_event("pointerdown")
         page.locator(".reader-progress-range").fill("80")
         page.locator(".reader-progress-range").dispatch_event("pointerup")
@@ -2085,7 +2091,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/history.epub"
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub&title=History", wait_until="domcontentloaded")
         page.wait_for_function("() => document.querySelectorAll('#toc-list .toc-item').length === 14")
-        page.locator("#history").click()
+        open_reader_panel(page)
         page.locator("#toc-list .panel-item-main").nth(9).click()
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(10)').classList.contains('is-current')")
         page.evaluate("window.dispatchEvent(new Event('pagehide'))")
