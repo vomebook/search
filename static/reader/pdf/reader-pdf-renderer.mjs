@@ -127,16 +127,25 @@ export function createReaderPdfRenderer(readerContext) {
     const previewTask = (async () => {
       if (readerContext.isPdfPageVisible(shell) && !readerContext.pdfDocument)
         return readerContext.renderPdfImageShell(shell, false, priority);
-      const documentReady = await Promise.race([
-        readerContext.pdfHybridDocumentPromise?.then(() => true, () => false) || Promise.resolve(false),
-        readerContext.waitForReader(readerContext.PDF_HYBRID_DOCUMENT_GRACE_MS).then(() => false)
-      ]);
+      async function waitForPrimaryDocument() {
+        const pending = readerContext.pdfHybridDocumentPromise;
+        if (!pending) return false;
+        const ready = pending.then(() => true, () => false);
+        const deadline = performance.now() + readerContext.PDF_HYBRID_DOCUMENT_GRACE_MS;
+        while (!controller.signal.aborted && !readerContext.readerAbortController.signal.aborted) {
+          if (readerContext.pdfDocument) return true;
+          if (readerContext.isPdfPageVisible(shell)) return false;
+          const remaining = deadline - performance.now();
+          if (remaining <= 0) return false;
+          const result = await Promise.race([ready, readerContext.waitForReader(Math.min(100, remaining)).then(() => null)]);
+          if (result !== null) return result;
+        }
+        throw readerContext.readerAbortError();
+      }
+      const documentReady = await waitForPrimaryDocument();
       if (!documentReady) return readerContext.renderPdfImageShell(shell, false, priority);
-      const winner = await Promise.race([
-        pdfTask.then(() => "pdf", () => "preview"),
-        readerContext.waitForReader(150).then(() => "preview")
-      ]);
-      if (winner === "pdf") return pdfTask;
+      if (!readerContext.isPdfPageVisible(shell)) return pdfTask;
+      if (await Promise.race([pdfTask.then(() => "pdf", () => "preview"), readerContext.waitForReader(150).then(() => "preview")]) === "pdf") return pdfTask;
       if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
       if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
       return readerContext.renderPdfImageShell(shell, false, priority);

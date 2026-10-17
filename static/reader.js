@@ -851,7 +851,7 @@ const PDF_MANIFEST_PREFETCH_CONCURRENCY = 3;
 const PDF_MANIFEST_PREFETCH_MAX_PAGES = 48;
 // Let a primary PDF win speculative pages before starting image-stream I/O.
 // The visible page keeps its immediate image fallback.
-const PDF_HYBRID_DOCUMENT_GRACE_MS = 750;
+const PDF_HYBRID_DOCUMENT_GRACE_MS = 5000;
 let pdfManifestPrefetchTimer = 0;
 let pdfManifestPrefetchNext = 0;
 let pdfManifestPrefetchOrigin = 0;
