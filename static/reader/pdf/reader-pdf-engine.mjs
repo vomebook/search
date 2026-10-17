@@ -25,6 +25,8 @@ export function createReaderPdfEngine(readerContext) {
       readerContext.openPdfRangeTask(pdfjs, options(url), {
         signal:owner.signal, readBytes:VoiceOfMLReaderSecurity.readBytes,
         limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
+        canPrefetchOpening: () => !!readerContext.pdfV3Manifest && readerContext.readerRestorationLoaded &&
+          (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) <= 1),
         onError() {
           if (!documentReady || readerContext.readerAbortController.signal.aborted || readerContext.capability.mode !== "pdf") return;
           // Page retries cannot revive a destroyed PDF.js document. Capture an

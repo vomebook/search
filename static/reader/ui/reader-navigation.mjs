@@ -112,6 +112,7 @@ export function createReaderNavigation(readerContext) {
 
   function handleReaderPositionChange() {
     if (readerContext.readerAbortController.signal.aborted) return;
+    readerContext.notePdfViewportMotion?.();
     if (readerContext.viewport.scrollTop !== readerContext.pdfLastScrollTop) readerContext.pdfScrollDirection = readerContext.viewport.scrollTop > readerContext.pdfLastScrollTop ? 1 : -1;
     readerContext.pdfLastScrollTop = readerContext.viewport.scrollTop;
     readerContext.pdfShellWindow?.schedule();
