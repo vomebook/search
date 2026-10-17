@@ -193,8 +193,15 @@ export function createReaderToc(readerContext) {
     const panel = document.querySelector("#history-panel");
     if (!panel) return;
     tocHintShown = true;
-    readerContext.setReaderPanelOpen(true);
     const autoSerial = readerContext.readerPanelInteractionSerial;
+    // This is a visual hint, not a user-opened panel state. Keep the toolbar's
+    // aria-expanded/state closed so the next history-button click converts the
+    // hint into a normal persistent panel instead of immediately closing it.
+    panel.hidden = false;
+    void panel.offsetWidth;
+    panel.classList.add("is-open");
+    readerContext.selectPanel("toc");
+    readerContext.updateTocCurrentMark();
     const markInteraction = () => { readerContext.readerPanelInteractionSerial++; };
     const events = ["pointerdown", "keydown", "focusin"];
     events.forEach(type => panel.addEventListener(type, markInteraction, true));
@@ -205,9 +212,12 @@ export function createReaderToc(readerContext) {
     tocHintTimer = setTimeout(() => {
       tocHintInteractionCleanup?.();
       tocHintTimer = 0;
-      if (!readerContext.readerLifecycle.disposed && readerContext.panelState.open &&
+      if (!readerContext.readerLifecycle.disposed && !readerContext.panelState.open &&
+          panel.classList.contains("is-open") &&
           readerContext.readerPanelInteractionSerial === autoSerial)
-        readerContext.setReaderPanelOpen(false);
+        panel.classList.remove("is-open");
+      if (!panel.classList.contains("is-open"))
+        setTimeout(() => { if (!panel.classList.contains("is-open")) panel.hidden = true; }, 250);
     }, 1600);
   };
   let phaseCleanup = null;
