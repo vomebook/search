@@ -348,6 +348,7 @@ export function createReaderDomSearch({
       }
       return { total, offset, pageSize, results };
     };
+    let scanDeadline = performance.now() + 8;
     for (let start = 0; start < text.length; start += 65536) {
       const group = { start, end: start + 65536 + query.length - 1,
         skip: Math.max(0, nextStart - start), count: 0 };
@@ -361,7 +362,12 @@ export function createReaderDomSearch({
       if (progressive && (start === 0 || (group.count && total <= 50) || groups.length % 8 === 0)) {
         publishPage(page(0), page, true);
       }
-      await yieldTask();
+      // Keep bounded scan groups and exact progress, but avoid a clamped timer
+      // for every small group when scanning itself is much faster than a frame.
+      if (start === 0 || performance.now() >= scanDeadline) {
+        await yieldTask();
+        scanDeadline = performance.now() + 8;
+      }
       if (!isCurrent("search", generation)) return [];
     }
     if (progressive) {
