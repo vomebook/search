@@ -144,7 +144,15 @@ export function createReaderPdfRenderer(readerContext) {
       }
       const documentReady = await waitForPrimaryDocument();
       if (!documentReady) return readerContext.renderPdfImageShell(shell, false, priority);
-      if (!readerContext.isPdfPageVisible(shell)) return pdfTask;
+      // Keep speculation PDF-only without losing the per-page fallback if this
+      // shell becomes visible while its PDF page read or draw is still pending.
+      let pdfSettled = false;
+      pdfTask.then(() => { pdfSettled = true; }, () => { pdfSettled = true; });
+      while (!readerContext.isPdfPageVisible(shell) && !pdfSettled) {
+        if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
+        await readerContext.waitForReader(100);
+      }
+      if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
       if (await Promise.race([pdfTask.then(() => "pdf", () => "preview"), readerContext.waitForReader(150).then(() => "preview")]) === "pdf") return pdfTask;
       if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
       if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
