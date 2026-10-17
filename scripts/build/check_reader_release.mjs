@@ -210,7 +210,7 @@ function crossCheck(githubRoot, hfRoot) {
       `cross-project drift: ${file}`
     );
   }
-  for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "fetch_foliate_reader.mjs", "foliate-local.patch", "check_reader_release.mjs"]) {
+  for (const file of ["compose_app.mjs", "copy_reader_vendor.mjs", "fetch_foliate_reader.mjs", "foliate-local.patch.b64", "check_reader_release.mjs"]) {
     assert(
       hash(path.join(githubRoot, "scripts/build", file)) === hash(path.join(hfRoot, "scripts/build", file)),
       `cross-project drift: scripts/build/${file}`
