@@ -373,7 +373,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'const READER_PROXY_TIMEOUT_MS = 120000;');
   assertCode(reader, '}, READER_PROXY_TIMEOUT_MS)');
   assert.match(reader, /function fetchWithReaderTimeout/);
-  assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxy))');
+  assertCode(reader, 'retryReaderProxy(() => loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy)))');
   assertCode(reader, 'return loadPdfTaskWithTimeout(pdfjs, options, target)');
   assert.match(reader, /function loadPdfWithTimeout/);
   assertCode(reader, 'trackReaderResource(destroy)');
