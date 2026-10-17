@@ -428,6 +428,8 @@ export function createReaderBindings(readerContext) {
   }
 
   function bindPanelBookmarkAndLifecycleControls() {
+    document.addEventListener("click", readerContext.handleReaderOutsideClick);
+    readerContext.trackReaderResource(() => document.removeEventListener("click", readerContext.handleReaderOutsideClick));
     readerContext.trackReaderResource(() => { readerContext.headingLocationCache?.dispose(); readerContext.headingLocationCache = null; });
 
     document.addEventListener("click", async (event) => {

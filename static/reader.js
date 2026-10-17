@@ -171,6 +171,7 @@ const readerContext = {
   get goToPage() { return goToPage; }, set goToPage(value) { goToPage = value; },
   get handlePageNavigationFailure() { return handlePageNavigationFailure; },
   get handleReaderKeydown() { return handleReaderKeydown; }, set handleReaderKeydown(value) { handleReaderKeydown = value; },
+  get handleReaderOutsideClick() { return handleReaderOutsideClick; },
   get handleReaderPositionChange() { return handleReaderPositionChange; }, set handleReaderPositionChange(value) { handleReaderPositionChange = value; },
   get headingLocationCache() { return headingLocationCache; }, set headingLocationCache(value) { headingLocationCache = value; },
   get headingTocEntries() { return headingTocEntries; }, set headingTocEntries(value) { headingTocEntries = value; },
@@ -590,7 +591,7 @@ let {
 
 let {
   beginReaderNavigation, clearReturnNavigation, navigateReaderFolder, turnViewport,
-  handleReaderKeydown, readerPageScrollTop, goToPage, handleReaderPositionChange,
+  handleReaderKeydown, handleReaderOutsideClick, readerPageScrollTop, goToPage, handleReaderPositionChange,
   navigateReader, notePdfScrollIntent, installReaderTapSelectionClear
 } = createReaderNavigation(readerContext);
 

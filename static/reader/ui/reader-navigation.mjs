@@ -45,7 +45,16 @@ export function createReaderNavigation(readerContext) {
       event.isComposing ||
       event.altKey ||
       event.ctrlKey ||
-      event.metaKey ||
+      event.metaKey
+    )
+      return;
+    if (event.key === "Escape" && readerContext.panelState.open && readerContext.bookmarkPopover.hidden) {
+      event.preventDefault();
+      if (readerContext.readerUiHistoryState === "full-search") readerContext.closeFullSearchView();
+      else readerContext.setReaderPanelOpen(false, true);
+      return;
+    }
+    if (
       event.target.closest?.(
         "input,textarea,select,button,a,audio,video,[contenteditable]:not([contenteditable=false])"
       )
@@ -57,6 +66,17 @@ export function createReaderNavigation(readerContext) {
         ["PageUp", "ArrowUp"].includes(event.key) || (event.key === " " && event.shiftKey) ? -1 : 1
       );
     }
+  }
+
+  function handleReaderOutsideClick(event) {
+    if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted ||
+        !readerContext.panelState.open || !readerContext.bookmarkPopover.hidden) return;
+    const path = event.composedPath();
+    if (path.includes(document.querySelector("#history-panel")) || path.includes(document.querySelector("#history")) ||
+        path.includes(readerContext.bookmarkPopover) || path.includes(readerContext.bookmarkRibbon)) return;
+    // Do not consume the content click or move focus: text selection and book
+    // links keep their ordinary behavior, including inside the HTML iframe.
+    readerContext.setReaderPanelOpen(false);
   }
 
   function readerPageScrollTop(shell) {
@@ -210,6 +230,7 @@ export function createReaderNavigation(readerContext) {
     navigateReaderFolder,
     turnViewport,
     handleReaderKeydown,
+    handleReaderOutsideClick,
     readerPageScrollTop,
     goToPage,
     handleReaderPositionChange,

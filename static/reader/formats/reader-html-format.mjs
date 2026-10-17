@@ -195,7 +195,10 @@ export function createReaderHtmlFormat(readerContext) {
           frame.contentWindow.addEventListener("scroll", readerContext.handleReaderPositionChange, {
             passive: true
           });
-          frame.contentDocument.addEventListener("keydown", readerContext.handleReaderKeydown);
+           frame.contentDocument.addEventListener("keydown", readerContext.handleReaderKeydown);
+           const doc = frame.contentDocument;
+           doc.addEventListener("click", readerContext.handleReaderOutsideClick);
+           readerContext.trackReaderResource(() => doc.removeEventListener("click", readerContext.handleReaderOutsideClick));
           readerContext.installReaderTapSelectionClear(frame.contentDocument.body, frame.contentDocument);
           for (const type of ["wheel", "touchstart", "pointerdown"])
             frame.contentDocument.addEventListener(type, readerContext.beginReaderNavigation, { passive: true });

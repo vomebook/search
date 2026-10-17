@@ -128,7 +128,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "node => node.style.getPropertyValue('--reader-zoom')"), "1.25")
 
     def search(self, query):
-        self.page.locator("#history").click()
+        support.open_reader_panel(self.page)
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill(query)
         self.page.wait_for_function("() => /^(?:\d+ 个结果|未找到正文匹配)$/.test(document.querySelector('#full-search-status').textContent)")
@@ -1586,7 +1586,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':prefix+'chapter-manifest.json'})
                 self.open(self.reader_url('epub-chapters', url=source))
                 self.assertNotIn(prefix+'epub-search-index.json.gz', requests)
-                self.page.locator('#history').click()
+                support.open_reader_panel(self.page)
                 self.page.locator('#full-search-toggle').click()
                 self.page.locator('#full-search-input').fill('needle')
                 if extension == 'epub':
@@ -1602,13 +1602,13 @@ class ReaderRefactorTest(unittest.TestCase):
                 self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter[data-chapter=\"2\"] mark.full-search-highlight')?.textContent === 'needle'")
                 self.assertEqual(requests.count(prefix+'epub-search-index.json.gz'), 2 if extension == 'epub' else 1)
                 if extension == 'fb2':
-                    self.page.locator('#history').click()
+                    support.open_reader_panel(self.page)
                     self.page.locator('#full-search-input').fill('Cover')
                     self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
                     self.page.locator('.full-search-result').first.click()
                     self.page.locator('.reader-chapter-search-heading mark').wait_for()
                     self.assertEqual(self.page.locator('.reader-chapter-search-heading mark').all_text_contents(), ['Cover'])
-                    self.page.locator('#history').click()
+                    support.open_reader_panel(self.page)
                     self.page.locator('#full-search-input').fill('needle')
                     self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '66 个结果'")
                     self.page.locator('.full-search-result').first.click()
@@ -1699,14 +1699,14 @@ class ReaderRefactorTest(unittest.TestCase):
             content_type='application/json' if 'chapter-manifest.json' in route.request.url else 'text/html',
             body=json.dumps(manifest) if 'chapter-manifest.json' in route.request.url else body))
         self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
-        self.page.locator('#history').click()
+        support.open_reader_panel(self.page)
         self.page.locator('#toc-panel').evaluate('node => {node.scrollTop=200*40; node.dispatchEvent(new Event("scroll"));}')
         target = self.page.locator('[data-toc-index="205"]')
         target.wait_for()
         self.assertEqual(target.evaluate('node => node.style.getPropertyValue("--toc-depth")'), '1')
         target.locator('[role="link"]').click()
         self.page.wait_for_function('() => Math.abs(document.querySelector("#day-205").getBoundingClientRect().top-document.querySelector("#viewport").getBoundingClientRect().top)<5')
-        self.page.locator('#history').click()
+        support.open_reader_panel(self.page)
         self.assertEqual(self.page.locator('#toc-list .is-current').get_attribute('data-toc-index'), '205')
         self.page.locator('#toc-panel').evaluate('node => {node.scrollTop=0; node.dispatchEvent(new Event("scroll"));}')
         self.page.locator('[data-toc-index="0"]').wait_for()
@@ -1756,7 +1756,7 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_chapter_search_emits_partial_results_before_exact_total(self):
         self.serve_chapter_search()
-        self.page.locator("#history").click()
+        support.open_reader_panel(self.page)
         self.page.locator("#full-search-toggle").click()
         self.page.evaluate("""() => {
           window.__chapterStatuses = [];
@@ -1794,7 +1794,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertNotIn(False, self.page.evaluate("__cancelPagingChanges"))
         self.page.locator('.full-search-result').last.click()
         self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter mark')?.parentElement.textContent === '第154处needle结束'")
-        self.page.locator('#history').click()
+        support.open_reader_panel(self.page)
         self.assertFalse(self.page.locator('#full-search-view').is_hidden())
         self.page.locator('#full-search-input').fill('独特 词语')
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
@@ -1832,7 +1832,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 route.fulfill(body=packed[:-1] + bytes([packed[-1] ^ 1]))
                 return True
         self.serve_chapter_search(failure)
-        self.page.locator('#history').click()
+        support.open_reader_panel(self.page)
         self.page.locator('#full-search-toggle').click()
         self.page.locator('#full-search-input').fill('needle')
         self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent.includes('503')")
@@ -1848,7 +1848,7 @@ class ReaderRefactorTest(unittest.TestCase):
                 held.append((route, packed))
                 return True
         requests, _ = self.serve_chapter_search(hold)
-        self.page.locator('#history').click()
+        support.open_reader_panel(self.page)
         self.page.locator('#full-search-toggle').click()
         with self.context.expect_event('request', predicate=lambda request: 'epub-search-index' in request.url):
             self.page.locator('#full-search-input').fill('needle')
@@ -2630,7 +2630,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertIn("url(icon.png) and @import theme.css;", frame.locator("body").inner_text())
         self.assertTrue(self.page.locator(".html-frame").get_attribute("title"))
         frame.locator("#chapter-2").evaluate("node => node.scrollIntoView()")
-        self.page.locator("#history").click()
+        support.open_reader_panel(self.page)
         self.page.wait_for_function("() => Number(document.querySelector('.reader-progress-range').value) > 40")
         self.page.wait_for_function("() => document.querySelectorAll('.toc-item')[2].classList.contains('is-current')")
         self.page.locator(".reader-chapter-next").click()
@@ -2761,7 +2761,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.route("**/api/reader-content**", serve)
         url = self.reader_url("epub-chapters", url=source)
         self.open(url)
-        self.page.locator("#history").click()
+        support.open_reader_panel(self.page)
         self.page.locator("#toc-list .panel-item-main").nth(2).click()
         self.page.locator('.reader-epub-chapter[data-chapter="3"]').evaluate("node => { const v=document.querySelector('#viewport'); v.scrollTop += node.getBoundingClientRect().top - v.getBoundingClientRect().top + 250; }")
         self.page.locator("#bookmark-ribbon").click()

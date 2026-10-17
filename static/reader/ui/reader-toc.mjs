@@ -178,7 +178,7 @@ export function createReaderToc(readerContext) {
   };
   const finishTocHint = () => {
     tocHintTimer = 0;
-    if (readerContext.readerLifecycle.disposed || !tocHintPending) return;
+    if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted || !tocHintPending) return;
     tocHintPending = false;
     if (!readerContext.navigationState.tocEntries.length ||
         readerContext.panelState.open || readerContext.readerPanelInteractionSerial > 0 ||
@@ -186,19 +186,11 @@ export function createReaderToc(readerContext) {
       tocHintShown = true;
       return;
     }
-    const panel = document.querySelector("#history-panel");
-    if (!panel) return;
     tocHintShown = true;
-    // This is a visual hint, not a user-opened panel state. Keep the toolbar's
-    // aria-expanded/state closed so the next history-button click converts the
-    // hint into a normal persistent panel instead of immediately closing it.
-    panel.hidden = false;
-    void panel.offsetWidth;
-    panel.classList.add("is-open");
+    // Keep the directory open using the normal panel owner: toolbar, Escape,
+    // system Back and aria-expanded must all agree with the visible drawer.
+    readerContext.setReaderPanelOpen(true);
     readerContext.selectPanel("toc");
-    readerContext.updateTocCurrentMark();
-    // Keep the directory visible. The toolbar button can still convert this
-    // visual hint into normal panel state on the user's first interaction.
   };
   let phaseCleanup = null;
   function ensureTocHintPhaseListener() {
