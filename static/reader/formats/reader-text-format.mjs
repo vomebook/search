@@ -55,6 +55,7 @@ export function createReaderTextFormat(readerContext) {
     }
     const reader = response.body.getReader(),
       sampleChunks = [],
+      signature = [],
       previewDecoder = new TextDecoder("utf-8");
     const untrack = readerContext.trackReaderResource(() => {
       reader.cancel(readerContext.readerAbortError()).catch(() => {});
@@ -93,6 +94,15 @@ export function createReaderTextFormat(readerContext) {
         if (!decoder) {
           sampleChunks.push(value);
           sampleLength += value.byteLength;
+          for (let i = 0; i < value.byteLength && signature.length < 3; i++) signature.push(value[i]);
+          // A BOM determines the decoder without waiting for the heuristic
+          // sample. Retain streaming decoder state across split code units.
+          if ((signature[0] === 0xef && signature[1] === 0xbb && signature[2] === 0xbf) ||
+              (signature[0] === 0xff && signature[1] === 0xfe) ||
+              (signature[0] === 0xfe && signature[1] === 0xff)) {
+            await startDecoder();
+            continue;
+          }
           if (asciiPreviewPossible) {
             let asciiLength = 0;
             while (asciiLength < value.length && value[asciiLength] > 0 && value[asciiLength] < 128)
