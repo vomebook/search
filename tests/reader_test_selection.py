@@ -49,7 +49,7 @@ CATEGORY_METHODS = {
         "test_long_pdf_pages_touch_swipe_preserves_existing_ocr_selection",
         "test_compact_pdf_manifest_virtualizes_and_navigates_to_distant_page",
         "test_oversized_chapter_manifest_and_response_use_resource_limit",
-        "test_zip_bomb_metadata_is_rejected_before_docx_and_foliate_parsers",
+        "test_zip_bomb_metadata_is_rejected_before_foliate_parser",
         "test_image_proxy_failure_falls_back_to_direct_source",
         "test_fetch_formats_fall_back_when_proxy_request_rejects",
         "test_foliate_normalizes_legacy_chm_markup_and_keeps_resources",
