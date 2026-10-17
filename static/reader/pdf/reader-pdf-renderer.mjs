@@ -153,7 +153,7 @@ export function createReaderPdfRenderer(readerContext) {
         await readerContext.waitForReader(100);
       }
       if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
-      if (await Promise.race([pdfTask.then(() => "pdf", () => "preview"), readerContext.waitForReader(150).then(() => "preview")]) === "pdf") return pdfTask;
+      if (await Promise.race([pdfTask.then(() => "pdf", () => "preview"), readerContext.waitForReader(readerContext.pdfScrollActivity?.(true) ? 0 : 150).then(() => "preview")]) === "pdf") return pdfTask;
       if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
       if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
       return readerContext.renderPdfImageShell(shell, false, priority);
