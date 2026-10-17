@@ -1,5 +1,5 @@
 export function createReaderPdfEngine(readerContext) {
-  function loadPdfTaskWithTimeout(pdfjs, options, url) {
+  function loadPdfTaskWithTimeout(pdfjs, options, url, initial = null) {
     readerContext.assertReaderActive();
     let task = null, documentReady = false;
     const owner = new AbortController();
@@ -23,7 +23,7 @@ export function createReaderPdfEngine(readerContext) {
         destroy();
       }, readerContext.READER_PROXY_TIMEOUT_MS);
       readerContext.openPdfRangeTask(pdfjs, options(url), {
-        signal:owner.signal, readBytes:VoiceOfMLReaderSecurity.readBytes,
+        signal:owner.signal, readBytes:VoiceOfMLReaderSecurity.readBytes, initial,
         limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
         canPrefetchOpening: () => !!readerContext.pdfV3Manifest && readerContext.readerRestorationLoaded &&
           (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) <= 1),
@@ -58,8 +58,8 @@ export function createReaderPdfEngine(readerContext) {
     });
   }
 
-  function loadPdfWithTimeout(pdfjs, options, target = readerContext.sourceUrl, proxy = readerContext.contentUrl) {
-    return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxy)).catch((error) => {
+  function loadPdfWithTimeout(pdfjs, options, target = readerContext.sourceUrl, proxy = readerContext.contentUrl, takeInitial = () => null) {
+    return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy))).catch((error) => {
       readerContext.assertReaderActive();
       if (error && error.name === "AbortError") throw error;
       if (readerContext.retryableReaderProxyError(error)) throw error;
@@ -168,13 +168,30 @@ export function createReaderPdfEngine(readerContext) {
   }
 
   function loadPdfDocument(target = readerContext.sourceUrl) {
+    readerContext.assertReaderActive();
+    const proxyUrl = readerContext.readerContentUrl(target);
+    if (!readerContext.pdfFetchPolicy) {
+      readerContext.pdfFetchPolicy = readerContext.createPdfFetchPolicy();
+      readerContext.trackReaderResource(() => { readerContext.pdfFetchPolicy?.dispose(); readerContext.pdfFetchPolicy = null; });
+    }
+    readerContext.pdfFetchPolicy.add([target, proxyUrl]);
+    const owner = new AbortController();
+    const untrack = readerContext.trackReaderResource(() => owner.abort(readerContext.readerAbortError()));
+    // This is the first demand, not extra speculation or a larger/full download.
+    // Keep it owned while engine preparation is pending and consume it only once.
+    let initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
+      signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
+      readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes
+    });
+    initial.catch(() => {});
+    const takeInitial = url => {
+      if (url !== proxyUrl) return null;
+      const pending = initial;
+      initial = null;
+      return pending;
+    };
     return readerContext.measurePdf(readerContext.preloadPdfEngine(), "engine").then((pdfjs) => {
       readerContext.assertReaderActive();
-      if (!readerContext.pdfFetchPolicy) {
-        readerContext.pdfFetchPolicy = readerContext.createPdfFetchPolicy();
-        readerContext.trackReaderResource(() => { readerContext.pdfFetchPolicy?.dispose(); readerContext.pdfFetchPolicy = null; });
-      }
-      readerContext.pdfFetchPolicy.add([target, readerContext.readerContentUrl(target)]);
       pdfjs.GlobalWorkerOptions.workerSrc = readerContext.PDFJS_WORKER_URL;
       const options = (url) => ({
         url,
@@ -190,7 +207,11 @@ export function createReaderPdfEngine(readerContext) {
         standardFontDataUrl: readerContext.PDFJS_STANDARD_FONT_URL,
         withCredentials: false
       });
-      return readerContext.measurePdf(readerContext.loadPdfWithTimeout(pdfjs, options, target, readerContext.readerContentUrl(target)), "document");
+      return readerContext.measurePdf(readerContext.loadPdfWithTimeout(pdfjs, options, target, proxyUrl, takeInitial), "document");
+    }).finally(() => {
+      initial = null;
+      untrack();
+      owner.abort(readerContext.readerAbortError());
     });
   }
 

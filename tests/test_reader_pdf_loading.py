@@ -60,6 +60,43 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertEqual(len(self.modules), 1)
         self.assertNotIn('reader-module-retry', self.modules[0])
 
+    def test_first_range_overlaps_held_engine_and_is_consumed_once(self):
+        held = []
+        self.page.route(MODULE, lambda route: held.append(route))
+        with self.page.expect_response('**/api/reader-content**') as opened:
+            self.open()
+        self.assertEqual(opened.value.request.headers.get('range'), 'bytes=0-262143')
+        self.assertEqual(len(self.documents), 1)
+        self.assertEqual(self.page.locator('.reader-page canvas.ready').count(), 0)
+        self.assertEqual(self.page.workers, [])
+        self.assertTrue(held)
+        self.page.unroute(MODULE)
+        for route in held:
+            route.continue_()
+        self.ready()
+        self.assertEqual(len(self.documents), 1)
+        self.assertEqual(len(self.modules), 1)
+
+    def test_reopen_skips_identical_zoom_but_restores_a_different_saved_zoom(self):
+        self.page.add_init_script("localStorage.setItem('reader-zoom','100')")
+        for zoom, draws in ((100, 1), (125, 2)):
+            with self.subTest(zoom=zoom):
+                self.page.goto(self.origin + '/search/static/manifest.json')
+                self.page.add_script_tag(url=self.origin + '/search/static/reader/core/reader-store.js')
+                self.page.evaluate('''async ({source,zoom})=>{
+                  await VoiceOfMLReaderStore.clearHistory();
+                  await VoiceOfMLReaderStore.put({url:source,page:1,zoom});
+                }''', dict(source=SOURCE, zoom=zoom))
+                self.open()
+                self.ready()
+                self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+                self.page.wait_for_function("n=>VoiceOfMLReaderPdfDiagnostics.snapshot().pages.filter(r=>r.page===1&&r.stage==='draw'&&r.outcome==='ready').length>=n", arg=draws)
+                self.page.wait_for_timeout(100)
+                self.assertEqual(self.page.evaluate("VoiceOfMLReaderPdfDiagnostics.snapshot().pages.filter(r=>r.page===1&&r.stage==='draw'&&r.outcome==='ready').length"), draws)
+                self.assertEqual(self.page.locator('#zoom').input_value(), str(zoom))
+                self.assertEqual(self.page.locator('#page-number').input_value(), '1')
+                self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
+
     def test_transient_worker_download_failure_recovers_without_reader_reload(self):
         self.page.add_init_script('''const native = window.setTimeout.bind(window);
           window.setTimeout = (fn, ms, ...args) => native(fn, ms === 20000 ? 300 : ms, ...args);''')
@@ -84,7 +121,7 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('__workerAttempts'), 2)
         self.assertEqual(self.page.evaluate('__workerDestroys'), 1)
         self.assertIn('reader-worker-retry=1', self.page.evaluate('__workerUrls[1]'))
-        self.assertEqual(len(self.documents), 0)
+        self.assertEqual(len(self.documents), 1)
 
     def test_pdf_range_policy_keeps_default_browser_cache_from_serializing_reads(self):
         payload = b''.join(bytes([index]) * 128 for index in range(16))
@@ -340,13 +377,13 @@ class PdfLoadingTests(unittest.TestCase):
         self.open()
         self.page.locator('#reader-engine-retry').wait_for()
         self.assertEqual(len(self.modules), 3)
-        self.assertEqual(self.documents, [])
+        self.assertEqual(len(self.documents), 1)
         self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_ENGINE_NETWORK')
         self.assertNotIn('Failed to fetch', self.page.locator('.reader-error').inner_text())
         self.page.unroute(MODULE)
         self.page.locator('#reader-engine-retry').click()
         self.ready()
-        self.assertEqual(len(self.documents), 1)
+        self.assertEqual(len(self.documents), 2)
 
     def test_disposal_cancels_retry_backoff(self):
         self.page.route(MODULE, lambda route: route.abort('connectionreset'))
@@ -355,7 +392,7 @@ class PdfLoadingTests(unittest.TestCase):
         self.page.evaluate("() => window.dispatchEvent(new Event('pagehide'))")
         self.page.wait_for_timeout(1800)
         self.assertEqual(len(self.modules), 1)
-        self.assertEqual(self.documents, [])
+        self.assertLessEqual(len(self.documents), 1)
         self.assertEqual(self.errors, [])
 
     def test_timed_out_import_cannot_start_document_after_disposal(self):
@@ -373,7 +410,7 @@ class PdfLoadingTests(unittest.TestCase):
             ''')
         self.page.wait_for_timeout(200)
         self.assertFalse(self.page.evaluate('() => !!window.__latePdfStarted'))
-        self.assertEqual(self.documents, [])
+        self.assertEqual(len(self.documents), 1)
         self.assertEqual(self.errors, [])
 
     def test_syntax_error_is_not_retried_as_network_failure(self):

@@ -260,7 +260,10 @@ export function createReaderProgress(readerContext) {
 
   async function applyInitialRestoration(entry, generation) {
     readerContext.updateDocumentState({ restoredEntry: entry });
-    if (entry?.zoom && !readerContext.zoomChangedByUser && readerContext.isReaderGenerationCurrent("navigation", generation))
+    // Startup already applied the current zoom. Reapplying an identical saved
+    // value needlessly invalidates PDF canvases and lays out every format again.
+    if (entry?.zoom && !readerContext.zoomChangedByUser && readerContext.isReaderGenerationCurrent("navigation", generation) &&
+        VoiceOfMLReader.clampNumber(entry.zoom, 25, 400, 100) / 100 !== readerContext.documentState.zoom)
       readerContext.setZoom(entry.zoom, false);
     await readerContext.restoreInitialPosition(entry, generation);
   }
