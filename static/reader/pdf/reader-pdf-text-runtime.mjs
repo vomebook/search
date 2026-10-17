@@ -12,8 +12,8 @@ export function createReaderPdfTextRuntime(readerContext) {
   function createPdfV3Repository(sourceSha, pageCount) {
     return readerContext.createV3Repository({ sourceSha, pageCount, signal: readerContext.readerAbortController.signal,
       resourceUrl: readerContext.v3ResourceUrl,
-       readJson: (url, ref, signal) => readerContext.readPdfOcrJson(
-         url, VoiceOfMLReaderSecurity.LIMITS.chapterBytes, ref.sha256, ref.bytes, "auto", signal),
+        readJson: (url, ref) => readerContext.readPdfOcrJson(url,
+          VoiceOfMLReaderSecurity.LIMITS.chapterBytes, ref.sha256, ref.bytes),
        readBytes: async (url, ref, signal) => {
          const response = await readerContext.fetchReaderUrl(url, signal ? { signal } : {});
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -26,8 +26,8 @@ export function createReaderPdfTextRuntime(readerContext) {
     });
   }
 
-  async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0, priority = "auto", signal = null) {
-    const response = await readerContext.fetchReaderUrl(url, { priority, ...(signal ? { signal } : {}) });
+  async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0, priority = "auto") {
+    const response = await readerContext.fetchReaderUrl(url, { priority });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     let bytes = await VoiceOfMLReaderSecurity.readBytes(response, limit);
     if (size && bytes.byteLength !== size) throw new Error("PDF_OCR_SIZE_MISMATCH");
@@ -72,7 +72,7 @@ export function createReaderPdfTextRuntime(readerContext) {
       return readerContext.loadPdfOcrManifest().then((manifest) => {
         if (manifest?.text_layer) {
           readerContext.pdfTextLayerRepository ||= readerContext.createPdfV3Repository(manifest.source_sha256, manifest.page_count);
-           return readerContext.pdfTextLayerRepository.textPage(manifest.text_layer, page, readerContext.readerAbortController.signal).then(payload => {
+            return readerContext.pdfTextLayerRepository.textPage(manifest.text_layer, page).then(payload => {
             if (readerContext.pdfV3Map) {
               const geometry = readerContext.pdfV3Map.pages[page - 1];
               if (Math.abs((payload.geometry.width / payload.geometry.height) / (geometry.width / geometry.height) - 1) > .01)
