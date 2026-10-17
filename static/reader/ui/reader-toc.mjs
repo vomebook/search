@@ -171,13 +171,10 @@ export function createReaderToc(readerContext) {
   }
 
   let tocHintShown = false, tocHintPending = false, tocHintTimer = 0;
-  let tocHintInteractionCleanup = null;
   const cancelTocHint = () => {
     clearTimeout(tocHintTimer);
     tocHintTimer = 0;
     tocHintPending = false;
-    tocHintInteractionCleanup?.();
-    tocHintInteractionCleanup = null;
   };
   const finishTocHint = () => {
     tocHintTimer = 0;
@@ -192,7 +189,6 @@ export function createReaderToc(readerContext) {
     const panel = document.querySelector("#history-panel");
     if (!panel) return;
     tocHintShown = true;
-    const autoSerial = readerContext.readerPanelInteractionSerial;
     // This is a visual hint, not a user-opened panel state. Keep the toolbar's
     // aria-expanded/state closed so the next history-button click converts the
     // hint into a normal persistent panel instead of immediately closing it.
@@ -201,23 +197,8 @@ export function createReaderToc(readerContext) {
     panel.classList.add("is-open");
     readerContext.selectPanel("toc");
     readerContext.updateTocCurrentMark();
-    const markInteraction = () => { readerContext.readerPanelInteractionSerial++; };
-    const events = ["pointerdown", "keydown", "focusin"];
-    events.forEach(type => panel.addEventListener(type, markInteraction, true));
-    tocHintInteractionCleanup = () => {
-      events.forEach(type => panel.removeEventListener(type, markInteraction, true));
-      tocHintInteractionCleanup = null;
-    };
-    tocHintTimer = setTimeout(() => {
-      tocHintInteractionCleanup?.();
-      tocHintTimer = 0;
-      if (!readerContext.readerLifecycle.disposed && !readerContext.panelState.open &&
-          panel.classList.contains("is-open") &&
-          readerContext.readerPanelInteractionSerial === autoSerial)
-        panel.classList.remove("is-open");
-      if (!panel.classList.contains("is-open"))
-        setTimeout(() => { if (!panel.classList.contains("is-open")) panel.hidden = true; }, 250);
-    }, 650);
+    // Keep the directory visible. The toolbar button can still convert this
+    // visual hint into normal panel state on the user's first interaction.
   };
   let phaseCleanup = null;
   function ensureTocHintPhaseListener() {
