@@ -182,7 +182,6 @@ export function createReaderToc(readerContext) {
   const finishTocHint = () => {
     tocHintTimer = 0;
     if (readerContext.readerLifecycle.disposed || !tocHintPending) return;
-    if (readerContext.readerRuntime.state.lifecycle.phase !== "ready") return;
     tocHintPending = false;
     if (!readerContext.navigationState.tocEntries.length ||
         readerContext.panelState.open || readerContext.readerPanelInteractionSerial > 0 ||
@@ -218,15 +217,13 @@ export function createReaderToc(readerContext) {
         panel.classList.remove("is-open");
       if (!panel.classList.contains("is-open"))
         setTimeout(() => { if (!panel.classList.contains("is-open")) panel.hidden = true; }, 250);
-    }, 1600);
+    }, 650);
   };
   let phaseCleanup = null;
   function ensureTocHintPhaseListener() {
     if (phaseCleanup) return;
     phaseCleanup = readerContext.readerRuntime.events.on("phase", ({ phase }) => {
-      if (phase === "ready" && tocHintPending && !tocHintTimer)
-        tocHintTimer = setTimeout(finishTocHint, 80);
-      else if (phase === "failed" || phase === "disposed") {
+      if (phase === "failed" || phase === "disposed") {
         cancelTocHint();
         phaseCleanup?.();
         phaseCleanup = null;
@@ -238,8 +235,9 @@ export function createReaderToc(readerContext) {
     if (tocHintShown || tocHintPending || !readerContext.navigationState.tocEntries.length) return;
     ensureTocHintPhaseListener();
     tocHintPending = true;
-    if (readerContext.readerRuntime.state.lifecycle.phase === "ready")
-      tocHintTimer = setTimeout(finishTocHint, 80);
+    // Do not wait for the overall Reader phase: TOC availability itself is the
+    // useful signal, and the hint should be visible near the opening moment.
+    tocHintTimer = setTimeout(finishTocHint, 0);
   }
 
   function setToc(entries) {
