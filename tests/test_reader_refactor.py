@@ -2619,6 +2619,67 @@ class ReaderRefactorTest(unittest.TestCase):
         probe.click()
         self.assertFalse(self.page.evaluate("() => window.__readerSecurityMarker === 17"))
 
+    def test_epub_prefixed_xlink_and_smil_href_cannot_execute_in_reader_context(self):
+        with zipfile.ZipFile(io.BytesIO(support.minimal_epub())) as archive:
+            files = {item.filename: archive.read(item.filename) for item in archive.infolist()}
+        files["OEBPS/chapter.xhtml"] = b'''<html xmlns="http://www.w3.org/1999/xhtml"><body>
+          <svg xmlns="http://www.w3.org/2000/svg" xmlns:x="http://www.w3.org/1999/xlink" width="240" height="70">
+            <a id="probe" x:href="javascript:window.__readerSecurityMarker=23;void(0)">
+              <text x="10" y="20">prefixed label</text>
+            </a>
+            <a id="animated">
+              <set attributeName="href" to="javascript:window.__readerSecurityMarker=29;void(0)"/>
+              <text x="10" y="50">animated label</text>
+            </a>
+          </svg>
+        </body></html>'''
+        body = support.zip_bytes({name: value for name, value in files.items() if name != "mimetype"},
+                                 ("mimetype", "application/epub+zip"))
+        self.serve(body, "application/epub+zip")
+        self.open(self.reader_url("epub", name="svg-prefixed-xlink-security"))
+        probe = self.page.locator("article[data-section] #probe")
+        self.assertIsNone(probe.evaluate("n => n.getAttributeNS('http://www.w3.org/1999/xlink', 'href')"))
+        self.assertEqual(self.page.locator("article[data-section] #animated set").count(), 0)
+        probe.click()
+        self.page.locator("article[data-section] #animated").click()
+        self.page.wait_for_timeout(200)
+        self.assertIsNone(self.page.evaluate("() => window.__readerSecurityMarker ?? null"))
+
+    def test_offline_html_keeps_layout_attributes_and_enforces_frame_csp(self):
+        dot = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+               "/x8AAwMB/6XWbqkAAAAASUVORK5CYII=")
+        document = (
+            '<!doctype html><html><head><meta charset="utf-8"></head><body>'
+            '<table><tr><td id="merged" colspan="2" rowspan="3" width="120" lang="zh" dir="ltr">合并</td></tr></table>'
+            '<a id="remote-link" href="https://link.remote.test/x">x</a>'
+            f'<img id="inline" src="{dot}"><img id="remote" src="https://img.remote.test/a.png">'
+            '</body></html>'
+        )
+        remote = []
+        self.page.on("request", lambda request: remote.append(request.url) if ".remote.test" in request.url else None)
+        self.serve(document, "text/html")
+        self.open(self.reader_url("html", "layout"))
+        frame = self.page.locator("iframe.html-frame").element_handle().content_frame()
+        cell = frame.locator("#merged")
+        self.assertEqual([cell.get_attribute(name) for name in ("colspan", "rowspan", "width", "lang", "dir")],
+                         ["2", "3", "120", "zh", "ltr"])
+        self.assertIsNone(frame.locator("#remote-link").get_attribute("href"))
+        self.assertIsNone(frame.locator("#remote").get_attribute("src"))
+        self.assertTrue(frame.locator("#inline").get_attribute("src").startswith("data:image/png;"))
+        # The restrictive frame CSP must be a <head> child to be enforced; a remote
+        # image is then a CSP violation (Playwright still reports blocked requests).
+        result = self.page.evaluate("""async () => {
+          const doc = document.querySelector('iframe.html-frame').contentDocument, violations = [];
+          doc.addEventListener('securitypolicyviolation', event => violations.push(event.violatedDirective));
+          const image = doc.createElement('img');
+          image.src = 'https://img.remote.test/late.png';
+          doc.body.append(image);
+          await new Promise(resolve => setTimeout(resolve, 400));
+          return {policy: !!doc.head.querySelector('meta[http-equiv="Content-Security-Policy"]'), violations};
+        }""")
+        self.assertEqual(result, {"policy": True, "violations": ["img-src"]})
+        self.assertNotIn("https://img.remote.test/a.png", remote)
+
     def test_epub_css_cannot_load_remote_references_but_keeps_packaged_styles(self):
         css = ("@import url(https://css.remote.test/a.css);\n"
                "@import '\\68ttps://css.remote.test/b.css';\n"
