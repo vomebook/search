@@ -174,6 +174,7 @@ test("result actions use equal desktop heights and compact mobile column", () =>
   assert.match(css, /body\.mobile \.result-action-btn \{ height: 20px;/);
   assert.match(css, /body\.mobile \.result-path \{\s*display: block;\s*white-space: normal;\s*word-break: break-all;\s*overflow-wrap: normal;/);
   assert.match(app, /folderDisplay \+ separator \+ '<\/span>'/);
+  assert.ok(app.includes('role="button" tabindex="0" class="path-folder"'));
   assert.doesNotMatch(app, /'<span class="path-sep">\/<\/span><span class="path-folder"/);
 });
 test("virtual results use bounded buffering", () => {

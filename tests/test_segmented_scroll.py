@@ -95,9 +95,11 @@ class SegmentedScrollTests(unittest.TestCase):
         self.assertAlmostEqual(result['offset'], 11, delta=1)
 
     def test_editable_position_jumps_between_distant_segments(self):
+        self.page.locator('#edit-result-position').click()
         self.page.locator('#current-result-position').fill('95001')
         self.page.locator('#current-result-position').press('Enter')
         self.page.wait_for_function('findVirtualIndex(getResultScrollTop())===95000')
+        self.page.locator('#edit-result-position').click()
         self.page.locator('#current-result-position').fill('101')
         self.page.locator('#current-result-position').press('Enter')
         self.page.wait_for_function('findVirtualIndex(getResultScrollTop())===100')

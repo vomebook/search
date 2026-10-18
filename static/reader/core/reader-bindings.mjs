@@ -137,6 +137,9 @@ export function createReaderBindings(readerContext) {
   }
 
   function initializePanelAccessibility() {
+    document.querySelectorAll('.reader-toolbar svg, #history-panel > header svg').forEach(node => {
+      node.setAttribute('aria-hidden', 'true'); node.setAttribute('focusable', 'false');
+    });
     document.querySelector(".reader-panel-tabs")?.setAttribute("role", "tablist");
     document.querySelector(".reader-skip-link")?.addEventListener("click", (event) => {
       event.preventDefault();

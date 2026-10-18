@@ -524,7 +524,26 @@
     return hash.toString(36).padStart(13, "0");
   }
 
+  // Concise UI names from the datasets' Chinese README descriptions/link tables.
+  // Labels only: source IDs, matching, paths and routing keep their original keys.
+  const repositoryLabels = Object.freeze({
+    'A-Historical-Learning-Data': '推荐书单',
+    GPCREducation: '文革教材',
+    'Japanese-Materials': '日共资料',
+    'MLMRL-Hub': '待整理资料',
+    'MLMRL-Library': '重要书库',
+    Omnibus: '书纳百川',
+    SovMaterials: '苏联资料',
+    Teachers: '导师著作',
+    VOMEBOOK: '马列之声'
+  });
+  function repositoryLabel(value) {
+    const key = String(value || '').replace(/^VoiceOfML\//, '');
+    return Object.prototype.hasOwnProperty.call(repositoryLabels, key) ? repositoryLabels[key] : key.split('/').pop();
+  }
+
   root.VoiceOfMLReader = Object.freeze({
+    repositoryLabel,
     ReaderMode,
     articleExtensions,
     capability,
