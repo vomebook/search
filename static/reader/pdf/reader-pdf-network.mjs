@@ -124,6 +124,82 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit, rang
   }
 }
 
+function preparePdfRangeHint(options, begin, end, hooks, expected) {
+  const waiters = new Set();
+  let bytes = null, loaded = 0, complete = false, failed = false;
+  let published = false, failure = null, failureHandler = null, notified = false;
+  const notifyFailure = () => {
+    if (!failed || !published || notified || !failureHandler || hooks.signal.aborted) return;
+    notified = true;
+    failureHandler(failure);
+  };
+  const flush = () => {
+    for (const waiter of waiters) {
+      if (!failed && (!bytes || loaded < waiter.end - begin || (!complete && waiter.end === end))) continue;
+      waiters.delete(waiter);
+      if (failed) { waiter.resolve(null); continue; }
+      published = true;
+      // Each PDF.js range reader accepts one complete, exact requested buffer.
+      // A proper subrange must not wait for unrelated trailing hint bytes/EOF.
+      waiter.resolve({bytes:bytes.slice(waiter.begin - begin, waiter.end - begin)});
+    }
+  };
+  const promise = readPdfRange(options, begin, end, {
+    ...hooks,
+    readBytes: async (response, length) => {
+      const declared = response.headers.get("Content-Length");
+      if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) !== length))
+        throw new Error("PDF_RANGE_INVALID");
+      if (!response.body?.getReader) return hooks.readBytes(response, length);
+      const reader = response.body.getReader();
+      try {
+        bytes = new Uint8Array(length);
+        while (true) {
+          const {value, done} = await abortable(reader.read(), hooks.signal);
+          hooks.signal.throwIfAborted();
+          if (done) break;
+          if (!value?.byteLength) continue;
+          if (loaded + value.byteLength > length) throw new Error("PDF_RANGE_INVALID");
+          bytes.set(value, loaded);
+          loaded += value.byteLength;
+          flush();
+        }
+        if (loaded !== length) throw new Error("PDF_RANGE_INVALID");
+        return bytes;
+      } catch (error) {
+        await reader.cancel(error).catch(() => {});
+        throw error;
+      } finally { reader.releaseLock(); }
+    }
+  }, expected).then(result => {
+    // readPdfRange retains only an exact, version-checked complete response.
+    bytes = result.bytes;
+    loaded = bytes.byteLength;
+    complete = true;
+    flush();
+    return result;
+  }, error => {
+    failure = error;
+    failed = true;
+    flush();
+    // If a proper subrange was already used, a malformed/truncated remainder
+    // must invalidate that document, not silently leave an accepted bad stream.
+    notifyFailure();
+    return null;
+  });
+  return {
+    begin, end, promise,
+    read(from, last) {
+      if (from < begin || last > end || last <= from) return Promise.reject(new Error("PDF_RANGE_INVALID"));
+      const pending = Promise.withResolvers();
+      waiters.add({begin:from, end:last, resolve:pending.resolve});
+      flush();
+      return pending.promise;
+    },
+    onFailure(handler) { failureHandler = handler; notifyFailure(); }
+  };
+}
+
 function firstPageSectionEnd(bytes, total, chunkSize) {
   // A bounded scheduling hint, not a PDF parser. Only a direct, internally
   // consistent first-object linearization dictionary can justify first-page
@@ -157,7 +233,7 @@ export async function preparePdfInitialRange(options, hooks) {
       // Start the existing two-chunk tail on validated headers, not after the
       // first body finishes. This changes scheduling, not the fetched range.
       const begin = Math.floor((metadata.total - 1) / options.rangeChunkSize) * options.rangeChunkSize - options.rangeChunkSize;
-      tail = {begin, promise:readPdfRange(options, begin, metadata.total, {...hooks, signal}, metadata).catch(() => null)};
+      tail = preparePdfRangeHint(options, begin, metadata.total, {...hooks, signal}, metadata);
     };
     let first = null;
     // A complete retained prefix may be reused only after a fresh no-store
@@ -184,8 +260,7 @@ export async function preparePdfInitialRange(options, hooks) {
       ? firstPageSectionEnd(first.bytes, first.total, options.rangeChunkSize) : 0;
     for (let begin = options.rangeChunkSize; begin < end; begin += options.rangeChunkSize * 2) {
       const last = Math.min(end, begin + options.rangeChunkSize * 2);
-      openingRanges.push({begin, end:last,
-        promise:readPdfRange(options, begin, last, {...hooks, signal}, first).catch(() => null)});
+      openingRanges.push(preparePdfRangeHint(options, begin, last, {...hooks, signal}, first));
     }
     return {...first, tail, openingRanges, cancelInitial:reason => owner.abort(reason)};
   } catch (error) {
@@ -235,7 +310,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     let tail = first.tail || null;
     if (!tail && first.total > chunkSize * 4) {
       const begin = Math.floor((first.total - 1) / chunkSize) * chunkSize - chunkSize;
-      tail = {begin, promise:read(begin, first.total, first).catch(() => null)};
+      tail = preparePdfRangeHint(options, begin, first.total, {signal:active, readBytes, limit, rangeCache}, first);
     }
     // A conservative read-ahead hint, not a PDF parser: only a direct Length
     // before the first stream, in the bounded opening header, can qualify.
@@ -257,10 +332,8 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       ? prefix.promise.then(result => result
         ? {bytes:result.bytes.slice(begin - prefix.begin, end - prefix.begin)}
         : read(begin, end, first))
-      : tail && begin >= tail.begin
-      ? tail.promise.then(result => result
-        ? {bytes:result.bytes.slice(begin - tail.begin, end - tail.begin)}
-        : read(begin, end, first))
+      : tail && begin >= tail.begin && end <= first.total
+      ? tail.read(begin, end).then(result => result || read(begin, end, first))
       : read(begin, end, first);
     const fetchRange = (begin, end) => {
       const parts = [];
@@ -274,8 +347,8 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         if (offset === end) break;
       }
       if (offset !== end) return fetchOrdinaryRange(begin, end);
-      return Promise.all(parts.map(({range, from, last}) => range.promise.then(result => result
-        ? result.bytes.slice(from - range.begin, last - range.begin)
+      return Promise.all(parts.map(({range, from, last}) => range.read(from, last).then(result => result
+        ? result.bytes
         : read(from, last, first).then(row => row.bytes)))).then(values => {
         const bytes = new Uint8Array(end - begin);
         let at = 0;
@@ -283,16 +356,18 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         return {bytes};
       });
     };
+    const fail = error => {
+      if (stopped) return;
+      failure.reject(error);
+      stop(error);
+      task?.destroy()?.catch?.(() => {});
+      onError?.(error);
+    };
+    for (const hint of [tail, ...openingRanges]) hint?.onFailure(fail);
     transport.requestDataRange = (begin, end) => {
       fetchRange(begin,end).then(result => {
         if (!stopped) transport.onDataRange(begin,result.bytes);
-      }).catch(error => {
-        if (stopped) return;
-        failure.reject(error);
-        stop(error);
-        task?.destroy()?.catch?.(() => {});
-        onError?.(error);
-      });
+      }).catch(fail);
     };
     task = pdfjs.getDocument({...options, range:transport});
     task.promise.catch(error => stop(error));
