@@ -20,6 +20,7 @@ on:
       - "static/foliate-reader/**"
       - "tests/test_reader_refactor.py"
       - "tests/test_search_accessibility_browser.py"
+      - "tests/test_position_controls.py"
       - "tests/test_reader_chapter_search.mjs"
       - "tests/test_reader_*.py"
       - "tests/test_reader_*.mjs"
@@ -48,7 +49,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install playwright==1.63.0 Pillow==12.3.0
-          python -m playwright install --with-deps chromium
+          python -m playwright install --with-deps chromium firefox
           node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
           node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
       - name: Run chapter-search unit tests
@@ -64,6 +65,10 @@ jobs:
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
       - name: Run search accessibility keyboard gates
         run: python3 -B -m unittest -v tests.test_search_accessibility_browser
+      - name: Check Firefox footer counter geometry
+        env:
+          SEARCH_POSITION_BROWSER: firefox
+        run: python3 -B -m unittest -v tests.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total tests.test_position_controls.PositionControlTests.test_footer_controls_keep_layout_and_latest_return_target tests.test_position_controls.PositionControlTests.test_both_footer_buttons_use_left_and_right_on_narrow_screens
       - name: Check warmed Reader shell reuse
         run: |
           node tests/test_service_worker.js
@@ -107,7 +112,7 @@ jobs:
         working-directory: huggingface-search
         run: |
           python -m pip install -r requirements.txt playwright==1.63.0 Pillow==12.3.0
-          python -m playwright install --with-deps chromium
+          python -m playwright install --with-deps chromium firefox
           node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
           node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
       - name: Run chapter-search unit tests
@@ -133,6 +138,11 @@ jobs:
       - name: Run search accessibility keyboard gates
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_search_accessibility_browser
+      - name: Check Firefox footer counter geometry
+        working-directory: huggingface-search
+        env:
+          SEARCH_POSITION_BROWSER: firefox
+        run: python3 -B -m unittest -v tests.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total tests.test_position_controls.PositionControlTests.test_footer_controls_keep_layout_and_latest_return_target tests.test_position_controls.PositionControlTests.test_both_footer_buttons_use_left_and_right_on_narrow_screens
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |

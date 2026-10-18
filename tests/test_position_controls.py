@@ -1,5 +1,6 @@
 """Browser contracts for explicit recovery and editable result positions."""
 import unittest
+import os
 from tests import test_paging_recovery as paging
 
 
@@ -7,6 +8,12 @@ class PositionControlTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         paging.PagingRecoveryTests.setUpClass()
+        browser = os.environ.get('SEARCH_POSITION_BROWSER', 'chromium')
+        if browser == 'firefox':
+            paging.PagingRecoveryTests.browser.close()
+            paging.PagingRecoveryTests.browser = paging.PagingRecoveryTests.playwright.firefox.launch(headless=True)
+        elif browser != 'chromium':
+            raise ValueError('SEARCH_POSITION_BROWSER must be chromium or firefox')
 
     @classmethod
     def tearDownClass(cls):
@@ -53,6 +60,40 @@ class PositionControlTests(unittest.TestCase):
           if(clearViewport) tx.objectStore('viewports').clear();
           await new Promise(resolve=>tx.oncomplete=resolve);
         }''', clear_viewport)
+
+    def test_footer_multi_digit_display_and_editor_do_not_overlap_total(self):
+        self.input_position(95001)
+        self.wait_position(95000)
+        for width in (1280, 390, 320):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({'width': width, 'height': 844})
+                self.page.evaluate('STATE.isMobile=innerWidth<600;applyMobileMode();updateLoadInfo()')
+                geometry = self.page.locator('.result-position-count').evaluate('''count=>{
+                  const button=count.querySelector('#edit-result-position'),input=count.querySelector('input');
+                  const digits=count.querySelector('#result-position-display'),total=count.querySelector('#total-count');
+                  const text=node=>{const range=document.createRange();range.selectNodeContents(node);return range.getBoundingClientRect()};
+                  const value=text(digits),limit=text(total),box=button.getBoundingClientRect();
+                  const longest=String(STATE.total),original=digits.textContent;
+                  digits.textContent=longest;const longestRect=text(digits);digits.textContent=original;
+                  return {value:digits.textContent,total:total.textContent,buttonWidth:box.width,
+                    longestInside:longestRect.left>=box.left-.5&&longestRect.right<=box.right+.5,
+                    textWidth:value.width,inside:value.left>=box.left-.5&&value.right<=box.right+.5,
+                    separated:limit.left>value.right+2,hidden:input.hidden};
+                }''')
+                self.assertEqual(geometry['value'], '95001')
+                self.assertEqual(geometry['total'], '100,000')
+                self.assertTrue(geometry['inside'], geometry)
+                self.assertTrue(geometry['longestInside'], geometry)
+                self.assertTrue(geometry['separated'], geometry)
+                self.assertTrue(geometry['hidden'])
+                self.page.locator('#edit-result-position').press('Enter')
+                editor = self.page.locator('#current-result-position')
+                self.assertTrue(editor.evaluate('node=>node===document.activeElement'))
+                self.assertTrue(editor.evaluate('node=>node.scrollWidth<=node.clientWidth'))
+                self.assertTrue(editor.evaluate('node=>node.getBoundingClientRect().right<document.querySelector("#total-count").getBoundingClientRect().left'))
+                editor.press('Escape')
+                self.assertTrue(editor.is_hidden())
+                self.assertEqual(self.page.evaluate('document.activeElement.id'), 'edit-result-position')
 
     def test_unloaded_index_requests_only_neighborhood_and_submits_once(self):
         # Isolate restore-critical requests from post-restore viewport lookahead.
