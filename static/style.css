@@ -1340,6 +1340,21 @@ body.mobile .mobile-selected-count {
   gap: 4px;
 }
 
+#filter-folder-section .filter-section-title {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+#filter-folder-section .filter-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+#filter-folder-section .text-btn-sm:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .filter-checkbox-list {
   max-height: 240px;
   overflow-y: auto;
