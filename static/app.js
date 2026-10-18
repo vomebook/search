@@ -480,7 +480,20 @@ function handleReaderMessage(event) {
         return;
       }
     } catch (_) {}
+    var overlay = readerOverlay;
     history.back();
+    // A traversal that never fires popstate must not leave the Reader stuck.
+    setTimeout(function() {
+      if (!readerClosing || readerOverlay !== overlay) return;
+      var fallback = "/search/";
+      try {
+        var stuck = new URL(new URL(overlay.src, location.origin).searchParams.get("return") || fallback, location.origin);
+        if (stuck.origin === location.origin && stuck.pathname === "/search/") fallback = stuck.href;
+      } catch (_) {}
+      closeReaderOverlay();
+      history.replaceState(null, "", fallback);
+      ROUTER.apply();
+    }, 1000);
     return;
   }
   if (message.type === "voice-reader-ui-state") {
@@ -1843,6 +1856,8 @@ function cacheDOM() {
   DOM.closeFiltersBtn = $("#close-filters-btn");
   DOM.folderSelectAll = $("#folder-select-all");
   DOM.folderDeselectAll = $("#folder-deselect-all");
+  DOM.folderCollapseAll = $("#folder-collapse-all");
+  DOM.folderExpandAll = $("#folder-expand-all");
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
@@ -5132,6 +5147,7 @@ async function renderFilters(routeId) {
     var folderRepo = STATE.repo;
     var folderRepoFull = STATE.repoFull;
     DOM.filterFolderSection.style.display = "";
+    updateFolderTreeControls(true);
     DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">加载中...</div>';
     var folderTree = folderTreeCache.get(folderRepoFull) || null;
     var initialFolderTree = null;
@@ -5175,6 +5191,7 @@ async function renderFilters(routeId) {
     renderFilterFolderTree();
   } else {
     DOM.filterFolderSection.style.display = "none";
+    updateFolderTreeControls(true);
   }
   await extensionPromise;
 }
@@ -5421,10 +5438,35 @@ function renderCheckboxList(container, items, selected, onChange) {
   container._onChange = onChange;
 }
 
+function updateFolderTreeControls(loading = false) {
+  const enabled = !loading && STATE.mode === "repo" &&
+    (STATE.folderTree || []).some(node => node.children && node.children.length);
+  DOM.folderCollapseAll.disabled = !enabled;
+  DOM.folderExpandAll.disabled = !enabled;
+}
+
+function setAllFoldersCollapsed(collapsed) {
+  if (DOM.folderCollapseAll.disabled) return;
+  const stack = [...STATE.folderTree];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node.children || !node.children.length) continue;
+    STATE.folderTreeCollapsed[node.path] = collapsed;
+    for (const child of node.children) stack.push(child);
+  }
+  if (DOM.filterFolderTree.contains(document.activeElement)) {
+    (collapsed ? DOM.folderCollapseAll : DOM.folderExpandAll).focus({ preventScroll: true });
+  }
+  // Use the owned, time-sliced tree renderer. Superseding bulk actions and
+  // route changes cancel old batches; selections/search state stay untouched.
+  renderFilterFolderTree();
+}
+
 function renderFilterFolderTree() {
   cancelFolderTreeRendering();
   folderSelectionMemo = null;
   setupFolderTreeEvents();
+  updateFolderTreeControls();
   DOM.filterFolderTree.innerHTML = "";
   if (!STATE.folderTree || STATE.folderTree.length === 0) {
     DOM.filterFolderTree.innerHTML = '<div style="font-size:12px;color:var(--on-surface-variant);opacity:0.6">暂无目录</div>';
@@ -6774,6 +6816,8 @@ async function init() {
     renderExtensionFilter(routeRenderId);
     scheduleFilterSearch();
   });
+  DOM.folderCollapseAll.addEventListener("click", () => setAllFoldersCollapsed(true));
+  DOM.folderExpandAll.addEventListener("click", () => setAllFoldersCollapsed(false));
   DOM.folderSelectAll.addEventListener("click", function() {
     if (!STATE.folderTree || STATE.folderTree.length === 0) return;
     var subtreeSet = new Set();
@@ -6814,17 +6858,9 @@ async function init() {
   setupDownloadIntentWarming();
   window.addEventListener("message", handleReaderMessage);
   window.addEventListener("popstate", function(event) {
-    if (readerOverlay && readerUiState !== "base") {
-      try {
-        if (event.state?.voiceReaderOverlay) {
-          const returnUrl = new URL(readerOverlay.src).searchParams.get("return");
-          if (returnUrl) history.replaceState(null, "", returnUrl);
-        }
-        readerNavigation.remember(new URL(readerOverlay.src), readerReturnScrollState);
-        readerOverlay.contentWindow?.postMessage({ type: "voice-reader-system-back" }, location.origin);
-      } catch (_) {}
-      return;
-    }
+    // System back leaves the Reader even with its directory/search panel open.
+    // Re-pushing an entry here (without a user activation) made Chromium mark
+    // the whole search document skippable, so the next swipe skipped it.
     if (readerOverlay || event.state?.voiceReaderOverlay) {
       restoreReaderOverlay(event.state);
       return;

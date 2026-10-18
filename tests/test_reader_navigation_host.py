@@ -117,6 +117,39 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }''')
         self.assertEqual(state, 'panel', 'a new Reader must still publish its real panel state')
 
+    def test_back_with_panel_open_exits_even_without_overlay_history_entry(self):
+        # Formerly the close waited on history.back(); a non-overlay current entry
+        # left the Reader open and readerClosing then ignored every later tap.
+        before = self.page.evaluate('() => new URL(location.href).pathname')
+        self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.evaluate("""() => {
+          history.replaceState(null, "", location.href);
+          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
+            data:{type:'voice-reader-ui-state',state:'panel'}});
+          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
+            data:{type:'voice-reader-close'}});
+        }""")
+        self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
+        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertEqual(self.page.evaluate('() => new URL(location.href).pathname'), before)
+
+    def test_back_tap_recovers_when_history_traversal_never_arrives(self):
+        self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.evaluate("""() => {
+          const back = history.back; history.back = () => {};
+          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
+          history.back = back;
+        }""")
+        self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
+        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.assertFalse(self.page.evaluate('!!history.state?.voiceReaderOverlay'))
+        self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.evaluate('history.back()')
+        self.page.locator('.reader-overlay').wait_for(state='detached')
+
     def test_close_disposes_child_synchronously_before_detachment(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
