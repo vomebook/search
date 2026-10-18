@@ -151,11 +151,10 @@ export function createReaderSource(readerContext) {
       readerContext.folderNavigationTarget.hash =
         "#/" + encodeURIComponent(data.repo) + (query.size ? "?" + query.toString() : "");
     }
-    const displayPath = value.replace(/^(?:VoiceOfML\/)?([^/]+)/, (_, repo) => VoiceOfMLReader.repositoryLabel(repo));
-    readerContext.readerPath.textContent = displayPath;
+    readerContext.readerPath.textContent = value;
     readerContext.readerPath.hidden = !value;
     readerContext.readerPath.disabled = !readerContext.folderNavigationTarget;
-    readerContext.readerPath.setAttribute("aria-label", `筛选文件夹：${displayPath}`);
+    readerContext.readerPath.setAttribute("aria-label", `筛选文件夹：${value}`);
   }
 
   function validSource(raw) {

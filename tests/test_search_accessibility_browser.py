@@ -50,24 +50,24 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertTrue(self.page.locator('#current-result-position').is_hidden())
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'edit-result-position')
 
-    def test_known_repository_names_are_short_chinese_without_changing_ids(self):
-        expected = {'A-Historical-Learning-Data':'推荐书单','GPCREducation':'文革教材',
-            'Japanese-Materials':'日共资料','MLMRL-Hub':'待整理资料','MLMRL-Library':'重要书库',
-            'Omnibus':'书纳百川','SovMaterials':'苏联资料','Teachers':'导师著作','VOMEBOOK':'马列之声'}
+    def test_repository_display_and_accessible_names_keep_original_english_ids(self):
+        expected = ['A-Historical-Learning-Data', 'GPCREducation', 'Japanese-Materials',
+            'MLMRL-Hub', 'MLMRL-Library', 'Omnibus', 'SovMaterials', 'Teachers', 'VOMEBOOK']
         observed = self.page.evaluate('''names=>{
           routeRenderId++;
           STATE.leftSidebarOpen=true;updateSidebarVisibility();
-          renderRepoListItems(Object.keys(names).map(name=>({name:'VoiceOfML/'+name,count:1})));
+          renderRepoListItems(names.map(name=>({name:'VoiceOfML/'+name,count:1})));
           return Array.from(DOM.sidebarContent.querySelectorAll('.repo-list-item'),node=>
             ({id:node.dataset.repo,text:node.querySelector('.repo-name').textContent,label:node.getAttribute('aria-label')}));
         }''', expected)
-        self.assertEqual(observed, [dict(id=key,text=value,label='打开仓库：'+value) for key,value in expected.items()])
-        self.assertEqual(self.page.evaluate("VoiceOfMLReader.repositoryLabel('constructor')"), 'constructor')
+        self.assertEqual(observed, [dict(id=key,text=key,label='打开仓库：'+key) for key in expected])
+        self.assertFalse(self.page.evaluate("'repositoryLabel' in VoiceOfMLReader"))
         self.page.evaluate("()=>{STATE.mode='global';const host=document.createElement('div');document.body.append(host);host.append(createResultRow({Repo:'VoiceOfML/Teachers',File:'book',Extension:'txt',Folder:[],Size:1},101))}")
         row = self.page.locator('.result-item[data-index="101"]')
-        self.assertEqual(row.locator('.result-repo-tag').inner_text(), '导师著作')
+        self.assertEqual(row.locator('.result-repo-tag').inner_text(), 'Teachers')
+        self.assertEqual(row.locator('.result-repo-tag').get_attribute('aria-label'), '打开仓库：Teachers')
         self.assertEqual(row.locator('.result-repo-tag').get_attribute('data-repo'), 'Teachers')
-        self.assertNotIn('Teachers', row.locator('.result-path').inner_text())
+        self.assertIn('Teachers', row.locator('.result-path').inner_text())
 
     def test_toolbar_actions_have_chinese_function_names_and_no_svg_noise(self):
         self.assertIn(self.page.locator('#hamburger-btn').get_attribute('aria-label'), ['打开仓库导航','关闭仓库导航'])
