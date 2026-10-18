@@ -63,6 +63,7 @@ jobs:
           node --check _site/static/search/index-worker.js
           node --check _site/sw.js
           node scripts/build/build_static_assets.mjs
+          python3 scripts/build/seo.py --project pages --output _site
           node scripts/build/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
       - name: Setup Pages
         uses: actions/configure-pages@v6
