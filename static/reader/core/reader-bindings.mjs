@@ -368,9 +368,8 @@ export function createReaderBindings(readerContext) {
         const target = new URL(readerContext.normalizeReaderReturnUrl(readerContext.returnUrl), location.origin);
         if (target.origin === location.origin) {
           if (readerContext.returnNeedsReload) location.replace(target.href);
-          else if (readerContext.canReturnWithHistory && history.length > 2) {
-            history.go(-2);
-          } else location.assign(target.href);
+          else if (readerContext.canReturnWithHistory && history.length > 1) history.back();
+          else location.assign(target.href);
           return;
         }
       } catch (_) {}
@@ -417,22 +416,10 @@ export function createReaderBindings(readerContext) {
   }
 
   function bindReaderUiHistory() {
-    if (window.parent === window) {
-      history.replaceState({ ...history.state, voiceReaderBase: true }, "", location.href);
-      history.pushState({ voiceReaderGuard: true }, "", location.href);
-      window.addEventListener("popstate", (event) => {
-        if (!event.state?.voiceReaderBase || readerContext.readerLifecycle.disposed) return;
-        if (document.querySelector("#history-panel").classList.contains("is-open") && !readerContext.fullSearchView.hidden)
-          readerContext.closeFullSearchView();
-        else if (document.querySelector("#history-panel").classList.contains("is-open"))
-          readerContext.setReaderPanelOpen(false, true);
-        else {
-          history.back();
-          return;
-        }
-        history.pushState({ voiceReaderGuard: true }, "", location.href);
-      });
-    }
+    // System back always leaves the Reader, exactly like its Back button. Do not
+    // add a guard entry or re-push one from popstate: entries created without a
+    // user activation make Chromium skip this document on the next back gesture,
+    // landing on an older repository/book instead of the page that opened it.
   }
 
   function bindPanelBookmarkAndLifecycleControls() {
@@ -616,11 +603,6 @@ export function createReaderBindings(readerContext) {
         event.data.type === "voice-reader-theme-state"
       )
         readerContext.applyReaderTheme(event.data.theme, false);
-      if (event.origin === location.origin && event.source === window.parent &&
-          event.data?.type === "voice-reader-system-back") {
-        if (readerContext.readerUiHistoryState === "full-search") readerContext.closeFullSearchView();
-        else if (readerContext.readerUiHistoryState === "panel") readerContext.setReaderPanelOpen(false, true);
-      }
     });
     document
       .querySelector("#history")

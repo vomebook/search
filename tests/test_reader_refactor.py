@@ -2164,23 +2164,21 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#full-search-clear").click()
         self.assertTrue(self.page.locator("#full-search-clear").is_hidden())
 
-    def test_top_level_system_back_steps_out_without_reopen_race(self):
+    def test_top_level_reader_adds_no_history_guard_and_system_back_leaves(self):
+        # A standalone Reader (e.g. a restored tab) must not push a guard entry:
+        # Chromium marks entries created without a user activation as skippable.
         self.serve("needle " * 300)
         url = self.reader_url()
-        self.open(url)
+        self.page.goto("about:blank")
+        before = self.page.evaluate("history.length")
+        self.page.goto(url)
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(self.page.evaluate("history.length"), before + 1)
+        self.assertFalse(self.page.evaluate("!!history.state?.voiceReaderGuard"))
         self.page.locator("#history").click()
-        self.page.locator("#full-search-toggle").click()
-        self.page.locator("#full-search-input").fill("needle")
-        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '300 个结果'")
-        self.page.locator(".full-search-result").first.click()
-        self.page.locator("#history").click()
-        self.page.wait_for_function("() => !document.querySelector('#full-search-view').hidden")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => document.querySelector('#full-search-view').hidden && document.querySelector('#history-panel').classList.contains('is-open') && history.state.voiceReaderGuard")
-        self.assertEqual(self.page.url, url)
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => !document.querySelector('#history-panel').classList.contains('is-open') && history.state.voiceReaderGuard")
-        self.assertEqual(self.page.url, url)
+        self.page.wait_for_function("() => document.querySelector('#history-panel').classList.contains('is-open')")
+        self.page.go_back()
+        self.assertEqual(self.page.url, "about:blank")
 
     def test_txt_small_chunks_reuse_preview_decoder_and_visit_samples_once(self):
         def instrument(route):
@@ -2601,6 +2599,25 @@ class ReaderRefactorTest(unittest.TestCase):
           });
         }''')
         self.assertEqual(result, [dict(equal=True, unsafe=False, remote=False, styles=False)] * 9)
+
+    def test_epub_svg_xlink_control_whitespace_cannot_execute_in_reader_context(self):
+        with zipfile.ZipFile(io.BytesIO(support.minimal_epub())) as archive:
+            files = {item.filename: archive.read(item.filename) for item in archive.infolist()}
+        files["OEBPS/chapter.xhtml"] = b'''<html xmlns="http://www.w3.org/1999/xhtml"><body>
+          <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+            <a id="probe" xlink:href="java&#x09;script:window.__readerSecurityMarker=17;void(0)">
+              <text x="10" y="20">safe label</text>
+            </a>
+          </svg>
+        </body></html>'''
+        body = support.zip_bytes({name: value for name, value in files.items() if name != "mimetype"},
+                                 ("mimetype", "application/epub+zip"))
+        self.serve(body, "application/epub+zip")
+        self.open(self.reader_url("epub", name="svg-xlink-security"))
+        probe = self.page.locator("article[data-section] #probe")
+        self.assertEqual(probe.get_attribute("xlink:href"), None)
+        probe.click()
+        self.assertFalse(self.page.evaluate("() => window.__readerSecurityMarker === 17"))
 
     def expose_html_contrast(self):
         def instrument(route):
