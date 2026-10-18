@@ -9,7 +9,7 @@ export const EPUB_HTML_VOID_TAGS = new Set(
 );
 
 export const HTML_FRAME_STYLE =
-  '<meta name="color-scheme" content="only light"><style>:root{color-scheme:only light!important;background:#fff!important}html,body{min-height:100%;background:#fff!important;color:#111!important}</style>';
+  '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; base-uri \'none\'; form-action \'none\'; img-src data: blob:; media-src data: blob:; font-src data: blob:; style-src \'unsafe-inline\'"><meta name="color-scheme" content="only light"><style>:root{color-scheme:only light!important;background:#fff!important}html,body{min-height:100%;background:#fff!important;color:#111!important}</style>';
 
 export const DISCOURSE_POST_SELECTOR = ".topic-post .cooked";
 
