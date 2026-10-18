@@ -7,6 +7,9 @@ on:
   push:
     branches: ["main"]
     paths:
+      - "static/app.js"
+      - "static/index.html"
+      - "static/style.css"
       - "static/reader*.js"
       - "static/reader*.mjs"
       - "static/reader/**"
@@ -16,6 +19,7 @@ on:
       - "static/reader*.html"
       - "static/foliate-reader/**"
       - "tests/test_reader_refactor.py"
+      - "tests/test_search_accessibility_browser.py"
       - "tests/test_reader_chapter_search.mjs"
       - "tests/test_reader_*.py"
       - "tests/test_reader_*.mjs"
@@ -58,6 +62,8 @@ jobs:
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
       - name: Run multi-format preparation and navigation gates
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+      - name: Run search accessibility keyboard gates
+        run: python3 -B -m unittest -v tests.test_search_accessibility_browser
       - name: Check warmed Reader shell reuse
         run: |
           node tests/test_service_worker.js
@@ -124,6 +130,9 @@ jobs:
       - name: Run multi-format preparation and navigation gates
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+      - name: Run search accessibility keyboard gates
+        working-directory: huggingface-search
+        run: python3 -B -m unittest -v tests.test_search_accessibility_browser
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
