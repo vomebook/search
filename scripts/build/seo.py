@@ -68,7 +68,7 @@ def metadata(title: str, description: str, url: str, *, canonical: bool, noindex
 
 def enrich_search_shell(html: str, repo: str | None = None, count: int | None = None) -> str:
     """HF-only: retain the platform's single HTTP canonical, never add a rival."""
-    title = f"{repo} 资料检索 — VoiceOfML Search" if repo else "VoiceOfML Search — 资料检索与文库目录"
+    title = "VoiceOfML Search — 资料检索与文库目录"
     description = (f"检索 {repo} 的 {count:,} 条资料记录，按文件名、路径和格式查找，在线阅读或下载。"
                    if repo and count is not None else DESCRIPTION)
     url = HF + (quote(repo.split("/")[-1], safe="") + "/" if repo else "")
