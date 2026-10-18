@@ -525,7 +525,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(sw, /readerShell = url\.pathname === "\/search\/static\/reader\.html"/);
   assert.match(sw, /networkFirst = !readerShell &&/);
   assert.match(sw, /cacheKey = readerShell \? "\/search\/static\/reader\.html" : searchNavigation \? "\/search\/" : event\.request/);
-  assert.match(sw, /fetch\(event\.request\)[\s\S]*cache\.put\(cacheKey/);
+  assert.match(sw, /fetch\(revalidatedRequest\(event\.request\)\)[\s\S]*cache\.put\(cacheKey/);
 });
 test("mobile shell hides sidebars before application startup", () => {
   assert.match(html, /document\.documentElement\.classList\.add\("mobile-boot"\)/);

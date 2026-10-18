@@ -173,6 +173,58 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#filter-ext-list").get_by_text("暂无").count(), 0)
         self.assertEqual(self.page_errors, [])
 
+    def test_path_only_navigation_does_not_strand_pending_filter_render(self):
+        self.page.unroute("https://voiceofml-search.hf.space/**")
+        tree = [{"name": "VOMEBOOK", "path": "", "count": 2, "hasDirectFiles": False, "hasChildren": True,
+                 "children": [{"name": n, "path": n, "count": 1, "hasDirectFiles": True, "hasChildren": False,
+                               "children": []} for n in ("甲", "乙")]}]
+        held = []
+
+        def api(route):
+            path = route.request.url.split("?", 1)[0]
+            if path.endswith("/api/folders/VOMEBOOK"):
+                held.append(route)
+                return
+            if path.endswith("/api/extensions"):
+                body = [{"name": "txt", "count": 1}]
+            elif "/api/search" in path:
+                body = {"page": 1, "page_size": 100, "total": 0, "results": []}
+            elif path.endswith("/api/random-reader/status"):
+                body = {"available": False}
+            else:
+                body = {}
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+        self.page.route("https://voiceofml-search.hf.space/**", api)
+        self.load("#/VOMEBOOK?filters=1")
+        self.page.wait_for_function("routeInitialized === true && STATE.dataLoaded === true", timeout=30000)
+        # Let startup filter renders finish before starting the observed one.
+        for _ in range(15):
+            while held:
+                held.pop(0).fulfill(status=200, content_type="application/json", body="[]")
+            self.page.wait_for_timeout(100)
+        self.page.wait_for_function("!document.querySelector('#filter-folder-tree').textContent.includes('加载中')", timeout=15000)
+        self.page.wait_for_timeout(300)
+        # Start a filter render that waits on the API tree, as a route change does.
+        self.page.evaluate("() => { folderTreeCache.clear(); apiAvailable = true; renderFilters(routeRenderId); }")
+        deadline = time.time() + 15
+        while not held and time.time() < deadline:
+            self.page.wait_for_timeout(50)
+        self.assertTrue(held, "folder tree request never started")
+        self.assertIn("加载中", self.page.locator("#filter-folder-tree").inner_text())
+        # A sidebar folder click changes only the path while the tree is pending.
+        self.page.evaluate("() => ROUTER.navigate('repo', 'VOMEBOOK', '甲')")
+        self.page.wait_for_function("STATE.browserPath === '甲'")
+        for _ in range(20):
+            while held:
+                held.pop(0).fulfill(status=200, content_type="application/json", body=json.dumps(tree))
+            self.page.wait_for_timeout(100)
+        self.assertNotIn("加载中", self.page.locator("#filter-folder-tree").inner_text())
+        self.page.wait_for_function("!folderTreeRenderQueue.length")
+        paths = self.page.locator("#filter-folder-tree .filter-folder-item").evaluate_all("rows => rows.map(r => r.dataset.path)")
+        self.assertIn("甲", paths)
+        self.assertEqual(self.page_errors, [])
+
     def test_repository_filter_tree_loads_nested_api_folders(self):
         self.page.unroute("https://voiceofml-search.hf.space/**")
 

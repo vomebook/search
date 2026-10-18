@@ -17,6 +17,15 @@ function pruneHashedAssets(cache, resetShell = false) {
   return cachePruning;
 }
 
+// Unversioned shells/data must revalidate with the server: a browser HTTP-cache
+// copy can predate the current deploy and reference hashes this worker prunes.
+function revalidatedRequest(request) {
+  const url = typeof request === "string" ? request : request.url;
+  if (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url) || typeof Request !== "function" ||
+      (typeof request !== "string" && request.cache && request.cache !== "default")) return request;
+  try { return new Request(request, { cache: "no-cache" }); } catch (_) { return request; }
+}
+
 const PRECACHE_URLS = [
   "/search/",
   "/search/static/style.css",
@@ -41,7 +50,7 @@ const READER_RUNTIME_PATHS = new Set(VoiceOfMLReaderResources.runtimePaths("/sea
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_URLS);
+      return cache.addAll(PRECACHE_URLS.map(revalidatedRequest));
     }).then(() => self.skipWaiting())
   );
 });
@@ -74,7 +83,7 @@ self.addEventListener("fetch", (event) => {
   // Pinned same-origin assets are identical across classic/module Origin headers.
   const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey, { ignoreVary: immutable }) : undefined).catch(() => undefined);
   let cacheWrite;
-  const networkPromise = Promise.all([cachePromise, immutable ? cachedPromise : null]).then(([cache, cached]) => cached || fetch(event.request).then(response => {
+  const networkPromise = Promise.all([cachePromise, immutable ? cachedPromise : null]).then(([cache, cached]) => cached || fetch(revalidatedRequest(event.request)).then(response => {
     if (cache && response.ok && response.status !== 206) {
       cacheWrite = cache.put(cacheKey, response.clone()).then(() => immutable ? pruneHashedAssets(cache) : undefined).catch(() => {});
     }
