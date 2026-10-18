@@ -134,29 +134,32 @@ class BrowserBehaviorTest(unittest.TestCase):
                 self.assertIn('data-action="read"', rendered["html"], extension)
                 self.assertIn("在线阅读", rendered["html"], extension)
 
-    def test_system_back_steps_out_of_reader_search_and_panel(self):
+    def test_system_back_exits_reader_in_one_step_with_panel_or_search_open(self):
+        # Like the Back button, one system back leaves the Reader. It must not
+        # re-push a history entry (Chromium would mark the search page skippable).
         self.page.route("https://voiceofml-search.hf.space/api/reader-content**",
                         lambda route: route.fulfill(content_type="text/plain", body="find-me in the book",
                                                   headers={"Access-Control-Allow-Origin": "*"}))
         self.load()
         url = "/search/static/reader.html?url=https%3A%2F%2Fhuggingface.co%2Fdatasets%2FVoiceOfML%2FTest%2Fresolve%2Fmain%2Fback.txt&ext=txt"
-        self.page.evaluate("url => navigateToReader(url)", url)
-        reader = self.page.frame_locator("iframe.reader-overlay")
-        reader.locator(".reader-text").wait_for()
-        reader.locator("#history").click()
-        reader.locator("#full-search-toggle").click()
-        reader.locator("#full-search-input").fill("find-me")
-        reader.locator(".full-search-result").wait_for()
-        self.page.wait_for_function("() => readerUiState === 'full-search'")
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => readerUiState === 'panel'")
-        self.assertEqual(self.page.locator("iframe.reader-overlay").count(), 1)
-        self.assertTrue(reader.locator("#full-search-view").is_hidden())
-        self.page.evaluate("history.back()")
-        self.page.wait_for_function("() => readerUiState === 'base'")
-        self.assertEqual(self.page.locator("iframe.reader-overlay").count(), 1)
-        self.page.evaluate("history.back()")
-        self.page.locator("iframe.reader-overlay").wait_for(state="detached")
+        for view in ("panel", "full-search"):
+            before = self.page.evaluate("() => location.href")
+            self.page.evaluate("url => navigateToReader(url)", url)
+            reader = self.page.frame_locator("iframe.reader-overlay")
+            reader.locator(".reader-text").wait_for()
+            reader.locator("#history").click()
+            if view == "full-search":
+                reader.locator("#full-search-toggle").click()
+                reader.locator("#full-search-input").fill("find-me")
+                reader.locator(".full-search-result").wait_for()
+            self.page.wait_for_function("view => readerUiState === view", arg=view)
+            self.page.evaluate("""() => { window.__pushes = 0; const push = history.pushState.bind(history);
+              history.pushState = (...args) => { window.__pushes++; return push(...args); }; }""")
+            self.page.evaluate("history.back()")
+            self.page.locator("iframe.reader-overlay").wait_for(state="detached")
+            self.assertEqual(self.page.evaluate("window.__pushes"), 0, view)
+            self.assertEqual(self.page.evaluate("() => location.href"), before, view)
+            self.page.evaluate("() => { delete history.pushState; }")
         self.assertEqual(self.page_errors, [])
 
     def test_global_filters_recover_from_unavailable_api_after_local_metadata_loads(self):
@@ -1216,7 +1219,12 @@ class BrowserBehaviorTest(unittest.TestCase):
           url: 'https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/second.txt',
           title: '第二本.txt', extension: 'txt', readerUrl, page: 1, pageCount: 0, lastReadAt: Date.now()
         })""", second_url)
-        reader_frame.locator("#history").click()
+        # The panel can open by itself after loading; open it idempotently
+        # instead of toggling it closed again.
+        reader_frame.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        if reader_frame.locator("#history").get_attribute("aria-expanded") != "true":
+            reader_frame.locator("#history").click()
+        reader_frame.wait_for_function("() => document.querySelector('#history-panel').classList.contains('is-open')")
         reader_frame.locator('.reader-panel-tabs button[data-panel="history"]').click()
         reader_frame.locator("#history-list .panel-item-main").filter(has_text="第二本.txt").click()
         self.page.wait_for_function("() => new URL(location.href).searchParams.get('title') === '第二本.txt'")

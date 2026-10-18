@@ -47,18 +47,17 @@ class ReaderTocLatencyTests(unittest.TestCase):
         self.page.wait_for_function("()=>document.querySelector('#history-panel').hidden")
         self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'), 'false')
 
-    def test_auto_open_toc_has_normal_close_escape_and_system_back(self):
+    def test_auto_open_toc_has_normal_close_and_escape(self):
+        # System back exits the whole Reader (host test), not just this panel.
         self.page.set_viewport_size({'width': 1200, 'height': 800})
         self.open_toc_book()
-        for action in ('close', 'escape', 'back'):
+        for action in ('close', 'escape'):
             if self.page.locator('#history').get_attribute('aria-expanded') != 'true':
                 self.page.locator('#history').click()
             if action == 'close':
                 self.page.locator('#history-close').click()
-            elif action == 'escape':
-                self.page.keyboard.press('Escape')
             else:
-                self.page.evaluate("window.postMessage({type:'voice-reader-system-back'}, location.origin)")
+                self.page.keyboard.press('Escape')
             self.page.wait_for_function("()=>document.querySelector('#history-panel').hidden")
             self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'), 'false')
         self.page.wait_for_timeout(100)
