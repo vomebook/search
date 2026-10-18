@@ -149,6 +149,10 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("<body>unchanged</body>", html)
         self.assertEqual(html.count("<title>"), 1)
 
+    def test_reader_shell_is_explicitly_non_indexable(self):
+        shell = (ROOT / "static/reader.html").read_text(encoding="utf-8")
+        self.assertIn('<meta name="robots" content="noindex, nofollow, noarchive"', shell)
+
 
 if __name__ == "__main__":
     unittest.main()
