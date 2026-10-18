@@ -243,6 +243,8 @@ if (!document.hidden && navigator.onLine) {
         <div class="filter-section-title">
           <span class="filter-title-leading"><span>路径过滤</span><button id="folder-filter-cancel" class="text-btn-sm" hidden>取消</button></span>
           <span class="filter-actions">
+            <button type="button" id="folder-collapse-all" class="text-btn-sm" aria-label="收起所有子目录" title="收起所有子目录" aria-controls="filter-folder-tree" disabled>收起</button>
+            <button type="button" id="folder-expand-all" class="text-btn-sm" aria-label="展开所有子目录" title="展开所有子目录" aria-controls="filter-folder-tree" disabled>展开</button>
             <button id="folder-select-all" class="text-btn-sm">全选</button>
             <button id="folder-deselect-all" class="text-btn-sm">反选</button>
           </span>

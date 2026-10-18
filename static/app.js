@@ -5441,12 +5441,12 @@ function renderCheckboxList(container, items, selected, onChange) {
 function updateFolderTreeControls(loading = false) {
   const enabled = !loading && STATE.mode === "repo" &&
     (STATE.folderTree || []).some(node => node.children && node.children.length);
-  DOM.folderCollapseAll.disabled = !enabled;
-  DOM.folderExpandAll.disabled = !enabled;
+  if (DOM.folderCollapseAll) DOM.folderCollapseAll.disabled = !enabled;
+  if (DOM.folderExpandAll) DOM.folderExpandAll.disabled = !enabled;
 }
 
 function setAllFoldersCollapsed(collapsed) {
-  if (DOM.folderCollapseAll.disabled) return;
+  if (!DOM.folderCollapseAll || DOM.folderCollapseAll.disabled) return;
   const stack = [...STATE.folderTree];
   while (stack.length) {
     const node = stack.pop();
@@ -6816,8 +6816,8 @@ async function init() {
     renderExtensionFilter(routeRenderId);
     scheduleFilterSearch();
   });
-  DOM.folderCollapseAll.addEventListener("click", () => setAllFoldersCollapsed(true));
-  DOM.folderExpandAll.addEventListener("click", () => setAllFoldersCollapsed(false));
+  if (DOM.folderCollapseAll) DOM.folderCollapseAll.addEventListener("click", () => setAllFoldersCollapsed(true));
+  if (DOM.folderExpandAll) DOM.folderExpandAll.addEventListener("click", () => setAllFoldersCollapsed(false));
   DOM.folderSelectAll.addEventListener("click", function() {
     if (!STATE.folderTree || STATE.folderTree.length === 0) return;
     var subtreeSet = new Set();
