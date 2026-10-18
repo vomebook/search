@@ -96,6 +96,7 @@
   ]);
   const readerFiles = Object.freeze([
     "reader-resources.js",
+    "reader/pdf/pdf-worker-wrapper.mjs",
     "reader/pdf/reader-engine-preload.js",
     "reader/search/workers/reader-chapter-search-worker.mjs",
     "reader/search/reader-chapter-search.mjs",
@@ -117,7 +118,6 @@
     "reader/search/reader-book-text.js",
     "reader/search/workers/reader-pdf-book-search-worker.mjs",
     "reader/search/reader-pdf-book-search.mjs",
-    "reader/pdf/pdf-worker-wrapper.mjs",
     "reader/pdf/reader-pdf-network.mjs",
     "reader/pdf/reader-pdf-text-store.mjs",
     "reader.css",
@@ -139,11 +139,13 @@
   const runtimePaths = (base) => readerFiles.map((file) => base + file);
   const shellAssets = (base) =>
     ["reader.html", ...readerFiles.filter((file) => !lazyFiles.has(file))].map((file) => base + file);
-  function engineAssets(extension, base, foliateSuffix = "") {
+  // Extracted unchanged from the checksum-pinned PDF.js archive above.
+  const pdfSupportAssets = (base) => [base + "vendor/wasm/qcms_bg.wasm"];
+  function engineAssets(extension, base, foliateSuffix = "", workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
     if (extension === "pdf")
       return [
         vendorUrl("pdf", base),
-        base + "reader/pdf/pdf-worker-wrapper.mjs",
+        workerWrapper,
         vendorUrl("pdfWorker", base)
       ];
     if (extension === "epub")
@@ -186,6 +188,7 @@
     vendorUrl,
     runtimePaths,
     shellAssets,
+    pdfSupportAssets,
     engineAssets,
     buildFiles,
     bundleArguments
