@@ -1919,31 +1919,31 @@ function getFileIconType(ext) {
 
 const highlightRegexCache = new Map();
 
-function getHighlightRegexes(query) {
-  const cached = highlightRegexCache.get(query);
-  if (cached) return cached;
-  const regexes = query.split(/\s+/).filter((t) => t.length > 0).map(function(tok) {
-    const escapedTok = escapeHTML(tok);
-    return new RegExp(
-      `(${escapedTok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
-      "gi"
-    );
-  });
+// One alternation over the raw text (longest term first), so a later term can
+// never match inside an earlier <mark> tag or an HTML entity.
+function getHighlightRegex(query) {
+  if (highlightRegexCache.has(query)) return highlightRegexCache.get(query);
+  const terms = [...new Set(query.split(/\s+/).filter((t) => t.length > 0))]
+    .sort((a, b) => b.length - a.length)
+    .map((tok) => tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = terms.length ? new RegExp(terms.join("|"), "gi") : null;
   if (highlightRegexCache.size >= 20) highlightRegexCache.delete(highlightRegexCache.keys().next().value);
-  highlightRegexCache.set(query, regexes);
-  return regexes;
+  highlightRegexCache.set(query, regex);
+  return regex;
 }
 
 function highlightText(text, query) {
   if (!query || !text) return escapeHTML(text);
-  const escaped = escapeHTML(text);
-  const regexes = getHighlightRegexes(query);
-  if (regexes.length === 0) return escaped;
-  let result = escaped;
-  for (const regex of regexes) {
-    result = result.replace(regex, "<mark>$1</mark>");
+  const regex = getHighlightRegex(query);
+  if (!regex) return escapeHTML(text);
+  const source = String(text);
+  let result = "", last = 0;
+  for (const match of source.matchAll(regex)) {
+    if (!match[0]) continue;
+    result += escapeHTML(source.slice(last, match.index)) + "<mark>" + escapeHTML(match[0]) + "</mark>";
+    last = match.index + match[0].length;
   }
-  return result;
+  return result + escapeHTML(source.slice(last));
 }
 
 let routeInitialized = false;
@@ -2152,6 +2152,7 @@ const ROUTER = {
         previousPath !== STATE.browserPath && previousSearchKey === getSearchViewKey()) {
       const routeId = ++routeRenderId;
       renderBrowser(STATE.browserPath || "", routeId);
+      retainFilterRenderingForRoute(routeId);
       routeInitialized = true;
       persistSearchSession();
       return;
@@ -2252,6 +2253,10 @@ let filterSearchTimer = null;
 let sizeFilterTimer = null;
 const FILTER_SEARCH_DEBOUNCE_MS = 200;
 let routeRenderId = 0;
+// A path-only route change bumps routeRenderId for the browser, but must not
+// orphan an unfinished filter render or its batched folder-tree tasks.
+let filterRenderToken = 0;
+let filterRenderDone = 0;
 let apiAvailable = true;
 let apiFailureCount = 0;
 let apiProbeTimer = null;
@@ -5135,6 +5140,7 @@ async function renderBrowser(path, routeId) {
 }
 
 async function renderFilters(routeId) {
+  const token = ++filterRenderToken;
   var extensionPromise = renderExtensionFilter(routeId);
   if (STATE.mode === "global") {
     DOM.filterRepoSection.style.display = "";
@@ -5193,6 +5199,13 @@ async function renderFilters(routeId) {
     updateFolderTreeControls(true);
   }
   await extensionPromise;
+  if (routeId && routeId !== routeRenderId) return;
+  if (token === filterRenderToken) filterRenderDone = token;
+}
+
+function retainFilterRenderingForRoute(routeId) {
+  for (const task of folderTreeRenderQueue) task.route = routeId;
+  if (filterRenderDone !== filterRenderToken) renderFilters(routeId);
 }
 
 async function renderRepoFilter(routeId) {
