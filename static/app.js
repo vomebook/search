@@ -1856,8 +1856,7 @@ function cacheDOM() {
   DOM.closeFiltersBtn = $("#close-filters-btn");
   DOM.folderSelectAll = $("#folder-select-all");
   DOM.folderDeselectAll = $("#folder-deselect-all");
-  DOM.folderCollapseAll = $("#folder-collapse-all");
-  DOM.folderExpandAll = $("#folder-expand-all");
+  DOM.folderToggleAll = $("#folder-toggle-all");
   DOM.extSelectAll = $("#ext-select-all");
   DOM.extDeselectAll = $("#ext-deselect-all");
   DOM.searchFoldersToggle = $("#search-folders-toggle");
@@ -5441,12 +5440,20 @@ function renderCheckboxList(container, items, selected, onChange) {
 function updateFolderTreeControls(loading = false) {
   const enabled = !loading && STATE.mode === "repo" &&
     (STATE.folderTree || []).some(node => node.children && node.children.length);
-  if (DOM.folderCollapseAll) DOM.folderCollapseAll.disabled = !enabled;
-  if (DOM.folderExpandAll) DOM.folderExpandAll.disabled = !enabled;
+  const button = DOM.folderToggleAll;
+  if (!button) return;
+  // A closed root hides even descendants whose individual open state is kept.
+  const expanded = Boolean(enabled && STATE.folderTree.some(node =>
+    node.children && node.children.length && !STATE.folderTreeCollapsed[node.path]));
+  button.disabled = !enabled;
+  button.textContent = expanded ? "收起" : "展开";
+  button.setAttribute("aria-expanded", String(expanded));
+  button.setAttribute("aria-label", expanded ? "收起所有子目录" : "展开所有子目录");
+  button.title = button.getAttribute("aria-label");
 }
 
 function setAllFoldersCollapsed(collapsed) {
-  if (!DOM.folderCollapseAll || DOM.folderCollapseAll.disabled) return;
+  if (!DOM.folderToggleAll || DOM.folderToggleAll.disabled) return;
   const stack = [...STATE.folderTree];
   while (stack.length) {
     const node = stack.pop();
@@ -5455,7 +5462,7 @@ function setAllFoldersCollapsed(collapsed) {
     for (const child of node.children) stack.push(child);
   }
   if (DOM.filterFolderTree.contains(document.activeElement)) {
-    (collapsed ? DOM.folderCollapseAll : DOM.folderExpandAll).focus({ preventScroll: true });
+    DOM.folderToggleAll.focus({ preventScroll: true });
   }
   // Use the owned, time-sliced tree renderer. Superseding bulk actions and
   // route changes cancel old batches; selections/search state stay untouched.
@@ -5507,6 +5514,7 @@ function setupFolderTreeEvents() {
       const children = row.nextElementSibling;
       const expanding = !!STATE.folderTreeCollapsed[node.path];
       STATE.folderTreeCollapsed[node.path] = !expanding;
+      updateFolderTreeControls();
       if (!expanding) cancelFolderTreeRendering(children);
       if (expanding && !children._childrenRendered) {
         children.style.display = "block";
@@ -6816,8 +6824,8 @@ async function init() {
     renderExtensionFilter(routeRenderId);
     scheduleFilterSearch();
   });
-  if (DOM.folderCollapseAll) DOM.folderCollapseAll.addEventListener("click", () => setAllFoldersCollapsed(true));
-  if (DOM.folderExpandAll) DOM.folderExpandAll.addEventListener("click", () => setAllFoldersCollapsed(false));
+  if (DOM.folderToggleAll) DOM.folderToggleAll.addEventListener("click", () =>
+    setAllFoldersCollapsed(DOM.folderToggleAll.getAttribute("aria-expanded") === "true"));
   DOM.folderSelectAll.addEventListener("click", function() {
     if (!STATE.folderTree || STATE.folderTree.length === 0) return;
     var subtreeSet = new Set();

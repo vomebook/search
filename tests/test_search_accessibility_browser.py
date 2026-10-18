@@ -88,18 +88,29 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.page.wait_for_function('!folderTreeRenderQueue.length')
         before = self.page.evaluate('''()=>({selfs:STATE.filterFolderSelfs.slice(),subtrees:STATE.filterFolderSubtrees.slice(),
           filters:STATE.filterFolders.slice(),total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
-        collapse = self.page.get_by_role('button', name='收起所有子目录', exact=True)
-        expand = self.page.get_by_role('button', name='展开所有子目录', exact=True)
-        collapse.press('Enter')
+        toggle = self.page.locator('#folder-toggle-all')
+        self.assertEqual(toggle.count(), 1)
+        self.assertEqual(self.page.locator('#folder-collapse-all, #folder-expand-all').count(), 0)
+        self.assertEqual(toggle.inner_text(), '收起')
+        toggle.press('Enter')
+        self.assertEqual(toggle.inner_text(), '展开')
+        self.assertEqual(toggle.get_attribute('aria-label'), '展开所有子目录')
+        self.assertEqual(toggle.get_attribute('aria-expanded'), 'false')
         self.page.wait_for_function('!folderTreeRenderQueue.length')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 1)
         self.assertTrue(self.page.evaluate('Object.values(STATE.folderTreeCollapsed).every(Boolean)'))
         self.page.locator('#filter-folder-tree .tree-toggle').first.click()
+        self.assertEqual(toggle.inner_text(), '收起')
         self.page.wait_for_function('!folderTreeRenderQueue.length')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 3)
         self.assertTrue(self.page.locator('[data-path="alpha"] input').evaluate('n=>n.indeterminate'))
         self.assertTrue(self.page.locator('[data-path="beta"] input').is_checked())
-        expand.press('Space')
+        toggle.press('Space')
+        self.assertEqual(toggle.inner_text(), '展开')
+        toggle.press('Space')
+        self.assertEqual(toggle.inner_text(), '收起')
+        self.assertEqual(toggle.get_attribute('aria-label'), '收起所有子目录')
+        self.assertEqual(toggle.get_attribute('aria-expanded'), 'true')
         self.page.wait_for_function('!folderTreeRenderQueue.length')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 5)
         self.assertTrue(self.page.locator('[data-path="alpha/deep/hit"] input').is_checked())
@@ -107,7 +118,12 @@ class SearchAccessibilityTests(unittest.TestCase):
         after = self.page.evaluate('''()=>({selfs:STATE.filterFolderSelfs.slice(),subtrees:STATE.filterFolderSubtrees.slice(),
           filters:STATE.filterFolders.slice(),total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
         self.assertEqual(after, before)
-        self.assertTrue(expand.evaluate('n=>document.activeElement===n'))
+        self.assertTrue(toggle.evaluate('n=>document.activeElement===n'))
+        self.page.locator('#filter-folder-tree .tree-toggle').first.click()
+        self.assertEqual(toggle.inner_text(), '展开')
+        toggle.press('Enter')
+        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 5)
 
         # Interrupt an unfinished large expansion, then replace the route/tree.
         self.page.evaluate('''()=>{
@@ -120,8 +136,7 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.page.wait_for_function('!folderTreeRenderQueue.length')
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 1)
         self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').get_attribute('data-path'), 'new')
-        self.assertTrue(collapse.is_disabled())
-        self.assertTrue(expand.is_disabled())
+        self.assertTrue(toggle.is_disabled())
 
     def test_landmarks_names_and_skip_preserve_result_position(self):
         for role, name in [('searchbox', '搜索文件'), ('combobox', '结果排序:')]:
