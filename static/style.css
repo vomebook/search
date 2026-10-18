@@ -1164,6 +1164,7 @@ body:not(.mobile) .result-meta { grid-column: 3 / 5; grid-row: 3; margin-top: 0;
 .current-result-position { width: calc(var(--position-width, 1ch) + 6px); box-sizing: border-box; margin: 0; padding: 2px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; text-align: center; font: inherit; font-variant-numeric: tabular-nums; }
 .current-result-position:focus { outline: 1px solid var(--primary); background: var(--surface); color: var(--on-surface); }
 .current-result-position[hidden] { display: none; }
+.current-result-position::-moz-focus-inner { border: 0; padding: 0; }
 
 .mobile-selected-count {
   grid-column: 1;
