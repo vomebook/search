@@ -48,12 +48,16 @@ export function createReaderHtmlFormat(readerContext) {
     for (const element of doc.querySelectorAll("*"))
       for (const attribute of [...element.attributes]) {
         const name = attribute.name.toLowerCase(),
-          value = String(attribute.value || "").trim();
+          value = String(attribute.value || "").trim(),
+          // WHATWG URL parsing ignores ASCII whitespace/control characters
+          // around and inside a scheme. Check a normalized copy, but retain
+          // the original value for safe relative URLs.
+          schemeValue = value.replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
+        const urlAttribute = ["href", "xlink:href", "src", "poster", "data"].includes(name);
         if (
           name.startsWith("on") ||
           name === "srcdoc" ||
-          ((name === "href" || name === "xlink:href" || name === "src") &&
-            /^javascript:/i.test(value))
+          (urlAttribute && /^(?:javascript|vbscript):/i.test(schemeValue))
         )
           element.removeAttribute(attribute.name);
       }
