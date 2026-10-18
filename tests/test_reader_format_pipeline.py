@@ -24,7 +24,7 @@ class ReaderFormatPipelineTests(unittest.TestCase):
         })();''')
         engines={
             'marked':'window.marked={parse:t=>"<h1>Heading</h1><p>"+t+"</p>"};',
-            'purify':'window.DOMPurify={sanitize:(t,o)=>{if(!o?.RETURN_DOM_FRAGMENT)return t;const n=document.createElement("template");n.innerHTML=t;return n.content;}};',
+            'purify':'window.DOMPurify={addHook(){},removeHook(){},sanitize:(t,o)=>{if(!o?.RETURN_DOM_FRAGMENT)return t;const n=document.createElement("template");n.innerHTML=t;return n.content;}};',
         }
         documents=[('md',b'Markdown body','text/plain'),('html',b'<h1>Heading</h1><p>HTML body</p>','text/html'),
                    ('epub',epub_with_navigation(),'application/epub+zip')]

@@ -108,7 +108,7 @@ window.VoiceOfMLReaderStore = Object.freeze({
 });
 """
 MARKED_SCRIPT = "window.marked = { parse: (text) => '<p>' + text + '</p>' };"
-PURIFY_SCRIPT = "window.DOMPurify = { sanitize: (html, options) => { if (!options?.RETURN_DOM_FRAGMENT) return html; const template = document.createElement('template'); template.innerHTML = html; return template.content; } };"
+PURIFY_SCRIPT = "window.DOMPurify = { addHook() {}, removeHook() {}, sanitize: (html, options) => { if (!options?.RETURN_DOM_FRAGMENT) return html; const template = document.createElement('template'); template.innerHTML = html; return template.content; } };"
 EPUB_SCRIPT = """
 window.ePub = () => ({ renderTo: (frame) => ({
   on() {}, prev() {}, next() {}, themes: { register() {}, select() {}, fontSize(value) { window.__epubFontSize = value; } },
