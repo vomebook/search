@@ -93,6 +93,30 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertIsNotNone(result['expected'])
         self.assertEqual(result['captured'], result['expected'])
 
+    def test_explicit_close_ignores_late_panel_state_before_history_pop(self):
+        self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        state = self.page.evaluate('''() => {
+          const frame=readerOverlay, back=history.back;
+          history.back=()=>{};
+          try {
+            handleReaderMessage({origin:location.origin,source:frame.contentWindow,data:{type:'voice-reader-close'}});
+            handleReaderMessage({origin:location.origin,source:frame.contentWindow,
+              data:{type:'voice-reader-ui-state',state:'panel'}});
+            return readerUiState;
+          } finally { history.back=back; }
+        }''')
+        self.assertEqual(state, 'base')
+        self.page.evaluate('history.back()')
+        self.page.locator('.reader-overlay').wait_for(state='detached')
+        self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
+        state = self.page.evaluate('''()=>{
+          handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
+            data:{type:'voice-reader-ui-state',state:'panel'}});
+          return readerUiState;
+        }''')
+        self.assertEqual(state, 'panel', 'a new Reader must still publish its real panel state')
+
     def test_close_disposes_child_synchronously_before_detachment(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
