@@ -1930,7 +1930,7 @@ function updateSidebarExpandButton() {
 function updateSidebarHeader() {
   if (!DOM.sidebarTitle) return;
   const global = STATE.mode === "global";
-  DOM.sidebarTitle.textContent = global ? "仓库列表" : (VoiceOfMLReader.repositoryLabel(STATE.repo) || "仓库");
+  DOM.sidebarTitle.textContent = global ? "仓库列表" : (STATE.repo || "仓库");
   if (DOM.sidebarBackBtn) {
     if (global && document.activeElement === DOM.sidebarBackBtn) DOM.hamburgerBtn.focus({ preventScroll: true });
     DOM.sidebarBackBtn.hidden = global;
@@ -2143,8 +2143,8 @@ const ROUTER = {
       DOM.searchInput.placeholder = "搜索 VoiceOfML 数据仓库...";
       DOM.sidebarTitle.textContent = "仓库列表";
     } else {
-      DOM.headerTitle.textContent = VoiceOfMLReader.repositoryLabel(STATE.repo);
-      DOM.searchInput.placeholder = "搜索 " + VoiceOfMLReader.repositoryLabel(STATE.repo) + "...";
+      DOM.headerTitle.textContent = STATE.repo;
+      DOM.searchInput.placeholder = "搜索 " + STATE.repo + "...";
     }
     updateSidebarHeader();
   },
@@ -4182,7 +4182,6 @@ function buildResultHTML(rec, idx) {
   const iconType = getFileIconType(rec.Extension);
   const titleHTML = highlightText(rec.File, STATE.query);
   const repoShort = escapeHTML((rec.Repo || "").split("/").pop());
-  const repoLabel = escapeHTML(VoiceOfMLReader.repositoryLabel(rec.Repo));
   const sizeStr = formatSize(rec.Size);
   const recordLink = getRecordLink(rec);
   const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
@@ -4203,9 +4202,9 @@ function buildResultHTML(rec, idx) {
       '<div class="result-title">' + titleHTML +
         (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
       '</div>' +
-      '<div class="result-path"><span role="button" tabindex="0" class="path-folder" aria-label="筛选仓库路径：' + repoLabel + '" data-folder="" data-repo="' + repoShort + '">' + repoLabel + repoSeparator + '</span>' + breadcrumb + '</div>' +
+      '<div class="result-path"><span role="button" tabindex="0" class="path-folder" aria-label="筛选仓库路径：' + repoShort + '" data-folder="" data-repo="' + repoShort + '">' + repoShort + repoSeparator + '</span>' + breadcrumb + '</div>' +
       '<div class="result-meta">' +
-        (STATE.mode === "global" ? '<button type="button" class="result-repo-tag" aria-label="打开仓库：' + repoLabel + '" data-repo="' + repoShort + '">' + repoLabel + '</button>' : '') +
+        (STATE.mode === "global" ? '<button type="button" class="result-repo-tag" aria-label="打开仓库：' + repoShort + '" data-repo="' + repoShort + '">' + repoShort + '</button>' : '') +
         (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
       '</div>' +
     '</div>' +
@@ -4881,7 +4880,7 @@ function renderRepoListItems(repos) {
   for (var i = 0; i < repos.length; i++) {
     var repo = repos[i];
     var short = repo.name.split("/").pop();
-    var label = escapeHTML(VoiceOfMLReader.repositoryLabel(repo.name));
+    var label = escapeHTML(short);
     html += '<button type="button" class="repo-list-item" aria-label="打开仓库：' + label + '" data-repo="' + escapeHTML(short) + '">';
     html += '<svg class="repo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
     html += '<span class="repo-name">' + label + '</span>';
@@ -5182,7 +5181,7 @@ async function renderRepoFilter(routeId) {
   for (var i = 0; i < repos.length; i++) {
     items.push({
       key: repos[i].name,
-      label: VoiceOfMLReader.repositoryLabel(repos[i].name),
+      label: repos[i].name.split("/").pop(),
       count: repos[i].count,
     });
   }
