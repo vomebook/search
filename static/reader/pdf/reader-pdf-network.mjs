@@ -1,3 +1,67 @@
+// A search-tab-owned, bounded memory cache. Every opening still fetches its
+// first range to establish a fresh strong ETag/total before any reuse. No disk,
+// Service Worker body cache or change to the PDF HTTP no-store policy is involved.
+export function createPdfRangeCache({maxBytes = 8 * 1024 * 1024, maxEntries = 64,
+  maxAgeMs = 600000, now = () => Date.now()} = {}) {
+  const entries = new Map();
+  let bytes = 0;
+  const remove = key => { const row = entries.get(key); if (row) { bytes -= row.bytes.byteLength; entries.delete(key); } };
+  const valid = (url, version) => typeof url === "string" && url.length <= 4096 &&
+    /^"[^"\r\n]+"$/.test(version?.etag || "") && version.etag.length <= 256 &&
+    Number.isSafeInteger(version.total) && version.total > 0;
+  const prune = () => {
+    for (const [key, row] of entries) if (now() - row.at >= maxAgeMs) remove(key);
+  };
+  return Object.freeze({
+    get(url, begin, end, version) {
+      if (!valid(url, version) || !Number.isSafeInteger(begin) || !Number.isSafeInteger(end) ||
+          begin < 0 || end <= begin || end > version.total) return null;
+      prune();
+      for (const [key, row] of entries) {
+        if (row.url !== url || row.etag !== version.etag || row.total !== version.total ||
+            begin < row.begin || end > row.end) continue;
+        entries.delete(key); entries.set(key, row);
+        // PDF.js transfers ArrayBuffers. Never let it detach our retained bytes.
+        return row.bytes.slice(begin - row.begin, end - row.begin);
+      }
+      return null;
+    },
+    put(url, begin, value, version) {
+      if (!valid(url, version) || value.byteLength > 2 * 1024 * 1024 || value.byteLength > maxBytes) return;
+      prune();
+      const end = begin + value.byteLength;
+      if (!Number.isSafeInteger(begin) || begin < 0 || end > version.total) return;
+      for (const [key, row] of entries) {
+        if (row.url === url && (row.etag !== version.etag || row.total !== version.total ||
+            (row.begin >= begin && row.end <= end))) remove(key);
+      }
+      const key = JSON.stringify([url, version.etag, version.total, begin, end]);
+      remove(key);
+      const retained = value.slice();
+      entries.set(key, {url, begin, end, etag:version.etag, total:version.total, bytes:retained, at:now()});
+      bytes += retained.byteLength;
+      while (bytes > maxBytes || entries.size > maxEntries) remove(entries.keys().next().value);
+    },
+    get byteLength() { return bytes; },
+    get size() { return entries.size; }
+  });
+}
+
+function sharedPdfRangeCache() {
+  if (typeof window === "undefined") return null;
+  let owner = window;
+  try {
+    if (parent !== window && parent.location.origin === location.origin &&
+        [...parent.document.querySelectorAll("iframe.reader-overlay")].some(frame => frame.contentWindow === window)) owner = parent;
+  } catch (_) {}
+  const key = Symbol.for("voice-reader-pdf-ranges-v1");
+  try {
+    if (!Object.prototype.hasOwnProperty.call(owner, key))
+      Object.defineProperty(owner, key, {value:createPdfRangeCache()});
+    return owner[key];
+  } catch (_) { return null; }
+}
+
 function abortable(promise, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);
@@ -7,8 +71,13 @@ function abortable(promise, signal) {
   });
 }
 
-async function readPdfRange(options, begin, end, {signal, readBytes, limit}, expected = null, onHeaders = null) {
+async function readPdfRange(options, begin, end, {signal, readBytes, limit, rangeCache}, expected = null, onHeaders = null) {
   signal.throwIfAborted();
+  const key = new URL(options.url, globalThis.location?.href).href;
+  let cached = null;
+  try { if (expected) cached = rangeCache?.get(key, begin, Math.min(end, expected.total), expected); }
+  catch (_) { /* Cache allocation failure must retain normal network reading. */ }
+  if (cached) return {bytes:cached, total:expected.total, etag:expected.etag};
   const response = await fetch(options.url, {
     headers: {Range: `bytes=${begin}-${end-1}`}, signal, credentials:"same-origin"
   });
@@ -35,6 +104,9 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit}, exp
     onHeaders?.({total, etag});
     const bytes = await readBytes(response, last-start+1);
     if (bytes.byteLength !== last-start+1) throw invalid();
+    signal.throwIfAborted();
+    try { rangeCache?.put(key, start, bytes, {total, etag}); }
+    catch (_) { /* Retaining an optional copy must never fail the document. */ }
     return {bytes, total, etag, complete:bytes.byteLength === total};
   } catch (error) {
     await response.body?.cancel().catch(() => {});
@@ -42,8 +114,30 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit}, exp
   }
 }
 
-// The first existing demand can overlap engine preparation, never a larger read.
+function firstPageSectionEnd(bytes, total, chunkSize) {
+  // A bounded scheduling hint, not a PDF parser. Only a direct, internally
+  // consistent first-object linearization dictionary can justify first-page
+  // lookahead. PDF.js remains the authority for all content and rendering.
+  // Keep this section disjoint from the already scheduled two-chunk tail.
+  if (total <= chunkSize * 6) return 0;
+  const header = new TextDecoder("latin1").decode(bytes.subarray(0, 4096));
+  const object = /\b\d+\s+\d+\s+obj\s*<<([^]*?)>>/.exec(header);
+  if (!object || object.index > 1024 || !/\/Linearized\s+1(?:\.0+)?(?=[\s/>]|$)/.test(object[1])) return 0;
+  const integer = name => {
+    const match = new RegExp("/" + name + "\\s+(\\d+)(?=[\\s/>]|$)").exec(object[1]);
+    if (!match || /^\s+\d+\s+R\b/.test(object[1].slice(match.index + match[0].length))) return NaN;
+    return Number(match[1]);
+  };
+  const length = integer("L"), end = integer("E"), firstPage = /\/P\s/.test(object[1]) ? integer("P") : 0;
+  if (length !== total || firstPage !== 0 || !Number.isSafeInteger(end) || end <= chunkSize ||
+      end >= total || end > chunkSize * 4) return 0;
+  return Math.min(total, Math.ceil(end / chunkSize) * chunkSize);
+}
+
+// The first demand overlaps engine preparation. After its complete validation,
+// a qualified page-one file may overlap at most three more existing chunks.
 export async function preparePdfInitialRange(options, hooks) {
+  hooks = {...hooks, rangeCache:hooks.rangeCache === undefined ? sharedPdfRangeCache() : hooks.rangeCache};
   const owner = new AbortController();
   const signal = AbortSignal.any([hooks.signal, owner.signal]);
   let tail = null;
@@ -56,14 +150,23 @@ export async function preparePdfInitialRange(options, hooks) {
       tail = {begin, promise:readPdfRange(options, begin, metadata.total, {...hooks, signal}, metadata).catch(() => null)};
     });
     if (!first) { owner.abort(); return first; }
-    return {...first, tail, cancelInitial:reason => owner.abort(reason)};
+    const openingRanges = [];
+    const end = !first.complete && hooks.canPrefetchFirstPage?.()
+      ? firstPageSectionEnd(first.bytes, first.total, options.rangeChunkSize) : 0;
+    for (let begin = options.rangeChunkSize; begin < end; begin += options.rangeChunkSize * 2) {
+      const last = Math.min(end, begin + options.rangeChunkSize * 2);
+      openingRanges.push({begin, end:last,
+        promise:readPdfRange(options, begin, last, {...hooks, signal}, first).catch(() => null)});
+    }
+    return {...first, tail, openingRanges, cancelInitial:reason => owner.abort(reason)};
   } catch (error) {
     owner.abort(error);
     throw error;
   }
 }
 
-export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError, initial = null, canPrefetchOpening = () => false}) {
+export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError, initial = null,
+  rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
   const chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
@@ -81,9 +184,10 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   const cancelled = () => stop(signal.reason);
   signal.addEventListener("abort", cancelled, {once:true});
   const read = (begin, end, expected = null) => readPdfRange(options, begin, end,
-    {signal:active, readBytes, limit}, expected);
+    {signal:active, readBytes, limit, rangeCache}, expected);
   try {
-    const first = prepared = await (initial || preparePdfInitialRange(options, {signal:active, readBytes, limit}));
+    const first = prepared = await (initial || preparePdfInitialRange(options,
+      {signal:active, readBytes, limit, rangeCache, canPrefetchFirstPage}));
     active.throwIfAborted();
     if (!first) {
       stop();
@@ -114,11 +218,13 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     const openingStreamContinues = length && !/\sR$/.test(length[0]) && Number.isSafeInteger(streamEnd) &&
       streamEnd > first.bytes.byteLength && streamEnd <= first.total;
     // One chunk only; deep restorations and non-v3/native URLs do not opt in.
-    const prefix = first.total > chunkSize * 4 && openingStreamContinues && canPrefetchOpening()
+    const openingRanges = first.openingRanges || [];
+    const prefix = first.total > chunkSize * 4 && openingStreamContinues && canPrefetchOpening() &&
+      !openingRanges.some(range => range.begin <= chunkSize && range.end >= chunkSize * 2)
       ? {begin:chunkSize, end:chunkSize * 2,
         promise:read(chunkSize, chunkSize * 2, first).catch(() => null)}
       : null;
-    const fetchRange = (begin, end) => prefix && begin >= prefix.begin && end <= prefix.end
+    const fetchOrdinaryRange = (begin, end) => prefix && begin >= prefix.begin && end <= prefix.end
       ? prefix.promise.then(result => result
         ? {bytes:result.bytes.slice(begin - prefix.begin, end - prefix.begin)}
         : read(begin, end, first))
@@ -127,6 +233,27 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         ? {bytes:result.bytes.slice(begin - tail.begin, end - tail.begin)}
         : read(begin, end, first))
       : read(begin, end, first);
+    const fetchRange = (begin, end) => {
+      const parts = [];
+      let offset = begin;
+      for (const range of openingRanges) {
+        if (offset < range.begin || offset >= range.end) continue;
+        const last = Math.min(end, range.end);
+        const from = offset;
+        parts.push({range, from, last});
+        offset = last;
+        if (offset === end) break;
+      }
+      if (offset !== end) return fetchOrdinaryRange(begin, end);
+      return Promise.all(parts.map(({range, from, last}) => range.promise.then(result => result
+        ? result.bytes.slice(from - range.begin, last - range.begin)
+        : read(from, last, first).then(row => row.bytes)))).then(values => {
+        const bytes = new Uint8Array(end - begin);
+        let at = 0;
+        for (const value of values) { bytes.set(value, at); at += value.byteLength; }
+        return {bytes};
+      });
+    };
     transport.requestDataRange = (begin, end) => {
       fetchRange(begin,end).then(result => {
         if (!stopped) transport.onDataRange(begin,result.bytes);

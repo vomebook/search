@@ -27,6 +27,9 @@ export function createReaderPdfEngine(readerContext) {
         limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
         canPrefetchOpening: () => !!readerContext.pdfV3Manifest && readerContext.readerRestorationLoaded &&
           (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) <= 1),
+        canPrefetchFirstPage: () => readerContext.capability?.mode === "pdf" &&
+          readerContext.readerRestorationLoaded && !readerContext.restorationFailed &&
+          (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) === 1),
         onError() {
           if (!documentReady || readerContext.readerAbortController.signal.aborted || readerContext.capability.mode !== "pdf") return;
           // Page retries cannot revive a destroyed PDF.js document. Capture an
@@ -177,21 +180,32 @@ export function createReaderPdfEngine(readerContext) {
     readerContext.pdfFetchPolicy.add([target, proxyUrl]);
     const owner = new AbortController();
     const untrack = readerContext.trackReaderResource(() => owner.abort(readerContext.readerAbortError()));
+    let pageOneKnown = false;
+    const navigation = readerContext.readerRuntime?.currentGeneration("navigation");
+    readerContext.readerRestorationPromise?.then(entry => {
+      pageOneKnown = readerContext.capability?.mode === "pdf" && !readerContext.restorationFailed &&
+        (!entry || Number(entry.page) === 1);
+    }).catch(() => {});
     // This is the first demand, not extra speculation or a larger/full download.
     // Keep it owned while engine preparation is pending and consume it only once.
     let initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
       signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
-      readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes
+      readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
+      canPrefetchFirstPage: () => pageOneKnown && !owner.signal.aborted &&
+        navigation === readerContext.readerRuntime?.currentGeneration("navigation")
     });
     initial.catch(() => {});
+    let initialHandedOff = false, rangeTransportAvailable = false;
     const takeInitial = url => {
       if (url !== proxyUrl) return null;
       const pending = initial;
       initial = null;
+      if (pending && rangeTransportAvailable) initialHandedOff = true;
       return pending;
     };
     return readerContext.measurePdf(readerContext.preloadPdfEngine(), "engine").then((pdfjs) => {
       readerContext.assertReaderActive();
+      rangeTransportAvailable = typeof pdfjs.PDFDataRangeTransport === "function";
       pdfjs.GlobalWorkerOptions.workerSrc = readerContext.PDFJS_WORKER_URL;
       const options = (url) => ({
         url,
@@ -211,7 +225,10 @@ export function createReaderPdfEngine(readerContext) {
     }).finally(() => {
       initial = null;
       untrack();
-      owner.abort(readerContext.readerAbortError());
+      // A validated first-page section can still be serving getPage/render
+      // after the document promise resolves. The transport now owns those
+      // reads through cancelInitial; only an unhanded bootstrap ends here.
+      if (!initialHandedOff) owner.abort(readerContext.readerAbortError());
     });
   }
 
