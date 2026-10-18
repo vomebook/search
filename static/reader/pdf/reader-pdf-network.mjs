@@ -1,5 +1,5 @@
 // A search-tab-owned, bounded memory cache. Every opening still fetches its
-// first range to establish a fresh strong ETag/total before any reuse. No disk,
+// fresh range to establish a strong ETag/total before any reuse. No disk,
 // Service Worker body cache or change to the PDF HTTP no-store policy is involved.
 export function createPdfRangeCache({maxBytes = 8 * 1024 * 1024, maxEntries = 64,
   maxAgeMs = 600000, now = () => Date.now()} = {}) {
@@ -13,6 +13,15 @@ export function createPdfRangeCache({maxBytes = 8 * 1024 * 1024, maxEntries = 64
     for (const [key, row] of entries) if (now() - row.at >= maxAgeMs) remove(key);
   };
   return Object.freeze({
+    version(url, begin, end) {
+      if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin) return null;
+      prune();
+      for (const row of entries.values()) {
+        if (row.url === url && begin >= row.begin && Math.min(end, row.total) <= row.end)
+          return {etag:row.etag, total:row.total};
+      }
+      return null;
+    },
     get(url, begin, end, version) {
       if (!valid(url, version) || !Number.isSafeInteger(begin) || !Number.isSafeInteger(end) ||
           begin < 0 || end <= begin || end > version.total) return null;
@@ -71,7 +80,7 @@ function abortable(promise, signal) {
   });
 }
 
-async function readPdfRange(options, begin, end, {signal, readBytes, limit, rangeCache}, expected = null, onHeaders = null) {
+async function readPdfRange(options, begin, end, {signal, readBytes, limit, rangeCache}, expected = null, onHeaders = null, partialOnly = false) {
   signal.throwIfAborted();
   const key = new URL(options.url, globalThis.location?.href).href;
   let cached = null;
@@ -85,6 +94,7 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit, rang
   try {
     if (!response.ok) throw Object.assign(new Error(`server response (${response.status})`), {status:response.status});
     if (!expected && response.status === 200) {
+      if (partialOnly) { await response.body?.cancel(); return null; }
       const bytes = await readBytes(response, limit);
       return {bytes, complete:true};
     }
@@ -142,13 +152,32 @@ export async function preparePdfInitialRange(options, hooks) {
   const signal = AbortSignal.any([hooks.signal, owner.signal]);
   let tail = null;
   try {
-    const first = await readPdfRange(options, 0, options.rangeChunkSize, {...hooks, signal}, null, metadata => {
+    const onHeaders = metadata => {
       if (metadata.total <= options.rangeChunkSize * 4) return;
       // Start the existing two-chunk tail on validated headers, not after the
       // first body finishes. This changes scheduling, not the fetched range.
       const begin = Math.floor((metadata.total - 1) / options.rangeChunkSize) * options.rangeChunkSize - options.rangeChunkSize;
       tail = {begin, promise:readPdfRange(options, begin, metadata.total, {...hooks, signal}, metadata).catch(() => null)};
-    });
+    };
+    let first = null;
+    // A complete retained prefix may be reused only after a fresh no-store
+    // one-byte 206 proves its exact strong ETag and whole-document length.
+    // A changed/weak source or origin ignoring Range takes the ordinary path.
+    const key = new URL(options.url, globalThis.location?.href).href;
+    let previous = null;
+    try { previous = hooks.rangeCache?.version?.(key, 0, options.rangeChunkSize); } catch (_) {}
+    if (previous) {
+      const checked = await readPdfRange(options, 0, 1, {...hooks, signal, rangeCache:null}, null, null, true);
+      if (checked && checked.etag === previous.etag && checked.total === previous.total) {
+        let bytes = null;
+        try { bytes = hooks.rangeCache?.get(key, 0, Math.min(options.rangeChunkSize, checked.total), checked); } catch (_) {}
+        if (bytes) {
+          first = {bytes, total:checked.total, etag:checked.etag, complete:bytes.byteLength === checked.total};
+          if (!first.complete) onHeaders(first);
+        }
+      }
+    }
+    first ||= await readPdfRange(options, 0, options.rangeChunkSize, {...hooks, signal}, null, onHeaders);
     if (!first) { owner.abort(); return first; }
     const openingRanges = [];
     const end = !first.complete && hooks.canPrefetchFirstPage?.()
