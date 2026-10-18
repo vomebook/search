@@ -160,7 +160,7 @@ export function createReaderFoliateFormat(readerContext) {
     const sourceNodes = new WeakMap();
     while (original.nextNode() && cloned.nextNode())
       sourceNodes.set(cloned.currentNode, original.currentNode);
-    return { doc: readerContext.sanitizeEpubDocument(doc), sourceNodes };
+    return { doc: readerContext.sanitizeEpubDocument(doc, { keepBlobImports: true }), sourceNodes };
   }
 
   function foliateSearchAnchor(source, sourceNodes, body, renderedBody) {
@@ -326,7 +326,11 @@ export function createReaderFoliateFormat(readerContext) {
     const { doc, sourceNodes } = readerContext.cloneFoliateDocument(source);
     readerContext.assertReaderActive();
     readerContext.rewriteFoliateResources(doc, section);
-    const styles = [...doc.querySelectorAll("style,link")].map((node) => node.cloneNode(true));
+    // Packaged CSS is loaded from Foliate blob: URLs; inline it sanitized so
+    // remote url()/@import references cannot bypass the archive-only policy.
+    const styles = await readerContext.sanitizeFoliateStyles([...doc.querySelectorAll("style,link")]);
+    signal.throwIfAborted();
+    readerContext.assertReaderActive();
     for (const node of doc.querySelectorAll("style,link")) node.remove();
     const article = document.createElement("article");
     article.dataset.section = String(index);

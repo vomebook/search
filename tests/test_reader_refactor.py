@@ -2619,6 +2619,41 @@ class ReaderRefactorTest(unittest.TestCase):
         probe.click()
         self.assertFalse(self.page.evaluate("() => window.__readerSecurityMarker === 17"))
 
+    def test_epub_css_cannot_load_remote_references_but_keeps_packaged_styles(self):
+        css = ("@import url(https://css.remote.test/a.css);\n"
+               "@import '\\68ttps://css.remote.test/b.css';\n"
+               "p.linked { letter-spacing: 3px; background-image: url(https://img.remote.test/a.png); }\n"
+               "p.escaped { background-image: \\75rl(//img.remote.test/b.png); }\n"
+               "p.set { background-image: image-set('https://img.remote.test/c.png' 1x); }\n"
+               "p.local { background-image: url(dot.png); }\n")
+        dot = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6XWbqkAAAAASUVORK5CYII=")
+        body = support.zip_bytes({
+            "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+            "OEBPS/content.opf": '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">css-security</dc:identifier><dc:title>CSS</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="style" href="style.css" media-type="text/css"/><item id="dot" href="dot.png" media-type="image/png"/></manifest><spine><itemref idref="chapter"/></spine></package>',
+            "OEBPS/style.css": css,
+            "OEBPS/dot.png": dot,
+            "OEBPS/chapter.xhtml": '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>CSS</title><link rel="stylesheet" href="style.css"/><style>p.inline { background-image: \\75 rl("https://img.remote.test/d.png"); }</style></head><body><p class="linked">linked</p><p class="escaped">escaped</p><p class="set">set</p><p class="local">local</p><p class="inline">inline</p><p class="attr" style="background-image:url(&quot;https://img.remote.test/e.png&quot;)">attr</p></body></html>',
+        }, ("mimetype", "application/epub+zip"))
+        remote = []
+        self.page.on("request", lambda request: remote.append(request.url) if ".remote.test" in request.url else None)
+        self.serve(body, "application/epub+zip")
+        self.open(self.reader_url("epub", name="css-security"))
+        self.page.wait_for_function("""() => {
+          const root = document.querySelector('article[data-section]')?.shadowRoot;
+          const p = root?.querySelector('p.linked');
+          return p && getComputedStyle(p).letterSpacing === '3px';
+        }""")
+        styles = self.page.evaluate("""() => {
+          const root = document.querySelector('article[data-section]').shadowRoot;
+          return Object.fromEntries([...root.querySelectorAll('p')].map(p =>
+            [p.className, getComputedStyle(p).backgroundImage]));
+        }""")
+        for name in ("linked", "escaped", "set", "inline", "attr"):
+            self.assertEqual(styles[name], "none", name)
+        self.assertRegex(styles["local"], r"^url\(\"blob:")
+        self.page.wait_for_timeout(300)
+        self.assertEqual(remote, [])
+
     def expose_html_contrast(self):
         def instrument(route):
             response = route.fetch()

@@ -367,6 +367,7 @@ const readerContext = {
   get returnHistoryKey() { return returnHistoryKey; },
   get runFullSearch() { return runFullSearch; },
   get sanitizeEpubDocument() { return sanitizeEpubDocument; }, set sanitizeEpubDocument(value) { sanitizeEpubDocument = value; },
+  get sanitizeFoliateStyles() { return sanitizeFoliateStyles; }, set sanitizeFoliateStyles(value) { sanitizeFoliateStyles = value; },
   get saveDeadline() { return saveDeadline; }, set saveDeadline(value) { saveDeadline = value; },
   get saveProgress() { return saveProgress; }, set saveProgress(value) { saveProgress = value; },
   get saveTimer() { return saveTimer; }, set saveTimer(value) { saveTimer = value; },
@@ -645,7 +646,7 @@ let {
 } = createReaderPdfTextRuntime(readerContext);
 
 let {
-  normalizeEpubDocument, sanitizeReaderDocument, sanitizeEpubDocument, parseChapterDocument,
+  normalizeEpubDocument, sanitizeReaderDocument, sanitizeEpubDocument, sanitizeFoliateStyles, parseChapterDocument,
   epubContentBody, renderText, sanitizeOfflineHtml, buildDiscourseDocument,
   prepareHtmlDocument, buildHtmlFrameSource, waitForSpreadsheetImages, renderHtml,
   detectHtmlEncoding, repairHtmlContrast
