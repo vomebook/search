@@ -30,6 +30,12 @@ export function createReaderHtmlFormat(readerContext) {
       ? "script,iframe,object,embed,base,form"
       : "script,iframe,object,embed,base,form,link,style";
     for (const node of doc.querySelectorAll(blocked)) node.remove();
+    // SMIL can retarget a link's href after sanitizing; drop animations that do.
+    for (const node of doc.querySelectorAll("*")) {
+      if (!SVG_ANIMATION_ELEMENTS.has(String(node.localName || "").toLowerCase())) continue;
+      const target = String(node.getAttribute("attributeName") || "").toLowerCase();
+      if (/(?:^|:)href$/.test(target.trim()) || target.trim().startsWith("on")) node.remove();
+    }
     if (preserveEpubStyles) {
       for (const link of doc.querySelectorAll("link")) {
         const rel = (link.getAttribute("rel") || "").toLowerCase().split(/\s+/);
@@ -48,19 +54,39 @@ export function createReaderHtmlFormat(readerContext) {
           // around and inside a scheme. Check a normalized copy, but retain
           // the original value for safe relative URLs.
           schemeValue = value.replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
-        const urlAttribute = ["href", "xlink:href", "src", "poster", "data"].includes(name);
+        // XHTML may bind the XLink namespace to any prefix (x:href), so match the
+        // attribute's namespace and local name rather than its qualified name.
+        const localName = String(attribute.localName || name).toLowerCase(),
+          namespace = attribute.namespaceURI;
+        const urlAttribute = (!namespace || namespace === XLINK_NAMESPACE) &&
+          ["href", "src", "poster", "data"].includes(localName);
         if (
           name.startsWith("on") ||
           name === "srcdoc" ||
           (urlAttribute && /^(?:javascript|vbscript):/i.test(schemeValue))
         )
-          element.removeAttribute(attribute.name);
+          element.removeAttributeNode(attribute);
         else if (CSS_VALUE_ATTRIBUTES.has(name)) {
           const clean = sanitizeCssReferences(attribute.value);
           if (clean !== attribute.value) element.setAttribute(attribute.name, clean);
         }
       }
     return doc;
+  }
+
+  const XLINK_NAMESPACE = "http://www.w3.org/1999/xlink";
+  const SVG_ANIMATION_ELEMENTS = new Set(["animate", "animatemotion", "animatetransform", "set", "discard"]);
+  // Offline HTML may embed only inline images. Restrict URL-bearing attributes to
+  // that rule; ordinary attributes (colspan, width, lang...) keep DOMPurify defaults.
+  const OFFLINE_URL_ATTRIBUTES = new Set([
+    "href", "xlink:href", "src", "srcset", "poster", "action", "formaction", "background",
+    "cite", "data", "longdesc", "ping", "usemap", "codebase", "manifest", "lowsrc", "dynsrc"
+  ]);
+  const OFFLINE_INLINE_IMAGE = /^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i;
+  function restrictOfflineUrlAttribute(_node, data) {
+    if (OFFLINE_URL_ATTRIBUTES.has(data.attrName) &&
+        !OFFLINE_INLINE_IMAGE.test(String(data.attrValue || "").replace(/[\u0000-\u0020\u007f-\u009f]/g, "")))
+      data.keepAttr = false;
   }
 
   // Style attributes and SVG presentation attributes that accept CSS url().
@@ -431,14 +457,21 @@ export function createReaderHtmlFormat(readerContext) {
   }
 
   function sanitizeOfflineHtml(text) {
-    const clean = DOMPurify.sanitize(text, {
-      USE_PROFILES: { html: true },
-      RETURN_DOM_FRAGMENT: true,
-      ADD_TAGS: ["style"],
-      FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
-      FORBID_ATTR: ["action", "formaction", "srcdoc"],
-       ALLOWED_URI_REGEXP: /^data:image\/(?:gif|png|jpeg|webp|svg\+xml);/i
-    });
+    // A global ALLOWED_URI_REGEXP would also strip every non-allow-listed plain
+    // attribute (colspan/rowspan/width), so scope the inline-image rule to URLs.
+    DOMPurify.addHook("uponSanitizeAttribute", restrictOfflineUrlAttribute);
+    let clean;
+    try {
+      clean = DOMPurify.sanitize(text, {
+        USE_PROFILES: { html: true },
+        RETURN_DOM_FRAGMENT: true,
+        ADD_TAGS: ["style"],
+        FORBID_TAGS: ["base", "embed", "form", "iframe", "object", "script"],
+        FORBID_ATTR: ["action", "formaction", "srcdoc"]
+      });
+    } finally {
+      DOMPurify.removeHook("uponSanitizeAttribute", restrictOfflineUrlAttribute);
+    }
     const template = document.createElement("template");
     template.content.appendChild(clean);
     const stripUrls = (value) => sanitizeCssReferences(value, { strict: true });
@@ -491,7 +524,11 @@ export function createReaderHtmlFormat(readerContext) {
   }
 
   function buildHtmlFrameSource(documentData) {
-    return documentData.html + readerContext.HTML_FRAME_STYLE +
+    // A CSP <meta> only applies as a <head> child, so it must precede any body
+    // content; the remaining frame styles keep their later cascade position.
+    const frameStyle = readerContext.HTML_FRAME_STYLE;
+    const policyEnd = frameStyle.startsWith('<meta http-equiv="Content-Security-Policy"') ? frameStyle.indexOf(">") + 1 : 0;
+    return frameStyle.slice(0, policyEnd) + documentData.html + frameStyle.slice(policyEnd) +
       (documentData.discourse ? readerContext.DISCOURSE_HTML_STYLE : "") +
       (documentData.spreadsheet ? readerContext.SPREADSHEET_HTML_STYLE : "");
   }
