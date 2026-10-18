@@ -7,7 +7,7 @@ function abortable(promise, signal) {
   });
 }
 
-async function readPdfRange(options, begin, end, {signal, readBytes, limit}, expected = null) {
+async function readPdfRange(options, begin, end, {signal, readBytes, limit}, expected = null, onHeaders = null) {
   signal.throwIfAborted();
   const response = await fetch(options.url, {
     headers: {Range: `bytes=${begin}-${end-1}`}, signal, credentials:"same-origin"
@@ -32,6 +32,7 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit}, exp
       await response.body?.cancel();
       return null;
     }
+    onHeaders?.({total, etag});
     const bytes = await readBytes(response, last-start+1);
     if (bytes.byteLength !== last-start+1) throw invalid();
     return {bytes, total, etag, complete:bytes.byteLength === total};
@@ -42,8 +43,24 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit}, exp
 }
 
 // The first existing demand can overlap engine preparation, never a larger read.
-export function preparePdfInitialRange(options, hooks) {
-  return readPdfRange(options, 0, options.rangeChunkSize, hooks);
+export async function preparePdfInitialRange(options, hooks) {
+  const owner = new AbortController();
+  const signal = AbortSignal.any([hooks.signal, owner.signal]);
+  let tail = null;
+  try {
+    const first = await readPdfRange(options, 0, options.rangeChunkSize, {...hooks, signal}, null, metadata => {
+      if (metadata.total <= options.rangeChunkSize * 4) return;
+      // Start the existing two-chunk tail on validated headers, not after the
+      // first body finishes. This changes scheduling, not the fetched range.
+      const begin = Math.floor((metadata.total - 1) / options.rangeChunkSize) * options.rangeChunkSize - options.rangeChunkSize;
+      tail = {begin, promise:readPdfRange(options, begin, metadata.total, {...hooks, signal}, metadata).catch(() => null)};
+    });
+    if (!first) { owner.abort(); return first; }
+    return {...first, tail, cancelInitial:reason => owner.abort(reason)};
+  } catch (error) {
+    owner.abort(error);
+    throw error;
+  }
 }
 
 export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError, initial = null, canPrefetchOpening = () => false}) {
@@ -51,13 +68,14 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   const chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
   const active = AbortSignal.any([signal, owner.signal]);
-  let task = null, stopped = false;
+  let task = null, stopped = false, prepared = null;
   const failure = Promise.withResolvers();
   failure.promise.catch(() => {});
   const stop = reason => {
     if (stopped) return;
     stopped = true;
     owner.abort(reason);
+    prepared?.cancelInitial?.(reason);
     signal.removeEventListener("abort", cancelled);
   };
   const cancelled = () => stop(signal.reason);
@@ -65,7 +83,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   const read = (begin, end, expected = null) => readPdfRange(options, begin, end,
     {signal:active, readBytes, limit}, expected);
   try {
-    const first = await (initial || read(0, chunkSize));
+    const first = prepared = await (initial || preparePdfInitialRange(options, {signal:active, readBytes, limit}));
     active.throwIfAborted();
     if (!first) {
       stop();
@@ -81,8 +99,8 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     // PDF.js parses non-linearized files from their end (trailer, then the
     // cross-reference table), demanding those chunks one round trip at a
     // time. Fetch the last two aligned chunks once, alongside its startup.
-    let tail = null;
-    if (first.total > chunkSize * 4) {
+    let tail = first.tail || null;
+    if (!tail && first.total > chunkSize * 4) {
       const begin = Math.floor((first.total - 1) / chunkSize) * chunkSize - chunkSize;
       tail = {begin, promise:read(begin, first.total, first).catch(() => null)};
     }
