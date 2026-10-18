@@ -198,6 +198,18 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
           }
           return false;
         }'''))
+        # A pre-control link warm is deduplicated on rewarm; classic shell
+        # scripts must still reach the SW cache instead of the Reader's critical path.
+        self.assertTrue(self.page.evaluate('''async()=>{
+          const names=['reader/core/reader-security.js','reader/core/reader-store.js','reader/pdf/reader-engine-preload.js'];
+          for(let i=0;i<200;i++){
+            const cache=await caches.open('vomebook-search-v1.0.0');
+            const hits=await Promise.all(names.map(n=>cache.match('/search/static/'+n,{ignoreVary:true})));
+            if(hits.every(Boolean))return true;
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          return false;
+        }'''), 'classic Reader shell scripts were not cached after delayed SW control')
 
     def test_reader_query_navigations_keep_one_normalized_cache_entry(self):
         self.prime()
