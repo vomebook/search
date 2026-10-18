@@ -146,10 +146,15 @@
         base + "reader/pdf/pdf-worker-wrapper.mjs",
         vendorUrl("pdfWorker", base)
       ];
-    if (["epub", "mobi", "azw", "azw3", "fb2", "fbz"].includes(extension))
+    if (extension === "epub")
+      return [base + "foliate-reader/view.js" + foliateSuffix,
+        base + "foliate-reader/vendor/zip.js", base + "foliate-reader/epub.js",
+        base + "foliate-reader/paginator.js"];
+    if (["mobi", "azw", "azw3", "fb2", "fbz"].includes(extension))
       return [base + "foliate-reader/view.js" + foliateSuffix];
-    if (["md", "markdown", "html", "htm"].includes(extension))
+    if (["md", "markdown"].includes(extension))
       return [vendorUrl("marked", base), vendorUrl("purify", base)];
+    if (["html", "htm"].includes(extension)) return [vendorUrl("purify", base)];
     return [];
   }
   function buildFiles(project) {
