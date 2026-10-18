@@ -76,6 +76,53 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#mobile-toggle-btn').get_attribute('aria-label'), '切换到手机版')
         self.assertEqual(self.page.locator('#header svg:not([aria-hidden="true"])').count(), 0)
 
+    def test_folder_bulk_controls_preserve_filters_and_cancel_superseded_rendering(self):
+        self.page.locator('#settings-btn').click()
+        self.page.evaluate('''()=>{
+          const node=(path,children=[])=>({path,name:path||'根目录',children,count:1,
+            isRoot:!path,hasChildren:!!children.length,hasDirectFiles:true,showSelfToggle:!!children.length});
+          STATE.mode='repo';STATE.folderTree=[node('',[node('alpha',[node('alpha/deep',[node('alpha/deep/hit')])]),node('beta')])];
+          STATE.folderTreeCollapsed={};STATE.filterFolderSubtrees=['alpha/deep/hit'];STATE.filterFolderSelfs=['beta'];
+          STATE.filterFolders=['alpha/deep/hit','beta'];DOM.filterFolderSection.style.display='';renderFilterFolderTree();
+        }''')
+        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        before = self.page.evaluate('''()=>({selfs:STATE.filterFolderSelfs.slice(),subtrees:STATE.filterFolderSubtrees.slice(),
+          filters:STATE.filterFolders.slice(),total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
+        collapse = self.page.get_by_role('button', name='收起所有子目录', exact=True)
+        expand = self.page.get_by_role('button', name='展开所有子目录', exact=True)
+        collapse.press('Enter')
+        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 1)
+        self.assertTrue(self.page.evaluate('Object.values(STATE.folderTreeCollapsed).every(Boolean)'))
+        self.page.locator('#filter-folder-tree .tree-toggle').first.click()
+        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 3)
+        self.assertTrue(self.page.locator('[data-path="alpha"] input').evaluate('n=>n.indeterminate'))
+        self.assertTrue(self.page.locator('[data-path="beta"] input').is_checked())
+        expand.press('Space')
+        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 5)
+        self.assertTrue(self.page.locator('[data-path="alpha/deep/hit"] input').is_checked())
+        self.assertTrue(self.page.evaluate('Object.values(STATE.folderTreeCollapsed).every(v=>!v)'))
+        after = self.page.evaluate('''()=>({selfs:STATE.filterFolderSelfs.slice(),subtrees:STATE.filterFolderSubtrees.slice(),
+          filters:STATE.filterFolders.slice(),total:STATE.total,ids:STATE.results.map(r=>r.ID),url:location.href,request:searchRequestId})''')
+        self.assertEqual(after, before)
+        self.assertTrue(expand.evaluate('n=>document.activeElement===n'))
+
+        # Interrupt an unfinished large expansion, then replace the route/tree.
+        self.page.evaluate('''()=>{
+          STATE.folderTree=[{path:'wide',name:'wide',hasChildren:true,children:Array.from({length:256},(_,i)=>
+            ({path:'wide/'+i,name:String(i),hasChildren:false,children:[],hasDirectFiles:true}))}];
+          renderFilterFolderTree();setAllFoldersCollapsed(false);setAllFoldersCollapsed(true);
+          routeRenderId++;STATE.folderTree=[{path:'new',name:'new',hasChildren:false,children:[],hasDirectFiles:true}];
+          renderFilterFolderTree();
+        }''')
+        self.page.wait_for_function('!folderTreeRenderQueue.length')
+        self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').count(), 1)
+        self.assertEqual(self.page.locator('#filter-folder-tree .filter-folder-item').get_attribute('data-path'), 'new')
+        self.assertTrue(collapse.is_disabled())
+        self.assertTrue(expand.is_disabled())
+
     def test_landmarks_names_and_skip_preserve_result_position(self):
         for role, name in [('searchbox', '搜索文件'), ('combobox', '结果排序:')]:
             self.assertEqual(self.page.get_by_role(role, name=name, exact=True).count(), 1)
