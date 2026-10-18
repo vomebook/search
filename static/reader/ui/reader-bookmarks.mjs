@@ -285,15 +285,21 @@ export function createReaderBookmarks(readerContext) {
         remove.type = "button";
         remove.className = "panel-item-remove";
         remove.textContent = "删除";
+        remove.setAttribute("aria-label", `删除书签：${open.textContent}`);
         remove.addEventListener("click", async () => {
           await VoiceOfMLReaderStore.removeBookmark(entry.id);
+          const restoreFocus = row.contains(document.activeElement);
+          const next = row.nextElementSibling?.querySelector("button") || row.previousElementSibling?.querySelector("button") ||
+            readerContext.bookmarksAllButton;
           row.remove();
           if (!list.querySelector(".panel-item")) readerContext.emptyPanel(list, "暂无书签");
+          if (restoreFocus) next.focus({ preventScroll: true });
         });
         const edit = document.createElement("button");
         edit.type = "button";
         edit.className = "panel-item-edit";
         edit.textContent = "编辑";
+        edit.setAttribute("aria-label", `编辑书签：${open.textContent}`);
         edit.addEventListener("click", () => readerContext.openBookmarkPopover(edit, entry));
         row.append(open, edit, remove, excerpt, meta);
         list.appendChild(row);

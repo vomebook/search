@@ -281,6 +281,8 @@ export function createReaderProgress(readerContext) {
     const percent = readerContext.readerProgressPercent();
     readerContext.progressRange.value = String(percent);
     readerContext.progressPercent.textContent = `${percent.toFixed(1)}%`;
+    if (readerContext.progressRange.getAttribute("aria-valuetext") !== readerContext.progressPercent.textContent)
+      readerContext.progressRange.setAttribute("aria-valuetext", readerContext.progressPercent.textContent);
     const hasChapters = readerContext.navigationState.tocEntries.length > 0,
       hasPreviousChapter = hasChapters && readerContext.navigationState.currentChapterIndex > 0,
       hasNextChapter =

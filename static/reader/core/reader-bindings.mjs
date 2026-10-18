@@ -138,6 +138,11 @@ export function createReaderBindings(readerContext) {
 
   function initializePanelAccessibility() {
     document.querySelector(".reader-panel-tabs")?.setAttribute("role", "tablist");
+    document.querySelector(".reader-skip-link")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      readerContext.setReaderPanelOpen(false);
+      readerContext.viewport.focus({ preventScroll: true });
+    });
   }
 
   function mountInitialLoadingFeedback() {
@@ -551,6 +556,10 @@ export function createReaderBindings(readerContext) {
       button.textContent = "搜索";
       button.hidden = false;
       button.setAttribute("aria-expanded", "false");
+      const view = button.closest(".reader-panel-view"), input = view.querySelector(".panel-search");
+      input.id ||= `${view.id}-search`;
+      button.setAttribute("aria-controls", input.id);
+      button.setAttribute("aria-label", `搜索${view.querySelector(".panel-view-header strong")?.textContent || "列表"}`);
       button.addEventListener("click", () =>
         readerContext.setPanelSearchOpen(button, button.getAttribute("aria-expanded") !== "true")
       );
@@ -612,8 +621,8 @@ export function createReaderBindings(readerContext) {
     });
     document
       .querySelector("#history")
-      .addEventListener("click", () =>
-        readerContext.setReaderPanelOpen(document.querySelector("#history").getAttribute("aria-expanded") !== "true")
+      .addEventListener("click", (event) =>
+        readerContext.setReaderPanelOpen(document.querySelector("#history").getAttribute("aria-expanded") !== "true", false, event.detail === 0)
       );
     document
       .querySelector("#history-close")
@@ -758,29 +767,45 @@ export function createReaderBindings(readerContext) {
   }
 
   function bindProgressActions() {
-    readerContext.progressRange.addEventListener("pointerdown", () => {
+    const startSeeking = () => {
+      if (readerContext.progressSeeking) return;
       readerContext.beginReaderNavigation();
       readerContext.progressSeeking = true;
       readerContext.previousProgressState = readerContext.captureProgressState();
+    };
+    const finishSeeking = () => {
+      if (!readerContext.progressSeeking) return;
+      readerContext.progressSeeking = false;
+      const generation = readerContext.readerRuntime.currentGeneration("navigation");
+      readerContext.flushEpubSeek().then(() => {
+        if (readerContext.isReaderGenerationCurrent("navigation", generation)) readerContext.updateProgressTools();
+      });
+    };
+    readerContext.progressRange.addEventListener("pointerdown", startSeeking);
+    const seekKeys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"];
+    readerContext.progressRange.addEventListener("keydown", (event) => {
+      if (seekKeys.includes(event.key) && !event.defaultPrevented && !event.altKey && !event.ctrlKey && !event.metaKey)
+        startSeeking();
     });
+    readerContext.progressRange.addEventListener("keyup", (event) => {
+      if (seekKeys.includes(event.key)) finishSeeking();
+    });
+    readerContext.progressRange.addEventListener("blur", finishSeeking);
     readerContext.progressRange.addEventListener("input", () => {
       readerContext.progressPercent.textContent = `${Number(readerContext.progressRange.value).toFixed(1)}%`;
+      readerContext.progressRange.setAttribute("aria-valuetext", readerContext.progressPercent.textContent);
       readerContext.seekProgress(readerContext.progressRange.value, true);
     });
     for (const type of ["pointerup", "pointercancel"])
-      readerContext.progressRange.addEventListener(type, () => {
-        readerContext.progressSeeking = false;
-        const generation = readerContext.readerRuntime.currentGeneration("navigation");
-        readerContext.flushEpubSeek().then(() => {
-          if (readerContext.isReaderGenerationCurrent("navigation", generation)) readerContext.updateProgressTools();
-        });
-      });
+      readerContext.progressRange.addEventListener(type, finishSeeking);
     readerContext.progressUndo.addEventListener("click", () => {
+      const restoreFocus = document.activeElement === readerContext.progressUndo;
       const state = readerContext.previousProgressState;
       readerContext.previousProgressState = null;
       readerContext.progressSeeking = false;
       readerContext.restoreProgressState(state);
       readerContext.updateProgressTools();
+      if (restoreFocus) readerContext.progressRange.focus({ preventScroll: true });
     });
     readerContext.chapterPrev.addEventListener("click", () =>
       readerContext.activateChapter(readerContext.navigationState.currentChapterIndex - 1)

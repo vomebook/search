@@ -289,11 +289,15 @@ export function createReaderToc(readerContext) {
       if (!mark) {
         mark = document.createElement("span");
         mark.className = "toc-current-mark";
+        mark.setAttribute("aria-hidden", "true");
         mark.textContent = "✓";
         row.appendChild(mark);
       }
       mark.hidden = index !== readerContext.navigationState.currentChapterIndex;
       row.classList.toggle("is-current", index === readerContext.navigationState.currentChapterIndex);
+      const link = row.querySelector('[role="link"]');
+      if (index === readerContext.navigationState.currentChapterIndex) link?.setAttribute("aria-current", "location");
+      else link?.removeAttribute("aria-current");
     }
   }
 

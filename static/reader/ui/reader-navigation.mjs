@@ -54,11 +54,11 @@ export function createReaderNavigation(readerContext) {
       else readerContext.setReaderPanelOpen(false, true);
       return;
     }
-    if (
-      event.target.closest?.(
-        "input,textarea,select,button,a,audio,video,[contenteditable]:not([contenteditable=false])"
-      )
-    )
+    // Panel lists scroll independently. Inspect the composed path so a control
+    // inside a chapter Shadow DOM is not mistaken for the reading surface.
+    if ((event.composedPath?.() || [event.target]).some(node => node.closest?.(
+      '#history-panel,input,textarea,select,button,a,audio,video,[role="button"],[role="link"],[contenteditable]:not([contenteditable=false])'
+    )))
       return;
     if (["PageDown", " ", "ArrowDown", "PageUp", "ArrowUp"].includes(event.key)) {
       event.preventDefault();
