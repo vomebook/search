@@ -127,32 +127,41 @@ export function createReaderUi(readerContext) {
       window.parent.postMessage({ type: "voice-reader-ui-state", state }, location.origin);
   }
 
-  function setReaderPanelOpen(open, restoreFocus = false) {
+  function setReaderPanelOpen(open, restoreFocus = false, focusPanel = false) {
     readerContext.readerRuntime.update("panel", { open });
     const panel = document.querySelector("#history-panel");
+    const focusWasInside = panel.contains(document.activeElement);
     clearTimeout(readerContext.panelAnimationTimer);
     document.querySelector("#history").setAttribute("aria-expanded", String(open));
     if (open) {
       readerContext.readerPanelInteractionSerial++;
       panel.hidden = false;
+      panel.inert = false;
       void panel.offsetWidth;
       panel.classList.add("is-open");
       readerContext.selectPanel(readerContext.panelState.selected === "full-search" ? "full-search" : readerContext.mediaElement ? "media" : "toc");
       readerContext.updateTocCurrentMark();
       readerContext.notifyReaderUiState(readerContext.panelState.selected === "full-search" ? "full-search" : "panel");
+      // Only an explicit keyboard/assistive activation moves focus. Automatic
+      // directory discovery and ordinary pointer opening leave reading alone.
+      if (focusPanel) (panel.querySelector('#full-search-view:not([hidden]) input') ||
+        panel.querySelector('.reader-panel-tabs button[aria-selected="true"]:not([hidden])') ||
+        panel.querySelector('#history-close')).focus({ preventScroll: true });
       return;
     }
     panel.classList.remove("is-open");
+    panel.inert = true;
     readerContext.panelAnimationTimer = setTimeout(() => {
       if (!panel.classList.contains("is-open")) panel.hidden = true;
     }, 250);
     readerContext.notifyReaderUiState("base");
-    if (restoreFocus) document.querySelector("#history").focus({ preventScroll: true });
+    if (restoreFocus || focusWasInside) document.querySelector("#history").focus({ preventScroll: true });
   }
 
   function setPanelSearchOpen(button, open) {
     const input = button.closest(".reader-panel-view").querySelector(".panel-search");
     button.setAttribute("aria-expanded", String(open));
+    input.inert = !open;
     if (open) {
       input.hidden = false;
       void input.offsetWidth;
@@ -210,6 +219,7 @@ export function createReaderUi(readerContext) {
         remove.type = "button";
         remove.className = "panel-item-remove";
         remove.textContent = "删除";
+        remove.setAttribute("aria-label", `删除阅读记录：${entry.title || entry.url}`);
         remove.addEventListener("click", async () => {
           if (entry.url === readerContext.sourceUrl) {
             readerContext.historySuppressed = true;
