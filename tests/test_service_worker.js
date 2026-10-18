@@ -119,6 +119,17 @@ test("registers install activate and fetch listeners", () => {
   const instance = harness();
   assert.deepStrictEqual(Object.keys(instance.listeners).sort(), ["activate", "fetch", "install"]);
 });
+test("catalog navigations and SEO manifests bypass the SPA cache", () => {
+  const instance = harness();
+  for (const pathname of ['/search/catalog/', '/search/VOMEBOOK/', '/search/book/0ym7e7wbcxau0/']) {
+    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + pathname, 'navigate'), undefined);
+  }
+  for (const pathname of ['/search/sitemap.xml', '/search/seo-publication.json']) {
+    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + pathname), undefined);
+  }
+  assert.deepStrictEqual(instance.operations.fetch, []);
+  assert.deepStrictEqual(instance.operations.put, []);
+});
 test("only pinned static hashes ignore Origin Vary mismatches", async () => {
   for (const [text, prefix] of [[source, '/search/static/']]) {
     const calls = [];

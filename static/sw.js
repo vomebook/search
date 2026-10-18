@@ -63,6 +63,9 @@ self.addEventListener("fetch", (event) => {
   if (isRetiredAsset(url.pathname)) return;
   const readerShell = url.pathname === "/search/static/reader.html";
   const searchNavigation = event.request.mode === "navigate" && ["/search/", "/search/index.html"].includes(url.pathname);
+  // Catalog HTML and its manifest/sitemap must not inherit the SPA shell cache.
+  if ((event.request.mode === "navigate" && !searchNavigation && !readerShell) ||
+      ["/search/sitemap.xml", "/search/seo-publication.json"].includes(url.pathname)) return;
   const generatedData = url.pathname.startsWith("/search/data/");
   const networkFirst = !readerShell && (searchNavigation || generatedData || READER_RUNTIME_PATHS.has(url.pathname));
   const cacheKey = readerShell ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
