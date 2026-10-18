@@ -148,12 +148,14 @@
         workerWrapper,
         vendorUrl("pdfWorker", base)
       ];
-    if (extension === "epub")
-      return [base + "foliate-reader/view.js" + foliateSuffix,
-        base + "foliate-reader/vendor/zip.js", base + "foliate-reader/epub.js",
-        base + "foliate-reader/paginator.js"];
-    if (["mobi", "azw", "azw3", "fb2", "fbz"].includes(extension))
-      return [base + "foliate-reader/view.js" + foliateSuffix];
+    // view.js statically imports these leaf modules; warm them with it so they
+    // are not discovered one round trip later. Format modules follow makeBook.
+    const foliate = (...files) => [base + "foliate-reader/view.js" + foliateSuffix,
+      ...["epubcfi.js", "progress.js", "overlayer.js", "text-walker.js", ...files].map(file => base + "foliate-reader/" + file)];
+    if (extension === "epub") return foliate("vendor/zip.js", "epub.js", "paginator.js");
+    if (["mobi", "azw", "azw3"].includes(extension)) return foliate("mobi.js", "vendor/fflate.js", "paginator.js");
+    if (extension === "fb2") return foliate("fb2.js", "paginator.js");
+    if (extension === "fbz") return foliate("vendor/zip.js", "fb2.js", "paginator.js");
     if (["md", "markdown"].includes(extension))
       return [vendorUrl("marked", base), vendorUrl("purify", base)];
     if (["html", "htm"].includes(extension)) return [vendorUrl("purify", base)];
