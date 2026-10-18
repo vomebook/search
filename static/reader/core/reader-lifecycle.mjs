@@ -136,7 +136,7 @@ export function createReaderLifecycle(readerContext) {
     readerContext.loadingStatus.hidden = true;
     readerContext.markReaderContentReady();
     const visibleMessage = `${message} [${readerContext.readerLifecycle.stage}]`;
-    readerContext.content.innerHTML = `<div class="reader-error"></div>`;
+    readerContext.content.innerHTML = `<div class="reader-error" role="alert"></div>`;
     readerContext.content.querySelector(".reader-error").textContent = visibleMessage;
     if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT", "READER_MEDIA"].includes(code)) {
       const retry = document.createElement("button");

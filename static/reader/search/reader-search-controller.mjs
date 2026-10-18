@@ -20,6 +20,8 @@ export function createReaderSearchController({
   view.id = "full-search-view";
   view.className = "reader-panel-view full-search-view";
   view.dataset.panelView = "full-search";
+  view.setAttribute("role", "region");
+  view.setAttribute("aria-label", "全文搜索");
   view.hidden = true;
   view.innerHTML =
     '<div class="full-search-bar"><input id="full-search-input" class="full-search-input" type="search" placeholder="搜索正文" aria-label="搜索正文"><button id="full-search-clear" class="icon-button" type="button" aria-label="清除全文搜索" title="清除">×</button></div><div id="full-search-status" class="full-search-status" role="status">输入关键词搜索正文</div><div class="full-search-nav"><button id="full-search-prev" type="button" disabled>上一个</button><button id="full-search-next" type="button" disabled>下一个</button></div><div id="full-search-results" class="full-search-results"></div>';
@@ -27,8 +29,12 @@ export function createReaderSearchController({
   const button = document.querySelector("#full-search-toggle");
   button.textContent = "全文搜索";
   button.setAttribute("aria-label", "全文搜索");
+  button.setAttribute("aria-controls", view.id);
+  button.setAttribute("aria-expanded", "false");
   const input = view.querySelector("#full-search-input");
   const status = view.querySelector("#full-search-status");
+  status.setAttribute("aria-atomic", "true");
+  input.setAttribute("aria-describedby", status.id);
   const results = view.querySelector("#full-search-results");
   const clear = view.querySelector("#full-search-clear");
   clear.hidden = true;
@@ -64,6 +70,7 @@ export function createReaderSearchController({
   function updateButton(open) {
     button.textContent = open ? "关闭全文搜索" : "全文搜索";
     button.setAttribute("aria-label", button.textContent);
+    button.setAttribute("aria-expanded", String(open));
   }
   function updateClear() {
     clear.hidden = !input.value;
@@ -141,6 +148,7 @@ export function createReaderSearchController({
     resetResults();
   }
   function close() {
+    const restoreFocus = view.contains(document.activeElement);
     clearInputTimer();
     if (busy()) state.complete = false;
     nextGeneration();
@@ -150,6 +158,7 @@ export function createReaderSearchController({
     cancel.hidden = retry.hidden = true;
     panel.hide();
     updateButton(false);
+    if (restoreFocus && panel.isOpen()) button.focus({ preventScroll: true });
   }
   async function run() {
     if (!active()) return;
@@ -287,6 +296,10 @@ export function createReaderSearchController({
     status.textContent = input.value.trim() ? "正在搜索正文…" : "输入关键词搜索正文";
     inputTimer = setTimeout(run, 180);
   }
+
+  listeners.push(runtime.events.on("state:panel", ({ panel: state }) => {
+    updateButton(state.open && state.selected === "full-search");
+  }));
 
   listen(retry, "click", async () => {
     const failed = state.failedPage;

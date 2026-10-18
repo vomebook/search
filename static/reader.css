@@ -1420,6 +1420,26 @@ body {
 }
 
 /* Keyboard focus and accessibility preferences */
+.reader-skip-link {
+  position: fixed;
+  top: 4px;
+  left: 4px;
+  z-index: 40;
+  padding: 10px 14px;
+  background: Canvas;
+  color: CanvasText;
+  border: 2px solid currentColor;
+  transform: translateY(calc(-100% - 8px));
+}
+.reader-skip-link:focus {
+  transform: none;
+  outline: 2px solid var(--reader-focus-color);
+  outline-offset: 2px;
+}
+.reader-viewport:focus-visible {
+  outline: 2px solid var(--reader-focus-color);
+  outline-offset: -3px;
+}
 :is(.reader-toolbar, .reader-panel, .bookmark-popover)
   :is(button, a, input, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--reader-focus-color);
