@@ -65,7 +65,7 @@ function harness(options) {
   const fetchImpl = settings.fetch || ((request) => Promise.resolve(response(`network:${keyOf(request)}`)));
   const context = {
     importScripts() {}, VoiceOfMLReaderResources: require('../static/reader-resources.js'),
-    URL,
+    URL, Request: settings.Request,
     caches,
     fetch(request) { operations.fetch.push(keyOf(request)); return fetchImpl(request); },
     console: {
@@ -115,6 +115,36 @@ function manifestsFetch(failPath) {
   };
 }
 
+class MockRequest {
+  constructor(input, init) {
+    this.url = typeof input === "string" ? input : input.url;
+    this.mode = typeof input === "string" ? "cors" : input.mode;
+    this.cache = (init && init.cache) || "default";
+  }
+}
+test("unversioned shells and data revalidate past the HTTP cache; pinned hashes do not", async () => {
+  const hashed = source.replace('"/search/static/app.js",', '"/search/static/app.0123456789ab.js",');
+  const install = harness({ Request: MockRequest, source: hashed, fetch: manifestsFetch() });
+  await lifecycle(install.listeners.install);
+  const byUrl = new Map(install.operations.addAll[0].map(item => [keyOf(item), item]));
+  for (const url of ["/search/", "/search/data/initial/global.json", "/search/static/style.css"]) {
+    assert.strictEqual(byUrl.get(url).cache, "no-cache", url);
+  }
+  assert.strictEqual(byUrl.get("/search/static/app.0123456789ab.js"), "/search/static/app.0123456789ab.js");
+  for (const [pathname, mode] of [["/search/", "navigate"], ["/search/static/reader.html", "navigate"], ["/search/data/sidebar/global.json", "cors"]]) {
+    const requests = [];
+    const instance = harness({ Request: MockRequest, fetch(request) { requests.push(request); return Promise.resolve(response("fresh")); } });
+    await dispatchFetch(instance, "https://example.test" + pathname, mode);
+    await Promise.all(instance.operations.lifetimes);
+    assert.ok(requests[0] instanceof MockRequest, pathname);
+    assert.strictEqual(requests[0].cache, "no-cache", pathname);
+  }
+  const requests = [];
+  const pinned = harness({ Request: MockRequest, fetch(request) { requests.push(request); return Promise.resolve(response("fresh")); } });
+  await dispatchFetch(pinned, "https://example.test/search/static/app.0123456789ab.js");
+  await Promise.all(pinned.operations.lifetimes);
+  assert.ok(!(requests[0] instanceof MockRequest));
+});
 test("registers install activate and fetch listeners", () => {
   const instance = harness();
   assert.deepStrictEqual(Object.keys(instance.listeners).sort(), ["activate", "fetch", "install"]);
