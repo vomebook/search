@@ -869,19 +869,91 @@ function addHistoryItem(q) {
 
 function renderDropdown() {
   if (!DOM.historyDropdown) return;
+  var active = document.activeElement;
+  var row = DOM.historyDropdown.contains(active) ? active.closest('.history-item') : null;
+  var oldIndex = row ? Array.from(DOM.historyDropdown.querySelectorAll('.history-item')).indexOf(row) : -1;
   var list = getHistory();
-  if (list.length === 0) { DOM.historyDropdown.style.display = "none"; return; }
+  if (list.length === 0) { hideSearchHistory(!!row); return; }
   var html = "";
   for (var h = 0; h < list.length; h++) {
     html += '<div class="history-item" data-query="' + escapeHTML(list[h]) + '">' +
       '<svg class="history-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' +
-      '<span class="history-text">' + escapeHTML(list[h]) + '</span>' +
-      '<button class="history-del" data-del="' + escapeHTML(list[h]) + '">&times;</button>' +
+      '<button type="button" class="history-text" aria-label="搜索：' + escapeHTML(list[h]) + '">' + escapeHTML(list[h]) + '</button>' +
+      '<button type="button" class="history-del" aria-label="删除搜索历史：' + escapeHTML(list[h]) + '" data-del="' + escapeHTML(list[h]) + '">&times;</button>' +
       '</div>';
   }
   html += '<div class="history-footer"><button class="history-clear-all">清空历史</button></div>';
   DOM.historyDropdown.innerHTML = html;
   DOM.historyDropdown.style.display = "";
+  if (row) {
+    var index = list.indexOf(row.dataset.query);
+    var selector = index >= 0 && active.matches('.history-del') ? '.history-del' : '.history-text';
+    DOM.historyDropdown.querySelectorAll('.history-item')[index >= 0 ? index : Math.min(oldIndex, list.length - 1)]
+      .querySelector(selector).focus({ preventScroll: true });
+  }
+}
+
+function hideSearchHistory(restoreFocus = false) {
+  // Focus first: its normal focus listener may render history again.
+  if (restoreFocus) DOM.searchInput.focus({ preventScroll: true });
+  DOM.historyDropdown.style.display = "none";
+}
+
+function setupSearchHistory() {
+  let hideTimer, pressTimer, pressed = false, hovering = false;
+  const scheduleHide = () => {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      if (!hovering && !DOM.searchBox.contains(document.activeElement)) hideSearchHistory();
+    }, 150);
+  };
+  DOM.searchInput.addEventListener('focus', renderDropdown);
+  DOM.searchBox.addEventListener('focusout', scheduleHide);
+  DOM.historyDropdown.addEventListener('mouseenter', () => { hovering = true; });
+  DOM.historyDropdown.addEventListener('mouseleave', () => { hovering = false; clearTimeout(pressTimer); scheduleHide(); });
+  document.addEventListener('pointerdown', event => {
+    if (!DOM.searchBox.contains(event.target)) hideSearchHistory();
+  }, { passive: true });
+  DOM.searchBox.addEventListener('keydown', event => {
+    if (event.isComposing || searchComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey ||
+        DOM.historyDropdown.style.display === 'none') return;
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); hideSearchHistory(true);
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const buttons = Array.from(DOM.historyDropdown.querySelectorAll('.history-text'));
+      if (!buttons.length) return;
+      const row = event.target.closest('.history-item');
+      const index = row ? Array.from(DOM.historyDropdown.querySelectorAll('.history-item')).indexOf(row) : -1;
+      const next = event.key === 'ArrowDown' ? index + 1 : index - 1;
+      event.preventDefault(); event.stopPropagation();
+      if (next < 0) DOM.searchInput.focus({ preventScroll: true });
+      else buttons[Math.min(next, buttons.length - 1)].focus({ preventScroll: true });
+    }
+  });
+  const startPress = event => {
+    clearTimeout(pressTimer); pressed = false;
+    if (event.target.closest('.history-del,.history-clear-all')) return;
+    const row = event.target.closest('.history-item');
+    if (row) pressTimer = setTimeout(() => { pressed = true; removeHistoryItem(row.dataset.query); }, 600);
+  };
+  DOM.historyDropdown.addEventListener('mousedown', startPress);
+  DOM.historyDropdown.addEventListener('touchstart', startPress, { passive: true });
+  for (const type of ['mouseup', 'touchend', 'touchmove', 'touchcancel'])
+    DOM.historyDropdown.addEventListener(type, () => clearTimeout(pressTimer), { passive: true });
+  DOM.historyDropdown.addEventListener('click', event => {
+    if (pressed && event.detail !== 0) { pressed = false; return; }
+    pressed = false;
+    const remove = event.target.closest('.history-del');
+    if (remove) { removeHistoryItem(remove.dataset.del); return; }
+    if (event.target.closest('.history-clear-all')) { saveHistory([]); hideSearchHistory(true); return; }
+    const row = event.target.closest('.history-item');
+    if (row) {
+      const restoreFocus = DOM.historyDropdown.contains(document.activeElement);
+      submitSearchQuery(row.dataset.query, { restore: true, blur: true });
+      hideSearchHistory();
+      if (restoreFocus) DOM.resultsContainer.focus({ preventScroll: true });
+    }
+  });
 }
 
 function removeHistoryItem(q) {
@@ -1695,8 +1767,13 @@ const $ = (sel) => document.querySelector(sel);
 const DOM = {};
 
 function cacheDOM() {
+  document.querySelectorAll('#header svg, .empty-state svg, #footer svg').forEach(node => {
+    node.setAttribute('aria-hidden', 'true'); node.setAttribute('focusable', 'false');
+  });
+  DOM.announcement = $("#search-announcement");
   DOM.headerTitle = $("#header-title");
   DOM.headerLogo = $("#header-logo");
+  DOM.headerLogo.setAttribute('aria-label', '马列之声主页');
   DOM.searchBox = $("#search-box");
   DOM.searchInput = $("#search-input");
   DOM.hamburgerBtn = $("#hamburger-btn");
@@ -1853,8 +1930,11 @@ function updateSidebarExpandButton() {
 function updateSidebarHeader() {
   if (!DOM.sidebarTitle) return;
   const global = STATE.mode === "global";
-  DOM.sidebarTitle.textContent = global ? "仓库列表" : (STATE.repo || "仓库");
-  if (DOM.sidebarBackBtn) DOM.sidebarBackBtn.hidden = global;
+  DOM.sidebarTitle.textContent = global ? "仓库列表" : (VoiceOfMLReader.repositoryLabel(STATE.repo) || "仓库");
+  if (DOM.sidebarBackBtn) {
+    if (global && document.activeElement === DOM.sidebarBackBtn) DOM.hamburgerBtn.focus({ preventScroll: true });
+    DOM.sidebarBackBtn.hidden = global;
+  }
   updateSidebarExpandButton();
 }
 
@@ -2063,8 +2143,8 @@ const ROUTER = {
       DOM.searchInput.placeholder = "搜索 VoiceOfML 数据仓库...";
       DOM.sidebarTitle.textContent = "仓库列表";
     } else {
-      DOM.headerTitle.textContent = STATE.repo;
-      DOM.searchInput.placeholder = "搜索 " + STATE.repo + "...";
+      DOM.headerTitle.textContent = VoiceOfMLReader.repositoryLabel(STATE.repo);
+      DOM.searchInput.placeholder = "搜索 " + VoiceOfMLReader.repositoryLabel(STATE.repo) + "...";
     }
     updateSidebarHeader();
   },
@@ -2357,6 +2437,12 @@ function setupSearchPositionControls() {
   DOM.cancelPositionBtn?.addEventListener("click", backToSearchTop);
 
   let edit = null;
+  const editButton = document.getElementById('edit-result-position');
+  editButton.addEventListener('click', () => {
+    DOM.currentResultPosition.hidden = false;
+    editButton.hidden = true;
+    DOM.currentResultPosition.focus({ preventScroll: true });
+  });
   DOM.currentResultPosition?.addEventListener("focus", event => {
     edit = { key: getSearchViewKey(), value: event.target.value };
     event.target.select();
@@ -2368,11 +2454,14 @@ function setupSearchPositionControls() {
       event.stopPropagation();
       if (event.key === "Escape") edit = null;
       event.target.blur();
+      editButton.focus({ preventScroll: true });
     }
   });
   DOM.currentResultPosition?.addEventListener("blur", event => {
     const previous = edit;
     edit = null;
+    event.target.hidden = true;
+    editButton.hidden = false;
     if (previous && previous.key === getSearchViewKey() && previous.value !== event.target.value)
       jumpToSearchResult(event.target.value.trim());
     else updateCurrentResultPosition();
@@ -4089,9 +4178,11 @@ function animateVisibleResultRows() {
 }
 
 function buildResultHTML(rec, idx) {
+  const fileName = escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : ''));
   const iconType = getFileIconType(rec.Extension);
   const titleHTML = highlightText(rec.File, STATE.query);
   const repoShort = escapeHTML((rec.Repo || "").split("/").pop());
+  const repoLabel = escapeHTML(VoiceOfMLReader.repositoryLabel(rec.Repo));
   const sizeStr = formatSize(rec.Size);
   const recordLink = getRecordLink(rec);
   const readerRecord = applyReaderAsset(rec, rec.Repo || "", buildRecordRelativePath(rec), recordLink);
@@ -4102,27 +4193,27 @@ function buildResultHTML(rec, idx) {
     const accum = (rec.Folder || []).slice(0, j + 1).join("/");
     const folderDisplay = STATE.searchFolders ? highlightText(f, STATE.query) : escapeHTML(f);
     const separator = j < (rec.Folder || []).length - 1 ? '<span class="path-sep">/</span>' : '';
-    return '<span class="path-folder" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + separator + '</span>';
+    return '<span role="button" tabindex="0" class="path-folder" aria-label="筛选路径：' + escapeHTML(accum) + '" data-folder="' + escapeHTML(accum) + '" data-repo="' + repoShort + '">' + folderDisplay + separator + '</span>';
   }).join("");
   const repoSeparator = (rec.Folder || []).length ? '<span class="path-sep">/</span>' : '';
   return (
-    '<input type="checkbox" class="result-checkbox" data-index="' + idx + '">' +
-    '<div class="result-file-icon">' + (ICONS[iconType] || ICONS.file) + '</div>' +
+    '<input type="checkbox" class="result-checkbox" aria-label="选择文件：' + fileName + '" data-index="' + idx + '">' +
+    '<div class="result-file-icon" aria-hidden="true">' + (ICONS[iconType] || ICONS.file) + '</div>' +
     '<div class="result-info">' +
       '<div class="result-title">' + titleHTML +
         (rec.Extension ? '<span style="opacity:0.5;font-size:12px">.' + escapeHTML(rec.Extension) + '</span>' : '') +
       '</div>' +
-      '<div class="result-path"><span class="path-folder" data-folder="" data-repo="' + repoShort + '">' + repoShort + repoSeparator + '</span>' + breadcrumb + '</div>' +
+      '<div class="result-path"><span role="button" tabindex="0" class="path-folder" aria-label="筛选仓库路径：' + repoLabel + '" data-folder="" data-repo="' + repoShort + '">' + repoLabel + repoSeparator + '</span>' + breadcrumb + '</div>' +
       '<div class="result-meta">' +
-        (STATE.mode === "global" ? '<span class="result-repo-tag" data-repo="' + repoShort + '">' + repoShort + '</span>' : '') +
+        (STATE.mode === "global" ? '<button type="button" class="result-repo-tag" aria-label="打开仓库：' + repoLabel + '" data-repo="' + repoShort + '">' + repoLabel + '</button>' : '') +
         (sizeStr ? '<span class="result-size">' + sizeStr + '</span>' : '') +
       '</div>' +
     '</div>' +
     '<div class="result-actions">' +
-      '<button class="result-action-btn" data-action="copy" data-link="' + escapeHTML(getCopyableLink(recordLink)) + '">复制链接</button>' +
-      '<button class="result-action-btn primary" data-action="download" data-filename="' + escapeHTML(rec.File + (rec.Extension ? '.' + rec.Extension : '')) + '" data-link="' + escapeHTML(recordLink) + '">下载</button>' +
-      '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
-      (readerActionUrl ? '<button class="result-action-btn" data-action="read" data-reader-url="' + escapeHTML(readerActionUrl) + '">' + (["audio", "video", "swf"].indexOf(VoiceOfMLReader.capability(readerActionRecord.ReaderExtension || readerActionRecord.Extension).mode) >= 0 ? "在线播放" : "在线阅读") + '</button>' : '') +
+      '<button class="result-action-btn" aria-label="复制链接：' + fileName + '" data-action="copy" data-link="' + escapeHTML(getCopyableLink(recordLink)) + '">复制链接</button>' +
+      '<button class="result-action-btn primary" aria-label="下载：' + fileName + '" data-action="download" data-filename="' + fileName + '" data-link="' + escapeHTML(recordLink) + '">下载</button>' +
+      '<a href="' + escapeHTML(getPreviewLink(getRecordPath(rec))) + '" aria-label="仓库查看：' + fileName + '（新窗口）" class="result-action-btn" target="_blank" rel="noopener noreferrer">仓库查看</a>' +
+      (readerActionUrl ? '<button class="result-action-btn" aria-label="' + (["audio", "video", "swf"].includes(VoiceOfMLReader.capability(readerActionRecord.ReaderExtension || readerActionRecord.Extension).mode) ? "在线播放" : "在线阅读") + '：' + fileName + '" data-action="read" data-reader-url="' + escapeHTML(readerActionUrl) + '">' + (["audio", "video", "swf"].indexOf(VoiceOfMLReader.capability(readerActionRecord.ReaderExtension || readerActionRecord.Extension).mode) >= 0 ? "在线播放" : "在线阅读") + '</button>' : '') +
     '</div>'
   );
 }
@@ -4148,6 +4239,7 @@ function refreshResultReaderActions() {
     button.dataset.readerUrl = getReaderLink(actionRecord);
     const label = ["audio", "video", "swf"].includes(VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读";
     if (button.textContent !== label) { button.textContent = label; VSCROLL.measuredRowKeys[index] = null; }
+    button.setAttribute('aria-label', label + '：' + record.File + (record.Extension ? '.' + record.Extension : ''));
   }
   VSCROLL.measuredWindowKey = "";
   VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
@@ -4202,6 +4294,9 @@ function createResultRow(rec, idx) {
     VSCROLL.templateCache.set(idx, template);
   }
   const row = template.cloneNode(true);
+  row.tabIndex = -1;
+  row.setAttribute('role', 'listitem');
+  row.setAttribute('aria-label', rec.File + (rec.Extension ? '.' + rec.Extension : ''));
   resultRowRecords.set(row, rec);
   return row;
 }
@@ -4254,6 +4349,9 @@ function layoutResultScrollSegment(topH, endH, totalH, logicalTop) {
 }
 
 function reconcileVirtualRows(items, start, end, topH, bottomH) {
+  const focused = document.activeElement;
+  const focusedRow = DOM.resultsList.contains(focused) ? focused.closest('.result-item') : null;
+  const focusedRecord = focusedRow && resultRowRecords.get(focusedRow);
   // Validate once before reusing rows, not once for every new row.
   ensureResultTemplateCache();
   const logicalTop = getResultScrollTop();
@@ -4263,11 +4361,13 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   if (!topSpacer) {
     topSpacer = document.createElement("div");
     topSpacer.className = "virtual-spacer virtual-spacer-top";
+    topSpacer.setAttribute('aria-hidden', 'true');
     DOM.resultsList.prepend(topSpacer);
   }
   if (!bottomSpacer) {
     bottomSpacer = document.createElement("div");
     bottomSpacer.className = "virtual-spacer virtual-spacer-bottom";
+    bottomSpacer.setAttribute('aria-hidden', 'true');
     DOM.resultsList.append(bottomSpacer);
   }
   const endH = getVirtualOffset(end);
@@ -4282,10 +4382,23 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   let cursor = topSpacer.nextSibling;
   for (let idx = start; idx < end; idx++) {
     const row = existing.get(idx) || createResultRow(items[idx], idx);
+    row.setAttribute('role', 'listitem');
+    row.setAttribute('aria-posinset', String(idx + 1));
+    row.setAttribute('aria-setsize', String(STATE.total));
     if (row !== cursor) DOM.resultsList.insertBefore(row, cursor || bottomSpacer);
     cursor = row.nextSibling;
   }
   if (DOM.resultsList.lastElementChild !== bottomSpacer) DOM.resultsList.append(bottomSpacer);
+  if (focusedRow && !focused.isConnected) {
+    const replacement = DOM.resultsList.querySelector('.result-item[data-index="' + focusedRow.dataset.index + '"]');
+    const sameRecord = replacement && focusedRecord && resultRowRecords.get(replacement) === focusedRecord;
+    const control = sameRecord && (focused === focusedRow ? replacement :
+      Array.from(replacement.querySelectorAll('button,a,input,[role="button"]')).find(node =>
+        node.className === focused.className && node.dataset.action === focused.dataset.action &&
+        node.getAttribute('aria-label') === focused.getAttribute('aria-label')));
+    if (!control) keyboardResultIndex = findVirtualIndex(logicalTop) - 1;
+    (control || DOM.resultsContainer).focus({ preventScroll: true });
+  }
   if (previousOrigin !== resultScrollOrigin || resultScrollTarget !== null) {
     DOM.resultsContainer.scrollTop = Math.ceil(logicalTop - resultScrollOrigin);
     resultScrollTarget = null;
@@ -4639,7 +4752,26 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
   return changed;
 }
 
+let searchAnnouncementTimer = 0;
+function announceSearchStatus(message, resultKey = '') {
+  if (!DOM.announcement) return;
+  clearTimeout(searchAnnouncementTimer);
+  if (!resultKey && DOM.announcement.textContent === message) DOM.announcement.textContent = '';
+  searchAnnouncementTimer = setTimeout(() => {
+    if (resultKey && (STATE.isLoading || resultKey !== STATE.query + '\0' + STATE.total)) return;
+    if (DOM.announcement.textContent !== message) DOM.announcement.textContent = message;
+    if (resultKey) DOM.announcement.dataset.resultKey = resultKey;
+  }, 250);
+}
+
 function updateStatusBar() {
+  DOM.resultsContainer?.setAttribute('aria-busy', String(STATE.isLoading));
+  if (DOM.announcement && !STATE.isLoading && STATE._loadedPage > 0) {
+    const key = STATE.query + '\0' + STATE.total;
+    if (DOM.announcement.dataset.resultKey !== key)
+      announceSearchStatus((STATE.query ? '搜索“' + STATE.query + '”完成，' : '') +
+        (STATE.total ? '共 ' + STATE.total.toLocaleString() + ' 条结果' : '没有找到结果'), key);
+  }
   DOM.resultCount.textContent = STATE.total > 0 ? "共 " + STATE.total.toLocaleString() + " 条结果" : "";
   var has = STATE.filterRepos.length || STATE.filterExtensions.length || STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ||
             STATE.filterMinSize !== null || STATE.filterMaxSize !== null;
@@ -4712,10 +4844,13 @@ function scheduleFilterSearch(clearResults = false) {
 function updateCurrentResultPosition() {
   const label = document.getElementById("current-result-position");
   if (!label) return;
-  label.hidden = !(STATE.results.length || STATE.total);
+  const editing = document.activeElement === label;
+  label.hidden = !editing;
   if (STATE.results.length || STATE.total) {
     const index = findVirtualIndex(getResultScrollTop());
-    if (document.activeElement !== label) label.value = index + 1;
+    if (!editing && label.value !== String(index + 1)) label.value = index + 1;
+    const display = document.getElementById('result-position-display');
+    if (display && display.textContent !== String(index + 1)) display.textContent = index + 1;
   }
   updateSearchPositionControls();
 }
@@ -4741,17 +4876,22 @@ function renderSidebar(routeId) {
 }
 
 function renderRepoListItems(repos) {
+  const focused = DOM.sidebarContent.contains(document.activeElement) ? document.activeElement.closest('.repo-list-item') : null;
   var html = "";
   for (var i = 0; i < repos.length; i++) {
     var repo = repos[i];
     var short = repo.name.split("/").pop();
-    html += '<div class="repo-list-item" data-repo="' + escapeHTML(short) + '">';
+    var label = escapeHTML(VoiceOfMLReader.repositoryLabel(repo.name));
+    html += '<button type="button" class="repo-list-item" aria-label="打开仓库：' + label + '" data-repo="' + escapeHTML(short) + '">';
     html += '<svg class="repo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
-    html += '<span class="repo-name">' + escapeHTML(short) + '</span>';
+    html += '<span class="repo-name">' + label + '</span>';
     html += '<span class="repo-count">' + (repo.count || 0).toLocaleString() + '</span>';
-    html += '</div>';
+    html += '</button>';
   }
   DOM.sidebarContent.innerHTML = html;
+  DOM.sidebarContent.querySelectorAll('svg').forEach(node => node.setAttribute('aria-hidden', 'true'));
+  if (focused) (Array.from(DOM.sidebarContent.querySelectorAll('.repo-list-item'))
+    .find(node => node.dataset.repo === focused.dataset.repo) || DOM.leftSidebar).focus({ preventScroll: true });
   updateSidebarHeader();
 }
 
@@ -4784,7 +4924,9 @@ function renderBrowserListItems(list, data, currentRepo, path) {
   const fragment = document.createDocumentFragment();
   for (var j = 0; j < (data.folders || []).length; j++) {
     var f = data.folders[j];
-    var div = document.createElement("div");
+    var div = document.createElement("button");
+    div.type = 'button';
+    div.setAttribute('aria-label', '打开文件夹：' + f.name);
     div.className = "browser-item";
     div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
     div.addEventListener("click", (function(fp) { return function() { ROUTER.navigate("repo", STATE.repo, fp); }; })(f.path));
@@ -4797,14 +4939,17 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var iconType = getFileIconType(f2.ext);
     var sizeStr = formatSize(f2.size);
     var browserFileName = getBrowserFileName(f2);
+    div2.setAttribute('role', 'group');
+    div2.setAttribute('aria-label', browserFileName);
     var browserFileLink = getBrowserFileLink(currentRepo, path || "", f2);
     div2.dataset.link = browserFileLink;
     var warmReaderLink = getBrowserReaderUrl(f2, currentRepo, path);
     if (warmReaderLink) div2.dataset.readerUrl = warmReaderLink;
     div2.innerHTML = (ICONS[iconType] || ICONS.file) +
-      '<span class="browser-name">' + escapeHTML(browserFileName) + '</span>' +
-      '<span class="browser-action" data-download="1">下载</span>' +
+      '<button type="button" class="browser-name">' + escapeHTML(browserFileName) + '</button>' +
+      '<button type="button" class="browser-action" aria-label="下载：' + escapeHTML(browserFileName) + '" data-download="1">下载</button>' +
       (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '');
+    div2.querySelector('.browser-name').setAttribute('aria-label', (warmReaderLink ? '打开阅读器：' : '下载文件：') + browserFileName);
     div2.addEventListener("click", function(ff, ppath) {
       return function(e) {
         var fileLink = getBrowserFileLink(currentRepo, ppath, ff);
@@ -4830,6 +4975,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     fragment.appendChild(div2);
   }
   list.replaceChildren(fragment);
+  list.querySelectorAll('svg').forEach(node => node.setAttribute('aria-hidden', 'true'));
 }
 
 function getBrowserReaderUrl(file, repo, path) {
@@ -4845,11 +4991,11 @@ function createSidebarBreadcrumb(path) {
   breadcrumb.className = "sidebar-breadcrumb";
   breadcrumb.setAttribute("aria-label", "当前路径");
   const parts = path ? path.split("/") : [];
-  breadcrumb.innerHTML = '<span class="crumb-item' + (!path ? ' current' : '') + '" data-path="">根目录</span>';
+  breadcrumb.innerHTML = '<button type="button" class="crumb-item' + (!path ? ' current' : '') + '" ' + (!path ? 'aria-current="location"' : '') + ' data-path="">根目录</button>';
   for (let i = 0; i < parts.length; i++) {
     const partPath = parts.slice(0, i + 1).join("/");
-    breadcrumb.innerHTML += '<span class="crumb-sep">/</span>';
-    breadcrumb.innerHTML += '<span class="crumb-item' + (i === parts.length - 1 ? ' current' : '') + '" data-path="' + escapeHTML(partPath) + '">' + escapeHTML(parts[i]) + '</span>';
+    breadcrumb.innerHTML += '<span class="crumb-sep" aria-hidden="true">/</span>';
+    breadcrumb.innerHTML += '<button type="button" class="crumb-item' + (i === parts.length - 1 ? ' current' : '') + '" ' + (i === parts.length - 1 ? 'aria-current="location"' : '') + ' data-path="' + escapeHTML(partPath) + '">' + escapeHTML(parts[i]) + '</button>';
   }
   breadcrumb.querySelectorAll(".crumb-item").forEach(function(item) {
     item.addEventListener("click", function() {
@@ -4861,11 +5007,13 @@ function createSidebarBreadcrumb(path) {
 
 async function renderBrowser(path, routeId) {
   if (routeId && routeId !== routeRenderId) return;
+  const restoreFocus = DOM.sidebarContent.contains(document.activeElement);
   STATE.browserPath = path;
   syncStateToURL();
   DOM.sidebarContent.innerHTML = "";
   var currentRepo = STATE.repoFull;
   DOM.sidebarContent.appendChild(createSidebarBreadcrumb(path));
+  if (restoreFocus) DOM.sidebarContent.querySelector('.crumb-item.current').focus({ preventScroll: true });
   const list = document.createElement("div");
   list.className = "browser-list";
   list.innerHTML = '<div class="sidebar-loading">加载中...</div>';
@@ -4884,6 +5032,7 @@ async function renderBrowser(path, routeId) {
       const readerUrl = getBrowserReaderUrl(file, currentRepo, path);
       if (readerUrl) row.dataset.readerUrl = readerUrl;
       else delete row.dataset.readerUrl;
+      row.querySelector('.browser-name').setAttribute('aria-label', (readerUrl ? '打开阅读器：' : '下载文件：') + getBrowserFileName(file));
     });
   });
   if (STATE.useLocalMode && STATE.dataLoaded) {
@@ -5033,7 +5182,7 @@ async function renderRepoFilter(routeId) {
   for (var i = 0; i < repos.length; i++) {
     items.push({
       key: repos[i].name,
-      label: repos[i].name.split("/").pop(),
+      label: VoiceOfMLReader.repositoryLabel(repos[i].name),
       count: repos[i].count,
     });
   }
@@ -5149,6 +5298,7 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
   container.innerHTML = html.join("");
   var parentCb = container.querySelector('input[value="__OTHER__"]');
   if (parentCb) {
+    parentCb.setAttribute('aria-label', '选择其他文件类型');
     var initiallySelectedRestCount = 0;
     for (var initialIndex = 0; initialIndex < rest.length; initialIndex++) {
       if (selectedSet.has(rest[initialIndex].name)) initiallySelectedRestCount++;
@@ -5184,6 +5334,12 @@ function renderExtensionTree(container, items, rest, selected, onChange) {
     });
   });
   var toggleButton = container.querySelector(".ext-other-toggle");
+  if (toggleButton) {
+    const children = container.querySelector('.ext-other-children');
+    children.id = 'ext-other-children';
+    children.inert = STATE.extensionOtherCollapsed !== false;
+    toggleButton.setAttribute('aria-controls', children.id);
+  }
   if (toggleButton) toggleButton.addEventListener("click", function() { toggleExtensionOther(toggleButton); });
 }
 
@@ -5193,7 +5349,13 @@ function toggleExtensionOther(button) {
   var expanding = STATE.extensionOtherCollapsed !== false;
   STATE.extensionOtherCollapsed = !expanding;
   button.setAttribute("aria-expanded", expanding ? "true" : "false");
+  if (!expanding && children.contains(document.activeElement)) button.focus({ preventScroll: true });
+  children.inert = !expanding;
   children.getAnimations().forEach(function(animation) { animation.cancel(); });
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    children.style.display = expanding ? 'block' : 'none';
+    return false;
+  }
   if (expanding) {
     children.style.display = "block";
     children.animate([
@@ -5293,6 +5455,7 @@ function setupFolderTreeEvents() {
         renderFilterTreeNodes(children, node.children, Number(row.style.getPropertyValue("--fdepth")) + 1);
       } else if (expanding) resumeFolderTreeRendering(children);
       toggle.setAttribute("aria-expanded", String(expanding));
+      toggle.setAttribute('aria-label', (expanding ? '收起子文件夹：' : '展开子文件夹：') + node.path);
       toggleFolderChildrenAnimated(children, toggle, expanding);
     }
   });
@@ -5319,6 +5482,13 @@ function toggleFolderChildrenAnimated(childContainer, toggle, expanding) {
   };
   stopTransition();
   resetChildStyles();
+  if (!expanding && childContainer.contains(document.activeElement)) toggle.focus({ preventScroll: true });
+  childContainer.inert = !expanding;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    childContainer.style.display = expanding ? 'block' : 'none';
+    toggle.classList.toggle('expanded', expanding);
+    return;
+  }
   const duration = expanding ? 220 : 190;
   const easing = "cubic-bezier(0.22, 1, 0.36, 1)";
   childContainer.style.display = "block";
@@ -5495,6 +5665,7 @@ function applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup = nul
 }
 
 let folderTreeRenderQueue = [];
+let folderTreeControlId = 0;
 let folderTreeRenderTimer = null;
 let folderTreeRenderActive = false;
 
@@ -5569,11 +5740,17 @@ function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, looku
       (node.showSelfToggle ? '<button type="button" class="folder-self-toggle" data-path="' + escapeHTML(node.path) + '">本层文件</button>' : '') +
       '<span class="folder-count">' + (node.count || 0).toLocaleString() + '</span>';
     const toggle = row.querySelector(".tree-toggle");
+    row.querySelector('input').setAttribute('aria-label', '选择文件夹：' + node.path);
+    row.querySelector('.folder-self-toggle')?.setAttribute('aria-label', '本层文件：' + node.path);
+    toggle?.setAttribute('aria-label', (collapsed ? '展开子文件夹：' : '收起子文件夹：') + node.path);
     applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
     container.appendChild(row);
     if (has) {
       const childDiv = document.createElement("div");
       childDiv.className = "tree-children";
+      childDiv.id = 'filter-folder-children-' + ++folderTreeControlId;
+      childDiv.inert = collapsed;
+      toggle.setAttribute('aria-controls', childDiv.id);
       childDiv._folderPath = node.path;
       childDiv._folderNode = node; childDiv._folderDepth = depth + 1;
       if (collapsed) childDiv.style.display = "none";
@@ -5819,6 +5996,7 @@ async function randomTxt() {
 let toastTimer;
 
 function showToast(msg, dur) {
+  announceSearchStatus(msg);
   dur = dur || 2000;
   DOM.toast.textContent = msg;
   DOM.toast.style.display = "";
@@ -6135,6 +6313,7 @@ function toggleTheme() {
 }
 
 function applyTheme() {
+  DOM.themeBtn.setAttribute('aria-label', STATE.isDark ? '切换到浅色主题' : '切换到深色主题');
   if (STATE.isDark) {
     document.body.classList.remove("light");
     DOM.themeIconLight.style.display = "none";
@@ -6154,6 +6333,7 @@ function toggleMobile() {
 }
 
 function applyMobileMode() {
+  DOM.mobileToggleBtn.setAttribute('aria-label', STATE.isMobile ? '切换到电脑版' : '切换到手机版');
   if (STATE.isMobile) {
     document.body.classList.add("mobile");
     document.body.classList.remove("force-desktop");
@@ -6178,7 +6358,13 @@ function applyMobileMode() {
 
 function autoDetectMobile() { return window.innerWidth <= 768; }
 
-function toggleLeftSidebar() {
+function focusSearchSidebar(sidebar) {
+  const control = Array.from(sidebar.querySelectorAll('button,a[href],input,select,[tabindex="0"]'))
+    .find(node => !node.disabled && node.getClientRects().length && !node.closest('[hidden],[inert]'));
+  (control || sidebar).focus({ preventScroll: true });
+}
+
+function toggleLeftSidebar(event) {
   if (STATE.leftSidebarOpen) {
     closeLeftSidebar();
     return;
@@ -6188,23 +6374,39 @@ function toggleLeftSidebar() {
   updateSidebarVisibility();
   updateSidebarHeader();
   syncStateToURL();
+  if (event?.detail === 0 || event?.type === 'keydown') focusSearchSidebar(DOM.leftSidebar);
 }
 
-function toggleRightSidebar() {
+function toggleRightSidebar(event) {
   if (STATE.rightSidebarOpen) return closeRightSidebar();
   STATE.rightSidebarOpen = true;
   if (STATE.rightSidebarOpen && STATE.leftSidebarOpen && STATE.isMobile) STATE.leftSidebarOpen = false;
   updateSidebarVisibility();
   syncStateToURL();
+  if (event?.detail === 0 || event?.type === 'keydown') focusSearchSidebar(DOM.rightSidebar);
 }
 
 function updateSidebarVisibility() {
+  const main = document.querySelector('#main-content');
+  const covered = STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen);
+  const focusCovered = covered && main.contains(document.activeElement);
+  main.inert = covered;
+  for (const [sidebar, button, open] of [[DOM.leftSidebar, DOM.hamburgerBtn, STATE.leftSidebarOpen],
+      [DOM.rightSidebar, DOM.settingsBtn, STATE.rightSidebarOpen]]) {
+    const restoreFocus = !open && sidebar.contains(document.activeElement);
+    sidebar.inert = !open;
+    button.setAttribute('aria-expanded', String(open));
+    button.setAttribute('aria-label', sidebar === DOM.leftSidebar ? (open ? '关闭仓库导航' : '打开仓库导航') :
+      (open ? '关闭搜索过滤' : '打开搜索过滤'));
+    if (restoreFocus) button.focus({ preventScroll: true });
+  }
   DOM.leftSidebar.classList.toggle("collapsed", !STATE.leftSidebarOpen);
   DOM.leftSidebar.classList.toggle("open", STATE.leftSidebarOpen);
   DOM.rightSidebar.classList.toggle("collapsed", !STATE.rightSidebarOpen);
   DOM.rightSidebar.classList.toggle("open", STATE.rightSidebarOpen);
   DOM.overlay.style.display = "";
   DOM.overlay.classList.toggle("open", STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen));
+  if (focusCovered) focusSearchSidebar(STATE.rightSidebarOpen ? DOM.rightSidebar : DOM.leftSidebar);
 }
 let keyboardResultIndex = -1;
 
@@ -6220,17 +6422,29 @@ function focusKeyboardResult(index) {
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   renderVisible();
-  requestAnimationFrame(function() {
-    DOM.resultsList.querySelectorAll(".result-item.keyboard-focus").forEach(function(item) { item.classList.remove("keyboard-focus"); });
-    var el = DOM.resultsList.querySelector('.result-item[data-index="' + keyboardResultIndex + '"]');
-    if (el) el.classList.add("keyboard-focus");
-  });
+  DOM.resultsList.querySelectorAll(".result-item.keyboard-focus").forEach(function(item) { item.classList.remove("keyboard-focus"); });
+  var el = DOM.resultsList.querySelector('.result-item[data-index="' + keyboardResultIndex + '"]');
+  if (el) { el.classList.add("keyboard-focus"); el.focus({ preventScroll: true }); }
 }
 
 function setupKeyboard() {
+  document.querySelector('.skip-link').addEventListener('click', event => {
+    event.preventDefault(); hideSearchHistory();
+    if (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) {
+      STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false;
+      updateSidebarVisibility(); syncStateToURL(true);
+    }
+    DOM.resultsContainer.focus({ preventScroll: true });
+  });
   document.addEventListener("keydown", function(e) {
     if (e.defaultPrevented || e.isComposing || searchComposing || e.keyCode === 229 || readerOverlay) return;
     const target = e.target instanceof Element ? e.target : document.activeElement;
+    if (e.key === 'Escape' && target.closest('.sidebar')) {
+      e.preventDefault();
+      if (target.closest('#right-sidebar')) closeRightSidebar();
+      else closeLeftSidebar();
+      return;
+    }
     const isInput = target.isContentEditable || !!target.closest("input, textarea, select");
     if (isInput && !(target === DOM.searchInput && e.key === "Escape")) return;
     if (["Enter", "ArrowDown", "ArrowUp"].includes(e.key) && target.closest("button, a, [role='button']")) return;
@@ -6252,9 +6466,10 @@ function setupKeyboard() {
     }
     if (e.key === "b" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      toggleLeftSidebar();
+      toggleLeftSidebar(e);
       return;
     }
+    if (target.closest('.sidebar')) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (STATE.results.length === 0) return;
@@ -6300,6 +6515,13 @@ function clearAllFilters() {
 }
 
 function setupResultDelegation() {
+  DOM.resultsList.addEventListener('keydown', event => {
+    if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+    const path = event.target.closest('.path-folder[role="button"]');
+    if (path && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault(); event.stopPropagation(); path.click();
+    }
+  });
   DOM.resultsList.addEventListener("click", function(e) {
     const missing = e.target.closest("[data-window-page]");
     if (missing && resultWindow) {
@@ -6392,44 +6614,7 @@ async function init() {
     clearTimeout(composeSafetyTimer);
     debouncedSearch();
   });
-  var hideDropdown = function() {
-    setTimeout(function() {
-      if (!dropdownActive) DOM.historyDropdown.style.display = "none";
-    }, 150);
-  };
-  var dropdownActive = false;
-  DOM.searchInput.addEventListener("focus", function() {
-    renderDropdown();
-  });
-  DOM.searchInput.addEventListener("blur", hideDropdown);
-  var longPressTimer = null;
-  DOM.historyDropdown.addEventListener("mouseenter", function() { dropdownActive = true; });
-  DOM.historyDropdown.addEventListener("mouseleave", function() { dropdownActive = false; });
-  DOM.historyDropdown.addEventListener("mousedown", function(e) {
-    if (e.target.closest(".history-del")) return;
-    if (e.target.closest(".history-clear-all")) { saveHistory([]); DOM.historyDropdown.style.display = "none"; return; }
-    var item = e.target.closest(".history-item");
-    if (item) longPressTimer = setTimeout(function() { removeHistoryItem(item.dataset.query); }, 600);
-  });
-  DOM.historyDropdown.addEventListener("mouseup", function() { clearTimeout(longPressTimer); });
-  DOM.historyDropdown.addEventListener("mouseleave", function() { clearTimeout(longPressTimer); });
-  DOM.historyDropdown.addEventListener("touchstart", function(e) {
-    if (e.target.closest(".history-del")) return;
-    var item = e.target.closest(".history-item");
-    if (item) longPressTimer = setTimeout(function() { removeHistoryItem(item.dataset.query); }, 600);
-  }, { passive: true });
-  DOM.historyDropdown.addEventListener("touchend", function() { clearTimeout(longPressTimer); });
-  DOM.historyDropdown.addEventListener("touchmove", function() { clearTimeout(longPressTimer); });
-  DOM.historyDropdown.addEventListener("click", function(e) {
-    var delBtn = e.target.closest(".history-del");
-    if (delBtn) { removeHistoryItem(delBtn.dataset.del); return; }
-    var item = e.target.closest(".history-item");
-    if (item) {
-      submitSearchQuery(item.dataset.query, { restore: true, blur: true });
-      hideDropdown();
-      return;
-    }
-  });
+  setupSearchHistory();
   DOM.historyToggle.addEventListener("change", function() {
     STATE.recordHistory = DOM.historyToggle.checked;
     if (!STATE.recordHistory) saveHistory([]);

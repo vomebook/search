@@ -26,10 +26,12 @@ if (!document.hidden && navigator.onLine) {
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body class="dark">
+<a class="skip-link" href="#results-container">跳转到搜索结果</a>
+<div id="search-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <header id="header">
   <div class="header-left">
-    <button id="hamburger-btn" class="icon-btn" aria-label="菜单" title="侧边栏 (Ctrl+B)">
+    <button id="hamburger-btn" class="icon-btn" aria-label="菜单" aria-controls="left-sidebar" aria-expanded="false" title="侧边栏 (Ctrl+B)">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <line x1="4" y1="6" x2="20" y2="6"/>
         <line x1="4" y1="12" x2="20" y2="12"/>
@@ -49,14 +51,15 @@ if (!document.hidden && navigator.onLine) {
         <line x1="21" y1="21" x2="16.65" y2="16.65"/>
       </svg>
       <input type="search" id="search-input" class="search-input"
+             aria-label="搜索文件" aria-controls="results-list search-history-dropdown"
              placeholder="搜索 VoiceOfML 数据仓库..."
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
        <kbd class="search-kbd" id="search-kbd">/</kbd>
-      <div id="search-history-dropdown" class="search-history-dropdown" style="display:none"></div>
+      <div id="search-history-dropdown" class="search-history-dropdown" role="region" aria-label="搜索历史" style="display:none"></div>
     </div>
   </div>
   <div class="header-right">
-    <button id="settings-btn" class="icon-btn" aria-label="搜索设置" title="搜索过滤">
+    <button id="settings-btn" class="icon-btn" aria-label="搜索设置" aria-controls="right-sidebar" aria-expanded="false" title="搜索过滤">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="11" cy="11" r="8"/>
         <line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -92,7 +95,7 @@ if (!document.hidden && navigator.onLine) {
 </header>
 <div id="app-body" class="app-body">
 
-  <aside id="left-sidebar" class="sidebar left-sidebar">
+  <aside id="left-sidebar" class="sidebar left-sidebar" aria-labelledby="sidebar-title" tabindex="-1" inert>
     <div class="sidebar-header">
       <div class="sidebar-context">
         <button id="sidebar-back-btn" class="icon-btn-sm" type="button" aria-label="返回上一页" title="返回上一页" hidden>
@@ -124,7 +127,7 @@ if (!document.hidden && navigator.onLine) {
       <div class="status-right">
         <button id="clear-filters-btn" class="text-btn" style="display:none">清空筛选</button>
         <div class="sort-group">
-          <span class="sort-label">排序:</span>
+          <label class="sort-label" for="sort-select">结果排序:</label>
           <select id="sort-select" class="sort-select">
             <option value="relevance">相关度</option>
             <option value="name">文件名</option>
@@ -140,8 +143,8 @@ if (!document.hidden && navigator.onLine) {
       <button id="multi-batch-download" class="multi-action-btn primary">批量下载</button>
       <span id="multi-selected-count" class="multi-selected-count"></span>
     </div>
-    <div id="results-container" class="results-container">
-      <div id="results-list" class="results-list" role="listbox" aria-label="搜索结果"></div>
+    <div id="results-container" class="results-container" role="region" aria-label="搜索结果浏览" tabindex="0" aria-busy="false">
+      <div id="results-list" class="results-list" role="list" aria-label="搜索结果"></div>
       <div id="empty-state" class="empty-state" style="display:none">
         <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -160,7 +163,7 @@ if (!document.hidden && navigator.onLine) {
     </div>
     <div id="load-info" class="load-info" style="display:none">
       <span id="mobile-selected-count" class="mobile-selected-count" style="display:none"></span>
-      <span class="result-position-count">当前第 <input id="current-result-position" class="current-result-position" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="当前结果条目号" title="点击编辑，Enter 跳转，Escape 取消"> / <span id="total-count">0</span> 条</span>
+      <span class="result-position-count">当前第 <button id="edit-result-position" class="current-result-position" type="button" aria-label="跳转到指定结果" title="双击或按回车编辑条目号"><span id="result-position-display" aria-hidden="true">1</span></button><input id="current-result-position" class="current-result-position" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="跳转条目号" title="回车跳转，退出键取消" hidden> / <span id="total-count">0</span> 条</span>
       <span class="result-position-actions">
         <button id="restart-position-btn" class="text-btn" type="button" hidden>回到顶部</button>
         <button id="return-to-position-btn" class="text-btn" type="button" hidden>回到原位置</button>
@@ -175,9 +178,9 @@ if (!document.hidden && navigator.onLine) {
 
   </main>
 
-  <aside id="right-sidebar" class="sidebar right-sidebar">
+  <aside id="right-sidebar" class="sidebar right-sidebar" aria-labelledby="filters-title" tabindex="-1" inert>
     <div class="sidebar-header">
-      <span>搜索过滤</span>
+      <span id="filters-title">搜索过滤</span>
       <button id="close-filters-btn" class="icon-btn-sm" aria-label="关闭过滤">&times;</button>
     </div>
         <div class="sidebar-content">
@@ -245,16 +248,16 @@ if (!document.hidden && navigator.onLine) {
       <div class="filter-section">
         <div class="filter-section-title">文件大小</div>
         <div class="filter-size-row">
-          <input type="number" id="filter-min-size" class="size-input" placeholder="最小" min="0" step="0.1">
-          <select id="filter-min-unit" class="size-unit">
+          <input type="number" id="filter-min-size" class="size-input" aria-label="最小文件大小" placeholder="最小" min="0" step="0.1">
+          <select id="filter-min-unit" class="size-unit" aria-label="最小文件大小单位">
             <option value="B">B</option>
             <option value="KB">KB</option>
             <option value="MB" selected>MB</option>
             <option value="GB">GB</option>
           </select>
           <span class="size-sep">—</span>
-          <input type="number" id="filter-max-size" class="size-input" placeholder="最大" min="0" step="0.1">
-          <select id="filter-max-unit" class="size-unit">
+          <input type="number" id="filter-max-size" class="size-input" aria-label="最大文件大小" placeholder="最大" min="0" step="0.1">
+          <select id="filter-max-unit" class="size-unit" aria-label="最大文件大小单位">
             <option value="B">B</option>
             <option value="KB">KB</option>
             <option value="MB" selected>MB</option>

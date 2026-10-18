@@ -819,7 +819,7 @@ body {
 .bookmark-ribbon:focus-visible {
   background: #d35b61;
   outline: 2px solid #8ab4f8;
-  outline-offset: 2px;
+  outline-offset: -4px;
 }
 .bookmark-popover {
   position: fixed;
@@ -1493,6 +1493,28 @@ body {
   .search-match {
     outline: 2px solid currentColor;
   }
+}
+
+@media (forced-colors: active) {
+  :is(.reader-toolbar, .reader-panel, .bookmark-popover, .reader-progress-tools)
+    :is(button, a, input, textarea, [tabindex]):focus-visible,
+  .reader-viewport:focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: -3px;
+  }
+  :is(.reader-panel-tabs button[aria-selected="true"], #page-invert-toggle[aria-pressed="true"]) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  .bookmark-ribbon {
+    clip-path: none;
+    background: ButtonFace;
+    color: ButtonText;
+    border: 2px solid ButtonText;
+  }
+  .bookmark-ribbon::after { content: "书签"; font-size: 12px; }
+  .bookmark-ribbon:focus-visible { outline: 3px solid Highlight; outline-offset: -3px; }
+  .toc-current-mark { color: LinkText; }
 }
 
 /* Mobile toolbar and bookmark placement */

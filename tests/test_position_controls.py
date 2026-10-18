@@ -38,6 +38,7 @@ class PositionControlTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
     def input_position(self, value, key='Enter'):
+        self.page.locator('#edit-result-position').click()
         self.page.locator('#current-result-position').fill(str(value))
         self.page.locator('#current-result-position').press(key)
 
@@ -70,7 +71,7 @@ class PositionControlTests(unittest.TestCase):
         self.input_position(95001, 'Escape')
         self.assertEqual(self.page.evaluate('positionCalls'), [])
         self.assertEqual(self.page.locator('#current-result-position').input_value(), '1')
-        self.page.locator('#current-result-position').focus()
+        self.page.locator('#edit-result-position').click()
         self.page.locator('#current-result-position').blur()
         self.assertEqual(self.page.evaluate('positionCalls'), [])
         self.input_position('not-a-number')

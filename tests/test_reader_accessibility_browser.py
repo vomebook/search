@@ -29,6 +29,22 @@ class ReaderAccessibilityTests(unittest.TestCase):
             self.page.locator('#history').press('Enter')
         self.page.locator('#history').press('Enter')
 
+    def test_forced_colors_keeps_bookmark_and_selected_controls_visible(self):
+        self.open_book()
+        self.page.emulate_media(forced_colors='active', reduced_motion='reduce')
+        ribbon = self.page.locator('#bookmark-ribbon')
+        self.page.wait_for_function('()=>getComputedStyle(document.querySelector("#bookmark-ribbon")).clipPath==="none"')
+        self.assertGreater(float(ribbon.evaluate('node=>parseFloat(getComputedStyle(node).borderTopWidth)')), 0)
+        self.assertIn('书签', ribbon.evaluate('node=>getComputedStyle(node,"::after").content'))
+        for theme in ('dark', 'light'):
+            self.page.evaluate('theme=>{document.documentElement.dataset.theme=theme}', theme)
+            self.open_with_keyboard()
+            self.assertNotEqual(self.page.locator('#toc-tab').evaluate('node=>getComputedStyle(node).outlineStyle'), 'none')
+            self.page.keyboard.press('Escape')
+            ribbon.focus()
+            self.assertNotEqual(ribbon.evaluate('node=>getComputedStyle(node).outlineStyle'), 'none')
+            self.assertEqual(self.page.locator('.reader-markdown').evaluate('node=>getComputedStyle(node).filter'), 'none')
+
     def test_names_relations_auto_open_and_keyboard_focus(self):
         self.page.set_viewport_size({'width': 1200, 'height': 800})
         self.open_book()
