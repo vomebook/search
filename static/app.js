@@ -361,6 +361,7 @@ function normalizeReaderReturnUrl(rawUrl) {
 
 var readerOverlay = null;
 var readerUiState = "base";
+var readerClosing = false;
 const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html");
 var readerReturnScrollState = null;
 var readerReturnSnapshot = null;
@@ -411,6 +412,7 @@ function restoreReaderReturnScroll(windowRendered = false) {
 }
 function closeReaderOverlay(restoreFocus, restoreScroll) {
   if (!readerOverlay) return false;
+  readerClosing = false;
   readerUiState = "base";
   const returnFocus = readerNavigation.unmount();
   readerOverlay = null;
@@ -442,6 +444,7 @@ function openReaderOverlay(url, addHistory) {
   }
   readerOverlay = readerNavigation.mount(url);
   readerUiState = "base";
+  readerClosing = false;
   if (addHistory !== false) readerNavigation.remember(url, readerReturnScrollState);
 }
 
@@ -461,6 +464,8 @@ function handleReaderMessage(event) {
   if (!readerNavigation.accepts(event)) return;
   var message = event.data || {};
   if (message.type === "voice-reader-close") {
+    if (readerClosing) return;
+    readerClosing = true;
     readerUiState = "base";
     try {
       var readerUrl = new URL(readerOverlay.src, location.origin);
@@ -479,6 +484,7 @@ function handleReaderMessage(event) {
     return;
   }
   if (message.type === "voice-reader-ui-state") {
+    if (readerClosing) return;
     if (["base", "panel", "full-search"].includes(message.state)) readerUiState = message.state;
     return;
   }
