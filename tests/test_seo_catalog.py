@@ -143,7 +143,8 @@ class CatalogTests(unittest.TestCase):
     def test_hf_shell_metadata_is_scoped_and_not_a_canonical_override(self):
         template = '<head><!-- SEO:HEAD --><title>old</title><!-- /SEO:HEAD --></head><body>unchanged</body>'
         html = seo.enrich_search_shell(template, "VoiceOfML/Alpha", 23)
-        self.assertIn("Alpha 资料检索", html)
+        self.assertIn("<title>VoiceOfML Search</title>", html)
+        self.assertNotIn("Alpha 资料检索", html)
         self.assertIn("23 条资料记录", html)
         self.assertEqual(Facts(html).canonicals, [])
         self.assertIn("<body>unchanged</body>", html)
