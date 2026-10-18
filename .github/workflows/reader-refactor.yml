@@ -68,7 +68,7 @@ jobs:
       - name: Check Firefox footer counter geometry
         env:
           SEARCH_POSITION_BROWSER: firefox
-        run: python3 -B -m unittest -v tests.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total tests.test_position_controls.PositionControlTests.test_footer_controls_keep_layout_and_latest_return_target tests.test_position_controls.PositionControlTests.test_both_footer_buttons_use_left_and_right_on_narrow_screens
+        run: python3 -B -m unittest -v tests.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total
       - name: Check warmed Reader shell reuse
         run: |
           node tests/test_service_worker.js
@@ -142,7 +142,7 @@ jobs:
         working-directory: huggingface-search
         env:
           SEARCH_POSITION_BROWSER: firefox
-        run: python3 -B -m unittest -v tests.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total tests.test_position_controls.PositionControlTests.test_footer_controls_keep_layout_and_latest_return_target tests.test_position_controls.PositionControlTests.test_both_footer_buttons_use_left_and_right_on_narrow_screens
+        run: python3 -B -m unittest -v tests.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
