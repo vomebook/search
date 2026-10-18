@@ -347,6 +347,10 @@ body.light .header-logo-icon-light {
   opacity: 0.6;
 }
 
+/* The rounded search container owns the focus treatment; don't draw a square
+   outline inside it when keyboard focus reaches the input. */
+.search-input:focus-visible { outline: none; }
+
 .search-kbd {
   flex-shrink: 0;
   margin-right: 8px;
