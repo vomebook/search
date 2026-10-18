@@ -603,17 +603,8 @@ function warmReaderIntent(rawUrl) {
   } catch (_) { return; }
   var shellAssets = VoiceOfMLReaderResources.shellAssets("/search/static/");
   var engineAssets = VoiceOfMLReaderResources.engineAssets(extension, "/search/static/", "?reader-v1");
-  shellAssets.concat(engineAssets).forEach(function(href) {
-    if (warmedReaderAssets.has(href)) return;
-    warmedReaderAssets.add(href);
-    if (href.endsWith("/reader.html")) {
-      fetch(href, { priority: "low", signal: AbortSignal.timeout(8000) })
-        .then(response => {
-          if (!response.ok) throw new Error("Reader shell HTTP " + response.status);
-          return response.arrayBuffer();
-        }).catch(() => warmedReaderAssets.delete(href));
-      return;
-    }
+  var controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+  var preload = function(href) {
     var link = document.createElement("link");
     var module = href.endsWith(".mjs") || href.includes("/foliate-reader/view.js") || (href.endsWith(".js") && !engineAssets.includes(href));
     link.rel = module ? "modulepreload" : "preload";
@@ -622,6 +613,25 @@ function warmReaderIntent(rawUrl) {
     link.href = href;
     link.addEventListener("error", () => { warmedReaderAssets.delete(href); link.remove(); }, { once: true });
     document.head.appendChild(link);
+  };
+  shellAssets.concat(engineAssets).forEach(function(href) {
+    if (warmedReaderAssets.has(href)) return;
+    warmedReaderAssets.add(href);
+    var shellFile = href.endsWith("/reader.html");
+    // Under SW control, store shell files in its cache first. A repeated link
+    // preload is deduplicated after a pre-control warm, leaving classic shell
+    // scripts uncached and on the Reader's critical path. The link then reads
+    // the cached copy without a second download.
+    if (shellFile || (controlled && !engineAssets.includes(href))) {
+      fetch(href, { priority: "low", signal: AbortSignal.timeout(8000) })
+        .then(response => {
+          if (!response.ok) throw new Error("Reader shell HTTP " + response.status);
+          return response.arrayBuffer();
+        }).then(() => { if (!shellFile) preload(href); })
+        .catch(() => warmedReaderAssets.delete(href));
+      return;
+    }
+    preload(href);
   });
   startReaderSourceWarmup(API_BASE, readerId, sourceUrl);
   warmConnection();

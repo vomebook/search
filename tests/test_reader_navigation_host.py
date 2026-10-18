@@ -152,7 +152,8 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
 
     def test_shell_is_warmed_without_pointer_intent_or_reader_execution(self):
         self.page.wait_for_function('warmedReaderAssets.has("/search/static/reader.html")')
-        self.assertTrue(self.page.locator('link[rel="modulepreload"][href="/search/static/reader.js"]').count())
+        # Under SW control the link follows the cached shell fetch.
+        self.page.locator('link[rel="modulepreload"][href="/search/static/reader.js"]').wait_for(state='attached')
         self.assertEqual(self.page.locator('.reader-overlay').count(), 0)
         self.assertFalse(self.page.evaluate('!!window.VoiceOfMLReaderPdfDiagnostics'))
 
