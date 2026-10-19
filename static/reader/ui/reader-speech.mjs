@@ -23,6 +23,14 @@ function textNodes(root) {
   return nodes;
 }
 
+function until(check, timeout) {
+  const deadline = performance.now() + timeout;
+  return new Promise((resolve) => {
+    const poll = () => (check() || performance.now() > deadline ? resolve() : setTimeout(poll, 100));
+    poll();
+  });
+}
+
 function rootText(root) { return textNodes(root).map((node) => node.data).join(""); }
 
 // PDF/OCR line breaks are layout, not sentences. Keep the length (and thus
@@ -194,16 +202,27 @@ export function createReaderSpeech(readerContext) {
         }
         return null;
       },
+      // Follow only while the listener is reading along (the previous clip was
+      // on screen or was brought there by us); a reader who scrolled away is left alone.
       follow(start) {
         const part = self.partAt(start);
         if (!part) return;
-        const range = self.range(start, start + 1), rect = range?.getBoundingClientRect();
+        const range = self.range(start, start + 1);
+        if (!range) {
+          // An unrendered page/section: navigate there and wait for its text.
+          if (!self.following || sourceInfo.root(part.unit) || !sourceInfo.locate) return;
+          return Promise.resolve(sourceInfo.locate(part.unit)).then(() => until(() => sourceInfo.root(part.unit), 8000));
+        }
+        const rect = range.getBoundingClientRect();
+        if (!rect.height) return;
         const box = readerContext.viewport.getBoundingClientRect();
-        if (rect && rect.height && (rect.bottom > box.bottom - 24 || rect.top < box.top)) {
-          // Follow only when the previous clip was on screen, i.e. the reader is listening along.
-          if (self.following) range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
-        } else if (!rect && sourceInfo.page && self.following) sourceInfo.locate?.(part.unit);
-        self.following = !!rect && rect.bottom > box.top && rect.top < box.bottom;
+        const shift = sourceInfo.frame ? sourceInfo.frame.getBoundingClientRect().top : 0;
+        const top = rect.top + shift, bottom = rect.bottom + shift;
+        if (self.following && (bottom > box.bottom - 24 || top < box.top)) {
+          range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
+          return;
+        }
+        self.following = bottom > box.top && top < box.bottom;
       },
       following: true,
       async reveal(offset) {

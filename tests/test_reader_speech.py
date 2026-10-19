@@ -13,7 +13,6 @@ from tests import test_reader_performance as perf
 PlaywrightError, epub_with_navigation, minimal_pdf, sync_playwright = perf.PlaywrightError, perf.epub_with_navigation, perf.minimal_pdf, perf.sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
-perf.local_server  # GitHub Pages harness serves /search/*
 SPEECH = "https://vomebook-hitokoto.hf.space"
 MP3 = (bytes.fromhex("fffb9064") + bytes(413)) * 58  # ~1.5 s of silent MPEG-1 Layer III
 SOURCE = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/sample"
@@ -43,7 +42,7 @@ class ReaderSpeechTest(unittest.TestCase):
         cls.origin, _state = cls.server.__enter__()
         cls.playwright = sync_playwright().start()
         try:
-            cls.browser = cls.playwright.chromium.launch(headless=True, args=["--no-sandbox", "--autoplay-policy=no-user-gesture-required"])
+            cls.browser = cls.playwright.chromium.launch(headless=True, args=["--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--disable-audio-output"])
         except PlaywrightError as error:
             cls.playwright.stop()
             cls.server.__exit__(None, None, None)
@@ -144,6 +143,35 @@ class ReaderSpeechTest(unittest.TestCase):
         try:
             page.wait_for_timeout(500)
             self.assertEqual(page.locator("[data-speech-toggle]").count(), 0)
+        finally:
+            context.close()
+
+    def test_sparse_pdf_reads_distant_text_page_and_follows_there(self):
+        # Like scanned books with an appended information page: only page 30 has text.
+        count = 30
+        stream = b"BT /F1 18 Tf 20 100 Td (Information Page Text.) Tj ET"
+        kids = " ".join(f"{3 + index} 0 R" for index in range(count)).encode()
+        objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [" + kids + b"] /Count " + str(count).encode() + b" >>"]
+        for index in range(count):
+            contents = f" /Contents {3 + count} 0 R" if index == count - 1 else ""
+            objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 {4 + count} 0 R >> >>{contents} >>".encode())
+        objects += [b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+                    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+        payload = bytearray(b"%PDF-1.4\n"); offsets = []
+        for number, body in enumerate(objects, 1):
+            offsets.append(len(payload)); payload.extend(f"{number} 0 obj\n".encode() + body + b"\nendobj\n")
+        xref = len(payload); payload.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+        for offset in offsets: payload.extend(f"{offset:010d} 00000 n \n".encode())
+        payload.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+        context, page, posts, errors = self.open("pdf", bytes(payload), "application/pdf")
+        try:
+            job = self.play(page, posts)
+            self.assertIn("Information Page Text", job["text"])
+            wait(page, "() => CSS.highlights.has('ccrd-speech')", 15000)
+            self.assertTrue(page.evaluate("""() => { const r = document.querySelector('.reader-page[data-page="30"]').getBoundingClientRect();
+              const v = document.querySelector('#viewport').getBoundingClientRect(); return r.bottom > v.top && r.top < v.bottom; }"""))
+            self.stop(page)
+            self.assertFalse(errors, errors)
         finally:
             context.close()
 
