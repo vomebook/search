@@ -348,13 +348,19 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     }
     marked = null;
   }
-  function mark() {
+  function mark(retried = false) {
     clearMark();
     if (!owner?.current || preview?.id !== owner.snapshot.id || (owner.snapshot.adapter && preview.adapter !== owner.snapshot.adapter)) return;
     const start = owner.current.job.batch.start + owner.current.part.start;
     const end = owner.current.job.batch.start + owner.current.part.end;
     const range = preview.adapter ? preview.adapter.range?.(start, end) : sourceRange(start, end);
-    if (!range) return;
+    if (!range) {
+      // The clip's page/section may not be rendered yet: the adapter can bring
+      // it into view, after which the same clip is highlighted once.
+      const current = owner.current;
+      if (preview.adapter && !retried) Promise.resolve(preview.adapter.follow?.(start, end)).then(() => { if (owner?.current === current) mark(true); }, () => {});
+      return;
+    }
     if (preview.adapter) {
       // The range may live in an iframe document or shadow tree: register it in
       // that realm's highlight registry and never mutate the host's DOM.
