@@ -155,6 +155,18 @@ class SearchAccessibilityTests(unittest.TestCase):
 
     def test_switches_have_real_keyboard_and_visible_focus_in_both_themes(self):
         self.page.locator('#settings-btn').press('Enter')
+        # The exact-search switch is only meaningful (and only focusable) in API
+        # mode; locally it must stay inert so a hidden control cannot change
+        # query semantics.
+        hidden = self.page.locator('#exact-search-toggle')
+        self.assertTrue(hidden.evaluate('node=>node.closest("#exact-search-section").inert'))
+        self.assertEqual(hidden.evaluate('node=>node.tabIndex'), -1)
+        hidden.evaluate('node=>node.focus()')
+        self.assertNotEqual(self.page.evaluate('document.activeElement.id'), 'exact-search-toggle')
+        self.page.locator("#local-mode-toggle").evaluate(
+            "el => { el.checked = false; el.dispatchEvent(new Event('change', {bubbles: true})); }"
+        )
+        self.page.wait_for_function('()=>!document.querySelector("#exact-search-section").inert', timeout=10000)
         for theme in ('dark', 'light'):
             self.page.evaluate("dark=>{STATE.isDark=dark;applyTheme()}", theme == 'dark')
             for selector in ('#mirror-links-toggle', '#history-toggle', '#search-folders-toggle', '#exact-search-toggle'):
