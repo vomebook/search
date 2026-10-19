@@ -2,7 +2,7 @@ const WORKER_PROTOCOL_VERSION = 1;
 const MAX_PAGE_SIZE = 500;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
 // Bump when matching, filtering, collation or public record semantics change.
-const SEARCH_SEMANTICS_VERSION = "worker-search-v2";
+const SEARCH_SEMANTICS_VERSION = "worker-search-v3";
 let snapshotGeneration = null;
 
 let records = [];
@@ -696,18 +696,23 @@ function searchLocal(params) {
     if (order !== null) return pageResult(order, params);
     matched = recordIndices.slice();
   } else if (params.exact || literalSearch(query)) {
-    const wildcard = query.includes("*") || query.includes("?");
-    const lower = query.toLowerCase();
-    if (wildcard && query.replace(/\*/g, "") === "") {
-      // A star-only pattern matches every string, including an empty field.
-      matched = recordIndices.slice();
-    } else {
-      const pattern = wildcard ? compileWildcardMatcher(query) : null;
-      for (const i of exactSearchScope(params.repos)) {
-        const record = records[i] || {};
+    // Whitespace separates independent literal terms, matching the HF API.
+    // A term may still be a wildcard pattern; every term must match.
+    const terms = query.split(/\s+/).filter(Boolean);
+    matched = exactSearchScope(params.repos).slice();
+    for (const term of terms) {
+      const wildcard = term.includes("*") || term.includes("?");
+      const lower = term.toLowerCase();
+      if (wildcard && term.replace(/\*/g, "") === "") continue;
+      const pattern = wildcard ? compileWildcardMatcher(term) : null;
+      matched = matched.filter(index => {
+        const record = records[index] || {};
         const fields = getRecordSearchFields(record);
-        if (pattern ? pattern.test(fields.file) || pattern.test(fields.repo) || (searchFolders && pattern.test(fields.folder)) : fields.file.includes(lower) || fields.repo.includes(lower) || (searchFolders && fields.folder.includes(lower))) matched.push(i);
-      }
+        return pattern
+          ? pattern.test(fields.file) || pattern.test(fields.repo) || (searchFolders && pattern.test(fields.folder))
+          : fields.file.includes(lower) || fields.repo.includes(lower) || (searchFolders && fields.folder.includes(lower));
+      });
+      if (!matched.length) break;
     }
   } else {
     buildFulltext();
