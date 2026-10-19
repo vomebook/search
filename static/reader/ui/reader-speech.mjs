@@ -138,6 +138,30 @@ export function createReaderSpeech(readerContext) {
     return null;
   }
 
+  // Scroll the sentence itself (not its parent block: a TXT block holds 32 KiB)
+  // to a third of the way down its nearest scroller, crossing shadow roots and frames.
+  function scrollToRange(range, behavior) {
+    const rect = range.getBoundingClientRect();
+    if (!rect.height) return;
+    const doc = range.startContainer.ownerDocument;
+    for (let el = range.startContainer.parentElement; el; el = el.parentElement || el.getRootNode?.().host || null) {
+      const overflow = el.ownerDocument.defaultView.getComputedStyle(el).overflowY;
+      if (/auto|scroll/.test(overflow) && el.scrollHeight > el.clientHeight + 1) {
+        const box = el.getBoundingClientRect();
+        el.scrollBy({ top: rect.top - box.top - box.height / 3, behavior });
+        return;
+      }
+    }
+    const scroller = doc.scrollingElement;
+    if (doc !== document && scroller && scroller.scrollHeight > scroller.clientHeight + 1) {
+      doc.defaultView.scrollBy({ top: rect.top - doc.defaultView.innerHeight / 3, behavior });
+      return;
+    }
+    const frame = doc.defaultView?.frameElement;
+    const box = readerContext.viewport.getBoundingClientRect();
+    readerContext.viewport.scrollBy({ top: rect.top + (frame ? frame.getBoundingClientRect().top : 0) - box.top - box.height / 3, behavior });
+  }
+
   // ---- Adapter ---------------------------------------------------------------
   function createAdapter(sourceInfo, base) {
     const parts = [];
@@ -204,35 +228,55 @@ export function createReaderSpeech(readerContext) {
       },
       // Follow only while the listener is reading along (the previous clip was
       // on screen or was brought there by us); a reader who scrolled away is left alone.
+      // Whether `following` holds is decided by the reader's own scrolling (see
+      // userScrolled), not by the clip boundary: scrolling the current clip out
+      // of view stops following until "回到播放位置" or scrolling back to it.
       follow(start) {
         const part = self.partAt(start);
         if (!part) return;
+        self.current = start;
+        if (!self.following) return;
         const range = self.range(start, start + 1);
         if (!range) {
           // An unrendered page/section: navigate there and wait for its text.
-          if (!self.following || sourceInfo.root(part.unit) || !sourceInfo.locate) return;
-          return Promise.resolve(sourceInfo.locate(part.unit)).then(() => until(() => sourceInfo.root(part.unit), 8000));
+          if (sourceInfo.root(part.unit) || !sourceInfo.locate) return;
+          self.autoUntil = performance.now() + 8000;
+          return Promise.resolve(sourceInfo.locate(part.unit)).then(() => until(() => sourceInfo.root(part.unit), 8000))
+            .finally(() => { self.autoUntil = performance.now() + 600; });
         }
-        const rect = range.getBoundingClientRect();
-        if (!rect.height) return;
+        const position = self.visible(start, range);
+        if (position && position.inside) return;
+        if (position) {
+          self.autoUntil = performance.now() + 1200;
+          scrollToRange(range, "smooth");
+        }
+      },
+      following: true, current: null, autoUntil: 0,
+      // null when the clip has no rendered range; otherwise whether it is in view.
+      visible(start, range = self.range(start, start + 1)) {
+        const rect = range?.getBoundingClientRect();
+        if (!rect || !rect.height) return null;
         const box = readerContext.viewport.getBoundingClientRect();
         const shift = sourceInfo.frame ? sourceInfo.frame.getBoundingClientRect().top : 0;
         const top = rect.top + shift, bottom = rect.bottom + shift;
-        if (self.following && (bottom > box.bottom - 24 || top < box.top)) {
-          range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
-          return;
-        }
-        self.following = bottom > box.top && top < box.bottom;
+        return { inside: top >= box.top && bottom <= box.bottom - 24, overlaps: bottom > box.top && top < box.bottom };
       },
-      following: true,
+      // A settled scroll that we did not start: follow only if the clip is still on screen.
+      userScrolled() {
+        if (self.current === null || performance.now() < self.autoUntil) return;
+        self.following = !!self.visible(self.current)?.overlaps;
+      },
       async reveal(offset) {
         const part = self.partAt(offset);
         if (!part) return;
-        await sourceInfo.locate?.(part.unit);
-        if (adapter !== self) publish(self);
-        const range = self.range(offset, offset + 1);
-        range?.startContainer.parentElement?.scrollIntoView({ block: "center" });
-        self.following = true;
+        self.autoUntil = performance.now() + 8000;
+        try {
+          await sourceInfo.locate?.(part.unit);
+          if (adapter !== self) publish(self);
+          const range = self.range(offset, offset + 1);
+          if (range) scrollToRange(range, "auto");
+          self.following = true;
+        } finally { self.autoUntil = performance.now() + 600; }
       },
       offsetAtTop() {
         const position = topPosition();
@@ -369,11 +413,19 @@ export function createReaderSpeech(readerContext) {
     };
     listen(readerContext.viewport, "dblclick", onDoubleClick);
     if (info.frame?.contentDocument) { listen(info.frame.contentDocument, "dblclick", onDoubleClick); ensureStyle(info.frame.contentDocument); }
-    let timer = 0;
-    const onScroll = () => { clearTimeout(timer); timer = setTimeout(syncToView, 250); };
-    listen(readerContext.viewport, "scroll", onScroll, { passive: true });
+    let timer = 0, settle = 0;
+    const onScroll = () => {
+      clearTimeout(timer); timer = setTimeout(syncToView, 250);
+      clearTimeout(settle); settle = setTimeout(() => adapter?.userScrolled(), 150);
+    };
+    // Direct input overrides one of our smooth scrolls still in progress.
+    const onIntent = () => { if (adapter) adapter.autoUntil = 0; };
+    for (const target of [readerContext.viewport, info.frame?.contentDocument]) {
+      listen(target, "scroll", onScroll, { passive: true, capture: true });
+      for (const type of ["wheel", "touchstart", "keydown"]) listen(target, type, onIntent, { passive: true, capture: true });
+    }
     if (info.frame?.contentWindow) listen(info.frame.contentWindow, "scroll", onScroll, { passive: true });
-    cleanup.push(() => clearTimeout(timer));
+    cleanup.push(() => { clearTimeout(timer); clearTimeout(settle); });
     ensureStyle(document);
   }
 
