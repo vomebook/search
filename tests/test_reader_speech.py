@@ -130,6 +130,40 @@ class ReaderSpeechTest(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_scrolling_away_is_not_undone_by_the_next_sentence(self):
+        body = "".join(f"第{index}句。\n" for index in range(400)).encode()
+        context, page, posts, errors = self.open("txt", body, "text/plain; charset=utf-8")
+        try:
+            self.play(page, posts)
+            viewport = page.locator("#viewport")
+            box = viewport.bounding_box()
+            page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            page.mouse.wheel(0, 6000)
+            page.wait_for_timeout(700)
+            away = viewport.evaluate("n => n.scrollTop")
+            self.assertGreater(away, 2000)
+            clip = page.locator("#speech-audio").evaluate("n => n.src")
+            for _ in range(2):  # Two sentence changes must leave the reader where they scrolled.
+                page.locator("#speech-next").click()
+                wait(page, f"() => document.querySelector('#speech-audio').src !== {json.dumps(clip)}")
+                clip = page.locator("#speech-audio").evaluate("n => n.src")
+                page.wait_for_timeout(900)
+                self.assertEqual(viewport.evaluate("n => n.scrollTop"), away)
+            page.locator("#speech-locate").click()
+            wait(page, f"() => document.querySelector('#viewport').scrollTop < {away - 2000}", 5000)
+            # The sentence being read is on screen, not merely its 32 KiB text block.
+            self.assertTrue(page.evaluate("""() => { const range = [...CSS.highlights.get('ccrd-speech')][0], rect = range.getBoundingClientRect();
+              const box = document.querySelector('#viewport').getBoundingClientRect(); return rect.top >= box.top && rect.bottom <= box.bottom; }"""))
+            # Following resumes after returning to the playback position.
+            top = viewport.evaluate("n => n.scrollTop")
+            page.locator("#speech-next").click()
+            page.wait_for_timeout(900)
+            self.assertLess(abs(viewport.evaluate("n => n.scrollTop") - top), 400)
+            self.stop(page)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
     def test_native_pdf_text_layer_is_read_and_image_is_not_offered(self):
         context, page, posts, errors = self.open("pdf", minimal_pdf(), "application/pdf")
         try:
