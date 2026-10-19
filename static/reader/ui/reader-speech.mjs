@@ -112,6 +112,8 @@ export function createReaderSpeech(readerContext) {
         units: pageCount() + 1, first: 1,
         root: (page) => { const node = shell(page); return node?.dataset.textReady === "1" ? node.querySelector(".reader-pdf-text") : null; },
         load: async (page) => {
+          const rendered = shell(page);
+          if (rendered?.dataset.textReady === "1" && rendered.querySelector(".reader-pdf-text")) return spokenPageText(rootText(rendered.querySelector(".reader-pdf-text")));
           if (ocr) {
             const payload = await readerContext.loadPdfOcrPage(page, "low");
             if (payload?.kind === "pdf-text-layer") return spokenPageText(String(payload.text || ""));
@@ -150,6 +152,11 @@ export function createReaderSpeech(readerContext) {
       base, source: sourceInfo,
       get text() { return text; },
       get done() { return done; },
+      // Shown while a slow search (e.g. scanned pages without text) continues.
+      progress() {
+        if (!sourceInfo.page || next - base < 3) return "";
+        return `正在查找可朗读的文字（第 ${Math.min(next, sourceInfo.units - 1)} / ${sourceInfo.units - 1} 页）…`;
+      },
       root: null,
       ensure(length) {
         chain = chain.then(async () => {
