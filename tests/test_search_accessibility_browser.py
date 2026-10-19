@@ -155,18 +155,19 @@ class SearchAccessibilityTests(unittest.TestCase):
 
     def test_switches_have_real_keyboard_and_visible_focus_in_both_themes(self):
         self.page.locator('#settings-btn').press('Enter')
-        # The exact-search switch is only meaningful (and only focusable) in API
-        # mode; locally it must stay inert so a hidden control cannot change
-        # query semantics.
-        hidden = self.page.locator('#exact-search-toggle')
-        self.assertTrue(hidden.evaluate('node=>node.closest("#exact-search-section").inert'))
-        self.assertEqual(hidden.evaluate('node=>node.tabIndex'), -1)
-        hidden.evaluate('node=>node.focus()')
+        # The exact-search switch is visible and focusable in both backends. If
+        # the section is ever collapsed it must also be inert and untabbable.
+        section = self.page.locator('#exact-search-section')
+        self.assertFalse(section.evaluate('node=>node.inert'))
+        self.assertNotEqual(self.page.locator('#exact-search-toggle').evaluate('node=>node.tabIndex'), -1)
+        self.page.evaluate('setExactSearchSectionVisible(false, false)')
+        self.assertTrue(section.evaluate('node=>node.inert'))
+        self.assertEqual(section.get_attribute('aria-hidden'), 'true')
+        self.assertEqual(self.page.locator('#exact-search-toggle').evaluate('node=>node.tabIndex'), -1)
+        self.page.locator('#exact-search-toggle').evaluate('node=>node.focus()')
         self.assertNotEqual(self.page.evaluate('document.activeElement.id'), 'exact-search-toggle')
-        self.page.locator("#local-mode-toggle").evaluate(
-            "el => { el.checked = false; el.dispatchEvent(new Event('change', {bubbles: true})); }"
-        )
-        self.page.wait_for_function('()=>!document.querySelector("#exact-search-section").inert', timeout=10000)
+        self.page.evaluate('setExactSearchSectionVisible(true, false)')
+        self.assertFalse(section.evaluate('node=>node.inert'))
         for theme in ('dark', 'light'):
             self.page.evaluate("dark=>{STATE.isDark=dark;applyTheme()}", theme == 'dark')
             for selector in ('#mirror-links-toggle', '#history-toggle', '#search-folders-toggle', '#exact-search-toggle'):
