@@ -92,7 +92,8 @@
     "reader/core/reader-document-loader.mjs", "reader/pdf/reader-pdf-page-window.mjs", "reader/pdf/reader-pdf-text-runtime.mjs",
     "reader/formats/reader-html-format.mjs", "reader/pdf/reader-pdf-renderer.mjs", "reader/formats/reader-text-format.mjs",
     "reader/formats/reader-chapter-format.mjs", "reader/formats/reader-format-controller.mjs",
-    "reader/pdf/reader-pdf-engine.mjs", "reader/pdf/reader-pdf-search.mjs", "reader/core/reader-bindings.mjs", "reader/ui/reader-document-styles.mjs"
+    "reader/pdf/reader-pdf-engine.mjs", "reader/pdf/reader-pdf-search.mjs", "reader/core/reader-bindings.mjs", "reader/ui/reader-document-styles.mjs",
+    "reader/ui/reader-speech.mjs"
   ]);
   const readerFiles = Object.freeze([
     "reader-resources.js",
@@ -120,6 +121,7 @@
     "reader/search/reader-pdf-book-search.mjs",
     "reader/pdf/reader-pdf-network.mjs",
     "reader/pdf/reader-pdf-text-store.mjs",
+    "tts-client.js",
     "reader.css",
     ...readerComponentFiles,
     "reader/reader-components.mjs",

@@ -1605,3 +1605,28 @@ body {
   font: inherit;
   cursor: pointer;
 }
+
+/* Native reading panel (shared static/tts-client.js; Reader theme colours). */
+.speech-panel { position: fixed; right: 16px; bottom: 16px; z-index: 60; width: min(320px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; padding: 12px; color: #eceff1; background: #1b1e21; border: 1px solid #34383d; border-radius: 14px; box-shadow: 0 8px 28px rgba(0, 0, 0, .45); user-select: none; -webkit-user-select: none; }
+.speech-panel[hidden] { display: none; }
+.speech-heading { display: flex; align-items: center; gap: 4px; }
+#speech-title { flex: 1; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.speech-note { margin: 4px 0 10px; min-height: 16px; color: #aab2bb; font-size: 11px; }
+.speech-setting { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 12px; }
+.speech-setting > span { min-width: 4em; }
+.speech-setting input, .speech-setting select { flex: 1; min-width: 0; accent-color: #8ab4f8; }
+.speech-setting output { min-width: 3em; text-align: right; font-variant-numeric: tabular-nums; }
+.speech-setting select { padding: 4px 6px; color: inherit; background: #26292d; border: 1px solid #34383d; border-radius: 6px; }
+.speech-transport, .speech-links { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 10px; }
+.speech-play { padding: 7px 24px; font-size: 12px; color: #0b1e3a; background: #8ab4f8; border: 0; border-radius: 20px; cursor: pointer; }
+.speech-panel button:disabled { opacity: .4; cursor: default; }
+.speech-links .text-button { font-size: 11px; }
+.preview-speech-btn svg { width: 16px; height: 16px; }
+.preview-speech-btn.speech-active { color: #8ab4f8; }
+::highlight(ccrd-speech) { background: rgba(138, 180, 248, .38); color: inherit; text-decoration: underline; }
+:root[data-theme="light"] .speech-panel { color: #1f2328; background: #ffffff; border-color: #d0d7de; box-shadow: 0 8px 28px rgba(0, 0, 0, .18); }
+:root[data-theme="light"] .speech-note { color: #57606a; }
+:root[data-theme="light"] .speech-setting select { background: #f6f8fa; border-color: #d0d7de; }
+:root[data-theme="light"] .speech-play { color: #ffffff; background: #0969da; }
+:root[data-theme="light"] .preview-speech-btn.speech-active { color: #0969da; }
+@media (max-width: 600px) { .speech-panel { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); } }

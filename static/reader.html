@@ -6,7 +6,7 @@
     <meta name="robots" content="noindex, nofollow, noarchive" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; base-uri 'self' blob:; script-src 'self' https://unpkg.com 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' blob:; font-src 'self' blob:; img-src 'self' data: blob: https:; media-src 'self' https://voiceofml-search.hf.space https://hf-mirror.com https://huggingface.co https://*.hf.co https://*.huggingface.co; connect-src 'self' blob: https://unpkg.com https://huggingface.co https://*.hf.co https://*.huggingface.co https://voiceofml-search.hf.space https://hf-mirror.com; frame-src 'self' blob: https://voiceofml-search.hf.space;"
+      content="default-src 'self'; base-uri 'self' blob:; script-src 'self' https://unpkg.com 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' blob:; font-src 'self' blob:; img-src 'self' data: blob: https:; media-src 'self' https://voiceofml-search.hf.space https://hf-mirror.com https://huggingface.co https://*.hf.co https://*.huggingface.co https://vomebook-hitokoto.hf.space blob:; connect-src 'self' blob: https://unpkg.com https://huggingface.co https://*.hf.co https://*.huggingface.co https://voiceofml-search.hf.space https://hf-mirror.com https://vomebook-hitokoto.hf.space; frame-src 'self' blob: https://voiceofml-search.hf.space;"
     />
     <title>VoiceOfML Reader</title>
     <script>
@@ -229,6 +229,16 @@
         panel.insertBefore(input, panel.querySelector(".panel-list"));
       }
     </script>
+    <section id="speech-panel" class="speech-panel" aria-label="朗读设置" hidden>
+      <div class="speech-heading"><span id="speech-title">朗读</span><button type="button" id="speech-collapse" class="icon-button" aria-label="收起设置，继续播放" title="收起，继续播放"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 12h14"/></svg></button><button type="button" id="speech-stop" class="icon-button" aria-label="停止朗读" title="停止朗读">×</button></div>
+      <p id="speech-status" class="speech-note" role="status">从当前阅读位置开始</p>
+      <label class="speech-setting" for="speech-pitch"><span>音高</span><input id="speech-pitch" type="range" min="-3" max="3" step="1" value="0"><output id="speech-pitch-value">0</output></label>
+      <label class="speech-setting" for="speech-speed"><span>语速</span><input id="speech-speed" type="range" min="0.5" max="2" step="0.05" value="1"><output id="speech-speed-value">1.0×</output></label>
+      <label class="speech-setting" for="speech-timer"><span>睡眠定时</span><select id="speech-timer"><option value="off">关闭</option><option value="clip">读完当前句</option><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">60 分钟</option></select></label>
+      <div class="speech-transport"><button type="button" id="speech-previous" class="text-button" aria-label="上一句">上一句</button><button type="button" id="speech-play" class="speech-play">暂停</button><button type="button" id="speech-next" class="text-button" aria-label="下一句">下一句</button></div>
+      <div class="speech-links"><button type="button" id="speech-visible" class="text-button">从当前阅读位置开始</button><button type="button" id="speech-locate" class="text-button">回到播放位置</button></div>
+    </section>
+    <script defer src="/search/static/tts-client.js"></script>
     <script type="module" src="/search/static/reader.js"></script>
   </body>
 </html>
