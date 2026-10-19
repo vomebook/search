@@ -190,9 +190,11 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
   let marked = null, markedRegistry = null;
   // Optional host adapter (paged/sectioned documents) supplies text that only
   // grows at its end, plus DOM mapping. Without one, the preview body is used.
-  const LOOKAHEAD = 2400;
+  // NEED covers one batch plus its planning context; growth targets LOOKAHEAD.
+  const LOOKAHEAD = 2400, NEED = 1800;
+  let starting = 0; // Supersedes pending adapter loads (start/stop).
   function more(snapshot) { return !!snapshot.adapter && !snapshot.adapter.done; }
-  function loaded(snapshot, offset) { return !more(snapshot) || snapshot.text.length >= offset + LOOKAHEAD; }
+  function loaded(snapshot, offset) { return !more(snapshot) || snapshot.text.length >= offset + NEED; }
   function sameSource(a, b) { return a?.id === b?.id && (a.adapter || b.adapter ? a.adapter === b.adapter : a.text === b.text); }
   function grow(snapshot, offset, value) {
     if (!more(snapshot) || snapshot.growing) return;
@@ -428,6 +430,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
   }
   function stop(message = "已停止，可继续朗读", keepalive = false, keepClips = false) {
+    starting += 1; // A pending adapter load must not start playback after stopping.
     const value = owner;
     if (value) {
       for (const job of value.jobs.values()) remember(value, job);
@@ -661,14 +664,19 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
       }
     }
   }
-  let starting = 0;
   function start(snapshot, offset, playing = true, skipHistory = false) {
     createAudio();
     if (!loaded(snapshot, offset)) {
       // Load enough source around the target first; a newer start wins.
       const token = ++starting;
       notice("正在载入正文…"); show();
-      Promise.resolve(snapshot.adapter.ensure(offset + LOOKAHEAD)).catch(() => {}).then(() => {
+      // A host may report where a slow search for text has reached.
+      const progress = setInterval(() => {
+        const text = token === starting && snapshot.adapter.progress?.();
+        if (text) notice(text); else if (token !== starting) clearInterval(progress);
+      }, 500);
+      Promise.resolve(snapshot.adapter.ensure(offset + NEED)).catch(() => {}).then(() => {
+        clearInterval(progress);
         if (token !== starting) return;
         if (!snapshot.text.trim()) { notice("这份文档没有可朗读的文字"); return; }
         start(snapshot, Math.min(offset, snapshot.text.length), playing, skipHistory);
