@@ -46,7 +46,8 @@ import {
   createReaderChapterFormat,
   createReaderFormatController,
   createReaderPdfEngine,
-  createReaderPdfSearch
+  createReaderPdfSearch,
+  createReaderSpeech
 } from "./reader/reader-components.mjs";
 
 const readerContext = {
@@ -682,6 +683,8 @@ let {
   makePdfSearchPageLoader, publishPdfSearchProgress, getPdfPersistentTextStore, cachePdfSearchText,
   loadPdfSearchText, fullSearchPdfMatches
 } = createReaderPdfSearch(readerContext);
+// Native reading (shared player in reader.html); installed once runtime exists.
+const { installReaderSpeech } = createReaderSpeech(readerContext);
 
 const pdfPageTimings = [];
 
@@ -711,6 +714,7 @@ const imageLoader = createReaderImageLoader({
 readerBindings.trackEarlySourceResolution();
 const pdfDiagnostics = Object.freeze({snapshot:() => ({pages:pdfPageTimings.map(row=>({...row})), requests:pdfFetchPolicy?.timings || [], cache:pdfPersistentTextStore?.stats || null})});
 readerBindings.publishDiagnosticsAndInstallCompatibility();
+installReaderSpeech();
 // Source metadata and session navigation.
 // GitHub Pages serves assets under /search/ and delegates document requests to HF.
 // Folder returns use hash routes; explicit folder URLs take precedence over resolved metadata.

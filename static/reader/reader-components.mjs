@@ -21,4 +21,5 @@ export { createReaderFormatController } from "./formats/reader-format-controller
 export { createReaderPdfEngine } from "./pdf/reader-pdf-engine.mjs";
 export { createReaderPdfSearch } from "./pdf/reader-pdf-search.mjs";
 export { createReaderBindings } from "./core/reader-bindings.mjs";
+export { createReaderSpeech } from "./ui/reader-speech.mjs";
 export { EPUB_HTML_TAGS, EPUB_HTML_VOID_TAGS, HTML_FRAME_STYLE, DISCOURSE_POST_SELECTOR, DISCOURSE_TITLE_SELECTOR, DISCOURSE_HTML_STYLE, SPREADSHEET_HTML_STYLE } from "./ui/reader-document-styles.mjs";
