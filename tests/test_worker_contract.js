@@ -431,7 +431,7 @@ test("snapshot identity survives Worker restarts but changes with content and se
   assert.deepStrictEqual(old.ids, current.ids);
   await second.worker.request('replace-corpus', {data: compact(records)});
   assert.strictEqual(old.snapshot_generation, (await second.worker.request('local-search', {})).snapshot_generation);
-  const changed = makeWorker(source.replace('worker-search-v2', 'worker-search-v3'));
+  const changed = makeWorker(source.replace('worker-search-v3', 'worker-search-v4'));
   await changed.request('replace-corpus', {data: compact(records)});
   assert.notStrictEqual(old.snapshot_generation, (await changed.request('local-search', {})).snapshot_generation);
   const resized = records.map(record => Object.assign({}, record, {Size: 1}));
@@ -514,6 +514,13 @@ test("page records are capped while total remains exact", async () => {
 });
 test("normal multi-token search intersects candidates", async () => {
   assert.deepStrictEqual(await names({ q: "alpha beta", exact: false }), ["beta alpha"]);
+});
+
+test("exact mode treats whitespace as independent AND terms", async () => {
+  assert.deepStrictEqual(await names({ q: "alpha guide", exact: true }), ["alpha guide"]);
+  assert.deepStrictEqual(await names({ q: "guide alpha", exact: true }), ["alpha guide"]);
+  assert.deepStrictEqual(await names({ q: "alpha missing", exact: true }), []);
+  assert.deepStrictEqual(await names({ q: "alpha* guide", exact: true }), ["alpha guide"]);
 });
 test("explicit sorts preserve collation and ties without computing relevance tokens", async () => {
   const input = ["book 中国", "book 重", "book Chong", "book chong", "book 10", "book 2", "book e\u0301", "book é", "book 重"]

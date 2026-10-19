@@ -119,6 +119,12 @@ function setExactSearchSectionVisible(visible, animate) {
   if (!DOM.exactSearchSection) return;
   if (!animate) DOM.exactSearchSection.style.transition = "none";
   DOM.exactSearchSection.classList.toggle("exact-section-hidden", !visible);
+  // A visually collapsed control must not stay keyboard-reachable: otherwise a
+  // hidden checkbox can silently change query semantics.
+  DOM.exactSearchSection.inert = !visible;
+  if (visible) DOM.exactSearchSection.removeAttribute("aria-hidden");
+  else DOM.exactSearchSection.setAttribute("aria-hidden", "true");
+  if (DOM.exactSearchToggle) DOM.exactSearchToggle.tabIndex = visible ? 0 : -1;
   if (!animate) {
     void DOM.exactSearchSection.offsetHeight;
     DOM.exactSearchSection.style.transition = "";
@@ -2136,7 +2142,9 @@ const ROUTER = {
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     STATE.useLocalMode = route.params.local !== "0";
     if (DOM.localModeToggle) DOM.localModeToggle.checked = STATE.useLocalMode;
-    setExactSearchSectionVisible(!STATE.useLocalMode, false);
+    // Exact mode is implemented by the Worker as well, so the switch is always
+    // relevant. Hiding it made a keyboard-reachable control change semantics.
+    setExactSearchSectionVisible(true, false);
     STATE.recordHistory = route.params.history !== "0";
     if (DOM.historyToggle) DOM.historyToggle.checked = STATE.recordHistory;
     STATE.useMirrorLinks = route.params.mirror !== "0";
@@ -3844,6 +3852,9 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
       showToast("本地数据加载失败");
       if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
       STATE.useLocalMode = false;
+      // API mode now owns the query. Keep the exact switch visible (and its
+      // value surfaced) so a fallback cannot silently change search semantics.
+      setExactSearchSectionVisible(true, false);
       syncStateToURL();
       if (triggerSearchAfterLoad) doSearch();
     }
@@ -6794,7 +6805,7 @@ async function init() {
   DOM.localModeToggle.addEventListener("change", function() {
     if (!STATE.dataLoaded && DOM.localModeToggle.checked) {
       STATE.useLocalMode = true;
-      setExactSearchSectionVisible(false, true);
+      setExactSearchSectionVisible(true, true);
       prepareFilterChange(true);
       DOM.resultsList.innerHTML = "";
       DOM.emptyState.style.display = "none";
@@ -6810,7 +6821,9 @@ async function init() {
       return;
     }
     STATE.useLocalMode = DOM.localModeToggle.checked;
-    setExactSearchSectionVisible(!STATE.useLocalMode, true);
+    // Keep the switch visible in both backends: the Worker implements exact
+    // mode, and a hidden but focusable control changed results unexpectedly.
+    setExactSearchSectionVisible(true, true);
     if (DOM.exactSearchToggle) DOM.exactSearchToggle.checked = STATE.exact;
     doFilterSearch(true);
     syncStateToURL();
