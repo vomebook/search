@@ -7,11 +7,30 @@ function isRetiredAsset(pathname) {
     (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
     !CURRENT_HASHED_ASSETS.includes(pathname);
 }
-function pruneHashedAssets(cache, resetShell = false) {
+// Activation keeps the previous generation's hashed files under a marker key for
+// one more release: an already-open old page may still lazy-load them after the
+// new worker claims it, and the server no longer has them. They are used only as
+// a fallback when the network cannot serve the retired URL, never repopulated,
+// and the generation before that is deleted.
+const RETAINED_MARKER = "sw-retained-generation";
+function retainedKey(url) {
+  const key = new URL(url); key.search = "?" + RETAINED_MARKER; return key.href;
+}
+function pruneHashedAssets(cache, resetShell = false, activation = false) {
   cachePruning = cachePruning.catch(() => {}).then(async () => {
     for (const request of await cache.keys()) {
       const url = new URL(request.url);
-      if (isRetiredAsset(url.pathname) || (resetShell && url.pathname === "/search/static/reader.html")) await cache.delete(request);
+      if (url.search === "?" + RETAINED_MARKER) {
+        if (activation) await cache.delete(request);
+        continue;
+      }
+      if (resetShell && url.pathname === "/search/static/reader.html") { await cache.delete(request); continue; }
+      if (!isRetiredAsset(url.pathname)) continue;
+      if (activation && /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname)) {
+        const response = await cache.match(request, { ignoreVary: true });
+        if (response) await cache.put(retainedKey(url.href), response);
+      }
+      await cache.delete(request);
     }
   });
   return cachePruning;
@@ -60,7 +79,7 @@ self.addEventListener("activate", (event) => {
       return Promise.all(
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
       );
-    }).then(() => caches.open(CACHE_NAME).then(cache => pruneHashedAssets(cache, true)).catch(() => {})).then(() => self.clients.claim())
+    }).then(() => caches.open(CACHE_NAME).then(cache => pruneHashedAssets(cache, true, true)).catch(() => {})).then(() => self.clients.claim())
   );
 });
 self.addEventListener("fetch", (event) => {
@@ -68,8 +87,15 @@ self.addEventListener("fetch", (event) => {
   if (url.hostname !== self.location.hostname || (event.request.method || "GET") !== "GET") {
     return;
   }
-  // Retired URLs must reach the server; never return or repopulate old cache entries.
-  if (isRetiredAsset(url.pathname)) return;
+  // Retired URLs always reach the server first and are never repopulated; only a
+  // missing/failed response falls back to the one retained previous generation.
+  if (isRetiredAsset(url.pathname)) {
+    const retained = () => caches.open(CACHE_NAME).then(cache => cache.match(retainedKey(url.href), { ignoreVary: true })).catch(() => undefined);
+    event.respondWith(fetch(event.request).then(response =>
+      response.ok ? response : retained().then(cached => cached || response),
+      error => retained().then(cached => { if (cached) return cached; throw error; })));
+    return;
+  }
   const readerShell = url.pathname === "/search/static/reader.html";
   const searchNavigation = event.request.mode === "navigate" && ["/search/", "/search/index.html"].includes(url.pathname);
   // Catalog HTML and its manifest/sitemap must not inherit the SPA shell cache.

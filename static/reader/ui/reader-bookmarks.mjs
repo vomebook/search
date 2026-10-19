@@ -37,9 +37,7 @@ export function createReaderBookmarks(readerContext) {
     // can reuse the same bookmark; overlay reload/Back uses the cleaned records.
     try {
       if (
-        window.parent !== window &&
-        window.parent.location.origin === location.origin &&
-        window.frameElement?.matches("iframe.reader-overlay") &&
+        readerContext.isReaderOverlayFrame() &&
         window.parent.history.state?.voiceReaderOverlay === true &&
         cleanMatchingUrl(window.parent.history.state.readerUrl)
       )

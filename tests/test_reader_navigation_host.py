@@ -150,6 +150,22 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.page.evaluate('history.back()')
         self.page.locator('.reader-overlay').wait_for(state='detached')
 
+    def test_close_without_overlay_entry_never_traverses_history_for_a_foreign_return(self):
+        self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt", "/elsewhere/page")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        traversed = self.page.evaluate("""() => {
+          let calls = 0; const back = history.back; history.back = () => { calls++; };
+          history.replaceState(null, "", location.href);
+          try {
+            handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,data:{type:'voice-reader-close'}});
+          } finally { history.back = back; }
+          return calls;
+        }""")
+        self.page.locator('.reader-overlay').wait_for(state='detached', timeout=3000)
+        self.assertEqual(traversed, 0)
+        self.assertEqual(self.page.evaluate('() => new URL(location.href).pathname'), '/search/')
+        self.assertFalse(self.page.evaluate('readerClosing'))
+
     def test_close_disposes_child_synchronously_before_detachment(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
