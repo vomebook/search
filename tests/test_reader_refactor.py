@@ -2619,6 +2619,23 @@ class ReaderRefactorTest(unittest.TestCase):
         probe.click()
         self.assertFalse(self.page.evaluate("() => window.__readerSecurityMarker === 17"))
 
+    def test_back_tapped_before_reader_module_binds_still_exits(self):
+        held = []
+        self.page.route("**/static/reader.js*", lambda route: held.append(route))
+        landing = self.origin + ("/search/" if "/search/" in self.reader_url() else "/")
+        self.page.route(lambda url: url == landing,
+                        lambda route: route.fulfill(content_type="text/html", body="<p>search page</p>"))
+        self.serve("early back\n" * 50)
+        self.page.goto(self.reader_url(name="early-back"), wait_until="commit")
+        self.page.locator("#back").wait_for(state="visible")
+        deadline = time.time() + 10
+        while not held and time.time() < deadline:
+            self.page.wait_for_timeout(50)
+        self.assertTrue(held, "reader module was not requested")
+        self.page.locator("#back").click()
+        held.pop(0).continue_()
+        self.page.wait_for_url(landing, timeout=8000)
+
     def test_epub_prefixed_xlink_and_smil_href_cannot_execute_in_reader_context(self):
         with zipfile.ZipFile(io.BytesIO(support.minimal_epub())) as archive:
             files = {item.filename: archive.read(item.filename) for item in archive.infolist()}
@@ -2714,6 +2731,140 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertRegex(styles["local"], r"^url\(\"blob:")
         self.page.wait_for_timeout(300)
         self.assertEqual(remote, [])
+
+    def frame_host_reader(self, overlay=False, cross_origin=False):
+        # The Reader must decide by its real host whether parent messages are handled.
+        reader = self.reader_url(name="framed", path="Test/docs")
+        base = urllib.parse.urlsplit(reader)
+        prefix = base.path[:-len("/static/reader.html")]
+        folder = (self.origin + prefix + "/#/Test?folder_self=docs") if prefix else (self.origin + "/Test?folder_self=docs")
+        reader += "&" + urllib.parse.urlencode({"folder_url": folder})
+        home = self.origin + (prefix + "/" if prefix else "/")
+        host_origin = self.origin.replace("127.0.0.1", "localhost") if cross_origin else self.origin
+        self.assertNotEqual(host_origin == self.origin, cross_origin)
+        if cross_origin:  # localhost -> 127.0.0.1 is otherwise a blocked local-network frame
+            self.context.grant_permissions(["local-network-access"], origin=host_origin)
+        frame_class = 'class="reader-overlay" ' if overlay else ""
+        shell = ("<!doctype html><body><script>window.__messages=[];"
+                 "addEventListener('message', event => __messages.push(event.data?.type));</script>"
+                 f'<iframe {frame_class}style="width:1000px;height:700px" '
+                 f"src={json.dumps(reader)}></iframe></body>")
+        landing = {home, folder.split("#", 1)[0]}
+        self.page.route(lambda url: url == host_origin + "/frame-host",
+                        lambda route: route.fulfill(content_type="text/html", body=shell))
+        self.page.route(lambda url: url in landing,
+                        lambda route: route.fulfill(content_type="text/html", body="<p>search page</p>"))
+        self.serve("framed reading\n" * 200)
+        self.page.goto(host_origin + "/frame-host")
+        frame = next(item for item in self.page.frames if item.url.startswith(self.origin + base.path))
+        frame.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        return frame, home, folder
+
+    def test_non_overlay_frame_host_navigates_reader_in_place(self):
+        for cross_origin in (False, True):
+            for action in ("back", "folder"):
+                with self.subTest(cross_origin=cross_origin, action=action):
+                    frame, home, folder = self.frame_host_reader(cross_origin=cross_origin)
+                    frame.locator("#back" if action == "back" else "#reader-path").click()
+                    expected = home if action == "back" else folder
+                    frame.wait_for_url(expected, timeout=4000)
+                    if not cross_origin:
+                        sent = self.page.evaluate("__messages")
+                        for message in ("voice-reader-close", "voice-reader-navigate", "voice-reader-open"):
+                            self.assertNotIn(message, sent)
+
+    def test_search_overlay_frame_still_receives_reader_messages(self):
+        frame, _home, _folder = self.frame_host_reader(overlay=True)
+        reader = frame.url
+        frame.locator("#back").click()
+        self.page.wait_for_function("() => __messages.includes('voice-reader-close')")
+        self.assertEqual(frame.url, reader)
+
+    def test_blocked_or_full_local_storage_keeps_reader_theme_and_zoom(self):
+        blocked = """Object.defineProperty(window, 'localStorage', {configurable: true,
+          get() { throw new DOMException('The operation is insecure.', 'SecurityError'); }});"""
+        full = """Storage.prototype.setItem = function () {
+          throw new DOMException('The quota has been exceeded.', 'QuotaExceededError'); };"""
+        for name, script in (("blocked", blocked), ("full", full)):
+            with self.subTest(storage=name):
+                page = self.context.new_page()
+                page.set_default_timeout(int(os.environ.get("READER_TEST_TIMEOUT_MS", "6000")))
+                page.on("pageerror", lambda error: self.errors.append(f"{name}: {error}"))
+                page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(
+                    content_type="text/javascript", body=support.STORE_SCRIPT))
+                page.route("**/api/reader-content**", lambda route: route.fulfill(
+                    content_type="text/plain", body="storage reading\n" * 400))
+                page.add_init_script(script)
+                page.goto(self.reader_url(name="storage-" + name))
+                page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'", timeout=6000)
+                page.wait_for_function("() => window.__savedReaderProgress?.zoom === 100")
+                page.locator("#zoom-in").click()
+                self.assertEqual(page.locator("#zoom").input_value(), "110")
+                self.assertEqual(page.locator("#content").evaluate(
+                    "node => node.style.getPropertyValue('--reader-zoom')"), "1.1")
+                page.wait_for_function("() => window.__savedReaderProgress?.zoom === 110")
+                theme = page.locator("html").get_attribute("data-theme")
+                support.open_reader_panel(page)
+                page.locator("#theme-toggle").click()
+                self.assertNotEqual(page.locator("html").get_attribute("data-theme"), theme)
+                self.assertEqual(page.locator("#theme-toggle").get_attribute("aria-pressed"),
+                                 str(theme == "dark").lower())
+                page.close()
+
+    def test_epub_html_and_svg_references_cannot_load_remote_resources(self):
+        vectors = ('<p style="background:image-set(\'https://img.remote.test/a.png\' 1x)">a</p>'
+                   '<p style="background:\\75rl(https://img.remote.test/b.png)">b</p>'
+                   '<table background="https://img.remote.test/c.png"><tr>'
+                   '<td id="cell" background="//img.remote.test/d.png">cell</td></tr></table>'
+                   '<input type="image" src="https://img.remote.test/e.png"/>'
+                   '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="20" height="20">'
+                   '<defs><circle id="dot" r="2"/><filter id="ff"><feImage href="https://img.remote.test/f.png"/>'
+                   '<feImage xlink:href="https://img.remote.test/g.png"/></filter></defs>'
+                   '<rect width="10" height="10" filter="url(#ff)"/><use id="local-use" href="#dot"/>'
+                   '<use href="https://img.remote.test/h.svg#a"/></svg><p id="kept">kept text</p>')
+        chapter = ('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Refs</title></head><body>'
+                   + vectors + '</body></html>')
+        book = support.zip_bytes({
+            "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+            "OEBPS/content.opf": '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">refs</dc:identifier><dc:title>Refs</dc:title><dc:language>en</dc:language></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>',
+            "OEBPS/c.xhtml": chapter,
+        }, ("mimetype", "application/epub+zip"))
+        prefix = "chapters/ebook/epub/" + "e" * 64 + "/" + "f" * 16 + "/"
+        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
+            {"index": 1, "path": "chapters/chapter-0001.xhtml", "title": "Refs",
+             "bytes": len(chapter.encode()), "sha256": hashlib.sha256(chapter.encode()).hexdigest()}]}
+        def bucket(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            if path == prefix + "chapter-manifest.json":
+                route.fulfill(content_type="application/json", body=json.dumps(manifest))
+            elif path == prefix + "chapters/chapter-0001.xhtml":
+                route.fulfill(content_type="application/xhtml+xml", body=chapter)
+            else:
+                route.fulfill(status=404, body="missing")
+        bucket_url = ("https://voiceofml-search.hf.space/api/reader-bucket-resource?path="
+                      + urllib.parse.quote(prefix + "chapter-manifest.json", safe=""))
+        for mode, url, root in (
+            ("foliate", self.reader_url("epub", name="remote-refs"),
+             "document.querySelector('article[data-section]')?.shadowRoot"),
+            ("chapters", self.reader_url("epub-chapters", url=bucket_url),
+             "document.querySelector('.reader-epub-chapter')"),
+        ):
+            with self.subTest(mode=mode):
+                page = self.context.new_page()
+                page.set_default_timeout(int(os.environ.get("READER_TEST_TIMEOUT_MS", "6000")))
+                page.on("pageerror", lambda error: self.errors.append(str(error)))
+                remote = []
+                page.on("request", lambda request: remote.append(request.url) if ".remote.test" in request.url else None)
+                page.route("**/api/reader-content**", lambda route: route.fulfill(
+                    content_type="application/epub+zip", body=book))
+                page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", bucket)
+                page.goto(url)
+                page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+                page.wait_for_function(f"() => !!({root})?.querySelector('#kept')")
+                page.wait_for_timeout(400)
+                self.assertEqual(remote, [])
+                self.assertEqual(page.evaluate(f"() => ({root}).querySelector('#local-use').getAttribute('href')"), "#dot")
+                page.close()
 
     def expose_html_contrast(self):
         def instrument(route):

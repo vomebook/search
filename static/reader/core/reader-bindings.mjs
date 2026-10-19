@@ -163,12 +163,14 @@ export function createReaderBindings(readerContext) {
   }
 
   function initializeDocumentTitle() {
+    let savedZoom = null;
+    try { savedZoom = localStorage.getItem("reader-zoom"); } catch (_) {}
     readerContext.updateDocumentState({
       title:
         String(
           readerContext.params.get("title") || (readerContext.localReaderData && readerContext.localReaderData.title) || readerContext.sourceName
         ).trim() || readerContext.sourceName,
-      zoom: Math.min(4, Math.max(0.25, Number(localStorage.getItem("reader-zoom") || 100) / 100))
+      zoom: Math.min(4, Math.max(0.25, Number(savedZoom || 100) / 100))
     });
   }
 
@@ -359,7 +361,7 @@ export function createReaderBindings(readerContext) {
     document.querySelector("#back").addEventListener("click", async () => {
       clearTimeout(readerContext.saveTimer);
       await Promise.race([readerContext.saveProgress(), new Promise((resolve) => setTimeout(resolve, 300))]);
-      if (window.parent !== window) {
+      if (readerContext.isReaderOverlayFrame()) {
         window.parent.postMessage({ type: "voice-reader-close" }, location.origin);
         return;
       }
@@ -375,6 +377,8 @@ export function createReaderBindings(readerContext) {
       } catch (_) {}
       location.assign("/search/");
     });
+    // Replay a Back tap made before this handler was bound.
+    if (window.__VOICE_READER_EARLY_BACK__?.()) document.querySelector("#back").click();
   }
 
   function bindZoomAndPageControls() {
@@ -576,7 +580,7 @@ export function createReaderBindings(readerContext) {
     readerContext.readerThemeToggle.addEventListener("click", () => {
       const theme = readerContext.readerTheme === "dark" ? "light" : "dark";
       readerContext.applyReaderTheme(theme);
-      if (window.parent !== window)
+      if (readerContext.isReaderOverlayFrame())
         window.parent.postMessage({ type: "voice-reader-theme", theme }, location.origin);
     });
     window.addEventListener("storage", (event) => {

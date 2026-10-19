@@ -49,7 +49,9 @@ export function createReaderUi(readerContext) {
     readerContext.readerThemeToggle.setAttribute("aria-pressed", String(readerContext.readerTheme === "light"));
     for (const article of readerContext.content.querySelectorAll(".foliate-continuous > article"))
       article.classList.toggle("reader-document-dark", readerContext.readerTheme === "dark");
-    if (persist) localStorage.setItem("theme", readerContext.readerTheme);
+    if (persist) {
+      try { localStorage.setItem("theme", readerContext.readerTheme); } catch (_) {}
+    }
     readerContext.foliateScrollAnchors.restore(anchor);
   }
 
@@ -71,7 +73,7 @@ export function createReaderUi(readerContext) {
     readerContext.viewport.scrollLeft = horizontalCenter * readerContext.viewport.scrollWidth - readerContext.viewport.clientWidth / 2;
     if (persist) {
       readerContext.zoomChangedByUser = true;
-      localStorage.setItem("reader-zoom", String(normalized));
+      try { localStorage.setItem("reader-zoom", String(normalized)); } catch (_) {}
     }
     readerContext.foliateScrollAnchors.restore(anchor);
     if (persist) readerContext.scheduleSave();
@@ -123,7 +125,7 @@ export function createReaderUi(readerContext) {
 
   function notifyReaderUiState(state) {
     readerContext.readerUiHistoryState = state;
-    if (window.parent !== window)
+    if (readerContext.isReaderOverlayFrame())
       window.parent.postMessage({ type: "voice-reader-ui-state", state }, location.origin);
   }
 

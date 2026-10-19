@@ -471,7 +471,10 @@ function handleReaderMessage(event) {
       var readerUrl = new URL(readerOverlay.src, location.origin);
       var returnUrl = readerUrl.searchParams.get("return");
       var target = returnUrl && new URL(returnUrl, location.origin);
-      if ((!history.state || !history.state.voiceReaderOverlay) && target && target.origin === location.origin && target.pathname === "/search/") {
+      if (!target || target.origin !== location.origin || target.pathname !== "/search/")
+        target = new URL("/search/", location.origin);
+      // Without this Reader's own overlay entry, history.back() can reach an unrelated page.
+      if (!history.state || !history.state.voiceReaderOverlay) {
         var returnFocus = readerNavigation.returnFocus;
         closeReaderOverlay(false);
         history.replaceState(null, "", target.href);
@@ -3777,8 +3780,11 @@ async function searchWithInitialFallback() {
 function searchWithInitialFallbackFresh() {
   var searchMode = STATE.mode;
   var searchRepo = STATE.repo;
+  // A query/filter change while the payload loads has already started its own search;
+  // a late fallback must not abort it and reset the user to page one.
+  var searchKey = getSearchViewKey();
   function isCurrentSearchRoute() {
-    return STATE.mode === searchMode && STATE.repo === searchRepo;
+    return STATE.mode === searchMode && STATE.repo === searchRepo && getSearchViewKey() === searchKey;
   }
   if (canUseInitialSearchPayload()) {
     return tryInitialSearchPayload(searchMode, searchRepo).then(function(applied) {
@@ -5535,6 +5541,7 @@ function setupFolderTreeEvents() {
       } else if (expanding) resumeFolderTreeRendering(children);
       toggle.setAttribute("aria-expanded", String(expanding));
       toggle.setAttribute('aria-label', (expanding ? '收起子文件夹：' : '展开子文件夹：') + node.path);
+      toggle.title = expanding ? '收起' : '展开';
       toggleFolderChildrenAnimated(children, toggle, expanding);
     }
   });

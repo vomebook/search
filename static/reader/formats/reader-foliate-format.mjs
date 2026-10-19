@@ -272,9 +272,9 @@ export function createReaderFoliateFormat(readerContext) {
         return null;
       }
     };
-    for (const element of doc.querySelectorAll(
-      "img[src],source[src],audio[src],video[src],video[poster]"
-    )) {
+    // Every src-bearing element (including input[type=image] and track) uses
+    // the archive-only resource policy, not just images and media.
+    for (const element of doc.querySelectorAll("[src],video[poster]")) {
       for (const name of ["src", "poster"])
         if (element.hasAttribute(name)) {
           const safe = archiveResourceUrl(element.getAttribute(name));
@@ -308,6 +308,20 @@ export function createReaderFoliateFormat(readerContext) {
         image.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
         image.removeAttribute("xlink:href");
         image.removeAttribute("href");
+      }
+    }
+    // Other SVG references (feImage, use, textPath...) may only point inside the
+    // chapter; feImage may also use a packaged image like <image>.
+    for (const element of doc.querySelectorAll("*")) {
+      if (element.namespaceURI !== "http://www.w3.org/2000/svg" || ["a", "image"].includes(element.localName)) continue;
+      for (const attribute of [...element.attributes]) {
+        if (attribute.localName !== "href" ||
+            (attribute.namespaceURI && attribute.namespaceURI !== "http://www.w3.org/1999/xlink")) continue;
+        const value = attribute.value.trim();
+        if (value.startsWith("#")) continue;
+        const safe = element.localName === "feImage" ? archiveResourceUrl(value) : null;
+        if (safe) attribute.value = safe;
+        else element.removeAttributeNode(attribute);
       }
     }
     for (const link of doc.querySelectorAll("a[href]")) {

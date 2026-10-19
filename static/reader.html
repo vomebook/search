@@ -199,6 +199,19 @@
       </section>
     </aside>
     <script>
+      // Back is visible before the module graph binds it; remember an early tap
+      // so the Reader can still exit instead of ignoring it.
+      (() => {
+        const back = document.querySelector("#back");
+        let pending = false;
+        const early = (event) => { event.preventDefault(); pending = true; };
+        back?.addEventListener("click", early);
+        window.__VOICE_READER_EARLY_BACK__ = () => {
+          back?.removeEventListener("click", early);
+          delete window.__VOICE_READER_EARLY_BACK__;
+          return pending;
+        };
+      })();
       if (window.parent !== window)
         window.parent.postMessage({ type: "voice-reader-shell" }, location.origin);
       for (const panel of document.querySelectorAll(".reader-panel-view")) {

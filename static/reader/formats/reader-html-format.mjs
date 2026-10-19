@@ -70,6 +70,9 @@ export function createReaderHtmlFormat(readerContext) {
           const clean = sanitizeCssReferences(attribute.value);
           if (clean !== attribute.value) element.setAttribute(attribute.name, clean);
         }
+        // Legacy table/body background images fetch like url(); same policy.
+        else if (name === "background" && !namespace && !safeCssReference(value))
+          element.removeAttributeNode(attribute);
       }
     return doc;
   }
