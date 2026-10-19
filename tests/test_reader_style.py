@@ -313,14 +313,23 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.goto(f"{self.origin}/search/static/reader.html?url={source}&ext=epub&title=Theme")
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
 
+    def dismiss_toc_hint(self):
+        # TOC books open their drawer on load; close it so layout is measured
+        # in the same closed state used after each theme switch.
+        self.page.wait_for_function("() => document.querySelector('#history-panel').classList.contains('is-open')")
+        self.page.locator("#history").click()
+        self.page.wait_for_function("() => document.querySelector('#history-panel').hidden")
+
     def check_document_theme_round_trip(self, selector):
+        self.dismiss_toc_hint()
         target = self.page.locator(selector).first
         initial = target.bounding_box()
         for theme in ("dark", "light", "dark"):
             if self.page.locator("html").get_attribute("data-theme") != theme:
-                self.page.locator("#history").click()
+                support.open_reader_panel(self.page)
                 self.page.locator("#theme-toggle").click()
                 self.page.locator("#history").click()
+                self.page.wait_for_function("() => document.querySelector('#history-panel').hidden")
                 self.settle()
             colors = target.evaluate("e=>[getComputedStyle(e).color,getComputedStyle(e).backgroundColor]")
             self.assertEqual(colors, ["rgb(231, 233, 235)", "rgba(0, 0, 0, 0)"] if theme == "dark"
@@ -479,7 +488,7 @@ class ReaderStyleTests(unittest.TestCase):
             wait_until="domcontentloaded",
         )
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
-        self.page.locator("#history").click()
+        support.open_reader_panel(self.page)
         self.page.locator("#full-search-toggle").click()
         self.page.locator("#full-search-input").fill("ContrastTarget")
         self.page.locator("#full-search-results .full-search-result").first.click()

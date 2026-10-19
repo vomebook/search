@@ -15,9 +15,23 @@ export function createReaderNavigation(readerContext) {
     } catch (_) {}
   }
 
+  // Only the search page's own Reader overlay handles these messages. Any other
+  // frame host (or a cross-origin one) would drop them, so navigate in place.
+  function isReaderOverlayFrame() {
+    try {
+      return (
+        window.parent !== window &&
+        window.parent.location.origin === location.origin &&
+        !!window.frameElement?.matches("iframe.reader-overlay")
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   function navigateReaderFolder() {
     if (!readerContext.folderNavigationTarget) return;
-    if (window.parent !== window)
+    if (isReaderOverlayFrame())
       window.parent.postMessage(
         { type: "voice-reader-navigate", url: readerContext.folderNavigationTarget.href },
         location.origin
@@ -172,7 +186,7 @@ export function createReaderNavigation(readerContext) {
     const generation = readerContext.beginReaderNavigation();
     await readerContext.saveProgress();
     if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return;
-    if (window.parent !== window)
+    if (isReaderOverlayFrame())
       window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin);
     else location.assign(target.href);
   }
@@ -227,6 +241,7 @@ export function createReaderNavigation(readerContext) {
   return {
     beginReaderNavigation,
     clearReturnNavigation,
+    isReaderOverlayFrame,
     navigateReaderFolder,
     turnViewport,
     handleReaderKeydown,

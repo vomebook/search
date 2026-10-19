@@ -179,31 +179,40 @@ test("only pinned static hashes ignore Origin Vary mismatches", async () => {
     assert.deepStrictEqual(instance.operations.fetch, [ordinary]);
   }
 });
-test("removes every retired hash and alias while preserving current assets and data", async () => {
-  for (const [text, prefix, cacheName] of [
-    [source, '/search/static/', CACHE_NAME]
-  ]) {
-    const paths = ['111111111111', '222222222222', '333333333333', '444444444444'].map(hash => prefix + 'app.' + hash + '.js');
-    const instance = harness({source: text.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([paths[0]]))});
-    const values = new Map(paths.map(path => ['https://example.test' + path, response('asset')]));
-    values.set('https://example.test/data.json', response('data'));
-    values.set('https://example.test' + prefix + 'app.js', response('retired alias'));
-    values.set('https://example.test' + prefix + 'reader/pdf/reader-pdf-search.mjs', response('nested alias'));
-    values.set('https://example.test' + prefix + 'reader/pdf/reader-pdf-search.555555555555.mjs', response('nested retired hash'));
-    instance.stores.set(cacheName, values);
-    await lifecycle(instance.listeners.activate);
-    assert.ok(values.has('https://example.test' + paths[0]));
-    assert.ok(!values.has('https://example.test' + paths[1]));
-    assert.strictEqual(values.size, 2);
-    assert.ok(values.has('https://example.test/data.json'));
-    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'app.555555555555.js'), undefined);
-    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'app.js'), undefined);
-    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'reader/pdf/reader-pdf-search.mjs'), undefined);
-    assert.strictEqual(dispatchFetch(instance, 'https://example.test' + prefix + 'reader/pdf/reader-pdf-search.555555555555.mjs'), undefined);
-    await Promise.all(instance.operations.lifetimes);
-    assert.strictEqual(values.size, 2);
-    assert.ok(values.has('https://example.test' + paths[0]));
-  }
+test("retires old hashes for one generation and removes aliases without repopulating them", async () => {
+  const prefix = '/search/static/', retained = url => url + '?sw-retained-generation';
+  const paths = ['111111111111', '222222222222', '333333333333', '444444444444'].map(hash => prefix + 'app.' + hash + '.js');
+  const source1 = source.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([paths[0]]));
+  const values = new Map(paths.map(path => ['https://example.test' + path, response('asset ' + path)]));
+  values.set('https://example.test/data.json', response('data'));
+  values.set('https://example.test' + prefix + 'app.js', response('retired alias'));
+  values.set('https://example.test' + prefix + 'reader/pdf/reader-pdf-search.mjs', response('nested alias'));
+  values.set('https://example.test' + prefix + 'reader/pdf/reader-pdf-search.555555555555.mjs', response('nested retired hash'));
+  values.set(retained('https://example.test' + prefix + 'app.999999999999.js'), response('two generations old'));
+  const offline = harness({source: source1, fetch: () => Promise.reject(new TypeError('offline'))});
+  offline.stores.set(CACHE_NAME, values);
+  await lifecycle(offline.listeners.activate);
+  const expected = ['https://example.test' + paths[0], 'https://example.test/data.json',
+    ...paths.slice(1).map(path => retained('https://example.test' + path)),
+    retained('https://example.test' + prefix + 'reader/pdf/reader-pdf-search.555555555555.mjs')];
+  assert.deepStrictEqual([...values.keys()].sort(), expected.sort());
+  // Network failure for a retired hash falls back to its retained copy, without writes.
+  assert.strictEqual((await dispatchFetch(offline, 'https://example.test' + paths[1])).body, 'asset ' + paths[1]);
+  await assert.rejects(dispatchFetch(offline, 'https://example.test' + prefix + 'app.js'));
+  assert.deepStrictEqual(offline.operations.put.filter(key => !key.endsWith('?sw-retained-generation')), []);
+  // Online, a retired URL is served by the network (404 falls back), never repopulated.
+  const online = harness({source: source1, fetch: request => Promise.resolve(keyOf(request).endsWith('333333333333.js')
+    ? response('gone', { ok: false, status: 404 }) : response('network'))});
+  online.stores.set(CACHE_NAME, values);
+  assert.strictEqual((await dispatchFetch(online, 'https://example.test' + paths[1])).body, 'network');
+  assert.strictEqual((await dispatchFetch(online, 'https://example.test' + paths[2])).body, 'asset ' + paths[2]);
+  await Promise.all(online.operations.lifetimes);
+  assert.deepStrictEqual(online.operations.put, []);
+  // The next activation drops this retained generation.
+  const later = harness({source: source.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ["/search/static/app.aaaaaaaaaaaa.js"]')});
+  later.stores.set(CACHE_NAME, values);
+  await lifecycle(later.listeners.activate);
+  assert.ok(![...values.keys()].some(key => key.endsWith('?sw-retained-generation') && !key.includes('111111111111')));
 });
 test("install precaches only the search shell and global data", async () => {
   const instance = harness({ fetch: manifestsFetch() });

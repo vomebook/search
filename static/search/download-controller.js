@@ -74,9 +74,15 @@
         const timer = setTimeout(() => controller.abort(), timeout);
         try {
           const response = await fetch(buildCheckUrl(link), { signal: controller.signal });
-          const data = await response.json();
+          // Gateway errors may return HTML; never surface a JSON parse error as the message.
+          const data = await response.json().catch(error => {
+            if (error && error.name === "AbortError") throw error;
+            return {};
+          });
           if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-          if (!response.ok || data.ok !== true) throw new Error(data.error || "下载检查失败，请重试");
+          if (!response.ok || data.ok !== true)
+            throw new Error((typeof data.error === "string" && data.error) ||
+              (response.ok ? "下载检查失败，请重试" : `下载检查失败（HTTP ${response.status}），请重试`));
           entry.expires = Date.now() + 30000;
           const cached = Array.from(downloadChecks).filter(([, value]) => value.expires);
           while (cached.length > 64) downloadChecks.delete(cached.shift()[0]);

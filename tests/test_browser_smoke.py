@@ -225,6 +225,32 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertIn("甲", paths)
         self.assertEqual(self.page_errors, [])
 
+    def test_late_initial_payload_fallback_does_not_restart_a_newer_query(self):
+        self.load()
+        self.wait_for_local_results()
+        result = self.page.evaluate('''() => new Promise(async done => {
+              const original = {fetchJsonWithTimeout, doSearch};
+              let release, searches = 0;
+              fetchJsonWithTimeout = () => new Promise(resolve => { release = resolve; });
+              doSearch = () => { searches++; };
+              if (typeof readInitialSearchPayload === "function") {
+                original.readInitialSearchPayload = readInitialSearchPayload;
+                readInitialSearchPayload = () => null;
+              }
+              initialPayloadCache.clear();
+              STATE.query = ""; STATE.page = 1;
+              const pending = searchWithInitialFallbackFresh();
+              await new Promise(resolve => setTimeout(resolve, 50));
+              const held = typeof release === "function";
+              STATE.query = "late-payload-query";
+              if (held) release(null);
+              await pending;
+              Object.assign(window, original);
+              done({held, searches});
+            })''')
+        self.assertEqual(result, {"held": True, "searches": 0})
+        self.assertEqual(self.page_errors, [])
+
     def test_repository_filter_tree_loads_nested_api_folders(self):
         self.page.unroute("https://voiceofml-search.hf.space/**")
 
@@ -1250,6 +1276,8 @@ class BrowserBehaviorTest(unittest.TestCase):
         })""")
         self.page.evaluate("url => navigateToReader(url, location.origin + '/')", reader_url)
         self.page.frame_locator("iframe.reader-overlay").locator("#back").click()
+        # Back saves progress (bounded to 300 ms) before asking the host to close.
+        self.page.locator("iframe.reader-overlay").wait_for(state="detached", timeout=5000)
         self.page.locator("#search-input").wait_for(state="visible")
         self.assertEqual(self.page.evaluate("() => location.pathname"), "/search/")
 

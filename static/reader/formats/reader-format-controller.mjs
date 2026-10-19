@@ -237,7 +237,7 @@ export function createReaderFormatController(readerContext) {
         target.searchParams.set("ext", "pdf");
         target.searchParams.delete("chapter_manifest");
         target.searchParams.delete("fallback");
-        if (window.parent !== window)
+        if (readerContext.isReaderOverlayFrame())
           window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin);
         else location.replace(target.href);
         return;
