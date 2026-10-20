@@ -325,6 +325,49 @@ class ReaderSpeechTest(unittest.TestCase):
         finally:
             context.close()
 
+    def test_leaving_a_standalone_reader_keeps_reading_on_the_search_page(self):
+        # A Reader opened directly (not as an overlay) cannot keep its audio when
+        # ← navigates to the search page; that page resumes it at the same sentence.
+        context, page, posts, errors = self.open("txt", TEXT.encode(), "text/plain; charset=utf-8")
+        try:
+            self.play(page, posts)
+            for _ in range(3):
+                clip = page.locator("#speech-audio").evaluate("n => n.src")
+                page.locator("#speech-next").click()
+                wait(page, f"() => document.querySelector('#speech-audio').src !== {json.dumps(clip)}")
+            # The sentence being read (the resumed job starts at its beginning).
+            playing = page.evaluate("""() => { const s = CCRDSpeech.state(), t = s.adapter.text; let i = s.position;
+              while (i > 0 && !/[。！？\\n]/.test(t[i - 1])) i--; return t.slice(i, i + 8).trim(); }""")
+            self.assertTrue(playing and not playing.startswith("第0段"), playing)
+            before = len(posts)
+            reader = page.url
+            base = reader.split("reader.html")[0]
+            page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")  # leaving fires pagehide
+            page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
+            page.add_script_tag(content=(ROOT / "static/search/reader-navigation.js").read_text(encoding="utf-8"))
+            page.evaluate("url => { window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) }); }", reader)
+            bar = page.locator(".reader-speech-mini")
+            bar.wait_for(timeout=5000)
+            kept = page.wait_for_selector("iframe.reader-overlay-parked", state="attached")
+            self.assertEqual(page.evaluate("() => getComputedStyle(document.querySelector('iframe.reader-overlay-parked')).visibility"), "hidden")
+            frame = kept.content_frame()
+            wait(frame, "()=>{const a=document.querySelector('#speech-audio');return !!a&&!a.paused&&a.currentTime>0.05}", 30000)
+            self.assertTrue(posts[before]["text"].lstrip().startswith(playing), (playing, posts[before]["text"][:30]))
+            self.assertEqual(frame.evaluate("() => window.name"), "")
+            self.assertEqual(page.evaluate("() => sessionStorage.getItem('reader-speech-handoff')"), None)
+            bar.get_by_role("button", name="返回阅读").click()
+            self.assertEqual(page.locator(".reader-speech-mini").count(), 0)
+            self.assertFalse(frame.evaluate("() => document.querySelector('#speech-audio').paused"))
+            # A Reader left without reading aloud (or reloaded) leaves nothing to resume.
+            frame.locator("#speech-stop").click()
+            page.goto(reader, wait_until="domcontentloaded")
+            wait(page, "() => document.documentElement.dataset.readerPhase === 'ready'", 30000)
+            page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")
+            self.assertEqual(page.evaluate("() => sessionStorage.getItem('reader-speech-handoff')"), None)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
     def test_native_pdf_text_layer_is_read_and_image_is_not_offered(self):
         context, page, posts, errors = self.open("pdf", minimal_pdf(), "application/pdf")
         try:
