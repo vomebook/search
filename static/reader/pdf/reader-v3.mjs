@@ -177,10 +177,15 @@ export function validateReadingManifest(manifest, maxPages) {
   if (!manifest || manifest.version !== 3 || manifest.kind !== "pdf-reading" ||
       !sha(manifest.source_sha256) || !sha(manifest.generation) || !integer(manifest.page_count) ||
       manifest.page_count > maxPages || typeof manifest.source_key !== "string" ||
-      manifest.primary?.kind !== "pdf" || manifest.primary.status !== "ready" ||
+      !["pdf", "djvu"].includes(manifest.primary?.kind) || manifest.primary.status !== "ready" ||
       typeof manifest.preview?.complete !== "boolean" || manifest.preview.page_count !== manifest.page_count) invalid();
   validateResource(manifest.primary.resource);
-  if (!manifest.primary.resource.path.endsWith(".pdf")) invalid();
+  // Browsers cannot render DjVu: such books read from the preview stream and text layer.
+  if (manifest.primary.kind === "djvu"
+    ? manifest.primary.resource.bucket !== "vomebook/pdf-pages-v2" ||
+      !manifest.primary.resource.path.startsWith(`objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}/`) ||
+      !manifest.primary.resource.path.endsWith("/document.djvu")
+    : !manifest.primary.resource.path.endsWith(".pdf")) invalid();
   validateResource(manifest.page_map, manifest.source_sha256);
   if (!manifest.page_map.path.endsWith("/page-map.json.gz")) invalid();
   partitions(manifest.preview.partitions, manifest.page_count, manifest.preview.complete, manifest.source_sha256);

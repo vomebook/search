@@ -311,7 +311,7 @@
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages-v2") {
      if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path) || v2ChapterPathPattern.test(path) || v2ObjectPathPattern.test(path);
      if (bucket !== "vomebook/pdf-pages-v2") return false;
-    return /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/document\.pdf$/.test(path) ||
+    return /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/document\.(?:pdf|djvu)$/.test(path) ||
       (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
       v3BucketPathPattern.test(path) ||
       staticBucketPathPattern.test(path) ||
@@ -409,6 +409,7 @@
     if (
       !asset ||
       asset.s !== 2 ||
+      path.endsWith(".djvu") ||
       !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
        !(asset.b ? bucket : bucket || assetPrimaryPattern.test(path)) ||
         (asset?.b && bucketName !== "vomebook/pdf-pages-v2" && bucketName !== "vomebook/reader-assets-v2") ||
