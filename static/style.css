@@ -1977,3 +1977,37 @@ body.multiselect .result-file-icon { display: none; }
 .result-item.selected {
   background: color-mix(in srgb, var(--primary) 15%, transparent) !important;
 }
+
+/* A Reader closed while reading aloud stays alive here, hidden. */
+.reader-overlay-parked { visibility: hidden; pointer-events: none; }
+.reader-speech-mini {
+  position: fixed;
+  left: 50%;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(560px, calc(100vw - 24px));
+  padding: 6px 8px 6px 14px;
+  border-radius: 24px;
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .28);
+  font-size: 13px;
+}
+.reader-speech-mini-title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.reader-speech-mini button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.reader-speech-mini .reader-speech-mini-back { background: var(--primary); color: var(--on-primary); }
+.reader-speech-mini button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
