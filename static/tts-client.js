@@ -39,9 +39,15 @@ globalThis.CCRDSpeechPlan = (() => {
   // second of audio (2026-10-20 cold CW:0), so a clip may be at most ~1.4x the
   // previous one or it is not ready when the previous clip's speech ends.
   const RAMP = [[16, 30], [24, 40], [34, 56], [50, 78], [72, 110]];
-  function phraseEnds(text, first = false) {
+  function phraseEnds(text, first = false, carry = 0) {
     const cuts = wordEnds(text), chars = Array.from(text), offsets = [0], ends = [];
     for (const char of chars) offsets.push(offsets[offsets.length - 1] + char.length);
+    // While ramping (the first batch, or a batch after a short final clip),
+    // every clip follows the previous clip's length: its playback is all the
+    // time the next clip has to be synthesized. A short clip after the ramp
+    // (e.g. 17 chars before 61, 2.6 s late cold) re-enters it.
+    let ramping = first || (carry > 0 && carry < 72);
+    const stage = length => Math.max(1, RAMP.findIndex(([, limit]) => length * 1.45 <= limit));
     let start = 0;
     while (start < text.length) {
       const position = offsets.indexOf(start), short = first && !ends.length;
@@ -63,9 +69,10 @@ globalThis.CCRDSpeechPlan = (() => {
       // last words fade (measured -17 to -21 dB). A ramp clip therefore never
       // cuts mid-phrase: without a mark in its range it widens to the next size.
       // The preferred range follows the previous clip's actual length (<= 1.45x).
-      const previous = ends.length ? ends[ends.length - 1] - (ends[ends.length - 2] || 0) : 0;
+      const previous = ends.length ? ends[ends.length - 1] - (ends[ends.length - 2] || 0) : first ? 0 : carry;
       const fit = ([goal, limit]) => previous ? [goal, Math.min(limit, Math.max(goal + 4, Math.round(previous * 1.45)))] : [goal, limit];
-      const sizes = first && ends.length < RAMP.length ? [fit(RAMP[ends.length]), ...RAMP.slice(ends.length + 1), [90, 120]] : [[90, 120]];
+      const index = !previous ? 0 : previous < 72 ? stage(previous) : -1;
+      const sizes = ramping && index >= 0 ? [fit(RAMP[index]), ...RAMP.slice(index + 1), [90, 120]] : [[90, 120]];
       let found = marks(...sizes[0]);
       for (const size of sizes.slice(1)) {
         if (found.hard || found.natural.length) break;
@@ -94,6 +101,7 @@ globalThis.CCRDSpeechPlan = (() => {
       if (end <= start) throw new Error("无法确定完整词语边界");
       if (end < text.length && !/[\p{L}\p{N}]/u.test(text.slice(end))) end = text.length;
       ends.push(end); start = end;
+      if (end - (ends[ends.length - 2] || 0) >= 72) ramping = false; // a full-length clip ends the ramp
     }
     return ends;
   }
@@ -180,7 +188,7 @@ globalThis.CCRDSpeechPlan = (() => {
     while (cursor > 0 && /[”’"'」』）)\s]/u.test(text[cursor])) cursor -= 1;
     return sentence(text, Math.max(0, cursor)).start;
   }
-  function batch(text, offset, first = false) {
+  function batch(text, offset, first = false, carry = 0) {
     // The first batch holds the whole short-to-long clip ramp (see RAMP).
     const start = first ? clauseStart(text, offset) : safe(text, offset), limit = first ? 260 : 480;
     if (start >= text.length) return null;
@@ -213,7 +221,7 @@ globalThis.CCRDSpeechPlan = (() => {
     const candidates = wordEnds(text.slice(start, offsets[Math.min(chars.length, 800)]))
       .filter(value => value.end <= stop - start && value.end > 0 && !dangling.has(value.word));
     if (candidates.length && stop < text.length && !punctuated) stop = start + candidates[candidates.length - 1].end;
-    let body = text.slice(start, stop), ends = phraseEnds(body, first);
+    let body = text.slice(start, stop), ends = phraseEnds(body, first, carry);
     if (ends.length > 64) { stop = start + ends[63]; body = text.slice(start, stop); ends = ends.slice(0, 64); }
     return { start, end: stop, text: body, first, segment_ends: ends,
       context_before: Array.from(text.slice(Math.max(0, start - 64), start)).slice(-32).join(""),
@@ -264,6 +272,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
   function release(id, keepalive = false) {
     if (id) fetch(`${ORIGIN}/tts/jobs/${encodeURIComponent(id)}`, { method: "DELETE", credentials: "omit", keepalive }).catch(() => {});
   }
+  function lastClip(batch) { const ends = batch?.segment_ends || []; return ends.length ? ends[ends.length - 1] - (ends[ends.length - 2] || 0) : 0; }
   function clipKey(value, job, part) { return `${value.snapshot.id}\n${value.pitch}\n${job.batch.start + part.start}\n${job.batch.start + part.end}`; }
   function dropClip(key) {
     const entry = clips.get(key);
@@ -804,7 +813,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
         value.position = job.batch.end;
         discard(value, job);
         if (value.position >= value.snapshot.text.length) { stop("已读完全文"); saved = null; controls(); return; }
-        value.batch = plan.batch(value.snapshot.text, value.position);
+        value.batch = plan.batch(value.snapshot.text, value.position, false, job.batch.first ? lastClip(job.batch) : 0);
         value.part = 0;
         if (!value.jobs.has(value.batch.start)) value.jobs.set(value.batch.start, newJob(value.batch));
         advance(value); return;
@@ -820,7 +829,9 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
       // A completed preceding batch can remain usable briefly after a seek, but
       // never keep a third subscription or add extra speculative inference.
       for (const other of Array.from(value.jobs.values())) if (other !== job) discard(value, other);
-      const batch = plan.batch(value.snapshot.text, job.batch.end);
+      // Only the batch after the first can still be ahead of synthesis by less
+      // than one clip; later batches are queued a whole batch early.
+      const batch = plan.batch(value.snapshot.text, job.batch.end, false, job.batch.first ? lastClip(job.batch) : 0);
       value.jobs.set(batch.start, newJob(batch));
     }
     if (value.current) prefetchAhead(value, job);
