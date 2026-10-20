@@ -111,7 +111,8 @@ export function createReaderPdfRenderer(readerContext) {
   }
 
   function pdfPrimarySource() {
-    return readerContext.pdfV3Manifest ? readerContext.v3ResourceUrl(readerContext.pdfV3Manifest.primary.resource) : "";
+    // A non-PDF (DjVu) primary keeps the image stream plus v3 text layer.
+    return readerContext.pdfV3Manifest?.primary.kind === "pdf" ? readerContext.v3ResourceUrl(readerContext.pdfV3Manifest.primary.resource) : "";
   }
 
   function renderPdfManifestShell(shell, force = false, priority = false) {
