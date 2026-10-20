@@ -74,7 +74,9 @@ class ReaderSpeechTest(unittest.TestCase):
                 spans = list(zip([0] + data["segment_ends"][:-1], data["segment_ends"]))
                 jobs[job] = {"id": job, "state": "ready", "result": {"pitch_semitones": data["pitch_semitones"]},
                              "progress": {"total_parts": len(spans), "parts": [
+                                 # As the real server: each ~1.52 s clip ends with 0.6 s of guard/pause silence.
                                  {"index": i, "start": a, "end": b, "bytes": len(MP3), "pitch_semitones": data["pitch_semitones"],
+                                  "pause_kind": "comma", "pause_after_seconds": 0.6, "audio_seconds": 1.515,
                                   "audio_url": f"/tts/audio/{job}/parts/{i}.mp3"} for i, (a, b) in enumerate(spans)]}}
                 return route.fulfill(status=202, content_type="application/json", body=json.dumps(jobs[job]), headers=headers)
             if path.startswith("/tts/jobs/"):
@@ -186,6 +188,35 @@ class ReaderSpeechTest(unittest.TestCase):
             page.locator("#speech-next").click()
             page.wait_for_timeout(900)
             self.assertLess(abs(viewport.evaluate("n => n.scrollTop") - top), 400)
+            self.stop(page)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_next_clip_starts_when_speech_ends_not_after_the_silent_tail(self):
+        # Gapless handoff: a cached next clip starts at speech end + its comma
+        # pause (1.515 - 0.6 + 0.14 = 1.055 s), in a second player, in order.
+        body = "".join(f"第{index}句话。" for index in range(300)).encode()
+        context, page, posts, errors = self.open("txt", body, "text/plain; charset=utf-8")
+        try:
+            page.evaluate("""() => { window.__starts = []; window.__seen = new Set();
+              new MutationObserver(() => { for (const a of document.querySelectorAll('audio')) if (!__seen.has(a)) { __seen.add(a);
+                a.addEventListener('playing', () => __starts.push([performance.now() / 1000, a.getAttribute('src'),
+                  String([...(CSS.highlights.get('ccrd-speech') || [])][0] || '')])); } }).observe(document.body, {childList: true, subtree: true}); }""")
+            self.play(page, posts)
+            wait(page, "() => __starts.length >= 6", 20000)
+            starts = page.evaluate("() => __starts")
+            intervals = [round(b[0] - a[0], 2) for a, b in zip(starts[1:], starts[2:])]
+            self.assertTrue(intervals and max(intervals) < 1.35, intervals)  # not >= 1.52 s (whole clip)
+            self.assertEqual(len({row[1] for row in starts}), len(starts))  # every start is a new clip
+            texts = [row[2] for row in starts[1:]]
+            joined = page.evaluate("() => document.querySelector('.reader-text').textContent")
+            positions = [joined.find(text) for text in texts if text]
+            self.assertEqual(positions, sorted(positions))  # highlighted in reading order, nothing skipped twice
+            # Pausing during a pending handoff stops everything.
+            page.locator("#speech-play").click()
+            page.wait_for_timeout(1600)
+            self.assertTrue(page.evaluate("() => [...document.querySelectorAll('audio')].every(a => a.paused)"))
             self.stop(page)
             self.assertFalse(errors, errors)
         finally:

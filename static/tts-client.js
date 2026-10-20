@@ -34,19 +34,40 @@ globalThis.CCRDSpeechPlan = (() => {
       Array.from(text.matchAll(/[^，,。！？!?；;：:\n]+[，,。！？!?；;：:\n]?/gu), value => ({ end: value.index + value[0].length, word: "" }));
     return values.filter(value => !atoms.some(atom => atom.start < value.end && value.end < atom.end));
   }
+  const RAMP = [[16, 32], [36, 56], [64, 90]];
   function phraseEnds(text, first = false) {
     const cuts = wordEnds(text), chars = Array.from(text), offsets = [0], ends = [];
     for (const char of chars) offsets.push(offsets[offsets.length - 1] + char.length);
     let start = 0;
     while (start < text.length) {
       const position = offsets.indexOf(start), short = first && !ends.length;
-      const target = offsets[Math.min(chars.length, position + (short ? 16 : 90))];
-      // The fast first clip may extend to the first punctuation within 32
-      // characters instead of being cut mid-clause at about 16.
-      const ceiling = offsets[Math.min(chars.length, position + (short ? 32 : 120))];
-      const hard = cuts.find(value => value.end > start && value.end <= ceiling && endsSentence(text, value.end));
-      const natural = cuts.filter(value => value.end > start + (short ? 4 : 20) && value.end <= ceiling &&
-        /[，,：:、—…][”’"'」』）)\t \r]*$/u.test(text.slice(start, value.end)) && !connectorOnly(text.slice(start, value.end).trim()));
+      // Streaming ramp (as ElevenLabs' chunk_length_schedule): each early clip
+      // is short enough to be synthesized while the one before it still plays,
+      // so the first sentence is quick and the second does not wait ~5 s for a
+      // 90-character clip on the shared CPU worker.
+      const marks = (goal, limit) => {
+        const ceiling = offsets[Math.min(chars.length, position + limit)];
+        return { target: offsets[Math.min(chars.length, position + goal)],
+          hard: cuts.find(value => value.end > start && value.end <= ceiling && endsSentence(text, value.end)),
+          natural: cuts.filter(value => value.end > start + (short ? 5 : Math.min(20, goal / 2)) && value.end <= ceiling &&
+            /[，,：:、—…][”’"'」』）)\t \r]*$/u.test(text.slice(start, value.end)) && !connectorOnly(text.slice(start, value.end).trim())),
+          // A run of book titles (《甲》《乙》) has no comma; between titles is a weak mark.
+          weak: cuts.filter(value => value.end > start + (short ? 5 : Math.min(20, goal / 2)) && value.end <= ceiling &&
+            text[value.end - 1] === "》" && text[value.end] === "《") };
+      };
+      // A clip ending without punctuation is read as an utterance end and its
+      // last words fade (measured -17 to -21 dB). A ramp clip therefore never
+      // cuts mid-phrase: without a mark in its range it widens to the next size.
+      const sizes = first ? [...RAMP.slice(ends.length), [90, 120]] : [[90, 120]];
+      let found = marks(...sizes[0]);
+      for (const size of sizes.slice(1)) {
+        if (found.hard || found.natural.length) break;
+        const wider = marks(...size);
+        // Prefer a nearer title boundary to a much longer clip.
+        if (found.weak.length && !wider.natural.some(value => value.end <= found.weak[found.weak.length - 1].end + 8)) break;
+        found = wider;
+      }
+      const { target, hard } = found, natural = found.natural.length ? found.natural : found.weak;
       let end;
       if (short && natural.length && (!hard || natural[0].end < hard.end)) end = natural[0].end; // Earliest mark keeps first audio fast.
       else if (hard) end = hard.end; // Never merge different spoken sentences in one part.
@@ -153,7 +174,8 @@ globalThis.CCRDSpeechPlan = (() => {
     return sentence(text, Math.max(0, cursor)).start;
   }
   function batch(text, offset, first = false) {
-    const start = first ? clauseStart(text, offset) : safe(text, offset), limit = first ? 48 : 480;
+    // The first batch holds the whole short-to-long clip ramp (see RAMP).
+    const start = first ? clauseStart(text, offset) : safe(text, offset), limit = first ? 200 : 480;
     if (start >= text.length) return null;
     const chars = Array.from(text.slice(start, start + 1800)), offsets = [start];
     for (const char of chars) offsets.push(offsets[offsets.length - 1] + char.length);
@@ -254,7 +276,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     entry.url = URL.createObjectURL(blob); entry.bytes = blob.size; clipBytes += blob.size;
     for (const [other, item] of Array.from(clips)) {
       if (clips.size <= CLIP_LIMIT && clipBytes <= CLIP_BYTES) break;
-      if (other !== key && item.url && item.url !== audio?.getAttribute("src")) dropClip(other);
+      if (other !== key && item.url && item.url !== audio?.getAttribute("src") && item.url !== spare?.getAttribute("src")) dropClip(other);
     }
   }
   function fetchClip(value, job, part) {
@@ -273,7 +295,10 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
       .catch(() => { if (clips.get(key) === entry) clips.delete(key); })
       .finally(() => {
         clipLoads -= 1;
-        if (live(value) && value.wantsPlay && value.current) prefetchAhead(value, value.current.job);
+        if (live(value) && value.wantsPlay && value.current) {
+          prefetchAhead(value, value.current.job);
+          if (!handoff && !retiring && audio && !audio.paused) armHandoff(value); // the next clip just arrived
+        }
       });
   }
   function prefetchAhead(value, job) {
@@ -492,7 +517,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     owner.wantsPlay = false;
     clearPreload();
     for (const job of Array.from(owner.jobs.values())) if (job.batch.start !== owner.batch.start && job.state !== "ready") discard(owner, job);
-    audio.pause(); notice("已暂停"); controls();
+    audio.pause(); cancelHandoff(); if (retiring) retire(); notice("已暂停"); controls();
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
   }
   function stop(message = "已停止，可继续朗读", keepalive = false, keepClips = false) {
@@ -508,33 +533,118 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     owner = null;
     clearSleep(); clearPreload(); switching = true;
     if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+    cancelHandoff(); if (retiring) retire();
     // An internal restart (seek outside the buffer, pitch, retry) keeps clips;
     // an explicit stop, sleep expiry or page exit releases all audio memory.
     if (!keepClips) clearClips();
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "none";
     notice(message); controls();
   }
+  // Gapless handoff (double-buffered players, as in gapless music players): the
+  // next cached clip is preloaded in a second element and started when this
+  // clip's speech ends, instead of waiting for its trailing guard silence and a
+  // src swap/decode (measured 0.15-0.18 s per clip). The server adds at least
+  // 0.22 s after every part (lost-tail guard for single-element swaps), so a
+  // comma took ~0.5 s. Old clips finish their silent tail in their own element.
+  const SPOKEN_PAUSE = { comma: .14, clause: .22, sentence: .32, line: .35, list: .3, heading: .45, paragraph: .55, continuation: .06 };
+  let spare = null, retiring = null, handoff = null, handoffBlocked = false;
+  function newPlayer() {
+    const player = new Audio(); player.preload = "auto"; player.hidden = true; player.crossOrigin = "anonymous";
+    document.body.append(player);
+    return player;
+  }
+  function cancelHandoff() {
+    if (!handoff) return;
+    clearTimeout(handoff.timer); handoff = null;
+    if (spare && spare !== retiring) { spare.removeAttribute("src"); spare.load(); }
+  }
+  function retire() {
+    const old = retiring; retiring = null;
+    if (old && old !== audio) { old.pause(); old.removeAttribute("src"); old.load(); }
+    if (owner?.wantsPlay) armHandoff(owner);
+  }
+  function nextClip(value) {
+    const job = value.current?.job, part = job?.parts[value.part + 1];
+    if (!part || job.stale) return null;
+    const url = clipUrl(clipKey(value, job, part));
+    return url ? { job, part, url } : null;
+  }
+  function armHandoff(value) {
+    cancelHandoff();
+    const part = value.current?.part, kind = part?.pause_kind;
+    if (handoffBlocked || retiring || finishClip || !live(value) || !value.wantsPlay || !spare ||
+        !(kind in SPOKEN_PAUSE) || !(part.pause_after_seconds > 0) || !Number.isFinite(audio.duration)) return;
+    const next = nextClip(value);
+    if (!next) return;
+    // Speech ends `pause_after_seconds` before the clip does; keep its intended pause.
+    const at = audio.duration - part.pause_after_seconds + SPOKEN_PAUSE[kind];
+    if (at >= audio.duration - .03) return;
+    spare.src = next.url; spare.load();
+    const token = handoff = { ...next, current: value.current, timer: 0 };
+    const wait = () => {
+      if (handoff !== token) return;
+      const left = (at - audio.currentTime) / (audio.playbackRate || 1);
+      if (left > .02) { token.timer = setTimeout(wait, Math.min(250, left * 1000)); return; }
+      commitHandoff(value, token);
+    };
+    wait();
+  }
+  function commitHandoff(value, token) {
+    if (handoff !== token || owner !== value || value.current !== token.current || !value.wantsPlay || checkSleep() ||
+        spare.readyState < 2 || spare.getAttribute("src") !== token.url) return;
+    const next = spare;
+    next.defaultPlaybackRate = next.playbackRate = audio.playbackRate;
+    if ("preservesPitch" in next) next.preservesPitch = true;
+    next.muted = audio.muted; next.volume = audio.volume;
+    next.play().then(() => {
+      if (handoff !== token || owner !== value || value.current !== token.current || !value.wantsPlay) {
+        if (next !== audio) next.pause();
+        return;
+      }
+      handoff = null;
+      const previous = audio;
+      previous.removeAttribute("id"); next.id = "speech-audio";
+      audio = next; spare = previous; retiring = previous;
+      previous.addEventListener("ended", retire, { once: true });
+      setTimeout(() => { if (retiring === previous) retire(); }, 2000);
+      value.position = token.job.batch.start + token.current.part.end; value.part += 1;
+      token.job.used = true;
+      value.current = { job: token.job, part: token.part }; value.position = token.job.batch.start + token.part.start;
+      notice("朗读中"); mark(); controls();
+      pump(value);
+    }, () => { handoffBlocked = true; handoff = null; }); // e.g. iOS autoplay: keep the ordinary path.
+  }
+  function clipEnded(event) {
+    const value = owner;
+    if (event.target !== audio || !value?.current || checkSleep()) return;
+    cancelHandoff();
+    value.position = value.current.job.batch.start + value.current.part.end;
+    value.part += 1; value.current = null;
+    if (finishClip) { stop("本句已读完，睡眠定时结束"); return; }
+    advance(value); pump(value);
+  }
+  function bindPlayer(player) {
+    player.addEventListener("loadedmetadata", () => {
+      if (player !== audio || !owner?.current || checkSleep()) return;
+      switching = false; applyRate();
+      if (owner.wantsPlay) { playAudio(owner); armHandoff(owner); }
+    });
+    player.addEventListener("ended", clipEnded);
+    player.addEventListener("pause", () => {
+      if (player === audio && owner && !switching && !audio.ended && owner.wantsPlay) pause();
+    });
+    player.addEventListener("error", () => onPlayerError(player));
+    player.addEventListener("timeupdate", () => { if (player === audio) checkSleep(); });
+  }
   function createAudio() {
     if (audio) return;
-    audio = new Audio(); audio.id = "speech-audio"; audio.preload = "auto"; audio.hidden = true;
-    audio.crossOrigin = "anonymous"; document.body.append(audio);
-    audio.addEventListener("loadedmetadata", () => {
-      if (!owner?.current || checkSleep()) return;
-      switching = false; applyRate();
-      if (owner.wantsPlay) playAudio(owner);
-    });
-    audio.addEventListener("ended", () => {
-      const value = owner;
-      if (!value?.current || checkSleep()) return;
-      value.position = value.current.job.batch.start + value.current.part.end;
-      value.part += 1; value.current = null;
-      if (finishClip) { stop("本句已读完，睡眠定时结束"); return; }
-      advance(value); pump(value);
-    });
-    audio.addEventListener("pause", () => {
-      if (owner && !switching && !audio.ended && owner.wantsPlay) pause();
-    });
-    audio.addEventListener("error", () => {
+    audio = newPlayer(); audio.id = "speech-audio";
+    spare = newPlayer();
+    bindPlayer(audio); bindPlayer(spare);
+  }
+  function onPlayerError(player) {
+    if (player !== audio) { if (handoff && player === spare) { clearTimeout(handoff.timer); handoff = null; } return; }
+    {
       if (!owner?.current || !audio.hasAttribute("src")) return;
       const { job, part } = owner.current;
       if (audio.getAttribute("src").startsWith("blob:") && !job.preloaded && !job.stale) {
@@ -544,8 +654,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
         audio.src = ORIGIN + part.audio_url; audio.load(); applyRate(); return;
       }
       owner.blocked = true; pause(); notice("音频连接中断，点击继续重试，不跳过正文"); controls();
-    });
-    audio.addEventListener("timeupdate", checkSleep);
+    }
   }
   function applyRate() {
     if (!audio) return;
@@ -679,7 +788,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
       if (part && (cached || !job.preloaded)) {
         job.used = true;
         value.current = { job, part }; value.position = job.batch.start + part.start;
-        switching = true; audio.src = cached || ORIGIN + part.audio_url; audio.load(); applyRate();
+        switching = true; cancelHandoff(); audio.src = cached || ORIGIN + part.audio_url; audio.load(); applyRate();
         notice("朗读中"); mark(); controls();
       } else if (job.state === "ready" || (job.stale && !part)) {
         // A paged source may still be loading the text after this batch.
@@ -797,7 +906,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     if (!owner) { if (saved) start(saved.snapshot, saved.position); return; }
     if (owner.blocked || owner.settingsChanged) { start(owner.snapshot, owner.position); return; }
     owner.wantsPlay = true; notice("正在继续…"); controls();
-    if (owner.current) playAudio(owner);
+    if (owner.current) { playAudio(owner); armHandoff(owner); }
     advance(owner); pump(owner);
   }
   function launch() {
@@ -905,7 +1014,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     if (owner.wantsPlay) start(owner.snapshot, owner.position);
     else { owner.settingsChanged = true; notice("音高已调整，点击继续后从当前句重新生成"); }
   });
-  speed.addEventListener("input", () => { applyRate(); controls(); });
+  speed.addEventListener("input", () => { applyRate(); controls(); if (owner?.current && owner.wantsPlay && !retiring) armHandoff(owner); });
   timer.addEventListener("change", armSleep);
   panel.addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hide(); } });
   window.addEventListener("pagehide", () => stop("已停止", true));
