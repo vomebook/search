@@ -368,7 +368,10 @@ function normalizeReaderReturnUrl(rawUrl) {
 var readerOverlay = null;
 var readerUiState = "base";
 var readerClosing = false;
-const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html");
+const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html", {
+  // "返回阅读" on the background-reading bar reopens the kept Reader.
+  resume: (url) => navigateToReader(url)
+});
 var readerReturnScrollState = null;
 var readerReturnSnapshot = null;
 var readerReturnRestoreGeneration = 0;

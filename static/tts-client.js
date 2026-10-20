@@ -44,7 +44,7 @@ globalThis.CCRDSpeechPlan = (() => {
       // The fast first clip may extend to the first punctuation within 32
       // characters instead of being cut mid-clause at about 16.
       const ceiling = offsets[Math.min(chars.length, position + (short ? 32 : 120))];
-      const hard = cuts.find(value => value.end > start && value.end <= ceiling && /[。！？!?；;\n.][”’"'」』）)\t \r]*$/u.test(text.slice(start, value.end)));
+      const hard = cuts.find(value => value.end > start && value.end <= ceiling && endsSentence(text, value.end));
       const natural = cuts.filter(value => value.end > start + (short ? 4 : 20) && value.end <= ceiling &&
         /[，,：:、—…][”’"'」』）)\t \r]*$/u.test(text.slice(start, value.end)) && !connectorOnly(text.slice(start, value.end).trim()));
       let end;
@@ -88,7 +88,26 @@ globalThis.CCRDSpeechPlan = (() => {
     return offset && /[\uDC00-\uDFFF]/u.test(text[offset] || "") && /[\uD800-\uDBFF]/u.test(text[offset - 1]) ? offset - 1 : offset;
   }
   function boundary(text, index) {
-    return ending.test(text[index]) || (text[index] === "." && !ascii.test(text[index + 1] || ""));
+    return ending.test(text[index]) || (text[index] === "." && !ascii.test(text[index + 1] || "") && !listMarker(text, index));
+  }
+  // "1." / "12." / "一." / "(3)." at a line or clause start number the item that
+  // follows; that period must not end a sentence ("1." spoken alone, then the item).
+  function listMarker(text, index) {
+    let cursor = index;
+    const closed = cursor > 0 && /[)）]/u.test(text[cursor - 1]);
+    if (closed) cursor -= 1;
+    const digits = cursor;
+    while (cursor > 0 && digits - cursor < 4 && /[0-9０-９一二三四五六七八九十百]/u.test(text[cursor - 1])) cursor -= 1;
+    if (cursor === digits) return false;
+    if (cursor > 0 && /[(（]/u.test(text[cursor - 1])) cursor -= 1;
+    else if (closed) return false;
+    return cursor === 0 || /[\s。！？!?；;：:，,、]/u.test(text[cursor - 1]);
+  }
+  // Whether text[0..end) finishes a sentence (ignoring closing quotes/space).
+  function endsSentence(text, end) {
+    let index = end - 1;
+    while (index > 0 && /[”’"'」』）)\t \r]/u.test(text[index])) index -= 1;
+    return index >= 0 && boundary(text, index);
   }
   // Clause marks for natural cut points; ASCII , and : only outside numbers/times.
   function clause(text, index) {
@@ -299,6 +318,45 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     function tickSleep() { if (!checkSleep() && sleepDeadline) sleepTimer = setTimeout(tickSleep, Math.min(1000, sleepDeadline - Date.now())); }
     tickSleep();
   }
+  // "回到播放位置" <-> "回到原位置" (like a reader's "back to page N" after a jump):
+  // after jumping, the button returns to where the reader was until the playing
+  // sentence is no longer in view (the reader scrolled away / it moved on).
+  let returnView = null, locateTimer = 0;
+  function playingInView() {
+    const value = owner || saved;
+    if (!value || preview?.id !== value.snapshot.id) return false;
+    if (value.snapshot.adapter) return preview.adapter === value.snapshot.adapter && !!value.snapshot.adapter.inView?.(value.position);
+    const rect = sourceRange(Math.min(value.position, Math.max(0, preview.text.length - 1)))?.getBoundingClientRect();
+    const box = preview.body.getBoundingClientRect();
+    return !!rect?.height && rect.bottom > Math.max(0, box.top) && rect.top < Math.min(innerHeight, box.bottom);
+  }
+  function updateLocate() {
+    if (returnView && performance.now() > returnView.grace && !playingInView()) returnView = null;
+    const back = !!returnView;
+    locate.textContent = back ? "回到原位置" : "回到播放位置";
+    locate.setAttribute("aria-label", back ? "回到跳转前的阅读位置" : "回到正在朗读的句子");
+  }
+  function viewChanged() { clearTimeout(locateTimer); locateTimer = setTimeout(updateLocate, 120); }
+  function saveView() {
+    if (preview?.adapter) return preview.adapter.saveView?.() ?? null;
+    return preview?.body ? { body: preview.body, top: preview.body.scrollTop, page: scrollY } : null;
+  }
+  function restoreView(view) {
+    if (view?.body) { view.body.scrollTop = view.top; scrollTo({ top: view.page }); }
+    else if (view !== null && view !== undefined) preview?.adapter?.restoreView?.(view);
+  }
+  async function toggleLocate() {
+    if (returnView) {
+      const view = returnView.view; returnView = null;
+      restoreView(view); updateLocate();
+      return;
+    }
+    const view = saveView();
+    await locateSource();
+    if (view !== null && view !== undefined) returnView = { view, grace: performance.now() + 2500 };
+    updateLocate();
+  }
+  document.addEventListener("scroll", viewChanged, { capture: true, passive: true });
   function show() {
     const parent = preview?.host?.isConnected ? preview.host : preview?.body?.isConnected ? preview.body.parentElement : $("#preview-panel:not([hidden])") || document.body;
     if (panel.parentElement !== parent) parent.append(panel);
@@ -319,6 +377,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     next.disabled = !owner || (plan.sentence(owner.snapshot.text, owner.position).end >= owner.snapshot.text.length && !more(owner.snapshot));
     visible.disabled = !preview;
     locate.disabled = !owner && !saved;
+    updateLocate();
     $("#speech-pitch-value").textContent = (Number(pitch.value) > 0 ? "+" : "") + pitch.value;
     $("#speech-speed-value").textContent = Number(speed.value).toFixed(2).replace(/0$/, "") + "×";
     const button = $("[data-speech-toggle]");
@@ -367,6 +426,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
       const realm = (range.startContainer.ownerDocument || document).defaultView || globalThis;
       if (realm.CSS?.highlights && realm.Highlight) { realm.CSS.highlights.set("ccrd-speech", new realm.Highlight(range)); markedRegistry = realm.CSS.highlights; }
       preview.adapter.follow?.(start, end);
+      viewChanged();
       return;
     }
     if (globalThis.CSS?.highlights && globalThis.Highlight) CSS.highlights.set("ccrd-speech", new Highlight(range));
@@ -714,9 +774,20 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     if (job.preloaded) advance(value);
     pump(value); // First POST directly; no iframe, voices or health round-trips.
   }
-  function fromPreview(offset = visibleOffset()) {
+  function fromPreview(offset) {
     // An adapter loads its text on demand; start() waits for it.
     if (!preview || (!preview.adapter && !preview.text.trim())) { if (typeof showToast === "function") showToast("请等待预览正文加载完成"); return; }
+    if (offset === undefined && preview.adapter?.locateTop) {
+      // Find (and load up to) the text at the reading position first, so a
+      // paged document is not read from its first loaded unit.
+      const token = ++starting;
+      if (!owner) { notice("正在定位当前阅读位置…"); show(); }
+      Promise.resolve(preview.adapter.locateTop()).catch(() => 0).then((found) => {
+        if (token === starting && preview?.adapter) fromPreview(plan.safe(preview.text, Number(found) || 0));
+      });
+      return;
+    }
+    if (offset === undefined) offset = visibleOffset();
     if (owner && owner.snapshot.id !== preview.id && !confirm("切换到当前预览会停止原朗读，继续吗？")) return;
     if (owner && sameSource(owner.snapshot, preview) && seek(owner, offset, true)) return;
     start(preview.adapter ? preview.snapshot : { id: preview.id, text: preview.text, title: preview.title }, offset);
@@ -731,7 +802,9 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
   }
   function launch() {
     if (!owner) {
-      if (saved?.snapshot.id === preview?.id) start(saved.snapshot, saved.position);
+      // A host adapter resumes a stopped session only when it is the same
+      // window; otherwise "听书" starts where the reader is looking now.
+      if (saved?.snapshot.id === preview?.id && (!preview?.adapter || saved.snapshot.adapter === preview.adapter && !preview.adapter.locateTop)) start(saved.snapshot, saved.position);
       else fromPreview();
     } else if (!panel.hidden) hide();
     else { show(); if (!owner.wantsPlay && owner.snapshot.id === preview?.id) resume(); }
@@ -823,7 +896,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
   previous.addEventListener("click", () => navigate(-1));
   next.addEventListener("click", () => navigate(1));
   visible.addEventListener("click", () => fromPreview());
-  locate.addEventListener("click", locateSource);
+  locate.addEventListener("click", toggleLocate);
   collapse.addEventListener("click", hide);
   stopButton.addEventListener("click", () => { stop(); clearMark(); hide(); });
   pitch.addEventListener("input", controls);
@@ -847,6 +920,10 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
   // readFrom: a host adapter's double-click/selection starts at a source offset.
   return { launch, previewLoaded, previewPending, previewClosed, owns: node => !!node && panel.contains(node), modal: () => false,
     readFrom: offset => { if (preview) fromPreview(plan.sentence(preview.text, offset).start); },
+    // Host hooks: show the playing sentence (no "回到原位置" toggle) and report
+    // scrolling the player cannot observe itself (e.g. inside an iframe).
+    reveal: () => { returnView = null; return locateSource().then(updateLocate); },
+    viewChanged,
     state: () => ({ active: !!owner, playing: !!owner?.wantsPlay, adapter: owner?.snapshot.adapter || saved?.snapshot.adapter || null }),
     stop: () => { stop("已停止", true); clearMark(); hide(); } };
 })();

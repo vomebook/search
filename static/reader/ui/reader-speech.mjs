@@ -196,6 +196,20 @@ export function createReaderSpeech(readerContext) {
         });
         return chain;
       },
+      // Load through `unit` (the unit the reader is looking at).
+      ensureUnit(unit) {
+        chain = chain.then(async () => {
+          for (let guard = 0; !done && next <= unit && guard < 400; guard++) await loadNext();
+        });
+        return chain;
+      },
+      // Offset of a unit-local position; past an empty unit, the next text.
+      offsetOf(position) {
+        const part = parts.find((item) => item.unit === position.unit);
+        if (part) return part.start + Math.min(position.offset, part.raw.length);
+        return parts.find((item) => item.unit > position.unit)?.start ?? text.length;
+      },
+      locateTop: () => locateTop(),
       partAt(offset) {
         let low = 0, high = parts.length - 1;
         while (low <= high) {
@@ -235,7 +249,8 @@ export function createReaderSpeech(readerContext) {
         const part = self.partAt(start);
         if (!part) return;
         self.current = start;
-        if (!self.following) return;
+        // Parked in the background (Reader closed while reading): no layout to follow.
+        if (!self.following || !readerContext.viewport.getClientRects().length) return;
         const range = self.range(start, start + 1);
         if (!range) {
           // An unrendered page/section: navigate there and wait for its text.
@@ -261,10 +276,23 @@ export function createReaderSpeech(readerContext) {
         const top = rect.top + shift, bottom = rect.bottom + shift;
         return { inside: top >= box.top && bottom <= box.bottom - 24, overlaps: bottom > box.top && top < box.bottom };
       },
-      // A settled scroll that we did not start: follow only if the clip is still on screen.
+      // Any scroll the reader starts (wheel, touch, scroll keys, scrollbar,
+      // TOC/progress navigation) stops following; only "回到播放位置" or a new
+      // start resumes it (Readwise Reader / Spotify "Sync" model, no timeout).
       userScrolled() {
-        if (self.current === null || performance.now() < self.autoUntil) return;
-        self.following = !!self.visible(self.current)?.overlaps;
+        if (performance.now() < self.autoUntil) return;
+        self.following = false;
+      },
+      inView(offset) { return !!self.visible(offset)?.overlaps; },
+      saveView() {
+        const win = sourceInfo.frame?.contentWindow;
+        return { top: readerContext.viewport.scrollTop, frame: win ? win.scrollY : null };
+      },
+      restoreView(view) {
+        self.following = false;
+        self.autoUntil = performance.now() + 600;
+        readerContext.viewport.scrollTop = view.top;
+        if (view.frame !== null) sourceInfo.frame?.contentWindow?.scrollTo(0, view.frame);
       },
       async reveal(offset) {
         const part = self.partAt(offset);
@@ -322,18 +350,45 @@ export function createReaderSpeech(readerContext) {
     }
     const root = info.root(unit);
     if (!root) return { unit, offset: 0 };
-    const doc = root.ownerDocument || document;
-    let x = box.left + 24, y = box.top + 12;
-    if (info.frame) { const frameBox = info.frame.getBoundingClientRect(); x = 24; y = Math.max(12, box.top - frameBox.top + 12); }
-    const shadow = root.getRootNode?.();
-    const caret = caretIn(doc, x, y, shadow?.nodeType === 11 ? [shadow] : []);
-    if (!caret || !root.contains(caret.node)) return { unit, offset: 0 };
+    // First character whose line reaches below the viewport top. Rendered
+    // characters are in reading order, so a binary search over each text node
+    // is exact even for one 32 KiB TXT text node (no hit-testing guesswork).
+    const shift = info.frame ? info.frame.getBoundingClientRect().top : 0;
+    const limit = box.top + 4 - shift;
+    const doc = root.ownerDocument || document, range = doc.createRange();
+    const bottom = (node, index) => {
+      range.setStart(node, index); range.setEnd(node, Math.min(node.length, index + 1));
+      const rect = [...range.getClientRects()].find((item) => item.height) || range.getBoundingClientRect();
+      return rect.height ? rect.bottom : null;
+    };
     let total = 0;
     for (const node of textNodes(root)) {
-      if (node === caret.node) return { unit, offset: total + caret.offset };
+      const last = bottom(node, Math.max(0, node.length - 1));
+      if (last !== null && last > limit) {
+        let low = 0, high = node.length - 1;
+        while (low < high) {
+          const middle = (low + high) >> 1, value = bottom(node, middle);
+          if (value !== null && value > limit) high = middle; else low = middle + 1;
+        }
+        return { unit, offset: total + low };
+      }
       total += node.length;
     }
     return { unit, offset: 0 };
+  }
+
+  // Exact start for "听书"/"从当前阅读位置开始": the window is re-based to the
+  // unit in view when it is not loaded (or would need many earlier units).
+  async function locateTop() {
+    const position = topPosition();
+    if (!adapter || !position) return 0;
+    let target = adapter;
+    if (target.source.units > 1 && (position.unit < target.base || !target.covers(position.unit) && position.unit - target.base > 2)) {
+      target = rebase(position.unit);
+    }
+    await target.ensureUnit(position.unit);
+    target.following = true; // Reading starts where the reader looks: follow it.
+    return target.offsetOf(position);
   }
 
   // ---- Publication to the shared player --------------------------------------
@@ -354,6 +409,7 @@ export function createReaderSpeech(readerContext) {
   }
 
   function syncToView() {
+    if (!adapter && offerSource) { offer(offerSource); return; }
     if (!adapter || adapter.source.units <= 1) return;
     const state = speech()?.state?.();
     if (state?.active) return; // Never re-base under active playback.
@@ -377,6 +433,7 @@ export function createReaderSpeech(readerContext) {
       global = next.offsetFromNode(node, offset);
       if (global === null || global === undefined) return;
     }
+    if (adapter) adapter.following = true;
     speech()?.readFrom(global);
   }
 
@@ -390,7 +447,56 @@ export function createReaderSpeech(readerContext) {
   }
 
   // ---- Lifecycle ---------------------------------------------------------------
+  // Formats whose text may be absent (scanned PDF, comic books, empty files)
+  // only get the button once text is found at/near the reading position.
+  const probeText = new Map(), probeSeen = new Map();
+  let generation = 0, probing = null, offerSource = null;
+
+  function withProbeCache(info) {
+    const load = info.load;
+    return { ...info, load: (unit) => {
+      const hit = probeText.get(unit);
+      if (hit) { probeText.delete(unit); return hit; }
+      return load(unit);
+    } };
+  }
+
+  function needsProbe(info) {
+    const current = mode();
+    if (current === "epub-chapters") return false;
+    if (current === "pdf-pages" && (readerContext.ocrManifestUrl || readerContext.pdfOcrManifest)) return false;
+    return true;
+  }
+
+  async function probe(info, owner) {
+    const from = info.units > 1 ? (topPosition()?.unit ?? info.first) : info.first;
+    for (let unit = Math.max(info.first, from - 1); unit < Math.min(info.units, from + 12); unit++) {
+      if (!probeSeen.has(unit)) {
+        const text = Promise.resolve(info.load(unit)).then((value) => String(value || ""), () => "");
+        probeText.set(unit, text);
+        probeSeen.set(unit, text.then((value) => !!value.trim()));
+      }
+      const found = await probeSeen.get(unit);
+      if (owner !== generation) return null;
+      if (found) return from;
+    }
+    return null;
+  }
+
+  function offer(info) {
+    if (adapter || probing) return;
+    const owner = generation;
+    probing = probe(info, owner).then((from) => {
+      if (owner !== generation) return;
+      probing = null;
+      if (from === null || adapter) return;
+      publish(createAdapter(info, info.units > 1 ? Math.max(info.first, from - 1) : info.first));
+    }, () => { if (owner === generation) probing = null; });
+  }
+
   function detach() {
+    generation++;
+    probing = null; offerSource = null; probeText.clear(); probeSeen.clear();
     for (const off of cleanup.splice(0)) off();
     adapter = null;
     speech()?.previewClosed();
@@ -402,10 +508,11 @@ export function createReaderSpeech(readerContext) {
     if (!player) return;
     document.querySelector("[data-speech-toggle]")?.remove();
     if (!hasText()) return;
-    const info = source();
-    if (!info || info.units <= info.first) return;
-    const start = info.units > 1 ? Math.max(info.first, (topPosition()?.unit ?? info.first) - 1) : info.first;
-    publish(createAdapter(info, start));
+    const raw = source();
+    if (!raw || raw.units <= raw.first) return;
+    const info = withProbeCache(raw);
+    if (needsProbe(info)) { offerSource = info; offer(info); }
+    else publish(createAdapter(info, info.units > 1 ? Math.max(info.first, (topPosition()?.unit ?? info.first) - 1) : info.first));
     const listen = (target, type, handler, options) => {
       if (!target) return;
       target.addEventListener(type, handler, options);
@@ -416,14 +523,23 @@ export function createReaderSpeech(readerContext) {
     let timer = 0, settle = 0;
     const onScroll = () => {
       clearTimeout(timer); timer = setTimeout(syncToView, 250);
-      clearTimeout(settle); settle = setTimeout(() => adapter?.userScrolled(), 150);
+      clearTimeout(settle); settle = setTimeout(() => speech()?.viewChanged?.(), 150);
     };
-    // Direct input overrides one of our smooth scrolls still in progress.
-    const onIntent = () => { if (adapter) adapter.autoUntil = 0; };
-    for (const target of [readerContext.viewport, info.frame?.contentDocument]) {
-      listen(target, "scroll", onScroll, { passive: true, capture: true });
-      for (const type of ["wheel", "touchstart", "keydown"]) listen(target, type, onIntent, { passive: true, capture: true });
+    // Reader-initiated movement stops auto-follow at once, including during one
+    // of our own smooth scrolls. Scroll events alone (layout shifts, lazy pages,
+    // our own follow) never do. The player panel's buttons are excluded.
+    const keys = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown", " ", "Spacebar"]);
+    const onIntent = (event) => {
+      if (!adapter || event.target?.closest?.("#speech-panel, .reader-actions")) return;
+      if (event.type === "keydown" && !keys.has(event.key)) return;
+      adapter.autoUntil = 0;
+      adapter.userScrolled();
+    };
+    const intentTargets = [document, info.frame?.contentDocument];
+    for (const target of intentTargets) {
+      for (const type of ["wheel", "touchmove", "keydown", "pointerdown"]) listen(target, type, onIntent, { passive: true, capture: true });
     }
+    listen(readerContext.viewport, "scroll", onScroll, { passive: true, capture: true });
     if (info.frame?.contentWindow) listen(info.frame.contentWindow, "scroll", onScroll, { passive: true });
     cleanup.push(() => { clearTimeout(timer); clearTimeout(settle); });
     ensureStyle(document);
