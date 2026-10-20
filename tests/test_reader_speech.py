@@ -141,7 +141,10 @@ class ReaderSpeechTest(unittest.TestCase):
                     count = len(posts)
                     page.locator("#speech-next").click()
                     wait(page, "()=>!document.querySelector('#speech-audio').paused")
-                    self.assertEqual(len(posts), count)
+                    # Only the speculative following batch may be queued (its
+                    # context is this batch's end), never a resynthesis.
+                    for later in posts[count:]:
+                        self.assertTrue(later["context_before"] and job["text"].endswith(later["context_before"]), later["text"][:40])
                     # The CSS highlight lives in the realm owning the text.
                     realm = "document.querySelector('iframe.html-frame').contentWindow" if ext == "html" else "window"
                     wait(page, f"()=>{realm}.CSS.highlights.has('ccrd-speech')", 5000)
