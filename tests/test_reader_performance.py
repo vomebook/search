@@ -504,6 +504,15 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertIn("第 1 / 30 页", self.page.locator("#bookmark-prompt").text_content())
         self.page.wait_for_function("() => window.__savedReaderProgress && window.__savedReaderProgress.page === 1")
         self.page.locator("#bookmark-add").click()
+        # A TOC book opens the drawer as an opening hint, so a bare click here
+        # could toggle it closed. Normalize to closed first, then test the
+        # click-to-open path deterministically.
+        self.page.locator("#history").evaluate(
+            "button => { if (button.getAttribute('aria-expanded') === 'true') button.click(); }"
+        )
+        self.page.wait_for_function(
+            "() => document.querySelector('#history').getAttribute('aria-expanded') === 'false'"
+        )
         self.page.locator("#history").click()
         self.assertTrue(self.page.locator("#history-panel").evaluate("element => element.classList.contains('is-open')"))
         self.assertNotEqual(self.page.locator("#history-panel").evaluate("element => getComputedStyle(element).transitionDuration"), "0s")
