@@ -89,8 +89,8 @@ export function createReaderBookmarks(readerContext) {
   }
 
   function bookmarkExcerpt() {
-    if (["image", "audio", "video", "pdf-pages"].includes(readerContext.capability.mode)) return "";
-    if (readerContext.capability.mode === "pdf") {
+    if (["image", "audio", "video"].includes(readerContext.capability.mode)) return "";
+    if (["pdf", "pdf-pages"].includes(readerContext.capability.mode)) {
       const shell = readerContext.pageAtMarker(),
         items = shell && shell._bookmarkTextItems;
       if (items && items.length) {
