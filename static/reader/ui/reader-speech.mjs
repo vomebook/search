@@ -62,7 +62,7 @@ export function createReaderSpeech(readerContext) {
   const speech = () => globalThis.CCRDSpeech;
   const mode = () => readerContext.capability?.mode || "";
   const documentId = () => "reader:" + (readerContext.sourceUrl || readerContext.contentUrl || location.search);
-  const title = () => document.querySelector("#title")?.textContent?.trim() || document.title || "朗读";
+  const readerSpeechTitle = () => document.querySelector("#title")?.textContent?.trim() || document.title || "朗读";
 
   // ---- Per-format unit sources -------------------------------------------
   function foliateSections() {
@@ -395,7 +395,7 @@ export function createReaderSpeech(readerContext) {
   function publish(next) {
     adapter = next;
     speech()?.previewLoaded({
-      id: documentId(), title: title(), adapter: next, host: document.body,
+      id: documentId(), title: readerSpeechTitle(), adapter: next, host: document.body,
       tools: document.querySelector(".reader-actions"), buttonClass: "icon-button preview-speech-btn"
     });
   }
