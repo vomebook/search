@@ -841,16 +841,17 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     const epoch = value.seekEpoch;
     clearTimeout(value.timer); value.pumpEpoch = epoch;
     try {
-      // Jobs are long-polled concurrently. Polled one after another, the next
-      // batch (queued behind this one on the single worker) held each round for
-      // its full 8 s wait, so this batch's finished clips were seen up to 9 s
-      // late (2026-10-20 cold CW:0: clips 2 and 3 arrived together, 4.9 s late).
+      // Only the current batch is awaited. A following batch is queued behind it
+      // on the single worker, so its long-poll usually waits the full 8 s; when
+      // a pump round awaited it, this batch's finished clips were seen up to 9 s
+      // late (2026-10-20 cold CW:0: clips 4-7 arrived together, 2.2 s late).
+      // update() skips a job whose request is still pending.
       const current = value.jobs.get(value.batch.start);
-      const jobs = [current, ...Array.from(value.jobs.values()).filter(job => job !== current)].filter(Boolean);
-      await Promise.all(jobs.map(async job => {
-        await update(value, job);
-        if (live(value) && epoch === value.seekEpoch) advance(value); // Never wait for speculative work.
-      }));
+      for (const job of Array.from(value.jobs.values())) if (job !== current) {
+        update(value, job).then(() => { if (live(value) && epoch === value.seekEpoch) advance(value); }, () => {});
+      }
+      if (current) await update(value, current);
+      if (live(value) && epoch === value.seekEpoch) advance(value); // Never wait for speculative work.
     } finally {
       if (epoch === value.seekEpoch) {
         value.pumpEpoch = null;
