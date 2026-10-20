@@ -34,7 +34,11 @@ globalThis.CCRDSpeechPlan = (() => {
       Array.from(text.matchAll(/[^，,。！？!?；;：:\n]+[，,。！？!?；;：:\n]?/gu), value => ({ end: value.index + value[0].length, word: "" }));
     return values.filter(value => !atoms.some(atom => atom.start < value.end && value.end < atom.end));
   }
-  const RAMP = [[16, 32], [36, 56], [64, 90]];
+  // First-batch clip sizes (goal, ceiling characters), like ElevenLabs'
+  // chunk_length_schedule. Production CPU synthesis runs at ~0.65-0.72 s per
+  // second of audio (2026-10-20 cold CW:0), so a clip may be at most ~1.4x the
+  // previous one or it is not ready when the previous clip's speech ends.
+  const RAMP = [[16, 30], [24, 40], [34, 56], [50, 78], [72, 110]];
   function phraseEnds(text, first = false) {
     const cuts = wordEnds(text), chars = Array.from(text), offsets = [0], ends = [];
     for (const char of chars) offsets.push(offsets[offsets.length - 1] + char.length);
@@ -52,13 +56,16 @@ globalThis.CCRDSpeechPlan = (() => {
           natural: cuts.filter(value => value.end > start + (short ? 5 : Math.min(20, goal / 2)) && value.end <= ceiling &&
             /[，,：:、—…][”’"'」』）)\t \r]*$/u.test(text.slice(start, value.end)) && !connectorOnly(text.slice(start, value.end).trim())),
           // A run of book titles (《甲》《乙》) has no comma; between titles is a weak mark.
-          weak: cuts.filter(value => value.end > start + (short ? 5 : Math.min(20, goal / 2)) && value.end <= ceiling &&
+          weak: cuts.filter(value => value.end > start + (short ? 5 : 8) && value.end <= ceiling &&
             text[value.end - 1] === "》" && text[value.end] === "《") };
       };
       // A clip ending without punctuation is read as an utterance end and its
       // last words fade (measured -17 to -21 dB). A ramp clip therefore never
       // cuts mid-phrase: without a mark in its range it widens to the next size.
-      const sizes = first ? [...RAMP.slice(ends.length), [90, 120]] : [[90, 120]];
+      // The preferred range follows the previous clip's actual length (<= 1.45x).
+      const previous = ends.length ? ends[ends.length - 1] - (ends[ends.length - 2] || 0) : 0;
+      const fit = ([goal, limit]) => previous ? [goal, Math.min(limit, Math.max(goal + 4, Math.round(previous * 1.45)))] : [goal, limit];
+      const sizes = first && ends.length < RAMP.length ? [fit(RAMP[ends.length]), ...RAMP.slice(ends.length + 1), [90, 120]] : [[90, 120]];
       let found = marks(...sizes[0]);
       for (const size of sizes.slice(1)) {
         if (found.hard || found.natural.length) break;
@@ -175,7 +182,7 @@ globalThis.CCRDSpeechPlan = (() => {
   }
   function batch(text, offset, first = false) {
     // The first batch holds the whole short-to-long clip ramp (see RAMP).
-    const start = first ? clauseStart(text, offset) : safe(text, offset), limit = first ? 200 : 480;
+    const start = first ? clauseStart(text, offset) : safe(text, offset), limit = first ? 260 : 480;
     if (start >= text.length) return null;
     const chars = Array.from(text.slice(start, start + 1800)), offsets = [start];
     for (const char of chars) offsets.push(offsets[offsets.length - 1] + char.length);
@@ -577,8 +584,9 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     const next = nextClip(value);
     if (!next) return;
     // Speech ends `pause_after_seconds` before the clip does; keep its intended pause.
-    const at = audio.duration - part.pause_after_seconds + SPOKEN_PAUSE[kind];
-    if (at >= audio.duration - .03) return;
+    // Even when that pause is the whole tail (sentence, paragraph) the preloaded
+    // start still saves the src swap/decode, so start just before the end.
+    const at = Math.min(audio.duration - part.pause_after_seconds + SPOKEN_PAUSE[kind], audio.duration - .06);
     spare.src = next.url; spare.load();
     const token = handoff = { ...next, current: value.current, timer: 0 };
     const wait = () => {
