@@ -53,7 +53,9 @@
         return null;
       }
     }
-    function park(target, focus) {
+    // `restartBy`: a Reader resumed after a page navigation is not reading yet;
+    // keep it until then (bounded) instead of disposing it on the first check.
+    function park(target, focus, restartBy = 0) {
       disposeParked();
       target.classList.add("reader-overlay-parked");
       target.setAttribute("inert", "");
@@ -84,12 +86,18 @@
       });
       stop.setAttribute("aria-label", "停止朗读并关闭阅读器");
       bar.append(label, back, play, stop);
+      let started = !restartBy;
       const sync = () => {
         const state = speech(target);
         if (!state?.active) {
+          if (!started && Date.now() < restartBy) {
+            label.textContent = "正在恢复朗读…";
+            return;
+          }
           if (parked?.frame === target) disposeParked();
           return;
         }
+        started = true;
         const title = inFrame(target, "#speech-title")?.textContent?.trim() || "朗读";
         const status = inFrame(target, "#speech-status")?.textContent?.trim() || "";
         label.textContent = status ? `${title} · ${status}` : title;
@@ -277,6 +285,38 @@
       returnFocus = focus;
       return frame;
     }
+    // A standalone Reader that was reading aloud when the reader went back here
+    // (reader-speech.mjs records it): keep reading in a background Reader.
+    // Leaving the page cannot keep its audio; this restarts at that sentence.
+    function resumeSpeech() {
+      let handoff = null;
+      try {
+        handoff = JSON.parse(sessionStorage.getItem("reader-speech-handoff") || "null");
+        sessionStorage.removeItem("reader-speech-handoff");
+      } catch (_) {
+        return;
+      }
+      if (!handoff || !(Date.now() - handoff.at < 30000) || frame || parked || !document.body) return;
+      let url;
+      try {
+        url = parse(handoff.readerUrl);
+      } catch (_) {
+        return;
+      }
+      url.searchParams.delete("return");
+      url.searchParams.delete("nav");
+      const next = document.createElement("iframe");
+      next.className = "reader-overlay reader-overlay-parked";
+      next.title = "在线阅读";
+      next.name = "reader-speech-resume:" + JSON.stringify({ unit: handoff.unit, offset: handoff.offset });
+      next.src = url.href;
+      document.body.append(next);
+      park(next, null, Date.now() + 30000);
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", resumeSpeech, { once: true });
+    else setTimeout(resumeSpeech);
+    // A search page restored from the back/forward cache runs no startup code.
+    root.addEventListener?.("pageshow", (event) => { if (event.persisted) resumeSpeech(); });
     function accepts(event) {
       if (!frame || event.origin !== location.origin) return false;
       if (event.source === frame.contentWindow) return true;

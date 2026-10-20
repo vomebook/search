@@ -541,7 +541,8 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     const value = owner;
     if (value) {
       for (const job of value.jobs.values()) remember(value, job);
-      saved = { snapshot: value.snapshot, position: value.position, history: value.history, pitch: value.pitch };
+      // `interrupted`: stopped by leaving the page while playing, not by the listener.
+      saved = { snapshot: value.snapshot, position: value.position, history: value.history, pitch: value.pitch, interrupted: keepalive && !!value.wantsPlay };
       value.cancelled = true; clearTimeout(value.timer);
       for (const controller of value.controllers) if (!controller.createsJob) controller.abort();
       for (const job of value.jobs.values()) release(job.id, keepalive);
@@ -903,21 +904,22 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     if (job.preloaded) advance(value);
     pump(value); // First POST directly; no iframe, voices or health round-trips.
   }
-  function fromPreview(offset) {
+  function fromPreview(offset, chosen = false) {
     // An adapter loads its text on demand; start() waits for it.
     if (!preview || (!preview.adapter && !preview.text.trim())) { if (typeof showToast === "function") showToast("请等待预览正文加载完成"); return; }
     if (offset === undefined && preview.adapter?.locateTop) {
       // Find (and load up to) the text at the reading position first, so a
       // paged document is not read from its first loaded unit.
       const token = ++starting;
-      if (!owner) { notice("正在定位当前阅读位置…"); show(); }
+      if (!owner || chosen) { notice("正在定位当前阅读位置…"); show(); }
       Promise.resolve(preview.adapter.locateTop()).catch(() => 0).then((found) => {
-        if (token === starting && preview?.adapter) fromPreview(plan.safe(preview.text, Number(found) || 0));
+        if (token === starting && preview?.adapter) fromPreview(plan.safe(preview.text, Number(found) || 0), chosen);
       });
       return;
     }
     if (offset === undefined) offset = visibleOffset();
-    if (owner && owner.snapshot.id !== preview.id && !confirm("切换到当前预览会停止原朗读，继续吗？")) return;
+    // 听书 pressed on another article is that choice; other paths still ask.
+    if (!chosen && owner && owner.snapshot.id !== preview.id && !confirm("切换到当前预览会停止原朗读，继续吗？")) return;
     if (owner && sameSource(owner.snapshot, preview) && seek(owner, offset, true)) return;
     start(preview.adapter ? preview.snapshot : { id: preview.id, text: preview.text, title: preview.title }, offset);
   }
@@ -935,6 +937,11 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
       // window; otherwise "听书" starts where the reader is looking now.
       if (saved?.snapshot.id === preview?.id && (!preview?.adapter || saved.snapshot.adapter === preview.adapter && !preview.adapter.locateTop)) start(saved.snapshot, saved.position);
       else fromPreview();
+    } else if (preview && !sameSource(owner.snapshot, preview)) {
+      // 听书 on another article starts that article. It used to toggle the old
+      // article's panel, so a press collapsed it and the next one showed it
+      // again. The stopped article keeps its position for 继续.
+      fromPreview(undefined, true);
     } else if (!panel.hidden) hide();
     else { show(); if (!owner.wantsPlay && owner.snapshot.id === preview?.id) resume(); }
   }
@@ -1053,6 +1060,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     // scrolling the player cannot observe itself (e.g. inside an iframe).
     reveal: () => { returnView = null; return locateSource().then(updateLocate); },
     viewChanged,
-    state: () => ({ active: !!owner, playing: !!owner?.wantsPlay, adapter: owner?.snapshot.adapter || saved?.snapshot.adapter || null }),
+    state: () => ({ active: !!owner, playing: !!owner?.wantsPlay, adapter: owner?.snapshot.adapter || saved?.snapshot.adapter || null,
+      position: owner ? owner.position : saved ? saved.position : null, interrupted: !owner && !!saved?.interrupted }),
     stop: () => { stop("已停止", true); clearMark(); hide(); } };
 })();

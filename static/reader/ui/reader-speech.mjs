@@ -5,6 +5,11 @@
 // DOM text is never modified: highlights use the CSS Custom Highlight API in
 // the realm (frame document / shadow tree) that owns the range.
 const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
+// A standalone Reader left while reading aloud (← or browser back) records
+// where it was; search/reader-navigation.js resumes it in a background Reader
+// and passes the position through the frame name. Keep both keys in sync.
+const HANDOFF_KEY = "reader-speech-handoff";
+const RESUME_PREFIX = "reader-speech-resume:";
 const HIGHLIGHT_STYLE = "::highlight(ccrd-speech){background:rgba(138,180,248,.38);color:inherit;text-decoration:underline}";
 
 function textNodes(root) {
@@ -398,6 +403,43 @@ export function createReaderSpeech(readerContext) {
       id: documentId(), title: readerSpeechTitle(), adapter: next, host: document.body,
       tools: document.querySelector(".reader-actions"), buttonClass: "icon-button preview-speech-btn"
     });
+    if (resume) { const target = resume; resume = null; resumeAt(target); }
+  }
+
+  // ---- Leaving a standalone Reader while reading aloud -----------------------
+  // Unit-local position: adapter offsets depend on the unit the window started at.
+  let resume = (() => {
+    try {
+      if (!String(window.name).startsWith(RESUME_PREFIX)) return null;
+      const value = JSON.parse(window.name.slice(RESUME_PREFIX.length));
+      window.name = "";
+      return Number.isInteger(value?.unit) && Number.isInteger(value?.offset) ? value : null;
+    } catch (_) { return null; }
+  })();
+
+  function handoff() {
+    try {
+      if (readerContext.isReaderOverlayFrame?.()) return; // The search page keeps that one alive.
+      const state = speech()?.state?.();
+      const owner = state?.adapter;
+      // The Reader's disposal may stop the player first; `interrupted` keeps that case.
+      if (!(state?.playing || state?.interrupted) || typeof owner?.partAt !== "function" || !Number.isInteger(state.position)) return;
+      const part = owner.partAt(state.position);
+      if (!part) return;
+      sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({ readerUrl: location.href, unit: part.unit,
+        offset: Math.max(0, Math.min(part.raw.length, state.position - part.start)), at: Date.now() }));
+    } catch (_) { /* Optional: without storage, leaving stops reading as before. */ }
+  }
+
+  async function resumeAt(target) {
+    const info = adapter?.source;
+    if (!info || target.unit < info.first || target.unit >= info.units) return;
+    let owner = adapter;
+    if (info.units > 1 && (target.unit < owner.base || !owner.covers(target.unit) && target.unit - owner.base > 2)) owner = rebase(target.unit);
+    await owner.ensureUnit(target.unit);
+    if (owner !== adapter) return;
+    owner.following = true;
+    speech()?.readFrom(owner.offsetOf(target));
   }
 
   function rebase(unit) {
@@ -548,6 +590,10 @@ export function createReaderSpeech(readerContext) {
   function install() {
     if (installed) return;
     installed = true;
+    try { if (!readerContext.isReaderOverlayFrame?.()) sessionStorage.removeItem(HANDOFF_KEY); } catch (_) {}
+    // ← records it before navigating; pagehide covers browser back and other exits.
+    window.addEventListener("pagehide", handoff, { capture: true });
+    document.querySelector("#back")?.addEventListener("click", handoff, { capture: true });
     readerContext.readerRuntime.events.on("phase", ({ phase }) => {
       if (phase === "ready") attach();
       else if (phase === "disposed") { speech()?.stop?.(); detach(); }
