@@ -54,7 +54,7 @@ class ReaderSpeechTest(unittest.TestCase):
         cls.playwright.stop()
         cls.server.__exit__(None, None, None)
 
-    def open(self, ext, body, content_type, viewport=None):
+    def open(self, ext, body, content_type, viewport=None, host=False, name="sample"):
         context = self.browser.new_context(viewport=viewport or {"width": 1280, "height": 860})
         page = context.new_page()
         posts, errors = [], []
@@ -86,10 +86,28 @@ class ReaderSpeechTest(unittest.TestCase):
         page.route(SPEECH + "/**", speech)
         page.route("**/api/reader-content**", lambda route: route.fulfill(status=200, content_type=content_type, body=body, headers={"Access-Control-Allow-Origin": "*"}))
         perf.route_local_vendor_fallback(page)
-        query = urllib.parse.quote(f"{SOURCE}.{ext}", safe="")
-        page.goto(f"{self.origin}/search/static/reader.html?url={query}&ext={ext}&title=Speech", wait_until="domcontentloaded")
-        wait(page, "() => document.documentElement.dataset.readerPhase === 'ready'", 30000)
-        return context, page, posts, errors
+        reader = self.reader_url(ext, name)
+        if not host:
+            page.goto(reader, wait_until="domcontentloaded")
+            wait(page, "() => document.documentElement.dataset.readerPhase === 'ready'", 30000)
+            return context, page, posts, errors
+        # A same-origin host page owning the Reader overlay through the shared navigation module.
+        base = reader.split("reader.html")[0]
+        page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")
+        # Inject as content: this host document has no charset, so a src= script would decode as Latin-1.
+        page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
+        page.add_script_tag(content=(ROOT / "static/search/reader-navigation.js").read_text(encoding="utf-8"))
+        page.evaluate("""url => {
+          window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) });
+          window.__reader = __nav.mount(new URL(url));
+        }""", reader)
+        frame = page.wait_for_selector("iframe.reader-overlay").content_frame()
+        wait(frame, "() => document.documentElement.dataset.readerPhase === 'ready'", 30000)
+        return context, page, posts, errors, frame
+
+    def reader_url(self, ext, name="sample"):
+        query = urllib.parse.quote(f"{SOURCE.rsplit('/', 1)[0]}/{name}.{ext}", safe="")
+        return f"{self.origin}/search/static/reader.html?url={query}&ext={ext}&title=Speech"
 
     def play(self, page, posts):
         button = page.locator(".reader-actions [data-speech-toggle]")
@@ -149,7 +167,16 @@ class ReaderSpeechTest(unittest.TestCase):
                 clip = page.locator("#speech-audio").evaluate("n => n.src")
                 page.wait_for_timeout(900)
                 self.assertEqual(viewport.evaluate("n => n.scrollTop"), away)
-            page.locator("#speech-locate").click()
+            locate = page.locator("#speech-locate")
+            self.assertEqual(locate.inner_text(), "回到播放位置")
+            locate.click()
+            wait(page, f"() => document.querySelector('#viewport').scrollTop < {away - 2000}", 5000)
+            # After jumping, the same button returns to where the reader was.
+            wait(page, "() => document.querySelector('#speech-locate').textContent === '回到原位置'", 3000)
+            locate.click()
+            wait(page, f"() => document.querySelector('#viewport').scrollTop === {away}", 3000)
+            wait(page, "() => document.querySelector('#speech-locate').textContent === '回到播放位置'", 3000)
+            locate.click()
             wait(page, f"() => document.querySelector('#viewport').scrollTop < {away - 2000}", 5000)
             # The sentence being read is on screen, not merely its 32 KiB text block.
             self.assertTrue(page.evaluate("""() => { const range = [...CSS.highlights.get('ccrd-speech')][0], rect = range.getBoundingClientRect();
@@ -160,6 +187,106 @@ class ReaderSpeechTest(unittest.TestCase):
             page.wait_for_timeout(900)
             self.assertLess(abs(viewport.evaluate("n => n.scrollTop") - top), 400)
             self.stop(page)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_a_small_scroll_while_listening_is_never_undone(self):
+        # The reader nudges the page while the sentence is still on screen; later
+        # sentences must not pull it back (only 回到播放位置 resumes following).
+        body = "".join(f"第{index}句。\n" for index in range(400)).encode()
+        context, page, posts, errors = self.open("txt", body, "text/plain; charset=utf-8", viewport={"width": 1280, "height": 420})
+        try:
+            self.play(page, posts)
+            viewport = page.locator("#viewport")
+            on_screen = """() => { const range = [...(CSS.highlights.get('ccrd-speech') || [])][0];
+              const box = document.querySelector('#viewport').getBoundingClientRect(), rect = range && range.getBoundingClientRect();
+              return !!rect && rect.top >= box.top && rect.bottom <= box.bottom; }"""
+            clip = page.locator("#speech-audio").evaluate("n => n.src")
+            for _ in range(4):  # the playing sentence moves to the middle of the screen
+                page.locator("#speech-next").click()
+                wait(page, f"() => document.querySelector('#speech-audio').src !== {json.dumps(clip)}")
+                clip = page.locator("#speech-audio").evaluate("n => n.src")
+            box = viewport.bounding_box()
+            page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            page.mouse.wheel(0, 40)
+            page.wait_for_timeout(500)
+            self.assertTrue(page.evaluate(on_screen))  # still visible after the nudge
+            moved = viewport.evaluate("n => n.scrollTop")
+            self.assertGreater(moved, 0)
+            below = """() => { const range = [...(CSS.highlights.get('ccrd-speech') || [])][0];
+              const box = document.querySelector('#viewport').getBoundingClientRect();
+              return !!range && range.getBoundingClientRect().top > box.bottom; }"""
+            passed = 0
+            for _ in range(40):  # walk the sentence past the bottom of the viewport, then two more
+                page.locator("#speech-next").click()
+                wait(page, f"() => document.querySelector('#speech-audio').src !== {json.dumps(clip)}")
+                clip = page.locator("#speech-audio").evaluate("n => n.src")
+                page.wait_for_timeout(250)
+                self.assertEqual(viewport.evaluate("n => n.scrollTop"), moved)
+                passed += page.evaluate(below)
+                if passed >= 2:
+                    break
+            self.assertGreaterEqual(passed, 2)
+            page.wait_for_timeout(900)
+            self.assertEqual(viewport.evaluate("n => n.scrollTop"), moved)
+            self.stop(page)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_listening_starts_where_the_reader_is_looking(self):
+        body = "".join(f"第{index}句。\n" for index in range(400)).encode()
+        context, page, posts, errors = self.open("txt", body, "text/plain; charset=utf-8")
+        try:
+            page.locator("#viewport").evaluate("n => { n.scrollTop = 4000; }")
+            page.wait_for_timeout(400)
+            # The first line at the top of the viewport, measured independently.
+            first = page.evaluate("""() => { const box = document.querySelector('#viewport').getBoundingClientRect();
+              const node = document.querySelector('.reader-text-block').firstChild, range = document.createRange();
+              for (let i = 0; i < node.length; i++) { range.setStart(node, i); range.setEnd(node, i + 1);
+                const r = range.getClientRects()[0]; if (r && r.height && r.bottom > box.top + 4) return node.data.slice(i).match(/第(\\d+)句/)[1]; } }""")
+            self.assertGreater(int(first), 50)
+            job = self.play(page, posts)
+            self.assertTrue(job["text"].lstrip().startswith(f"第{first}句") or job["text"].lstrip().startswith(f"{first}句"), (first, job["text"][:30]))
+            self.stop(page)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_closing_the_reader_keeps_reading_in_the_background(self):
+        context, page, posts, errors, frame = self.open("txt", TEXT.encode(), "text/plain; charset=utf-8", host=True)
+        try:
+            self.play(frame, posts)
+            page.evaluate("() => __nav.unmount()")
+            bar = page.locator(".reader-speech-mini")
+            bar.wait_for(timeout=3000)
+            self.assertTrue(page.evaluate("() => __reader.isConnected && __nav.backgroundReader === __reader"))
+            self.assertEqual(page.evaluate("getComputedStyle(__reader).visibility"), "hidden")
+            before = frame.evaluate("() => [document.querySelector('#speech-audio').src, document.querySelector('#speech-audio').currentTime]")
+            page.wait_for_timeout(1500)
+            after = frame.evaluate("() => [document.querySelector('#speech-audio').src, document.querySelector('#speech-audio').currentTime]")
+            self.assertNotEqual(before, after)  # still reading while hidden
+            # Pause / continue from the search page.
+            bar.get_by_role("button", name="暂停").click()
+            wait(frame, "() => document.querySelector('#speech-audio').paused", 5000)
+            bar.get_by_role("button", name="继续").wait_for(timeout=3000)
+            bar.get_by_role("button", name="继续").click()
+            wait(frame, "() => !document.querySelector('#speech-audio').paused", 5000)
+            # Back to the same Reader (not a reload), still reading.
+            bar.get_by_role("button", name="返回阅读").click()
+            self.assertEqual(page.locator(".reader-speech-mini").count(), 0)
+            self.assertTrue(page.evaluate("() => document.querySelector('iframe.reader-overlay') === __reader && !__nav.backgroundReader && getComputedStyle(__reader).visibility === 'visible'"))
+            self.assertFalse(frame.evaluate("() => document.querySelector('#speech-audio').paused"))
+            # Opening another book stops background reading and releases its Reader.
+            page.evaluate("() => __nav.unmount()")
+            bar.wait_for(timeout=3000)
+            page.evaluate("url => { window.__next = __nav.mount(new URL(url)); }", self.reader_url("txt", "other"))
+            self.assertTrue(page.evaluate("() => !__reader.isConnected && __next !== __reader && !__nav.backgroundReader"))
+            self.assertEqual(page.locator(".reader-speech-mini").count(), 0)
+            page.evaluate("() => __nav.unmount()")
+            # A Reader that is not reading closes normally.
+            self.assertTrue(page.evaluate("() => !__next.isConnected && !__nav.backgroundReader"))
             self.assertFalse(errors, errors)
         finally:
             context.close()
@@ -199,6 +326,10 @@ class ReaderSpeechTest(unittest.TestCase):
         payload.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
         context, page, posts, errors = self.open("pdf", bytes(payload), "application/pdf")
         try:
+            # No text near page 1: no button. It appears once the text page is in view.
+            page.wait_for_timeout(2500)
+            self.assertEqual(page.locator("[data-speech-toggle]").count(), 0)
+            page.locator("#viewport").evaluate("n => { n.scrollTop = n.scrollHeight; }")
             job = self.play(page, posts)
             self.assertIn("Information Page Text", job["text"])
             wait(page, "() => CSS.highlights.has('ccrd-speech')", 15000)
