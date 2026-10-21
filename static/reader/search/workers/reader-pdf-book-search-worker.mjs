@@ -12,14 +12,11 @@ const partitionRequests = new Set();
 function validUrl(raw, pathPattern = bookPath) {
   const url = new URL(raw, self.location.href);
   if (url.username || url.password || url.hash) return false;
-  if (url.pathname === "/api/reader-bucket-resource")
-    return (url.origin === self.location.origin || url.origin === "https://voiceofml-search.hf.space") &&
-      url.searchParams.getAll("path").length === 1 &&
-      [...url.searchParams.keys()].every(key => key === "path") &&
-      pathPattern.test(url.searchParams.get("path"));
-  const prefix = /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\//.exec(url.pathname);
-  return url.protocol === "https:" && ["huggingface.co", "hf-mirror.com"].includes(url.hostname) &&
-    !url.search && !!prefix && pathPattern.test(decodeURIComponent(url.pathname.slice(prefix[0].length)));
+  if (url.pathname !== "/api/reader-bucket-resource") return false;
+  return (url.origin === self.location.origin || url.origin === "https://voiceofml-search.hf.space") &&
+    url.searchParams.getAll("path").length === 1 &&
+    [...url.searchParams.keys()].every(key => key === "path") &&
+    pathPattern.test(url.searchParams.get("path"));
 }
 
 async function readBounded(stream, signal, expected = null, text = false) {

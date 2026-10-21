@@ -238,11 +238,11 @@ class ReaderStyleTests(unittest.TestCase):
     def test_pdf_page_images_follow_theme_but_original_images_do_not(self):
         output = io.BytesIO()
         Image.new('RGB', (600, 800), 'white').save(output, 'WEBP')
-        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+        self.page.route('**/page-manifest.json', lambda route: route.fulfill(
             json={"version": 2, "kind": "pdf-pages", "page_count": 1}))
         self.page.route('**/pages/page-*.webp', lambda route: route.fulfill(
             content_type='image/webp', body=output.getvalue()))
-        source = urllib.parse.quote('https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64 + '/page-manifest.json', safe='')
+        source = urllib.parse.quote('https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/' + 'a' * 64 + '/1234567890abcdef/page-manifest.json', safe='')
         self.page.goto(f'{self.origin}/search/static/reader.html?url={source}&ext=pdf-pages')
         image = self.page.locator('.reader-page img.ready').first
         image.wait_for()

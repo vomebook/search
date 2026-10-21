@@ -3,7 +3,7 @@ import io
 import json
 import unittest
 import zipfile
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 from tests import test_reader_pdf_followup as support
 from tests.test_reader_performance import epub_with_many_chapters
 
@@ -125,18 +125,18 @@ class EbookFlowTests(unittest.TestCase):
         self.assertAlmostEqual(result['before'],result['after'],delta=2)
 
     def test_chapter_jump_warms_both_sides_without_old_observer_demands(self):
-        manifest={'version':1,'kind':'epub-chapters','chapters':[{'index':i,'path':f'chapter-{i}.xhtml','bytes':500} for i in range(1,41)]}
+        manifest={'version':1,'kind':'epub-chapters','chapters':[{'index':i,'path':f'chapters/chapter-{i:04d}.xhtml','bytes':500} for i in range(1,41)]}
         requested=[]
         def resource(route):
             url=route.request.url
             if 'chapter-manifest' in url:route.fulfill(json=manifest);return
             import re
-            index=int(re.search(r'chapter-(\d+)\.xhtml',url).group(1))
+            index=int(re.search(r'chapter-(\d+)\.xhtml',unquote(url)).group(1))
             requested.append(index)
             route.fulfill(content_type='text/html',body=f'<h1 id="chapter-{index}">Chapter {index}</h1><p style="height:1600px">Body {index}</p>')
-        self.page.route('**/api/reader-content**',resource)
+        self.page.route('**/api/reader-bucket-resource**',resource)
         self.expose()
-        source='https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/'+'a'*64+'/chapter-manifest.json'
+        source='https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/'+'a'*64+'/1234567890abcdef/chapter-manifest.json'
         self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url=source,ext='epub-chapters')))
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.page.evaluate('__ebook.chapter(30)')

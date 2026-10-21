@@ -396,7 +396,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(contract, /params\.set\("download"/);
   assert.match(contract, /ReaderExtension/);
   assert.match(contract, /pdf-pages/);
-  assert.match(reader, /Reader-Assets/);
+  assert.doesNotMatch(reader, /Reader-Assets/);
   assertCode(reader, 'if (Array.isArray(manifest.toc) && manifest.toc.length) setToc(manifest.toc.map');
   assert.match(reader, /tab\.hidden = !navigationState\.tocEntries\.length/);
   assert.match(reader, /PDF_MANIFEST_INVALID/);
