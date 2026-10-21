@@ -318,6 +318,11 @@ class ReaderSpeechTest(unittest.TestCase):
             page.evaluate("url => { window.__next = __nav.mount(new URL(url)); }", self.reader_url("txt", "other"))
             self.assertTrue(page.evaluate("() => __reader.isConnected && __next !== __reader && __nav.backgroundReader === __reader"))
             self.assertEqual(page.locator(".reader-speech-mini").count(), 1)
+            # The bar stays above the new Reader and remains operable.
+            bar.get_by_role("button", name="暂停").click()
+            wait(frame, "() => document.querySelector('#speech-audio').paused", 5000)
+            bar.get_by_role("button", name="继续").click()
+            wait(frame, "() => !document.querySelector('#speech-audio').paused", 5000)
             next_frame = page.wait_for_selector("iframe.reader-overlay:not(.reader-overlay-parked)").content_frame()
             # Starting the new book's speech is the explicit takeover.
             self.play(next_frame, posts)

@@ -1985,7 +1985,7 @@ body.multiselect .result-file-icon { display: none; }
   left: 50%;
   bottom: max(12px, env(safe-area-inset-bottom));
   transform: translateX(-50%);
-  z-index: 9000;
+  z-index: 10001;
   display: flex;
   align-items: center;
   gap: 6px;
