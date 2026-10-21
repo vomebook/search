@@ -64,24 +64,28 @@ const assetRoot = 'objects/aa/' + 'a'.repeat(64) + '/'
 const sourcePrefix = '/datasets/vomebook/Reader-Assets/resolve/main/'
 for (const directory of ['', 'converter-v1/', 'b'.repeat(16) + '/', 'b'.repeat(16) + '/converter-v1/']) {
   const path = assetRoot + directory + 'linearized.pdf'
-  const fields = assets.assetFields({s: 2, m: 'p', p: path}, '/api/reader-bucket-resource')
-  assert.strictEqual(fields.ReaderExtension, 'pdf')
-  assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + path), true)
+  assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: path}, '/api/reader-bucket-resource'), null)
 }
-for (const extension of ['epub', 'mobi', 'azw', 'azw3', 'fb2']) {
-  const fields = assets.assetFields({s: 2, m: 'e', p: assetRoot + 'document.' + extension})
-  assert.strictEqual(fields.ReaderExtension, extension)
+for (const extension of ['epub', 'mobi', 'azw3', 'fb2', 'chm']) {
+  const path = 'chapters/ebook/' + extension + '/' + 'c'.repeat(64) + '/' + 'b'.repeat(16) + '/chapter-manifest.json'
+  const fields = assets.assetFields({s: 2, m: 'e', p: path, b: 'vomebook/reader-assets-v2',
+    c: path, cb: 'vomebook/reader-assets-v2'}, '/api/reader-bucket-resource')
+  assert.strictEqual(fields.ReaderExtension, 'epub-chapters')
+  assert.strictEqual(fields.ReaderLink, '/api/reader-bucket-resource?path=' + encodeURIComponent(path))
 }
 const bucket = assetRoot + 'b'.repeat(16) + '/page-manifest.json'
-for (const suffix of ['', 'b'.repeat(16) + '/']) {
-  const url = 'https://hf-mirror.com' + sourcePrefix.replace('/main/', '/revision/') + assetRoot + suffix + 'page-manifest.json'
-  const parsed = assets.pdfPageSource(url, 'https://site.test', 'https://api.test')
-  assert.strictEqual(parsed.root, (assetRoot + suffix).slice(0, -1))
-  assert.strictEqual(parsed.pageUrl(2), url.replace('page-manifest.json', 'pages/page-000002.webp'))
-  assert.throws(() => parsed.pageUrl(0), /PDF_PAGE_INVALID/)
-}
+const bucketUrl = 'https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/' + bucket
+const parsed = assets.pdfPageSource(bucketUrl, 'https://site.test', 'https://api.test')
+assert.strictEqual(parsed.root, assetRoot + 'b'.repeat(16))
+assert.strictEqual(parsed.pageUrl(2), bucketUrl.replace('page-manifest.json', 'pages/page-000002.webp'))
+assert.throws(() => parsed.pageUrl(0), /PDF_PAGE_INVALID/)
 assert.ok(assets.pdfPageSource('https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(bucket), 'https://site.test', 'https://api.test'))
-for (const url of ['https://evil.test' + sourcePrefix + bucket, 'https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(assetRoot + 'page-manifest.json')])
+for (const url of [
+  'https://evil.test/buckets/vomebook/pdf-pages-v2/resolve/' + bucket,
+  'https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(assetRoot + 'page-manifest.json'),
+  'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/' + bucket,
+  'https://hf-mirror.com/datasets/vomebook/Reader-Assets/revision/main/' + bucket,
+])
   assert.strictEqual(assets.pdfPageSource(url, 'https://site.test', 'https://api.test'), null)
 assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: bucket}, '/api/reader-bucket-resource').ReaderLink,
   '/api/reader-bucket-resource?path=' + encodeURIComponent(bucket))
@@ -129,12 +133,9 @@ const optimizedFields = assets.assetFields(
 )
 assert.strictEqual(optimizedFields, null)
 assert.strictEqual(assets.isBucketPath(optimized, true, 'vomebook/pdf-optimized'), false)
-assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + 'pdf_manifest.json'), true)
-assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + assetRoot + 'epub-chapters/chapters/chapter-0012.xhtml'), true)
-for (const path of [assetRoot + '../linearized.pdf', assetRoot + 'private.json', 'objects/invalid/document.pdf']) {
+assert.strictEqual(assets.isAssetSourcePath, undefined)
+for (const path of [assetRoot + '../linearized.pdf', assetRoot + 'private.json', 'objects/invalid/document.pdf'])
   assert.strictEqual(assets.assetFields({s: 2, m: 'p', p: path}), null)
-  assert.strictEqual(assets.isAssetSourcePath(sourcePrefix + path), false)
-}
 
 for (const extension of ['pdf', 'pdf-pages', 'txt', 'md', 'markdown', 'html', 'htm', 'epub', 'mobi', 'azw', 'azw3', 'fb2', 'fbz', 'jpg', 'png', 'mp3', 'm4a', 'flac', 'mpga', 'audio', 'mp4', 'mov', 'video']) {
   assert.ok(sandbox.self.VoiceOfMLReader.capability(extension).mode, extension)

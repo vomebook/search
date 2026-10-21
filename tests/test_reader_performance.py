@@ -756,10 +756,10 @@ class ReaderPerformanceTest(unittest.TestCase):
             with self.subTest(case=name):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844})
                 page = context.new_page()
-                source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/page-manifest.json"
+                source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
                 page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route, _request, manifest=manifest: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
-                page.route("https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/**", lambda route: route.fulfill(status=404, body=b""))
+                page.route("https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/**", lambda route: route.fulfill(status=404, body=b""))
                 page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages&title=Converted", wait_until="domcontentloaded")
                 page.locator(".reader-error").wait_for(timeout=10000)
                 self.assertTrue(page.locator(".reader-error").text_content().strip())
@@ -770,11 +770,11 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_converted_pdf_pages_report_error_when_later_page_is_missing(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
+        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 4}
         page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
+        page.route("**/page-manifest.json", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         def serve_page(route, _request):
             if not route.request.url.endswith("page-000004.webp"):
                 route.fulfill(status=200, content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
@@ -793,36 +793,38 @@ class ReaderPerformanceTest(unittest.TestCase):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         self.addCleanup(context.close)
         page = context.new_page()
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         source = root + "/page-manifest.json"
-        proxy = []
         page.add_init_script(f"""(() => {{
           const fetchOriginal = window.fetch.bind(window);
           window.__earlyManifestAborted = false;
-          window.fetch = (url, options = {{}}) => String(url) === {json.dumps(source)}
-            ? new Promise((resolve, reject) => options.signal.addEventListener('abort', () => {{
+          let stalled = false;
+          // The early manifest preload is cancelled; the reader must still load the
+          // same Bucket source through its normal path.
+          window.fetch = (url, options = {{}}) => String(url) === {json.dumps(source)} && !stalled
+            ? (stalled = true, new Promise((resolve, reject) => options.signal.addEventListener('abort', () => {{
                 window.__earlyManifestAborted = true;
                 reject(new DOMException('cancelled', 'AbortError'));
-              }}, {{once: true}}))
+              }}, {{once: true}})))
             : fetchOriginal(url, options);
         }})()""")
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: (proxy.append(route.request.url), route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2}))))
+        _manifest = {"version": 2, "kind": "pdf-pages", "page_count": 2}
+        page.route("**/page-manifest.json", lambda route: route.fulfill(
+            content_type="application/json", body=json.dumps(_manifest)))
         page.route(f"{root}/pages/**", lambda route: route.fulfill(
             content_type="image/webp", body=IMAGE_FIXTURES["webp"][1]))
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages", wait_until="domcontentloaded")
         page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=8000)
         self.assertTrue(page.evaluate('window.__earlyManifestAborted'))
-        self.assertTrue(proxy)
 
     def test_pdf_pages_progressive_prefetch_yields_to_jump(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         self.addCleanup(context.close)
         page = context.new_page()
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         source = root + "/page-manifest.json"
         held, requested = [], []
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+        page.route("**/page-manifest.json", lambda route: route.fulfill(
             content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 40})))
         def serve_page(route):
             number = int(route.request.url.rsplit("page-", 1)[1].split(".", 1)[0])
@@ -851,10 +853,10 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.addCleanup(context.close)
         page = context.new_page()
         page.add_init_script("Object.defineProperty(navigator, 'connection', {value: {saveData: true}, configurable: true})")
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         source = root + "/page-manifest.json"
         held, requested = [], []
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+        page.route("**/page-manifest.json", lambda route: route.fulfill(
             content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 40})))
         def serve_page(route):
             number = int(route.request.url.rsplit("page-", 1)[1].split(".", 1)[0])
@@ -879,14 +881,14 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_converted_pdf_pages_fit_wide_images_without_overlap(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
+        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3, "toc": [{"title": "第一章", "page": 1, "depth": 0}, {"title": "第二章", "page": 2, "depth": 1}]}
         # Three wide pages must fit even the minimum retained-pixel budget.
         wide_page = b'<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="white"/></svg>'
         page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("https://voiceofml-search.hf.space/api/reader-resolve?id=wide-pages", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"url": source, "download": source, "extension": "pdf-pages", "original_extension": "pdf", "title": "Converted"})))
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
+        page.route("**/page-manifest.json", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         page.route(f"{root}/pages/**", lambda route: route.fulfill(status=200, content_type="image/svg+xml", body=wide_page))
         page.goto(f"{self.origin}/search/static/reader.html?id=wide-pages&ext=pdf&title=Converted", wait_until="domcontentloaded")
         page.locator(".reader-page img.ready").first.wait_for(timeout=10000)
@@ -919,7 +921,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         image_root = root + "/" + "1" * 16
         ocr_root = root + "/" + "2" * 16
         text_root = root + "/" + "3" * 16
-        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/page-manifest.json"
+        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/page-manifest.json"
         ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + ocr_root + "/ocr-manifest.json"
         payloads = [gzip.compress(json.dumps({"version": 1, "kind": "pdf-ocr-page", "page": number,
                      "width": 100, "height": 140, "blocks": [
@@ -938,7 +940,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                                   "sha256": "a" * 64},
                     "page_manifest": {"path": image_root + "/page-manifest.json"}}
         held, requested, held_images = [], [], []
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+        page.route("**/page-manifest.json", lambda route: route.fulfill(
             content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2})))
         def serve_ocr(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
@@ -956,7 +958,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 held_images.append(route)
             else:
                 route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
-        page.route("https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/pages/**",
+        page.route("https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/pages/**",
                    serve_image)
         with page.expect_request(ocr_url):
             page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
@@ -1106,7 +1108,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         root = "objects/aa/" + "a" * 64
         image_root = root + "/" + "1" * 16
         text_root = root + "/" + "2" * 16
-        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/page-manifest.json"
+        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/page-manifest.json"
         ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + text_root + "/ocr-manifest.json"
         total = 359
         ocr = {"version": 1, "kind": "pdf-ocr", "complete": True, "source_sha256": "a" * 64,
@@ -1116,7 +1118,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                "book_text": {"path": text_root + "/ocr/book-text.json.gz", "bytes": 1,
                              "sha256": "a" * 64},
                "page_manifest": {"path": image_root + "/page-manifest.json"}}
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+        page.route("**/page-manifest.json", lambda route: route.fulfill(
             content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": total})))
         def serve_ocr(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
@@ -1138,7 +1140,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             route.fulfill(content_type="application/gzip", body=gzip.compress(json.dumps(payload).encode()))
         page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve_ocr)
         image = b'<svg xmlns="http://www.w3.org/2000/svg" width="1441" height="2145"><rect width="100%" height="100%" fill="white"/></svg>'
-        page.route("https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/pages/**",
+        page.route("https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/pages/**",
                    lambda route: route.fulfill(content_type="image/svg+xml", body=image))
         page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
             {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
@@ -1238,7 +1240,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         root = "objects/aa/" + "a" * 64
         image_root = root + "/" + "1" * 16
         text_root = root + "/" + "2" * 16
-        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/page-manifest.json"
+        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/page-manifest.json"
         ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + text_root + "/ocr-manifest.json"
         total = 359
         ocr = {"version": 1, "kind": "pdf-ocr", "complete": True, "source_sha256": "a" * 64,
@@ -1248,7 +1250,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                "book_text": {"path": text_root + "/ocr/book-text.json.gz", "bytes": 1,
                              "sha256": "a" * 64},
                "page_manifest": {"path": image_root + "/page-manifest.json"}}
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(
+        page.route("**/page-manifest.json", lambda route: route.fulfill(
             content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": total})))
         def serve_ocr(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
@@ -1270,7 +1272,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 "width": 1441, "height": 2145, "blocks": blocks}).encode()))
         page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve_ocr)
         image = b'<svg xmlns="http://www.w3.org/2000/svg" width="1441" height="2145"><rect width="100%" height="100%" fill="white"/></svg>'
-        page.route("https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + image_root + "/pages/**",
+        page.route("https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/pages/**",
                    lambda route: route.fulfill(content_type="image/svg+xml", body=image))
         page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
             {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
@@ -1357,13 +1359,13 @@ class ReaderPerformanceTest(unittest.TestCase):
     def test_compact_pdf_manifest_virtualizes_and_navigates_to_distant_page(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/1234567890abcdef"
+        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         source = root + "/page-manifest.json"
         manifest = {"version": 2, "kind": "pdf-pages", "source_sha256": "a" * 64,
                     "profile": "test", "page_count": 5000}
         page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route(source, lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
-        page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
+        page.route("**/page-manifest.json", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         page.route(f"{root}/pages/**", lambda route: route.fulfill(status=200, content_type="image/webp", body=IMAGE_FIXTURES["webp"][1]))
         page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages&title=Compact", wait_until="domcontentloaded")
         page.locator(".reader-page img.ready").first.wait_for(timeout=10000)
@@ -1644,23 +1646,22 @@ class ReaderPerformanceTest(unittest.TestCase):
 
     def test_oversized_chapter_manifest_and_response_use_resource_limit(self):
         digest = "a" * 64
-        source = f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{digest}/chapter-manifest.json"
+        source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + f"chapters/ebook/epub/{digest}/1234567890abcdef/chapter-manifest.json"
         limit = 8 * 1024 * 1024
-        cases = [("manifest", {"version": 1, "kind": "epub-chapters", "chapters": [{"index": 1, "path": "chapter.xhtml", "bytes": 10}]}, {"content-length": str(limit + 1)}, None),
-                 ("chapter", {"version": 1, "kind": "epub-chapters", "chapters": [{"index": 1, "path": "chapter.xhtml", "bytes": 10}]}, {}, {"content-length": str(8 * 1024 * 1024 + 1)})]
+        cases = [("manifest", {"version": 1, "kind": "epub-chapters", "chapters": [{"index": 1, "path": "chapters/chapter-0001.xhtml", "bytes": 10}]}, {"content-length": str(limit + 1)}, None),
+                 ("chapter", {"version": 1, "kind": "epub-chapters", "chapters": [{"index": 1, "path": "chapters/chapter-0001.xhtml", "bytes": 10}]}, {}, {"content-length": str(8 * 1024 * 1024 + 1)})]
         for name, manifest, manifest_headers, chapter_headers in cases:
             with self.subTest(case=name):
                 context = self.browser.new_context(viewport={"width": 390, "height": 844})
                 page = context.new_page()
                 page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
                 def serve_limited(route, _request, manifest=manifest, headers=manifest_headers, chapter_headers=chapter_headers):
-                    if chapter_headers and "chapter.xhtml" in route.request.url:
-                        route.fulfill(status=200, content_type="text/html", headers=chapter_headers, body=b"<h1>chapter</h1>")
+                    path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("path", [""])[0]
+                    if path.endswith("chapter-0001.xhtml"):
+                        route.fulfill(status=200, content_type="text/html", headers=chapter_headers or {}, body=b"<h1>chapter</h1>")
                     else:
                         route.fulfill(status=200, content_type="application/json", headers=headers, body=json.dumps(manifest))
-                page.route("**/api/reader-content**", serve_limited)
-                if chapter_headers:
-                    page.route("https://huggingface.co/**", lambda route, _request, headers=chapter_headers: route.fulfill(status=200, content_type="text/html", headers=headers, body=b"<h1>chapter</h1>"))
+                page.route("**/api/reader-bucket-resource**", serve_limited)
                 page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub-chapters&title=Limits", wait_until="domcontentloaded")
                 page.locator(".reader-error").wait_for(timeout=10000)
                 self.assertIn(page.locator("#content").get_attribute("data-error-code"), ("READER_PARSE", "READER_CORRUPT"))
@@ -1784,24 +1785,27 @@ class ReaderPerformanceTest(unittest.TestCase):
 
     def test_epub_chapters_load_first_lazy_next_and_toc_destination(self):
         digest = "b" * 64
-        source = f"https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/{digest}/chapter-manifest.json"
-        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [{"index": i, "path": f"chapters/chapter-{i}.xhtml", "title": f"Chapter {i}", "bytes": 100} for i in range(1, 4)]}
+        source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + f"chapters/ebook/epub/{digest}/1234567890abcdef/chapter-manifest.json"
+        manifest = {"version": 1, "kind": "epub-chapters", "chapters": [{"index": i, "path": f"chapters/chapter-{i:04d}.xhtml", "title": f"Chapter {i}", "bytes": 100} for i in range(1, 4)]}
         requests = []
         self.page.unroute("https://voiceofml-search.hf.space/api/reader-content**")
         def serve_chapter(route, _request):
-            if any(f"chapter-{i}.xhtml" in route.request.url for i in range(1, 4)):
-                requests.append(route.request.url)
-                image = "<img src='../resources/cover.svg' alt='cover'>" if "chapter-1.xhtml" in route.request.url else ""
-                route.fulfill(status=200, content_type="text/html", body=f"<h1>Chapter {route.request.url.split('chapter-')[-1].split('.')[0]}</h1>{image}<p style='height:900px'>body</p>".encode())
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("path", [""])[0]
+            if any(path.endswith(f"chapter-{i:04d}.xhtml") for i in range(1, 4)):
+                requests.append(path)
+                image = "<img src='../resources/cover.svg' alt='cover'>" if path.endswith("chapter-0001.xhtml") else ""
+                route.fulfill(status=200, content_type="text/html", body=f"<h1>Chapter {path.split('chapter-')[-1].split('.')[0]}</h1>{image}<p style='height:900px'>body</p>".encode())
+            elif path.endswith("cover.svg"):
+                route.fulfill(status=200, content_type="image/svg+xml", body=b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>")
             else:
                 route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest))
-        self.page.route("**/api/reader-content**", serve_chapter)
+        self.page.route("**/api/reader-bucket-resource**", serve_chapter)
         self.page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=epub-chapters&title=Chapters", wait_until="domcontentloaded")
         self.page.locator(".reader-epub-chapter[data-chapter='1']").wait_for()
-        self.assertIn("chapter-1.xhtml", requests[0])
+        self.assertTrue(requests[0].endswith("chapter-0001.xhtml"))
         image = self.page.locator(".reader-epub-chapter[data-chapter='1'] img")
         image.wait_for()
-        self.assertIn("/resources/cover.svg", image.get_attribute("src") or "")
+        self.assertIn("resources%2Fcover.svg", image.get_attribute("src") or "")
         # The first six following chapters are now prefetched. A successful
         # preload removes its sentinel before this assertion can observe it.
         self.page.locator(".reader-epub-chapter[data-chapter='2']").wait_for()

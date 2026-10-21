@@ -183,8 +183,7 @@ export function createReaderSource(readerContext) {
       }
       if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname))
         return false;
-      const readerAsset = VoiceOfMLReader.isAssetSourcePath(url.pathname);
-      return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname) || readerAsset;
+      return /^\/datasets\/VoiceOfML\/[^/]+\/(resolve|raw)\//.test(url.pathname);
     } catch (_) {
       return false;
     }
@@ -206,27 +205,14 @@ export function createReaderSource(readerContext) {
   function readerAssetObjectFamily(raw, base = location.href) {
     try {
       const url = new URL(raw, base);
-      if (url.origin === "https://voiceofml-search.hf.space" && url.pathname === "/api/reader-bucket-resource") {
-        const bucketPath = url.searchParams.get("path") || "";
-         const match = bucketPath.match(/^(chapters\/ebook\/(?:epub|mobi|azw3|fb2|chm)\/[0-9a-f]{64}\/[0-9a-f]{16}\/)/);
-        if (url.hash || url.searchParams.getAll("path").length !== 1 ||
-             [...url.searchParams.keys()].some((key) => key !== "path") || !match ||
-             !VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/reader-assets-v2")) return null;
-        return { url, prefix: match[1], bucket: true, bucketPath };
-      }
-      if (
-        url.protocol !== "https:" ||
-        !["huggingface.co", "hf-mirror.com"].includes(url.hostname) ||
-        url.username ||
-        url.password
-      )
+      if (url.origin !== "https://voiceofml-search.hf.space" || url.pathname !== "/api/reader-bucket-resource")
         return null;
-      const match = url.pathname.match(
-        /^\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/(objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[a-z0-9-]+\/)?)/
-      );
-      return match
-        ? { url, prefix: url.pathname.slice(0, url.pathname.indexOf(match[1])) + match[1], bucket: false }
-        : null;
+      const bucketPath = url.searchParams.get("path") || "";
+      const match = bucketPath.match(/^(chapters\/ebook\/(?:epub|mobi|azw3|fb2|chm)\/[0-9a-f]{64}\/[0-9a-f]{16}\/)/);
+      if (url.hash || url.searchParams.getAll("path").length !== 1 ||
+          [...url.searchParams.keys()].some((key) => key !== "path") || !match ||
+          !VoiceOfMLReader.isBucketPath(bucketPath, true, "vomebook/reader-assets-v2")) return null;
+      return { url, prefix: match[1], bucket: true, bucketPath };
     } catch (_) {
       return null;
     }
@@ -234,38 +220,23 @@ export function createReaderSource(readerContext) {
 
   function trustedReaderAssetManifestUrl(raw) {
     const family = readerContext.readerAssetObjectFamily(raw);
-    const manifestPath = family?.bucket ? family.bucketPath : family?.url.pathname;
-    return family &&
-      (family.bucket || family.url.search === "") &&
-      (family.bucket || !family.url.hash) &&
-      /\/chapter-manifest\.json$/i.test(manifestPath || "")
+    return family && /\/chapter-manifest\.json$/i.test(family.bucketPath || "")
       ? family.url.href
       : null;
   }
 
   function trustedChapterUrl(raw, base) {
     const manifest = readerContext.readerAssetObjectFamily(base);
-    const manifestPath = manifest?.bucket ? manifest.bucketPath : new URL(base, location.href).pathname;
-    if (!manifest || !/\/chapter-manifest\.json$/i.test(manifestPath))
+    if (!manifest || !/\/chapter-manifest\.json$/i.test(manifest.bucketPath || ""))
       return null;
     try {
-      if (manifest.bucket) {
-        const url = new URL(String(raw || ""), `https://bucket.invalid/${manifest.bucketPath}`);
-        const path = decodeURIComponent(url.pathname.slice(1));
-        if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
-            !path.startsWith(manifest.prefix) ||
-            !/(?:\/chapters\/chapter-[0-9]{4}\.xhtml|\/epub-search-index\.json\.gz)$/i.test(path) ||
-             !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
-        return `${manifest.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
-      }
-      const url = new URL(raw, base);
-      return !url.search &&
-        !url.hash &&
-        url.origin === manifest.url.origin &&
-        url.pathname.startsWith(manifest.prefix) &&
-         /(?:\.(?:xhtml?|html?)|\/epub-search-index\.json\.gz)$/i.test(url.pathname)
-        ? url.href
-        : null;
+      const url = new URL(String(raw || ""), `https://bucket.invalid/${manifest.bucketPath}`);
+      const path = decodeURIComponent(url.pathname.slice(1));
+      if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
+          !path.startsWith(manifest.prefix) ||
+          !/(?:\/chapters\/chapter-[0-9]{4}\.xhtml|\/epub-search-index\.json\.gz)$/i.test(path) ||
+          !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
+      return `${manifest.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
     } catch (_) {
       return null;
     }
@@ -273,23 +244,16 @@ export function createReaderSource(readerContext) {
 
   function trustedChapterReferenceUrl(raw, base, manifestBase) {
     const family = readerContext.readerAssetObjectFamily(manifestBase);
-    if (!family) return null;
+    const current = readerContext.readerAssetObjectFamily(base);
+    if (!family || !current) return null;
     try {
-      if (family.bucket) {
-        const current = readerContext.readerAssetObjectFamily(base);
-        if (!current?.bucket) return null;
-        const url = new URL(String(raw || ""), `https://bucket.invalid/${current.bucketPath}`);
-        const path = decodeURIComponent(url.pathname.slice(1));
-        if (url.origin !== "https://bucket.invalid" || url.search ||
-             !path.startsWith(family.prefix) || !/\/chapters\/chapter-[0-9]{4}\.xhtml$/i.test(path) ||
-             !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
-        return { url: `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`,
-                 fragment: url.hash };
-      }
-      const url = new URL(raw, base);
-      return !url.search && url.origin === family.url.origin && url.pathname.startsWith(family.prefix) &&
-        /\/(?:chapters\/)?[^/]+\.xhtml?$/i.test(url.pathname)
-        ? { url: url.href, fragment: url.hash } : null;
+      const url = new URL(String(raw || ""), `https://bucket.invalid/${current.bucketPath}`);
+      const path = decodeURIComponent(url.pathname.slice(1));
+      if (url.origin !== "https://bucket.invalid" || url.search ||
+          !path.startsWith(family.prefix) || !/\/chapters\/chapter-[0-9]{4}\.xhtml$/i.test(path) ||
+          !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
+      return { url: `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`,
+               fragment: url.hash };
     } catch (_) {
       return null;
     }
@@ -300,27 +264,14 @@ export function createReaderSource(readerContext) {
     if (!value || /^(?:data:|mailto:|tel:|javascript:)/i.test(value)) return null;
     // Chapters and resources can be siblings within the manifest's asset directory.
     const family = readerContext.readerAssetObjectFamily(manifestBase);
-    if (!family) return null;
+    const current = readerContext.readerAssetObjectFamily(base);
+    if (!family || !current) return null;
     try {
-      if (family.bucket) {
-        const current = readerContext.readerAssetObjectFamily(base);
-        if (!current?.bucket) return null;
-        const url = new URL(value, `https://bucket.invalid/${current.bucketPath}`);
-        const path = decodeURIComponent(url.pathname.slice(1));
-        if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
-             !path.startsWith(family.prefix) || !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
-        return `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
-      }
-      const url = new URL(value, base),
-        path = url.pathname.toLowerCase();
-      if (url.origin !== family.url.origin || !url.pathname.startsWith(family.prefix)) return null;
-      const allowed =
-        attribute === "href"
-          ? /\.(?:x?html?|css|svg|png|jpe?g|gif|webp|woff2?|ttf|otf|mp3|mp4|m4a|webm|ogg)$/i.test(
-              path
-            )
-          : /\.(?:svg|png|jpe?g|gif|webp|woff2?|ttf|otf|mp3|mp4|m4a|webm|ogg)$/i.test(path);
-      return allowed ? url.href : null;
+      const url = new URL(value, `https://bucket.invalid/${current.bucketPath}`);
+      const path = decodeURIComponent(url.pathname.slice(1));
+      if (url.origin !== "https://bucket.invalid" || url.search || url.hash ||
+          !path.startsWith(family.prefix) || !VoiceOfMLReader.isBucketPath(path, true, "vomebook/reader-assets-v2")) return null;
+      return `${family.url.origin}/api/reader-bucket-resource?path=${encodeURIComponent(path)}`;
     } catch (_) {
       return null;
     }
