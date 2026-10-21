@@ -1570,6 +1570,111 @@ const browserApiCache = new BoundedResponseCache(BROWSER_API_CACHE_MAX, 5 * 60 *
 const browserApiPending = new Map();
 const sidebarInitialCache = new Map();
 const sidebarInitialPending = new Map();
+const SIDEBAR_SCROLL_STORAGE_KEY = "vomebook-search-sidebar-scroll-v1";
+const SIDEBAR_SCROLL_LIMIT = 80;
+const sidebarScrollPositions = new Map();
+let activeSidebarScrollKey = "";
+let sidebarScrollFrame = 0;
+let sidebarScrollRestoreFrame = 0;
+let sidebarScrollRestoring = false;
+let sidebarScrollPersistTimer = 0;
+
+function sidebarScrollKeyFor(repo, path) {
+  return repo ? `repo:${repo}|path:${path || ""}` : "global";
+}
+
+function setSidebarScrollPosition(key, top) {
+  if (!key || !Number.isFinite(top) || top < 0) return;
+  sidebarScrollPositions.delete(key);
+  sidebarScrollPositions.set(key, Math.round(top));
+  while (sidebarScrollPositions.size > SIDEBAR_SCROLL_LIMIT) {
+    sidebarScrollPositions.delete(sidebarScrollPositions.keys().next().value);
+  }
+  scheduleSidebarScrollPersist();
+}
+
+function scheduleSidebarScrollPersist() {
+  if (sidebarScrollPersistTimer) return;
+  sidebarScrollPersistTimer = setTimeout(() => {
+    sidebarScrollPersistTimer = 0;
+    persistSidebarScrollPositions();
+  }, 250);
+}
+
+function loadSidebarScrollPositions() {
+  try {
+    const raw = sessionStorage.getItem(SIDEBAR_SCROLL_STORAGE_KEY);
+    if (!raw) return;
+    const stored = JSON.parse(raw);
+    if (!stored || typeof stored !== "object") return;
+    for (const [key, value] of Object.entries(stored)) {
+      if (typeof key === "string" && Number.isFinite(value) && value >= 0) {
+        sidebarScrollPositions.set(key, Math.round(value));
+      }
+    }
+    while (sidebarScrollPositions.size > SIDEBAR_SCROLL_LIMIT) {
+      sidebarScrollPositions.delete(sidebarScrollPositions.keys().next().value);
+    }
+  } catch (_) {}
+}
+
+function persistSidebarScrollPositions() {
+  try {
+    const stored = {};
+    for (const [key, value] of sidebarScrollPositions) {
+      if (value > 0) stored[key] = value;
+    }
+    sessionStorage.setItem(SIDEBAR_SCROLL_STORAGE_KEY, JSON.stringify(stored));
+  } catch (_) {}
+}
+
+function rememberSidebarScroll() {
+  if (!DOM.sidebarContent || !activeSidebarScrollKey || sidebarScrollRestoring) return;
+  const top = DOM.sidebarContent.scrollTop;
+  if (Number.isFinite(top) && top >= 0) setSidebarScrollPosition(activeSidebarScrollKey, top);
+}
+
+function activateSidebarScrollKey(key) {
+  if (key === activeSidebarScrollKey) return;
+  rememberSidebarScroll();
+  activeSidebarScrollKey = key;
+}
+
+function restoreSidebarScroll() {
+  if (!DOM.sidebarContent || !activeSidebarScrollKey) return;
+  const target = sidebarScrollPositions.get(activeSidebarScrollKey) || 0;
+  const max = Math.max(0, DOM.sidebarContent.scrollHeight - DOM.sidebarContent.clientHeight);
+  const next = Math.min(target, max);
+  sidebarScrollRestoring = true;
+  if (Math.abs(DOM.sidebarContent.scrollTop - next) > 1) DOM.sidebarContent.scrollTop = next;
+  if (!sidebarScrollRestoreFrame) {
+    sidebarScrollRestoreFrame = requestAnimationFrame(() => {
+      sidebarScrollRestoreFrame = 0;
+      sidebarScrollRestoring = false;
+    });
+  }
+}
+
+function handleSidebarScroll() {
+  if (sidebarScrollRestoring || sidebarScrollFrame) return;
+  sidebarScrollFrame = requestAnimationFrame(() => {
+    sidebarScrollFrame = 0;
+    rememberSidebarScroll();
+  });
+}
+
+function flushSidebarScroll() {
+  rememberSidebarScroll();
+  if (sidebarScrollFrame) {
+    cancelAnimationFrame(sidebarScrollFrame);
+    sidebarScrollFrame = 0;
+  }
+  if (sidebarScrollPersistTimer) {
+    clearTimeout(sidebarScrollPersistTimer);
+    sidebarScrollPersistTimer = 0;
+  }
+  persistSidebarScrollPositions();
+}
 
 async function fetchJsonWithTimeout(url, timeoutMs, requireOK = false) {
   var controller = new AbortController();
@@ -4931,6 +5036,7 @@ function renderSidebar(routeId) {
 }
 
 function renderRepoListItems(repos) {
+  activateSidebarScrollKey("global");
   const focused = DOM.sidebarContent.contains(document.activeElement) ? document.activeElement.closest('.repo-list-item') : null;
   var ordered = (repos || []).slice().sort(function(a, b) {
     return (a.count || 0) - (b.count || 0) ||
@@ -4951,6 +5057,7 @@ function renderRepoListItems(repos) {
   DOM.sidebarContent.querySelectorAll('svg').forEach(node => node.setAttribute('aria-hidden', 'true'));
   if (focused) (Array.from(DOM.sidebarContent.querySelectorAll('.repo-list-item'))
     .find(node => node.dataset.repo === focused.dataset.repo) || DOM.leftSidebar).focus({ preventScroll: true });
+  restoreSidebarScroll();
   updateSidebarHeader();
 }
 
@@ -4972,7 +5079,9 @@ async function renderRepoList(routeId) {
   }
   if (routeId && routeId !== routeRenderId) return;
   if (!repos || !Array.isArray(repos) || repos.length === 0) {
+    activateSidebarScrollKey("global");
     DOM.sidebarContent.innerHTML = '<div class="sidebar-loading">暂无仓库</div>';
+    restoreSidebarScroll();
     updateSidebarHeader();
     return;
   }
@@ -4981,14 +5090,16 @@ async function renderRepoList(routeId) {
 
 function renderBrowserListItems(list, data, currentRepo, path) {
   const fragment = document.createDocumentFragment();
+  const folderIcon = ICONS.folder.replace("<svg", '<svg aria-hidden="true"');
   for (var j = 0; j < (data.folders || []).length; j++) {
     var f = data.folders[j];
     var div = document.createElement("button");
     div.type = 'button';
     div.setAttribute('aria-label', '打开文件夹：' + f.name);
     div.className = "browser-item";
-    div.innerHTML = ICONS.folder + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
-    div.addEventListener("click", (function(fp) { return function() { ROUTER.navigate("repo", STATE.repo, fp); }; })(f.path));
+    div.dataset.type = "folder";
+    div.dataset.path = f.path;
+    div.innerHTML = folderIcon + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
     fragment.appendChild(div);
   }
   for (var k = 0; k < (data.files || []).length; k++) {
@@ -4998,50 +5109,34 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var iconType = getFileIconType(f2.ext);
     var sizeStr = formatSize(f2.size);
     var browserFileName = getBrowserFileName(f2);
+    div2.dataset.type = "file";
+    div2.dataset.filename = browserFileName;
     div2.setAttribute('role', 'group');
     div2.setAttribute('aria-label', browserFileName);
     var browserFileLink = getBrowserFileLink(currentRepo, path || "", f2);
     div2.dataset.link = browserFileLink;
     var warmReaderLink = getBrowserReaderUrl(f2, currentRepo, path);
     if (warmReaderLink) div2.dataset.readerUrl = warmReaderLink;
-    div2.innerHTML = (ICONS[iconType] || ICONS.file) +
-      '<button type="button" class="browser-name">' + escapeHTML(browserFileName) + '</button>' +
+    var fileIcon = (ICONS[iconType] || ICONS.file).replace("<svg", '<svg aria-hidden="true"');
+    div2.innerHTML = fileIcon +
+      '<button type="button" class="browser-name" aria-label="' + (warmReaderLink ? '打开阅读器：' : '下载文件：') + escapeHTML(browserFileName) + '">' + escapeHTML(browserFileName) + '</button>' +
       '<button type="button" class="browser-action" aria-label="下载：' + escapeHTML(browserFileName) + '" data-download="1">下载</button>' +
       (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '');
-    div2.querySelector('.browser-name').setAttribute('aria-label', (warmReaderLink ? '打开阅读器：' : '下载文件：') + browserFileName);
-    div2.addEventListener("click", function(ff, ppath) {
-      return function(e) {
-        var fileLink = getBrowserFileLink(currentRepo, ppath, ff);
-        if (e.target.closest(".browser-action")) {
-          e.stopPropagation();
-          if (fileLink) downloadFile(getBrowserFileName(ff), fileLink, { button: e.target.closest(".browser-action") });
-          return;
-        }
-        var assetPath = ppath ? ppath + "/" + getBrowserFileName(ff) : getBrowserFileName(ff);
-        var browserRecord = { File: ff.name, Extension: ff.ext, Link: fileLink, ReturnUrl: location.href };
-        if (ff.hasTxt && String(ff.ext || "").toLowerCase() !== "txt") { var relPath = (ppath ? ppath + "/" : "") + getBrowserFileName(ff); browserRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath)); }
-        browserRecord = applyReaderAsset(browserRecord, currentRepo, assetPath, fileLink);
-        var readerLink = isReadableRecord(browserRecord) ? VoiceOfMLReader.readerUrl(browserRecord, "/search/static/reader.html") : "";
-        if (readerLink) {
-          navigateToReader(readerLink);
-          return;
-        }
-        if (fileLink) {
-          downloadFile(getBrowserFileName(ff), fileLink);
-        }
-      };
-    }(f2, path || ""));
     fragment.appendChild(div2);
   }
   list.replaceChildren(fragment);
-  list.querySelectorAll('svg').forEach(node => node.setAttribute('aria-hidden', 'true'));
+  restoreSidebarScroll();
 }
 
 function getBrowserReaderUrl(file, repo, path) {
   const name = getBrowserFileName(file);
   const link = getBrowserFileLink(repo, path || "", file);
   const assetPath = path ? path + "/" + name : name;
-  const record = applyReaderAsset({ File: file.name, Extension: file.ext, Link: link }, repo, assetPath, link);
+  let record = { File: file.name, Extension: file.ext, Link: link };
+  if (file.hasTxt && String(file.ext || "").toLowerCase() !== "txt") {
+    record.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(assetPath));
+  }
+  record = applyReaderAsset(record, repo, assetPath, link);
   return VoiceOfMLReader.readerUrl(record, "/search/static/reader.html");
 }
 
@@ -5066,6 +5161,7 @@ function createSidebarBreadcrumb(path) {
 
 async function renderBrowser(path, routeId) {
   if (routeId && routeId !== routeRenderId) return;
+  activateSidebarScrollKey(sidebarScrollKeyFor(STATE.repoFull || STATE.repo, path));
   const restoreFocus = DOM.sidebarContent.contains(document.activeElement);
   STATE.browserPath = path;
   syncStateToURL();
@@ -6688,12 +6784,41 @@ function setupResultDelegation() {
     const repoItem = e.target.closest(".repo-list-item");
     if (repoItem) {
       ROUTER.navigate("repo", repoItem.dataset.repo);
+      return;
+    }
+    const browserItem = e.target.closest(".browser-item");
+    if (!browserItem) return;
+    if (e.target.closest(".browser-action")) {
+      e.stopPropagation();
+      if (browserItem.dataset.link) {
+        downloadFile(browserItem.dataset.filename || "file", browserItem.dataset.link,
+          { button: browserItem.querySelector(".browser-action") });
+      }
+      return;
+    }
+    if (browserItem.dataset.type === "folder") {
+      ROUTER.navigate("repo", STATE.repo, browserItem.dataset.path);
+      return;
+    }
+    const readerLink = browserItem.dataset.readerUrl;
+    if (readerLink) {
+      navigateToReader(readerLink);
+      return;
+    }
+    if (browserItem.dataset.link) {
+      downloadFile(browserItem.dataset.filename || "file", browserItem.dataset.link);
     }
   });
 }
 
 async function init() {
   cacheDOM();
+  loadSidebarScrollPositions();
+  DOM.sidebarContent.addEventListener("scroll", handleSidebarScroll, { passive: true });
+  window.addEventListener("pagehide", flushSidebarScroll);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushSidebarScroll();
+  });
   syncSearchInputState();
   await initSearchPositions();
   setupSearchPositionControls();
