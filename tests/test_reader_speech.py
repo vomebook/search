@@ -34,6 +34,64 @@ def wait(page, expression, timeout=20000, arg=None):
 TEXT = "".join(f"第{index}段，这是阅读器朗读测试的正文。手机和文化都要读出来。\n" for index in range(60))
 
 
+def sparse_pdf(count):
+    """Pages without text (like a scanned book); only the last page has text."""
+    stream = b"BT /F1 18 Tf 20 100 Td (Information Page Text.) Tj ET"
+    kids = " ".join(f"{3 + index} 0 R" for index in range(count)).encode()
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [" + kids + b"] /Count " + str(count).encode() + b" >>"]
+    for index in range(count):
+        contents = f" /Contents {3 + count} 0 R" if index == count - 1 else ""
+        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 {4 + count} 0 R >> >>{contents} >>".encode())
+    objects += [b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    payload = bytearray(b"%PDF-1.4\n"); offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(payload)); payload.extend(f"{number} 0 obj\n".encode() + body + b"\nendobj\n")
+    xref = len(payload); payload.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    for offset in offsets: payload.extend(f"{offset:010d} 00000 n \n".encode())
+    payload.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+    return bytes(payload)
+
+
+# The pinned PDF.js, re-exported with a per-page record of drawn pages and
+# text extractions. Extracting a page loads all its resources, which for a
+# scanned page is its full page image.
+PDF_RECORDER = """
+export * from "./%s?real";
+import * as real from "./%s?real";
+window.__pdfRecord = {drawn: [], text: []};
+const note = (list, number) => { if (!list.includes(number)) list.push(number); };
+export function getDocument(options) {
+  const task = real.getDocument(options);
+  const promise = task.promise.then(pdf => {
+    const getPage = pdf.getPage.bind(pdf);
+    pdf.getPage = number => getPage(number).then(page => {
+      if (!page.__recorded) {
+        page.__recorded = true;
+        const render = page.render.bind(page), text = page.getTextContent.bind(page);
+        page.render = parameters => { note(window.__pdfRecord.drawn, number); return render(parameters); };
+        page.getTextContent = parameters => { note(window.__pdfRecord.text, number); return text(parameters); };
+      }
+      return page;
+    });
+    return pdf;
+  });
+  Object.defineProperty(task, "promise", {value: promise});
+  return task;
+}
+"""
+
+
+def record_pdf_pages(page):
+    # Registered after the local vendor fallback, so these routes take precedence.
+    def route(route):
+        url = urlparse(route.request.url)
+        name = url.path.rsplit("/", 1)[-1]
+        body = (ROOT / "static/vendor" / name).read_bytes() if url.query == "real" else (PDF_RECORDER % (name, name)).encode()
+        route.fulfill(content_type="text/javascript", body=body)
+    page.route("**/static/vendor/pdf.min.*.mjs*", route)
+
+
 @unittest.skipIf(sync_playwright is None, "install requirements-test.txt to run Reader speech tests")
 class ReaderSpeechTest(unittest.TestCase):
     @classmethod
@@ -54,7 +112,7 @@ class ReaderSpeechTest(unittest.TestCase):
         cls.playwright.stop()
         cls.server.__exit__(None, None, None)
 
-    def open(self, ext, body, content_type, viewport=None, host=False, name="sample"):
+    def open(self, ext, body, content_type, viewport=None, host=False, name="sample", setup=None):
         context = self.browser.new_context(viewport=viewport or {"width": 1280, "height": 860})
         page = context.new_page()
         posts, errors = [], []
@@ -88,6 +146,8 @@ class ReaderSpeechTest(unittest.TestCase):
         page.route(SPEECH + "/**", speech)
         page.route("**/api/reader-content**", lambda route: route.fulfill(status=200, content_type=content_type, body=body, headers={"Access-Control-Allow-Origin": "*"}))
         perf.route_local_vendor_fallback(page)
+        if setup:
+            setup(page)
         reader = self.reader_url(ext, name)
         if not host:
             page.goto(reader, wait_until="domcontentloaded")
@@ -426,22 +486,7 @@ class ReaderSpeechTest(unittest.TestCase):
 
     def test_sparse_pdf_reads_distant_text_page_and_follows_there(self):
         # Like scanned books with an appended information page: only page 30 has text.
-        count = 30
-        stream = b"BT /F1 18 Tf 20 100 Td (Information Page Text.) Tj ET"
-        kids = " ".join(f"{3 + index} 0 R" for index in range(count)).encode()
-        objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [" + kids + b"] /Count " + str(count).encode() + b" >>"]
-        for index in range(count):
-            contents = f" /Contents {3 + count} 0 R" if index == count - 1 else ""
-            objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 {4 + count} 0 R >> >>{contents} >>".encode())
-        objects += [b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
-                    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
-        payload = bytearray(b"%PDF-1.4\n"); offsets = []
-        for number, body in enumerate(objects, 1):
-            offsets.append(len(payload)); payload.extend(f"{number} 0 obj\n".encode() + body + b"\nendobj\n")
-        xref = len(payload); payload.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
-        for offset in offsets: payload.extend(f"{offset:010d} 00000 n \n".encode())
-        payload.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
-        context, page, posts, errors = self.open("pdf", bytes(payload), "application/pdf")
+        context, page, posts, errors = self.open("pdf", sparse_pdf(30), "application/pdf")
         try:
             # No text near page 1: no button. It appears once the text page is in view.
             page.wait_for_timeout(2500)
@@ -453,6 +498,28 @@ class ReaderSpeechTest(unittest.TestCase):
             self.assertTrue(page.evaluate("""() => { const r = document.querySelector('.reader-page[data-page="30"]').getBoundingClientRect();
               const v = document.querySelector('#viewport').getBoundingClientRect(); return r.bottom > v.top && r.top < v.bottom; }"""))
             self.stop(page)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_text_probe_reads_only_pages_the_renderer_prepared(self):
+        # Looking for readable text near the reading position must not extract
+        # pages ahead of the renderer: for a scanned book every such page means
+        # downloading its full page image in competition with the visible page.
+        context, page, posts, errors = self.open("pdf", sparse_pdf(40), "application/pdf", setup=record_pdf_pages)
+        try:
+            def assert_prepared_only(where):
+                record = page.evaluate("() => window.__pdfRecord")
+                self.assertTrue(record["text"], where)
+                self.assertFalse(set(record["text"]) - set(record["drawn"]), f"{where}: {record}")
+            page.wait_for_timeout(1500)
+            assert_prepared_only("opening")
+            page.locator("#page-number").fill("20")
+            page.locator("#page-number").press("Enter")
+            wait(page, "() => window.__pdfRecord.drawn.includes(20)")
+            page.wait_for_timeout(1500)
+            assert_prepared_only("after a jump")
+            self.assertEqual(page.locator("[data-speech-toggle]").count(), 0)
             self.assertFalse(errors, errors)
         finally:
             context.close()

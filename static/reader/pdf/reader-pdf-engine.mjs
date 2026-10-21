@@ -31,6 +31,8 @@ export function createReaderPdfEngine(readerContext) {
         canPrefetchFirstPage: () => readerContext.capability?.mode === "pdf" &&
           readerContext.readerRestorationLoaded && !readerContext.restorationFailed &&
           (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) === 1),
+        // A still-opening hybrid primary yields its demand reads to page images.
+        admitRange: readerContext.admitPdfRange,
         onError(error) {
           if (!documentReady || readerContext.readerAbortController.signal.aborted) return;
           // A hybrid PDF-pages book keeps its image stream as the only surface.

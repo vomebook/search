@@ -42,6 +42,9 @@ export function createReaderPdfRenderer(readerContext) {
     }
     if (shell._backgroundRender) {
       if (priority >= 2 && shell._pdfRenderCancelled) shell._resumePdfDemand = true;
+      // A pending hybrid page that just became visible re-evaluates at once
+      // instead of on its next polling tick.
+      if (priority >= 2) shell._hybridWake?.();
       if (priority && ["pdf-pages", "image-pages"].includes(readerContext.capability.mode)) {
         const image = shell.querySelector("img");
         if (image) image.fetchPriority = priority >= 3 ? "high" : "auto";
@@ -130,9 +133,15 @@ export function createReaderPdfRenderer(readerContext) {
   // Recent per-page latencies for this book: PDF.js admission-to-draw and
   // page-image admission-to-decode. They choose the visible-page image grace.
   const pdfLatencySamples = { pdf: [], preview: [] };
+  // When this book's first page image was shown (0: not yet). Lookahead before
+  // the primary PDF is ready starts from it.
+  let pdfOpeningShownAt = 0;
+  const PDF_HYBRID_LOOKAHEAD_DELAY_MS = 1000;
 
+  // Resets all per-book scheduling samples, including the opening timestamp.
   function resetPdfLatencySamples() {
     pdfLatencySamples.pdf.length = pdfLatencySamples.preview.length = 0;
+    pdfOpeningShownAt = 0;
   }
 
   function notePdfLatency(kind, milliseconds) {
@@ -172,7 +181,57 @@ export function createReaderPdfRenderer(readerContext) {
     if (Math.abs(delta) >= .5) readerContext.viewport.scrollTop += delta;
   }
 
+  // Reveals a complete page surface. Like the native PDF canvas, a page that
+  // is on screen and was blank fades in; offscreen pages, surface swaps over an
+  // already shown page and reduced-motion clients switch instantly.
+  function revealPdfSurface(shell, surface, fade) {
+    surface.classList.add("ready");
+    if (fade) surface.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 120, easing: "ease" });
+  }
+
+  function pdfSurfaceFades(shell) {
+    return !shell.querySelector("canvas.ready, img.ready") && readerContext.isPdfPageVisible(shell) &&
+      !globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  }
+
+  // Waits until a loaded page image is decoded, so its first painted frame is
+  // the complete page rather than rows arriving from the top. Bounded: a
+  // hidden (parked) Reader may defer decoding without blocking the page.
+  async function decodePdfImage(image, signal) {
+    if (typeof image.decode !== "function") return;
+    let timer = 0;
+    try {
+      await readerContext.awaitReader(Promise.race([
+        image.decode().catch(() => {}),
+        new Promise(resolve => { timer = setTimeout(resolve, 2000); })
+      ]), signal);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function notePdfOpeningShown(at = performance.now()) {
+    pdfOpeningShownAt ||= at;
+  }
+
+  // Before a hybrid book's primary PDF is ready, page images are its only
+  // surface. Once the opening page is shown and the primary is still pending,
+  // the next pages in the reading direction (and the previous one) prepare
+  // their images ahead of visibility. Other pages keep waiting for the PDF.
+  function pdfHybridLookahead(shell) {
+    if (readerContext.pdfDocument || !pdfOpeningShownAt ||
+        performance.now() - pdfOpeningShownAt < PDF_HYBRID_LOOKAHEAD_DELAY_MS) return false;
+    const delta = (Number(shell.dataset.page) - readerContext.documentState.page) * (readerContext.pdfScrollDirection || 1);
+    return delta >= -1 && delta <= 2;
+  }
+
   function renderPdfManifestShell(shell, force = false, priority = false) {
+    // Pages reached after the opening show the quiet delayed indicator while
+    // their surface is pending, like native PDF pages. The opening page keeps
+    // its hidden state.
+    const pageState = shell.querySelector(".reader-page-state");
+    if (pageState?.hidden && readerContext.documentState.restorationReady && !shell.querySelector("canvas.ready, img.ready"))
+      readerContext.setPdfPageLoadingState(pageState, shell.dataset.page);
     if (!readerContext.pdfHybridUrl) return readerContext.renderPdfImageShell(shell, force, priority);
     if (!force && shell.querySelector("canvas.ready")) return Promise.resolve();
     if (shell._hybridRenderPromise) {
@@ -181,6 +240,13 @@ export function createReaderPdfRenderer(readerContext) {
     }
     const controller = new AbortController();
     shell._hybridCancel = () => { controller.abort(); shell._renderCancel?.(); };
+    // Visible demand wakes the polling waits below immediately.
+    let wake = null;
+    shell._hybridWake = () => { const resolve = wake; wake = null; resolve?.(); };
+    const pause = (ms) => new Promise((resolve, reject) => {
+      wake = resolve;
+      readerContext.waitForReader(ms).then(resolve, reject);
+    });
     const pdfTask = readerContext.renderHybridPdfCanvas(shell, controller.signal, priority);
     async function waitForPrimaryDocument() {
       const pending = readerContext.pdfHybridDocumentPromise;
@@ -191,26 +257,25 @@ export function createReaderPdfRenderer(readerContext) {
         if (readerContext.pdfDocument) return true;
         // A page promoted from speculation to visible demand should get its
         // image fallback immediately instead of waiting out the grace period.
-        if (readerContext.isPdfPageVisible(shell)) return false;
+        if (readerContext.isPdfPageVisible(shell) || readerContext.pdfHybridLookahead(shell)) return false;
         const remaining = deadline - performance.now();
         if (remaining <= 0) return false;
-        const result = await Promise.race([
-          documentReady,
-          readerContext.waitForReader(Math.min(100, remaining)).then(() => null)
-        ]);
+        const result = await Promise.race([documentReady, pause(Math.min(100, remaining)).then(() => null)]);
         if (result !== null) return result;
       }
       throw readerContext.readerAbortError();
     }
+    // The page's live priority: a speculative task may have become visible.
+    const livePriority = () => Math.max(readerContext.normalizePdfPriority(priority), readerContext.pdfPagePriority(shell));
     const previewTask = (async () => {
       // Keep the visible page's fallback immediate; only speculative pages
       // should wait for the primary-PDF grace period.
       if (readerContext.isPdfPageVisible(shell) && !readerContext.pdfDocument)
-        return readerContext.renderPdfImageShell(shell, false, priority);
+        return readerContext.renderPdfImageShell(shell, false, livePriority());
       // Give a warm primary PDF a short chance to win before starting preview
       // I/O. If drawing is slower, the image stream remains the fallback.
       const documentReady = await waitForPrimaryDocument();
-      if (!documentReady) return readerContext.renderPdfImageShell(shell, false, priority);
+      if (!documentReady) return readerContext.renderPdfImageShell(shell, false, livePriority());
       // Keep speculation PDF-only, but do not permanently give up this page's
       // fallback: scrolling may promote it while its getPage/draw is still slow.
       let pdfSettled = false;
@@ -219,7 +284,7 @@ export function createReaderPdfRenderer(readerContext) {
       while (true) {
         while (!readerContext.isPdfPageVisible(shell) && !pdfSettled) {
           if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
-          await readerContext.waitForReader(100);
+          await pause(100);
         }
         if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
         // The grace counts from visibility. A page flown past during fast
@@ -233,7 +298,7 @@ export function createReaderPdfRenderer(readerContext) {
         if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
         if (pdfSettled || readerContext.isPdfPageVisible(shell)) break;
       }
-      const preview = await readerContext.renderPdfImageShell(shell, false, priority);
+      const preview = await readerContext.renderPdfImageShell(shell, false, livePriority());
       if (controller.signal.aborted) throw readerContext.readerAbortError();
       return preview;
     })();
@@ -247,6 +312,7 @@ export function createReaderPdfRenderer(readerContext) {
         delete shell._hybridRenderPromise;
         delete shell._hybridReadyPromise;
         delete shell._hybridCancel;
+        delete shell._hybridWake;
         if (shell.dataset.pendingHybridRerender && shell.isConnected && !readerContext.readerLifecycle.disposed) {
           delete shell.dataset.pendingHybridRerender;
           readerContext.renderPdfInBackground(shell, true);
@@ -301,11 +367,14 @@ export function createReaderPdfRenderer(readerContext) {
           continue;
         }
         const ready = canvas;
+        // A canvas replacing a shown image switches instantly; on a blank
+        // visible page it fades in like a native PDF page.
+        const fade = pdfSurfaceFades(shell);
         readerContext.applyPdfShellGeometry(() => {
           const previous = shell.querySelector("canvas");
-          ready.classList.add("ready");
           if (previous) { previous.replaceWith(ready); previous.width = previous.height = 0; }
           else shell.prepend(ready);
+          revealPdfSurface(shell, ready, fade);
           shell.style.aspectRatio = `${base.width} / ${base.height}`;
           shell.dataset.pageGeometry = "1";
           shell._renderCancel?.();
@@ -358,6 +427,9 @@ export function createReaderPdfRenderer(readerContext) {
         const admittedAt = performance.now();
         shell._renderStarted = true;
         readerContext.assertReaderActive();
+        // The page may have become visible while it waited for a slot.
+        priority = Math.max(priority, readerContext.pdfPagePriority(shell));
+        shell._renderActivePriority = String(priority);
          const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
          if (!entry) throw new Error("PDF page entry missing");
          let target = readerContext.pdfPageManifest.pageUrl(entry.page);
@@ -398,13 +470,19 @@ export function createReaderPdfRenderer(readerContext) {
                Math.abs((image.naturalWidth / image.naturalHeight) / (geometry.width / geometry.height) - 1) > .01)
              throw new Error("PDF_V3_PREVIEW_GEOMETRY_MISMATCH");
          }
+        // Reveal only a fully decoded page, never one painting from the top.
+        await decodePdfImage(image, renderController.signal);
+        readerContext.assertReaderActive();
+        if (shell.dataset.pdfPresented === "1") return;
         readerContext.notePdfLatency("preview", performance.now() - admittedAt);
+        const fade = pdfSurfaceFades(shell);
         readerContext.applyPdfShellGeometry(() => {
           shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
           shell.dataset.pageGeometry = "1";
-          image.classList.add("ready");
+          revealPdfSurface(shell, image, fade);
           readerContext.seedPdfPageGeometry?.(image.naturalWidth, image.naturalHeight);
         });
+        if (readerContext.pdfHybridUrl) notePdfOpeningShown();
         if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
           loadText ||= readerContext.renderPdfOcrText(shell);
         loadText?.catch(() => {});
@@ -543,6 +621,10 @@ export function createReaderPdfRenderer(readerContext) {
     resetPdfLatencySamples,
     notePdfLatency,
     pdfHybridPreviewGrace,
-    applyPdfShellGeometry
+    applyPdfShellGeometry,
+    revealPdfSurface,
+    pdfSurfaceFades,
+    notePdfOpeningShown,
+    pdfHybridLookahead
   };
 }

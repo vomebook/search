@@ -964,6 +964,13 @@ body {
   height: auto;
   user-select: none;
   -webkit-user-select: none;
+  /* Like a PDF.js canvas, a page image is never shown while it streams or
+     decodes; the renderer reveals it (with a short fade) once complete. */
+  opacity: 0;
+}
+.reader-content[data-mode="pdf-pages"] .reader-page > img.ready,
+.reader-content[data-mode="image-pages"] .reader-page > img.ready {
+  opacity: 1;
 }
 .reader-content[data-mode="pdf-pages"] .reader-page,
 .reader-content[data-mode="image-pages"] .reader-page {
