@@ -115,7 +115,6 @@ export function createReaderFormatController(readerContext) {
     readerContext.contentUrl = readerContext.readerContentUrl(readerContext.sourceUrl);
     readerContext.downloadUrl = resolved.download || readerContext.sourceUrl;
     readerContext.chapterManifestUrl = resolved.chapter_manifest || "";
-    readerContext.fallbackUrl = resolved.fallback || "";
     if (resolved.extension) readerContext.extension = String(resolved.extension).toLowerCase();
     if (
       readerContext.extension === "pdf" &&
@@ -228,21 +227,6 @@ export function createReaderFormatController(readerContext) {
     } catch (error) {
       if (readerContext.readerAbortController.signal.aborted || error?.name === "AbortError") return;
       console.error(error);
-      if (
-        error?.code !== "READER_RESTORE" &&
-        readerContext.capability.mode === "epub-chapters" &&
-        readerContext.validFallback(readerContext.fallbackUrl)
-      ) {
-        const target = new URL(location.href);
-        target.searchParams.set("url", readerContext.fallbackUrl);
-        target.searchParams.set("ext", "pdf");
-        target.searchParams.delete("chapter_manifest");
-        target.searchParams.delete("fallback");
-        if (readerContext.isReaderOverlayFrame())
-          window.parent.postMessage({ type: "voice-reader-open", url: target.href }, location.origin);
-        else location.replace(target.href);
-        return;
-      }
       readerContext.fail(
         error && error.message ? error.message : "原文件加载失败",
         readerContext.classifyReaderError(error, readerContext.capability.mode === "foliate" ? "READER_CORRUPT" : "READER_PARSE")
