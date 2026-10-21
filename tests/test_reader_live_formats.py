@@ -1,9 +1,12 @@
+import gzip
+import hashlib
 import json
 import os
+import re
+import time
 import unittest
 import urllib.parse
 import urllib.request
-from urllib.error import HTTPError, URLError
 
 try:
     from playwright.sync_api import sync_playwright
@@ -14,21 +17,11 @@ except ImportError:
 BASE = os.environ.get("GITHUB_SEARCH_LIVE_BASE_URL", "").rstrip("/")
 API_BASE = os.environ.get("GITHUB_SEARCH_API_BASE_URL", "").rstrip("/")
 READER_PATH = "/search/static/reader.html"
-MANIFEST_URL = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/manifest.json"
-REPO_API_URL = "https://huggingface.co/api/datasets/vomebook/Reader-Assets"
-KNOWN_PDF_PAGES_PATH = "objects/40/400fab592d48d49dfbf90c1be75e0fc964557ff044b0df2ebcab35c586ed7f71/4b5e1b60723476d4/page-manifest.json"
-ASSET_ROOT = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main"
+# The Reader-Assets index both sites consume (HF backend refresh, Pages build). The former
+# `vomebook/Reader-Assets` dataset and its manifest.json have been deleted.
+READER_ASSETS_INDEX_URL = "https://huggingface.co/buckets/vomebook/reader-assets-v2/resolve/reader-index/reader_assets.json.gz"
+SAMPLE_ORDER = ("pdf", "pdf-pages", "epub", "mobi", "azw3", "audio", "video", "fb2", "html", "odt", "rtf", "mht", "txt", "md")
 SAMPLES = ()
-"""
-    ("mobi", f"{ASSET_ROOT}/objects/a9/a920bb7db749a5d74bd899a3392fc7c3740f655f3730e3128b23a9fe1eb78563/foliate-original-v1/document.mobi", "mobi", "foliate", None),
-    ("azw3", f"{ASSET_ROOT}/objects/65/6563fed9b66427417ef9c9c44f9fcc189979cded190a9de7cd445b1cb6c9d14f/foliate-original-v1/document.azw3", "azw3", "foliate", True),
-    ("audio", f"{ASSET_ROOT}/objects/36/3679a0ead0d3d72bacf71b392dbba708107f767a7bee4382909469d519259120/ffmpeg-audio-mp3-v1/audio.mp3", "mp3", "audio", False),
-    ("video", f"{ASSET_ROOT}/objects/9b/9bd4e16a28936dbf9f0bf9dbcdb09b0dc9889743c5f314c0720019175181ca91/ffmpeg-video-mp4-h264-aac-v1/video.mp4", "mp4", "video", False),
-    ("fb2", f"{ASSET_ROOT}/objects/79/794a61d8a31327c495e56313bdf19895b94885e9fcd2e2b8bd5f9fc5057b8608/foliate-original-v1/document.fb2", "fb2", "foliate", True),
-    ("fb2-cn", f"{ASSET_ROOT}/objects/ab/ab658eeefdcfedf881cc93cff87d10a06d902af497328315460875038c769381/foliate-original-v1/document.fb2", "fb2", "foliate", True),
-    ("html", f"{ASSET_ROOT}/objects/23/23e3eb7e0d93e496ce57e6c0a44d977a42b91991409b516b087e6a79b10bb4a7/sanitized-html-v5-e2f98d3c6dd02d16/document.html", "html", "html", True),
-)
-"""
 SAMPLE_BY_NAME = {}
 SAMPLE_FILTER = os.environ.get("READER_LIVE_SAMPLE", "")
 RAW_SAMPLE_NAMES = ("txt", "md")
@@ -37,6 +30,73 @@ RESPONSIVE_THEME_MATRIX = (
     ("tablet-dark", {"width": 820, "height": 1180}, "dark", "no-preference"),
     ("mobile-high-contrast", {"width": 390, "height": 844}, "dark", "more"),
 )
+
+
+HTML_SOURCES = {"html": ("html", "htm"), "odt": ("odt",), "rtf": ("rtf",), "mht": ("mht", "mhtml")}
+
+
+def _index_sample(entry):
+    """Map one Reader-Assets index entry to (name, bucket path, ext, mode), as assetFields does."""
+    if not isinstance(entry, dict) or entry.get("s") != 2:
+        return None  # 3 = OCR-only manifest, not a readable primary asset
+    mode, path, bucket = entry.get("m"), str(entry.get("p") or ""), entry.get("b")
+    if mode == "e" and entry.get("cb") == "vomebook/reader-assets-v2":
+        parts = str(entry.get("c") or "").split("/")
+        if len(parts) == 6 and parts[:2] == ["chapters", "ebook"] and parts[-1] == "chapter-manifest.json":
+            return parts[2], entry["c"], "epub-chapters", "epub-chapters"
+    if mode == "p" and bucket == "vomebook/pdf-pages-v2":
+        if path.endswith("/page-manifest.json") and not entry.get("o") and not entry.get("pd"):
+            return "pdf-pages", path, "pdf-pages", "pdf-pages"
+        if path.endswith("/document.pdf") and not entry.get("o"):
+            return "pdf", path, "pdf", "pdf"
+    if bucket != "vomebook/reader-assets-v2":
+        return None
+    if mode == "a" and path.startswith("media/audio/mp3/"):
+        return "audio", path, "audio", "audio"
+    if mode == "v" and path.startswith("media/video/mp4/"):
+        return "video", path, "video", "video"
+    if mode == "h":
+        for name, sources in HTML_SOURCES.items():
+            if any(path.startswith(f"documents/web/{source}/") for source in sources):
+                return name, path, "html", "html"
+    return None
+
+
+class ReaderIndexSampleTests(unittest.TestCase):
+    def test_index_entries_map_like_reader_asset_fields(self):
+        chapters = "chapters/ebook/mobi/" + "a" * 64 + "/" + "b" * 16 + "/chapter-manifest.json"
+        cases = (
+            ({"b": "vomebook/pdf-pages-v2", "m": "p", "s": 2, "p": "derived/m/" + "c" * 32 + "/document.pdf"}, ("pdf", "pdf")),
+            ({"b": "vomebook/pdf-pages-v2", "m": "p", "s": 2, "p": "objects/40/" + "d" * 64 + "/" + "e" * 16 + "/page-manifest.json"}, ("pdf-pages", "pdf-pages")),
+            ({"b": "vomebook/reader-assets-v2", "m": "e", "s": 2, "p": chapters, "c": chapters, "cb": "vomebook/reader-assets-v2"}, ("mobi", "epub-chapters")),
+            ({"b": "vomebook/reader-assets-v2", "m": "a", "s": 2, "p": "media/audio/mp3/" + "f" * 64 + "/audio.mp3"}, ("audio", "audio")),
+            ({"b": "vomebook/reader-assets-v2", "m": "v", "s": 2, "p": "media/video/mp4/" + "f" * 64 + "/video.mp4"}, ("video", "video")),
+            ({"b": "vomebook/reader-assets-v2", "m": "h", "s": 2, "p": "documents/web/htm/" + "f" * 64 + "/document.html"}, ("html", "html")),
+            ({"b": "vomebook/reader-assets-v2", "m": "h", "s": 2, "p": "documents/web/mht/" + "f" * 64 + "/document.html"}, ("mht", "html")),
+        )
+        for entry, (name, mode) in cases:
+            with self.subTest(entry=entry):
+                sample = _index_sample(entry)
+                self.assertEqual((sample[0], sample[3]), (name, mode))
+                self.assertEqual(sample[1], entry.get("c") or entry["p"])
+
+    def test_ocr_hybrid_and_unreadable_entries_are_not_samples(self):
+        base = {"b": "vomebook/pdf-pages-v2", "m": "p", "s": 2, "p": "objects/40/" + "d" * 64 + "/" + "e" * 16 + "/page-manifest.json"}
+        for entry in ({**base, "s": 3}, {**base, "o": "x/ocr-manifest.json"}, {**base, "pd": "derived/x/document.pdf"},
+                      {"b": "vomebook/reader-assets-v2", "m": "a", "s": 2, "p": "media/audio/wav/" + "f" * 64 + "/audio.wav"},
+                      {"b": "vomebook/reader-assets-v2", "m": "h", "s": 2, "p": "documents/spreadsheet/xlsx/" + "f" * 64 + "/document.html"}):
+            with self.subTest(entry=entry):
+                self.assertIsNone(_index_sample(entry))
+
+
+def _await_value(page, expression, arg, timeout):
+    """Poll an expression whose value may be a Promise; wait_for_function does not await it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if page.evaluate(expression, arg):
+            return True
+        page.wait_for_timeout(200)
+    return False
 
 
 def _raw_source_url(record):
@@ -78,63 +138,20 @@ def _select_raw_sample(name, extensions):
 
 
 def _select_samples():
-    request = urllib.request.Request(MANIFEST_URL, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        manifest = json.load(response)
-        revision = os.environ.get("READER_ASSETS_REVISION") or response.headers.get("X-Repo-Commit")
-    if not revision:
-        try:
-            with urllib.request.urlopen(REPO_API_URL, timeout=30) as response:
-                revision = json.load(response).get("sha")
-        except (HTTPError, URLError, OSError, ValueError):
-            revision = None
-    if not revision:
-        raise RuntimeError("Reader-Assets revision unavailable; set READER_ASSETS_REVISION")
-    print("Reader-Assets revision:", revision)
-    root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main"
-    ready = [v for v in manifest.get("files", {}).values() if v.get("status") == "ready" and v.get("path") and v.get("sha256")]
-    wanted = {"pdf": ("pdf",), "epub": ("epub",), "mobi": ("mobi",), "azw3": ("azw3",), "fb2": ("fb2",), "html": ("html", "htm"), "odt": ("odt",), "rtf": ("rtf",), "mht": ("mht", "mhtml")}
+    with urllib.request.urlopen(READER_ASSETS_INDEX_URL, timeout=60) as response:
+        payload = response.read()
+    index = json.loads(gzip.decompress(payload))
+    if not isinstance(index, dict) or index.get("v") != 1 or not isinstance(index.get("f"), dict):
+        raise RuntimeError("unexpected Reader-Assets index format")
+    revision = "sha256:" + hashlib.sha256(payload).hexdigest()
+    print("Reader-Assets index:", revision, "v3 generation:", (index.get("v3") or {}).get("generation"))
+    resource = (API_BASE or "https://voiceofml-search.hf.space") + "/api/reader-bucket-resource?path="
     selected = {}
-
-    def reader_extension(item, fallback):
-        mode = str(item.get("reader_mode") or "").lower()
-        return {"audio": "mp3", "video": "mp4", "html": "html"}.get(
-            mode, item.get("source_extension", fallback)
-        )
-
-    for name, extensions in wanted.items():
-        candidates = [v for v in ready if v.get("source_extension", "").lower() in extensions]
-        if name == "pdf":
-            candidates = [v for v in candidates if v.get("reader_mode") == "pdf"] or candidates
-        if candidates:
-            item = candidates[0]
-            selected[name] = (
-                name,
-                f"{root}/{item['path']}",
-                reader_extension(item, name),
-                item.get("reader_mode", name),
-                None,
-            )
-    for mode in ("audio", "video"):
-        candidates = [v for v in ready if v.get("reader_mode") == mode or (mode == "audio" and v.get("source_extension", "").lower() == "mp3")]
-        if candidates:
-            item = candidates[0]
-            selected[mode] = (
-                mode,
-                f"{root}/{item['path']}",
-                reader_extension(item, mode),
-                mode,
-                False,
-            )
-    page = manifest.get("pdf_manifest")
-    page_path = page.get("path") if isinstance(page, dict) else KNOWN_PDF_PAGES_PATH
-    page_url = f"https://voiceofml-search.hf.space/api/reader-bucket-resource?path={urllib.parse.quote(page_path, safe='')}"
-    try:
-        with urllib.request.urlopen(urllib.request.Request(page_url, method="HEAD"), timeout=30) as response:
-            if 200 <= response.status < 400:
-                selected["pdf-pages"] = ("pdf-pages", page_url, "pdf-pages", "pdf-pages", None)
-    except (HTTPError, URLError, OSError):
-        pass
+    for key in sorted(index["f"]):
+        sample = _index_sample(index["f"][key])
+        if sample and sample[0] in SAMPLE_ORDER and sample[0] not in selected:
+            name, path, extension, mode = sample
+            selected[name] = (name, resource + urllib.parse.quote(path, safe=""), extension, mode, None)
     raw_skips = {}
     for name, extensions in (("txt", ("txt",)), ("md", ("md", "markdown"))):
         try:
@@ -147,8 +164,7 @@ def _select_samples():
             raw_skips[name] = f"raw API selector failed: {error}"
     for name, reason in raw_skips.items():
         print(f"Raw {name} sample skipped: {reason}")
-    order = ("pdf", "pdf-pages", "epub", "mobi", "azw3", "audio", "video", "fb2", "html", "odt", "rtf", "mht", "txt", "md")
-    return tuple(selected[name] for name in order if name in selected), revision, raw_skips
+    return tuple(selected[name] for name in SAMPLE_ORDER if name in selected), revision, raw_skips
 
 
 @unittest.skipUnless(BASE and sync_playwright, "set GITHUB_SEARCH_LIVE_BASE_URL and install Playwright")
@@ -204,6 +220,9 @@ class ReaderLiveFormatTests(unittest.TestCase):
             article = page.locator(".foliate-continuous article").first
             article.wait_for(state="attached", timeout=120000)
             self.assertGreater(article.evaluate("node => (node.shadowRoot || node).textContent.trim().length"), 0, name)
+        elif mode == "epub-chapters":
+            chapter = page.locator(".reader-epub-chapter").filter(has_text=re.compile(r"\S")).first
+            chapter.wait_for(state="attached", timeout=120000)
         elif mode == "html":
             frame = page.frame_locator(".html-frame")
             self.assertGreater(len(frame.locator("body").inner_text(timeout=120000).strip()), 0, name)
@@ -245,7 +264,14 @@ class ReaderLiveFormatTests(unittest.TestCase):
             self.assertEqual(count, 0, name)
         if not count:
             return
-        page.locator("#history").click()
+        # The Reader opens the directory itself once a TOC is known (since 2026-10-17),
+        # so toggle the drawer only while it is closed.
+        for _ in range(3):
+            if page.locator("#history").get_attribute("aria-expanded") == "true":
+                break
+            page.locator("#history").click()
+            page.wait_for_timeout(300)
+        self.assertEqual(page.locator("#history").get_attribute("aria-expanded"), "true", name)
         page.locator("#toc-tab").click()
         target = 1 if count > 1 else 0
         page.locator("#toc-list .toc-item .panel-item-main").nth(target).click()
@@ -255,9 +281,11 @@ class ReaderLiveFormatTests(unittest.TestCase):
     def test_commit_pinned_format_matrix(self):
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
-            for sample in (item for item in SAMPLES if not SAMPLE_FILTER or item[0] == SAMPLE_FILTER):
-                name, _source, _extension, mode, expected_toc = sample
+            for name in (item for item in SAMPLE_ORDER if not SAMPLE_FILTER or item == SAMPLE_FILTER):
                 with self.subTest(sample=name):
+                    # A family missing from the index is reported as a skip, not dropped.
+                    sample = self.sample_or_skip(name)
+                    _name, _source, _extension, mode, expected_toc = sample
                     context = browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
                     page, errors = self.open_reader(context, sample)
                     self.assert_content_ready(page, name, mode)
@@ -329,7 +357,8 @@ class ReaderLiveFormatTests(unittest.TestCase):
             first.wait_for_function("() => document.querySelector('#page-number').value === '2'", timeout=120000)
             first.wait_for_timeout(1000)
             self.assertEqual(first.locator("#page-number").input_value(), "2")
-            first.wait_for_function("url => VoiceOfMLReaderStore.get(url).then(entry => entry?.page === 2)", arg=source, timeout=30000)
+            # Closing before the debounced save lands would lose it.
+            self.assertTrue(_await_value(first, "url => VoiceOfMLReaderStore.get(url).then(entry => entry?.page === 2)", source, 30), "page 2 not saved")
             first.close()
             second, second_errors = self.open_reader(context, sample)
             second.wait_for_timeout(1000)
