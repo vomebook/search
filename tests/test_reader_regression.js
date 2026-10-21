@@ -160,7 +160,7 @@ const convertedParams = new URL(`https://example.test${convertedUrl}`).searchPar
 assert.strictEqual(convertedParams.get('ext'), 'epub')
 assert.strictEqual(convertedParams.get('title'), '原始书名.mobi')
 assert.strictEqual(convertedParams.get('download'), 'https://download.example.test/books/book.mobi')
-assert.strictEqual(convertedParams.get('fallback'), 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/fallback.pdf')
+assert.strictEqual(convertedParams.get('fallback'), null)
 assert.strictEqual(convertedParams.get('chapter_manifest'), 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/chapters.json')
 const pageAssetUrl = sandbox.self.VoiceOfMLReader.readerUrl({
   ReaderLink: 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a'.repeat(64) + '/1234567890abcdef/page-manifest.json',

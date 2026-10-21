@@ -156,7 +156,6 @@ const readerContext = {
   get epubSeekTarget() { return epubSeekTarget; }, set epubSeekTarget(value) { epubSeekTarget = value; },
   get extension() { return extension; }, set extension(value) { extension = value; },
   get fail() { return fail; }, set fail(value) { fail = value; },
-  get fallbackUrl() { return fallbackUrl; }, set fallbackUrl(value) { fallbackUrl = value; },
   get fetchReaderResponse() { return fetchReaderResponse; }, set fetchReaderResponse(value) { fetchReaderResponse = value; },
   get fetchReaderUrl() { return fetchReaderUrl; }, set fetchReaderUrl(value) { fetchReaderUrl = value; },
   get filterPanel() { return filterPanel; }, set filterPanel(value) { filterPanel = value; },
@@ -429,7 +428,6 @@ const readerContext = {
   get updateSearchState() { return updateSearchState; }, set updateSearchState(value) { updateSearchState = value; },
   get updateTocCurrentMark() { return updateTocCurrentMark; }, set updateTocCurrentMark(value) { updateTocCurrentMark = value; },
   get v3ResourceUrl() { return v3ResourceUrl; }, set v3ResourceUrl(value) { v3ResourceUrl = value; },
-  get validFallback() { return validFallback; }, set validFallback(value) { validFallback = value; },
   get validOcr() { return validOcr; }, set validOcr(value) { validOcr = value; },
   get validSource() { return validSource; }, set validSource(value) { validSource = value; },
   get validatePageMap() { return validatePageMap; },
@@ -574,7 +572,7 @@ let {
 let {
   readerContentUrl, readerDownloadApiUrl, readerDownloadUrl, startReaderDownload,
   normalizeSourceUrl, resolveReaderId, applyReaderMetadata, normalizeReaderReturnUrl,
-  applyReaderPathMetadata, validSource, validOcr, validFallback,
+  applyReaderPathMetadata, validSource, validOcr,
   readerAssetObjectFamily, trustedReaderAssetManifestUrl, trustedChapterUrl, trustedChapterReferenceUrl,
   trustedChapterResourceUrl
 } = createReaderSource(readerContext);
@@ -795,7 +793,6 @@ const documentState = readerRuntime.state.document,
 
 readerBindings.initializeDocumentTitle();
 
-let fallbackUrl = params.get("fallback") || "";
 const ocrUrl = params.get("ocr") || "";
 let ocrManifestUrl = params.get("ocr_manifest") || "";
 

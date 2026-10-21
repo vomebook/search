@@ -203,21 +203,6 @@ export function createReaderSource(readerContext) {
     }
   }
 
-  function validFallback(raw) {
-    try {
-      const url = new URL(raw);
-      return (
-        url.protocol === "https:" &&
-        ["huggingface.co", "hf-mirror.com"].includes(url.hostname) &&
-        /\/datasets\/vomebook\/Reader-Assets\/resolve\/[^/]+\/objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:linearized\.pdf|(?:[a-z0-9-]+\/)?document\.pdf)$/.test(
-          url.pathname
-        )
-      );
-    } catch (_) {
-      return false;
-    }
-  }
-
   function readerAssetObjectFamily(raw, base = location.href) {
     try {
       const url = new URL(raw, base);
@@ -353,7 +338,6 @@ export function createReaderSource(readerContext) {
     applyReaderPathMetadata,
     validSource,
     validOcr,
-    validFallback,
     readerAssetObjectFamily,
     trustedReaderAssetManifestUrl,
     trustedChapterUrl,
