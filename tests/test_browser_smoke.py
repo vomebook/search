@@ -1118,6 +1118,12 @@ class BrowserBehaviorTest(unittest.TestCase):
         path = self.page.locator("#reader-path")
         path.wait_for(state="visible", timeout=10000)
         self.assertEqual(path.text_content(), "VOMEBOOK/一级目录/二级目录")
+        # Only the path text is a target, not the whole title column.
+        geometry = path.evaluate("""n => { const r = n.getBoundingClientRect(), h = n.parentElement.getBoundingClientRect();
+          const range = document.createRange(); range.selectNodeContents(n);
+          return {button: r.width, heading: h.width, text: range.getBoundingClientRect().width}; }""")
+        self.assertLess(geometry["button"], geometry["heading"] - 40, geometry)
+        self.assertLessEqual(geometry["button"], geometry["text"] + 2, geometry)
         self.assertTrue(self.page.locator("#status").is_hidden())
         path.click()
         self.page.wait_for_function("location.hash.includes('folder_self=')", timeout=10000)

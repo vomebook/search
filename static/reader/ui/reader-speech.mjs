@@ -413,6 +413,7 @@ export function createReaderSpeech(readerContext) {
       if (!String(window.name).startsWith(RESUME_PREFIX)) return null;
       const value = JSON.parse(window.name.slice(RESUME_PREFIX.length));
       window.name = "";
+      if (value?.pending === true) return { pending: true };
       return Number.isInteger(value?.unit) && Number.isInteger(value?.offset) ? value : null;
     } catch (_) { return null; }
   })();
@@ -426,14 +427,28 @@ export function createReaderSpeech(readerContext) {
       if (!(state?.playing || state?.interrupted) || typeof owner?.partAt !== "function" || !Number.isInteger(state.position)) return;
       const part = owner.partAt(state.position);
       if (!part) return;
-      sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({ readerUrl: location.href, unit: part.unit,
-        offset: Math.max(0, Math.min(part.raw.length, state.position - part.start)), at: Date.now() }));
+      const value = JSON.stringify({ readerUrl: location.href, unit: part.unit,
+        offset: Math.max(0, Math.min(part.raw.length, state.position - part.start)), at: Date.now() });
+      sessionStorage.setItem(HANDOFF_KEY, value);
+      // A Reader opened as the first page later reaches a search document that
+      // was never loaded in this tab; sessionStorage is still shared there, but
+      // localStorage also covers a search page opened in a fresh tab.
+      try { localStorage.setItem(HANDOFF_KEY, value); } catch (_) {}
     } catch (_) { /* Optional: without storage, leaving stops reading as before. */ }
   }
 
   async function resumeAt(target) {
     const info = adapter?.source;
-    if (!info || target.unit < info.first || target.unit >= info.units) return;
+    if (!info) return;
+    if (target.pending) {
+      let offset = 0;
+      try { offset = await adapter.locateTop(); } catch (_) {}
+      if (adapter?.source !== info) return;
+      adapter.following = true;
+      speech()?.readFrom(offset);
+      return;
+    }
+    if (target.unit < info.first || target.unit >= info.units) return;
     let owner = adapter;
     if (info.units > 1 && (target.unit < owner.base || !owner.covers(target.unit) && target.unit - owner.base > 2)) owner = rebase(target.unit);
     await owner.ensureUnit(target.unit);
@@ -590,7 +605,19 @@ export function createReaderSpeech(readerContext) {
   function install() {
     if (installed) return;
     installed = true;
-    try { if (!readerContext.isReaderOverlayFrame?.()) sessionStorage.removeItem(HANDOFF_KEY); } catch (_) {}
+    try {
+      if (!readerContext.isReaderOverlayFrame?.()) {
+        sessionStorage.removeItem(HANDOFF_KEY);
+        localStorage.removeItem(HANDOFF_KEY);
+      }
+    } catch (_) {}
+    // Starting speech in a newly opened book takes over from the Reader that
+    // was left reading in the background.
+    document.addEventListener("click", (event) => {
+      if (!event.target?.closest?.("[data-speech-toggle]")) return;
+      if (readerContext.isReaderOverlayFrame?.())
+        window.parent.postMessage({ type: "voice-reader-speech-start" }, location.origin);
+    }, { capture: true });
     // ← records it before navigating; pagehide covers browser back and other exits.
     window.addEventListener("pagehide", handoff, { capture: true });
     document.querySelector("#back")?.addEventListener("click", handoff, { capture: true });

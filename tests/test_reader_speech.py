@@ -312,15 +312,24 @@ class ReaderSpeechTest(unittest.TestCase):
             self.assertEqual(page.locator(".reader-speech-mini").count(), 0)
             self.assertTrue(page.evaluate("() => document.querySelector('iframe.reader-overlay') === __reader && !__nav.backgroundReader && getComputedStyle(__reader).visibility === 'visible'"))
             self.assertFalse(frame.evaluate("() => document.querySelector('#speech-audio').paused"))
-            # Opening another book stops background reading and releases its Reader.
+            # Opening another book leaves the background reading untouched.
             page.evaluate("() => __nav.unmount()")
             bar.wait_for(timeout=3000)
             page.evaluate("url => { window.__next = __nav.mount(new URL(url)); }", self.reader_url("txt", "other"))
-            self.assertTrue(page.evaluate("() => !__reader.isConnected && __next !== __reader && !__nav.backgroundReader"))
+            self.assertTrue(page.evaluate("() => __reader.isConnected && __next !== __reader && __nav.backgroundReader === __reader"))
+            self.assertEqual(page.locator(".reader-speech-mini").count(), 1)
+            next_frame = page.wait_for_selector("iframe.reader-overlay:not(.reader-overlay-parked)").content_frame()
+            # Starting the new book's speech is the explicit takeover.
+            self.play(next_frame, posts)
+            wait(page, "() => !__reader.isConnected && !__nav.backgroundReader", 5000)
             self.assertEqual(page.locator(".reader-speech-mini").count(), 0)
+            # Closing the new reading Reader parks it as the background Reader.
             page.evaluate("() => __nav.unmount()")
-            # A Reader that is not reading closes normally.
-            self.assertTrue(page.evaluate("() => !__next.isConnected && !__nav.backgroundReader"))
+            bar.wait_for(timeout=3000)
+            self.assertTrue(page.evaluate("() => __next.isConnected && __nav.backgroundReader === __next"))
+            bar.get_by_role("button", name="停止").click()
+            wait(page, "() => !__next.isConnected && !__nav.backgroundReader", 5000)
+            self.assertEqual(page.locator(".reader-speech-mini").count(), 0)
             self.assertFalse(errors, errors)
         finally:
             context.close()
@@ -364,6 +373,32 @@ class ReaderSpeechTest(unittest.TestCase):
             wait(page, "() => document.documentElement.dataset.readerPhase === 'ready'", 30000)
             page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")
             self.assertEqual(page.evaluate("() => sessionStorage.getItem('reader-speech-handoff')"), None)
+            self.assertFalse(errors, errors)
+        finally:
+            context.close()
+
+    def test_first_search_load_resumes_a_handoff_without_session_storage(self):
+        # A Reader opened as the first page writes both stores. A search document
+        # that was never loaded has no sessionStorage handoff; the localStorage
+        # fallback still lets it show the background bar and resume.
+        context, page, posts, errors = self.open("txt", TEXT.encode(), "text/plain; charset=utf-8")
+        try:
+            self.play(page, posts)
+            reader = page.url
+            base = reader.split("reader.html")[0]
+            page.goto(base + "empty", wait_until="domcontentloaded")  # pagehide writes the handoff
+            page.evaluate("() => sessionStorage.removeItem('reader-speech-handoff')")
+            page.goto(base + "search/reader-navigation.js", wait_until="domcontentloaded")
+            page.add_style_tag(content=(ROOT / "static/style.css").read_text(encoding="utf-8"))
+            page.add_script_tag(content=(ROOT / "static/search/reader-navigation.js").read_text(encoding="utf-8"))
+            page.evaluate("url => { window.__nav = VoiceOfMLReaderNavigation.createNavigation(new URL(url).pathname, { resume: next => __nav.mount(new URL(next)) }); }", reader)
+            bar = page.locator(".reader-speech-mini")
+            bar.wait_for(timeout=5000)
+            kept = page.wait_for_selector("iframe.reader-overlay-parked", state="attached")
+            frame = kept.content_frame()
+            wait(frame, "()=>{const a=document.querySelector('#speech-audio');return !!a&&!a.paused&&a.currentTime>0.05}", 30000)
+            self.assertEqual(page.evaluate("() => sessionStorage.getItem('reader-speech-handoff')"), None)
+            self.assertEqual(page.evaluate("() => localStorage.getItem('reader-speech-handoff')"), None)
             self.assertFalse(errors, errors)
         finally:
             context.close()
