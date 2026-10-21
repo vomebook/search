@@ -5,6 +5,11 @@ export function createReaderPdfScheduler(readerContext) {
   const PDF_PREVIEW_SLOTS = 2;
   const pdfPreviewActive = new Map(), pdfPreviewWaiters = [];
   let pdfMotionAt = 0, pdfFastUntil = 0;
+  // Demand range reads of a hybrid primary that is still opening. PDF.js can
+  // request dozens of scattered chunks at once there (page-tree reads); left
+  // unbounded they queue ahead of page images on the browser and proxy pools.
+  const pdfRangeWaiters = [];
+  let pdfRangesActive = 0;
 
   function notePdfViewportMotion() {
     if (!readerContext.documentState.restorationReady || !["pdf", "pdf-pages"].includes(readerContext.capability.mode)) return;
@@ -208,7 +213,9 @@ export function createReaderPdfScheduler(readerContext) {
   }
 
   function schedulePdfManifestPrefetch(page) {
-    if (readerContext.pdfHybridUrl) return;
+    // v3 previews are checksummed repository reads with no page URL; their
+    // nearby pages are prepared through the observer margin instead.
+    if (readerContext.pdfHybridUrl || readerContext.pdfV3Manifest) return;
     if (!["pdf-pages", "image-pages"].includes(readerContext.capability.mode) || !readerContext.pdfPageManifest) return;
     const origin = Math.max(1, Math.min(readerContext.documentState.pageCount + 1, page + 1));
     if (readerContext.pdfManifestPrefetchOrigin === origin && readerContext.pdfManifestPrefetchNext) {
@@ -322,6 +329,57 @@ export function createReaderPdfScheduler(readerContext) {
     if (readerContext.readerAbortController.signal.aborted) return;
     while (pdfPreviewActive.size < PDF_PREVIEW_SLOTS && pdfPreviewWaiters.length)
       pdfPreviewWaiters.splice(nextPdfWaiterIndex(pdfPreviewWaiters), 1)[0].resolve();
+    // Less image demand may admit more opening range reads.
+    drainPdfRangeWaiters();
+  }
+
+  // Before the hybrid primary is ready its ranges serve no visible surface:
+  // a visible page image leaves it one read in flight, speculative images
+  // share the transport, and otherwise its burst stays bounded. Native PDFs
+  // and ready documents are not limited.
+  function pdfOpeningRangeLimit() {
+    if (!readerContext.pdfHybridUrl || readerContext.pdfDocument) return Infinity;
+    let speculative = false;
+    for (const holder of pdfPreviewActive.keys()) {
+      if (holder && readerContext.isPdfPageVisible(holder)) return 1;
+      speculative = true;
+    }
+    for (const waiter of pdfPreviewWaiters)
+      if (waiter.shell && readerContext.isPdfPageVisible(waiter.shell)) return 1;
+    return speculative ? 4 : 6;
+  }
+
+  // Resolves with a release function once a demand range read may start.
+  function admitPdfRange(signal) {
+    if (signal?.aborted) return Promise.reject(signal.reason);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      pdfRangesActive = Math.max(0, pdfRangesActive - 1);
+      drainPdfRangeWaiters();
+    };
+    if (!pdfRangeWaiters.length && pdfRangesActive < pdfOpeningRangeLimit()) {
+      pdfRangesActive++;
+      return Promise.resolve(release);
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve: () => { signal?.removeEventListener("abort", abort); pdfRangesActive++; resolve(release); }
+      };
+      function abort() {
+        const index = pdfRangeWaiters.indexOf(waiter);
+        if (index >= 0) pdfRangeWaiters.splice(index, 1);
+        reject(signal.reason);
+        drainPdfRangeWaiters();
+      }
+      signal?.addEventListener("abort", abort, { once: true });
+      pdfRangeWaiters.push(waiter);
+    });
+  }
+
+  function drainPdfRangeWaiters() {
+    while (pdfRangeWaiters.length && pdfRangesActive < pdfOpeningRangeLimit()) pdfRangeWaiters.shift().resolve();
   }
 
   function releasePdfPreviewSlot(shell) {
@@ -496,6 +554,9 @@ export function createReaderPdfScheduler(readerContext) {
     acquirePdfPreviewSlot,
     releasePdfPreviewSlot,
     pdfPreviewLoads,
+    pdfOpeningRangeLimit,
+    admitPdfRange,
+    drainPdfRangeWaiters,
     acquirePdfTextSlot,
     drainPdfTextWaiters,
     releasePdfTextSlot,

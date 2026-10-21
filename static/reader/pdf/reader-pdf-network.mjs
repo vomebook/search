@@ -274,7 +274,7 @@ export async function preparePdfInitialRange(options, hooks) {
 }
 
 export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, rangeLimit = limit, onError, initial = null,
-  rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false}) {
+  rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false, admitRange = null}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
   const chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
@@ -291,8 +291,16 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   };
   const cancelled = () => stop(signal.reason);
   signal.addEventListener("abort", cancelled, {once:true});
-  const read = (begin, end, expected = null) => readPdfRange(options, begin, end,
-    {signal:active, readBytes, limit, rangeLimit, rangeCache}, expected);
+  // Optional admission for demand reads only: the bootstrap, tail and opening
+  // hints are already bounded. A queued read is cancelled with its document.
+  const read = async (begin, end, expected = null) => {
+    const release = admitRange ? await admitRange(active) : null;
+    try {
+      return await readPdfRange(options, begin, end, {signal:active, readBytes, limit, rangeLimit, rangeCache}, expected);
+    } finally {
+      release?.();
+    }
+  };
   try {
     const first = prepared = await (initial || preparePdfInitialRange(options,
       {signal:active, readBytes, limit, rangeLimit, rangeCache, canPrefetchFirstPage}));
