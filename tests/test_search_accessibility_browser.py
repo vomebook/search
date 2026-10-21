@@ -242,6 +242,40 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.page.get_by_role('button', name='搜索：paging remembered', exact=True).press('Enter')
         self.assertEqual(self.page.evaluate('submissions'), [['paging remembered', dict(restore=True, blur=True)]])
 
+    def test_global_repository_sidebar_orders_by_count_ascending(self):
+        observed = self.page.evaluate("""()=>{
+          routeRenderId++;
+          STATE.leftSidebarOpen=true;updateSidebarVisibility();
+          renderRepoListItems([
+            {name:'VoiceOfML/Large',count:30},
+            {name:'VoiceOfML/Small',count:2},
+            {name:'VoiceOfML/Medium',count:10},
+          ]);
+          return Array.from(DOM.sidebarContent.querySelectorAll('.repo-list-item'),node=>node.dataset.repo);
+        }""")
+        self.assertEqual(observed, ['Small', 'Medium', 'Large'])
+
+    def test_single_repository_browser_order_is_not_count_sorted(self):
+        observed = self.page.evaluate("""()=>{
+          const list=document.createElement('div');
+          renderBrowserListItems(list,{folders:[
+            {name:'large',path:'large',count:30},
+            {name:'small',path:'small',count:2},
+            {name:'medium',path:'medium',count:10},
+          ],files:[]},'Test','');
+          return Array.from(list.querySelectorAll('.browser-item .browser-name'),node=>node.textContent);
+        }""")
+        self.assertEqual(observed, ['large', 'small', 'medium'])
+
+    def test_global_repository_filter_orders_by_count_ascending(self):
+        observed = self.page.evaluate("""async()=>{
+          repoList=[{name:'VoiceOfML/Large',count:30},{name:'VoiceOfML/Small',count:2},{name:'VoiceOfML/Medium',count:10}];
+          STATE.filterRepos=[];routeRenderId++;
+          await renderRepoFilter(routeRenderId);
+          return Array.from(DOM.filterRepoList.querySelectorAll('input'),node=>node.value);
+        }""")
+        self.assertEqual(observed, ['VoiceOfML/Small', 'VoiceOfML/Medium', 'VoiceOfML/Large'])
+
     def test_sidebar_native_repository_directory_file_and_breadcrumb_actions(self):
         self.page.evaluate('''()=>{
           routeRenderId++;
