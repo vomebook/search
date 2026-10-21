@@ -92,6 +92,9 @@ const readerContext = {
   get notePdfLatency() { return notePdfLatency; }, set notePdfLatency(value) { notePdfLatency = value; },
   get pdfHybridPreviewGrace() { return pdfHybridPreviewGrace; }, set pdfHybridPreviewGrace(value) { pdfHybridPreviewGrace = value; },
   get applyPdfShellGeometry() { return applyPdfShellGeometry; }, set applyPdfShellGeometry(value) { applyPdfShellGeometry = value; },
+  get pdfHybridLookahead() { return pdfHybridLookahead; }, set pdfHybridLookahead(value) { pdfHybridLookahead = value; },
+  get admitPdfRange() { return admitPdfRange; }, set admitPdfRange(value) { admitPdfRange = value; },
+  get drainPdfRangeWaiters() { return drainPdfRangeWaiters; }, set drainPdfRangeWaiters(value) { drainPdfRangeWaiters = value; },
   get startPdfHybridDocument() { return startPdfHybridDocument; }, set startPdfHybridDocument(value) { startPdfHybridDocument = value; },
   get leavePdfHybridMode() { return leavePdfHybridMode; }, set leavePdfHybridMode(value) { leavePdfHybridMode = value; },
   get loadPdfOutline() { return loadPdfOutline; }, set loadPdfOutline(value) { loadPdfOutline = value; },
@@ -601,6 +604,7 @@ let {
   pdfRetainedPixels, trimPdfSurfaces, clearPdfManifestPrefetches, takePdfManifestPrefetch,
   queuePdfManifestPrefetch, prioritizePdfManifestPrefetch, schedulePdfManifestPrefetch, trimPdfManifestImages,
   refreshNearbyPdfPages, scheduleVisiblePdfRenderReconciliation, cancelSpeculativePdfRenders, promotePdfRenderWaiter, acquirePdfPreviewSlot, releasePdfPreviewSlot, pdfPreviewLoads, acquirePdfRenderSlot,
+  admitPdfRange, drainPdfRangeWaiters,
   releasePdfRenderSlot, acquirePdfTextSlot, drainPdfTextWaiters, releasePdfTextSlot,
   trimPdfCanvases, rerenderVisiblePdfPages, notePdfViewportMotion, pdfScrollActivity
 } = createReaderPdfScheduler(readerContext);
@@ -670,7 +674,7 @@ let {
   setPdfPageLoadingState, isPdfPageVisible, pdfPagePriority, normalizePdfPriority,
   renderPdfInBackground, pdfPrimarySource, renderPdfManifestShell, renderHybridPdfCanvas,
   renderPdfImageShell, renderPdfShell, resetPdfLatencySamples, notePdfLatency, pdfHybridPreviewGrace,
-  applyPdfShellGeometry
+  applyPdfShellGeometry, pdfHybridLookahead
 } = createReaderPdfRenderer(readerContext);
 
 let {

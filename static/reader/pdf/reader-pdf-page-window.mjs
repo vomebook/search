@@ -66,6 +66,7 @@ export function createReaderPdfPageWindow(readerContext) {
         throw new Error("PDF_PRIMARY_PAGE_COUNT_MISMATCH");
       }
       readerContext.pdfDocument = pdf;
+      readerContext.drainPdfRangeWaiters?.();
       readerContext.clearPdfManifestPrefetches();
       readerContext.cancelSpeculativePdfRenders(readerContext.pageAtMarker?.());
       readerContext.syncCapabilityControls();
@@ -90,6 +91,7 @@ export function createReaderPdfPageWindow(readerContext) {
     const pdf = readerContext.pdfDocument;
     readerContext.pdfDocument = null;
     readerContext.pdfHybridUrl = "";
+    readerContext.drainPdfRangeWaiters?.();
     // The page stream stays readable, but without OCR it has no text layer.
     readerContext.pdfHybridSearchUnavailable = true;
     if (pdf && error) pdf.destroy?.()?.catch?.(() => {});

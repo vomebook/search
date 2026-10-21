@@ -124,6 +124,11 @@ export function createReaderSpeech(readerContext) {
       return {
         units: pageCount() + 1, first: 1,
         root: (page) => { const node = shell(page); return node?.dataset.textReady === "1" ? node.querySelector(".reader-pdf-text") : null; },
+        // Text the renderer has extracted or is extracting. Only these pages are
+        // probed: extracting another page loads all its resources first, which
+        // for a scanned page means downloading its full page image.
+        ready: (page) => shell(page)?.dataset.textReady === "1" || !!readerContext.pdfTextContentCache?.has(page) ||
+          !!readerContext.pdfTextContentPromises?.get(page)?.request?.demanded,
         load: async (page) => {
           const rendered = shell(page);
           if (rendered?.dataset.textReady === "1" && rendered.querySelector(".reader-pdf-text")) return spokenPageText(rootText(rendered.querySelector(".reader-pdf-text")));
@@ -507,7 +512,7 @@ export function createReaderSpeech(readerContext) {
   // Formats whose text may be absent (scanned PDF, comic books, empty files)
   // only get the button once text is found at/near the reading position.
   const probeText = new Map(), probeSeen = new Map();
-  let generation = 0, probing = null, offerSource = null;
+  let generation = 0, probing = null, reprobe = false, offerSource = null;
 
   function withProbeCache(info) {
     const load = info.load;
@@ -528,6 +533,9 @@ export function createReaderSpeech(readerContext) {
   async function probe(info, owner) {
     const from = info.units > 1 ? (topPosition()?.unit ?? info.first) : info.first;
     for (let unit = Math.max(info.first, from - 1); unit < Math.min(info.units, from + 12); unit++) {
+      // A page the renderer has not reached is skipped, not recorded: it is
+      // probed once its text is extracted (see attach).
+      if (!probeSeen.has(unit) && info.ready && !info.ready(unit)) continue;
       if (!probeSeen.has(unit)) {
         const text = Promise.resolve(info.load(unit)).then((value) => String(value || ""), () => "");
         probeText.set(unit, text);
@@ -541,19 +549,25 @@ export function createReaderSpeech(readerContext) {
   }
 
   function offer(info) {
-    if (adapter || probing) return;
+    if (adapter) return;
+    // A page's text (or the position) changed during a probe: probe once more.
+    if (probing) { reprobe = true; return; }
+    reprobe = false;
     const owner = generation;
     probing = probe(info, owner).then((from) => {
       if (owner !== generation) return;
       probing = null;
-      if (from === null || adapter) return;
+      if (from === null || adapter) {
+        if (!adapter && reprobe) offer(info);
+        return;
+      }
       publish(createAdapter(info, info.units > 1 ? Math.max(info.first, from - 1) : info.first));
     }, () => { if (owner === generation) probing = null; });
   }
 
   function detach() {
     generation++;
-    probing = null; offerSource = null; probeText.clear(); probeSeen.clear();
+    probing = null; reprobe = false; offerSource = null; probeText.clear(); probeSeen.clear();
     for (const off of cleanup.splice(0)) off();
     adapter = null;
     speech()?.previewClosed();
@@ -577,6 +591,15 @@ export function createReaderSpeech(readerContext) {
     };
     listen(readerContext.viewport, "dblclick", onDoubleClick);
     if (info.frame?.contentDocument) { listen(info.frame.contentDocument, "dblclick", onDoubleClick); ensureStyle(info.frame.contentDocument); }
+    if (info.ready && offerSource && typeof MutationObserver === "function") {
+      // Pages are probed as the renderer extracts their text, never ahead of it.
+      const observer = new MutationObserver(() => {
+        if (adapter) observer.disconnect();
+        else if (offerSource) offer(offerSource);
+      });
+      observer.observe(readerContext.content, { subtree: true, attributes: true, attributeFilter: ["data-text-ready"] });
+      cleanup.push(() => observer.disconnect());
+    }
     let timer = 0, settle = 0;
     const onScroll = () => {
       clearTimeout(timer); timer = setTimeout(syncToView, 250);
