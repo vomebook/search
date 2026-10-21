@@ -180,7 +180,8 @@
     function shade(current) {
       document.body.classList.add("reader-overlay-open");
       background = Array.from(document.body.children)
-        .filter((element) => element !== current && element !== opening)
+        .filter((element) => element !== current && element !== opening &&
+          !element.classList.contains("reader-speech-mini"))
         .map((element) => {
           const state = {
             element,
@@ -196,6 +197,7 @@
       const key = bookKey(url.href);
       if (parked && key && parked.key === key) {
         // The same book: show the Reader that kept reading, at its reading position.
+        if (frame && frame !== parked.frame) unmount(false);
         const { frame: kept } = releaseParked();
         returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         frame = kept;
@@ -208,7 +210,11 @@
         try { kept.contentWindow.CCRDSpeech?.reveal?.(); } catch (_) {}
         return kept;
       }
-      disposeParked();
+      // A foreground Reader that is reading aloud becomes the background
+      // Reader. A different book's background speech is left running until
+      // the new Reader starts its own reading or the listener stops it.
+      if (frame) unmount(true);
+      if (parked && !speech(parked.frame)?.active) disposeParked();
       const next = document.createElement("iframe");
       next.className = "reader-overlay";
       next.title = "在线阅读";
@@ -280,7 +286,7 @@
         if (!next.searchParams.get(key) && current.searchParams.get(key))
           next.searchParams.set(key, current.searchParams.get(key));
       remember(next, returnScroll, true);
-      const focus = unmount(false);
+      const focus = unmount(bookKey(next.href) !== bookKey(current.href));
       mount(next);
       returnFocus = focus;
       return frame;
@@ -293,10 +299,15 @@
       try {
         handoff = JSON.parse(sessionStorage.getItem("reader-speech-handoff") || "null");
         sessionStorage.removeItem("reader-speech-handoff");
+        // A Reader opened as the first page (or in another tab) has no prior
+        // search document to hand the session to; localStorage survives that
+        // first search-page load for the same short window.
+        if (!handoff) handoff = JSON.parse(localStorage.getItem("reader-speech-handoff") || "null");
+        localStorage.removeItem("reader-speech-handoff");
       } catch (_) {
         return;
       }
-      if (!handoff || !(Date.now() - handoff.at < 30000) || frame || parked || !document.body) return;
+      if (!handoff || !(Date.now() - handoff.at < 300000) || frame || parked || !document.body) return;
       let url;
       try {
         url = parse(handoff.readerUrl);
@@ -308,10 +319,15 @@
       const next = document.createElement("iframe");
       next.className = "reader-overlay reader-overlay-parked";
       next.title = "在线阅读";
-      next.name = "reader-speech-resume:" + JSON.stringify({ unit: handoff.unit, offset: handoff.offset });
+      next.name = "reader-speech-resume:" + JSON.stringify(handoff.pending
+        ? { pending: true }
+        : { unit: handoff.unit, offset: handoff.offset });
       next.src = url.href;
       document.body.append(next);
-      park(next, null, Date.now() + 30000);
+      // A first load of the search page can take longer than the old 30 s
+      // grace to boot the resumed Reader. Keep the bar until it is reading or
+      // the listener stops it instead of silently dropping the session.
+      park(next, null, Date.now() + 300000);
     }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", resumeSpeech, { once: true });
     else setTimeout(resumeSpeech);
@@ -326,6 +342,12 @@
         return false;
       }
     }
+    // Starting speech in another Reader takes over from the background one.
+    root.addEventListener?.("message", (event) => {
+      if (!accepts(event) || event.data?.type !== "voice-reader-speech-start") return;
+      const background = parked?.frame;
+      if (background && event.source !== background.contentWindow) disposeParked();
+    });
     return Object.freeze({
       parse,
       mergeSearchParams,
