@@ -85,6 +85,17 @@ const readerContext = {
   get THEME_SUN_ICON() { return THEME_SUN_ICON; },
   get TOC_VIRTUALIZATION_THRESHOLD() { return TOC_VIRTUALIZATION_THRESHOLD; },
   get TOC_VIRTUAL_ROW_HEIGHT() { return TOC_VIRTUAL_ROW_HEIGHT; },
+  get acquirePdfPreviewSlot() { return acquirePdfPreviewSlot; }, set acquirePdfPreviewSlot(value) { acquirePdfPreviewSlot = value; },
+  get releasePdfPreviewSlot() { return releasePdfPreviewSlot; }, set releasePdfPreviewSlot(value) { releasePdfPreviewSlot = value; },
+  get pdfPreviewLoads() { return pdfPreviewLoads; }, set pdfPreviewLoads(value) { pdfPreviewLoads = value; },
+  get resetPdfLatencySamples() { return resetPdfLatencySamples; }, set resetPdfLatencySamples(value) { resetPdfLatencySamples = value; },
+  get notePdfLatency() { return notePdfLatency; }, set notePdfLatency(value) { notePdfLatency = value; },
+  get pdfHybridPreviewGrace() { return pdfHybridPreviewGrace; }, set pdfHybridPreviewGrace(value) { pdfHybridPreviewGrace = value; },
+  get applyPdfShellGeometry() { return applyPdfShellGeometry; }, set applyPdfShellGeometry(value) { applyPdfShellGeometry = value; },
+  get startPdfHybridDocument() { return startPdfHybridDocument; }, set startPdfHybridDocument(value) { startPdfHybridDocument = value; },
+  get leavePdfHybridMode() { return leavePdfHybridMode; }, set leavePdfHybridMode(value) { leavePdfHybridMode = value; },
+  get loadPdfOutline() { return loadPdfOutline; }, set loadPdfOutline(value) { loadPdfOutline = value; },
+  get seedPdfPageGeometry() { return seedPdfPageGeometry; }, set seedPdfPageGeometry(value) { seedPdfPageGeometry = value; },
   get acquirePdfRenderSlot() { return acquirePdfRenderSlot; }, set acquirePdfRenderSlot(value) { acquirePdfRenderSlot = value; },
   get acquirePdfTextSlot() { return acquirePdfTextSlot; }, set acquirePdfTextSlot(value) { acquirePdfTextSlot = value; },
   get activateFoliateTocEntry() { return activateFoliateTocEntry; }, set activateFoliateTocEntry(value) { activateFoliateTocEntry = value; },
@@ -244,6 +255,7 @@ const readerContext = {
   get pdfFirstPagePreload() { return pdfFirstPagePreload; }, set pdfFirstPagePreload(value) { pdfFirstPagePreload = value; },
   get pdfFirstPagePreloadPage() { return pdfFirstPagePreloadPage; }, set pdfFirstPagePreloadPage(value) { pdfFirstPagePreloadPage = value; },
   get pdfHybridDocumentPromise() { return pdfHybridDocumentPromise; }, set pdfHybridDocumentPromise(value) { pdfHybridDocumentPromise = value; },
+  get pdfHybridSearchUnavailable() { return pdfHybridSearchUnavailable; }, set pdfHybridSearchUnavailable(value) { pdfHybridSearchUnavailable = value; },
   get pdfHybridUrl() { return pdfHybridUrl; }, set pdfHybridUrl(value) { pdfHybridUrl = value; },
   get pdfLastScrollTop() { return pdfLastScrollTop; }, set pdfLastScrollTop(value) { pdfLastScrollTop = value; },
   get pdfManifestPrefetchActive() { return pdfManifestPrefetchActive; },
@@ -588,7 +600,7 @@ let {
   stopPdfManifestPrefetch, trimPdfManifestPrefetches, pdfPixelBudget, pdfSurfacePixels,
   pdfRetainedPixels, trimPdfSurfaces, clearPdfManifestPrefetches, takePdfManifestPrefetch,
   queuePdfManifestPrefetch, prioritizePdfManifestPrefetch, schedulePdfManifestPrefetch, trimPdfManifestImages,
-  refreshNearbyPdfPages, scheduleVisiblePdfRenderReconciliation, cancelSpeculativePdfRenders, promotePdfRenderWaiter, acquirePdfRenderSlot,
+  refreshNearbyPdfPages, scheduleVisiblePdfRenderReconciliation, cancelSpeculativePdfRenders, promotePdfRenderWaiter, acquirePdfPreviewSlot, releasePdfPreviewSlot, pdfPreviewLoads, acquirePdfRenderSlot,
   releasePdfRenderSlot, acquirePdfTextSlot, drainPdfTextWaiters, releasePdfTextSlot,
   trimPdfCanvases, rerenderVisiblePdfPages, notePdfViewportMotion, pdfScrollActivity
 } = createReaderPdfScheduler(readerContext);
@@ -636,8 +648,8 @@ let {
 
 let {
   preloadPdfFirstPage, pdfManifestSource, pdfPageEntry, appendShellsBatched,
-  pdfSelectionIntersects, correctPdfCrossPageSelection, createPdfShellWindow, renderPdfPages,
-  renderImagePages, renderPdf
+  pdfSelectionIntersects, correctPdfCrossPageSelection, createPdfShellWindow, startPdfHybridDocument,
+  leavePdfHybridMode, loadPdfOutline, seedPdfPageGeometry, renderPdfPages, renderImagePages, renderPdf
 } = createReaderPdfPageWindow(readerContext);
 
 let {
@@ -657,7 +669,8 @@ let {
 let {
   setPdfPageLoadingState, isPdfPageVisible, pdfPagePriority, normalizePdfPriority,
   renderPdfInBackground, pdfPrimarySource, renderPdfManifestShell, renderHybridPdfCanvas,
-  renderPdfImageShell, renderPdfShell
+  renderPdfImageShell, renderPdfShell, resetPdfLatencySamples, notePdfLatency, pdfHybridPreviewGrace,
+  applyPdfShellGeometry
 } = createReaderPdfRenderer(readerContext);
 
 let {
@@ -809,7 +822,7 @@ let pdfOcrManifestPromise = null;
 let pdfV3Manifest = null, pdfV3Map = null, pdfV3Repository = null, pdfTextLayerRepository = null;
 const pdfV3BlobReleases = new Set();
 readerBindings.ownIndependentPdfResources();
-let pdfHybridUrl = "", pdfHybridDocumentPromise = null;
+let pdfHybridUrl = "", pdfHybridDocumentPromise = null, pdfHybridSearchUnavailable = false;
 const pdfOcrPagePromises = new Map();
 const pdfTextContentCache = new Map();
 const pdfTextContentPromises = new Map();

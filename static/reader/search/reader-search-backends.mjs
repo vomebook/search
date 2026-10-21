@@ -221,7 +221,15 @@ export function createReaderSearchBackends(readerContext) {
   }
 
   async function searchReaderText(query, generation) {
-    if (readerContext.capability.mode === "pdf" && !readerContext.ocrManifestUrl) {
+    if ((readerContext.capability.mode === "pdf" || readerContext.pdfHybridUrl) && !readerContext.ocrManifestUrl) {
+      if (readerContext.pdfHybridUrl) {
+        try {
+          await readerContext.pdfHybridDocumentPromise;
+        } catch (error) {
+          if (error?.name === "AbortError") throw error;
+          throw new Error("此 PDF 尚无可搜索文字层，需要完成 OCR 后才能搜索正文");
+        }
+      }
       await readerContext.fullSearchPdfMatches(query, generation);
     }
     else if (["pdf", "pdf-pages"].includes(readerContext.capability.mode)) {

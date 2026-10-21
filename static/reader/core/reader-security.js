@@ -2,6 +2,8 @@
   "use strict";
   const LIMITS = Object.freeze({
     documentBytes: 512 * 1024 * 1024,
+    // PDF.js range transport only: demanded chunks are read, not the body.
+    pdfRangeDocumentBytes: 1024 * 1024 * 1024,
     archiveCompressedBytes: 512 * 1024 * 1024,
     archiveExpandedBytes: 1536 * 1024 * 1024,
     archiveEntries: 20000,

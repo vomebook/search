@@ -25,13 +25,20 @@ export function createReaderPdfEngine(readerContext) {
       readerContext.openPdfRangeTask(pdfjs, options(url), {
         signal:owner.signal, readBytes:VoiceOfMLReaderSecurity.readBytes, initial,
         limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
+        rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfRangeDocumentBytes,
         canPrefetchOpening: () => !!readerContext.pdfV3Manifest && readerContext.readerRestorationLoaded &&
           (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) <= 1),
         canPrefetchFirstPage: () => readerContext.capability?.mode === "pdf" &&
           readerContext.readerRestorationLoaded && !readerContext.restorationFailed &&
           (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) === 1),
-        onError() {
-          if (!documentReady || readerContext.readerAbortController.signal.aborted || readerContext.capability.mode !== "pdf") return;
+        onError(error) {
+          if (!documentReady || readerContext.readerAbortController.signal.aborted) return;
+          // A hybrid PDF-pages book keeps its image stream as the only surface.
+          if (readerContext.capability.mode === "pdf-pages" && readerContext.pdfHybridUrl) {
+            readerContext.leavePdfHybridMode(undefined, error);
+            return;
+          }
+          if (readerContext.capability.mode !== "pdf") return;
           // Page retries cannot revive a destroyed PDF.js document. Capture an
           // eligible position before failure stops work; reload owns recovery.
           readerContext.saveProgress();
@@ -191,6 +198,7 @@ export function createReaderPdfEngine(readerContext) {
     let initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
       signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
       readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
+      rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfRangeDocumentBytes,
       canPrefetchFirstPage: () => pageOneKnown && !owner.signal.aborted &&
         navigation === readerContext.readerRuntime?.currentGeneration("navigation")
     });
