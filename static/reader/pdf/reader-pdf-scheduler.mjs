@@ -1,5 +1,9 @@
 export function createReaderPdfScheduler(readerContext) {
   let pdfVisibleReconcileFrame = 0;
+  // Page-image admission (PDF-pages previews and image streams). Separate from
+  // canvas render slots so an image download never delays a PDF.js draw.
+  const PDF_PREVIEW_SLOTS = 2;
+  const pdfPreviewActive = new Map(), pdfPreviewWaiters = [];
   let pdfMotionAt = 0, pdfFastUntil = 0;
 
   function notePdfViewportMotion() {
@@ -153,7 +157,8 @@ export function createReaderPdfScheduler(readerContext) {
       if (readerContext.readerAbortController.signal.aborted || document.hidden || !navigator.onLine ||
           readerContext.pdfManifestPrefetchActive.size >= readerContext.pdfManifestPrefetchConcurrency() ||
           readerContext.pdfManifestPrefetchCount >= readerContext.pdfManifestPrefetchMaxPages() ||
-          (readerContext.pdfActiveRenders && readerContext.content.querySelector('.reader-page[data-render-visible="1"][data-render-state="rendering"]'))) return;
+          ((readerContext.pdfActiveRenders || pdfPreviewActive.size) &&
+            readerContext.content.querySelector('.reader-page[data-render-visible="1"][data-render-state="rendering"]'))) return;
       while (readerContext.pdfManifestPrefetchActive.size < readerContext.pdfManifestPrefetchConcurrency()) {
         if (readerContext.pdfManifestPrefetchCount >= readerContext.pdfManifestPrefetchMaxPages()) return;
         if (readerContext.pdfManifestPrefetchWrapped && readerContext.pdfManifestPrefetchNext >= readerContext.pdfManifestPrefetchOrigin) return;
@@ -203,7 +208,7 @@ export function createReaderPdfScheduler(readerContext) {
   }
 
   function schedulePdfManifestPrefetch(page) {
-    if (readerContext.pdfV3Manifest) return;
+    if (readerContext.pdfHybridUrl) return;
     if (!["pdf-pages", "image-pages"].includes(readerContext.capability.mode) || !readerContext.pdfPageManifest) return;
     const origin = Math.max(1, Math.min(readerContext.documentState.pageCount + 1, page + 1));
     if (readerContext.pdfManifestPrefetchOrigin === origin && readerContext.pdfManifestPrefetchNext) {
@@ -218,16 +223,6 @@ export function createReaderPdfScheduler(readerContext) {
 
   function trimPdfManifestImages(protectedShell) {
     readerContext.trimPdfSurfaces(protectedShell);
-  }
-
-  function refreshNearbyPdfPages() {
-    if (!readerContext.documentState.restorationReady || !["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability.mode)) return;
-    const page = readerContext.documentState.page;
-    for (const offset of [0, 1, 2, 3, -1]) {
-      const candidate = page + offset * readerContext.pdfScrollDirection;
-      const shell = readerContext.content.querySelector(`.reader-page[data-page="${candidate}"]`);
-      if (shell && shell.dataset.renderState !== "rendered") readerContext.renderPdfInBackground(shell);
-    }
   }
 
   function cancelSpeculativePdfRenders(protectedShell) {
@@ -250,6 +245,93 @@ export function createReaderPdfScheduler(readerContext) {
     for (const waiter of readerContext.pdfRenderWaiters) {
       if (waiter.shell === shell) waiter.priority = Math.max(waiter.priority, readerContext.pdfPagePriority(shell));
     }
+    for (const waiter of pdfPreviewWaiters) {
+      if (waiter.shell !== shell) continue;
+      waiter.priority = Math.max(waiter.priority, readerContext.pdfPagePriority(shell));
+      preemptPdfPreview(waiter.priority, shell);
+    }
+  }
+
+  // Index of the waiter to admit next: live priority first, then the nearest
+  // page, with pages behind the scroll direction counted at twice the distance.
+  function nextPdfWaiterIndex(waiters) {
+    let index = -1, best = -1, nearest = Infinity;
+    const bounds = readerContext.viewport.getBoundingClientRect();
+    for (let i = 0; i < waiters.length; i++) {
+      const waiter = waiters[i], value = waiter.shell ? readerContext.pdfPagePriority(waiter.shell) : waiter.priority;
+      const rect = waiter.shell?.getBoundingClientRect();
+      const gap = rect ? Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0) : Infinity;
+      const behind = rect && (readerContext.pdfScrollDirection < 0 ? rect.top >= bounds.bottom : rect.bottom <= bounds.top);
+      const distance = gap * (behind ? 2 : 1);
+      if (value > best || (value === best && distance < nearest)) {
+        best = value; nearest = distance; index = i;
+      }
+    }
+    return index < 0 ? 0 : index;
+  }
+
+  // Visible demand must not wait behind speculative image downloads: cancel
+  // the least useful offscreen holder; its page is requeued if it is needed.
+  function preemptPdfPreview(priority, shell) {
+    if (priority < 2 || pdfPreviewActive.size < PDF_PREVIEW_SLOTS) return false;
+    let victim = null, lowest = Infinity;
+    for (const [holder, entry] of pdfPreviewActive) {
+      if (holder === shell || readerContext.isPdfPageVisible(holder) || readerContext.pdfSelectionIntersects?.(holder)) continue;
+      const value = readerContext.pdfPagePriority(holder);
+      if (value < lowest) { lowest = value; victim = entry; }
+    }
+    if (!victim || lowest >= 2) return false;
+    victim.shell._pdfRenderCancelled = true;
+    victim.shell._pdfRenderNeedsRequeue = true;
+    victim.cancel();
+    return true;
+  }
+
+  function acquirePdfPreviewSlot(priority = false, shell = null, signal = null) {
+    if (readerContext.readerAbortController.signal.aborted || signal?.aborted)
+      return Promise.reject(readerContext.readerAbortError());
+    priority = readerContext.normalizePdfPriority(priority);
+    const admit = () => {
+      pdfPreviewActive.set(shell, { shell, cancel: () => shell?._renderCancel?.() });
+    };
+    if (pdfPreviewActive.size < PDF_PREVIEW_SLOTS && !pdfPreviewWaiters.length) {
+      admit();
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const lifetime = signal ? AbortSignal.any([signal, readerContext.readerAbortController.signal])
+        : readerContext.readerAbortController.signal;
+      const waiter = {
+        shell, priority,
+        resolve: () => { lifetime.removeEventListener("abort", abort); admit(); resolve(); }
+      };
+      function abort() {
+        const index = pdfPreviewWaiters.indexOf(waiter);
+        if (index >= 0) pdfPreviewWaiters.splice(index, 1);
+        reject(readerContext.readerAbortError());
+        drainPdfPreviewWaiters();
+      }
+      lifetime.addEventListener("abort", abort, { once: true });
+      pdfPreviewWaiters.push(waiter);
+      if (!preemptPdfPreview(priority, shell)) drainPdfPreviewWaiters();
+    });
+  }
+
+  function drainPdfPreviewWaiters() {
+    // Disposal rejects each waiter through its own abort listener.
+    if (readerContext.readerAbortController.signal.aborted) return;
+    while (pdfPreviewActive.size < PDF_PREVIEW_SLOTS && pdfPreviewWaiters.length)
+      pdfPreviewWaiters.splice(nextPdfWaiterIndex(pdfPreviewWaiters), 1)[0].resolve();
+  }
+
+  function releasePdfPreviewSlot(shell) {
+    pdfPreviewActive.delete(shell);
+    drainPdfPreviewWaiters();
+    scheduleVisiblePdfRenderReconciliation();
+  }
+
+  function pdfPreviewLoads() {
+    return pdfPreviewActive.size;
   }
 
   function acquirePdfRenderSlot(priority = false, shell = null, signal = null) {
@@ -301,19 +383,7 @@ export function createReaderPdfScheduler(readerContext) {
   function releasePdfRenderSlot() {
     readerContext.pdfActiveRenders = Math.max(0, readerContext.pdfActiveRenders - 1);
     if (readerContext.readerAbortController.signal.aborted) return;
-    let index = -1, best = -1, nearest = Infinity;
-    for (let i = 0; i < readerContext.pdfRenderWaiters.length; i++) {
-      const waiter = readerContext.pdfRenderWaiters[i], value = waiter.shell ? readerContext.pdfPagePriority(waiter.shell) : waiter.priority;
-      const rect = waiter.shell?.getBoundingClientRect(), bounds = readerContext.viewport.getBoundingClientRect();
-      const gap = rect ? Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0) : Infinity;
-      const behind = rect && (readerContext.pdfScrollDirection < 0 ? rect.top >= bounds.bottom : rect.bottom <= bounds.top);
-      const distance = gap * (behind ? 2 : 1);
-      if (value > best || (value === best && distance < nearest)) {
-        best = value; nearest = distance; index = i;
-      }
-    }
-    if (index < 0) index = 0;
-    const waiter = readerContext.pdfRenderWaiters.splice(index, 1)[0];
+    const waiter = readerContext.pdfRenderWaiters.splice(nextPdfWaiterIndex(readerContext.pdfRenderWaiters), 1)[0];
     if (waiter) waiter.resolve();
     scheduleVisiblePdfRenderReconciliation();
   }
@@ -371,6 +441,16 @@ export function createReaderPdfScheduler(readerContext) {
     }
   }
 
+  function refreshNearbyPdfPages() {
+    if (!readerContext.documentState.restorationReady || !["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability.mode)) return;
+    const page = readerContext.documentState.page;
+    for (const offset of [0, 1, 2, 3, -1]) {
+      const candidate = page + offset * readerContext.pdfScrollDirection;
+      const shell = readerContext.content.querySelector(`.reader-page[data-page="${candidate}"]`);
+      if (shell && shell.dataset.renderState !== "rendered") readerContext.renderPdfInBackground(shell);
+    }
+  }
+
   function scheduleVisiblePdfRenderReconciliation(force = false) {
     if (!["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability?.mode) ||
         pdfVisibleReconcileFrame || readerContext.readerAbortController.signal.aborted ||
@@ -409,16 +489,19 @@ export function createReaderPdfScheduler(readerContext) {
     prioritizePdfManifestPrefetch,
     schedulePdfManifestPrefetch,
     trimPdfManifestImages,
-    refreshNearbyPdfPages,
-    scheduleVisiblePdfRenderReconciliation,
     cancelSpeculativePdfRenders,
     promotePdfRenderWaiter,
     acquirePdfRenderSlot,
     releasePdfRenderSlot,
+    acquirePdfPreviewSlot,
+    releasePdfPreviewSlot,
+    pdfPreviewLoads,
     acquirePdfTextSlot,
     drainPdfTextWaiters,
     releasePdfTextSlot,
     trimPdfCanvases,
-    rerenderVisiblePdfPages
+    rerenderVisiblePdfPages,
+    refreshNearbyPdfPages,
+    scheduleVisiblePdfRenderReconciliation
   };
 }

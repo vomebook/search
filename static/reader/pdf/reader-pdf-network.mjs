@@ -80,7 +80,10 @@ function abortable(promise, signal) {
   });
 }
 
-async function readPdfRange(options, begin, end, {signal, readBytes, limit, rangeCache}, expected = null, onHeaders = null, partialOnly = false) {
+// Complete bodies retain `limit`. A validated range-transport document may be
+// larger (`rangeLimit`): PDF.js reserves one length-sized buffer, but only
+// demanded chunks are fetched or written. See the dated large-PDF report.
+async function readPdfRange(options, begin, end, {signal, readBytes, limit, rangeLimit = limit, rangeCache}, expected = null, onHeaders = null, partialOnly = false) {
   signal.throwIfAborted();
   const key = new URL(options.url, globalThis.location?.href).href;
   let cached = null;
@@ -102,7 +105,8 @@ async function readPdfRange(options, begin, end, {signal, readBytes, limit, rang
     if (response.status !== 206 || !match || match.slice(1).some(value=>!Number.isSafeInteger(Number(value))))
       throw invalid();
     const [start, last, total] = match.slice(1).map(Number);
-    if (total > limit) throw Object.assign(new Error("READER_RESOURCE_LIMIT"), {code:"READER_RESOURCE_LIMIT"});
+    if (total > (total === last + 1 - start ? limit : rangeLimit))
+      throw Object.assign(new Error("READER_RESOURCE_LIMIT"), {code:"READER_RESOURCE_LIMIT"});
     if (start !== begin || last !== Math.min(end,total)-1 || total <= start) throw invalid();
     const etag = response.headers.get("ETag"), encoding = response.headers.get("Content-Encoding");
     if (encoding && encoding !== "identity") throw invalid();
@@ -269,7 +273,7 @@ export async function preparePdfInitialRange(options, hooks) {
   }
 }
 
-export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, onError, initial = null,
+export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, rangeLimit = limit, onError, initial = null,
   rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
   const chunkSize = options.rangeChunkSize;
@@ -288,10 +292,10 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   const cancelled = () => stop(signal.reason);
   signal.addEventListener("abort", cancelled, {once:true});
   const read = (begin, end, expected = null) => readPdfRange(options, begin, end,
-    {signal:active, readBytes, limit, rangeCache}, expected);
+    {signal:active, readBytes, limit, rangeLimit, rangeCache}, expected);
   try {
     const first = prepared = await (initial || preparePdfInitialRange(options,
-      {signal:active, readBytes, limit, rangeCache, canPrefetchFirstPage}));
+      {signal:active, readBytes, limit, rangeLimit, rangeCache, canPrefetchFirstPage}));
     active.throwIfAborted();
     if (!first) {
       stop();
@@ -310,7 +314,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     let tail = first.tail || null;
     if (!tail && first.total > chunkSize * 4) {
       const begin = Math.floor((first.total - 1) / chunkSize) * chunkSize - chunkSize;
-      tail = preparePdfRangeHint(options, begin, first.total, {signal:active, readBytes, limit, rangeCache}, first);
+      tail = preparePdfRangeHint(options, begin, first.total, {signal:active, readBytes, limit, rangeLimit, rangeCache}, first);
     }
     // A conservative read-ahead hint, not a PDF parser: only a direct Length
     // before the first stream, in the bounded opening header, can qualify.

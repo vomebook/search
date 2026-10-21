@@ -37,6 +37,8 @@ export function createReaderPdfRenderer(readerContext) {
     if (priority) {
       shell.dataset.renderPriority = "1";
       readerContext.promotePdfRenderWaiter(shell);
+      if (["pdf-pages", "image-pages"].includes(readerContext.capability.mode) && readerContext.pdfPageManifest)
+        readerContext.prioritizePdfManifestPrefetch(readerContext.pdfPageManifest.pageUrl(Number(shell.dataset.page)));
     }
     if (shell._backgroundRender) {
       if (priority >= 2 && shell._pdfRenderCancelled) shell._resumePdfDemand = true;
@@ -111,8 +113,63 @@ export function createReaderPdfRenderer(readerContext) {
   }
 
   function pdfPrimarySource() {
+    if (readerContext.capability.mode !== "pdf-pages") return "";
     // A non-PDF (DjVu) primary keeps the image stream plus v3 text layer.
-    return readerContext.pdfV3Manifest?.primary.kind === "pdf" ? readerContext.v3ResourceUrl(readerContext.pdfV3Manifest.primary.resource) : "";
+    if (readerContext.pdfV3Manifest)
+      return readerContext.pdfV3Manifest.primary.kind === "pdf" ? readerContext.v3ResourceUrl(readerContext.pdfV3Manifest.primary.resource) : "";
+    const candidate = readerContext.normalizeSourceUrl(readerContext.params.get("pdf_document") || readerContext.resolvedReaderData?.pdf_document ||
+      (readerContext.resolvedReaderData?.original_extension === "pdf" || /\.pdf(?:$|[?#])/i.test(readerContext.downloadUrl)
+        ? readerContext.downloadUrl : ""));
+    try {
+      const parsed = new URL(candidate, location.href);
+      const path = parsed.searchParams.get("path") || parsed.pathname;
+      return readerContext.validSource(parsed.href) && /\.pdf$/i.test(path) ? parsed.href : "";
+    } catch (_) { return ""; }
+  }
+
+  // Recent per-page latencies for this book: PDF.js admission-to-draw and
+  // page-image admission-to-decode. They choose the visible-page image grace.
+  const pdfLatencySamples = { pdf: [], preview: [] };
+
+  function resetPdfLatencySamples() {
+    pdfLatencySamples.pdf.length = pdfLatencySamples.preview.length = 0;
+  }
+
+  function notePdfLatency(kind, milliseconds) {
+    const samples = pdfLatencySamples[kind];
+    if (!samples || !Number.isFinite(milliseconds) || milliseconds < 0) return;
+    samples.push(milliseconds);
+    if (samples.length > 12) samples.shift();
+  }
+
+  function pdfHybridPreviewGrace() {
+    // The image stream is a fallback once PDF.js is ready. Start it only when a
+    // draw is slower than this book's typical draw, not on every short wait:
+    // a duplicate image download competes with the PDF and swaps surfaces.
+    const median = (values, fallback) => {
+      if (!values.length) return fallback;
+      const sorted = [...values].sort((a, b) => a - b);
+      return sorted[sorted.length >> 1];
+    };
+    const pdf = median(pdfLatencySamples.pdf, 800), preview = median(pdfLatencySamples.preview, 2400);
+    // When this book's images are measurably faster than its PDF draws (small
+    // v3 previews, very heavy pages), keep the short fallback grace.
+    if (pdfLatencySamples.pdf.length >= 2 && pdfLatencySamples.preview.length >= 2 && preview < pdf * .8) return 150;
+    return Math.round(Math.max(400, Math.min(3000, pdf * 2)));
+  }
+
+  // Applies a page-geometry change (aspect ratio, surface swap) while keeping
+  // the reading anchor at the same visual position.
+  function applyPdfShellGeometry(change) {
+    const anchor = readerContext.content.querySelector(`.reader-page[data-page="${readerContext.documentState.page}"]`);
+    const viewportTop = readerContext.viewport.getBoundingClientRect().top;
+    const before = anchor?.getBoundingClientRect();
+    const fraction = before ? Math.max(0, (viewportTop - before.top) / Math.max(1, before.height)) : 0;
+    change();
+    if (!before || !anchor.isConnected) return;
+    const after = anchor.getBoundingClientRect();
+    const delta = after.top - before.top + fraction * (after.height - before.height);
+    if (Math.abs(delta) >= .5) readerContext.viewport.scrollTop += delta;
   }
 
   function renderPdfManifestShell(shell, force = false, priority = false) {
@@ -125,48 +182,71 @@ export function createReaderPdfRenderer(readerContext) {
     const controller = new AbortController();
     shell._hybridCancel = () => { controller.abort(); shell._renderCancel?.(); };
     const pdfTask = readerContext.renderHybridPdfCanvas(shell, controller.signal, priority);
+    async function waitForPrimaryDocument() {
+      const pending = readerContext.pdfHybridDocumentPromise;
+      if (!pending) return false;
+      const documentReady = pending.then(() => true, () => false);
+      const deadline = performance.now() + readerContext.PDF_HYBRID_DOCUMENT_GRACE_MS;
+      while (!controller.signal.aborted && !readerContext.readerAbortController.signal.aborted) {
+        if (readerContext.pdfDocument) return true;
+        // A page promoted from speculation to visible demand should get its
+        // image fallback immediately instead of waiting out the grace period.
+        if (readerContext.isPdfPageVisible(shell)) return false;
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) return false;
+        const result = await Promise.race([
+          documentReady,
+          readerContext.waitForReader(Math.min(100, remaining)).then(() => null)
+        ]);
+        if (result !== null) return result;
+      }
+      throw readerContext.readerAbortError();
+    }
     const previewTask = (async () => {
+      // Keep the visible page's fallback immediate; only speculative pages
+      // should wait for the primary-PDF grace period.
       if (readerContext.isPdfPageVisible(shell) && !readerContext.pdfDocument)
         return readerContext.renderPdfImageShell(shell, false, priority);
-      async function waitForPrimaryDocument() {
-        const pending = readerContext.pdfHybridDocumentPromise;
-        if (!pending) return false;
-        const ready = pending.then(() => true, () => false);
-        const deadline = performance.now() + readerContext.PDF_HYBRID_DOCUMENT_GRACE_MS;
-        while (!controller.signal.aborted && !readerContext.readerAbortController.signal.aborted) {
-          if (readerContext.pdfDocument) return true;
-          if (readerContext.isPdfPageVisible(shell)) return false;
-          const remaining = deadline - performance.now();
-          if (remaining <= 0) return false;
-          const result = await Promise.race([ready, readerContext.waitForReader(Math.min(100, remaining)).then(() => null)]);
-          if (result !== null) return result;
-        }
-        throw readerContext.readerAbortError();
-      }
+      // Give a warm primary PDF a short chance to win before starting preview
+      // I/O. If drawing is slower, the image stream remains the fallback.
       const documentReady = await waitForPrimaryDocument();
       if (!documentReady) return readerContext.renderPdfImageShell(shell, false, priority);
-      // Keep speculation PDF-only without losing the per-page fallback if this
-      // shell becomes visible while its PDF page read or draw is still pending.
+      // Keep speculation PDF-only, but do not permanently give up this page's
+      // fallback: scrolling may promote it while its getPage/draw is still slow.
       let pdfSettled = false;
       pdfTask.then(() => { pdfSettled = true; }, () => { pdfSettled = true; });
-      while (!readerContext.isPdfPageVisible(shell) && !pdfSettled) {
+      const pdfOutcome = pdfTask.then(() => "pdf", () => "preview");
+      while (true) {
+        while (!readerContext.isPdfPageVisible(shell) && !pdfSettled) {
+          if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
+          await readerContext.waitForReader(100);
+        }
         if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
-        await readerContext.waitForReader(100);
+        // The grace counts from visibility. A page flown past during fast
+        // scrolling therefore starts no image download of its own.
+        const winner = await Promise.race([
+          pdfOutcome,
+          readerContext.waitForReader(readerContext.pdfHybridPreviewGrace()).then(() => "preview")
+        ]);
+        if (winner === "pdf") return pdfTask;
+        if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
+        if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
+        if (pdfSettled || readerContext.isPdfPageVisible(shell)) break;
       }
-      if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
-      if (await Promise.race([pdfTask.then(() => "pdf", () => "preview"), readerContext.waitForReader(readerContext.pdfScrollActivity?.(true) ? 0 : 150).then(() => "preview")]) === "pdf") return pdfTask;
-      if (controller.signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
-      if (shell.querySelector("canvas.ready") || shell.dataset.pdfPresented === "1") return pdfTask;
-      return readerContext.renderPdfImageShell(shell, false, priority);
+      const preview = await readerContext.renderPdfImageShell(shell, false, priority);
+      if (controller.signal.aborted) throw readerContext.readerAbortError();
+      return preview;
     })();
-    const ready = Promise.any([pdfTask, previewTask]).catch(error => {
+    const ready = Promise.any([pdfTask, previewTask]).catch((error) => {
       if (controller.signal.aborted || readerContext.readerAbortController.signal.aborted) throw readerContext.readerAbortError();
       throw error.errors?.[1] || error.errors?.[0] || error;
     });
     shell._hybridReadyPromise = ready;
     const complete = Promise.allSettled([pdfTask, previewTask]).finally(() => {
       if (shell._hybridRenderPromise === complete) {
-        delete shell._hybridRenderPromise; delete shell._hybridReadyPromise; delete shell._hybridCancel;
+        delete shell._hybridRenderPromise;
+        delete shell._hybridReadyPromise;
+        delete shell._hybridCancel;
         if (shell.dataset.pendingHybridRerender && shell.isConnected && !readerContext.readerLifecycle.disposed) {
           delete shell.dataset.pendingHybridRerender;
           readerContext.renderPdfInBackground(shell, true);
@@ -179,11 +259,12 @@ export function createReaderPdfRenderer(readerContext) {
 
   async function renderHybridPdfCanvas(shell, signal, priority) {
     let acquired = false, canvas = null, rendering = null;
-    const cancel = () => rendering?.cancel?.();
     const untrack = readerContext.trackReaderResource(() => { rendering?.cancel?.(); shell._hybridCancel?.(); });
+    const cancel = () => rendering?.cancel?.();
     signal.addEventListener("abort", cancel, { once: true });
     try {
       const pdf = await readerContext.awaitReader(readerContext.pdfHybridDocumentPromise, signal);
+      let admittedAt = 0;
       do {
         const generation = readerContext.readerRuntime.currentGeneration("pdf");
         if (signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
@@ -191,46 +272,69 @@ export function createReaderPdfRenderer(readerContext) {
           // Admit page reads too: getPage can demand ranges before canvas rendering.
           await readerContext.measurePdf(readerContext.acquirePdfRenderSlot(priority, shell, signal), "queue", Number(shell.dataset.page));
           acquired = true;
+          admittedAt = performance.now();
           shell._pdfRenderOwnsSlot = true;
         }
         if (signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
         const page = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(Number(shell.dataset.page)), signal), "page", Number(shell.dataset.page));
         if (signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
         const base = page.getViewport({ scale: 1 });
-        const geometry = readerContext.pdfV3Map.pages[Number(shell.dataset.page) - 1];
-        if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
-          throw new Error("PDF_V3_DOCUMENT_GEOMETRY_MISMATCH");
+        if (readerContext.pdfV3Map) {
+          const geometry = readerContext.pdfV3Map.pages[Number(shell.dataset.page) - 1];
+          if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
+            throw new Error("PDF_V3_DOCUMENT_GEOMETRY_MISMATCH");
+        }
         const view = page.getViewport({ scale: Math.min(3, shell.clientWidth / base.width) });
         const outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
-        canvas = document.createElement("canvas"); canvas.setAttribute("aria-hidden", "true");
-        canvas.width = Math.ceil(view.width * outputScale); canvas.height = Math.ceil(view.height * outputScale);
+        canvas = document.createElement("canvas");
+        canvas.setAttribute("aria-hidden", "true");
+        canvas.width = Math.ceil(view.width * outputScale);
+        canvas.height = Math.ceil(view.height * outputScale);
         rendering = page.render({ canvasContext: canvas.getContext("2d"), viewport: view,
           transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0] });
-        await readerContext.measurePdf(readerContext.awaitReader(rendering.promise, signal), "draw", Number(shell.dataset.page)); rendering = null;
+        await readerContext.measurePdf(readerContext.awaitReader(rendering.promise, signal), "draw", Number(shell.dataset.page));
+        rendering = null;
         while (!readerContext.pdfV3Manifest && readerContext.pdfSelectionIntersects(shell) && !signal.aborted) await readerContext.waitForReader(100);
         if (signal.aborted || !shell.isConnected) throw readerContext.readerAbortError();
-        if (!readerContext.isReaderGenerationCurrent("pdf", generation)) { canvas.width = canvas.height = 0; continue; }
-        const anchor = readerContext.content.querySelector(`.reader-page[data-page="${readerContext.documentState.page}"]`);
-        const oldTop = anchor?.getBoundingClientRect().top;
-        canvas.classList.add("ready");
-        const previous = shell.querySelector("canvas");
-        if (previous) { previous.replaceWith(canvas); previous.width = previous.height = 0; }
-        else shell.prepend(canvas);
-        shell.style.aspectRatio = `${base.width} / ${base.height}`;
-        shell._renderCancel?.(); shell.querySelector("img")?.remove(); shell._v3PreviewRelease?.();
-        const state = shell.querySelector(".reader-page-state"); if (state) state.hidden = true;
-        shell.dataset.pdfPresented = "1"; shell.dataset.renderState = "rendered";
+        if (!readerContext.isReaderGenerationCurrent("pdf", generation)) {
+          canvas.width = canvas.height = 0;
+          continue;
+        }
+        const ready = canvas;
+        readerContext.applyPdfShellGeometry(() => {
+          const previous = shell.querySelector("canvas");
+          ready.classList.add("ready");
+          if (previous) { previous.replaceWith(ready); previous.width = previous.height = 0; }
+          else shell.prepend(ready);
+          shell.style.aspectRatio = `${base.width} / ${base.height}`;
+          shell.dataset.pageGeometry = "1";
+          shell._renderCancel?.();
+          shell.querySelector("img")?.remove();
+          shell._v3PreviewRelease?.();
+          readerContext.seedPdfPageGeometry?.(base.width, base.height);
+        });
+        if (admittedAt) readerContext.notePdfLatency("pdf", performance.now() - admittedAt);
+        const pageState = shell.querySelector(".reader-page-state");
+        if (pageState) pageState.hidden = true;
+        shell.dataset.pdfPresented = "1";
         delete shell.dataset.pendingHybridRerender;
+        shell.dataset.renderState = "rendered";
+        delete shell.dataset.renderRetries;
+        delete shell.dataset.renderFailed;
         shell.dataset.renderUsedAt = String(Date.now());
-        if (anchor) readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - oldTop;
-        readerContext.pdfShellWindow?.remember(shell); readerContext.trimPdfCanvases(shell);
+        readerContext.pdfShellWindow?.remember(shell);
+        readerContext.trimPdfCanvases(shell);
         (readerContext.ocrManifestUrl ? readerContext.renderPdfOcrText(shell) : readerContext.renderPdfText(page, shell, signal)).catch(() => {});
-        readerContext.scheduleMarkerSync(); canvas = null; return;
+        readerContext.scheduleMarkerSync();
+        canvas = null;
+        return;
       } while (true);
     } finally {
-      rendering?.cancel?.(); if (canvas) canvas.width = canvas.height = 0;
+      rendering?.cancel?.();
+      if (canvas) canvas.width = canvas.height = 0;
       if (acquired) { delete shell._pdfRenderOwnsSlot; readerContext.releasePdfRenderSlot(); }
-      signal.removeEventListener("abort", cancel); untrack();
+      signal.removeEventListener("abort", cancel);
+      untrack();
     }
   }
 
@@ -247,12 +351,15 @@ export function createReaderPdfRenderer(readerContext) {
     const task = (async () => {
       let acquired = false;
       try {
-        await readerContext.measurePdf(readerContext.acquirePdfRenderSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
+        // Page images are network-bound, not canvas work: they use their own
+        // priority-ordered pool, where visible demand preempts speculation.
+        await readerContext.measurePdf(readerContext.acquirePdfPreviewSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
         acquired = true;
+        const admittedAt = performance.now();
         shell._renderStarted = true;
         readerContext.assertReaderActive();
-        const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
-        if (!entry) throw new Error("PDF page entry missing");
+         const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
+         if (!entry) throw new Error("PDF page entry missing");
          let target = readerContext.pdfPageManifest.pageUrl(entry.page);
          if (readerContext.pdfV3Manifest) {
             const preview = await readerContext.pdfV3Repository.preview(readerContext.pdfV3Manifest, readerContext.pdfV3Map, entry.page, renderController.signal);
@@ -265,8 +372,8 @@ export function createReaderPdfRenderer(readerContext) {
            shell._v3PreviewRelease = release;
            readerContext.pdfV3BlobReleases.add(release);
          }
-        let loadText = null;
-        let image = shell.querySelector("img");
+         let loadText = null;
+         let image = shell.querySelector("img");
          const pageState = shell.querySelector(".reader-page-state");
          if (!image) {
           image = readerContext.takePdfManifestPrefetch(target) || new Image();
@@ -275,10 +382,10 @@ export function createReaderPdfRenderer(readerContext) {
           shell.appendChild(image);
         }
         image.fetchPriority = priority >= 3 ? "high" : priority >= 1 ? "auto" : "low";
-        if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
-          loadText = readerContext.renderPdfOcrText(shell);
-        loadText?.catch(() => {});
-        await readerContext.imageLoader.load(image, target, renderController.signal);
+         if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
+           loadText = readerContext.renderPdfOcrText(shell);
+         loadText?.catch(() => {});
+         await readerContext.imageLoader.load(image, target, renderController.signal);
         readerContext.assertReaderActive();
          if (shell.dataset.pdfPresented === "1") return;
          if (readerContext.pdfV3Manifest) {
@@ -291,11 +398,16 @@ export function createReaderPdfRenderer(readerContext) {
                Math.abs((image.naturalWidth / image.naturalHeight) / (geometry.width / geometry.height) - 1) > .01)
              throw new Error("PDF_V3_PREVIEW_GEOMETRY_MISMATCH");
          }
-         shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
-         if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
-           loadText ||= readerContext.renderPdfOcrText(shell);
+        readerContext.notePdfLatency("preview", performance.now() - admittedAt);
+        readerContext.applyPdfShellGeometry(() => {
+          shell.style.aspectRatio = `${image.naturalWidth || 1} / ${image.naturalHeight || 1}`;
+          shell.dataset.pageGeometry = "1";
+          image.classList.add("ready");
+          readerContext.seedPdfPageGeometry?.(image.naturalWidth, image.naturalHeight);
+        });
+        if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
+          loadText ||= readerContext.renderPdfOcrText(shell);
         loadText?.catch(() => {});
-        image.classList.add("ready");
         if (pageState) pageState.hidden = true;
         shell.dataset.renderState = "rendered";
         delete shell.dataset.renderRetries;
@@ -309,13 +421,15 @@ export function createReaderPdfRenderer(readerContext) {
       } catch (error) {
         shell.querySelector("img")?.remove();
         shell._v3PreviewRelease?.();
-        // The outer background task owns the user-visible error/retry state.
-        // Preview cancellation is expected during the PDF handoff and must
-        // not flash a false page failure.
-        if (shell.dataset.pdfPresented !== "1") shell.dataset.renderState = "idle";
+        // Hybrid handoff: if PDF canvas completed while this preview was loading,
+        // the cancellation is expected and the page is already successfully rendered.
+        if (shell.dataset.pdfPresented === "1") return;
+        // The outer background task owns user-visible error/retry state.
+        // Set idle so the reconciliation scheduler can retry if this becomes visible.
+        shell.dataset.renderState = "idle";
         throw error;
       } finally {
-        if (acquired) readerContext.releasePdfRenderSlot();
+        if (acquired) readerContext.releasePdfPreviewSlot(shell);
       }
     })().finally(() => {
       if (shell._renderPromise === task) delete shell._renderPromise;
@@ -425,6 +539,10 @@ export function createReaderPdfRenderer(readerContext) {
     renderPdfManifestShell,
     renderHybridPdfCanvas,
     renderPdfImageShell,
-    renderPdfShell
+    renderPdfShell,
+    resetPdfLatencySamples,
+    notePdfLatency,
+    pdfHybridPreviewGrace,
+    applyPdfShellGeometry
   };
 }

@@ -18,6 +18,7 @@ export function createReaderFormatController(readerContext) {
       readerContext.pdfV3Repository = readerContext.pdfTextLayerRepository = null;
       readerContext.pdfV3Manifest = readerContext.pdfV3Map = null;
       readerContext.pdfHybridUrl = ""; readerContext.pdfHybridDocumentPromise = null;
+      readerContext.pdfHybridSearchUnavailable = false;
       readerContext.pdfTextContentCache.clear();
       readerContext.pdfTextContentPromises.clear();
       readerContext.pdfTextContentCacheBytes = 0;
@@ -123,7 +124,7 @@ export function createReaderFormatController(readerContext) {
     )
       readerContext.extension = "pdf-pages";
     readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability(readerContext.extension));
-    if (readerContext.capability.mode !== "pdf") readerContext.releasePdfWorker?.();
+    if (readerContext.capability.mode !== "pdf" && !readerContext.pdfPrimarySource()) readerContext.releasePdfWorker?.();
     readerContext.readerRuntime.update("source", {
       url: readerContext.sourceUrl,
       contentUrl: readerContext.contentUrl,
@@ -255,7 +256,7 @@ export function createReaderFormatController(readerContext) {
     document.querySelector(".page-controls").hidden = !readerContext.capability.features.pagination;
     document.querySelector(".zoom-controls").hidden = !readerContext.capability.features.zoom;
     readerContext.mediaTab.hidden = !readerContext.capability.features.media;
-    readerContext.fullSearchButton.hidden = !readerContext.capability.features.search;
+    readerContext.fullSearchButton.hidden = !readerContext.capability.features.search || (readerContext.capability.mode === "pdf-pages" && !readerContext.ocrManifestUrl && (!readerContext.pdfHybridUrl || readerContext.pdfHybridSearchUnavailable));
     readerContext.bookmarkRibbon.hidden = !readerContext.capability.features.bookmarks;
     readerContext.readingProgressSummary.querySelector(".reader-progress-bookmark").hidden =
       !readerContext.capability.features.bookmarks;

@@ -57,6 +57,9 @@ export function createReaderUi(readerContext) {
 
   function setZoom(percent, persist = true) {
     const anchor = readerContext.foliateScrollAnchors.capture();
+    const pdfAnchor = readerContext.pdfHybridUrl ? readerContext.pageAtMarker() : null;
+    const pdfBounds = pdfAnchor?.getBoundingClientRect();
+    const pdfOffset = pdfBounds ? (readerContext.viewport.getBoundingClientRect().top - pdfBounds.top) / Math.max(1, pdfBounds.height) : 0;
     const normalized = VoiceOfMLReader.clampNumber(percent, 25, 400, 100);
     const horizontalCenter = readerContext.viewport.scrollWidth
       ? (readerContext.viewport.scrollLeft + readerContext.viewport.clientWidth / 2) / readerContext.viewport.scrollWidth
@@ -65,6 +68,10 @@ export function createReaderUi(readerContext) {
     readerContext.content.style.setProperty("--reader-zoom", String(readerContext.documentState.zoom));
     readerContext.zoomInput.value = String(normalized);
     readerContext.pdfShellWindow?.resize();
+    if (pdfAnchor?.isConnected) {
+      const bounds = pdfAnchor.getBoundingClientRect();
+      readerContext.viewport.scrollTop += bounds.top - readerContext.viewport.getBoundingClientRect().top + pdfOffset * bounds.height;
+    }
     if (readerContext.htmlFrame && readerContext.htmlFrame.contentDocument)
       readerContext.htmlFrame.contentDocument.documentElement.style.zoom = String(readerContext.documentState.zoom);
     if (readerContext.pdfDocument) readerContext.rerenderVisiblePdfPages();

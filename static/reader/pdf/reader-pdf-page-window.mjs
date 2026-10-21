@@ -1,6 +1,8 @@
 export function createReaderPdfPageWindow(readerContext) {
   async function preloadPdfFirstPage(total) {
-    if (readerContext.pdfV3Manifest) return;
+    // Hybrid PDFs use the primary-document race below. A standalone preload
+    // would guarantee preview traffic before a warm PDF can win.
+    if (readerContext.pdfV3Manifest || readerContext.pdfHybridUrl) return;
     await readerContext.getInitialReaderRestoration();
     try {
       const source = readerContext.pdfManifestSource();
@@ -47,19 +49,121 @@ export function createReaderPdfPageWindow(readerContext) {
     return ocrEntry ? { ...pageEntry, ...ocrEntry, page } : pageEntry;
   }
 
+  // Per-book PDF-pages state; renderPdfPages resets it.
+  let pdfPagesBook = { hybridFailed: false, manifestToc: false, initialShown: false, outlineStarted: false, seedRatio: 0 };
+
   function startPdfHybridDocument(totalPages = readerContext.documentState.pageCount) {
-    if (!readerContext.pdfV3Manifest || readerContext.pdfHybridDocumentPromise) return;
-    readerContext.pdfHybridUrl = readerContext.v3ResourceUrl(readerContext.pdfV3Manifest.primary.resource);
-    readerContext.pdfHybridDocumentPromise = readerContext.loadPdfDocument(readerContext.pdfHybridUrl).then((pdf) => {
+    // A failed primary leaves hybrid mode for the rest of this book.
+    if (pdfPagesBook.hybridFailed || readerContext.pdfHybridDocumentPromise) return;
+    readerContext.pdfHybridUrl = readerContext.pdfPrimarySource();
+    if (!readerContext.pdfHybridUrl) return;
+    const book = pdfPagesBook;
+    const documentPromise = readerContext.loadPdfDocument(readerContext.pdfHybridUrl).then((pdf) => {
       readerContext.assertReaderActive();
-      if (pdf.numPages !== totalPages) throw new Error("PDF_PRIMARY_PAGE_COUNT_MISMATCH");
+      if (book.hybridFailed) throw new Error("PDF_PRIMARY_TRANSPORT");
+      if (pdf.numPages !== totalPages) {
+        pdf.destroy?.()?.catch?.(() => {});
+        throw new Error("PDF_PRIMARY_PAGE_COUNT_MISMATCH");
+      }
       readerContext.pdfDocument = pdf;
       readerContext.clearPdfManifestPrefetches();
       readerContext.cancelSpeculativePdfRenders(readerContext.pageAtMarker?.());
       readerContext.syncCapabilityControls();
+      maybeLoadHybridOutline(book);
       return pdf;
     });
-    readerContext.pdfHybridDocumentPromise.catch(() => {});
+    readerContext.pdfHybridDocumentPromise = documentPromise;
+    documentPromise.catch((error) => {
+      if (error?.name === "AbortError" || readerContext.readerLifecycle.disposed ||
+          readerContext.pdfHybridDocumentPromise !== documentPromise) return;
+      console.warn("Primary PDF unavailable; page stream retained", error);
+      leavePdfHybridMode(book);
+    });
+  }
+
+  // The image stream becomes the only surface: ordinary prioritized image
+  // admission and manifest prefetch replace the PDF-preview race.
+  function leavePdfHybridMode(book = pdfPagesBook, error = null) {
+    if (book !== pdfPagesBook || book.hybridFailed || readerContext.readerLifecycle.disposed) return;
+    if (error) console.warn("Primary PDF failed after opening; page stream retained", error);
+    book.hybridFailed = true;
+    const pdf = readerContext.pdfDocument;
+    readerContext.pdfDocument = null;
+    readerContext.pdfHybridUrl = "";
+    // The page stream stays readable, but without OCR it has no text layer.
+    readerContext.pdfHybridSearchUnavailable = true;
+    if (pdf && error) pdf.destroy?.()?.catch?.(() => {});
+    for (const shell of readerContext.content.querySelectorAll(".reader-page[data-pdf-hybrid]")) {
+      delete shell.dataset.pdfHybrid;
+      if (shell.dataset.renderState !== "rendered") shell._pdfRenderNeedsRequeue = true;
+    }
+    readerContext.syncCapabilityControls();
+    readerContext.scheduleVisiblePdfRenderReconciliation(true);
+    const page = readerContext.documentState.page;
+    if (page) readerContext.schedulePdfManifestPrefetch(page);
+  }
+
+  async function loadPdfOutline(pdf) {
+    if (typeof pdf?.getOutline !== "function") return;
+    try {
+      const outline = await readerContext.awaitReader(pdf.getOutline()),
+        entries = [];
+      const cleanLabel = (value) =>
+        String(value || "未命名章节")
+          .replace(/[\u2610-\u2612\u25a1]\s*[xX×]?\s*$/u, "")
+          .trim() || "未命名章节";
+      const append = async (items, depth = 0) => {
+        for (const item of items || []) {
+          readerContext.assertReaderActive();
+          let destination = item.dest,
+            page = 0;
+          if (typeof destination === "string") destination = await pdf.getDestination(destination);
+          if (destination && destination[0]) {
+            try {
+              page = (await pdf.getPageIndex(destination[0])) + 1;
+            } catch (_) {}
+          }
+          entries.push({
+            label: page ? `${cleanLabel(item.title)} · 第 ${page} 页` : cleanLabel(item.title),
+            depth,
+            activate: (generation) => (page ? readerContext.goToPage(page, generation) : false)
+          });
+          await append(item.items, depth + 1);
+        }
+      };
+      await append(outline);
+      readerContext.assertReaderActive();
+      return entries;
+    } catch (error) {
+      if (!readerContext.readerAbortController.signal.aborted)
+        console.warn("PDF outline could not be loaded", error);
+    }
+  }
+
+  // A page manifest without its own TOC takes the primary PDF outline, after
+  // the opening page is shown so outline reads never delay the first screen.
+  function maybeLoadHybridOutline(book = pdfPagesBook) {
+    if (book !== pdfPagesBook || book.manifestToc || book.outlineStarted || !book.initialShown) return;
+    const pdf = readerContext.pdfDocument;
+    if (!pdf || !readerContext.pdfHybridUrl) return;
+    book.outlineStarted = true;
+    loadPdfOutline(pdf).then((entries) => {
+      if (book !== pdfPagesBook || book.manifestToc || !entries?.length || readerContext.readerLifecycle.disposed) return;
+      readerContext.setToc(entries);
+    }).catch(() => {});
+  }
+
+  // The first measured page geometry replaces the A4 estimate for unrendered
+  // shells and virtual chunk heights. Callers run inside applyPdfShellGeometry,
+  // which keeps the reading anchor in place.
+  function seedPdfPageGeometry(width, height) {
+    if (pdfPagesBook.seedRatio || readerContext.pdfV3Map || !(width > 0 && height > 0)) return;
+    const ratio = height / width;
+    pdfPagesBook.seedRatio = ratio;
+    if (Math.abs(ratio / 1.414 - 1) < .001) return;
+    for (const shell of readerContext.content.querySelectorAll(".reader-page:not([data-page-geometry])"))
+      shell.style.aspectRatio = `1 / ${ratio}`;
+    readerContext.pdfShellWindow?.setDefaultRatio(ratio);
   }
 
   async function appendShellsBatched(createShell, total, batchSize) {
@@ -136,6 +240,7 @@ export function createReaderPdfPageWindow(readerContext) {
   }
 
   function createPdfShellWindow(total, firstShell, createShell, unobserve, defaultRatio) {
+    // `defaultRatio` may be replaced once a real page geometry is known.
     if (total <= 256) return null;
     const chunkSize = 32, chunks = [], ratios = new Map();
     let frame = 0, disposed = false;
@@ -191,8 +296,9 @@ export function createReaderPdfPageWindow(readerContext) {
         const page = Number(shell.dataset.page);
         shell._textEpoch = (shell._textEpoch || 0) + 1;
         shell._renderCancel?.();
+        shell._hybridCancel?.();
+        shell._v3PreviewRelease?.();
         unobserve(shell);
-        shell._hybridCancel?.(); shell._v3PreviewRelease?.();
         readerContext.pdfManifestShells[page] = undefined;
       }
       chunk.element.replaceChildren();
@@ -248,6 +354,13 @@ export function createReaderPdfPageWindow(readerContext) {
         const bounds = shell.getBoundingClientRect();
         if (bounds.width && bounds.height) ratios.set(Number(shell.dataset.page), bounds.height / bounds.width);
       },
+      // The caller owns anchor compensation (see seedPdfPageGeometry).
+      setDefaultRatio(ratio) {
+        if (disposed || !(ratio > 0)) return;
+        defaultRatio = ratio;
+        const width = readWidth();
+        for (const chunk of chunks) if (!chunk.mounted) chunk.element.style.height = `${chunkHeight(chunk, width)}px`;
+      },
       schedule,
       resize,
       dispose() {
@@ -264,6 +377,9 @@ export function createReaderPdfPageWindow(readerContext) {
   }
 
   async function renderPdfPages(prepared) {
+    pdfPagesBook = { hybridFailed: false, manifestToc: false, initialShown: false, outlineStarted: false, seedRatio: 0 };
+    const book = pdfPagesBook;
+    readerContext.resetPdfLatencySamples();
     const response = await prepared;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const decoded = JSON.parse(await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes));
@@ -279,6 +395,7 @@ export function createReaderPdfPageWindow(readerContext) {
       readerContext.pdfV3Manifest = manifest;
       readerContext.pdfOcrManifest = manifest.text_layer ? manifest : null;
       readerContext.ocrManifestUrl = manifest.text_layer ? readerContext.sourceUrl : "";
+      // Start the primary PDF while the independent page map is being read.
       startPdfHybridDocument(manifest.page_count);
       const pageMap = repository.read(manifest.page_map);
       // The opening preview partition depends only on the validated reading
@@ -296,20 +413,16 @@ export function createReaderPdfPageWindow(readerContext) {
     const source = readerContext.pdfManifestSource();
     const totalPages = manifest.page_count;
     if (!source) throw new Error("PDF_MANIFEST_INVALID");
+    book.manifestToc = Array.isArray(manifest.toc) && manifest.toc.length > 0;
     readerContext.pdfPageManifest = { ...source, pageCount: totalPages };
-    if (readerContext.pdfV3Manifest) {
-      readerContext.pdfPageManifest.pageUrl = () => "";
-      startPdfHybridDocument(totalPages);
-    }
+    if (readerContext.pdfV3Manifest) readerContext.pdfPageManifest.pageUrl = () => "";
+    startPdfHybridDocument(totalPages);
     readerContext.updateDocumentState({ pageCount: totalPages });
     readerContext.pageInput.max = String(totalPages);
     document.querySelector("#page-total").textContent = `/ ${totalPages}`;
     readerContext.status.textContent = `${totalPages} 页`;
     await readerContext.getInitialReaderRestoration();
     const initialPage = readerContext.initialReaderPage(totalPages);
-    // Start the manifest and first OCR page while the first image is loading.
-    // The page renderer reuses these promises, so visible text does not wait for
-    // a second sequential request after the image has painted.
     if (readerContext.ocrManifestUrl && !navigator.connection?.saveData) {
       readerContext.loadPdfOcrPage(initialPage).catch(() => {});
     }
@@ -371,7 +484,8 @@ export function createReaderPdfPageWindow(readerContext) {
       const shell = document.createElement("section");
       shell.className = "reader-page";
       shell.dataset.page = String(page);
-      shell.style.aspectRatio = "1 / 1.414";
+      if (readerContext.pdfHybridUrl) shell.dataset.pdfHybrid = "1";
+      shell.style.aspectRatio = `1 / ${book.seedRatio || 1.414}`;
       if (readerContext.pdfV3Map) {
         const geometry = readerContext.pdfV3Map.pages[page - 1];
         shell.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
@@ -405,7 +519,7 @@ export function createReaderPdfPageWindow(readerContext) {
     readerContext.pdfShellWindow = readerContext.createPdfShellWindow(totalPages, firstShell, createShell, (shell) => {
       observer.unobserve(shell);
       visibleObserver.unobserve(shell);
-    }, 1.414);
+    }, book.seedRatio || 1.414);
     readerContext.pdfShellsReady = readerContext.pdfShellWindow ? Promise.resolve() : readerContext.appendShellsBatched(createShell, totalPages, 250);
     readerContext.pdfShellsReady.catch(() => {});
     try {
@@ -420,6 +534,8 @@ export function createReaderPdfPageWindow(readerContext) {
     } finally {
       releaseInitialRenderGate();
     }
+    book.initialShown = true;
+    maybeLoadHybridOutline(book);
   }
 
   async function renderImagePages(prepared) {
@@ -554,42 +670,9 @@ export function createReaderPdfPageWindow(readerContext) {
     } finally {
       releaseInitialRenderGate();
     }
-    const outlineReady = (async () => {
-      if (typeof pdf.getOutline !== "function") return;
-      try {
-        const outline = await readerContext.awaitReader(pdf.getOutline()),
-          entries = [];
-        const cleanLabel = (value) =>
-          String(value || "未命名章节")
-            .replace(/[\u2610-\u2612\u25a1]\s*[xX×]?\s*$/u, "")
-            .trim() || "未命名章节";
-        const append = async (items, depth = 0) => {
-          for (const item of items || []) {
-            readerContext.assertReaderActive();
-            let destination = item.dest,
-              page = 0;
-            if (typeof destination === "string") destination = await pdf.getDestination(destination);
-            if (destination && destination[0]) {
-              try {
-                page = (await pdf.getPageIndex(destination[0])) + 1;
-              } catch (_) {}
-            }
-            entries.push({
-              label: page ? `${cleanLabel(item.title)} · 第 ${page} 页` : cleanLabel(item.title),
-              depth,
-              activate: (generation) => (page ? readerContext.goToPage(page, generation) : false)
-            });
-            await append(item.items, depth + 1);
-          }
-        };
-        await append(outline);
-        readerContext.assertReaderActive();
-        if (entries.length) readerContext.setToc(entries);
-      } catch (error) {
-        if (!readerContext.readerAbortController.signal.aborted)
-          console.warn("PDF outline could not be loaded", error);
-      }
-    })();
+    const outlineReady = loadPdfOutline(pdf).then((entries) => {
+      if (entries?.length) readerContext.setToc(entries);
+    });
     outlineReady.catch(() => {});
     await readerContext.pdfShellsReady;
     readerContext.assertReaderActive();
@@ -603,6 +686,10 @@ export function createReaderPdfPageWindow(readerContext) {
     pdfSelectionIntersects,
     correctPdfCrossPageSelection,
     createPdfShellWindow,
+    startPdfHybridDocument,
+    leavePdfHybridMode,
+    loadPdfOutline,
+    seedPdfPageGeometry,
     renderPdfPages,
     renderImagePages,
     renderPdf
