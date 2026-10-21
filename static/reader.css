@@ -60,6 +60,7 @@ body {
 .reader-path {
   min-width: 0;
   max-width: 100%;
+  align-self: flex-start;
   padding: 0;
   border: 0;
   background: transparent;
