@@ -256,7 +256,7 @@ export function createReaderFormatController(readerContext) {
     document.querySelector(".page-controls").hidden = !readerContext.capability.features.pagination;
     document.querySelector(".zoom-controls").hidden = !readerContext.capability.features.zoom;
     readerContext.mediaTab.hidden = !readerContext.capability.features.media;
-    readerContext.fullSearchButton.hidden = !readerContext.capability.features.search || (readerContext.capability.mode === "pdf-pages" && !readerContext.ocrManifestUrl && (!readerContext.pdfHybridUrl || readerContext.pdfHybridSearchUnavailable));
+    readerContext.fullSearchButton.hidden = !readerContext.capability.features.search;
     readerContext.bookmarkRibbon.hidden = !readerContext.capability.features.bookmarks;
     readerContext.readingProgressSummary.querySelector(".reader-progress-bookmark").hidden =
       !readerContext.capability.features.bookmarks;
