@@ -4932,9 +4932,13 @@ function renderSidebar(routeId) {
 
 function renderRepoListItems(repos) {
   const focused = DOM.sidebarContent.contains(document.activeElement) ? document.activeElement.closest('.repo-list-item') : null;
+  var ordered = (repos || []).slice().sort(function(a, b) {
+    return (a.count || 0) - (b.count || 0) ||
+      String(a.name || "").localeCompare(String(b.name || ""), "zh-CN");
+  });
   var html = "";
-  for (var i = 0; i < repos.length; i++) {
-    var repo = repos[i];
+  for (var i = 0; i < ordered.length; i++) {
+    var repo = ordered[i];
     var short = repo.name.split("/").pop();
     var label = escapeHTML(short);
     html += '<button type="button" class="repo-list-item" aria-label="打开仓库：' + label + '" data-repo="' + escapeHTML(short) + '">';
@@ -5243,12 +5247,16 @@ async function renderRepoFilter(routeId) {
   }
   if (routeId && routeId !== routeRenderId) return;
   repos = Array.isArray(repos) ? repos : [];
+  var ordered = repos.slice().sort(function(a, b) {
+    return (a.count || 0) - (b.count || 0) ||
+      String(a.name || "").localeCompare(String(b.name || ""), "zh-CN");
+  });
   var items = [];
-  for (var i = 0; i < repos.length; i++) {
+  for (var i = 0; i < ordered.length; i++) {
     items.push({
-      key: repos[i].name,
-      label: repos[i].name.split("/").pop(),
-      count: repos[i].count,
+      key: ordered[i].name,
+      label: ordered[i].name.split("/").pop(),
+      count: ordered[i].count,
     });
   }
   renderCheckboxList(DOM.filterRepoList, items, STATE.filterRepos, function(vals) {
