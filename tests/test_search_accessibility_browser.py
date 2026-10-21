@@ -267,6 +267,53 @@ class SearchAccessibilityTests(unittest.TestCase):
         }""")
         self.assertEqual(observed, ['large', 'small', 'medium'])
 
+    def test_sidebar_scroll_position_restores_after_rerender(self):
+        result = self.page.evaluate("""async()=>{
+          sidebarScrollPositions.clear();
+          activeSidebarScrollKey='';
+          const repos=Array.from({length:240},(_,index)=>({
+            name:`VoiceOfML/Repo-${String(index).padStart(3,'0')}`,count:index
+          }));
+          renderRepoListItems(repos);
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+          DOM.sidebarContent.scrollTop=480;
+          DOM.sidebarContent.dispatchEvent(new Event('scroll'));
+          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          const saved=sidebarScrollPositions.get('global');
+          renderRepoListItems(repos);
+          return {saved, restored:DOM.sidebarContent.scrollTop,
+            height:DOM.sidebarContent.scrollHeight, client:DOM.sidebarContent.clientHeight};
+        }""")
+        self.assertGreater(result["height"], result["client"])
+        self.assertGreater(result["saved"], 0)
+        self.assertAlmostEqual(result["restored"], result["saved"], delta=2)
+
+    def test_sidebar_scroll_position_is_kept_per_repository_path(self):
+        result = self.page.evaluate("""async()=>{
+          sidebarScrollPositions.clear();
+          activeSidebarScrollKey='';
+          const fill=(key,top)=>{
+            activateSidebarScrollKey(key);
+            DOM.sidebarContent.innerHTML='<div style="height:4000px"></div>';
+            DOM.sidebarContent.scrollTop=top;
+            DOM.sidebarContent.dispatchEvent(new Event('scroll'));
+          };
+          const keyA=sidebarScrollKeyFor('VoiceOfML/A','docs');
+          const keyB=sidebarScrollKeyFor('VoiceOfML/B','');
+          fill(keyA,500);
+          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          fill(keyB,900);
+          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          activateSidebarScrollKey(keyA);
+          DOM.sidebarContent.innerHTML='<div style="height:4000px"></div>';
+          restoreSidebarScroll();
+          return {savedA:sidebarScrollPositions.get(keyA), savedB:sidebarScrollPositions.get(keyB),
+            restoredA:DOM.sidebarContent.scrollTop};
+        }""")
+        self.assertEqual(result["savedA"], 500)
+        self.assertEqual(result["savedB"], 900)
+        self.assertEqual(result["restoredA"], 500)
+
     def test_global_repository_filter_orders_by_count_ascending(self):
         observed = self.page.evaluate("""async()=>{
           repoList=[{name:'VoiceOfML/Large',count:30},{name:'VoiceOfML/Small',count:2},{name:'VoiceOfML/Medium',count:10}];
@@ -301,6 +348,25 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.page.get_by_role('button', name='下载：book.txt', exact=True).press('Enter')
         self.assertEqual(len(self.page.evaluate('downloads')), 1)
         self.assertEqual(self.page.locator('.crumb-item.current').get_attribute('aria-current'), 'location')
+
+    def test_sidebar_delegated_folder_and_reader_actions(self):
+        self.page.evaluate('''()=>{
+          routeRenderId++;
+          STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';
+          const list=document.createElement('div');list.className='browser-list';
+          DOM.sidebarContent.replaceChildren(createSidebarBreadcrumb('docs'),list);
+          renderBrowserListItems(list,{folders:[{name:'inner',path:'docs/inner',count:1}],
+            files:[{name:'book',ext:'txt',size:1}]},'VoiceOfML/Test','docs');
+          window.navigations=[];window.readerLinks=[];
+          ROUTER.navigate=(...args)=>navigations.push(args);
+          navigateToReader=(url)=>{readerLinks.push(url);return true};
+        }''')
+        self.page.get_by_role('button', name='打开文件夹：inner', exact=True).press('Enter')
+        self.page.get_by_role('button', name='打开阅读器：book.txt', exact=True).press('Enter')
+        observed = self.page.evaluate('({navigations,readerLinks})')
+        self.assertEqual(observed['navigations'], [['repo', 'Test', 'docs/inner']])
+        self.assertEqual(len(observed['readerLinks']), 1)
+        self.assertIn('/static/reader.html', observed['readerLinks'][0])
 
     def test_virtual_results_are_list_items_with_exact_positions_and_keyboard_focus(self):
         self.assertEqual(self.page.get_by_role('list', name='搜索结果', exact=True).count(), 1)
