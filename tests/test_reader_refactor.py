@@ -135,12 +135,12 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_pdf_page_sources_preserve_version_and_navigate(self):
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3}
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
+        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64
         self.serve(json.dumps(manifest), "application/json")
         self.page.route("**/page-manifest.json", lambda route: route.fulfill(json=manifest))
         self.page.route("**/pages/page-*.webp", lambda route: route.fulfill(
             content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1]))
-        for version in ("", "/1234567890abcdef"):
+        for version in ("/1234567890abcdef",):
             with self.subTest(version=version):
                 source = root + version
                 self.open(self.reader_url("pdf-pages", url=source + "/page-manifest.json"))
@@ -317,7 +317,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "get: () => Promise.resolve({page: 12, pageOffset: 0, zoom: 1}),",
         )
         manifest = {"version": 2, "kind": "pdf-pages", "page_count": 24}
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
+        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         requests = []
         self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
         self.serve(json.dumps(manifest), "application/json")
@@ -354,21 +354,21 @@ class ReaderRefactorTest(unittest.TestCase):
             "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
             "get: () => Promise.resolve({chapterIndex: 8, chapterOffset: 0}),",
         )
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
+        root = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/" + "a" * 64 + "/1234567890abcdef"
         manifest = {"version": 1, "kind": "epub-chapters", "toc": [], "chapters": [
-            {"index": i, "path": f"chapter-{i}.xhtml", "bytes": 100} for i in range(1, 13)
+            {"index": i, "path": f"chapters/chapter-{i:04d}.xhtml", "bytes": 100} for i in range(1, 13)
         ]}
         requested = []
         self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
         def resource(route):
-            url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("url", [""])[0]
-            if "chapter-" in url and url.endswith(".xhtml"):
-                number = int(url.rsplit("chapter-", 1)[1].split(".", 1)[0])
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("path", [""])[0]
+            if path.endswith(".xhtml"):
+                number = int(path.rsplit("chapter-", 1)[1].split(".", 1)[0])
                 requested.append(number)
                 route.fulfill(content_type="text/html", body=f"<h1>Chapter {number}</h1><p>Content</p>")
             else:
                 route.fulfill(json=manifest)
-        self.page.route("**/api/reader-content**", resource)
+        self.page.route("**/api/reader-bucket-resource**", resource)
         self.page.route("**/static/reader.js*", lambda route: (
             (lambda response: route.fulfill(response=response, body=response.text() +
               "\nwindow.__testLoadChapter = index => chapterManifestLoader(index);\n"))(route.fetch())
@@ -409,7 +409,7 @@ class ReaderRefactorTest(unittest.TestCase):
             route.fulfill(response=response, body=response.text() + "\nwindow.__reloadPdfOcr = async () => { const shell = document.querySelector('.reader-page[data-page=\\\"1\\\"]'); shell.querySelector('.reader-pdf-text').replaceChildren(); shell.dataset.textReady = '0'; await renderPdfOcrText(shell); };\n")
         self.page.route("**/static/reader.js*", instrument)
         root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
-        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/" + root
+        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + root
         ocr_path = root + "/ocr-manifest.json"
         manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
                     "source_sha256": "a" * 64, "profile": "test-layout-v1-retry", "page_count": 2,
@@ -422,6 +422,9 @@ class ReaderRefactorTest(unittest.TestCase):
             route.fulfill(content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1])
         def resource(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            if path.endswith("/page-manifest.json"):
+                route.fulfill(json={"version": 2, "kind": "pdf-pages", "page_count": 2})
+                return
             if path == ocr_path:
                 route.fulfill(json=manifest)
                 return
@@ -1690,12 +1693,12 @@ class ReaderRefactorTest(unittest.TestCase):
         }""", arg)
 
     def test_chapter_toc_preserves_fragments_depth_and_virtual_current_mark(self):
-        base = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'b' * 64 + '/epub-chapters/'
+        base = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/' + 'b' * 64 + '/1234567890abcdef/'
         body = '<h1>第一卷</h1>' + ''.join(f'<h2 id="day-{i}">日记 {i}</h2><p style="height:100px">正文 {i}</p>' for i in range(1100))
         manifest = dict(version=1, kind='epub-chapters',
                         chapters=[dict(index=1, path='chapters/chapter-0001.xhtml', title='文件标题', bytes=len(body.encode()))],
                         toc=[dict(title=f'日记 {i}', chapter=1, fragment=f'day-{i}', depth=1) for i in range(1100)])
-        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(
             content_type='application/json' if 'chapter-manifest.json' in route.request.url else 'text/html',
             body=json.dumps(manifest) if 'chapter-manifest.json' in route.request.url else body))
         self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
@@ -1715,7 +1718,8 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator('[data-toc-index="205"].is-current').wait_for()
 
     def serve_chapter_search(self, failure=None):
-        base = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "b" * 64 + "/foliate-original-v1/epub-chapters/"
+        base = "chapters/ebook/chm/" + "b" * 64 + "/1234567890abcdef/"
+        source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + base + "chapter-manifest.json"
         chapters, texts, bodies = [], [], {}
         for index in range(1, 13):
             path = f"chapters/chapter-{index:04d}.xhtml"
@@ -1737,21 +1741,21 @@ class ReaderRefactorTest(unittest.TestCase):
                         search_index=dict(path='epub-search-index.json.gz', bytes=len(packed), sha256=hashlib.sha256(packed).hexdigest()))
         requests = []
         def serve(route):
-            raw = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['url'][0]
-            requests.append(raw)
-            if raw.endswith('chapter-manifest.json'):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            requests.append(path)
+            if path.endswith('chapter-manifest.json'):
                 route.fulfill(content_type='application/json', body=json.dumps(manifest),
                               headers={'Access-Control-Allow-Origin': '*'})
-            elif raw.endswith('epub-search-index.json.gz'):
+            elif path.endswith('epub-search-index.json.gz'):
                 attempt = sum(item.endswith('epub-search-index.json.gz') for item in requests)
                 if not failure or not failure(route, attempt, packed):
                     route.fulfill(content_type='application/gzip', body=packed,
                                   headers={'Access-Control-Allow-Origin': '*'})
             else:
-                route.fulfill(content_type='text/html', body=bodies[raw],
+                route.fulfill(content_type='text/html', body=bodies[path],
                               headers={'Access-Control-Allow-Origin': '*'})
-        self.context.route('**/api/reader-content**', serve)
-        self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
+        self.page.route('**/api/reader-bucket-resource**', serve)
+        self.open(self.reader_url('epub-chapters', url=source))
         return requests, base
 
     def test_chapter_search_emits_partial_results_before_exact_total(self):
@@ -1862,15 +1866,15 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_failed_chapter_restoration_preserves_saved_position(self):
         requests, base = self.serve_chapter_search()
-        source = base + "chapter-manifest.json"
+        source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + base + "chapter-manifest.json"
         self.page.evaluate("""async source => {
           window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:false}));
           await new Promise(resolve => setTimeout(resolve, 0));
           await VoiceOfMLReaderStore.put({url:source, title:'Saved chapter',
             chapterIndex:12, chapterOffset:345, lastReadAt:Date.now()+1});
         }""", source)
-        self.context.route("**/api/reader-content**chapter-0012.xhtml*",
-                           lambda route: route.fulfill(status=503, body="temporary"))
+        self.page.route("**/api/reader-bucket-resource?path=*chapter-0012.xhtml",
+                        lambda route: route.fulfill(status=503, body="temporary"))
         self.page.reload()
         self.page.wait_for_timeout(1200)
         saved = self.page.evaluate("source => VoiceOfMLReaderStore.get(source)", source)
@@ -1878,7 +1882,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(saved["chapterOffset"], 345)
         self.assertEqual(self.page.locator("#content").get_attribute("data-error-code"), "READER_RESTORE")
         self.assertTrue(self.page.get_by_role("button", name="重试加载").is_visible())
-        self.context.unroute("**/api/reader-content**chapter-0012.xhtml*")
+        self.page.unroute("**/api/reader-bucket-resource?path=*chapter-0012.xhtml")
         self.page.get_by_role("button", name="重试加载").click()
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
         self.wait_for_store("async source => (await VoiceOfMLReaderStore.get(source))?.chapterIndex === 12", source)
@@ -1888,7 +1892,7 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_chapter_manifest_does_not_translate_foliate_positions(self):
         _, base = self.serve_chapter_search()
-        source = base + "chapter-manifest.json"
+        source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + base + "chapter-manifest.json"
         self.page.evaluate("""async source => {
           window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:false}));
           await new Promise(resolve => setTimeout(resolve, 0));
@@ -3056,18 +3060,18 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.url, folder)
 
     def test_chapter_manifest_restores_structured_history_and_bookmark(self):
-        source = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/chapter-manifest.json"
+        source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/" + "a" * 64 + "/1234567890abcdef/chapter-manifest.json"
         manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
-            {"index": i, "path": f"chapter-{i}.xhtml", "title": f"Chapter {i}", "bytes": 100} for i in range(1, 5)
+            {"index": i, "path": f"chapters/chapter-{i:04d}.xhtml", "title": f"Chapter {i}", "bytes": 100} for i in range(1, 5)
         ]}
         def serve(route):
-            raw = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["url"][0]
-            if raw.endswith("chapter-manifest.json"):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+            if path.endswith("chapter-manifest.json"):
                 route.fulfill(content_type="application/json", body=json.dumps(manifest))
             else:
-                number = raw.rsplit("chapter-", 1)[-1].split(".")[0]
+                number = path.rsplit("chapter-", 1)[-1].split(".")[0]
                 route.fulfill(content_type="text/html", body=f"<h1>Chapter {number}</h1><p style='height:2000px'>Body</p>")
-        self.page.route("**/api/reader-content**", serve)
+        self.page.route("**/api/reader-bucket-resource**", serve)
         url = self.reader_url("epub-chapters", url=source)
         self.open(url)
         support.open_reader_panel(self.page)
@@ -3155,25 +3159,32 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual("".join(self.page.locator("#inline .full-search-highlight").all_text_contents()), "international")
 
     def test_chapter_resources_allow_siblings_within_manifest_family_only(self):
-        object_root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64 + "/"
-        for variant in ("", "epub-chapters/"):
-            with self.subTest(variant=variant):
-                base = object_root + variant
-                source = base + "chapter-manifest.json"
+        for extension in ("epub", "chm"):
+            with self.subTest(extension=extension):
+                base = "chapters/ebook/" + extension + "/" + "a" * 64 + "/1234567890abcdef/"
+                source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + base + "chapter-manifest.json"
                 manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
-                    {"index": 1, "path": "chapters/chapter-1.xhtml", "bytes": 100}
+                    {"index": 1, "path": "chapters/chapter-0001.xhtml", "bytes": 100}
                 ]}
-                self.page.route("**/api/reader-content**", lambda route: route.fulfill(
-                    content_type="application/json" if "chapter-manifest.json" in route.request.url else "text/html",
-                    body=json.dumps(manifest) if "chapter-manifest.json" in route.request.url else """
-                      <h1>Chapter</h1><img id='cover' src='../resources/cover.svg'>
-                      <img id='escape' src='../../resources/outside.svg'>
-                      <img id='external' src='https://evil.test/cover.svg'>
-                    """))
+                def serve(route):
+                    path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
+                    if path.endswith("chapter-manifest.json"):
+                        route.fulfill(content_type="application/json", body=json.dumps(manifest))
+                    elif path.endswith(".svg"):
+                        route.fulfill(content_type="image/svg+xml", body="<svg xmlns='http://www.w3.org/2000/svg'/>")
+                    else:
+                        route.fulfill(content_type="text/html", body="""
+                          <h1>Chapter</h1><img id='cover' src='../resources/cover.svg'>
+                          <img id='escape' src='../../resources/outside.svg'>
+                          <img id='external' src='https://evil.test/cover.svg'>
+                        """)
+                self.page.route("**/api/reader-bucket-resource**", serve)
                 self.open(self.reader_url("epub-chapters", url=source))
-                self.assertEqual(self.page.locator("#cover").get_attribute("src"), base + "resources/cover.svg")
+                resource = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + urllib.parse.quote(base + "resources/cover.svg", safe="")
+                self.assertEqual(self.page.locator("#cover").get_attribute("src"), resource)
                 self.assertIsNone(self.page.locator("#escape").get_attribute("src"))
                 self.assertIsNone(self.page.locator("#external").get_attribute("src"))
+                self.page.unroute("**/api/reader-bucket-resource**", serve)
 
     def test_bucket_chapter_manifest_loads_before_reader_module_and_is_consumed_once(self):
         held, manifests = [], []
@@ -3203,27 +3214,27 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertTrue(self.page.locator('.reader-epub-chapter p').is_visible())
 
     def test_chapter_open_overlaps_first_page_and_prefetches_past_small_front_matter(self):
-        root = "https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/" + "a" * 64
+        root = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/" + "a" * 64 + "/1234567890abcdef"
         for width, chapter_bytes, last_expected in ((390, 100, 11), (1100, 1000000, 7)):
             with self.subTest(width=width, chapter_bytes=chapter_bytes):
                 self.page.set_viewport_size(dict(width=width, height=800))
                 requested, first = [], []
                 manifest = {"version": 1, "kind": "epub-chapters", "chapters": [
-                    {"index": i, "path": f"chapter-{i}.xhtml", "bytes": chapter_bytes}
+                    {"index": i, "path": f"chapters/chapter-{i:04d}.xhtml", "bytes": chapter_bytes}
                     for i in range(1, 21)
                 ]}
                 def resource(route):
-                    url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("url", [""])[0]
-                    if url.endswith("chapter-manifest.json"):
+                    path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("path", [""])[0]
+                    if path.endswith("chapter-manifest.json"):
                         route.fulfill(json=manifest)
                         return
-                    number = int(url.rsplit("chapter-", 1)[1].split(".", 1)[0])
+                    number = int(path.rsplit("chapter-", 1)[1].split(".", 1)[0])
                     requested.append(number)
                     if number == 1:
                         first.append(route)
                     else:
                         route.fulfill(content_type="text/html", body=f'<h1>Chapter {number}</h1><p style="height:1000px">Readable {number}</p><img src="picture.png"/>')
-                self.page.route("**/api/reader-content**", resource)
+                self.page.route("**/api/reader-bucket-resource**", resource)
                 self.page.goto(self.reader_url("epub-chapters", url=root + "/chapter-manifest.json"))
                 self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state="attached")
                 self.assertEqual(requested[0], 1)
@@ -3238,19 +3249,19 @@ class ReaderRefactorTest(unittest.TestCase):
                 image = self.page.locator('.reader-epub-chapter[data-chapter="3"] img')
                 self.assertEqual(image.evaluate('node => node.loading'), 'lazy')
                 self.assertEqual(image.evaluate('node => node.fetchPriority'), 'low')
-                self.page.unroute("**/api/reader-content**", resource)
+                self.page.unroute("**/api/reader-bucket-resource**", resource)
 
     def test_chapter_navigation_during_delayed_open_keeps_user_target(self):
-        root = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64
+        root = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/' + 'a' * 64 + '/1234567890abcdef'
         manifest = {'version':1, 'kind':'epub-chapters', 'chapters':[
-            {'index':i, 'path':f'chapter-{i}.xhtml', 'bytes':100} for i in range(1,21)]}
+            {'index':i, 'path':f'chapters/chapter-{i:04d}.xhtml', 'bytes':100} for i in range(1,21)]}
         first = []
         def resource(route):
-            url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('url',[''])[0]
-            if url.endswith('chapter-manifest.json'):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('path',[''])[0]
+            if path.endswith('chapter-manifest.json'):
                 route.fulfill(json=manifest)
                 return
-            number = int(url.rsplit('chapter-',1)[1].split('.',1)[0])
+            number = int(path.rsplit('chapter-',1)[1].split('.',1)[0])
             if number == 1:
                 first.append(route)
             else:
@@ -3258,7 +3269,7 @@ class ReaderRefactorTest(unittest.TestCase):
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + '\nwindow.__earlyChapter = index => navigationState.tocEntries[index-1].activate(beginReaderNavigation());\n')
-        self.page.route('**/api/reader-content**',resource)
+        self.page.route('**/api/reader-bucket-resource**',resource)
         self.page.route('**/static/reader.js*',instrument)
         self.page.goto(self.reader_url('epub-chapters',url=root+'/chapter-manifest.json'))
         self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state='attached')
@@ -3271,23 +3282,23 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertTrue(target.is_visible())
 
     def test_concurrent_chapter_open_keeps_order_when_third_chapter_arrives_first(self):
-        root = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64
+        root = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/' + 'a' * 64 + '/1234567890abcdef'
         manifest = {'version':1, 'kind':'epub-chapters', 'chapters':[
-            {'index':i, 'path':f'chapter-{i}.xhtml', 'bytes':100} for i in range(1,5)]}
+            {'index':i, 'path':f'chapters/chapter-{i:04d}.xhtml', 'bytes':100} for i in range(1,5)]}
         held = {}
         def body(number):
             return f'<h1>Chapter {number}</h1><p style="height:1200px">Readable {number}</p>'
         def resource(route):
-            url = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('url',[''])[0]
-            if url.endswith('chapter-manifest.json'):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('path',[''])[0]
+            if path.endswith('chapter-manifest.json'):
                 route.fulfill(json=manifest)
                 return
-            number = int(url.rsplit('chapter-',1)[1].split('.',1)[0])
+            number = int(path.rsplit('chapter-',1)[1].split('.',1)[0])
             if number in (1,2):
                 held[number] = route
             else:
                 route.fulfill(content_type='text/html',body=body(number))
-        self.page.route('**/api/reader-content**',resource)
+        self.page.route('**/api/reader-bucket-resource**',resource)
         self.page.goto(self.reader_url('epub-chapters',url=root+'/chapter-manifest.json'))
         self.page.locator('.reader-epub-chapter[data-chapter="3"]').wait_for(state='attached')
         held[1].fulfill(content_type='text/html',body=body(1))

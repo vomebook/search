@@ -221,12 +221,13 @@ class ReaderOptimizationTests(unittest.TestCase):
 
     def chapter_book(self, hold=False):
         self.expose()
-        base = 'https://huggingface.co/datasets/vomebook/Reader-Assets/resolve/main/objects/aa/' + 'a' * 64 + '/'
+        root = 'chapters/ebook/chm/' + 'a' * 64 + '/1234567890abcdef/'
+        base = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + root
         chapters, texts, bodies = [], [], {}
         for index in range(1, 61):
-            path = f'chapter-{index}.xhtml'
+            path = f'chapters/chapter-{index:04d}.xhtml'
             body = f'<h1 id="heading-{index}">Chapter {index}</h1><p style="height:1600px">needle unique-{index}</p>'
-            bodies[base + path] = body
+            bodies[base + root + path] = body
             chapters.append(dict(index=index, path=path, title=f'Chapter {index}', bytes=len(body)))
             texts.append(dict(index=index, path=path, title=f'Chapter {index}', text=f'Chapter {index} needle unique-{index}'))
         packed = gzip.compress(json.dumps(dict(version=1, kind='epub-search-index', chapters=texts)).encode(), mtime=0)
@@ -234,17 +235,17 @@ class ReaderOptimizationTests(unittest.TestCase):
                         search_index=dict(path='epub-search-index.json.gz', bytes=len(packed), sha256=hashlib.sha256(packed).hexdigest()))
         requested, held = [], []
         def resource(route):
-            raw = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['url'][0]
-            requested.append(raw)
-            if hold and raw in (base + 'chapter-2.xhtml', base + 'chapter-3.xhtml'):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            requested.append(path)
+            if hold and path in (root + 'chapters/chapter-0002.xhtml', root + 'chapters/chapter-0003.xhtml'):
                 held.append(route)
-            elif raw.endswith('chapter-manifest.json'):
+            elif path.endswith('chapter-manifest.json'):
                 route.fulfill(json=manifest, headers={'Access-Control-Allow-Origin': '*'})
-            elif raw.endswith('epub-search-index.json.gz'):
+            elif path.endswith('epub-search-index.json.gz'):
                 route.fulfill(body=packed, content_type='application/gzip', headers={'Access-Control-Allow-Origin': '*'})
             else:
-                route.fulfill(body=bodies[raw], content_type='text/html', headers={'Access-Control-Allow-Origin': '*'})
-        self.context.route('**/api/reader-content**', resource)
+                route.fulfill(body=bodies[base + path], content_type='text/html', headers={'Access-Control-Allow-Origin': '*'})
+        self.context.route('**/api/reader-bucket-resource**', resource)
         self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
         return requested, held
 
@@ -255,7 +256,7 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('__chapterStats().active'), 2)
         self.assertEqual(len(held), 2)
         self.assertTrue(self.page.evaluate('__goChapter(40)'))
-        self.assertTrue(any(url.endswith('chapter-40.xhtml') for url in requested))
+        self.assertTrue(any(url.endswith('chapter-0040.xhtml') for url in requested))
         self.assertEqual(self.page.locator('.reader-epub-chapter[data-chapter="2"]').count(), 0)
         self.page.evaluate('window.dispatchEvent(new Event("voice-reader-dispose"))')
         self.page.wait_for_function('() => __chapterStats().active === 0 && __chapterStats().pending === 0')
@@ -304,10 +305,10 @@ class ReaderOptimizationTests(unittest.TestCase):
                 before = self.page.locator('#viewport').evaluate('node => node.scrollHeight')
                 before_rows = self.page.locator('.epub-frame > [data-chapter]').evaluate_all('nodes => nodes.map(node => [node.dataset.chapter, node.className, node.getBoundingClientRect().height, node.offsetTop])')
                 if width == 1100:
-                    self.page.route('**/*chapter-1.xhtml', lambda route: route.fulfill(status=503, body='temporary fixture failure'))
+                    self.page.route('**/*chapter-0001.xhtml', lambda route: route.fulfill(status=503, body='temporary fixture failure'))
                     self.assertTrue(self.page.evaluate('async () => {try {await __goChapter(1); return false;} catch (_) {return true;}}'))
                     self.assertGreater(marker.evaluate('node => node.getBoundingClientRect().height'), 1600)
-                    self.page.unroute('**/*chapter-1.xhtml')
+                    self.page.unroute('**/*chapter-0001.xhtml')
                 self.assertTrue(self.page.evaluate('__goChapter(1)'))
                 self.settle_chapters()
                 after = self.page.locator('#viewport').evaluate('node => node.scrollHeight')
@@ -318,7 +319,7 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.page.locator('.full-search-result').first.click()
         self.page.wait_for_function('() => document.querySelector(".reader-epub-chapter[data-chapter=\\"1\\"] mark")')
         self.assertEqual(self.page.locator('mark.full-search-highlight').text_content(), 'needle')
-        self.assertGreater(sum(url.endswith('chapter-1.xhtml') for url in requested), 1)
+        self.assertGreater(sum(url.endswith('chapter-0001.xhtml') for url in requested), 1)
 
 
 
