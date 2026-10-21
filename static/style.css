@@ -672,6 +672,8 @@ body.light .header-logo-icon-light {
   transition: background var(--transition);
   font-size: 13px;
   color: var(--on-surface);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 21px;
 }
 
 .browser-item:hover, .browser-item:focus-visible {
@@ -755,6 +757,8 @@ button.browser-item { width: 100%; text-align: left; }
   padding: 8px 12px;
   cursor: pointer;
   transition: background var(--transition);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 18px;
 }
 
 .repo-list-item:hover, .repo-list-item:focus-visible {
