@@ -5036,7 +5036,9 @@ function renderSidebar(routeId) {
 }
 
 function renderRepoListItems(repos) {
+  const previousKey = activeSidebarScrollKey;
   activateSidebarScrollKey("global");
+  if (previousKey === "global") rememberSidebarScroll();
   const focused = DOM.sidebarContent.contains(document.activeElement) ? document.activeElement.closest('.repo-list-item') : null;
   var ordered = (repos || []).slice().sort(function(a, b) {
     return (a.count || 0) - (b.count || 0) ||
