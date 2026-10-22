@@ -274,16 +274,19 @@ class SearchAccessibilityTests(unittest.TestCase):
           const repos=Array.from({length:240},(_,index)=>({
             name:`VoiceOfML/Repo-${String(index).padStart(3,'0')}`,count:index
           }));
-          renderRepoListItems(repos);
+          // Isolate the manual list from late startup sidebar responses.
+          const renderItems=renderRepoListItems;
+          renderItems(repos);
           await new Promise(resolve=>{
             const wait=()=>sidebarScrollRestoring?requestAnimationFrame(wait):resolve();
             requestAnimationFrame(wait);
           });
+          renderRepoListItems=()=>{};
           DOM.sidebarContent.scrollTop=480;
           DOM.sidebarContent.dispatchEvent(new Event('scroll'));
           await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
           const saved=sidebarScrollPositions.get('global');
-          renderRepoListItems(repos);
+          renderItems(repos);
           return {saved, restored:DOM.sidebarContent.scrollTop,
             height:DOM.sidebarContent.scrollHeight, client:DOM.sidebarContent.clientHeight};
         }""")
