@@ -5089,42 +5089,35 @@ async function renderRepoList(routeId) {
 }
 
 function renderBrowserListItems(list, data, currentRepo, path) {
-  const fragment = document.createDocumentFragment();
   const folderIcon = ICONS.folder.replace("<svg", '<svg aria-hidden="true"');
+  var html = "";
   for (var j = 0; j < (data.folders || []).length; j++) {
     var f = data.folders[j];
-    var div = document.createElement("button");
-    div.type = 'button';
-    div.setAttribute('aria-label', '打开文件夹：' + f.name);
-    div.className = "browser-item";
-    div.dataset.type = "folder";
-    div.dataset.path = f.path;
-    div.innerHTML = folderIcon + '<span class="browser-name">' + escapeHTML(f.name) + '</span><span class="browser-count">' + (f.count || 0).toLocaleString() + '</span>';
-    fragment.appendChild(div);
+    var folderLabel = escapeHTML(f.name);
+    html += '<button type="button" class="browser-item" aria-label="打开文件夹：' + folderLabel +
+      '" data-type="folder" data-path="' + escapeHTML(f.path || "") + '">' + folderIcon +
+      '<span class="browser-name">' + folderLabel + '</span><span class="browser-count">' +
+      (f.count || 0).toLocaleString() + '</span></button>';
   }
   for (var k = 0; k < (data.files || []).length; k++) {
     var f2 = data.files[k];
-    var div2 = document.createElement("div");
-    div2.className = "browser-item";
     var iconType = getFileIconType(f2.ext);
     var sizeStr = formatSize(f2.size);
     var browserFileName = getBrowserFileName(f2);
-    div2.dataset.type = "file";
-    div2.dataset.filename = browserFileName;
-    div2.setAttribute('role', 'group');
-    div2.setAttribute('aria-label', browserFileName);
+    var fileLabel = escapeHTML(browserFileName);
     var browserFileLink = getBrowserFileLink(currentRepo, path || "", f2);
-    div2.dataset.link = browserFileLink;
     var warmReaderLink = getBrowserReaderUrl(f2, currentRepo, path);
-    if (warmReaderLink) div2.dataset.readerUrl = warmReaderLink;
     var fileIcon = (ICONS[iconType] || ICONS.file).replace("<svg", '<svg aria-hidden="true"');
-    div2.innerHTML = fileIcon +
-      '<button type="button" class="browser-name" aria-label="' + (warmReaderLink ? '打开阅读器：' : '下载文件：') + escapeHTML(browserFileName) + '">' + escapeHTML(browserFileName) + '</button>' +
-      '<button type="button" class="browser-action" aria-label="下载：' + escapeHTML(browserFileName) + '" data-download="1">下载</button>' +
-      (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '');
-    fragment.appendChild(div2);
+    html += '<div class="browser-item" role="group" aria-label="' + fileLabel +
+      '" data-type="file" data-filename="' + fileLabel + '" data-link="' + escapeHTML(browserFileLink) + '"' +
+      (warmReaderLink ? ' data-reader-url="' + escapeHTML(warmReaderLink) + '"' : '') + '>' + fileIcon +
+      '<button type="button" class="browser-name" aria-label="' +
+      (warmReaderLink ? '打开阅读器：' : '下载文件：') + fileLabel + '">' + fileLabel + '</button>' +
+      '<button type="button" class="browser-action" aria-label="下载：' + fileLabel +
+      '" data-download="1">下载</button>' + (sizeStr ? '<span class="browser-size">' + sizeStr + '</span>' : '') +
+      '</div>';
   }
-  list.replaceChildren(fragment);
+  list.innerHTML = html;
   restoreSidebarScroll();
 }
 
