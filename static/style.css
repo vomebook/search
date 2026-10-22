@@ -697,6 +697,20 @@ body.light .left-sidebar.expanded-wide .browser-item:nth-child(even) {
   background: var(--surface-variant);
 }
 
+.browser-item .browser-file-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: 18px 18px;
+  mask-size: 18px 18px;
+}
+
 .browser-item .browser-name {
   flex: 1;
   min-width: 0;

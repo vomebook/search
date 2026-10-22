@@ -348,6 +348,13 @@ class SearchAccessibilityTests(unittest.TestCase):
           },true);
           navigateToReader=()=>true;
         }''')
+        icon = self.page.evaluate('''()=>{
+          const node=document.querySelector('#sidebar-content .browser-item[data-type="file"] .browser-file-icon');
+          const style=getComputedStyle(node);
+          return {width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height,
+            mask:style.maskImage!=='none'||style.webkitMaskImage!=='none'};
+        }''')
+        self.assertEqual(icon, {"width": 18, "height": 18, "mask": True})
         self.page.get_by_role('button', name='打开文件夹：inner', exact=True).press('Enter')
         self.page.locator('.crumb-item').first.press('Enter')
         self.assertEqual(self.page.evaluate('navigations.slice(1)'), [['repo', 'Test', 'docs/sub/inner'], ['repo', 'Test', '']])
