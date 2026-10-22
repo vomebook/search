@@ -275,7 +275,10 @@ class SearchAccessibilityTests(unittest.TestCase):
             name:`VoiceOfML/Repo-${String(index).padStart(3,'0')}`,count:index
           }));
           renderRepoListItems(repos);
-          await new Promise(resolve=>requestAnimationFrame(resolve));
+          await new Promise(resolve=>{
+            const wait=()=>sidebarScrollRestoring?requestAnimationFrame(wait):resolve();
+            requestAnimationFrame(wait);
+          });
           DOM.sidebarContent.scrollTop=480;
           DOM.sidebarContent.dispatchEvent(new Event('scroll'));
           await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
