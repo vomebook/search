@@ -97,6 +97,29 @@ const ICONS = {
   database: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
 };
 
+let sidebarIconStyleSheet = null;
+
+function ensureSidebarIconStyles() {
+  if (sidebarIconStyleSheet) return;
+  const style = document.createElement("style");
+  let css = "";
+  for (const [key, markup] of Object.entries(ICONS)) {
+    const svg = markup
+      .replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"')
+      .replace(/currentColor/g, "#000");
+    const data = "data:image/svg+xml," + encodeURIComponent(svg);
+    css += `.browser-file-icon.icon-${key}{-webkit-mask-image:url("${data}");mask-image:url("${data}")}`;
+  }
+  style.textContent = css;
+  document.head.appendChild(style);
+  sidebarIconStyleSheet = style;
+}
+
+function sidebarIconMarkup(key) {
+  ensureSidebarIconStyles();
+  return `<span class="browser-file-icon icon-${key}" aria-hidden="true"></span>`;
+}
+
 let extensionCounts = {};
 let repoExtensionCounts = {};
 let repoList = [];
@@ -5091,7 +5114,7 @@ async function renderRepoList(routeId) {
 }
 
 function renderBrowserListItems(list, data, currentRepo, path) {
-  const folderIcon = ICONS.folder.replace("<svg", '<svg aria-hidden="true"');
+  const folderIcon = sidebarIconMarkup("folder");
   var html = "";
   for (var j = 0; j < (data.folders || []).length; j++) {
     var f = data.folders[j];
@@ -5109,7 +5132,7 @@ function renderBrowserListItems(list, data, currentRepo, path) {
     var fileLabel = escapeHTML(browserFileName);
     var browserFileLink = getBrowserFileLink(currentRepo, path || "", f2);
     var warmReaderLink = getBrowserReaderUrl(f2, currentRepo, path);
-    var fileIcon = (ICONS[iconType] || ICONS.file).replace("<svg", '<svg aria-hidden="true"');
+    var fileIcon = sidebarIconMarkup(iconType);
     html += '<div class="browser-item" role="group" aria-label="' + fileLabel +
       '" data-type="file" data-filename="' + fileLabel + '" data-link="' + escapeHTML(browserFileLink) + '"' +
       (warmReaderLink ? ' data-reader-url="' + escapeHTML(warmReaderLink) + '"' : '') + '>' + fileIcon +
