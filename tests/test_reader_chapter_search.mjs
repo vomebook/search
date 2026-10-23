@@ -82,4 +82,13 @@ assert.deepEqual(await resultPage(indexedChapters, "手机", filteredCount.count
   filteredCount.firstPage);
 assert.throws(() => validateIndex({ version: 1, kind: "epub-search-index", chapters: chapters.slice(0, 1) }, chapters));
 assert.throws(() => validateIndex({ version: 1, kind: "epub-search-index", chapters: [chapters[1], chapters[0]] }, chapters));
+const exactIndex = { version: 1, kind: "epub-search-index", text_profile: "dom-text-v1", chapters };
+assert.equal(validateIndex(exactIndex, chapters, "dom-text-v1").length, 2);
+assert.throws(() => validateIndex(exactIndex, chapters));
+assert.throws(() => validateIndex({ version: 1, kind: "epub-search-index", chapters }, chapters, "dom-text-v1"));
+assert.throws(() => validateIndex({ ...exactIndex, text_profile: "unknown" }, chapters, "unknown"));
+const literals = [{ index: 1, title: "literal", path: "chapters/1.xhtml", text: "&#0 &nbsp; ".repeat(70) }];
+const literalCounts = await countMatches(literals, "&nbsp;", () => true);
+assert.equal(literalCounts.total, 70);
+assert.equal((await resultPage(literals, "&nbsp;", literalCounts.counts, 50, () => true)).length, 20);
 console.log("chapter search: complete counts, paging, literal matches, Unicode boundaries, cancellation and index identity passed");

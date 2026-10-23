@@ -44,10 +44,13 @@ async function readBounded(stream, limit, signal) {
   }
 }
 
-export function validateIndex(data, chapters) {
+export function validateIndex(data, chapters, textProfile) {
   if (![1, 2].includes(data?.version) || data.kind !== "epub-search-index" ||
       !Array.isArray(data.chapters) || data.chapters.length !== chapters.length)
     throw new Error("全文搜索索引不完整，请重试");
+  if ((textProfile !== undefined && textProfile !== "dom-text-v1") ||
+      data.text_profile !== textProfile)
+    throw new Error("全文搜索索引文本格式不一致，请重试");
   for (let i = 0; i < chapters.length; i++) {
     const item = data.chapters[i], expected = chapters[i];
     if (item?.index !== expected.index || item.path !== expected.path || typeof item.text !== "string")
@@ -217,7 +220,7 @@ async function loadIndex() {
     if (bytes.length !== index.bytes || sha !== index.sha256) throw new Error("全文搜索索引校验失败，请重试");
     const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
     const text = await readBounded(stream, TEXT_LIMIT, controller.signal);
-    const loaded = validateIndex(JSON.parse(new TextDecoder().decode(text)), expected);
+    const loaded = validateIndex(JSON.parse(new TextDecoder().decode(text)), expected, index.text_profile);
     if (controller.signal.aborted) throw aborted();
     chapters = loaded;
     return loaded;
