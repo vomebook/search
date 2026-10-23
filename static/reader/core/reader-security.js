@@ -237,6 +237,8 @@
             !Number.isInteger(item.depth) || item.depth < 0 || item.depth > 64 ||
             typeof item.fragment !== "string") throw error("EPUB_INVALID");
     }
+    if (manifest.search_index?.text_profile !== undefined &&
+        manifest.search_index.text_profile !== "dom-text-v1") throw error("EPUB_INVALID");
     return manifest;
   }
   function validatePdfPageManifest(manifest) {

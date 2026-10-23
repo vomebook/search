@@ -1619,6 +1619,53 @@ class ReaderRefactorTest(unittest.TestCase):
                     self.assertEqual(self.page.locator('.reader-epub-chapter[data-chapter="1"] mark').all_text_contents(), ['needle'])
                     self.assertEqual(self.page.locator('.reader-chapter-search-heading').count(), 0)
 
+    def test_chapter_search_exact_dom_profile_preserves_literals_and_legacy_offsets(self):
+        documents = {}
+        cases = [('dom-text-v1', 'c'), (None, 'd')]
+        for profile, identity in cases:
+            prefix = 'chapters/ebook/chm/' + identity * 64 + '/' + 'a' * 16 + '/'
+            body = '<h1>Start</h1>' + '<p>literal &amp;#0 &amp;nbsp; tail</p>' * 65 + '<p>end</p>'
+            literal = 'literal &#0 &nbsp; tail' if profile else 'literal � tail'
+            text = 'Start ' + ' '.join([literal] * 65) + ' end'
+            chapter = dict(index=1, title='literal', path='chapters/chapter-0001.xhtml', bytes=len(body.encode()))
+            data = dict(version=1, kind='epub-search-index', chapters=[dict(chapter, text=text)])
+            if profile:
+                data['text_profile'] = profile
+            packed = gzip.compress(json.dumps(data).encode(), mtime=0)
+            ref = dict(path='epub-search-index.json.gz', bytes=len(packed), sha256=hashlib.sha256(packed).hexdigest())
+            if profile:
+                ref['text_profile'] = profile
+            manifest = dict(version=1, kind='epub-chapters', chapters=[chapter], search_index=ref)
+            documents[prefix+'chapter-manifest.json'] = ('application/json', json.dumps(manifest))
+            documents[prefix+'epub-search-index.json.gz'] = ('application/gzip', packed)
+            documents[prefix+chapter['path']] = ('text/html', body)
+
+        def serve(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)['path'][0]
+            mime, body = documents[path]
+            route.fulfill(content_type=mime, body=body, headers={'Access-Control-Allow-Origin':'*'})
+
+        self.context.route('**/api/reader-bucket-resource**', serve)
+        for profile, identity in cases:
+            with self.subTest(profile=profile):
+                prefix = 'chapters/ebook/chm/' + identity * 64 + '/' + 'a' * 16 + '/'
+                source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':prefix+'chapter-manifest.json'})
+                self.open(self.reader_url('epub-chapters', url=source))
+                for query in (['&nbsp;', '&#0', 'tail'] if profile else ['tail']):
+                    support.open_reader_panel(self.page)
+                    if not self.page.locator('#full-search-input').is_visible():
+                        self.page.locator('#full-search-toggle').click()
+                    self.page.locator('#full-search-input').fill(query)
+                    self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '65 个结果'")
+                    self.assertEqual(self.page.locator('.full-search-result').count(), 50)
+                    self.page.locator('#full-search-page').fill('2')
+                    self.page.locator('#full-search-page').dispatch_event('change')
+                    self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '51.'")
+                    self.assertEqual(self.page.locator('.full-search-result').count(), 15)
+                    self.page.locator('.full-search-result').last.click()
+                    self.page.wait_for_function("query => document.querySelector('mark.full-search-highlight')?.textContent === query", arg=query)
+                    self.assertIn('&#0 &nbsp;', self.page.locator('.reader-epub-chapter').inner_text())
+
     def test_bucket_chapter_stream_loads_manifest_chapter_and_resource(self):
         prefix = "chapters/ebook/epub/" + "c" * 64 + "/" + "b" * 16 + "/"
         chapter = '<html><body><h1>Bucket chapter</h1><img src="../resources/shared/cover.png"></body></html>'
