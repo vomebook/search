@@ -1,3 +1,13 @@
+export function stripMarkdownFrontMatter(markdown) {
+  // Marxists-Library Markdown carries YAML metadata for EPUB generation and
+  // source provenance. It is not article text; remove only a leading, keyed
+  // block so a body that starts with a horizontal rule is left untouched.
+  const text = String(markdown ?? "").replace(/^\uFEFF/, "");
+  const match = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!match || !/^[A-Za-z][\w-]*[ \t]*:/m.test(match[1])) return text;
+  return text.slice(match[0].length);
+}
+
 export function createReaderHtmlFormat(readerContext) {
   function normalizeEpubDocument(doc) {
     // Legacy CHM conversions can use an XHTML prefix even in HTML content.
@@ -451,7 +461,7 @@ export function createReaderHtmlFormat(readerContext) {
       const text = new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title)).decode(bytes);
       const article = document.createElement("article");
       article.className = "reader-markdown";
-      article.innerHTML = DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } });
+      article.innerHTML = DOMPurify.sanitize(marked.parse(stripMarkdownFrontMatter(text)), { USE_PROFILES: { html: true } });
       readerContext.content.appendChild(article);
       readerContext.setToc(readerContext.headingTocEntries(article));
     }
