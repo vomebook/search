@@ -7091,20 +7091,31 @@ async function init() {
   restoreReaderFromSession();
   // Keep the first search paint independent of the multi-megabyte Reader sidecar.
   // API results already carry Reader fields; the sidecar is only enrichment for
-  // local snapshots and directory browsing.
-  const loadReaderAssetsWhenIdle = function() {
-    loadReaderAssets().then(function() {
-      refreshResultReaderActions();
-      if (STATE.mode === "repo") {
-        renderFilters(routeRenderId);
+  // local snapshots and directory browsing. Load it on the first real
+  // interaction, or six seconds after load when the page never interacts.
+  const scheduleReaderAssetsLoad = function() {
+    var loaded = false;
+    var load = function() {
+      if (loaded) return;
+      loaded = true;
+      for (const type of ["pointerdown", "keydown", "focusin", "touchstart"]) {
+        document.removeEventListener(type, load, true);
       }
-    });
+      loadReaderAssets().then(function() {
+        refreshResultReaderActions();
+        if (STATE.mode === "repo") {
+          renderFilters(routeRenderId);
+        }
+      });
+    };
+    for (const type of ["pointerdown", "keydown", "focusin", "touchstart"]) {
+      document.addEventListener(type, load, { capture: true, passive: true });
+    }
+    var fallback = function() { setTimeout(load, 6000); };
+    if (document.readyState === "complete") fallback();
+    else window.addEventListener("load", fallback, { once: true });
   };
-  if (typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(loadReaderAssetsWhenIdle, { timeout: 2500 });
-  } else {
-    setTimeout(loadReaderAssetsWhenIdle, 1200);
-  }
+  scheduleReaderAssetsLoad();
   setupHitokoto();
 }
 document.addEventListener("DOMContentLoaded", init);
