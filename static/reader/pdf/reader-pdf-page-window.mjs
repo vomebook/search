@@ -636,13 +636,14 @@ export function createReaderPdfPageWindow(readerContext) {
       shell.tabIndex = 0;
       shell.setAttribute("role", "region");
       shell.setAttribute("aria-label", `第 ${page} 页`);
-      const canvas = document.createElement("canvas");
-      canvas.setAttribute("aria-hidden", "true");
+      // The canvas is created by the renderer on first use: a 300x150 default
+      // canvas per shell costs ~180 KB, so a 250-page PDF held ~45 MB of blank
+      // backing stores before any page was visible.
       const textLayer = document.createElement("div");
       textLayer.className = "reader-pdf-text";
       textLayer.setAttribute("role", "document");
       textLayer.setAttribute("aria-label", `第 ${page} 页正文`);
-      shell.append(canvas, textLayer);
+      shell.append(textLayer);
       const pageState = document.createElement("div");
       pageState.className = "reader-page-state";
       readerContext.setPdfPageLoadingState(pageState, page);
