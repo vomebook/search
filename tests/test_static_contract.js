@@ -81,6 +81,7 @@ test("background corpus loading uses idle scheduling independently of API prefet
 });
 test("HTML preloads the default first-page payload before styles and application startup", () => {
   assert.match(html, /<link rel="preload" href="\/search\/data\/initial\/global\.json" as="fetch" crossorigin="anonymous">/);
+  assert.ok(!html.includes('reader_assets.json.gz" as="fetch"'));
   assert.ok(html.indexOf("/api/ping") < html.indexOf('rel="preload"'));
   assert.ok(html.indexOf('rel="preload"') < html.indexOf('href="static/style.css"'));
 });
@@ -441,7 +442,8 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   const randomReaderBlock = app.slice(app.indexOf("async function randomTxt"), app.indexOf("let toastTimer"));
   assert.match(randomReaderBlock, /if \(!originalCount && !readerAssets\) await loadReaderAssets\(\);\s*else loadReaderAssets\(\);/);
   assert.doesNotMatch(randomReaderBlock, /try \{\s*await loadReaderAssets\(\)/);
-  assert.match(app, /loadReaderAssets\(\)\.then\(function\(\) \{\s*refreshResultReaderActions\(\);/);
+  assert.match(app, /const loadReaderAssetsWhenIdle = function\(\) \{[\s\S]*?loadReaderAssets\(\)\.then\(function\(\) \{\s*refreshResultReaderActions\(\);/);
+  assert.match(app, /requestIdleCallback\(loadReaderAssetsWhenIdle, \{ timeout: 2500 \}\)/);
   assert.match(readerHtml, /id="page-number"/);
   assert.match(reader, /document\.querySelector\("\.page-controls"\)\.hidden = !capability\.features\.pagination/);
   assert.match(reader, /document\.createElement\(mode\)/);

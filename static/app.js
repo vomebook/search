@@ -7089,12 +7089,22 @@ async function init() {
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
   ROUTER.apply();
   restoreReaderFromSession();
-  loadReaderAssets().then(function() {
-    refreshResultReaderActions();
-    if (STATE.mode === "repo") {
-      renderFilters(routeRenderId);
-    }
-  });
+  // Keep the first search paint independent of the multi-megabyte Reader sidecar.
+  // API results already carry Reader fields; the sidecar is only enrichment for
+  // local snapshots and directory browsing.
+  const loadReaderAssetsWhenIdle = function() {
+    loadReaderAssets().then(function() {
+      refreshResultReaderActions();
+      if (STATE.mode === "repo") {
+        renderFilters(routeRenderId);
+      }
+    });
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(loadReaderAssetsWhenIdle, { timeout: 2500 });
+  } else {
+    setTimeout(loadReaderAssetsWhenIdle, 1200);
+  }
   setupHitokoto();
 }
 document.addEventListener("DOMContentLoaded", init);
