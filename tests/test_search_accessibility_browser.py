@@ -271,6 +271,10 @@ class SearchAccessibilityTests(unittest.TestCase):
         result = self.page.evaluate("""async()=>{
           sidebarScrollPositions.clear();
           activeSidebarScrollKey='';
+          // The fixture may start on a narrow viewport where the sidebar is closed;
+          // a hidden element ignores scrollTop, which made this test flaky.
+          STATE.leftSidebarOpen=true;
+          updateSidebarVisibility();
           const repos=Array.from({length:240},(_,index)=>({
             name:`VoiceOfML/Repo-${String(index).padStart(3,'0')}`,count:index
           }));
@@ -282,12 +286,25 @@ class SearchAccessibilityTests(unittest.TestCase):
             requestAnimationFrame(wait);
           });
           renderRepoListItems=()=>{};
-          DOM.sidebarContent.scrollTop=480;
+          // Layout can still be pending in CI: wait (bounded) for a real scroll
+          // range and rows before assigning scrollTop, or it clamps to 0.
+          await new Promise(resolve=>{
+            let frames=0;
+            const wait=()=>{
+              const range=DOM.sidebarContent.scrollHeight - DOM.sidebarContent.clientHeight;
+              if (++frames > 60 || (range > 0 && DOM.sidebarContent.querySelector('.repo-list-item')))
+                resolve();
+              else requestAnimationFrame(wait);
+            };
+            requestAnimationFrame(wait);
+          });
+          const target=Math.min(480, DOM.sidebarContent.scrollHeight - DOM.sidebarContent.clientHeight);
+          DOM.sidebarContent.scrollTop=target;
           DOM.sidebarContent.dispatchEvent(new Event('scroll'));
           await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
           const saved=sidebarScrollPositions.get('global');
           renderItems(repos);
-          return {saved, restored:DOM.sidebarContent.scrollTop,
+          return {saved, target, restored:DOM.sidebarContent.scrollTop,
             height:DOM.sidebarContent.scrollHeight, client:DOM.sidebarContent.clientHeight};
         }""")
         self.assertGreater(result["height"], result["client"])
