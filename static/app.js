@@ -7103,9 +7103,6 @@ async function init() {
       }
       loadReaderAssets().then(function() {
         refreshResultReaderActions();
-        if (STATE.mode === "repo") {
-          renderFilters(routeRenderId);
-        }
       });
     };
     for (const type of ["pointerdown", "keydown", "focusin", "touchstart"]) {

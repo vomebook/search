@@ -77,8 +77,10 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#header svg:not([aria-hidden="true"])').count(), 0)
 
     def test_folder_bulk_controls_preserve_filters_and_cancel_superseded_rendering(self):
+        self.page.wait_for_function('filterRenderDone === filterRenderToken')
         self.page.locator('#settings-btn').click()
         self.page.evaluate('''()=>{
+          routeRenderId++;
           const node=(path,children=[])=>({path,name:path||'根目录',children,count:1,
             isRoot:!path,hasChildren:!!children.length,hasDirectFiles:true,showSelfToggle:!!children.length});
           STATE.mode='repo';STATE.folderTree=[node('',[node('alpha',[node('alpha/deep',[node('alpha/deep/hit')])]),node('beta')])];
