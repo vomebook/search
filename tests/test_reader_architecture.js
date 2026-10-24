@@ -190,6 +190,26 @@ for (const [top, bottom, expected] of [[10, 90, 3], [70, 160, 2], [110, 190, 1],
   assert.strictEqual(priorityContext.pdfPagePriority({ getBoundingClientRect: () => ({ top, bottom }) }), expected)
 assert.strictEqual(priorityContext.normalizePdfPriority(true), 3)
 const sandbox = { self: {} }; sandbox.self = sandbox;
+const frontMatterSource = fs.readFileSync(path.join(root, 'static/reader/formats/reader-html-format.mjs'), 'utf8')
+const frontMatterStart = frontMatterSource.indexOf('export function stripMarkdownFrontMatter')
+const frontMatterEnd = frontMatterSource.indexOf('\n}\n', frontMatterStart)
+assert.ok(frontMatterStart >= 0 && frontMatterEnd > frontMatterStart, 'Markdown front matter helper')
+const frontMatterContext = {}
+vm.runInNewContext(
+  frontMatterSource.slice(frontMatterStart, frontMatterEnd + 3).replace(/^export /, '') +
+  ';this.stripMarkdownFrontMatter = stripMarkdownFrontMatter;',
+  frontMatterContext
+)
+const stripFrontMatter = frontMatterContext.stripMarkdownFrontMatter
+for (const [input, expected] of [
+  ['---\ntitle: "标题"\nauthor: "作者"\nsection: "分类"\ndate: "日期"\nsource: "https://example.invalid"\nsource_path: "chinese/a.htm"\n---\n# 正文\n', '# 正文\n'],
+  ['\uFEFF---\r\ntitle: "T"\r\n---\r\n正文', '正文'],
+  ['---\ntitle: "T"\n---', ''],
+  ['---\n\n---\n# Body', '---\n\n---\n# Body'],
+  ['# Body\n---\n', '# Body\n---\n'],
+  ['---\ntitle: "T"\n', '---\ntitle: "T"\n'],
+]) assert.strictEqual(stripFrontMatter(input), expected)
+assert.match(reader, /marked\.parse\(stripMarkdownFrontMatter\(text\)\)/)
 function loadExports(file, name) { vm.runInNewContext(fs.readFileSync(path.join(root, 'static', file), 'utf8'), sandbox); return sandbox[name]; }
 const contractFeatures = loadExports('reader/core/reader-contract.js', 'VoiceOfMLReader').features
 const runtimeMatrix = loadExports('reader/core/reader-runtime.js', 'VoiceOfMLReaderRuntime').FEATURE_MATRIX
