@@ -546,6 +546,7 @@ export function createReaderPdfRenderer(readerContext) {
         if (renderController.signal.aborted) throw readerContext.readerAbortError();
         const pdf = readerContext.pdfDocument;
         if (!pdf) throw readerContext.readerAbortError();
+        let canvas = null;
         do {
           delete shell.dataset.pendingRerender;
           const generation = readerContext.readerRuntime.currentGeneration("pdf"),
@@ -557,7 +558,12 @@ export function createReaderPdfRenderer(readerContext) {
             scale = Math.min(3, shell.clientWidth / base.width),
             viewport = page.getViewport({ scale }),
             outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
-          const canvas = shell.querySelector("canvas");
+          canvas = shell.querySelector("canvas");
+          if (!canvas) {
+            canvas = document.createElement("canvas");
+            canvas.setAttribute("aria-hidden", "true");
+            shell.prepend(canvas);
+          }
           canvas.width = Math.ceil(viewport.width * outputScale);
           canvas.height = Math.ceil(viewport.height * outputScale);
           canvas.style.width = "100%";
@@ -584,7 +590,7 @@ export function createReaderPdfRenderer(readerContext) {
           if (renderController.signal.aborted) throw readerContext.readerAbortError();
           if (!readerContext.isReaderGenerationCurrent("pdf", generation)) shell.dataset.pendingRerender = "1";
         } while (shell.dataset.pendingRerender);
-        shell.querySelector("canvas").classList.add("ready");
+        canvas.classList.add("ready");
         const pageState = shell.querySelector(".reader-page-state");
         if (pageState) pageState.hidden = true;
         shell.dataset.renderState = "rendered";
