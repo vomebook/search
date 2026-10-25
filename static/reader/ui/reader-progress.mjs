@@ -283,12 +283,9 @@ export function createReaderProgress(readerContext) {
     readerContext.progressPercent.textContent = `${percent.toFixed(1)}%`;
     if (readerContext.progressRange.getAttribute("aria-valuetext") !== readerContext.progressPercent.textContent)
       readerContext.progressRange.setAttribute("aria-valuetext", readerContext.progressPercent.textContent);
-    const hasChapters = readerContext.navigationState.tocEntries.length > 0,
-      hasPreviousChapter = hasChapters && readerContext.navigationState.currentChapterIndex > 0,
-      hasNextChapter =
-        hasChapters &&
-        readerContext.navigationState.currentChapterIndex >= 0 &&
-        readerContext.navigationState.currentChapterIndex < readerContext.navigationState.tocEntries.length - 1;
+    const hasChapters = readerContext.navigationState.tocEntries.some((entry) => !entry.group),
+      hasPreviousChapter = readerContext.adjacentTocIndex(-1) >= 0,
+      hasNextChapter = readerContext.adjacentTocIndex(1) >= 0;
     readerContext.chapterPrev.hidden = !hasChapters;
     readerContext.chapterNext.hidden = !hasChapters;
     readerContext.chapterPrev.disabled = !hasPreviousChapter;
@@ -432,6 +429,14 @@ export function createReaderProgress(readerContext) {
     }
   }
 
+  function adjacentTocIndex(direction) {
+    for (let index = readerContext.navigationState.currentChapterIndex + direction;
+      index >= 0 && index < readerContext.navigationState.tocEntries.length; index += direction) {
+      if (!readerContext.navigationState.tocEntries[index].group) return index;
+    }
+    return -1;
+  }
+
   return {
     scheduleSave,
     saveProgress,
@@ -453,6 +458,7 @@ export function createReaderProgress(readerContext) {
     restoreProgressState,
     flushEpubSeek,
     seekProgress,
-    activateChapter
+    activateChapter,
+    adjacentTocIndex
   };
 }

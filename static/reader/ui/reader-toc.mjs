@@ -110,6 +110,7 @@ export function createReaderToc(readerContext) {
 
   async function navigateTocEntry(index) {
     if (index < 0 || index >= readerContext.navigationState.tocEntries.length) return;
+    if (readerContext.navigationState.tocEntries[index].group) return;
     const generation = readerContext.beginReaderNavigation(),
       entry = readerContext.navigationState.tocEntries[index];
     try {
@@ -133,9 +134,17 @@ export function createReaderToc(readerContext) {
     row.style.setProperty("--toc-depth", String(entry.depth || 0));
     const link = document.createElement("div");
     link.className = "panel-item-main";
+    link.textContent = entry.label;
+    link.title = entry.label;
+    if (entry.group) {
+      row.classList.add("toc-group");
+      link.setAttribute("role", "heading");
+      link.setAttribute("aria-level", String(Math.min(6, (entry.depth || 0) + 1)));
+      row.appendChild(link);
+      return row;
+    }
     link.tabIndex = 0;
     link.setAttribute("role", "link");
-    link.textContent = entry.label;
     const activate = (event) => {
       const selection = getSelection();
       if (event?.type === "click" && selection?.toString() && selection.containsNode(link, true)) return;
@@ -171,6 +180,13 @@ export function createReaderToc(readerContext) {
   }
 
   let tocHintShown = false, tocHintPending = false, tocHintTimer = 0;
+  // Opening the Reader must not pop the directory for a trivial one (a cover, a
+  // preface, a single chapter); the panel stays one tap away in the toolbar.
+  const TOC_HINT_MIN_ENTRIES = 3;
+  // A one- or two-entry directory (a cover, a preface) is not worth opening the
+  // panel for; the reader opens on the content and the panel stays one tap away.
+  const tocHintHasEnoughEntries = () =>
+    readerContext.navigationState.tocEntries.filter((entry) => !entry.group).length > TOC_HINT_MIN_ENTRIES;
   const cancelTocHint = () => {
     clearTimeout(tocHintTimer);
     tocHintTimer = 0;
@@ -180,7 +196,7 @@ export function createReaderToc(readerContext) {
     tocHintTimer = 0;
     if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted || !tocHintPending) return;
     tocHintPending = false;
-    if (!readerContext.navigationState.tocEntries.length ||
+    if (!tocHintHasEnoughEntries() ||
         readerContext.panelState.open || readerContext.readerPanelInteractionSerial > 0 ||
         readerContext.readerUiHistoryState !== "base") {
       tocHintShown = true;
@@ -205,7 +221,7 @@ export function createReaderToc(readerContext) {
     readerContext.readerRuntime.track(() => { cancelTocHint(); phaseCleanup?.(); phaseCleanup = null; });
   }
   function hintReaderToc() {
-    if (tocHintShown || tocHintPending || !readerContext.navigationState.tocEntries.length) return;
+    if (tocHintShown || tocHintPending || !tocHintHasEnoughEntries()) return;
     ensureTocHintPhaseListener();
     tocHintPending = true;
     // Do not wait for the overall Reader phase: TOC availability itself is the
@@ -221,7 +237,7 @@ export function createReaderToc(readerContext) {
     }));
     readerContext.updateNavigationState({
       tocEntries: normalizedEntries,
-      currentChapterIndex: normalizedEntries.length ? 0 : -1
+      currentChapterIndex: normalizedEntries.findIndex((entry) => !entry.group)
     });
     const tocTab = document.querySelector("#toc-tab");
     tocTab.hidden = false;
@@ -306,7 +322,7 @@ export function createReaderToc(readerContext) {
     if (!tab) return;
     tab.hidden = !readerContext.navigationState.tocEntries.length;
     if (readerContext.navigationState.tocEntries.length && readerContext.navigationState.currentChapterIndex < 0)
-      readerContext.updateNavigationState({ currentChapterIndex: 0 });
+      readerContext.updateNavigationState({ currentChapterIndex: readerContext.navigationState.tocEntries.findIndex((entry) => !entry.group) });
   }
 
   return {
