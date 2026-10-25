@@ -403,6 +403,8 @@ const readerContext = {
   get setToc() { return setToc; }, set setToc(value) { setToc = value; },
   get setZoom() { return setZoom; }, set setZoom(value) { setZoom = value; },
   get settleReaderImages() { return settleReaderImages; }, set settleReaderImages(value) { settleReaderImages = value; },
+  get alignReaderDestination() { return alignReaderDestination; },
+  get reassertReaderDestination() { return reassertReaderDestination; },
   get showDownloadFeedback() { return showDownloadFeedback; }, set showDownloadFeedback(value) { showDownloadFeedback = value; },
   get sourceName() { return sourceName; },
   get sourceUrl() { return sourceUrl; }, set sourceUrl(value) { sourceUrl = value; },
@@ -438,6 +440,7 @@ const readerContext = {
   get zoomChangedByUser() { return zoomChangedByUser; }, set zoomChangedByUser(value) { zoomChangedByUser = value; },
   get zoomInput() { return zoomInput; },
   get activateChapter() { return activateChapter; }, set activateChapter(value) { activateChapter = value; },
+  get adjacentTocIndex() { return adjacentTocIndex; },
   get applyPageInversion() { return applyPageInversion; }, set applyPageInversion(value) { applyPageInversion = value; },
   get applyReaderTheme() { return applyReaderTheme; }, set applyReaderTheme(value) { applyReaderTheme = value; },
   get bookmarkEditFields() { return bookmarkEditFields; },
@@ -627,7 +630,7 @@ let {
   pageAtMarker, syncCurrentPageFromMarker, scheduleMarkerSync, restoreFormat,
   restoreInitialPosition, applyInitialRestoration, updateReadingProgressSummary, updateProgressTools,
   captureProgressState, restoreProgressState, flushEpubSeek, seekProgress,
-  activateChapter
+  activateChapter, adjacentTocIndex
 } = createReaderProgress(readerContext);
 
 let {
@@ -907,6 +910,23 @@ const readerPath = document.querySelector("#reader-path");
 const bookmarkRibbon = document.querySelector("#bookmark-ribbon");
 const bookmarkPopover = document.querySelector("#bookmark-popover");
 readerBindings.labelToolbarControls();
+
+// A demanded TOC/search destination lands on the viewport's top edge. Measuring the
+// element keeps that landing exact (scrollIntoView can also move ancestor scrollers),
+// and it can be re-asserted once for a late layout shift.
+const alignReaderDestination = (target, offset = 0) => {
+  if (!target?.isConnected) return null;
+  const delta = target.getBoundingClientRect().top - viewport.getBoundingClientRect().top - offset;
+  if (Math.abs(delta) > 0.5) viewport.scrollTop += delta;
+  return { target, offset, scrollTop: viewport.scrollTop };
+};
+const READER_REASSERT_SCROLL_LIMIT = 200;
+const reassertReaderDestination = (landing) => {
+  if (!landing?.target?.isConnected) return;
+  // A reader scroll since the landing means it is no longer the demanded destination.
+  if (Math.abs(viewport.scrollTop - landing.scrollTop) > READER_REASSERT_SCROLL_LIMIT) return;
+  alignReaderDestination(landing.target, landing.offset);
+};
 
 const foliateScrollAnchors = readerRuntime.track(
   VoiceOfMLReaderScroll.createScrollAnchorManager({
