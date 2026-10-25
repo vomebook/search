@@ -137,13 +137,12 @@ export function createReaderFoliateFormat(readerContext) {
     }
     const destination = anchor || node;
     readerContext.foliateScrollAnchors.invalidate();
-    readerContext.viewport.scrollTop = Math.max(
-      0,
-      readerContext.viewport.scrollTop +
-        destination.getBoundingClientRect().top -
-        readerContext.viewport.getBoundingClientRect().top -
-        8
-    );
+    const landing = readerContext.alignReaderDestination(destination, 8);
+    readerContext.foliateScrollAnchors.remember();
+    // Sections, images and fonts can still settle after the jump; re-assert the same
+    // destination once the reader is idle unless the reader scrolled away by then.
+    readerContext.foliateScrollAnchors.whenIdle(
+      () => readerContext.reassertReaderDestination(landing));
     readerContext.syncFoliateScrollLocation();
     readerContext.updateTocCurrentMark();
     readerContext.updateProgressTools();
@@ -326,6 +325,15 @@ export function createReaderFoliateFormat(readerContext) {
     }
     for (const link of doc.querySelectorAll("a[href]")) {
       const href = link.getAttribute("href") || "";
+      // An in-book link to a packaged image opens the image itself, not a dead chapter URL.
+      if (/\.(?:gif|png|jpe?g|webp)$/i.test(href)) {
+        const resource = archiveResourceUrl(href);
+        if (resource) {
+          link.setAttribute("href", resource);
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+        }
+      }
       if (/^(?:https?:|mailto:|tel:)/i.test(href)) {
         link.target = "_blank";
         link.rel = "noopener noreferrer";
@@ -527,11 +535,12 @@ export function createReaderFoliateFormat(readerContext) {
     const append = (items, depth = 0) => {
       for (const item of items || []) {
         const href = item?.href ? String(item.href) : "";
-        if (href)
+        if (href || item?.label)
           entries.push({
             label: item.label || "未命名章节",
             href,
             depth,
+            group: !href,
             activate: () => view.goTo(href)
           });
         append(item.subitems, depth + 1);
@@ -554,6 +563,11 @@ export function createReaderFoliateFormat(readerContext) {
           continue;
         }
         const entry = entries[next++];
+        if (entry.group) {
+          entry.sectionIndex = -1;
+          entry.fragment = "";
+          continue;
+        }
         try {
           const target = await view.book.resolveHref(entry.href),
             section = target && view.book.sections[target.index];
