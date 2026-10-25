@@ -212,10 +212,9 @@ export function createReaderChapterFormat(readerContext) {
       // this viewport's top edge, and scrollIntoView can also move ancestor scrollers.
       const landing = readerContext.alignReaderDestination(anchor);
       readerContext.foliateScrollAnchors.remember();
-      // Images and fonts can settle after the jump. Re-assert the same anchor once the
-      // reader is idle, unless the reader scrolled away in the meantime.
-      readerContext.foliateScrollAnchors.whenIdle(
-        () => readerContext.reassertReaderDestination(landing));
+      // Chapter images and lazy placeholders keep changing height after the jump; hold
+      // the anchor on the landing line until the layout settles.
+      readerContext.holdReaderDestination(anchor);
       readerContext.syncHeadingLocation();
       readerContext.updateProgressTools();
       readerContext.scheduleSave();

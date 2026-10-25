@@ -404,6 +404,7 @@ const readerContext = {
   get setZoom() { return setZoom; }, set setZoom(value) { setZoom = value; },
   get settleReaderImages() { return settleReaderImages; }, set settleReaderImages(value) { settleReaderImages = value; },
   get alignReaderDestination() { return alignReaderDestination; },
+  get holdReaderDestination() { return holdReaderDestination; },
   get reassertReaderDestination() { return reassertReaderDestination; },
   get showDownloadFeedback() { return showDownloadFeedback; }, set showDownloadFeedback(value) { showDownloadFeedback = value; },
   get sourceName() { return sourceName; },
@@ -923,9 +924,108 @@ const alignReaderDestination = (target, offset = 0) => {
 const READER_REASSERT_SCROLL_LIMIT = 200;
 const reassertReaderDestination = (landing) => {
   if (!landing?.target?.isConnected) return;
-  // A reader scroll since the landing means it is no longer the demanded destination.
   if (Math.abs(viewport.scrollTop - landing.scrollTop) > READER_REASSERT_SCROLL_LIMIT) return;
   alignReaderDestination(landing.target, landing.offset);
+};
+// Chapters, images and placeholders above the destination keep changing height for a
+// moment after a jump (a large book can double its height), so one correction is not
+// enough: hold the destination on the landing line until the layout settles, a short
+// budget ends, or the reader scrolls. User input is the only release signal: the browser
+// adjusts scrollTop by itself while content above grows, so a scrollTop delta cannot
+// distinguish that from a reader scroll.
+// A jump has to survive slow layout: chapter images and lazy placeholders can take
+// seconds to change height above the destination. Keep the destination on the landing
+// line until the content box stops changing for a real pause, a hold budget ends, or the
+// reader scrolls. Only real input releases early: the browser moves scrollTop itself while
+// content above grows, so a scrollTop delta cannot distinguish that from a reader scroll.
+const READER_HOLD_BUDGET_MS = 15000;
+// Images and inserted chapters arrive in bursts seconds apart, so wait out a long gap
+// before deciding the layout is final. Reader input still releases immediately.
+const READER_HOLD_QUIET_MS = 2000;
+const holdReaderDestination = (target, offset = 0) => {
+  if (!target?.isConnected) return () => {};
+  const viewport = (target.ownerDocument === document
+    ? document
+    : target.ownerDocument.defaultView?.document)?.querySelector("#viewport");
+  // Scroll the actual reading viewport; the landing line is its top edge.
+  const scope = viewport || target.parentElement || document.body;
+  const scopeTop = () => (viewport || scope).getBoundingClientRect().top;
+  let frame = 0, released = false, lastChange = performance.now(), deadline = lastChange + READER_HOLD_BUDGET_MS;
+  let lastScrollTop = scope.scrollTop;
+  const listeners = [];
+  const observers = [];
+  const detach = () => {
+    for (const [name, handler] of listeners) if (name) scope.removeEventListener?.(name, handler);
+    for (const cleanup of cleanupImages) cleanup();
+    listeners.length = 0;
+    for (const observer of observers) observer.disconnect?.();
+    observers.length = 0;
+  };
+  const release = () => {
+    released = true;
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    detach();
+  };
+  for (const name of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+    const handler = () => release();
+    listeners.push([name, handler]);
+    scope.addEventListener?.(name, handler, { passive: true });
+  }
+  const bump = () => { lastChange = performance.now(); };
+  if (typeof ResizeObserver === "function") {
+    const sizes = new ResizeObserver(bump);
+    // Watch the scrolling content (the box that actually grows), not the viewport.
+    const observed = new Set();
+    const watch = (node) => {
+      if (!node || observed.has(node) || observed.size >= 24) return;
+      observed.add(node);
+      sizes.observe(node);
+    };
+    watch(scope.firstElementChild);
+    watch(scope);
+    for (let node = target.parentElement; node && node !== scope; node = node.parentElement) watch(node);
+    observers.push(sizes);
+  }
+  if (typeof MutationObserver === "function") {
+    const mutations = new MutationObserver(bump);
+    mutations.observe(scope, { childList: true, subtree: true, attributes: true });
+    observers.push(mutations);
+  }
+  // A chapter image finishing changes the document position without resizing the
+  // viewport element, so follow load/error on every image currently in the reader.
+  const cleanupImages = [];
+  for (const image of target.parentElement?.querySelectorAll("img") || []) {
+    if (image.complete) continue;
+    const handler = () => bump();
+    image.addEventListener("load", handler, { once: true });
+    image.addEventListener("error", handler, { once: true });
+    cleanupImages.push(() => {
+      image.removeEventListener("load", handler);
+      image.removeEventListener("error", handler);
+    });
+  }
+  if (cleanupImages.length) listeners.push([], []);
+  const loop = () => {
+    frame = 0;
+    if (released) return;
+    const now = performance.now();
+    if (!target.isConnected || now >= deadline) return release();
+    const delta = target.getBoundingClientRect().top - scopeTop() - offset;
+    if (Math.abs(delta) > 0.5) {
+      scope.scrollTop += delta;
+      bump();
+    } else if (now - lastChange >= READER_HOLD_QUIET_MS) {
+      return release();
+    } else if (Math.abs(scope.scrollTop - lastScrollTop) > 1) {
+      // The browser re-anchored the view or a late insert moved it: keep holding.
+      lastScrollTop = scope.scrollTop;
+      bump();
+    }
+    frame = requestAnimationFrame(loop);
+  };
+  frame = requestAnimationFrame(loop);
+  return release;
 };
 
 const foliateScrollAnchors = readerRuntime.track(
