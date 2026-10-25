@@ -139,10 +139,9 @@ export function createReaderFoliateFormat(readerContext) {
     readerContext.foliateScrollAnchors.invalidate();
     const landing = readerContext.alignReaderDestination(destination, 8);
     readerContext.foliateScrollAnchors.remember();
-    // Sections, images and fonts can still settle after the jump; re-assert the same
-    // destination once the reader is idle unless the reader scrolled away by then.
-    readerContext.foliateScrollAnchors.whenIdle(
-      () => readerContext.reassertReaderDestination(landing));
+    // Section heights and images keep settling after the jump; hold the destination on
+    // the landing line until the layout stops moving.
+    readerContext.holdReaderDestination(destination, 8);
     readerContext.syncFoliateScrollLocation();
     readerContext.updateTocCurrentMark();
     readerContext.updateProgressTools();

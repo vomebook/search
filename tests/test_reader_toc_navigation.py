@@ -74,6 +74,7 @@ class TocNavigationTests(unittest.TestCase):
               window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i),
                 state:()=>tocVirtualState,
                 align:(selector, offset)=>alignReaderDestination(document.querySelector(selector), offset || 0),
+                hold:(target, offset)=>holdReaderDestination(target, offset),
                 reassert:landing=>reassertReaderDestination(landing),
                 scrollTop:()=>viewport.scrollTop};
             ''')
@@ -220,6 +221,48 @@ class TocNavigationTests(unittest.TestCase):
                              f"virtualized row {index} landed on the wrong entry")
 
     # ---- landing re-assertion ----
+
+    def test_landing_holds_while_chapters_above_keep_growing(self):
+        """A large book keeps inserting/flattening chapters above the destination after the
+        jump. The browser's own scroll anchoring does not cover these inserts, so the landing
+        must be re-aligned while the document grows."""
+        self.open_chapters(120)
+        self.click_entry(99)
+        frames = self.page.evaluate("""async () => {
+            const target = document.querySelector('.reader-epub-chapter[data-chapter="100"]');
+            const viewport = document.querySelector('#viewport');
+            // Scroll anchoring would hide the drift this test is about.
+            viewport.style.overflowAnchor = 'none';
+            const frame = document.querySelector('.epub-frame');
+            frame.style.overflowAnchor = 'none';
+            const offsets = [];
+            for (let step = 0; step < 6; step += 1) {
+                const spacer = document.createElement('div');
+                spacer.style.height = '400px';
+                frame.insertBefore(spacer, target);
+                // Two frames give the hold loop its chance to re-align.
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                offsets.push(Math.round((target.getBoundingClientRect().top -
+                    viewport.getBoundingClientRect().top) * 10) / 10);
+            }
+            return offsets;
+        }""")
+        self.assertTrue(all(abs(value) < 2 for value in frames),
+                        f"landing drifted while content above grew: {frames}")
+
+    def test_landing_releases_on_reader_scroll(self):
+        self.open_chapters(60)
+        self.click_entry(29)
+        result = self.page.evaluate("""async () => {
+            const viewport = document.querySelector('#viewport');
+            const before = viewport.scrollTop;
+            viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: 600, bubbles: true }));
+            viewport.scrollTop = before + 1500;
+            await new Promise(resolve => setTimeout(resolve, 400));
+            return {before, after: viewport.scrollTop};
+        }""")
+        self.assertGreaterEqual(result["after"] - result["before"], 1400,
+                                "a reader scroll must not be pulled back by the hold")
 
     def test_landing_is_reasserted_after_a_late_layout_shift(self):
         self.open_chapters(40)
