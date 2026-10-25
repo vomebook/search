@@ -2341,8 +2341,11 @@ class ReaderRefactorTest(unittest.TestCase):
           __tocProbe.promise.finally(() => clearInterval(timer)); __tocProbe.release();''')
         self.page.evaluate('__tocProbe.promise')
         entries = self.page.evaluate('__tocProbe.entries')
-        self.assertEqual(entries[:-1], [dict(label=f'Chapter {n}', section=(0, -1, 1)[n % 3],
-                                           fragment=f'anchor {n}', anchor=n) for n in range(85)])
+        # A href-less navigation heading stays in the directory as a group row (it has no
+        # destination), so every entry keeps its original order.
+        self.assertEqual(entries[0], {'label':'Volume', 'section':-1, 'fragment':'', 'anchor':None})
+        self.assertEqual(entries[1:-1], [dict(label=f'Chapter {n}', section=(0, -1, 1)[n % 3],
+                                            fragment=f'anchor {n}', anchor=n) for n in range(85)])
         self.assertEqual(entries[-1], {'label':'Invalid', 'section':-1, 'fragment':'', 'anchor':None})
         self.assertEqual(self.page.evaluate('[__tocProbe.peak, __tocProbe.scans, __tocProbe.calls]'), [8, 0, 86])
         self.assertGreaterEqual(len(self.page.evaluate('__tocProbe.ticks')), 2)
