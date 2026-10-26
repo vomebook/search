@@ -253,7 +253,7 @@ function loadReaderAssets() {
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
   var asset = readerAssets && readerAssets[repo + "\0" + relativePath];
-  var fields = VoiceOfMLReader.assetFields(asset, API_BASE + "/api/reader-bucket-resource");
+  var fields = VoiceOfMLReader.assetFields(asset, API_BASE + "/api/reader-bucket-resource", String(record.Extension || record.extension || ""));
   return fields ? Object.assign({}, record, fields, { DownloadLink: originalLink }) : record;
 }
 

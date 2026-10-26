@@ -186,7 +186,8 @@ export function createReaderPdfRenderer(readerContext) {
   // already shown page and reduced-motion clients switch instantly.
   function revealPdfSurface(shell, surface, fade) {
     surface.classList.add("ready");
-    if (fade) surface.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 120, easing: "ease" });
+    if (fade && readerContext.capability?.mode === "image-pages")
+      surface.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 120, easing: "ease" });
   }
 
   function pdfSurfaceFades(shell) {
@@ -409,6 +410,8 @@ export function createReaderPdfRenderer(readerContext) {
 
   function renderPdfImageShell(shell, force = false, priority = false) {
     if (!shell) return Promise.reject(new Error("PDF page shell missing"));
+    if (readerContext.capability?.mode !== "image-pages" && readerContext.pdfV3Manifest?.primary?.kind === "pdf")
+      return Promise.reject(new Error("PDF_PRIMARY_REQUIRED"));
     if (shell._renderPromise) return shell._renderPromise;
     if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
     shell.dataset.renderState = "rendering";
@@ -432,17 +435,22 @@ export function createReaderPdfRenderer(readerContext) {
         shell._renderActivePriority = String(priority);
          const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
          if (!entry) throw new Error("PDF page entry missing");
-         let target = readerContext.pdfPageManifest.pageUrl(entry.page);
+          let target = readerContext.pdfPageManifest.pageUrl(entry.page);
+          let progressive = readerContext.pdfPageManifest.codec === "jxl";
          if (readerContext.pdfV3Manifest) {
             const preview = await readerContext.pdfV3Repository.preview(readerContext.pdfV3Manifest, readerContext.pdfV3Map, entry.page, renderController.signal);
            shell._v3PreviewEntry = preview.entry;
            readerContext.assertReaderActive();
            if (renderController.signal.aborted) throw readerContext.readerAbortError();
            shell._v3PreviewRelease?.();
-           target = URL.createObjectURL(preview.blob);
-           const release = () => { URL.revokeObjectURL(target); readerContext.pdfV3BlobReleases.delete(release); delete shell._v3PreviewRelease; };
-           shell._v3PreviewRelease = release;
-           readerContext.pdfV3BlobReleases.add(release);
+            progressive = preview.progressive === true;
+            if (progressive) target = preview.url;
+            else {
+              target = URL.createObjectURL(preview.blob);
+              const release = () => { URL.revokeObjectURL(target); readerContext.pdfV3BlobReleases.delete(release); delete shell._v3PreviewRelease; };
+              shell._v3PreviewRelease = release;
+              readerContext.pdfV3BlobReleases.add(release);
+            }
          }
          let loadText = null;
          let image = shell.querySelector("img");
@@ -453,7 +461,14 @@ export function createReaderPdfRenderer(readerContext) {
           image.decoding = "async";
           shell.appendChild(image);
         }
-        image.fetchPriority = priority >= 3 ? "high" : priority >= 1 ? "auto" : "low";
+         image.fetchPriority = priority >= 3 ? "high" : priority >= 1 ? "auto" : "low";
+         if (progressive) {
+           image.classList.add("progressive");
+           const geometry = readerContext.pdfV3Map?.pages[entry.page - 1];
+           if (geometry) readerContext.applyPdfShellGeometry(() => {
+             shell.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
+           });
+         }
          if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
            loadText = readerContext.renderPdfOcrText(shell);
          loadText?.catch(() => {});
@@ -471,7 +486,7 @@ export function createReaderPdfRenderer(readerContext) {
              throw new Error("PDF_V3_PREVIEW_GEOMETRY_MISMATCH");
          }
         // Reveal only a fully decoded page, never one painting from the top.
-        await decodePdfImage(image, renderController.signal);
+         if (!progressive) await decodePdfImage(image, renderController.signal);
         readerContext.assertReaderActive();
         if (shell.dataset.pdfPresented === "1") return;
         readerContext.notePdfLatency("preview", performance.now() - admittedAt);
@@ -558,6 +573,11 @@ export function createReaderPdfRenderer(readerContext) {
             scale = Math.min(3, shell.clientWidth / base.width),
             viewport = page.getViewport({ scale }),
             outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
+          if (readerContext.pdfV3Map) {
+            const geometry = readerContext.pdfV3Map.pages[pageNumber - 1];
+            if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
+              throw new Error("PDF_V3_DOCUMENT_GEOMETRY_MISMATCH");
+          }
           canvas = shell.querySelector("canvas");
           if (!canvas) {
             canvas = document.createElement("canvas");
