@@ -5,8 +5,9 @@ export function createReaderPdfPageWindow(readerContext) {
     if (readerContext.pdfV3Manifest || readerContext.pdfHybridUrl) return;
     await readerContext.getInitialReaderRestoration();
     try {
-      const source = readerContext.pdfManifestSource();
+      const source = readerContext.pdfPageManifest || readerContext.pdfManifestSource();
       if (!source) return;
+      if (source.codec === "jxl") return;
       const page = readerContext.initialReaderPage(total);
       readerContext.pdfFirstPagePreloadPage = page;
       const pageUrl = new URL(source.pageUrl(page));
@@ -42,7 +43,7 @@ export function createReaderPdfPageWindow(readerContext) {
     const pageEntry = (
       readerContext.pdfPageManifest.entries?.[page - 1] || {
         page,
-        path: `${readerContext.pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.webp`
+        path: `${readerContext.pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.${readerContext.pdfPageManifest.codec || "webp"}`
       }
     );
     const ocrEntry = readerContext.pdfPageManifest.ocr?.[page - 1];
@@ -53,6 +54,7 @@ export function createReaderPdfPageWindow(readerContext) {
   let pdfPagesBook = { hybridFailed: false, manifestToc: false, initialShown: false, outlineStarted: false, seedRatio: 0 };
 
   function startPdfHybridDocument(totalPages = readerContext.documentState.pageCount) {
+    if (readerContext.pdfV3Manifest?.primary.kind === "djvu" || readerContext.pdfPageManifest?.sourceFormat === "djvu") return;
     // A failed primary leaves hybrid mode for the rest of this book.
     if (pdfPagesBook.hybridFailed || readerContext.pdfHybridDocumentPromise) return;
     readerContext.pdfHybridUrl = readerContext.pdfPrimarySource();
@@ -397,6 +399,25 @@ export function createReaderPdfPageWindow(readerContext) {
       readerContext.pdfV3Manifest = manifest;
       readerContext.pdfOcrManifest = manifest.text_layer ? manifest : null;
       readerContext.ocrManifestUrl = manifest.text_layer ? readerContext.sourceUrl : "";
+      if (manifest.primary.kind === "pdf") {
+        // PDF and PDF-converted documents draw the primary directly. Keep the
+        // independent text layer/map, but never request old preview partitions,
+        // race a page image, or fall back to a raster stream after failure.
+        readerContext.extension = "pdf";
+        readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability("pdf"));
+        readerContext.readerRuntime.update("source", { extension: "pdf" });
+        readerContext.syncCapabilityControls();
+        const pending = readerContext.loadPdfDocument(readerContext.v3ResourceUrl(manifest.primary.resource));
+        pending.catch(() => {});
+        readerContext.pdfV3Map = readerContext.validatePageMap(await repository.read(manifest.page_map), manifest);
+        const pdf = await pending;
+        readerContext.assertReaderActive();
+        if (pdf.numPages !== manifest.page_count) {
+          await pdf.destroy?.();
+          throw new Error("PDF_PRIMARY_PAGE_COUNT_MISMATCH");
+        }
+        return readerContext.renderPdf(pdf);
+      }
       // Start the primary PDF while the independent page map is being read.
       startPdfHybridDocument(manifest.page_count);
       const pageMap = repository.read(manifest.page_map);
@@ -411,12 +432,41 @@ export function createReaderPdfPageWindow(readerContext) {
       }).catch(() => {});
       readerContext.pdfV3Map = readerContext.validatePageMap(await pageMap, manifest);
     }
+    if (manifest.kind !== "pdf-reading" && readerContext.capability.mode !== "image-pages") {
+      const extension = String(readerContext.resolvedReaderData?.original_extension || "").toLowerCase();
+      let originalPath = "";
+      try {
+        const url = new URL(readerContext.downloadUrl, location.href);
+        originalPath = url.searchParams.get("path") || url.pathname;
+      } catch (_) {}
+      const djvu = manifest.source_format === "djvu" || extension === "djvu" || /\.djvu$/i.test(originalPath);
+      if (!djvu) {
+        const primary = readerContext.pdfPrimarySource();
+        if (!primary) throw new Error("PDF_PRIMARY_REQUIRED");
+        readerContext.extension = "pdf";
+        readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability("pdf"));
+        readerContext.readerRuntime.update("source", { extension: "pdf" });
+        readerContext.syncCapabilityControls();
+        return readerContext.renderPdf(readerContext.loadPdfDocument(primary));
+      }
+    }
     readerContext.assertReaderActive();
     const source = readerContext.pdfManifestSource();
     const totalPages = manifest.page_count;
     if (!source) throw new Error("PDF_MANIFEST_INVALID");
     book.manifestToc = Array.isArray(manifest.toc) && manifest.toc.length > 0;
-    readerContext.pdfPageManifest = { ...source, pageCount: totalPages };
+    readerContext.pdfPageManifest = { ...source, pageCount: totalPages, codec: manifest.codec || "webp",
+      sourceFormat: readerContext.capability.mode === "pdf-pages" ? "djvu" : "image" };
+    if (manifest.codec === "jxl") {
+      readerContext.pdfPageManifest.pageUrl = page => {
+        const ref = manifest.images[page - 1];
+        const path = `${source.root}/pages/page-${String(page).padStart(6, "0")}.jxl`;
+        const url = new URL(source.assetUrl(path));
+        url.searchParams.set("sha256", ref.sha256);
+        url.searchParams.set("bytes", String(ref.bytes));
+        return url.href;
+      };
+    }
     if (readerContext.pdfV3Manifest) readerContext.pdfPageManifest.pageUrl = () => "";
     startPdfHybridDocument(totalPages);
     readerContext.updateDocumentState({ pageCount: totalPages });
@@ -633,6 +683,10 @@ export function createReaderPdfPageWindow(readerContext) {
       shell.className = "reader-page";
       shell.dataset.page = String(page);
       shell.style.aspectRatio = `${firstViewport.width} / ${firstViewport.height}`;
+      if (readerContext.pdfV3Map) {
+        const geometry = readerContext.pdfV3Map.pages[page - 1];
+        shell.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
+      }
       shell.tabIndex = 0;
       shell.setAttribute("role", "region");
       shell.setAttribute("aria-label", `第 ${page} 页`);

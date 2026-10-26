@@ -635,11 +635,18 @@ export function createReaderBindings(readerContext) {
         ? selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run") : null;
       const origin = run || selectedRun;
       const caret = !event.shiftKey && event.button === 0 ? readerContext.independentTextCaret(document, event.clientX, event.clientY) : null;
+      if (caret && run) {
+        // Independently positioned text owns caret mapping. Native drag
+        // selection also auto-scrolls near the viewport edge and can move the
+        // page under a stationary pointer into the previous page's text.
+        event.preventDefault();
+        selection?.setBaseAndExtent(caret.node, caret.offset, caret.node, caret.offset);
+      }
       readerContext.pdfSelectionPointer = origin
         ? { id: event.pointerId, x: event.clientX, y: event.clientY, frame: 0,
             page: origin.closest(".reader-page"), anchorNode: caret?.node || (run ? null : selection.anchorNode),
             anchorOffset: caret?.offset ?? (run ? 0 : selection.anchorOffset) } : null;
-    }, { passive: true });
+    }, { passive: false });
     document.addEventListener("pointermove", (event) => {
       const start = readerContext.pdfSelectionPointer;
       if (event.pointerType !== "mouse" || !start || start.id !== event.pointerId ||

@@ -964,11 +964,12 @@ body {
   height: auto;
   user-select: none;
   -webkit-user-select: none;
-  /* Like a PDF.js canvas, a page image is never shown while it streams or
-     decodes; the renderer reveals it (with a short fade) once complete. */
+   /* Progressive document pages are visible during decoding; other surfaces
+      become visible once their decoder finishes. */
   opacity: 0;
 }
 .reader-content[data-mode="pdf-pages"] .reader-page > img.ready,
+.reader-content[data-mode="pdf-pages"] .reader-page > img.progressive,
 .reader-content[data-mode="image-pages"] .reader-page > img.ready {
   opacity: 1;
 }
@@ -1017,6 +1018,10 @@ body {
   -webkit-user-select: none;
   opacity: 0;
   transition: opacity 120ms ease;
+}
+.reader-content[data-mode="pdf"] .reader-page canvas,
+.reader-content[data-mode="pdf-pages"] .reader-page canvas {
+  transition: none;
 }
 .reader-page canvas.ready {
   opacity: 1;

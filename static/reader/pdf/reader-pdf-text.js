@@ -193,6 +193,14 @@ export function populateIndependentTextLayer(layer, payload) {
   layer.style.userSelect = "text";
   layer.style.webkitUserSelect = "text";
   layer.dataset.textGeneration = payload.generation;
+  // Mixed-script vertical runs do not have one-em advances for every source
+  // codepoint (notably spaces/Latin accents). Measure attached native glyph
+  // advances rather than stretching by a character count alone.
+  for (const run of layer.querySelectorAll('.reader-pdf-text-run')) {
+    if (!(run._readerVerticalAdvance > 0) || !run.offsetHeight) continue;
+    const em = parseFloat(layer.ownerDocument.defaultView.getComputedStyle(run).fontSize);
+    run.style.transform = `scaleY(${run._readerVerticalAdvance * em / run.offsetHeight})`;
+  }
 }
 
 
