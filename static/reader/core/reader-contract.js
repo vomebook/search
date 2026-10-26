@@ -278,7 +278,7 @@
   }
 
   const assetRoot = String.raw`objects/[0-9a-f]{2}/[0-9a-f]{64}/`;
-  const v3BucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:reading-manifest\\.json|page-map\\.json\\.gz|text-layer-manifest\\.json|text-review-manifest\\.json|text/(?:page-[0-9]{6}\\.json\\.gz|book-text\\.json\\.gz|search-[0-9]{6}-[0-9]{6}\\.json\\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\\.json)|preview/(?:page-[0-9]{6}\\.(?:png|webp|jpeg|svg)|partition-[0-9]{6}-[0-9]{6}-manifest\\.json))$`);
+  const v3BucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:reading-manifest\\.json|page-map\\.json\\.gz|text-layer-manifest\\.json|text-review-manifest\\.json|text/(?:page-[0-9]{6}\\.json\\.gz|book-text\\.json\\.gz|search-[0-9]{6}-[0-9]{6}\\.json\\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\\.json)|preview/(?:page-[0-9]{6}\\.(?:png|webp|jpeg|svg|jxl)|partition-[0-9]{6}-[0-9]{6}-manifest\\.json))$`);
   const assetVersion = String.raw`(?:[0-9a-f]{16}/)?`;
   const assetPages = String.raw`(?:page-manifest\.json|pages/page-[0-9]{6}\.(?:webp|jxl))`;
   const assetOcr = String.raw`(?:ocr-manifest\.json|ocr/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz))`;
@@ -369,7 +369,7 @@
     return (dot > value.lastIndexOf("/") ? value.slice(0, dot) : value) + ".txt";
   }
 
-  function assetFields(asset, bucketBase) {
+  function assetFields(asset, bucketBase, originalExtension = "") {
     const path = String(asset?.p || "");
     const ocrPath = String(asset?.o || "");
     const ocrBucket = asset?.b === "vomebook/pdf-pages-v2" || asset?.ob === "vomebook/pdf-pages-v2";
@@ -378,6 +378,14 @@
       : "";
     if (asset?.s === 3 && ocrUrl)
       return { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") };
+    if (asset?.s === 2 && asset.m === "p" && !asset.c && path.endsWith("/page-manifest.json") &&
+        originalExtension && originalExtension.toLowerCase().replace(/^\./, "") !== "djvu") {
+      const fields = ocrUrl ? { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") } : {};
+      if (["vomebook/reader-assets-v2", "vomebook/pdf-pages-v2"].includes(asset.pdb) &&
+          isBucketPath(String(asset.pd || ""), true, asset.pdb) && asset.pd.endsWith("/document.pdf"))
+        Object.assign(fields, { ReaderLink: `${bucketBase}?path=${encodeURIComponent(asset.pd)}`, ReaderExtension: "pdf" });
+      return Object.keys(fields).length ? fields : null;
+    }
     const bucketName = String(asset?.b || "vomebook/reader-assets-v2");
     const bucket = isBucketPath(path, true, bucketName);
     const chapterBucket = asset?.cb === "vomebook/reader-assets-v2" &&

@@ -233,7 +233,7 @@ export function createReaderPdfTextRuntime(readerContext) {
   }
 
   async function renderPdfText(page, shell, signal = null) {
-    if (readerContext.ocrManifestUrl && readerContext.pdfV3Manifest) return readerContext.renderPdfOcrText(shell);
+    if (readerContext.ocrManifestUrl) return readerContext.renderPdfOcrText(shell);
     if (shell.dataset.textReady === "1") return;
     const layer = shell.querySelector(".reader-pdf-text");
     if (!layer || typeof page.getTextContent !== "function") return;

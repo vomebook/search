@@ -215,7 +215,7 @@ export function createReaderPdfScheduler(readerContext) {
   function schedulePdfManifestPrefetch(page) {
     // v3 previews are checksummed repository reads with no page URL; their
     // nearby pages are prepared through the observer margin instead.
-    if (readerContext.pdfHybridUrl || readerContext.pdfV3Manifest) return;
+    if (readerContext.pdfHybridUrl || readerContext.pdfV3Manifest || readerContext.pdfPageManifest?.codec === "jxl") return;
     if (!["pdf-pages", "image-pages"].includes(readerContext.capability.mode) || !readerContext.pdfPageManifest) return;
     const origin = Math.max(1, Math.min(readerContext.documentState.pageCount + 1, page + 1));
     if (readerContext.pdfManifestPrefetchOrigin === origin && readerContext.pdfManifestPrefetchNext) {

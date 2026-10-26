@@ -248,6 +248,12 @@
       throw error("PDF_MANIFEST_INVALID");
     const pageCount = manifest.page_count;
     if (pageCount > LIMITS.pdfPages) throw error("READER_RESOURCE_LIMIT");
+    if (manifest.codec !== undefined && !["webp", "jxl"].includes(manifest.codec))
+      throw error("PDF_MANIFEST_INVALID");
+    if (manifest.codec === "jxl" && (!Array.isArray(manifest.images) || manifest.images.length !== pageCount ||
+        manifest.images.some(ref => !/^[0-9a-f]{64}$/.test(ref?.sha256 || "") ||
+          !Number.isSafeInteger(ref.bytes) || ref.bytes < 1 || ref.bytes > LIMITS.chapterBytes)))
+      throw error("PDF_MANIFEST_INVALID");
     if (manifest.toc !== undefined) {
       if (!Array.isArray(manifest.toc) || manifest.toc.length > 2000)
         throw error("PDF_MANIFEST_INVALID");
