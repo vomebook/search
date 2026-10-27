@@ -90,6 +90,10 @@ class ReaderTocLatencyTests(unittest.TestCase):
             content_type='text/html', body='<h1>Directory</h1><p id="outside" style="height:1200px">Body</p>'))
         self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
             url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/outside.html',ext='html')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===1")
+        self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'), 'false')
+        self.page.locator('#history').click()
         self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='true'")
         frame = self.page.frame_locator('.html-frame')
         self.page.evaluate('''()=>document.querySelector('.html-frame').contentDocument.addEventListener(

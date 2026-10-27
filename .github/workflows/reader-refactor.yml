@@ -62,8 +62,20 @@ jobs:
         run: |
           node tests/test_reader_request_manager.js
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+      - name: Check DjVu-only streams and image memory eviction
+        run: |
+          node tests/test_reader_djvu_only.mjs
+          node tests/test_reader_djvu_png.mjs
+          node tests/test_reader_image_memory.mjs
       - name: Run multi-format preparation and navigation gates
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+      - name: Check TOC landing ownership and cancellation
+        run: |
+          python3 -B -m unittest -v \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_holds_while_chapters_above_keep_growing \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll
       - name: Run search accessibility keyboard gates
         run: python3 -B -m unittest -v tests.test_search_accessibility_browser
       - name: Check Firefox footer counter geometry
@@ -134,9 +146,24 @@ jobs:
           node tests/test_reader_pdf_range_transport.mjs
           python3 -B -m unittest -v tests.test_reader_timeout
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+      - name: Check DjVu-only streams and image memory eviction
+        working-directory: huggingface-search
+        run: |
+          node tests/test_reader_djvu_only.mjs
+          node tests/test_reader_djvu_png.mjs
+          node tests/test_reader_image_memory.mjs
+          python3 -B -m unittest -v tests.test_reader_pdf_hybrid
       - name: Run multi-format preparation and navigation gates
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+      - name: Check TOC landing ownership and cancellation
+        working-directory: huggingface-search
+        run: |
+          python3 -B -m unittest -v \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_holds_while_chapters_above_keep_growing \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll
       - name: Run search accessibility keyboard gates
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_search_accessibility_browser

@@ -767,12 +767,12 @@ class ReaderPerformanceTest(unittest.TestCase):
                 self.assertFalse(page.locator(".reader-loading-indicator").count())
                 context.close()
 
-    def test_converted_pdf_pages_report_error_when_later_page_is_missing(self):
+    def test_djvu_legacy_stream_reports_error_when_later_page_is_missing(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
         source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
         root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 4}
+        manifest = {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 4}
         page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route("**/page-manifest.json", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         def serve_page(route, _request):
@@ -808,7 +808,7 @@ class ReaderPerformanceTest(unittest.TestCase):
               }}, {{once: true}})))
             : fetchOriginal(url, options);
         }})()""")
-        _manifest = {"version": 2, "kind": "pdf-pages", "page_count": 2}
+        _manifest = {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 2}
         page.route("**/page-manifest.json", lambda route: route.fulfill(
             content_type="application/json", body=json.dumps(_manifest)))
         page.route(f"{root}/pages/**", lambda route: route.fulfill(
@@ -825,7 +825,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = root + "/page-manifest.json"
         held, requested = [], []
         page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 40})))
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 40})))
         def serve_page(route):
             number = int(route.request.url.rsplit("page-", 1)[1].split(".", 1)[0])
             requested.append(number)
@@ -857,7 +857,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         source = root + "/page-manifest.json"
         held, requested = [], []
         page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 40})))
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 40})))
         def serve_page(route):
             number = int(route.request.url.rsplit("page-", 1)[1].split(".", 1)[0])
             requested.append(number)
@@ -878,16 +878,16 @@ class ReaderPerformanceTest(unittest.TestCase):
             try: route.abort()
             except PlaywrightError: pass
 
-    def test_converted_pdf_pages_fit_wide_images_without_overlap(self):
+    def test_djvu_legacy_stream_fits_wide_images_without_overlap(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
         source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
         root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3, "toc": [{"title": "第一章", "page": 1, "depth": 0}, {"title": "第二章", "page": 2, "depth": 1}]}
+        manifest = {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 3, "toc": [{"title": "第一章", "page": 1, "depth": 0}, {"title": "第二章", "page": 2, "depth": 1}]}
         # Three wide pages must fit even the minimum retained-pixel budget.
         wide_page = b'<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="white"/></svg>'
         page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-        page.route("https://voiceofml-search.hf.space/api/reader-resolve?id=wide-pages", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"url": source, "download": source, "extension": "pdf-pages", "original_extension": "pdf", "title": "Converted"})))
+        page.route("https://voiceofml-search.hf.space/api/reader-resolve?id=wide-pages", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"url": source, "download": source, "extension": "pdf-pages", "original_extension": "djvu", "title": "DjVu"})))
         page.route("**/page-manifest.json", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
         page.route(f"{root}/pages/**", lambda route: route.fulfill(status=200, content_type="image/svg+xml", body=wide_page))
         page.goto(f"{self.origin}/search/static/reader.html?id=wide-pages&ext=pdf&title=Converted", wait_until="domcontentloaded")
@@ -941,7 +941,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                     "page_manifest": {"path": image_root + "/page-manifest.json"}}
         held, requested, held_images = [], [], []
         page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2})))
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 2})))
         def serve_ocr(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
             requested.append(path)
@@ -1119,7 +1119,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                              "sha256": "a" * 64},
                "page_manifest": {"path": image_root + "/page-manifest.json"}}
         page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": total})))
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": total})))
         def serve_ocr(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
             if path == text_root + "/ocr-manifest.json":
@@ -1127,7 +1127,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 return
             if path == image_root + "/page-manifest.json":
                 route.fulfill(content_type="application/json", body=json.dumps(
-                    {"version": 2, "kind": "pdf-pages", "page_count": total}))
+                    {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": total}))
                 return
             match = re.search(r"/ocr/page-(\d{6})\.json\.gz$", path)
             if not match:
@@ -1251,7 +1251,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                              "sha256": "a" * 64},
                "page_manifest": {"path": image_root + "/page-manifest.json"}}
         page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "page_count": total})))
+            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": total})))
         def serve_ocr(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
             if path == text_root + "/ocr-manifest.json":
@@ -1259,7 +1259,7 @@ class ReaderPerformanceTest(unittest.TestCase):
                 return
             if path == image_root + "/page-manifest.json":
                 route.fulfill(content_type="application/json", body=json.dumps(
-                    {"version": 2, "kind": "pdf-pages", "page_count": total}))
+                    {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": total}))
                 return
             match = re.search(r"/ocr/page-(\d{6})\.json\.gz$", path)
             if not match:
@@ -1361,7 +1361,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         page = context.new_page()
         root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         source = root + "/page-manifest.json"
-        manifest = {"version": 2, "kind": "pdf-pages", "source_sha256": "a" * 64,
+        manifest = {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "source_sha256": "a" * 64,
                     "profile": "test", "page_count": 5000}
         page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
         page.route(source, lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
@@ -1977,7 +1977,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.locator("#toc-list .panel-item-main").nth(9).click()
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(10)').classList.contains('is-current')")
         page.locator('.foliate-continuous article[data-section="11"] #chapter-11').wait_for(state='attached')
-        page.evaluate("""() => { const viewport = document.querySelector('#viewport'), target = document.querySelector('.foliate-continuous article[data-section="11"]').shadowRoot.querySelector('#chapter-11'); viewport.scrollTop += target.getBoundingClientRect().top - viewport.getBoundingClientRect().top + 100; viewport.dispatchEvent(new Event('scroll')); }""")
+        page.evaluate("""() => { const viewport = document.querySelector('#viewport'), target = document.querySelector('.foliate-continuous article[data-section="11"]').shadowRoot.querySelector('#chapter-11'); viewport.dispatchEvent(new WheelEvent('wheel', {deltaY:100, bubbles:true})); viewport.scrollTop += target.getBoundingClientRect().top - viewport.getBoundingClientRect().top + 100; viewport.dispatchEvent(new Event('scroll')); }""")
         page.wait_for_function("() => document.querySelector('#toc-list .toc-item:nth-child(11)').classList.contains('is-current')", timeout=1000)
         context.close()
 

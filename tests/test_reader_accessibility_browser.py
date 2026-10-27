@@ -13,7 +13,7 @@ class ReaderAccessibilityTests(unittest.TestCase):
     setUpClass = classmethod(support.PdfFollowupTests.setUpClass.__func__)
     setUp = support.PdfFollowupTests.setUp
 
-    def open_book(self, extension='md', body=None):
+    def open_book(self, extension='md', body=None, open_panel=True):
         self.page.emulate_media(reduced_motion='reduce')
         self.page.route('**/api/reader-content**', lambda route: route.fulfill(
             content_type='text/plain', body=body or '# Chapter one\n\n' + 'needle body\n\n' * 600 + '# Chapter two\n\nEnd'))
@@ -22,7 +22,14 @@ class ReaderAccessibilityTests(unittest.TestCase):
             ext=extension)))
         self.page.wait_for_function("()=>['ready','failed'].includes(document.documentElement.dataset.readerPhase)")
         if extension == 'md':
-            self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='true'")
+            self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'ready')
+            # A two-heading document is intentionally too short to open the
+            # directory hint. Exercise the ordinary accessible panel control.
+            self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===2")
+            self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'), 'false')
+            if open_panel:
+                self.page.locator('#history').click()
+                self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='true'")
 
     def open_with_keyboard(self):
         if self.page.locator('#history').get_attribute('aria-expanded') == 'true':
@@ -47,16 +54,16 @@ class ReaderAccessibilityTests(unittest.TestCase):
 
     def test_names_relations_auto_open_and_keyboard_focus(self):
         self.page.set_viewport_size({'width': 1200, 'height': 800})
-        self.open_book()
+        self.open_book(open_panel=False)
         self.assertFalse(self.page.evaluate("document.querySelector('#history-panel').contains(document.activeElement)"))
         self.page.keyboard.press('Tab')
         self.assertTrue(self.page.locator('.reader-skip-link').evaluate('node=>node===document.activeElement'))
         self.page.keyboard.press('Tab')
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'back')
+        self.open_with_keyboard()
         self.assertEqual(self.page.get_by_role('complementary', name='阅读选项').count(), 1)
         self.assertEqual(self.page.get_by_role('button', name='关闭阅读选项', exact=True).count(), 1)
         self.assertEqual(self.page.locator('#history').get_attribute('aria-controls'), 'history-panel')
-        self.open_with_keyboard()
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'toc-tab')
         self.page.keyboard.press('ArrowRight')
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'bookmarks-tab')
