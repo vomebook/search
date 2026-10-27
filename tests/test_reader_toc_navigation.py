@@ -12,7 +12,7 @@ import zipfile
 from urllib.parse import unquote, urlencode
 
 from tests import test_reader_pdf_followup as support
-from tests.test_reader_performance import zip_bytes
+from tests.test_reader_performance import epub_with_many_chapters, zip_bytes
 
 BODY = '<p style="height:1400px">正文</p>'
 
@@ -75,6 +75,7 @@ class TocNavigationTests(unittest.TestCase):
                 state:()=>tocVirtualState,
                 align:(selector, offset)=>alignReaderDestination(document.querySelector(selector), offset || 0),
                 hold:(target, offset)=>holdReaderDestination(target, offset),
+                hasHold:()=>!!activeReaderDestinationHold,
                 reassert:landing=>reassertReaderDestination(landing),
                 scrollTop:()=>viewport.scrollTop};
             ''')
@@ -263,6 +264,29 @@ class TocNavigationTests(unittest.TestCase):
         }""")
         self.assertGreaterEqual(result["after"] - result["before"], 1400,
                                 "a reader scroll must not be pulled back by the hold")
+
+    def test_new_navigation_supersedes_the_previous_landing_hold(self):
+        self.open_epub(epub_with_many_chapters())
+        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")
+        for index, chapter in [(9, 10), (4, 5), (7, 8)]:
+            self.page.evaluate("index => __toc.jump(index)", index)
+            self.page.wait_for_function('''chapter=>{
+              const node=document.querySelector(`article[data-section="${chapter}"]`)?.shadowRoot?.querySelector(`#chapter-${chapter}`);
+              return node && Math.abs(node.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top-8)<3;
+            }''', arg=chapter, timeout=1500)
+            self.page.wait_for_timeout(160)
+            offset = self.page.locator(f'article[data-section="{chapter}"] #chapter-{chapter}').evaluate(
+                "node=>node.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top")
+            self.assertLess(abs(offset - 8), 3,
+                            'the previous hold must not pull a newer jump back')
+
+    def test_landing_hold_is_cancelled_on_disposal(self):
+        self.open_chapters(40)
+        self.page.evaluate("index => __toc.jump(index)", 19)
+        self.page.wait_for_function("()=>__toc.hasHold()")
+        self.page.evaluate("dispatchEvent(new Event('voice-reader-dispose'))")
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='disposed'")
+        self.assertFalse(self.page.evaluate("()=>__toc.hasHold()"))
 
     def test_landing_is_reasserted_after_a_late_layout_shift(self):
         self.open_chapters(40)

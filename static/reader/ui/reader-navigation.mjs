@@ -1,5 +1,6 @@
 export function createReaderNavigation(readerContext) {
   function beginReaderNavigation() {
+    readerContext.cancelReaderDestinationHold?.();
     if (readerContext.epubSeekFrame) cancelAnimationFrame(readerContext.epubSeekFrame);
     readerContext.epubSeekFrame = 0;
     readerContext.foliateScrollAnchors.invalidate();
