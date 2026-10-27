@@ -420,11 +420,18 @@ export function createReaderPdfRenderer(readerContext) {
       return Promise.reject(new Error("PDF_PRIMARY_REQUIRED"));
     if (shell._renderPromise) return shell._renderPromise;
     if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
+    priority = readerContext.normalizePdfPriority(priority || readerContext.pdfPagePriority(shell));
+    const evicted = shell._pdfImageEvictedAt;
+    if (!force && priority < 2 && evicted && !readerContext.isPdfPageVisible(shell) &&
+        evicted.page === readerContext.documentState.page && evicted.zoom === readerContext.documentState.zoom &&
+        evicted.direction === readerContext.pdfScrollDirection && evicted.budget === readerContext.pdfPixelBudget() &&
+        evicted.width === readerContext.viewport.clientWidth && evicted.height === readerContext.viewport.clientHeight)
+      return Promise.resolve();
+    delete shell._pdfImageEvictedAt;
     shell.dataset.renderState = "rendering";
     const renderController = new AbortController();
     shell._renderCancel = () => renderController.abort();
     shell._renderStarted = false;
-    priority = readerContext.normalizePdfPriority(priority || readerContext.pdfPagePriority(shell));
     shell._renderActivePriority = String(priority);
     const task = (async () => {
       let acquired = false;
