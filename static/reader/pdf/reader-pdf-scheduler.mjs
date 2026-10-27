@@ -115,6 +115,14 @@ export function createReaderPdfScheduler(readerContext) {
       }
       if (image) {
         pixels -= readerContext.pdfSurfacePixels(image);
+        // Completion schedules nearby pages again. Remember this viewing state
+        // so a page discarded for memory cannot immediately download itself in
+        // that same speculative pass. Visible/explicit demand always wins.
+        shell._pdfImageEvictedAt = {
+          page: readerContext.documentState.page, zoom: readerContext.documentState.zoom,
+          direction: readerContext.pdfScrollDirection, budget: readerContext.pdfPixelBudget(),
+          width: readerContext.viewport.clientWidth, height: readerContext.viewport.clientHeight
+        };
         image.removeAttribute("src");
         image.remove();
         shell._v3PreviewRelease?.();
