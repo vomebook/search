@@ -173,9 +173,15 @@ export function createReaderPdfRenderer(readerContext) {
     const anchor = readerContext.content.querySelector(`.reader-page[data-page="${readerContext.documentState.page}"]`);
     const viewportTop = readerContext.viewport.getBoundingClientRect().top;
     const before = anchor?.getBoundingClientRect();
+    const atEnd = readerContext.viewport.scrollTop > 0 &&
+      readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight - readerContext.viewport.scrollTop <= 2;
     const fraction = before ? Math.max(0, (viewportTop - before.top) / Math.max(1, before.height)) : 0;
     change();
     if (!before || !anchor.isConnected) return;
+    if (atEnd) {
+      readerContext.viewport.scrollTop = readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight;
+      return;
+    }
     const after = anchor.getBoundingClientRect();
     const delta = after.top - before.top + fraction * (after.height - before.height);
     if (Math.abs(delta) >= .5) readerContext.viewport.scrollTop += delta;
@@ -436,7 +442,7 @@ export function createReaderPdfRenderer(readerContext) {
          const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
          if (!entry) throw new Error("PDF page entry missing");
           let target = readerContext.pdfPageManifest.pageUrl(entry.page);
-          let progressive = readerContext.pdfPageManifest.codec === "jxl";
+          let progressive = (readerContext.pdfPageManifest.pageCodec?.(entry.page) || readerContext.pdfPageManifest.codec) === "jxl";
          if (readerContext.pdfV3Manifest) {
             const preview = await readerContext.pdfV3Repository.preview(readerContext.pdfV3Manifest, readerContext.pdfV3Map, entry.page, renderController.signal);
            shell._v3PreviewEntry = preview.entry;
@@ -498,7 +504,10 @@ export function createReaderPdfRenderer(readerContext) {
           readerContext.seedPdfPageGeometry?.(image.naturalWidth, image.naturalHeight);
         });
         if (readerContext.pdfHybridUrl) notePdfOpeningShown();
-        if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
+        // A speculative page may become visible while its image is loading.
+        // The visibility observer saw "rendering" then, so it could not attach
+        // text; do not keep the stale admission priority after image completion.
+        if ((priority >= 2 || readerContext.isPdfPageVisible(shell)) && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
           loadText ||= readerContext.renderPdfOcrText(shell);
         loadText?.catch(() => {});
         if (pageState) pageState.hidden = true;

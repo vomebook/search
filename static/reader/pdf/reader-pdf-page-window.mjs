@@ -7,7 +7,7 @@ export function createReaderPdfPageWindow(readerContext) {
     try {
       const source = readerContext.pdfPageManifest || readerContext.pdfManifestSource();
       if (!source) return;
-      if (source.codec === "jxl") return;
+      if (["jxl", "png", "mixed"].includes(source.codec)) return;
       const page = readerContext.initialReaderPage(total);
       readerContext.pdfFirstPagePreloadPage = page;
       const pageUrl = new URL(source.pageUrl(page));
@@ -43,7 +43,7 @@ export function createReaderPdfPageWindow(readerContext) {
     const pageEntry = (
       readerContext.pdfPageManifest.entries?.[page - 1] || {
         page,
-        path: `${readerContext.pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.${readerContext.pdfPageManifest.codec || "webp"}`
+        path: `${readerContext.pdfPageManifest.root}/pages/page-${String(page).padStart(6, "0")}.${readerContext.pdfPageManifest.pageCodec?.(page) || readerContext.pdfPageManifest.codec || "webp"}`
       }
     );
     const ocrEntry = readerContext.pdfPageManifest.ocr?.[page - 1];
@@ -457,15 +457,17 @@ export function createReaderPdfPageWindow(readerContext) {
     book.manifestToc = Array.isArray(manifest.toc) && manifest.toc.length > 0;
     readerContext.pdfPageManifest = { ...source, pageCount: totalPages, codec: manifest.codec || "webp",
       sourceFormat: readerContext.capability.mode === "pdf-pages" ? "djvu" : "image" };
-    if (manifest.codec === "jxl") {
+    if (["jxl", "png", "mixed"].includes(manifest.codec)) {
       readerContext.pdfPageManifest.pageUrl = page => {
         const ref = manifest.images[page - 1];
-        const path = `${source.root}/pages/page-${String(page).padStart(6, "0")}.jxl`;
+        const codec = manifest.codec === "mixed" ? ref.codec : manifest.codec;
+        const path = `${source.root}/pages/page-${String(page).padStart(6, "0")}.${codec}`;
         const url = new URL(source.assetUrl(path));
         url.searchParams.set("sha256", ref.sha256);
         url.searchParams.set("bytes", String(ref.bytes));
         return url.href;
       };
+      readerContext.pdfPageManifest.pageCodec = page => manifest.codec === "mixed" ? manifest.images[page - 1].codec : manifest.codec;
     }
     if (readerContext.pdfV3Manifest) readerContext.pdfPageManifest.pageUrl = () => "";
     startPdfHybridDocument(totalPages);

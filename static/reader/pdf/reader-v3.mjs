@@ -5,7 +5,7 @@ const integer = value => Number.isSafeInteger(value) && value > 0;
 const invalid = () => { throw new Error("PDF_V3_INVALID"); };
 const modes = new Set(["auto", "horizontal-ltr", "horizontal-rtl", "vertical-rl", "vertical-lr"]);
 const pathPattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/(?:reading-manifest\.json|page-map\.json\.gz|text-layer-manifest\.json|text-review-manifest\.json|text\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz|search-[0-9]{6}-[0-9]{6}\.json\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\.json)|preview\/(?:page-[0-9]{6}\.(?:png|webp|jpeg|svg|jxl)|partition-[0-9]{6}-[0-9]{6}-manifest\.json))$/;
-const sharedPagePattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/pages\/page-[0-9]{6}\.jxl$/;
+const sharedPagePattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/pages\/page-[0-9]{6}\.(?:jxl|png)$/;
 export const isV3Path = path => typeof path === "string" && (pathPattern.test(path) || sharedPagePattern.test(path));
 export function validateResource(ref, source = "") {
   if (!ref || !["vomebook/pdf-pages-v2", "vomebook/reader-assets-v2"].includes(ref.bucket) ||
@@ -162,7 +162,7 @@ export function createV3Repository({ readJson, readBytes, resourceUrl, signal, p
         validateResource(entry.resource, sourceSha);
         const filename = `page-${String(entry.page).padStart(6, "0")}.${entry.codec}`;
         if (!entry.resource.path.endsWith(`/preview/${filename}`) &&
-            !(entry.codec === "jxl" && entry.resource.path.endsWith(`/pages/${filename}`))) invalid();
+            !(["jxl", "png"].includes(entry.codec) && entry.resource.path.endsWith(`/pages/${filename}`))) invalid();
         previous = entry.page;
       }
       if (part.complete && data.pages.length !== part.end - part.start + 1) invalid();
@@ -174,7 +174,12 @@ export function createV3Repository({ readJson, readBytes, resourceUrl, signal, p
         url.searchParams.set("bytes", String(entry.resource.bytes));
         return { entry, url: url.href, progressive: true };
       }
-      const packed = await readBytes(resourceUrl(entry.resource), entry.resource, signal);
+      const url = new URL(resourceUrl(entry.resource), location.href);
+      if (entry.codec === "png") {
+        url.searchParams.set("sha256", entry.resource.sha256);
+        url.searchParams.set("bytes", String(entry.resource.bytes));
+      }
+      const packed = await readBytes(url.href, entry.resource, signal);
       active();
       signal?.throwIfAborted?.();
       return { entry, blob: new Blob([packed], { type: entry.codec === "svg" ? "image/svg+xml" : `image/${entry.codec}` }) };

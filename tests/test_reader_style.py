@@ -239,7 +239,7 @@ class ReaderStyleTests(unittest.TestCase):
         output = io.BytesIO()
         Image.new('RGB', (600, 800), 'white').save(output, 'WEBP')
         self.page.route('**/page-manifest.json', lambda route: route.fulfill(
-            json={"version": 2, "kind": "pdf-pages", "page_count": 1}))
+            json={"version": 2, "kind": "pdf-pages", "page_count": 1, "source_format": "djvu"}))
         self.page.route('**/pages/page-*.webp', lambda route: route.fulfill(
             content_type='image/webp', body=output.getvalue()))
         source = urllib.parse.quote('https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/' + 'a' * 64 + '/1234567890abcdef/page-manifest.json', safe='')
@@ -314,10 +314,9 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
 
     def dismiss_toc_hint(self):
-        # TOC books open their drawer on load; close it so layout is measured
-        # in the same closed state used after each theme switch.
-        self.page.wait_for_function("() => document.querySelector('#history-panel').classList.contains('is-open')")
-        self.page.locator("#history").click()
+        # One/two-entry directories deliberately do not auto-open a hint.
+        # Normalize either state; hint policy has separate behavior tests.
+        self.page.locator("#history").evaluate("e=>{if(e.getAttribute('aria-expanded')==='true')e.click()}")
         self.page.wait_for_function("() => document.querySelector('#history-panel').hidden")
 
     def check_document_theme_round_trip(self, selector):

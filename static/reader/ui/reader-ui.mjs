@@ -57,10 +57,12 @@ export function createReaderUi(readerContext) {
 
   function setZoom(percent, persist = true) {
     const anchor = readerContext.foliateScrollAnchors.capture();
-    const pdfAnchor = (readerContext.capability.mode === 'pdf' || readerContext.pdfHybridUrl)
+    const pdfAnchor = (["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability.mode) || readerContext.pdfHybridUrl)
       ? readerContext.pageAtMarker() : null;
     const pdfBounds = pdfAnchor?.getBoundingClientRect();
     const pdfOffset = pdfBounds ? (readerContext.viewport.getBoundingClientRect().top - pdfBounds.top) / Math.max(1, pdfBounds.height) : 0;
+    const pdfAtEnd = !!pdfBounds && readerContext.viewport.scrollTop > 0 &&
+      readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight - readerContext.viewport.scrollTop <= 2;
     const normalized = VoiceOfMLReader.clampNumber(percent, 25, 400, 100);
     const horizontalCenter = readerContext.viewport.scrollWidth
       ? (readerContext.viewport.scrollLeft + readerContext.viewport.clientWidth / 2) / readerContext.viewport.scrollWidth
@@ -70,8 +72,11 @@ export function createReaderUi(readerContext) {
     readerContext.zoomInput.value = String(normalized);
     readerContext.pdfShellWindow?.resize();
     if (pdfAnchor?.isConnected) {
-      const bounds = pdfAnchor.getBoundingClientRect();
-      readerContext.viewport.scrollTop += bounds.top - readerContext.viewport.getBoundingClientRect().top + pdfOffset * bounds.height;
+      if (pdfAtEnd) readerContext.viewport.scrollTop = readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight;
+      else {
+        const bounds = pdfAnchor.getBoundingClientRect();
+        readerContext.viewport.scrollTop += bounds.top - readerContext.viewport.getBoundingClientRect().top + pdfOffset * bounds.height;
+      }
     }
     if (readerContext.htmlFrame && readerContext.htmlFrame.contentDocument)
       readerContext.htmlFrame.contentDocument.documentElement.style.zoom = String(readerContext.documentState.zoom);
