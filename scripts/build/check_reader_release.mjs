@@ -54,6 +54,15 @@ function checkBehavior(root) {
 }
 
 function checkAssets(output, hashed = false) {
+  const djvuLibrary = "vendor/djvujs-gpl-v0.5.4.js";
+  assert(hash(path.join(output, djvuLibrary)) === "10a831d62cc7ced39c30c7350a11410402d082a0f0a5b073a88d3d7ca662add3",
+    "DjVu.js release asset checksum mismatch");
+  assert(hash(path.join(output, "vendor/djvujs-source/pngjs-5.0.0.tgz")) ===
+    "4d960bbbe078022d7a36822e2874f884c7410ead111f3603d69d70fc7af36f20", "pngjs source checksum mismatch");
+  for (const file of ["NOTICE.txt", "UPSTREAM-LICENSE.txt", "GPL-2.0.txt", "package.json", "package-lock.json",
+    "PNGJS-LICENSE.txt", "rollup.config.js", "src/index.js", "src/DjVuDocument.js", "src/DjVuWorker.js", "src/DjVuPage.js"]) {
+    assert(fs.statSync(path.join(output, "vendor/djvujs-source", file)).isFile(), `missing DjVu.js corresponding source: ${file}`);
+  }
   for (const vendor of Object.values(resources.foliateVendors)) {
     const filename = path.join("foliate-reader/vendor", vendor.file);
     assert(hash(path.join(output, filename)) === vendor.sha256,
@@ -194,6 +203,10 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/core/reader-runtime.js",
     "reader/formats/reader-format-adapters.js",
     "reader/core/reader-security.js",
+    "reader/pdf/reader-v3.mjs", "reader/pdf/reader-djvu-worker.mjs", "reader/pdf/reader-djvu-scheduler.mjs",
+    "reader/pdf/reader-djvu-adapter.mjs", "vendor/djvujs-gpl-v0.5.4.js", "vendor/djvujs-source/NOTICE.txt",
+    "vendor/djvujs-source/UPSTREAM-LICENSE.txt", "vendor/djvujs-source/GPL-2.0.txt",
+    "vendor/djvujs-source/pngjs-5.0.0.tgz", "vendor/djvujs-source/PNGJS-LICENSE.txt",
     "reader/search/reader-search-controller.mjs",
     "reader/search/reader-dom-search.mjs",
     "reader/formats/reader-image-loader.mjs",

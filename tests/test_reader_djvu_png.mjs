@@ -81,4 +81,4 @@ for (const mode of ['pdf', 'pdf-pages', 'image-pages']) {
   Object.assign(reader, createReaderUi(reader));reader.setZoom(110, false);
   assert.equal(reader.viewport.scrollTop, 499, mode + ' retains the short last-page anchor on zoom');
 }
-console.log('Pages DjVu PNG/mixed schema, shared reading identity, checksummed transport, geometry rejection, disposal and end-anchor zoom passed');
+console.log('Pages historical PNG metadata, checksummed transport, disposal and zoom anchor passed');

@@ -1,0 +1,11 @@
+DjVu.js 0.5.4, Copyright (C) the DjVu.js project contributors.
+Source: https://github.com/RussCoder/djvujs
+Release tag: L.0.5.4_V.0.10.1
+Source commit: b41bd0557bd5b0376b56c8bd0bd0ffde6104405f
+Library asset SHA-256: 10a831d62cc7ced39c30c7350a11410402d082a0f0a5b073a88d3d7ca662add3
+
+The upstream LICENSE identifies the library as GNU GPL version 2. The
+upstream source, build configuration, dependency lock and GPL v2 text are
+included here. The pinned pngjs 5.0.0 source archive and its MIT license are
+also included. Complete corresponding-source and integration-license
+compliance must still be independently verified before distribution.

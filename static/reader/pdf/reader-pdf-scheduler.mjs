@@ -499,12 +499,16 @@ export function createReaderPdfScheduler(readerContext) {
 
   function rerenderVisiblePdfPages() {
     readerContext.nextReaderGeneration("pdf");
-    for (const shell of readerContext.content.querySelectorAll(".reader-page")) {
+    const shells = [...readerContext.content.querySelectorAll(".reader-page")].filter(shell => {
       const rect = shell.getBoundingClientRect();
-      if (rect.bottom >= -1200 && rect.top <= innerHeight + 1200) {
-        if (shell._renderPromise) shell.dataset.pendingRerender = "1";
-        else readerContext.renderPdfInBackground(shell, true);
-      }
+      return rect.bottom >= -1200 && rect.top <= innerHeight + 1200;
+    });
+    const marker = readerContext.pageAtMarker();
+    shells.sort((a, b) => Number(b === marker) - Number(a === marker) ||
+      readerContext.pdfPagePriority(b) - readerContext.pdfPagePriority(a));
+    for (const shell of shells) {
+      if (shell._renderPromise) shell.dataset.pendingRerender = "1";
+      else readerContext.renderPdfInBackground(shell, true);
     }
   }
 

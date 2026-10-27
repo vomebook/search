@@ -88,7 +88,18 @@ export function createReaderPdfSearch(readerContext) {
               if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
             }
             readerContext.paintTextHit(shell, boxes, hit);
-            shell.querySelector(".reader-text-hit-box")?.scrollIntoView({ block: "center" });
+            const mark = shell.querySelector(".reader-text-hit-box");
+            if (mark) {
+              // Keep the search hit visible without leaving the previous page
+              // under the ribbon on short mobile pages.
+              const viewport = readerContext.viewport;
+              const view = viewport.getBoundingClientRect();
+              const ribbon = readerContext.bookmarkRibbon.getBoundingClientRect().bottom - view.top;
+              const desired = readerContext.readerPageScrollTop(shell) +
+                mark.getBoundingClientRect().top - shell.getBoundingClientRect().top - viewport.clientHeight / 2;
+              const earliest = readerContext.readerPageScrollTop(shell) - Math.max(0, ribbon) + 1;
+              viewport.scrollTop = Math.max(earliest, desired);
+            }
           }
           return true;
         } };

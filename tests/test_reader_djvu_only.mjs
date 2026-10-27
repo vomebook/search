@@ -100,7 +100,15 @@ for (const extension of ['pdf', 'caj', 'kdh', 'ppt', 'ps']) {
   const fields = VoiceOfMLReader.assetFields({s: 2, m: 'p', b: 'vomebook/pdf-pages-v2',
     p: base + 'b'.repeat(16) + '/page-manifest.json'}, '/api/reader-bucket-resource', 'djvu');
   assert.equal(fields.ReaderExtension, 'pdf-pages');
-  const invalid = reading();invalid.primary.kind = 'djvu';invalid.primary.resource = ref('document.djvu');
-  assert.throws(() => validateReadingManifest(invalid, 10000), /PDF_V3_INVALID/, 'DjVu cannot skip its required page stream');
+  const direct = reading();direct.primary.kind = 'djvu';direct.primary.resource = {...ref('document.djvu'), sha256: source};
+  assert.ok(VoiceOfMLReader.isBucketPath(direct.primary.resource.path, true));
+  assert.equal(VoiceOfMLReader.isBucketPath(direct.primary.resource.path.replace('objects/aa/', 'objects/ff/'), true), false);
+  assert.equal(validateReadingManifest(direct, 10000), direct);
+  const invalid = structuredClone(direct);invalid.preview = {page_count:2, complete:true, ready_pages:2,
+    partitions:[{start:1,end:2,complete:true,resource:ref('preview/partition-000001-000002-manifest.json')}]};
+  invalid.components.preview = 'ready';
+  assert.throws(() => validateReadingManifest(invalid, 10000), /DJVU_LEGACY_READING_UNSUPPORTED/);
+  const mismatch = structuredClone(direct);mismatch.primary.resource.sha256 = 'c'.repeat(64);
+  assert.throws(() => validateReadingManifest(mismatch, 10000), /PDF_V3_INVALID/);
 }
-console.log('PDF/converted-PDF direct reading, zero image fallback, OCR retention and DjVu-only stream policy passed', root);
+console.log('PDF and DjVu primary reading, no legacy image fallback, OCR retention passed', root);
