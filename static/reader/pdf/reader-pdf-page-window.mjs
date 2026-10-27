@@ -418,19 +418,21 @@ export function createReaderPdfPageWindow(readerContext) {
         }
         return readerContext.renderPdf(pdf);
       }
-      // Start the primary PDF while the independent page map is being read.
-      startPdfHybridDocument(manifest.page_count);
-      const pageMap = repository.read(manifest.page_map);
-      // The opening preview partition depends only on the validated reading
-      // manifest, so fetch it alongside the page map; preview() still
-      // validates it against the map. Text uses its own repository.
-      Promise.resolve(readerContext.readerRestorationPromise).then((entry) => {
-        const restored = Number(entry?.page);
-        const page = Number.isInteger(restored) ? Math.max(1, Math.min(manifest.page_count, restored)) : 1;
-        const part = manifest.preview.partitions.find((p) => p.start <= page && page <= p.end);
-        if (part) return repository.read(part.resource);
-      }).catch(() => {});
-      readerContext.pdfV3Map = readerContext.validatePageMap(await pageMap, manifest);
+      readerContext.extension = "pdf";
+      readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability("pdf"));
+      readerContext.readerRuntime.update("source", { extension: "pdf" });
+      readerContext.syncCapabilityControls();
+      const { openDirectDjvu } = await import("./reader-djvu-loader.mjs");
+      let pdf;
+      try {
+        const pageMap = repository.read(manifest.page_map).then(map => readerContext.validatePageMap(map, manifest));
+        pdf = await openDirectDjvu(readerContext, manifest, pageMap);
+        readerContext.pdfV3Map = await pageMap;
+        return await readerContext.renderPdf(pdf);
+      } catch (error) {
+        pdf?.destroy();
+        throw error;
+      }
     }
     if (manifest.kind !== "pdf-reading" && readerContext.capability.mode !== "image-pages") {
       const extension = String(readerContext.resolvedReaderData?.original_extension || "").toLowerCase();
@@ -440,6 +442,7 @@ export function createReaderPdfPageWindow(readerContext) {
         originalPath = url.searchParams.get("path") || url.pathname;
       } catch (_) {}
       const djvu = manifest.source_format === "djvu" || extension === "djvu" || /\.djvu$/i.test(originalPath);
+      if (djvu) throw new Error("DJVU_LEGACY_READING_UNSUPPORTED");
       if (!djvu) {
         const primary = readerContext.pdfPrimarySource();
         if (!primary) throw new Error("PDF_PRIMARY_REQUIRED");

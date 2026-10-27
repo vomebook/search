@@ -1,5 +1,7 @@
 _site/
-static/vendor/
+static/vendor/*
+!static/vendor/djvujs-gpl-v0.5.4.js
+!static/vendor/djvujs-source/
 static/foliate-reader/
 __pycache__/
 *.py[cod]

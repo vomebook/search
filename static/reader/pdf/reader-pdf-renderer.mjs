@@ -67,6 +67,28 @@ export function createReaderPdfRenderer(readerContext) {
         // Hybrid preview cancellation after PDF canvas completion is not a user-visible failure
         if (shell.dataset.pdfPresented === "1") return;
         console.warn(`PDF page ${shell.dataset.page} render failed`, error);
+        if (error?.message === "DJVU_CANVAS_LIMIT_EXCEEDED") {
+          const pageState = shell.querySelector(".reader-page-state");
+          if (pageState) {
+            pageState.dataset.state = "error";
+            pageState.removeAttribute("aria-label");
+            pageState.hidden = false;
+            pageState.textContent = "页面超过浏览器绘制上限，请缩小后重试。";
+          }
+          shell.dataset.renderFailed = "1";
+          return;
+        }
+        if (String(error?.message || '').startsWith('DJVU_')) {
+          const pageState = shell.querySelector('.reader-page-state');
+          if (pageState) {
+            pageState.dataset.state = 'error';
+            pageState.removeAttribute('aria-label');
+            pageState.hidden = false;
+            pageState.textContent = `DjVu 页面解码失败（${error.message}），请重新打开原文件。`;
+          }
+          shell.dataset.renderFailed = '1';
+          return;
+        }
         const retries = Number(shell.dataset.renderRetries || 0);
         const pageState = shell.querySelector(".reader-page-state");
         if (pageState && !shell.querySelector("canvas.ready, img.ready")) {
@@ -101,7 +123,15 @@ export function createReaderPdfRenderer(readerContext) {
       })
       .finally(() => {
         if (shell._backgroundRender === task) delete shell._backgroundRender;
+        const cancelled = shell._pdfRenderCancelled;
         delete shell._pdfRenderCancelled;
+        if (shell.dataset.pendingRerender && !shell._renderPromise && shell.isConnected &&
+            !readerContext.readerAbortController.signal.aborted && shell.dataset.renderFailed !== "1") {
+          delete shell.dataset.pendingRerender;
+          if (!cancelled || readerContext.isPdfPageVisible(shell))
+            queueMicrotask(() => readerContext.renderPdfInBackground(shell, true, readerContext.pdfPagePriority(shell)));
+          return;
+        }
         if (shell._resumePdfDemand || shell._pdfRenderNeedsRequeue) {
           delete shell._resumePdfDemand;
           if (!readerContext.readerAbortController.signal.aborted && shell.isConnected &&
@@ -416,7 +446,7 @@ export function createReaderPdfRenderer(readerContext) {
 
   function renderPdfImageShell(shell, force = false, priority = false) {
     if (!shell) return Promise.reject(new Error("PDF page shell missing"));
-    if (readerContext.capability?.mode !== "image-pages" && readerContext.pdfV3Manifest?.primary?.kind === "pdf")
+    if (readerContext.capability?.mode !== "image-pages")
       return Promise.reject(new Error("PDF_PRIMARY_REQUIRED"));
     if (shell._renderPromise) return shell._renderPromise;
     if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
@@ -586,7 +616,7 @@ export function createReaderPdfRenderer(readerContext) {
           readerContext.assertReaderActive();
           if (renderController.signal.aborted) throw readerContext.readerAbortError();
           const base = page.getViewport({ scale: 1 }),
-            scale = Math.min(3, shell.clientWidth / base.width),
+            scale = Math.min(pdf.readerRenderScaleLimit ?? 3, shell.clientWidth / base.width),
             viewport = page.getViewport({ scale }),
             outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
           if (readerContext.pdfV3Map) {
@@ -600,14 +630,26 @@ export function createReaderPdfRenderer(readerContext) {
             canvas.setAttribute("aria-hidden", "true");
             shell.prepend(canvas);
           }
-          canvas.width = Math.ceil(viewport.width * outputScale);
-          canvas.height = Math.ceil(viewport.height * outputScale);
+          // Resizing clears a canvas; never expose it as complete until the
+          // replacement render has finished.
+          canvas.classList.remove("ready");
+          const targetWidth = Math.ceil(viewport.width * outputScale), targetHeight = Math.ceil(viewport.height * outputScale);
+          if (pdf.readerMaxCanvasPixels && targetWidth * targetHeight > pdf.readerMaxCanvasPixels) {
+            if (!readerContext.isReaderGenerationCurrent("pdf", generation)) {
+              shell.dataset.pendingRerender = "1";
+              continue;
+            }
+            throw new Error("DJVU_CANVAS_LIMIT_EXCEEDED");
+          }
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
           canvas.style.width = "100%";
           canvas.style.height = "auto";
           shell.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
           const rendering = page.render({
             canvasContext: canvas.getContext("2d"),
             viewport,
+            readerPriority: Math.max(priority, readerContext.pdfPagePriority(shell)),
             transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0]
           });
           activeRendering = rendering;

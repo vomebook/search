@@ -194,9 +194,10 @@ export function validateReadingManifest(manifest, maxPages) {
       !["pdf", "djvu"].includes(manifest.primary?.kind) || manifest.primary.status !== "ready" ||
       typeof manifest.preview?.complete !== "boolean" || manifest.preview.page_count !== manifest.page_count) invalid();
   validateResource(manifest.primary.resource);
-  // Browsers cannot render DjVu: such books read from the preview stream and text layer.
   if (manifest.primary.kind === "djvu"
     ? manifest.primary.resource.bucket !== "vomebook/pdf-pages-v2" ||
+      manifest.primary.resource.sha256 !== manifest.source_sha256 ||
+      manifest.primary.resource.bytes > 512 * 1024 * 1024 || manifest.page_count > 10000 ||
       !manifest.primary.resource.path.startsWith(`objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}/`) ||
       !manifest.primary.resource.path.endsWith("/document.djvu")
     : !manifest.primary.resource.path.endsWith(".pdf")) invalid();
@@ -211,8 +212,9 @@ export function validateReadingManifest(manifest, maxPages) {
   if (manifest.text_layer && !manifest.text_layer.path.endsWith("/text-layer-manifest.json")) invalid();
   const skipped = manifest.preview.status === "skipped";
   if (manifest.preview.status !== undefined && !skipped) invalid();
-  if (skipped && (manifest.primary.kind !== "pdf" || manifest.preview.complete ||
+  if (skipped && (manifest.preview.complete ||
       manifest.preview.ready_pages !== 0 || manifest.preview.partitions.length !== 0)) invalid();
+  if (manifest.primary.kind === "djvu" && !skipped) throw new Error("DJVU_LEGACY_READING_UNSUPPORTED");
   if (manifest.components?.document !== "ready" ||
       manifest.components.preview !== (skipped ? "skipped" : manifest.preview.complete ? "ready" : "pending") ||
       manifest.components.text !== (manifest.text_layer ? "ready" : "pending")) invalid();
