@@ -248,11 +248,15 @@
       throw error("PDF_MANIFEST_INVALID");
     const pageCount = manifest.page_count;
     if (pageCount > LIMITS.pdfPages) throw error("READER_RESOURCE_LIMIT");
-    if (manifest.codec !== undefined && !["webp", "jxl"].includes(manifest.codec))
+    if (manifest.codec !== undefined && !["webp", "jxl", "png", "mixed"].includes(manifest.codec))
       throw error("PDF_MANIFEST_INVALID");
-    if (manifest.codec === "jxl" && (!Array.isArray(manifest.images) || manifest.images.length !== pageCount ||
+    if (["jxl", "png", "mixed"].includes(manifest.codec) && (!Array.isArray(manifest.images) || manifest.images.length !== pageCount ||
         manifest.images.some(ref => !/^[0-9a-f]{64}$/.test(ref?.sha256 || "") ||
           !Number.isSafeInteger(ref.bytes) || ref.bytes < 1 || ref.bytes > LIMITS.chapterBytes)))
+      throw error("PDF_MANIFEST_INVALID");
+    if (["png", "mixed"].includes(manifest.codec) && (manifest.source_format !== "djvu" ||
+        !/^[0-9a-f]{64}$/.test(manifest.source_sha256 || "") || manifest.codec === "mixed" &&
+        manifest.images.some(ref => !["png", "jxl", "webp"].includes(ref.codec))))
       throw error("PDF_MANIFEST_INVALID");
     if (manifest.toc !== undefined) {
       if (!Array.isArray(manifest.toc) || manifest.toc.length > 2000)
@@ -291,7 +295,7 @@
   }
   const PDF_OCR_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz)$/;
   const PDF_OCR_MANIFEST_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?ocr-manifest\.json$/;
-  const PDF_OCR_PAGE_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?pages\/page-[0-9]{6}\.(?:webp|jxl)$/;
+  const PDF_OCR_PAGE_PATH = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:[0-9a-f]{16}\/)?pages\/page-[0-9]{6}\.(?:webp|jxl|png)$/;
   const PDF_OCR_ROOT = /^(objects\/[0-9a-f]{2}\/[0-9a-f]{64}(?:\/[0-9a-f]{16})?)/;
   function pdfSourceRoot(path) {
     return typeof path === "string" ? path.split("/").slice(0, 3).join("/") : "";
@@ -313,9 +317,14 @@
           (page.w !== undefined && (typeof page.w !== "string" || !PDF_OCR_PAGE_PATH.test(page.w) ||
             !page.w.endsWith(`/pages/page-${expected}.webp`) ||
             pdfSourceRoot(page.w) !== pdfSourceRoot(pageRoot))) ||
-          (page.j !== undefined && (typeof page.j !== "string" || !PDF_OCR_PAGE_PATH.test(page.j) ||
+           (page.j !== undefined && (typeof page.j !== "string" || !PDF_OCR_PAGE_PATH.test(page.j) ||
             !page.j.endsWith(`/pages/page-${expected}.jxl`) ||
-            pdfSourceRoot(page.j) !== pdfSourceRoot(pageRoot))) ||
+             pdfSourceRoot(page.j) !== pdfSourceRoot(pageRoot))) ||
+          (page.r !== undefined && (typeof page.r !== "string" || !PDF_OCR_PAGE_PATH.test(page.r) ||
+            !page.r.endsWith(`/pages/page-${expected}.png`) || pdfSourceRoot(page.r) !== pdfSourceRoot(pageRoot) ||
+            manifest.source_format !== "djvu" || page.w !== undefined || page.j !== undefined ||
+            page.rbucket !== "vomebook/pdf-pages-v2" || !/^[0-9a-f]{64}$/.test(page.rs || "") ||
+            !Number.isSafeInteger(page.rb) || page.rb < 1)) ||
           pdfSourceRoot(pageRoot) !== `objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}` ||
           (root && pdfSourceRoot(root) !== pdfSourceRoot(pageRoot)))
         throw error("PDF_OCR_MANIFEST_INVALID");

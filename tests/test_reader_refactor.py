@@ -134,7 +134,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.wait_for_function("() => /^(?:\d+ 个结果|未找到正文匹配)$/.test(document.querySelector('#full-search-status').textContent)")
 
     def test_pdf_page_sources_preserve_version_and_navigate(self):
-        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3}
+        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3, "source_format": "djvu"}
         root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64
         self.serve(json.dumps(manifest), "application/json")
         self.page.route("**/page-manifest.json", lambda route: route.fulfill(json=manifest))
@@ -316,7 +316,7 @@ class ReaderRefactorTest(unittest.TestCase):
             "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
             "get: () => Promise.resolve({page: 12, pageOffset: 0, zoom: 1}),",
         )
-        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 24}
+        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 24, "source_format": "djvu"}
         root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
         requests = []
         self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
@@ -416,14 +416,14 @@ class ReaderRefactorTest(unittest.TestCase):
                     "pages": [{"p": page, "o": root + f"/ocr/page-{page:06d}.json.gz"} for page in (1, 2)],
                     "book_text": {"path": root + "/ocr/book-text.json.gz", "bytes": 1, "sha256": "a" * 64}}
         attempts, image_requests = [], []
-        self.serve(json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2}), "application/json")
+        self.serve(json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2, "source_format": "djvu"}), "application/json")
         def image(route):
             image_requests.append(route.request.url)
             route.fulfill(content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1])
         def resource(route):
             path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
             if path.endswith("/page-manifest.json"):
-                route.fulfill(json={"version": 2, "kind": "pdf-pages", "page_count": 2})
+                route.fulfill(json={"version": 2, "kind": "pdf-pages", "page_count": 2, "source_format": "djvu"})
                 return
             if path == ocr_path:
                 route.fulfill(json=manifest)
