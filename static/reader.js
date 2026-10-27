@@ -405,6 +405,7 @@ const readerContext = {
   get settleReaderImages() { return settleReaderImages; }, set settleReaderImages(value) { settleReaderImages = value; },
   get alignReaderDestination() { return alignReaderDestination; },
   get holdReaderDestination() { return holdReaderDestination; },
+  get cancelReaderDestinationHold() { return cancelReaderDestinationHold; },
   get reassertReaderDestination() { return reassertReaderDestination; },
   get showDownloadFeedback() { return showDownloadFeedback; }, set showDownloadFeedback(value) { showDownloadFeedback = value; },
   get sourceName() { return sourceName; },
@@ -942,7 +943,12 @@ const READER_HOLD_BUDGET_MS = 15000;
 // Images and inserted chapters arrive in bursts seconds apart, so wait out a long gap
 // before deciding the layout is final. Reader input still releases immediately.
 const READER_HOLD_QUIET_MS = 2000;
+let activeReaderDestinationHold = null;
+const cancelReaderDestinationHold = () => activeReaderDestinationHold?.();
 const holdReaderDestination = (target, offset = 0) => {
+  // A newer navigation owns the viewport. Never let an older landing loop
+  // pull the new destination back while it is still loading or settling.
+  cancelReaderDestinationHold();
   if (!target?.isConnected) return () => {};
   const viewport = (target.ownerDocument === document
     ? document
@@ -954,7 +960,9 @@ const holdReaderDestination = (target, offset = 0) => {
   let lastScrollTop = scope.scrollTop;
   const listeners = [];
   const observers = [];
+  const cleanupImages = [];
   const detach = () => {
+    readerAbortController.signal.removeEventListener("abort", release);
     for (const [name, handler] of listeners) if (name) scope.removeEventListener?.(name, handler);
     for (const cleanup of cleanupImages) cleanup();
     listeners.length = 0;
@@ -962,11 +970,19 @@ const holdReaderDestination = (target, offset = 0) => {
     observers.length = 0;
   };
   const release = () => {
+    if (released) return;
     released = true;
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
     detach();
+    if (activeReaderDestinationHold === release) activeReaderDestinationHold = null;
   };
+  activeReaderDestinationHold = release;
+  if (readerAbortController.signal.aborted) {
+    release();
+    return release;
+  }
+  readerAbortController.signal.addEventListener("abort", release, { once: true });
   for (const name of ["wheel", "touchstart", "pointerdown", "keydown"]) {
     const handler = () => release();
     listeners.push([name, handler]);
@@ -994,7 +1010,6 @@ const holdReaderDestination = (target, offset = 0) => {
   }
   // A chapter image finishing changes the document position without resizing the
   // viewport element, so follow load/error on every image currently in the reader.
-  const cleanupImages = [];
   for (const image of target.parentElement?.querySelectorAll("img") || []) {
     if (image.complete) continue;
     const handler = () => bump();
