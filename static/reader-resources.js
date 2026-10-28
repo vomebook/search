@@ -153,6 +153,9 @@
     ["reader.html", ...readerFiles.filter((file) => !lazyFiles.has(file))].map((file) => base + file);
   // Extracted unchanged from the checksum-pinned PDF.js archive above.
   const pdfSupportAssets = (base) => [base + "vendor/wasm/qcms_bg.wasm"];
+  const djvuDecoderAssets = (base) => ["scalar/djvu_rs.js", "scalar/djvu_rs_bg.wasm",
+    "simd128/djvu_rs.js", "simd128/djvu_rs_bg.wasm"].map(file =>
+      base + "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/" + file);
   function engineAssets(extension, base, foliateSuffix = "", workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
     if (extension === "pdf")
       return [
@@ -203,6 +206,7 @@
     runtimePaths,
     shellAssets,
     pdfSupportAssets,
+    djvuDecoderAssets,
     engineAssets,
     buildFiles,
     bundleArguments
