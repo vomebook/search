@@ -18,8 +18,8 @@ self.onmessage = async ({ data }) => {
         throw new Error('DJVU_DOCUMENT_INVALID');
       if (!engine) {
         const simd = WebAssembly.validate(SIMD128_PROBE);
-        engine = simd ? await import('../../vendor/djvu-rs-reader/simd128/djvu_rs.js')
-                      : await import('../../vendor/djvu-rs-reader/scalar/djvu_rs.js');
+        engine = simd ? await import('../../vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/simd128/djvu_rs.js')
+                      : await import('../../vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/scalar/djvu_rs.js');
         await engine.default();
       }
       document = engine.WasmDocument.reader_open(new Uint8Array(data.bytes), data.cacheBytes);

@@ -45,6 +45,6 @@ for (const filename of ["index.html", "static/reader.html", "sw.js"]) {
   if (filename === "index.html") content = stripBundledScripts(content);
   content = rewrite(content, filename === "static/reader.html" ? "reader.html" : filename);
   if (filename === "sw.js") content = content.replace(/CURRENT_HASHED_ASSETS\s*=\s*\[\]/,
-    "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].filter(url => url.startsWith("static/")).map(url => "/search/" + url).concat([...currentVendorAssets])));
+    "CURRENT_HASHED_ASSETS=" + JSON.stringify([...replacements.values()].filter(url => url.startsWith("static/")).map(url => "/search/" + url).concat([...currentVendorAssets], resources.djvuDecoderAssets("/search/static/"))));
   writeFileSync(target, content);
 }
