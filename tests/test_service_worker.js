@@ -145,6 +145,21 @@ test("unversioned shells and data revalidate past the HTTP cache; pinned hashes 
   await Promise.all(pinned.operations.lifetimes);
   assert.ok(!(requests[0] instanceof MockRequest));
 });
+test("content-addressed DjVu decoder survives activation and reuses cached bytes", async () => {
+  const path = "/search/static/vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/simd128/djvu_rs.js";
+  const url = "https://example.test" + path;
+  const old = "https://example.test/search/static/vendor/djvu-rs-reader/release-aaaaaaaaaaaa-bbbbbbbbbbbb/scalar/djvu_rs_bg.wasm";
+  const configured = source.replace("const CURRENT_HASHED_ASSETS = []", 'const CURRENT_HASHED_ASSETS = ["/search/static/app.111111111111.js", "' + path + '"]');
+  const instance = harness({ source: configured, cacheEntries: [[url, response("cached-decoder")], [old, response("old-decoder")]] });
+  await lifecycle(instance.listeners.activate);
+  assert.ok(instance.stores.get(CACHE_NAME).has(url));
+  assert.ok(!instance.stores.get(CACHE_NAME).has(old));
+  assert.ok(instance.stores.get(CACHE_NAME).has(old + "?sw-retained-generation"));
+  const result = await dispatchFetch(instance, url);
+  assert.strictEqual(result.body, "cached-decoder");
+  await Promise.all(instance.operations.lifetimes);
+  assert.deepStrictEqual(instance.operations.fetch, []);
+});
 test("registers install activate and fetch listeners", () => {
   const instance = harness();
   assert.deepStrictEqual(Object.keys(instance.listeners).sort(), ["activate", "fetch", "install"]);
