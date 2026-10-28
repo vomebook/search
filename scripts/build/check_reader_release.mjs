@@ -54,15 +54,18 @@ function checkBehavior(root) {
 }
 
 function checkAssets(output, hashed = false) {
-  const djvuLibrary = "vendor/djvujs-gpl-v0.5.4.js";
-  assert(hash(path.join(output, djvuLibrary)) === "10a831d62cc7ced39c30c7350a11410402d082a0f0a5b073a88d3d7ca662add3",
-    "DjVu.js release asset checksum mismatch");
-  assert(hash(path.join(output, "vendor/djvujs-source/pngjs-5.0.0.tgz")) ===
-    "4d960bbbe078022d7a36822e2874f884c7410ead111f3603d69d70fc7af36f20", "pngjs source checksum mismatch");
-  for (const file of ["NOTICE.txt", "UPSTREAM-LICENSE.txt", "GPL-2.0.txt", "package.json", "package-lock.json",
-    "PNGJS-LICENSE.txt", "rollup.config.js", "src/index.js", "src/DjVuDocument.js", "src/DjVuWorker.js", "src/DjVuPage.js"]) {
-    assert(fs.statSync(path.join(output, "vendor/djvujs-source", file)).isFile(), `missing DjVu.js corresponding source: ${file}`);
-  }
+  const djvuFiles = {
+    "scalar/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
+    "simd128/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
+    "scalar/djvu_rs_bg.wasm": "a03526f445b48c4f99043ce282e333828eae0c956148693f52788fe6787c5b33",
+    "simd128/djvu_rs_bg.wasm": "a99c0e299e9526d084c845f2ab5d988c0cfc05e75f20d14a84ed4c55fe5d47a3",
+    "strict-source.zip": "770d44f46001190f0b3ff9d15903ace50788b2c2e68a83714720c2a0bfa7c532",
+    "LICENSE.txt": "9b634d974fb7ccacccc877fa6b36016eb48884b09732485d7ad92b6294699163",
+    "THIRD_PARTY_NOTICES.txt": "f8b526769a2f382a6a8a0ea6a0f56948604b1508ec73429b19c43b89a8f1e752"
+  };
+  for (const [file, digest] of Object.entries(djvuFiles))
+    assert(hash(path.join(output, "vendor/djvu-rs-reader", file)) === digest, `DjVu decoder integrity mismatch: ${file}`);
+  assert(fs.statSync(path.join(output, "vendor/djvu-rs-reader/NOTICE.txt")).isFile(), "missing DjVu decoder notice");
   for (const vendor of Object.values(resources.foliateVendors)) {
     const filename = path.join("foliate-reader/vendor", vendor.file);
     assert(hash(path.join(output, filename)) === vendor.sha256,
@@ -203,10 +206,11 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/core/reader-runtime.js",
     "reader/formats/reader-format-adapters.js",
     "reader/core/reader-security.js",
-    "reader/pdf/reader-v3.mjs", "reader/pdf/reader-djvu-worker.mjs", "reader/pdf/reader-djvu-scheduler.mjs",
-    "reader/pdf/reader-djvu-adapter.mjs", "vendor/djvujs-gpl-v0.5.4.js", "vendor/djvujs-source/NOTICE.txt",
-    "vendor/djvujs-source/UPSTREAM-LICENSE.txt", "vendor/djvujs-source/GPL-2.0.txt",
-    "vendor/djvujs-source/pngjs-5.0.0.tgz", "vendor/djvujs-source/PNGJS-LICENSE.txt",
+    "reader/pdf/reader-v3.mjs", "reader/pdf/reader-djvu-engine-worker.mjs", "reader/pdf/reader-djvu-worker.mjs", "reader/pdf/reader-djvu-scheduler.mjs",
+    "reader/pdf/reader-djvu-adapter.mjs", "vendor/djvu-rs-reader/scalar/djvu_rs.js", "vendor/djvu-rs-reader/simd128/djvu_rs.js",
+    "vendor/djvu-rs-reader/scalar/djvu_rs_bg.wasm", "vendor/djvu-rs-reader/simd128/djvu_rs_bg.wasm",
+    "vendor/djvu-rs-reader/strict-source.zip", "vendor/djvu-rs-reader/LICENSE.txt", "vendor/djvu-rs-reader/NOTICE.txt",
+    "vendor/djvu-rs-reader/THIRD_PARTY_NOTICES.txt",
     "reader/search/reader-search-controller.mjs",
     "reader/search/reader-dom-search.mjs",
     "reader/formats/reader-image-loader.mjs",
