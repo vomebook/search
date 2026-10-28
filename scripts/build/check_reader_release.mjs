@@ -55,10 +55,10 @@ function checkBehavior(root) {
 
 function checkAssets(output, hashed = false) {
   const djvuFiles = {
-    "scalar/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
-    "simd128/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
-    "scalar/djvu_rs_bg.wasm": "a03526f445b48c4f99043ce282e333828eae0c956148693f52788fe6787c5b33",
-    "simd128/djvu_rs_bg.wasm": "a99c0e299e9526d084c845f2ab5d988c0cfc05e75f20d14a84ed4c55fe5d47a3",
+    "release-a03526f445b4-a99c0e299e95/scalar/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
+    "release-a03526f445b4-a99c0e299e95/simd128/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
+    "release-a03526f445b4-a99c0e299e95/scalar/djvu_rs_bg.wasm": "a03526f445b48c4f99043ce282e333828eae0c956148693f52788fe6787c5b33",
+    "release-a03526f445b4-a99c0e299e95/simd128/djvu_rs_bg.wasm": "a99c0e299e9526d084c845f2ab5d988c0cfc05e75f20d14a84ed4c55fe5d47a3",
     "strict-source.zip": "770d44f46001190f0b3ff9d15903ace50788b2c2e68a83714720c2a0bfa7c532",
     "LICENSE.txt": "9b634d974fb7ccacccc877fa6b36016eb48884b09732485d7ad92b6294699163",
     "THIRD_PARTY_NOTICES.txt": "f8b526769a2f382a6a8a0ea6a0f56948604b1508ec73429b19c43b89a8f1e752"
@@ -207,8 +207,8 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/formats/reader-format-adapters.js",
     "reader/core/reader-security.js",
     "reader/pdf/reader-v3.mjs", "reader/pdf/reader-djvu-engine-worker.mjs", "reader/pdf/reader-djvu-worker.mjs", "reader/pdf/reader-djvu-scheduler.mjs",
-    "reader/pdf/reader-djvu-adapter.mjs", "vendor/djvu-rs-reader/scalar/djvu_rs.js", "vendor/djvu-rs-reader/simd128/djvu_rs.js",
-    "vendor/djvu-rs-reader/scalar/djvu_rs_bg.wasm", "vendor/djvu-rs-reader/simd128/djvu_rs_bg.wasm",
+    "reader/pdf/reader-djvu-adapter.mjs", "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/scalar/djvu_rs.js", "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/simd128/djvu_rs.js",
+    "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/scalar/djvu_rs_bg.wasm", "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/simd128/djvu_rs_bg.wasm",
     "vendor/djvu-rs-reader/strict-source.zip", "vendor/djvu-rs-reader/LICENSE.txt", "vendor/djvu-rs-reader/NOTICE.txt",
     "vendor/djvu-rs-reader/THIRD_PARTY_NOTICES.txt",
     "reader/search/reader-search-controller.mjs",
