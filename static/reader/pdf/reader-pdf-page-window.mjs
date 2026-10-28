@@ -422,7 +422,7 @@ export function createReaderPdfPageWindow(readerContext) {
       readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability("pdf"));
       readerContext.readerRuntime.update("source", { extension: "pdf" });
       readerContext.syncCapabilityControls();
-      const { openDirectDjvu } = await import("./reader-djvu-loader.mjs");
+      const { openDirectDjvu } = await import("/search/static/reader/pdf/reader-djvu-loader.mjs");
       let pdf;
       try {
         const pageMap = repository.read(manifest.page_map).then(map => readerContext.validatePageMap(map, manifest));
