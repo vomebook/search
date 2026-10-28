@@ -1,0 +1,21 @@
+DjVu Reader decoder based on djvu-rs 0.43.0
+Copyright (c) 2026 Lev Matyushkin and djvu-rs contributors.
+Upstream: https://github.com/matyushkin/djvu-rs
+Upstream revision: ad6cd1b35eedb2f7ecc3fdbbdf4bf80ea5823cf9
+License: MIT; see LICENSE.txt. Third-party dependencies are described in
+THIRD_PARTY_NOTICES.txt; the exact source used is in strict-source.zip.
+
+Reader integration changes to src/wasm.rs, 2026-10-28: expose strict full-page
+rendering, unsupported-layer rejection, bounded input/cache options, original rotation and outline metadata.
+The binaries are local builds, not the original npm release binaries.
+
+Build: Rust 1.99.1, wasm-bindgen-cli 0.2.129, wasm-opt 117, locked Cargo
+dependencies, features=wasm. Scalar: cargo build --locked --release --target
+wasm32-unknown-unknown --features wasm; SIMD adds RUSTFLAGS='-C target-feature=+simd128'.
+Run wasm-bindgen --target web, then wasm-opt -O --enable-reference-types
+(and --enable-simd for the SIMD binary). This archive excludes test corpora and
+is not a statement that every runtime interaction or legal obligation is met.
+
+source archive SHA-256: 770d44f46001190f0b3ff9d15903ace50788b2c2e68a83714720c2a0bfa7c532
+scalar wasm SHA-256: a03526f445b48c4f99043ce282e333828eae0c956148693f52788fe6787c5b33
+SIMD wasm SHA-256: a99c0e299e9526d084c845f2ab5d988c0cfc05e75f20d14a84ed4c55fe5d47a3
