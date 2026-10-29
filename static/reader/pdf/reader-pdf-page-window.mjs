@@ -626,6 +626,20 @@ export function createReaderPdfPageWindow(readerContext) {
     readerContext.assertReaderActive();
     readerContext.pdfDocument = pdf;
     readerContext.updateDocumentState({ pageCount: pdf.numPages });
+    if (pdf.sourceSha256 && readerContext.ocrManifestUrl) {
+      // Existing OCR is optional and never allowed to change the source image.
+      // Attach it only when its manifest identifies these exact source bytes.
+      try {
+        const manifest = await readerContext.loadPdfOcrManifest();
+        if (manifest?.source_sha256 !== pdf.sourceSha256) throw new Error("DJVU_OCR_SOURCE_MISMATCH");
+      } catch (error) {
+        if (readerContext.readerAbortController.signal.aborted) throw error;
+        console.warn("DjVu OCR text does not match this source; using embedded text", error);
+        readerContext.ocrManifestUrl = "";
+        readerContext.pdfOcrManifest = null;
+        readerContext.pdfOcrManifestPromise = null;
+      }
+    }
     readerContext.pageInput.max = String(readerContext.documentState.pageCount);
     document.querySelector("#page-total").textContent = `/ ${readerContext.documentState.pageCount}`;
     readerContext.status.textContent = `${pdf.numPages} 页`;

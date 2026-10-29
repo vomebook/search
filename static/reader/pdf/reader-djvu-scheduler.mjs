@@ -28,10 +28,11 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     pending.delete(task.page); active = task;
     Promise.resolve().then(() => {
       if (closed) throw abort();
-      return task.outline ? decoder.outline() : decoder.page(task.page);
+      return task.outline ? decoder.outline() : task.operation === 'geometry' ? decoder.geometry(task.number) :
+        task.operation === 'text' ? decoder.text(task.number) : decoder.page(task.page);
     }).then(value => {
       if (closed) return;
-      if (task.outline) { settle(task, null, value); return; }
+      if (task.outline || task.operation) { settle(task, null, value); return; }
       if (!value?.image || !(value.image.data instanceof Uint8ClampedArray)) throw new Error("DJVU_DECODE_INVALID");
       const bytes = value.image.data.byteLength;
       // A decode that was already running cannot be interrupted without losing
@@ -83,8 +84,21 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     const promise = new Promise((resolve,reject)=>task.clients.add({resolve,reject}));
     next(); return promise;
   }
+  function requestMetadata(operation, number, priority = 0) {
+    if (closed) return Promise.reject(abort());
+    if (!['geometry','text'].includes(operation) || !Number.isSafeInteger(number) || number < 1)
+      return Promise.reject(new Error('DJVU_PAGE_INVALID'));
+    const key = `${operation}:${number}`;
+    let task = active?.page === key ? active : pending.get(key);
+    if (!task) {
+      task = {page:key, number, operation, priority:Number(priority) || 0, seq:sequence++, clients:new Set()};
+      pending.set(key,task);
+    } else task.priority = Math.max(task.priority, Number(priority) || 0);
+    const promise = new Promise((resolve,reject)=>task.clients.add({resolve,reject}));
+    next(); return promise;
+  }
   function cancelSpeculation() {
-    for (const [page, task] of pending) if (!task.outline && task.priority < 2) {
+    for (const [page, task] of pending) if (!task.outline && !task.operation && task.priority < 2) {
       pending.delete(page); settle(task, abort());
     }
   }
@@ -96,6 +110,6 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (active) settle(active, abort());
     cache.clear(); retained = 0; ephemeral = null; decoder.close();
   }
-  return { request, requestOutline, cancelSpeculation, close,
+  return { request, requestOutline, requestMetadata, cancelSpeculation, close,
     stats: () => ({ retainedBytes: retained, pages: [...cache.keys()], queued: pending.size, active: active?.page || null }) };
 }

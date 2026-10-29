@@ -77,7 +77,11 @@ export function createReaderFormatController(readerContext) {
         () => readerContext.fetchReaderResponse(),
         readerContext.renderImagePages
       ],
-      pdf: [readerContext.loadPdfDocument, readerContext.renderPdf],
+      pdf: [() => {
+        if (readerContext.extension !== "djvu") return readerContext.loadPdfDocument();
+        readerContext.releasePdfWorker?.();
+        return import("/search/static/reader/pdf/reader-djvu-loader.mjs").then(module => module.openNativeDjvu(readerContext));
+      }, readerContext.renderPdf],
       image: [readerContext.loadImageDocument, readerContext.renderImageDocument],
       text: [readerContext.loadTextDocument, readerContext.renderTextDocument],
       markdown: [readerContext.loadMarkdownDocument, readerContext.renderMarkdownDocument],
@@ -111,6 +115,14 @@ export function createReaderFormatController(readerContext) {
       }
     }
     readerContext.assertReaderActive();
+    if (String(resolved.original_extension || '').toLowerCase().replace(/^\./,'') === 'djvu' &&
+        String(resolved.extension || '').toLowerCase() === 'pdf-pages') {
+      // Links saved before the direct reader may still resolve to an old page
+      // stream. Use their original download URL, never the legacy page images.
+      if (!readerContext.validSource(resolved.download) || !/\.djvu$/i.test(new URL(resolved.download).pathname))
+        throw new Error('DJVU_ORIGINAL_SOURCE_REQUIRED');
+      resolved = {...resolved,url:resolved.download,extension:'djvu'};
+    }
     readerContext.sourceUrl = readerContext.normalizeSourceUrl(resolved.url || "");
     readerContext.contentUrl = readerContext.readerContentUrl(readerContext.sourceUrl);
     readerContext.downloadUrl = resolved.download || readerContext.sourceUrl;

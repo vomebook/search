@@ -31,6 +31,30 @@ self.onmessage = async ({ data }) => {
       return;
     }
     if (!document) throw new Error('DJVU_DOCUMENT_INVALID');
+    if (operation === 'geometry' || operation === 'text') {
+      const number = data.page;
+      if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
+      const page = document.page(number - 1);
+      try {
+        const dpi = page.dpi(), rotation = page.reader_rotation();
+        const width = page.width_at(dpi), height = page.height_at(dpi);
+        if (![width, height, dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
+            width * height > MAX_PIXELS || ![0, 90, 180, 270].includes(rotation))
+          throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
+        if (operation === 'geometry') {
+          self.postMessage({ id, ok: true, width, height, dpi, rotation });
+        } else {
+          const text = page.text() || '';
+          if (text.length > 2_000_000) throw new Error('DJVU_TEXT_SIZE_LIMIT');
+          const packed = page.text_zones_json(dpi);
+          if (text.length > 2_000_000 || (packed && packed.length > 4_000_000)) throw new Error('DJVU_TEXT_SIZE_LIMIT');
+          const zones = packed ? JSON.parse(packed) : [];
+          if (!Array.isArray(zones) || zones.length > 20_000) throw new Error('DJVU_TEXT_SIZE_LIMIT');
+          self.postMessage({ id, ok: true, text, zones });
+        }
+      } finally { page.free(); }
+      return;
+    }
     if (operation === 'page') {
       const number = data.page;
       if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
@@ -80,6 +104,6 @@ self.onmessage = async ({ data }) => {
     const message = String(error?.message || error || '');
     const known = message.match(/\bDJVU_[A-Z_]+\b/)?.[0];
     fail(id, known || (operation === 'open' ? 'DJVU_OPEN_FAILED' :
-      operation === 'page' ? 'DJVU_PAGE_DECODE_FAILED' : 'DJVU_WORKER_FAILED'));
+      operation === 'page' ? 'DJVU_PAGE_DECODE_FAILED' : operation === 'text' ? 'DJVU_TEXT_DECODE_FAILED' : 'DJVU_WORKER_FAILED'));
   }
 };
