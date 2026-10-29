@@ -56,4 +56,16 @@ await assert.rejects(scheduler.request(1), { name: "AbortError" });
   await assert.rejects(task,{name:'AbortError'});await tick();
   assert.equal(started,0,'close before dispatch must not run a decoder command');
 }
+{
+  const work=[], hold=deferred => new Promise(resolve=>deferred(resolve));
+  let release;
+  const mixed=createDjvuScheduler({page:n=>{work.push(`page:${n}`);return hold(r=>release=r);},
+    geometry:async n=>{work.push(`geometry:${n}`);return {width:1};},
+    text:async n=>{work.push(`text:${n}`);return {text:'text'};},close(){}},{maxBytes:4,maxPages:1});
+  const page=mixed.request(1,3);await tick();
+  const text=mixed.requestMetadata('text',2,-1),geometry=mixed.requestMetadata('geometry',2,2);
+  mixed.cancelSpeculation();release(image(1));await page;
+  assert.deepEqual(await geometry,{width:1});assert.deepEqual(await text,{text:'text'});
+  assert.deepEqual(work,['page:1','geometry:2','text:2']);mixed.close();
+}
 console.log("DjVu scheduler cancellation, ordering, deduplication, LRU and closure passed");

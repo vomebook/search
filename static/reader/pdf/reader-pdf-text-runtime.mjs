@@ -247,6 +247,20 @@ export function createReaderPdfTextRuntime(readerContext) {
       readerContext.cachePdfTextContent(pageNumber, text);
       if (epoch !== (shell._textEpoch || 0) || !shell.isConnected) return;
       const pdfViewport = page.getViewport({ scale: 1 });
+      if (Array.isArray(text.readerTextZones)) {
+        const raw = readerContext.pdfTextContent(text.items);
+        const regions = text.readerTextZones.filter(zone => zone.end > zone.start &&
+          zone.box[0] < zone.box[2] && zone.box[1] < zone.box[3]).map(zone => ({
+            text:zone.text, start:zone.start, end:zone.end, box:zone.box,
+            quad:[[zone.box[0],zone.box[1]],[zone.box[2],zone.box[1]],
+              [zone.box[2],zone.box[3]],[zone.box[0],zone.box[3]]], writing_mode:'horizontal-tb'
+          }));
+        readerContext.populateIndependentTextLayer(layer,{text:raw,regions});
+        shell._bookmarkTextItems=regions.map(region=>({text:region.text,y:region.box[1]}));
+        shell.dataset.textReady="1";
+        readerContext.highlightPdfText(shell);
+        return;
+      }
       shell._bookmarkTextItems = text.items
         .filter((item) => item.str && item.str.trim())
         .map((item) => {

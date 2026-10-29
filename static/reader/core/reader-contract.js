@@ -164,7 +164,7 @@
     video: "video",
     swf: "swf"
   });
-  const articleExtensions = Object.freeze(Object.keys(modes));
+  const articleExtensions = Object.freeze([...Object.keys(modes), "djvu"]);
   const features = Object.freeze({
     pdf: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false },
     "pdf-pages": {
@@ -260,7 +260,8 @@
 
   function capability(extension) {
     const normalized = String(extension || "").toLowerCase();
-    const mode = modes[normalized];
+    // Native DjVu reuses the paginated document UI but never PDF.js.
+    const mode = normalized === "djvu" ? "pdf" : modes[normalized];
     return Object.freeze({
       extension: normalized,
       mode: mode || null,
@@ -379,6 +380,8 @@
       : "";
     if (asset?.s === 3 && ocrUrl)
       return { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") };
+    if (asset?.s === 2 && originalExtension.toLowerCase().replace(/^\./, "") === "djvu")
+      return ocrUrl ? { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") } : null;
     if (asset?.s === 2 && asset.m === "p" && !asset.c && path.endsWith("/page-manifest.json") &&
         originalExtension && originalExtension.toLowerCase().replace(/^\./, "") !== "djvu") {
       const fields = ocrUrl ? { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") } : {};

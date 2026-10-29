@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash, webcrypto} from 'node:crypto';
-import {openDirectDjvu} from '../static/reader/pdf/reader-djvu-loader.mjs';
+import {openDirectDjvu, openNativeDjvu} from '../static/reader/pdf/reader-djvu-loader.mjs';
 
 Object.defineProperty(globalThis, 'crypto', {configurable: true, value: webcrypto});
 globalThis.matchMedia = () => ({matches: false});
@@ -10,7 +10,8 @@ globalThis.VoiceOfMLReaderSecurity = {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.length > limit) throw new Error('READER_RESOURCE_LIMIT');
     return bytes;
-  }
+  },
+  async readText(response, limit) { return new TextDecoder().decode(await this.readBytes(response,limit)); }
 };
 let workers = 0;
 globalThis.Worker = class { constructor() { workers++; throw new Error('unexpected decoder start'); } };
@@ -60,5 +61,15 @@ function context(fetchReaderUrl, controller = new AbortController()) {
   await assert.rejects(openDirectDjvu(contextValue, manifest, Promise.reject(new Error('bad page map'))), /bad page map/);
   assert.equal(stopped, true, 'failed page map cancels source download');
   assert.equal(workers, 0);
+}
+{
+  let sourceReads=0;
+  const value = context(async()=>{sourceReads++;return new Response(bytes);});
+  Object.assign(value,{sourceUrl:url,readerDownloadApiUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:async()=>new Response(JSON.stringify({revision:'b'.repeat(40),
+      url:url.replace('a'.repeat(40),'b'.repeat(40))}))});
+  await assert.rejects(openNativeDjvu(value),/DJVU_SOURCE_REVISION_INVALID/);
+  assert.equal(sourceReads,0,'changed immutable revision must not be downloaded');
+  assert.equal(workers,0);
 }
 console.log('DjVu dataset source size, hash, cancellation and map-failure guards passed');
