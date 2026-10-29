@@ -65,6 +65,22 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
       throw new Error('DJVU_PAGE_DECODE_INVALID');
     return { image: new ImageData(new Uint8ClampedArray(pixels), width, height), width, height, dpi, rotation };
   }
+  async function geometry(number) {
+    if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
+    const {width, height, dpi, rotation} = await request('geometry', {page:number});
+    if (![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
+        width * height > maxPixels || ![0,90,180,270].includes(rotation)) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
+    return {width,height,dpi,rotation};
+  }
+  async function text(number) {
+    if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
+    const {text, zones} = await request('text', {page:number});
+    if (typeof text !== 'string' || text.length > 2_000_000 || !Array.isArray(zones) || zones.length > 20_000 ||
+        zones.some(z => !z || typeof z.t !== 'string' || z.t.length > 4000 ||
+          ![z.x,z.y,z.w,z.h].every(Number.isFinite) || z.x < 0 || z.y < 0 || z.w < 0 || z.h < 0))
+      throw new Error('DJVU_TEXT_INVALID');
+    return {text,zones};
+  }
   async function outline(signal) {
     const { entries } = await request('outline', {}, { signal });
     if (!Array.isArray(entries) || entries.length > 2000 || entries.some((entry, index) =>
@@ -80,5 +96,5 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
     if (!Number.isSafeInteger(value.cacheBytes) || value.cacheBytes < 0) throw new Error('DJVU_WORKER_PROTOCOL');
     return { decodedCacheBytes: value.cacheBytes };
   }
-  return { open, page, outline, stats, close, get closed() { return closed; } };
+  return { open, page, geometry, text, outline, stats, close, get closed() { return closed; } };
 }

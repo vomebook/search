@@ -283,7 +283,9 @@ export function createReaderPdfSearch(readerContext) {
         await readerContext.waitForReader(0, true);
       }
     }
-    if (!hasText) throw new Error("此 PDF 尚无可搜索文字层，需要完成 OCR 后才能搜索正文");
+    if (!hasText) throw new Error(readerContext.extension === "djvu"
+      ? "此 DjVu 原件尚无可搜索文字层，需要已有 OCR 文本后才能搜索正文"
+      : "此 PDF 尚无可搜索文字层，需要完成 OCR 后才能搜索正文");
     readerContext.publishPdfSearchProgress(generation, groups, total, pattern, firstPage, pdf.numPages, pdf.numPages);
     return readerContext.fullSearchSession.page.results;
   }

@@ -17,6 +17,9 @@ function fakeEngine({count=2, width=10, height=20, dpi=300, rotation=0, hang=fal
         ? openError ? {id:message.id,ok:false,error:openError} : {id:message.id,ok:true,count}
         : message.operation==='outline' ? {id:message.id,ok:true,entries}
         : message.operation==='stats' ? {id:message.id,ok:true,cacheBytes:200}
+        : message.operation==='geometry' ? {id:message.id,ok:true,width,height,dpi,rotation}
+        : message.operation==='text' ? {id:message.id,ok:true,text:'Hello world\n',zones:[
+            {t:'Hello',x:0,y:0,w:5,h:5},{t:'world',x:5,y:0,w:5,h:5}]}
         : {id:message.id,ok:true,width,height,dpi,rotation,
            pixels:new ArrayBuffer(badData ? 1 : width*height*4)};
       queueMicrotask(()=>this.onmessage({data:result}));
@@ -35,6 +38,18 @@ const map={pages:[1,2].map(page=>({page,width:2.4,height:4.8,rotation:0,
   assert.equal((await worker.stats()).decodedCacheBytes,200);
   assert.equal(fake.instance.sends[0].transfer.length,1,'source ownership must transfer');
   worker.close();assert.equal(fake.instance.terminated,true);
+}
+{
+  const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
+    bytes:bytes(),cacheBytes:1024,cachePages:2});
+  const page=await pdf.getPage(1), viewport=page.getViewport({scale:1}), text=await page.getTextContent();
+  assert.equal(viewport.width,2.4);assert.equal(viewport.height,4.8);
+  assert.equal(text.items.map(item=>item.str).join(''),'Hello world\n');
+  assert.equal(text.readerTextZones.length,2);
+  let drawn=0;
+  globalThis.OffscreenCanvas=class {getContext(){return {putImageData(){}}}};
+  await page.render({canvasContext:{canvas:{width:10,height:20},clearRect(){},drawImage(){drawn++;}}}).promise;
+  assert.equal(drawn,1);pdf.destroy();assert.equal(fake.instance.terminated,true);
 }
 {
   const fake=fakeEngine(),worker=createDjvuWorkerAdapter('/worker',{createWorker:fake.createWorker});

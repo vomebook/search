@@ -99,7 +99,10 @@ for (const extension of ['pdf', 'caj', 'kdh', 'ppt', 'ps']) {
 {
   const fields = VoiceOfMLReader.assetFields({s: 2, m: 'p', b: 'vomebook/pdf-pages-v2',
     p: base + 'b'.repeat(16) + '/page-manifest.json'}, '/api/reader-bucket-resource', 'djvu');
-  assert.equal(fields.ReaderExtension, 'pdf-pages');
+  assert.equal(fields, null, 'legacy DjVu page streams never become reading links');
+  const oldReading = VoiceOfMLReader.assetFields({s:2,m:'p',b:'vomebook/pdf-pages-v2',
+    p:base+'b'.repeat(16)+'/reading-manifest.json'}, '/api/reader-bucket-resource', 'djvu');
+  assert.equal(oldReading,null,'old DjVu reading manifests never replace the original link');
   const direct = reading();direct.primary.kind = 'djvu';direct.primary.resource = {...ref('document.djvu'), sha256: source};
   assert.ok(VoiceOfMLReader.isBucketPath(direct.primary.resource.path, true));
   assert.equal(VoiceOfMLReader.isBucketPath(direct.primary.resource.path.replace('objects/aa/', 'objects/ff/'), true), false);
