@@ -12,7 +12,7 @@ import "/search/static/reader/formats/reader-format-adapters.js";
 import "/search/static/reader/core/reader-security.js";
 import { paintTextHit, hitBoxes } from "/search/static/reader/search/reader-book-text.js";
 import { createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange } from "./reader/pdf/reader-pdf-network.mjs";
-import { createV3Repository, validateResource, validateReadingManifest, validatePageMap } from "./reader/pdf/reader-v3.mjs";
+import { createV3Repository, validateResource, validateReadingManifest, validatePageMap, datasetPrimaryUrl } from "./reader/pdf/reader-v3.mjs";
 import { populateIndependentTextLayer, independentTextCaret } from "./reader/pdf/reader-pdf-text.js";
 let pdfFetchPolicy = null;
 import { populatePdfTextLayer, populateOcrTextLayer, pdfTextContent, pdfSearchText, normalizePdfSearchText, pdfSourceOffset } from "/search/static/reader/pdf/reader-pdf-text.js";
@@ -437,6 +437,7 @@ const readerContext = {
   get validatePageMap() { return validatePageMap; },
   get validateReadingManifest() { return validateReadingManifest; },
   get validateResource() { return validateResource; },
+  get datasetPrimaryUrl() { return datasetPrimaryUrl; },
   get viewport() { return viewport; },
   get waitForReader() { return waitForReader; }, set waitForReader(value) { waitForReader = value; },
   get zoomChangedByUser() { return zoomChangedByUser; }, set zoomChangedByUser(value) { zoomChangedByUser = value; },

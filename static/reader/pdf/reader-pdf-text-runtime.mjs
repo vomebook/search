@@ -5,6 +5,7 @@ export function createReaderPdfTextRuntime(readerContext) {
   }
 
   function v3ResourceUrl(ref) {
+    if (ref?.kind === 'dataset-source') return readerContext.datasetPrimaryUrl(ref);
     readerContext.validateResource(ref);
     return new URL(readerContext.readerDownloadApiUrl(`/api/reader-bucket-resource?path=${encodeURIComponent(ref.path)}`), location.href).href;
   }
