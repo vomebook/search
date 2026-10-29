@@ -51,6 +51,7 @@ jobs:
           node scripts/data/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
           node scripts/build/fetch_foliate_reader.mjs _site/static/foliate-reader
           node scripts/build/copy_reader_vendor.mjs _site/static/vendor --foliate-output _site/static/foliate-reader/vendor
+          cp -a static/vendor/djvu-rs-reader _site/static/vendor/
           node scripts/build/compose_app.mjs > "$RUNNER_TEMP/app-composed.js"
           npx --yes esbuild@0.28.2 "$RUNNER_TEMP/app-composed.js" --minify --target=es2020 --charset=utf8 --legal-comments=none --outfile=_site/static/app.js
           for file in $(node -e 'console.log(require("./static/reader-resources.js").buildFiles("github").filter(f => f !== "app.js").join(" "))'); do
