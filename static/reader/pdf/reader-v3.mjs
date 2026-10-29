@@ -15,6 +15,28 @@ export function validateResource(ref, source = "") {
       (source && !ref.path.startsWith(`objects/${source.slice(0, 2)}/${source}/`)))) invalid();
   return ref;
 }
+export function validateDatasetPrimary(ref, sourceKey, sourceSha, expectedKind) {
+  const keys = ["kind", "repo", "path", "revision", "sha256", "bytes", "role"];
+  if (!ref || typeof ref !== "object" || Array.isArray(ref) ||
+      Object.keys(ref).length !== keys.length || keys.some(key => !Object.hasOwn(ref, key)) ||
+      ref.kind !== "dataset-source" || ref.role !== "runtime" ||
+      typeof ref.repo !== "string" || !/^VoiceOfML\/[A-Za-z0-9._-]+$/.test(ref.repo) ||
+      [".", ".."].includes(ref.repo.split("/")[1]) ||
+      typeof ref.path !== "string" || !ref.path || ref.path.startsWith("/") ||
+      ref.path.split("/").some(part => !part || part === "." || part === "..") ||
+      /[\\%?#\x00-\x1f\x7f\p{Cs}]/u.test(ref.path) || !/\.(?:pdf|djvu)$/i.test(ref.path) ||
+      typeof ref.revision !== "string" || !/^[0-9a-f]{40}$/.test(ref.revision) ||
+      !sha(ref.sha256) || !integer(ref.bytes) || ref.bytes > 512 * 1024 * 1024 ||
+      (sourceKey !== undefined && sourceKey !== ref.repo + "\0" + ref.path) ||
+      (sourceSha !== undefined && sourceSha !== ref.sha256) ||
+      (expectedKind !== undefined && !ref.path.toLowerCase().endsWith("." + expectedKind))) invalid();
+  return ref;
+}
+export function datasetPrimaryUrl(ref) {
+  validateDatasetPrimary(ref);
+  return `https://huggingface.co/datasets/${ref.repo}/resolve/${ref.revision}/` +
+    ref.path.split("/").map(encodeURIComponent).join("/");
+}
 function validBox(b) {
   return Array.isArray(b) && b.length === 4 && b.every(v => Number.isFinite(v) && v >= 0 && v <= 1) &&
     b[0] < b[2] && b[1] < b[3];
@@ -193,14 +215,16 @@ export function validateReadingManifest(manifest, maxPages) {
       manifest.page_count > maxPages || typeof manifest.source_key !== "string" ||
       !["pdf", "djvu"].includes(manifest.primary?.kind) || manifest.primary.status !== "ready" ||
       typeof manifest.preview?.complete !== "boolean" || manifest.preview.page_count !== manifest.page_count) invalid();
-  validateResource(manifest.primary.resource);
-  if (manifest.primary.kind === "djvu"
-    ? manifest.primary.resource.bucket !== "vomebook/pdf-pages-v2" ||
-      manifest.primary.resource.sha256 !== manifest.source_sha256 ||
-      manifest.primary.resource.bytes > 512 * 1024 * 1024 || manifest.page_count > 10000 ||
-      !manifest.primary.resource.path.startsWith(`objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}/`) ||
-      !manifest.primary.resource.path.endsWith("/document.djvu")
-    : !manifest.primary.resource.path.endsWith(".pdf")) invalid();
+  const primary = manifest.primary.resource;
+  const dataset = primary?.kind === "dataset-source";
+  if (dataset) validateDatasetPrimary(primary, manifest.source_key, manifest.source_sha256, manifest.primary.kind);
+  else validateResource(primary);
+  if (manifest.primary.kind === "djvu" && (manifest.page_count > 10000 ||
+      (!dataset && (primary.bucket !== "vomebook/pdf-pages-v2" || primary.sha256 !== manifest.source_sha256 ||
+        primary.bytes > 512 * 1024 * 1024 ||
+        !primary.path.startsWith(`objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}/`) ||
+        !primary.path.endsWith("/document.djvu"))))) invalid();
+  if (manifest.primary.kind === "pdf" && !dataset && !primary.path.endsWith(".pdf")) invalid();
   validateResource(manifest.page_map, manifest.source_sha256);
   if (!manifest.page_map.path.endsWith("/page-map.json.gz")) invalid();
   partitions(manifest.preview.partitions, manifest.page_count, manifest.preview.complete, manifest.source_sha256);

@@ -577,6 +577,7 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(workflow, /node scripts\/data\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/build\/fetch_foliate_reader\.mjs _site\/static\/foliate-reader/);
   assert.match(workflow, /node scripts\/build\/copy_reader_vendor\.mjs _site\/static\/vendor/);
+  assert.match(workflow, /cp -a static\/vendor\/djvu-rs-reader _site\/static\/vendor\//);
   assert.match(workflow, /--foliate-output _site\/static\/foliate-reader\/vendor/);
   assert.doesNotMatch(workflow, /cp -a static\/foliate-reader/);
   assert.ok(workflow.includes('.buildFiles("github")'));
