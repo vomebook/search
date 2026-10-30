@@ -430,7 +430,7 @@ export function createReaderPdfRenderer(readerContext) {
         shell.dataset.renderUsedAt = String(Date.now());
         readerContext.pdfShellWindow?.remember(shell);
         readerContext.trimPdfCanvases(shell);
-        (readerContext.ocrManifestUrl ? readerContext.renderPdfOcrText(shell) : readerContext.renderPdfText(page, shell, signal)).catch(() => {});
+        readerContext.renderPdfText(page, shell, signal).catch(() => {});
         readerContext.scheduleMarkerSync();
         canvas = null;
         return;
