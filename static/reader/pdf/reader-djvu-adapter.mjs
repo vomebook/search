@@ -3,8 +3,8 @@ import {createDjvuScheduler} from './reader-djvu-scheduler.mjs';
 
 // PDF-shaped document interface, enabling the existing Reader's
 // page-window, zoom, selection, search and OCR surfaces to be reused unchanged.
-export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cacheBytes, cachePages, createWorker, rangeReader, outlineFallback }) {
-  const worker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,createWorker,rangeReader});
+export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cacheBytes, cachePages, createWorker, rangeReader, outlineFallback, preparedWorker }) {
+  const worker=preparedWorker || createDjvuWorkerAdapter(workerUrl,{cacheBytes,createWorker,rangeReader});
   try {
     const count=rangeReader ? await worker.openRange(signal) : await worker.open(bytes,signal);
     if (pageMap && (!Array.isArray(pageMap.pages) || pageMap.pages.length!==count)) throw new Error('DJVU_PAGE_MAP_MISMATCH');

@@ -1,18 +1,34 @@
 import { openDjvuDocument } from "./reader-djvu-adapter.mjs";
 import { openDjvuRange } from "./reader-djvu-range.mjs";
+import { createDjvuWorkerAdapter } from "./reader-djvu-worker.mjs";
 
 const workerUrl = new URL("./reader-djvu-engine-worker.mjs", import.meta.url);
 
 // Native URLs can be read directly without creating or fetching a page map.
 export async function openNativeDjvu(context) {
   const signal = context.readerAbortController.signal;
-  const endpoint = context.readerDownloadApiUrl(`/api/reader-source-revision?url=${encodeURIComponent(context.sourceUrl)}`);
-  const metadata = await context.fetchWithReaderTimeout(endpoint, context.READER_PROXY_TIMEOUT_MS, {signal});
-  if (!metadata.ok) throw new Error(`DJVU_SOURCE_REVISION_HTTP_${metadata.status}`);
-  const pinned = JSON.parse(await VoiceOfMLReaderSecurity.readText(metadata, 64 * 1024));
-  const original = new URL(context.sourceUrl), resolved = new URL(pinned?.url);
+  const original = new URL(context.sourceUrl);
   const originalRevision = /\/resolve\/([0-9a-f]{40})\//.exec(original.pathname)?.[1];
-  if (resolved.origin !== 'https://huggingface.co' || resolved.username || resolved.password ||
+  let pinned;
+  const canonicalPinned = /^\/datasets\/VoiceOfML\/([A-Za-z0-9._-]+)\/resolve\/([0-9a-f]{40})\/(.+\.djvu)$/.exec(original.pathname);
+  let decodedPath = '';
+  try { decodedPath = decodeURIComponent(canonicalPinned?.[3] || ''); } catch (_) {}
+  if (originalRevision && original.origin === 'https://huggingface.co' && canonicalPinned &&
+      !['.', '..'].includes(canonicalPinned[1]) && decodedPath &&
+      !/[\x00-\x1f\x7f%?#\\]/.test(decodedPath) && !decodedPath.split('/').some(part=>!part || part==='.' || part==='..') &&
+      !/%(?:2f|5c)/i.test(canonicalPinned[3])) {
+    // The URL already names an immutable commit. The 206 path still checks the
+    // strong ETag, length and every subsequent If-Range response.
+    pinned = {url:original.href, revision:originalRevision};
+  } else {
+    const endpoint = context.readerDownloadApiUrl(`/api/reader-source-revision?url=${encodeURIComponent(context.sourceUrl)}`);
+    const metadata = await context.fetchWithReaderTimeout(endpoint, context.READER_PROXY_TIMEOUT_MS, {signal});
+    if (!metadata.ok) throw new Error(`DJVU_SOURCE_REVISION_HTTP_${metadata.status}`);
+    pinned = JSON.parse(await VoiceOfMLReaderSecurity.readText(metadata, 64 * 1024));
+  }
+  const resolved = new URL(pinned?.url);
+  if (original.username || original.password || original.search || original.hash ||
+      resolved.origin !== 'https://huggingface.co' || resolved.username || resolved.password ||
       !['huggingface.co','hf-mirror.com'].includes(original.hostname) ||
       resolved.search || resolved.hash || !/^[0-9a-f]{40}$/.test(pinned.revision || '') ||
       (originalRevision && originalRevision !== pinned.revision) ||
@@ -24,6 +40,11 @@ export async function openNativeDjvu(context) {
   // never substitute OCR from an unverified metadata claim.
   if (!context.ocrManifestUrl) {
     let range;
+    let documentWorker;
+    const stopBootstrap=new AbortController();
+    const abortBootstrap=()=>stopBootstrap.abort(signal.reason);
+    signal.addEventListener('abort',abortBootstrap,{once:true});
+    if (signal.aborted) abortBootstrap();
     const stopOutline=new AbortController();
     const abortOutline=()=>stopOutline.abort(signal.reason);
     signal.addEventListener('abort',abortOutline,{once:true});
@@ -53,18 +74,30 @@ export async function openNativeDjvu(context) {
     };
     const fetchResponse=(url,options)=>context.fetchWithReaderTimeout(url,context.READER_PROXY_TIMEOUT_MS,options);
     try {
-      range=await openDjvuRange({signal,fetchResponse,url:context.readerContentUrl(resolved.href),
+      const rangeUrl=context.readerContentUrl(resolved.href);
+      const opening=openDjvuRange({signal:stopBootstrap.signal,fetchResponse,url:rangeUrl,
         readBytes:(response,limit)=>VoiceOfMLReaderSecurity.readBytes(response,limit),
-        timeoutMs:context.READER_PROXY_TIMEOUT_MS});
-      const document=await openDjvuDocument({workerUrl,rangeReader:range,signal,outlineFallback,
-        cacheBytes,cachePages:2});
+        timeoutMs:context.READER_PROXY_TIMEOUT_MS}).then(value=>{range=value;return value;});
+      // Decoder initialization and the first validated Range are independent.
+      // Start both after revision pinning; neither is sufficient to show a page.
+      const deferredRange = {get total(){return range?.total}, get failure(){return range?.failure},
+        read:(offset,length)=>range.read(offset,length), close:()=>range?.close()};
+      const preparing=Promise.resolve().then(()=>{
+        documentWorker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,rangeReader:deferredRange});
+        return documentWorker.prepare(stopBootstrap.signal);
+      });
+      await Promise.all([opening,preparing]);
+      const document=await openDjvuDocument({workerUrl,rangeReader:range,preparedWorker:documentWorker,
+        signal,outlineFallback,cacheBytes,cachePages:2});
       // Until the transport has authenticated all slices as one immutable
       // object, do not claim to have locally computed a whole-file digest.
-      context.trackReaderResource(()=>{stopOutline.abort();signal.removeEventListener('abort',abortOutline);document.destroy();});
+      context.trackReaderResource(()=>{stopOutline.abort();stopBootstrap.abort();
+        signal.removeEventListener('abort',abortOutline);signal.removeEventListener('abort',abortBootstrap);document.destroy();});
       context.assertReaderActive();
       return document;
     } catch (error) {
-      stopOutline.abort();signal.removeEventListener('abort',abortOutline);
+      stopOutline.abort();stopBootstrap.abort();signal.removeEventListener('abort',abortOutline);
+      signal.removeEventListener('abort',abortBootstrap);documentWorker?.close();
       const transportFailure=range?.failure;
       range?.close();
       if (signal.aborted) throw error;

@@ -9,6 +9,15 @@ const ranges = new Map();
 const MAX_PIXELS = 50_000_000;
 const fail = (id, code) => self.postMessage({ id, ok: false, error: code });
 
+async function prepareEngine() {
+  if (engine) return;
+  const simd = WebAssembly.validate(SIMD128_PROBE);
+  const candidate = simd ? await import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js')
+                         : await import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs.js');
+  await candidate.default();
+  engine = candidate;
+}
+
 self.onmessage = async ({ data }) => {
   const { id, operation } = data || {};
   if (operation === 'range-result') {
@@ -24,18 +33,18 @@ self.onmessage = async ({ data }) => {
   try {
     if (!Number.isSafeInteger(id) || id < 1) throw new Error('DJVU_WORKER_PROTOCOL');
     activeId=id;
+    if (operation === 'prepare') {
+      await prepareEngine();
+      self.postMessage({id,ok:true});
+      return;
+    }
     if (operation === 'open' || operation === 'open-range') {
       lazy = operation === 'open-range';
       if (document || (!lazy && (!(data.bytes instanceof ArrayBuffer) || !data.bytes.byteLength)) ||
           (lazy && (!Number.isSafeInteger(data.total) || data.total < 16 || data.total > 512*1024*1024)) ||
           !Number.isSafeInteger(data.cacheBytes) || data.cacheBytes < 1 || data.cacheBytes > 64 * 1024 * 1024)
         throw new Error('DJVU_DOCUMENT_INVALID');
-      if (!engine) {
-        const simd = WebAssembly.validate(SIMD128_PROBE);
-        engine = simd ? await import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js')
-                      : await import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs.js');
-        await engine.default();
-      }
+      await prepareEngine();
       document = lazy ? await engine.WasmLazyDocument.open(data.total,(offset,length)=>new Promise((resolve,reject)=>{
         const rangeId=++rangeSequence;
         ranges.set(rangeId,{id:activeId,length,resolve,reject});

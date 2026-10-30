@@ -1,0 +1,4 @@
+Synthetic DjVu benchmark fixture: 24 pages, generated from eight copies of
+synthetic-reader.djvu using DjVuLibre djvm -c. Its page imagery and text are
+entirely synthetic; it contains no production book or OCR correction.
+SHA-256: e66b11750c33f55a9ae7fe3d308977b8408abd852a41d5308f2b586fc9d34781

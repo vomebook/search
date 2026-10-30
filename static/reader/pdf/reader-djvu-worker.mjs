@@ -78,6 +78,10 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
       return pageCount;
     } catch (error) { close(error); throw error; }
   }
+  async function prepare(signal) {
+    try { await request('prepare', {}, {signal}); }
+    catch (error) { close(error); throw error; }
+  }
   async function openRange(signal) {
     if (!rangeReader || !Number.isSafeInteger(rangeReader.total) || rangeReader.total < 16 || rangeReader.total > 512*1024*1024)
       throw new Error('DJVU_DOCUMENT_INVALID');
@@ -130,6 +134,6 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
     if (!Number.isSafeInteger(value.cacheBytes) || value.cacheBytes < 0) throw new Error('DJVU_WORKER_PROTOCOL');
     return { decodedCacheBytes: value.cacheBytes };
   }
-  return { open, openRange, page, geometry, text, outline, stats, close,
+  return { prepare, open, openRange, page, geometry, text, outline, stats, close,
     get outlineNeedsFullSource() {return outlineNeedsFullSource;}, get closed() { return closed; } };
 }
