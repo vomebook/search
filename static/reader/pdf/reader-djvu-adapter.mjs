@@ -3,10 +3,10 @@ import {createDjvuScheduler} from './reader-djvu-scheduler.mjs';
 
 // PDF-shaped document interface, enabling the existing Reader's
 // page-window, zoom, selection, search and OCR surfaces to be reused unchanged.
-export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cacheBytes, cachePages, createWorker }) {
-  const worker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,createWorker});
+export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cacheBytes, cachePages, createWorker, rangeReader, outlineFallback }) {
+  const worker=createDjvuWorkerAdapter(workerUrl,{cacheBytes,createWorker,rangeReader});
   try {
-    const count=await worker.open(bytes,signal);
+    const count=rangeReader ? await worker.openRange(signal) : await worker.open(bytes,signal);
     if (pageMap && (!Array.isArray(pageMap.pages) || pageMap.pages.length!==count)) throw new Error('DJVU_PAGE_MAP_MISMATCH');
     for (const [index,page] of (pageMap?.pages || []).entries())
       if (page.page!==index+1 || !Number.isFinite(page.width) || !Number.isFinite(page.height) ||
@@ -93,7 +93,18 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
       };
     }
     async function getOutline() {
-      const flat=await scheduler.requestOutline(), roots=[], parents=[];
+      let flat;
+      try { flat=await scheduler.requestOutline(); }
+      catch(error) {
+        if (error?.message !== 'DJVU_LAZY_OUTLINE_UNCERTAIN' || typeof outlineFallback !== 'function') throw error;
+        const full=await outlineFallback();
+        try {
+          if (closed || full.numPages !== count) throw new Error('DJVU_PAGE_COUNT_MISMATCH');
+          const outline=await full.getOutline();
+          return closed ? [] : outline;
+        } finally { full.destroy(); }
+      }
+      const roots=[], parents=[];
       for (const item of flat) {
         const page=Number(item.page);
         const node={title:item.title, dest:Number.isInteger(page)&&page>=1&&page<=count ? [page] : null, items:[]};
@@ -104,6 +115,7 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
       return roots;
     }
     return {numPages:count,getPage, getOutline, getPageIndex:async page=>page-1,
+      outlineNeedsFullSource:worker.outlineNeedsFullSource,
       readerRenderScaleLimit: Infinity, readerMaxCanvasPixels: 16_000_000,
       destroy(){if(!closed){closed=true;geometries.clear();scheduler.close();}},
       scheduler};

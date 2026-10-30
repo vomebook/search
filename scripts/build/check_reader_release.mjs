@@ -59,6 +59,11 @@ function checkAssets(output, hashed = false) {
     "release-a03526f445b4-a99c0e299e95/simd128/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
     "release-a03526f445b4-a99c0e299e95/scalar/djvu_rs_bg.wasm": "a03526f445b48c4f99043ce282e333828eae0c956148693f52788fe6787c5b33",
     "release-a03526f445b4-a99c0e299e95/simd128/djvu_rs_bg.wasm": "a99c0e299e9526d084c845f2ab5d988c0cfc05e75f20d14a84ed4c55fe5d47a3",
+    "release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs.js": "d54655bbcbde980299fc054c4177c0c0565dccc84b775adf70dee24111c0c2c2",
+    "release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js": "d54655bbcbde980299fc054c4177c0c0565dccc84b775adf70dee24111c0c2c2",
+    "release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs_bg.wasm": "a23e0b3e3a443f348161a57506d2f434d4dbbcdaeb89500642688539c3a9ca36",
+    "release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs_bg.wasm": "025029b02a7c6e13f3d8a612077ebc5efae6fc23b02debbc754b4e8da9bca424",
+    "range-source-v13.zip": "ab9fc6128ce8ff743600809d85afe36cf308620b7fd50badb2fb732e01510438",
     "strict-source.zip": "770d44f46001190f0b3ff9d15903ace50788b2c2e68a83714720c2a0bfa7c532",
     "LICENSE.txt": "9b634d974fb7ccacccc877fa6b36016eb48884b09732485d7ad92b6294699163",
     "THIRD_PARTY_NOTICES.txt": "f8b526769a2f382a6a8a0ea6a0f56948604b1508ec73429b19c43b89a8f1e752"
