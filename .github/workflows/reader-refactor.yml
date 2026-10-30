@@ -25,6 +25,10 @@ on:
       - "tests/test_reader_*.py"
       - "tests/test_reader_*.mjs"
       - "tests/test_reader_*.js"
+      - "tests/reader_native_fixture.py"
+      - "tests/reader_test_selection.py"
+      - "tests/fixtures/synthetic-reader.djvu"
+      - "tests/fixtures/synthetic-reader-NOTICE.txt"
       - "requirements*.txt"
       - ".github/workflows/reader-refactor.yml"
 
