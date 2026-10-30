@@ -6,7 +6,7 @@ globalThis.ImageData = class ImageData {
   constructor(data,width,height) { this.data=data; this.width=width; this.height=height; }
 };
 function fakeEngine({count=2, width=10, height=20, dpi=300, rotation=0, hang=false,
-  entries=[], badData=false, openError=null} = {}) {
+  entries=[], badData=false, openError=null, outlineError=null} = {}) {
   let instance;
   const createWorker = () => instance = {
     terminated:false, sends:[],
@@ -15,7 +15,7 @@ function fakeEngine({count=2, width=10, height=20, dpi=300, rotation=0, hang=fal
       if (hang) return;
       const result=message.operation==='open'
         ? openError ? {id:message.id,ok:false,error:openError} : {id:message.id,ok:true,count}
-        : message.operation==='outline' ? {id:message.id,ok:true,entries}
+        : message.operation==='outline' ? outlineError ? {id:message.id,ok:false,error:outlineError} : {id:message.id,ok:true,entries}
         : message.operation==='stats' ? {id:message.id,ok:true,cacheBytes:200}
         : message.operation==='geometry' ? {id:message.id,ok:true,width,height,dpi,rotation}
         : message.operation==='text' ? {id:message.id,ok:true,text:'Hello world\n',zones:[
@@ -38,6 +38,39 @@ const map={pages:[1,2].map(page=>({page,width:2.4,height:4.8,rotation:0,
   assert.equal((await worker.stats()).decodedCacheBytes,200);
   assert.equal(fake.instance.sends[0].transfer.length,1,'source ownership must transfer');
   worker.close();assert.equal(fake.instance.terminated,true);
+}
+{
+  let instance,closed=0;
+  const rangeReader={total:100,close(){closed++},async read(offset,length){
+    assert.equal(offset,0);assert.equal(length,8);return new Uint8Array(length).fill(42);
+  }};
+  const worker=createDjvuWorkerAdapter('/worker',{rangeReader,createWorker:()=>instance={
+    postMessage(message){
+      if(message.operation==='open-range')queueMicrotask(()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:0,length:8}}));
+      else if(message.operation==='range-result'){
+        assert.equal(new Uint8Array(message.bytes)[0],42);
+        queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:2}}));
+      }
+    },terminate(){}
+  }});
+  assert.equal(await worker.openRange(),2);worker.close();assert.equal(closed,1);
+}
+{
+  const changed=Object.assign(new Error('DJVU_SOURCE_CHANGED'),{code:'DJVU_SOURCE_CHANGED'});let instance,closed=0;
+  const rangeReader={total:100,close(){closed++},get failure(){return changed},async read(){throw changed}};
+  const worker=createDjvuWorkerAdapter('/worker',{rangeReader,createWorker:()=>instance={
+    postMessage(message){if(message.operation==='open-range')queueMicrotask(()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:0,length:8}}));},
+    terminate(){this.terminated=true}
+  }});
+  await assert.rejects(worker.openRange(),/DJVU_SOURCE_CHANGED/);assert.equal(instance.terminated,true);assert.equal(closed,1);
+}
+{
+  let instance,closed=0;const rangeReader={total:100,close(){closed++},async read(){throw Error('must not read')}};
+  const worker=createDjvuWorkerAdapter('/worker',{rangeReader,createWorker:()=>instance={
+    postMessage(message){if(message.operation==='open-range')queueMicrotask(()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:99,length:2}}));},
+    terminate(){this.terminated=true}
+  }});
+  await assert.rejects(worker.openRange(),/DJVU_WORKER_PROTOCOL/);assert.equal(instance.terminated,true);assert.equal(closed,1);
 }
 {
   const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
@@ -107,6 +140,28 @@ for(const type of ['error','messageerror','cancel']) {
   const outline=await pdf.getOutline();
   assert.equal(outline[0].title,'第一章');assert.equal(await pdf.getPageIndex(outline[0].dest[0]),1);
   assert.equal(outline[0].items[0].dest,null);pdf.destroy();
+}
+{
+  const fake=fakeEngine({outlineError:'DJVU_LAZY_OUTLINE_UNCERTAIN'});let destroyed=0;
+  const result=[{title:'Late TOC',dest:[2],items:[]}];
+  const pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes(),
+    cacheBytes:1024,cachePages:2,outlineFallback:async()=>({numPages:2,getOutline:async()=>result,destroy(){destroyed++}})});
+  assert.deepEqual(await pdf.getOutline(),result);assert.equal(destroyed,1);pdf.destroy();
+}
+{
+  const fake=fakeEngine({outlineError:'DJVU_LAZY_OUTLINE_UNCERTAIN'});let destroyed=0;
+  const pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes(),
+    cacheBytes:1024,cachePages:2,outlineFallback:async()=>({numPages:3,getOutline:async()=>[],destroy(){destroyed++}})});
+  await assert.rejects(pdf.getOutline(),/DJVU_PAGE_COUNT_MISMATCH/);assert.equal(destroyed,1);pdf.destroy();
+}
+{
+  const fake=fakeEngine({outlineError:'DJVU_LAZY_OUTLINE_UNCERTAIN'});let release,destroyed=0;
+  const pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes(),cacheBytes:1024,cachePages:2,
+    outlineFallback:()=>new Promise(resolve=>release=resolve)});
+  const pending=pdf.getOutline();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  pdf.destroy();release({numPages:2,getOutline:async()=>[{title:'stale'}],destroy(){destroyed++}});
+  await assert.rejects(pending,/DJVU_PAGE_COUNT_MISMATCH/);assert.equal(destroyed,1);
 }
 {
   const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes(),

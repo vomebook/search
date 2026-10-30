@@ -29,7 +29,7 @@ function fixture() {
   const marker = {dataset: {page: '55'}};
   const abort = new AbortController();
   const reader = {readerAbortController: abort, documentState: {page: 55, zoom: 1},
-    pdfScrollDirection: 1, capability: {mode: 'pdf-pages'},
+    pdfScrollDirection: 1, capability: {mode: 'image-pages'},
     pdfManifestPrefetches: new Map(), pdfManifestPrefetchActive: new Set(),
     content: {
       querySelector: () => null,
