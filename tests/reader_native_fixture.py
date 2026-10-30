@@ -24,7 +24,8 @@ def payload(page, text):
     return gzip.compress(body, mtime=0)
 
 
-def install(page, origin, *, prefix="", ocr=False, mismatch=False, fail_page_once=False, body=RAW):
+def install(page, origin, *, prefix="", ocr=False, mismatch=False, fail_page_once=False, body=RAW,
+            source_handler=None):
     """Serve actual DjVu bytes over Range or full-body fetch; no remote calls."""
     api = "https://voiceofml-search.hf.space" if prefix == "/search" else origin
     sha = "b" * 64 if mismatch else SHA256
@@ -51,8 +52,14 @@ def install(page, origin, *, prefix="", ocr=False, mismatch=False, fail_page_onc
     state = {"source": [], "assets": [], "page_attempts": [], "texts": texts,
              "manifest": manifest, "ocr_path": ocr_path, "raw": body, "source_url": PINNED}
 
-    page.route("**/api/reader-source-revision?**", lambda route: route.fulfill(
-        json={"url": PINNED, "revision": REVISION}, headers={"Access-Control-Allow-Origin": "*"}))
+    def revision(route):
+        target = parse_qs(urlsplit(route.request.url).query).get("url", [""])[0]
+        revision = target.split('/resolve/', 1)[1].split('/', 1)[0] if '/resolve/' in target else ''
+        if revision not in ('main', REVISION):
+            route.fulfill(status=400)
+            return
+        route.fulfill(json={"url": PINNED, "revision": REVISION}, headers={"Access-Control-Allow-Origin": "*"})
+    page.route("**/api/reader-source-revision?**", revision)
 
     def content(route):
         target = parse_qs(urlsplit(route.request.url).query).get("url", [""])[0]
@@ -79,7 +86,8 @@ def install(page, origin, *, prefix="", ocr=False, mismatch=False, fail_page_onc
         route.fulfill(status=206, body=body[start:end + 1], content_type="image/vnd.djvu",
                       headers={**common, "Content-Range": f"bytes {start}-{end}/{len(body)}"})
 
-    page.route("**/api/reader-content?**", content)
+    state["respond_source"] = content
+    page.route("**/api/reader-content?**", source_handler or content)
     if ocr:
         def asset(route):
             path = parse_qs(urlsplit(route.request.url).query).get("path", [""])[0]
