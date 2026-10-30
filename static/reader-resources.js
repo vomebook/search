@@ -115,6 +115,7 @@
     "reader/pdf/reader-djvu-worker.mjs",
     "reader/pdf/reader-djvu-scheduler.mjs",
     "reader/pdf/reader-djvu-adapter.mjs",
+    "reader/pdf/reader-djvu-range.mjs",
     "reader/pdf/reader-djvu-loader.mjs",
     "reader/search/reader-search-controller.mjs",
     "reader/search/reader-dom-search.mjs",
@@ -141,6 +142,7 @@
     "reader/pdf/reader-djvu-scheduler.mjs",
     "reader/pdf/reader-djvu-adapter.mjs",
     "reader/pdf/reader-djvu-loader.mjs",
+    "reader/pdf/reader-djvu-range.mjs",
     "reader/search/workers/reader-chapter-search-worker.mjs",
     "reader/search/reader-chapter-search.mjs",
     "reader/search/workers/reader-pdf-book-search-worker.mjs",
@@ -155,7 +157,7 @@
   const pdfSupportAssets = (base) => [base + "vendor/wasm/qcms_bg.wasm"];
   const djvuDecoderAssets = (base) => ["scalar/djvu_rs.js", "scalar/djvu_rs_bg.wasm",
     "simd128/djvu_rs.js", "simd128/djvu_rs_bg.wasm"].map(file =>
-      base + "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/" + file);
+      base + "vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/" + file);
   function engineAssets(extension, base, foliateSuffix = "", workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
     if (extension === "pdf")
       return [

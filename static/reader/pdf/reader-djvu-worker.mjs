@@ -1,20 +1,43 @@
 // Serialize requests to one decoder worker. A fatal error, timeout or opening
 // abort always terminates the worker and settles the outstanding operation.
 export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, timeoutMs = 60000,
-  cacheBytes = 32 * 1024 * 1024, createWorker = url => new Worker(url, { type: 'module' }) } = {}) {
+  cacheBytes = 32 * 1024 * 1024, rangeReader = null, createWorker = url => new Worker(url, { type: 'module' }) } = {}) {
   const worker = createWorker(workerUrl);
-  let closed = false, fatal = null, active = null, sequence = 0, pageCount = 0;
+  let closed = false, fatal = null, active = null, sequence = 0, pageCount = 0, outlineNeedsFullSource = false, outstandingRange = 0;
   const abort = () => new DOMException('DjVu task cancelled', 'AbortError');
   function close(reason = abort()) {
     if (closed) return;
     closed = true; fatal = reason;
-    worker.terminate();
+    worker.terminate();rangeReader?.close();
     active?.reject(reason);
     active = null;
   }
   worker.onerror = event => close(Object.assign(new Error('DJVU_WORKER_FAILED'), { cause: event.message }));
   worker.onmessageerror = () => close(new Error('DJVU_WORKER_MESSAGE_FAILED'));
   worker.onmessage = event => {
+    if (event.data?.operation === 'range') {
+      const {id, rangeId, offset, length} = event.data;
+      if (!rangeReader || !active || id !== active.id || outstandingRange || !Number.isSafeInteger(rangeId) || rangeId < 1 ||
+          !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 ||
+          length > 65536 || offset+length > rangeReader.total) {
+        close(new Error('DJVU_WORKER_PROTOCOL'));return;
+      }
+      outstandingRange=rangeId;
+      Promise.resolve().then(()=>rangeReader.read(offset,length)).then(bytes=>{
+        if (closed || active?.id !== id) return;
+        const buffer=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
+        outstandingRange=0;
+        worker.postMessage({id,operation:'range-result',rangeId,ok:true,bytes:buffer},[buffer]);
+      }).catch(error=>{
+        if (closed || active?.id !== id) return;
+        const code=/^DJVU_[A-Z_]+$/.test(error?.code||'') ? error.code :
+          /^DJVU_[A-Z_]+$/.test(error?.message||'') ? error.message : 'DJVU_RANGE_FAILED';
+        outstandingRange=0;
+        worker.postMessage({id,operation:'range-result',rangeId,ok:false,error:code});
+        if (rangeReader?.failure) close(rangeReader.failure);
+      });
+      return;
+    }
     if (!active || event.data?.id !== active.id) { close(new Error('DJVU_WORKER_PROTOCOL')); return; }
     const task = active;
     active = null;
@@ -54,6 +77,17 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
       pageCount = value.count;
       return pageCount;
     } catch (error) { close(error); throw error; }
+  }
+  async function openRange(signal) {
+    if (!rangeReader || !Number.isSafeInteger(rangeReader.total) || rangeReader.total < 16 || rangeReader.total > 512*1024*1024)
+      throw new Error('DJVU_DOCUMENT_INVALID');
+    try {
+      const value=await request('open-range',{total:rangeReader.total,cacheBytes},{signal});
+      if (!Number.isSafeInteger(value.count) || value.count < 1 || value.count > 10000)
+        throw new Error('DJVU_PAGE_COUNT_INVALID');
+      outlineNeedsFullSource=value.outlineNeedsFullSource===true;
+      pageCount=value.count;return pageCount;
+    } catch(error){close(error);throw error;}
   }
   async function page(number, signal) {
     if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
@@ -96,5 +130,6 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
     if (!Number.isSafeInteger(value.cacheBytes) || value.cacheBytes < 0) throw new Error('DJVU_WORKER_PROTOCOL');
     return { decodedCacheBytes: value.cacheBytes };
   }
-  return { open, page, geometry, text, outline, stats, close, get closed() { return closed; } };
+  return { open, openRange, page, geometry, text, outline, stats, close,
+    get outlineNeedsFullSource() {return outlineNeedsFullSource;}, get closed() { return closed; } };
 }
