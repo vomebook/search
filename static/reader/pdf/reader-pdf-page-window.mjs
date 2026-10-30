@@ -746,10 +746,28 @@ export function createReaderPdfPageWindow(readerContext) {
     } finally {
       releaseInitialRenderGate();
     }
-    const outlineReady = loadPdfOutline(pdf).then((entries) => {
-      if (entries?.length) readerContext.setToc(entries);
-    });
-    outlineReady.catch(() => {});
+    if (pdf.outlineNeedsFullSource) {
+      // An ambiguous range index may hide document-level NAVM after page
+      // components. Keep first paint fast; fetch the whole original only when
+      // the reader explicitly opens its contents panel.
+      let requested=false;
+      const outlineEntry=(label)=>({label,depth:0,activate:async(generation)=>{
+        if (requested) return false;
+        requested=true;
+        try {
+          const entries=await loadPdfOutline(pdf);
+          if (!readerContext.isReaderGenerationCurrent("navigation",generation)) return false;
+          readerContext.setToc(entries || [outlineEntry("原件目录加载失败，点击重试")]);
+        } finally { requested=false; }
+        return false;
+      }});
+      readerContext.setToc([outlineEntry("加载原件目录")]);
+    } else {
+      const outlineReady = loadPdfOutline(pdf).then((entries) => {
+        if (entries?.length) readerContext.setToc(entries);
+      });
+      outlineReady.catch(() => {});
+    }
     await readerContext.pdfShellsReady;
     readerContext.assertReaderActive();
   }

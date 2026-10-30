@@ -19,3 +19,16 @@ is not a statement that every runtime interaction or legal obligation is met.
 source archive SHA-256: 770d44f46001190f0b3ff9d15903ace50788b2c2e68a83714720c2a0bfa7c532
 scalar wasm SHA-256: a03526f445b48c4f99043ce282e333828eae0c956148693f52788fe6787c5b33
 SIMD wasm SHA-256: a99c0e299e9526d084c845f2ab5d988c0cfc05e75f20d14a84ed4c55fe5d47a3
+
+Reader range integration, 2026-10-30: `range-source-v13.zip` derives from the
+same 0.43.0 strict source. Its `wasm-lazy` build adds bounded byte ranges,
+strict native-page rendering, original rotation/text/outline, and one parsed
+page at a time. The original eager API remains for verified OCR and fallback.
+The third-party notices above already cover the wasm-lazy dependency graph.
+Build with Rust 1.99.1 and wasm-bindgen-cli 0.2.129: `cargo build --offline
+--locked --release --target wasm32-unknown-unknown --features wasm-lazy`;
+the SIMD build adds `RUSTFLAGS='-C target-feature=+simd128'`. Run
+`wasm-bindgen --target web` on each build. No wasm-opt pass was used.
+range-source-v13.zip SHA-256: ab9fc6128ce8ff743600809d85afe36cf308620b7fd50badb2fb732e01510438
+range scalar wasm SHA-256: a23e0b3e3a443f348161a57506d2f434d4dbbcdaeb89500642688539c3a9ca36
+range SIMD wasm SHA-256: 025029b02a7c6e13f3d8a612077ebc5efae6fc23b02debbc754b4e8da9bca424
