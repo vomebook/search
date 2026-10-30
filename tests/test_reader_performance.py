@@ -923,6 +923,9 @@ class ReaderPerformanceTest(unittest.TestCase):
         cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
         page.wait_for_timeout(350)
         self.assertEqual(page.evaluate('window.__writes'), 0)
+        self.assertEqual(page.evaluate('getSelection().toString()'), 'OCR')
+        self.assertGreater(page.locator('#viewport').evaluate('node => node.scrollTop'), 20)
+        self.assertLessEqual(int(page.locator('#page-number').input_value()), 2)
         self.assertEqual(page.locator('.reader-page img').count(), 0)
         self.assertTrue(state['source'] and all(row['range'] is None for row in state['source']))
 
@@ -947,7 +950,8 @@ class ReaderPerformanceTest(unittest.TestCase):
         page.wait_for_timeout(350)
         self.assertEqual(page.evaluate('window.__writes'), 0)
         self.assertEqual(page.evaluate('getSelection().toString()'), '')
-        self.assertLessEqual(int(page.locator('#page-number').input_value()), 3)
+        self.assertGreater(page.locator('#viewport').evaluate('node => node.scrollTop'), 20)
+        self.assertLessEqual(int(page.locator('#page-number').input_value()), 2)
         self.assertFalse([path for path in state['assets'] if '/pages/page-' in path])
 
     def test_long_pdf_virtualizes_and_navigates_to_distant_page(self):
