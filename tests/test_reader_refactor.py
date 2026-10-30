@@ -13,6 +13,7 @@ import zipfile
 import wave
 
 from tests import test_reader_performance as support
+from tests.reader_native_fixture import install as install_native_djvu
 
 
 def expose_dom_search_tools(page):
@@ -133,24 +134,24 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator("#full-search-input").fill(query)
         self.page.wait_for_function("() => /^(?:\d+ 个结果|未找到正文匹配)$/.test(document.querySelector('#full-search-status').textContent)")
 
-    def test_pdf_page_sources_preserve_version_and_navigate(self):
-        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 3, "source_format": "djvu"}
-        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64
-        self.serve(json.dumps(manifest), "application/json")
-        self.page.route("**/page-manifest.json", lambda route: route.fulfill(json=manifest))
-        self.page.route("**/pages/page-*.webp", lambda route: route.fulfill(
-            content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1]))
-        for version in ("/1234567890abcdef",):
-            with self.subTest(version=version):
-                source = root + version
-                self.open(self.reader_url("pdf-pages", url=source + "/page-manifest.json"))
-                self.page.locator(".reader-page img.ready").first.wait_for()
-                self.page.locator("#page-number").fill("3")
-                self.page.locator("#page-number").dispatch_event("change")
-                image = self.page.locator('.reader-page[data-page="3"] img.ready')
-                image.wait_for()
-                self.assertEqual(image.get_attribute("src"), source + "/pages/page-000003.webp")
-                self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0"))
+    def test_djvu_source_is_pinned_and_navigates(self):
+        state = install_native_djvu(self.page, self.origin, prefix="/search")
+        requests = []
+        self.page.on("request", lambda request: requests.append(request.url))
+        self.open(state["url"])
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for()
+        self.page.locator("#page-number").fill("3")
+        self.page.locator("#page-number").dispatch_event("change")
+        self.page.locator('.reader-page[data-page="3"] canvas.ready').wait_for()
+        self.assertTrue(state["source"])
+        self.assertTrue(all(row["range"] and "/resolve/main/" not in row["url"] for row in state["source"]))
+        self.assertFalse([url for url in requests if "/pages/page-" in url or "/preview/" in url])
+        self.assertFalse(self.page.locator('.reader-page img').count())
+        self.page.wait_for_function("() => !document.querySelector('#toc-tab').hidden")
+        support.open_reader_panel(self.page)
+        self.page.locator('#toc-tab').click()
+        self.page.get_by_text('Chapter two · 第 2 页', exact=True).click()
+        self.page.wait_for_function("() => document.querySelector('#page-number').value === '2'")
 
     def test_unconverted_docx_is_download_only_without_loading_native_engines(self):
         requests = []
@@ -311,25 +312,26 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#page-number").input_value(), "12")
         self.page.locator('.reader-page[data-page="12"] canvas.ready').wait_for()
 
-    def test_saved_pdf_pages_requests_target_image_first(self):
+    def test_saved_djvu_decodes_target_page_first(self):
         store = support.STORE_SCRIPT.replace(
             "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
             "get: () => Promise.resolve({page: 12, pageOffset: 0, zoom: 1}),",
         )
-        manifest = {"version": 2, "kind": "pdf-pages", "page_count": 24, "source_format": "djvu"}
-        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        requests = []
+        store = store.replace("page: 12", "page: 2")
+        state = install_native_djvu(self.page, self.origin, prefix="/search")
+        def record_page(route):
+            response = route.fetch()
+            marker = 'async function getPage(number) {'
+            body = response.text()
+            self.assertIn(marker, body)
+            route.fulfill(response=response, body=body.replace(marker, marker + ' (window.__nativePages ||= []).push(number);'))
         self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
-        self.serve(json.dumps(manifest), "application/json")
-        self.page.route("**/page-manifest.json", lambda route: route.fulfill(json=manifest))
-        def image(route):
-            requests.append(route.request.url)
-            route.fulfill(content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1])
-        self.page.route("**/pages/page-*.webp", image)
-        self.open(self.reader_url("pdf-pages", url=root + "/page-manifest.json"))
-        self.assertTrue(requests, "saved-page image was not requested")
-        self.assertTrue(requests[0].endswith("page-000012.webp"), requests)
-        self.assertEqual(self.page.locator("#page-number").input_value(), "12")
+        self.page.route("**/static/reader/pdf/reader-djvu-adapter.mjs*", record_page)
+        self.open(state["url"])
+        self.assertEqual(self.page.evaluate("window.__nativePages[0]"), 2)
+        self.assertEqual(self.page.locator("#page-number").input_value(), "2")
+        self.page.locator('.reader-page[data-page="2"] canvas.ready').wait_for()
+        self.assertTrue(all(row["range"] for row in state["source"]))
 
     def test_native_pdf_reuses_text_after_layer_is_cleared(self):
         module = support.PDF_MODULE.replace("numPages: 30", "numPages: 1").replace(
@@ -403,60 +405,35 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.evaluate("window.__openedSections[0]"), 10)
         self.assertTrue(self.page.locator('.foliate-continuous article[data-section="10"]').is_visible())
 
-    def test_pdf_pages_retries_failed_ocr_text_without_reloading_image(self):
-        def instrument(route):
-            response = route.fetch()
-            route.fulfill(response=response, body=response.text() + "\nwindow.__reloadPdfOcr = async () => { const shell = document.querySelector('.reader-page[data-page=\\\"1\\\"]'); shell.querySelector('.reader-pdf-text').replaceChildren(); shell.dataset.textReady = '0'; await renderPdfOcrText(shell); };\n")
-        self.page.route("**/static/reader.js*", instrument)
-        root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
-        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + root
-        ocr_path = root + "/ocr-manifest.json"
-        manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
-                    "source_sha256": "a" * 64, "profile": "test-layout-v1-retry", "page_count": 2,
-                    "pages": [{"p": page, "o": root + f"/ocr/page-{page:06d}.json.gz"} for page in (1, 2)],
-                    "book_text": {"path": root + "/ocr/book-text.json.gz", "bytes": 1, "sha256": "a" * 64}}
-        attempts, image_requests = [], []
-        self.serve(json.dumps({"version": 2, "kind": "pdf-pages", "page_count": 2, "source_format": "djvu"}), "application/json")
-        def image(route):
-            image_requests.append(route.request.url)
-            route.fulfill(content_type="image/webp", body=support.IMAGE_FIXTURES["webp"][1])
-        def resource(route):
-            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
-            if path.endswith("/page-manifest.json"):
-                route.fulfill(json={"version": 2, "kind": "pdf-pages", "page_count": 2, "source_format": "djvu"})
-                return
-            if path == ocr_path:
-                route.fulfill(json=manifest)
-                return
-            if path.endswith("page-000001.json.gz"):
-                attempts.append(path)
-                if len(attempts) == 1:
-                    route.fulfill(status=503, body="temporarily unavailable")
-                    return
-            number = int(path.rsplit("page-", 1)[1][:6])
-            payload = {"version": 1, "kind": "pdf-ocr-page", "page": number,
-                       "width": 100, "height": 140,
-                       "blocks": [{"t": "Recovered text", "b": [0.1, 0.2, 0.8, 0.3]}]}
-            route.fulfill(content_type="application/gzip", body=gzip.compress(json.dumps(payload).encode()))
-        self.page.route(source + "/pages/**", image)
-        self.page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", resource)
-        self.open(self.reader_url("pdf-pages", url=source + "/page-manifest.json",
-                                  ocr_manifest="https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + ocr_path))
-        self.page.wait_for_function("() => document.querySelector('.reader-page[data-page=\"1\"]')?.dataset.renderState === 'rendered' && !document.querySelector('.reader-page[data-page=\"1\"]')._ocrPromise")
-        self.assertIn(len(attempts), (1, 2))
-        first_image_requests = image_requests.count(source + "/pages/page-000001.webp")
-        self.page.locator("#page-number").fill("2")
-        self.page.locator("#page-number").dispatch_event("change")
-        self.page.wait_for_function("() => document.querySelector('#page-number').value === '2'")
-        self.page.locator("#page-number").fill("1")
-        self.page.locator("#page-number").dispatch_event("change")
+    def test_djvu_retries_failed_ocr_without_reloading_source(self):
+        state = install_native_djvu(self.page, self.origin, prefix="/search", ocr=True, fail_page_once=True)
+        self.open(state["url"])
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for()
+        self.page.wait_for_function("() => !document.querySelector('.reader-page[data-page=\"1\"]')._ocrPromise")
+        self.assertEqual(state["page_attempts"].count(1), 1)
+        self.assertNotEqual(self.page.locator('.reader-page[data-page="1"]').get_attribute('data-text-ready'), '1')
+        self.page.locator('#zoom-in').click()
         self.page.locator('.reader-page[data-page="1"][data-text-ready="1"]').wait_for()
-        self.assertEqual(len(attempts), 2)
-        self.assertEqual(image_requests.count(source + "/pages/page-000001.webp"), first_image_requests)
-        self.assertIn("Recovered text", self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
-        self.page.evaluate("window.__reloadPdfOcr()")
-        self.assertEqual(len(attempts), 2)
-        self.assertIn("Recovered text", self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
+        self.assertEqual(state["page_attempts"].count(1), 2)
+        self.assertIn(state["texts"][0], self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
+        self.assertTrue(state["source"] and all(row["range"] is None for row in state["source"]))
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('OCR first')
+        self.page.wait_for_function("() => document.querySelector('#full-search-status').textContent === '1 个结果'")
+        self.assertEqual(self.page.locator('.full-search-result').count(), 1)
+        self.assertFalse(self.page.locator('.reader-page img').count())
+
+    def test_djvu_mismatched_ocr_is_never_attached(self):
+        state = install_native_djvu(self.page, self.origin, prefix='/search', ocr=True, mismatch=True)
+        self.open(state["url"])
+        self.page.locator('.reader-page[data-page="1"][data-text-ready="1"] canvas.ready').wait_for()
+        text = self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content()
+        self.assertIn('Page1text', text)
+        self.assertNotIn(state['texts'][0], text)
+        self.assertEqual(state['page_attempts'], [])
+        self.assertEqual(state['assets'], [state['ocr_path']])
+        self.assertTrue(state['source'] and all(row['range'] is None for row in state['source']))
 
     def test_download_during_prepare_does_not_interrupt_reader(self):
         pending_content = []
@@ -1527,9 +1504,13 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(self.page.locator('audio').evaluate('node => node.duration'), 1)
         self.page.evaluate("async () => { const media = document.querySelector('audio'); media.currentTime = 0.5; await VoiceOfMLReaderStore.put({url: new URL(location.href).searchParams.get('url'), mediaTime: 0.5}); }")
         self.page.reload()
-        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('audio').currentTime === 0.5")
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('audio')?.currentTime === 0.5")
         self.assertEqual(len(requests), 2)
-        self.page.locator('audio').evaluate("node => node.dispatchEvent(new Event('error'))")
+        self.page.evaluate("""() => {
+          const media=document.querySelector('audio');
+          if (!media) throw new Error('restored media disappeared');
+          media.dispatchEvent(new Event('error'));
+        }""")
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'failed'")
         self.assertEqual(len(requests), 2)
 
