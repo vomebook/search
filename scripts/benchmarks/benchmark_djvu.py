@@ -76,13 +76,18 @@ MARKS = r"""(() => {
 
 
 def category(url):
-    path = urlsplit(url).path
+    from urllib.parse import parse_qs
+    parsed = urlsplit(url)
+    path = parsed.path
+    if path.endswith('/api/reader-bucket-resource'):
+        bucket_path = parse_qs(parsed.query).get('path', [''])[0]
+        if '/pages/page-' in bucket_path or '/preview/' in bucket_path or bucket_path.endswith('/page-manifest.json'):
+            return 'reading_image'
+        return 'ocr_resource'
     if path.endswith('/api/reader-content'):
         return 'source'
     if path.endswith('/api/reader-source-revision'):
         return 'revision'
-    if path.endswith('/api/reader-bucket-resource'):
-        return 'ocr_resource'
     if '/djvu-rs-reader/' in path and path.endswith('.wasm'):
         return 'decoder_wasm'
     if '/djvu-rs-reader/' in path and path.endswith('.js'):
@@ -274,7 +279,7 @@ def measure(browser, reader_url, *, fixture, prefix, mode, stall_ms, target, tim
             text=page.locator('.reader-error').all_text_contents(timeout=2000)
         except Exception:
             phase,text=None,[]
-        raise RuntimeError(f'DjVu benchmark failed: {error}; phase={phase}; reader_errors={text}; page_errors={errors}; requests={requests}') from error
+        raise RuntimeError(f'DjVu benchmark failed: {error}; phase={phase}; reader_errors={text}; page_errors={errors}; requests={snapshot_requests(requests)}') from error
     finally:
         if mode == 'trace':
             context.tracing.stop(path=str(trace_path))
