@@ -153,6 +153,73 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.get_by_text('Chapter two · 第 2 页', exact=True).click()
         self.page.wait_for_function("() => document.querySelector('#page-number').value === '2'")
 
+    def test_removed_pdf_text_copy_falls_back_to_original_for_selection(self):
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/embedded.pdf'
+        module = support.PDF_MODULE.replace('numPages: 30', 'numPages: 1')
+        self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(
+            content_type='text/javascript', body=module))
+        self.serve(b'pdf', 'application/pdf')
+        def missing_external(route):
+            response = route.fetch()
+            body = response.text().replace('  function loadPdfOcrPage(page, priority = "high") {',
+                '  function loadPdfOcrPage(page, priority = "high") { return Promise.reject(new Error("retired external text"));')
+            route.fulfill(response=response, body=body)
+        self.page.route('**/static/reader/pdf/reader-pdf-text-runtime.mjs*', missing_external)
+        def expose_context(route):
+            response=route.fetch()
+            route.fulfill(response=response, body=response.text()+'''
+              window.__testRetiredExternal = async () => {
+                const shell=document.querySelector('.reader-page[data-page="1"]');
+                shell.querySelector('.reader-pdf-text').replaceChildren();
+                shell.dataset.textReady='0';ocrManifestUrl='/retired-text';
+                await renderPdfText(await pdfDocument.getPage(1),shell);
+              };''')
+        self.page.route('**/static/reader.js*', expose_context)
+        self.page.goto(self.reader_url('pdf', url=source), wait_until='domcontentloaded')
+        shell = self.page.locator('.reader-page[data-page="1"]')
+        shell.locator('canvas.ready').wait_for()
+        self.page.wait_for_function("() => document.querySelector('.reader-page')?.dataset.textReady === '1'")
+        self.page.evaluate('window.__testRetiredExternal()')
+        self.assertEqual(shell.get_attribute('data-native-text-fallback'), '1')
+        self.assertIn('Accessible PDF text', shell.locator('.reader-pdf-text').text_content())
+        selected = shell.locator('.reader-pdf-text-run').first.evaluate('''run => {
+          const range=document.createRange();range.selectNodeContents(run);
+          const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+          return selection.toString();
+        }''')
+        self.assertEqual(selected, 'Accessible PDF text')
+
+    def test_real_pdf_embedded_text_survives_missing_external_layer(self):
+        from pathlib import Path
+        engine = Path(__file__).resolve().parents[1] / 'static/vendor' / support.VENDOR_FILES['pdf']
+        worker = Path(__file__).resolve().parents[1] / 'static/vendor' / support.VENDOR_FILES['pdf_worker']
+        if not engine.is_file() or not worker.is_file():
+            self.skipTest('checksum-pinned PDF.js vendor not installed')
+        support.route_local_vendor_fallback(self.page)
+        self.serve(support.minimal_pdf(), 'application/pdf')
+        def expose_context(route):
+            response=route.fetch()
+            route.fulfill(response=response, body=response.text()+'''
+              window.__testRetiredExternal = async () => {
+                const shell=document.querySelector('.reader-page[data-page="1"]');
+                shell.querySelector('.reader-pdf-text').replaceChildren();
+                shell.dataset.textReady='0';ocrManifestUrl='/retired-text';
+                loadPdfOcrPage=async()=>{throw new Error('retired external text')};
+                await renderPdfText(await pdfDocument.getPage(1),shell);
+              };''')
+        self.page.route('**/static/reader.js*', expose_context)
+        self.open(self.reader_url('pdf'))
+        shell=self.page.locator('.reader-page[data-page="1"]')
+        shell.locator('canvas.ready').wait_for()
+        self.page.evaluate('window.__testRetiredExternal()')
+        self.assertEqual(shell.get_attribute('data-native-text-fallback'), '1')
+        self.assertIn('Reader PDF', shell.locator('.reader-pdf-text').text_content())
+        selected=shell.locator('.reader-pdf-text-run').first.evaluate('''run=>{
+          const range=document.createRange();range.selectNodeContents(run);
+          getSelection().removeAllRanges();getSelection().addRange(range);return getSelection().toString();
+        }''')
+        self.assertEqual(selected, 'Reader PDF')
+
     def test_unconverted_docx_is_download_only_without_loading_native_engines(self):
         requests = []
         self.page.on("request", lambda request: requests.append(request.url))
@@ -411,9 +478,10 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for()
         self.page.wait_for_function("() => !document.querySelector('.reader-page[data-page=\"1\"]')._ocrPromise")
         self.assertEqual(state["page_attempts"].count(1), 1)
-        self.assertNotEqual(self.page.locator('.reader-page[data-page="1"]').get_attribute('data-text-ready'), '1')
+        self.page.wait_for_function("() => document.querySelector('.reader-page[data-page=\"1\"]')?.dataset.nativeTextFallback === '1'")
+        self.assertIn('Page1text', self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
         self.page.locator('#zoom-in').click()
-        self.page.locator('.reader-page[data-page="1"][data-text-ready="1"]').wait_for()
+        self.page.wait_for_function("() => document.querySelector('.reader-page[data-page=\"1\"] .reader-pdf-text')?.textContent.includes('OCR first preserved')")
         self.assertEqual(state["page_attempts"].count(1), 2)
         self.assertIn(state["texts"][0], self.page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
         self.assertTrue(state["source"] and all(row["range"] is None for row in state["source"]))

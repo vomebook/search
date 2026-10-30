@@ -131,6 +131,7 @@ export function createReaderPdfScheduler(readerContext) {
       shell.querySelector(".reader-pdf-text")?.replaceChildren();
       shell._bookmarkTextItems = [];
       shell.dataset.textReady = "0";
+      delete shell.dataset.nativeTextFallback;
       shell.dataset.renderState = "idle";
       const pageState = shell.querySelector(".reader-page-state");
       if (pageState) readerContext.setPdfPageLoadingState(pageState, shell.dataset.page);

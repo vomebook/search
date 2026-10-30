@@ -84,10 +84,10 @@ for (const outcome of ['failed', 'wrong-count']) {
 }
 {
   let ocr = 0;
-  const reader = {ocrManifestUrl: '/ocr-manifest.json', renderPdfOcrText: async () => ocr++};
+  const reader = {ocrManifestUrl: '/ocr-manifest.json', renderPdfOcrText: async shell => {ocr++;shell.dataset.textReady='1';}};
   Object.assign(reader, createReaderPdfTextRuntime(reader));
-  reader.renderPdfOcrText = async () => ocr++;
-  await reader.renderPdfText({}, {});
+  reader.renderPdfOcrText = async shell => {ocr++;shell.dataset.textReady='1';};
+  await reader.renderPdfText({}, {dataset:{}});
   assert.equal(ocr, 1, 'direct PDF must not discard separately published OCR text');
 }
 for (const extension of ['pdf', 'caj', 'kdh', 'ppt', 'ps']) {

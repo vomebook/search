@@ -85,6 +85,26 @@ const map={pages:[1,2].map(page=>({page,width:2.4,height:4.8,rotation:0,
   assert.equal(drawn,1);pdf.destroy();assert.equal(fake.instance.terminated,true);
 }
 {
+  const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
+    bytes:bytes(),pageMap:map,cacheBytes:1024,cachePages:2});
+  const page=await pdf.getPage(1);
+  assert.equal(fake.instance.sends.filter(({message})=>message.operation==='geometry').length,0,
+    'geometry is fetched only when the embedded text is requested');
+  const text=await page.getTextContent();
+  assert.equal(text.items.map(item=>item.str).join(''),'Hello world\n');
+  assert.deepEqual(text.readerTextZones[1].box,[.5,0,1,.25]);
+  assert.equal(fake.instance.sends.filter(({message})=>message.operation==='text').length,1);
+  pdf.destroy();
+}
+{
+  const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
+    bytes:bytes(),pageMap:{pages:[{...map.pages[0],width:11*72/300,djvu:{pixels:[11,20],dpi:300}},map.pages[1]]},
+    cacheBytes:1024,cachePages:2});
+  await assert.rejects((await pdf.getPage(1)).getTextContent(),/DJVU_PAGE_GEOMETRY_MISMATCH/);
+  assert.equal(fake.instance.sends.filter(({message})=>message.operation==='text').length,0);
+  pdf.destroy();
+}
+{
   const fake=fakeEngine(),worker=createDjvuWorkerAdapter('/worker',{createWorker:fake.createWorker});
   await worker.open(bytes());
   const first=worker.page(1);
