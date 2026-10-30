@@ -153,6 +153,17 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.get_by_text('Chapter two · 第 2 页', exact=True).click()
         self.page.wait_for_function("() => document.querySelector('#page-number').value === '2'")
 
+    def test_pinned_djvu_skips_revision_lookup_and_keeps_verified_ranges(self):
+        state = install_native_djvu(self.page, self.origin, prefix='/search')
+        revisions = []
+        self.page.on('request', lambda request: revisions.append(request.url)
+                     if '/api/reader-source-revision?' in request.url else None)
+        self.open(state['url'].replace('%2Fmain%2F', '%2F' + 'a'*40 + '%2F'))
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for()
+        self.assertEqual(revisions, [])
+        self.assertTrue(state['source'] and all(row['range'] for row in state['source']))
+        self.assertFalse(self.page.locator('.reader-page img').count())
+
     def test_removed_pdf_text_copy_falls_back_to_original_for_selection(self):
         source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/embedded.pdf'
         module = support.PDF_MODULE.replace('numPages: 30', 'numPages: 1')

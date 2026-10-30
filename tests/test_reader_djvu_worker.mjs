@@ -13,7 +13,7 @@ function fakeEngine({count=2, width=10, height=20, dpi=300, rotation=0, hang=fal
     postMessage(message, transfer) {
       this.sends.push({message,transfer});
       if (hang) return;
-      const result=message.operation==='open'
+      const result=message.operation==='prepare' ? {id:message.id,ok:true} : message.operation==='open'
         ? openError ? {id:message.id,ok:false,error:openError} : {id:message.id,ok:true,count}
         : message.operation==='outline' ? outlineError ? {id:message.id,ok:false,error:outlineError} : {id:message.id,ok:true,entries}
         : message.operation==='stats' ? {id:message.id,ok:true,cacheBytes:200}
@@ -31,6 +31,20 @@ function fakeEngine({count=2, width=10, height=20, dpi=300, rotation=0, hang=fal
 const bytes=()=>new ArrayBuffer(16);
 const map={pages:[1,2].map(page=>({page,width:2.4,height:4.8,rotation:0,
   djvu:{pixels:[10,20],dpi:300}}))};
+{
+  const fake=fakeEngine(),worker=createDjvuWorkerAdapter('/worker',{createWorker:fake.createWorker});
+  await worker.prepare();
+  assert.equal(fake.instance.sends[0].message.operation,'prepare');
+  assert.equal(fake.instance.sends[0].transfer.length,0,'preparation must not transfer unverified source bytes');
+  assert.equal(await worker.open(bytes()),2);
+  worker.close();assert.equal(fake.instance.terminated,true);
+}
+{
+  const fake=fakeEngine({hang:true}),worker=createDjvuWorkerAdapter('/worker',{createWorker:fake.createWorker});
+  const controller=new AbortController(),preparing=worker.prepare(controller.signal);
+  controller.abort();await assert.rejects(preparing,{name:'AbortError'});
+  assert.equal(fake.instance.terminated,true,'cancelled preparation terminates its worker');
+}
 {
   const fake=fakeEngine(),worker=createDjvuWorkerAdapter('/worker',{createWorker:fake.createWorker});
   assert.equal(await worker.open(bytes()),2);
