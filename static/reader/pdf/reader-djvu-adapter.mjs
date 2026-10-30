@@ -43,17 +43,27 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
           transform:[scale,0,0,-scale,0,geometry.height*scale],
           convertToViewportPoint:(x,y)=>[x*scale,(geometry.height-y)*scale]};},
         async getTextContent() {
-          if (map) return {items:[],styles:{}};
+          // A page map describes geometry, not text. Fetch embedded text from
+          // the original even when a separately verified page map is present.
+          const textGeometry = native || await getGeometry(number);
+          if (closed) throw new DOMException('DjVu document closed','AbortError');
+          if (map) {
+            const pixels = map.rotation === 90 || map.rotation === 270
+              ? [map.djvu.pixels[1],map.djvu.pixels[0]] : map.djvu.pixels;
+            if (textGeometry.width!==pixels[0] || textGeometry.height!==pixels[1] ||
+                textGeometry.dpi!==map.djvu.dpi || textGeometry.rotation!==map.rotation)
+              throw new Error('DJVU_PAGE_GEOMETRY_MISMATCH');
+          }
           const {text,zones} = await scheduler.requestMetadata('text',number,-1);
-          const size = 72/native.dpi, items = [], positions = [];
+          const size = 72/textGeometry.dpi, items = [], positions = [];
           let cursor = 0, codepoints = 0;
           for (const zone of zones) {
             const at = text.indexOf(zone.t,cursor);
-            if (!zone.t || at < 0 || zone.x + zone.w > native.width || zone.y + zone.h > native.height) continue;
+            if (!zone.t || at < 0 || zone.x + zone.w > textGeometry.width || zone.y + zone.h > textGeometry.height) continue;
             if (at > cursor) { const gap=text.slice(cursor,at); items.push({str:gap}); codepoints+=Array.from(gap).length; }
             const start=codepoints, end=start+Array.from(zone.t).length;
-            positions.push({text:zone.t,box:[zone.x/native.width,zone.y/native.height,
-              (zone.x+zone.w)/native.width,(zone.y+zone.h)/native.height],start,end});
+            positions.push({text:zone.t,box:[zone.x/textGeometry.width,zone.y/textGeometry.height,
+              (zone.x+zone.w)/textGeometry.width,(zone.y+zone.h)/textGeometry.height],start,end});
             const height = Math.max(zone.h*size,.01);
             items.push({str:zone.t,transform:[height,0,0,height,zone.x*size,
               geometry.height-(zone.y+zone.h*.8)*size],width:zone.w*size,height,fontName:'djvu'});
