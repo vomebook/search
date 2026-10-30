@@ -280,22 +280,25 @@ class SearchAccessibilityTests(unittest.TestCase):
           const repos=Array.from({length:240},(_,index)=>({
             name:`VoiceOfML/Repo-${String(index).padStart(3,'0')}`,count:index
           }));
-          // Isolate the manual list from late startup sidebar responses.
+          // Isolate before rendering or awaiting a frame: an already pending
+          // startup response can otherwise replace the 240 rows in between.
+          routeRenderId++;
           const renderItems=renderRepoListItems;
+          renderRepoListItems=()=>{};
           renderItems(repos);
           await new Promise(resolve=>{
             const wait=()=>sidebarScrollRestoring?requestAnimationFrame(wait):resolve();
             requestAnimationFrame(wait);
           });
-          renderRepoListItems=()=>{};
           // Layout can still be pending in CI: wait (bounded) for a real scroll
           // range and rows before assigning scrollTop, or it clamps to 0.
-          await new Promise(resolve=>{
+          await new Promise((resolve,reject)=>{
             let frames=0;
             const wait=()=>{
               const range=DOM.sidebarContent.scrollHeight - DOM.sidebarContent.clientHeight;
-              if (++frames > 60 || (range > 0 && DOM.sidebarContent.querySelector('.repo-list-item')))
+              if (range > 0 && DOM.sidebarContent.querySelectorAll('.repo-list-item').length === repos.length)
                 resolve();
+              else if (++frames > 60) reject(new Error('sidebar fixture did not become scrollable'));
               else requestAnimationFrame(wait);
             };
             requestAnimationFrame(wait);
@@ -303,14 +306,24 @@ class SearchAccessibilityTests(unittest.TestCase):
           const target=Math.min(480, DOM.sidebarContent.scrollHeight - DOM.sidebarContent.clientHeight);
           DOM.sidebarContent.scrollTop=target;
           DOM.sidebarContent.dispatchEvent(new Event('scroll'));
-          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          await new Promise((resolve,reject)=>{
+            let frames=0;
+            const wait=()=>{
+              if (sidebarScrollPositions.get('global') === target) resolve();
+              else if (++frames > 60) reject(new Error('sidebar scroll position was not recorded'));
+              else requestAnimationFrame(wait);
+            };
+            requestAnimationFrame(wait);
+          });
           const saved=sidebarScrollPositions.get('global');
           renderItems(repos);
+          renderRepoListItems=renderItems;
           return {saved, target, restored:DOM.sidebarContent.scrollTop,
             height:DOM.sidebarContent.scrollHeight, client:DOM.sidebarContent.clientHeight};
         }""")
         self.assertGreater(result["height"], result["client"])
         self.assertGreater(result["saved"], 0)
+        self.assertEqual(result["saved"], result["target"])
         self.assertAlmostEqual(result["restored"], result["saved"], delta=2)
 
     def test_sidebar_scroll_position_is_kept_per_repository_path(self):
