@@ -85,6 +85,12 @@ class DjvuBenchmarkTests(unittest.TestCase):
         self.assertEqual(report['pairs'][0]['baseline']['target_canvas_sha256'],
                          report['pairs'][0]['candidate']['target_canvas_sha256'])
 
+    def test_bucket_proxy_page_images_are_not_mislabeled_as_ocr(self):
+        base = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path='
+        self.assertEqual(bench.category(base+'objects%2Faa%2Fbook%2Fpages%2Fpage-000001.png'), 'reading_image')
+        self.assertEqual(bench.category(base+'objects%2Faa%2Fbook%2Fpage-manifest.json'), 'reading_image')
+        self.assertEqual(bench.category(base+'objects%2Faa%2Fbook%2Focr%2Fpage-000001.json.gz'), 'ocr_resource')
+
 
 if __name__ == '__main__':
     unittest.main()
