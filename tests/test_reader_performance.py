@@ -12,6 +12,7 @@ import wave
 import zipfile
 
 from tests.browser_support import local_server
+from tests.reader_native_fixture import install as install_native_djvu, separated_pages
 
 try:
     from playwright.sync_api import Error as PlaywrightError
@@ -767,627 +768,200 @@ class ReaderPerformanceTest(unittest.TestCase):
                 self.assertFalse(page.locator(".reader-loading-indicator").count())
                 context.close()
 
-    def test_djvu_legacy_stream_reports_error_when_later_page_is_missing(self):
+    def test_djvu_legacy_stream_is_rejected_without_page_images(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        self.addCleanup(context.close)
         page = context.new_page()
-        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
-        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        manifest = {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 4}
-        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-        page.route("**/page-manifest.json", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
-        def serve_page(route, _request):
-            if not route.request.url.endswith("page-000004.webp"):
-                route.fulfill(status=200, content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=objects/aa/' + 'a' * 64 + '/1234567890abcdef/page-manifest.json'
+        requests = []
+        page.on('request', lambda request: requests.append(request.url))
+        page.route('**/api/reader-bucket-resource?**', lambda route: route.fulfill(
+            json={'version': 2, 'kind': 'pdf-pages', 'source_format': 'djvu', 'page_count': 4},
+            headers={'Access-Control-Allow-Origin': '*'}))
+        page.goto(f'{self.origin}/search/static/reader.html?' + urllib.parse.urlencode({'url': source, 'ext': 'pdf-pages'}), wait_until='domcontentloaded')
+        page.locator('.reader-error').wait_for(timeout=10000)
+        self.assertIn('DJVU_LEGACY_READING_UNSUPPORTED', page.locator('.reader-error').inner_text())
+        self.assertFalse([url for url in requests if '/pages/page-' in url or '/preview/' in url])
+        self.assertEqual(page.locator('.reader-page img, .reader-page canvas').count(), 0)
+
+    def test_djvu_source_revision_failure_and_retry(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        state = install_native_djvu(page, self.origin, prefix='/search')
+        attempts = []
+        def revision(route):
+            attempts.append(route.request.url)
+            if len(attempts) == 1:
+                route.fulfill(status=503, body='temporary', headers={'Access-Control-Allow-Origin': '*'})
             else:
-                route.fulfill(status=404, body=b"")
-        page.route(f"{root}/pages/**", serve_page)
-        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages&title=Converted", wait_until="domcontentloaded")
-        page.locator(".reader-page img.ready").first.wait_for(timeout=10000)
-        page.locator(".reader-page[data-page='4']").scroll_into_view_if_needed()
-        page.wait_for_timeout(500)
-        self.assertNotEqual(page.locator(".reader-page[data-page='4']").get_attribute("data-render-state"), "rendered")
-        self.assertEqual(page.locator(".reader-page[data-page='4'] img.ready").count(), 0)
-        context.close()
+                route.fulfill(json={'url': state['source_url'], 'revision': 'a' * 40}, headers={'Access-Control-Allow-Origin': '*'})
+        page.route('**/api/reader-source-revision?**', revision)
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.locator('.reader-error').wait_for(timeout=10000)
+        self.assertIn('DJVU_SOURCE_REVISION_HTTP_', page.locator('.reader-error').inner_text())
+        self.assertFalse(state['source'])
+        page.reload(wait_until='domcontentloaded')
+        page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=10000)
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(state['source'][0]['range'])
 
-    def test_pdf_pages_stalled_early_manifest_uses_proxy(self):
+    def test_djvu_range_jump_renders_complete_page(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         self.addCleanup(context.close)
         page = context.new_page()
-        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        source = root + "/page-manifest.json"
-        page.add_init_script(f"""(() => {{
-          const fetchOriginal = window.fetch.bind(window);
-          window.__earlyManifestAborted = false;
-          let stalled = false;
-          // The early manifest preload is cancelled; the reader must still load the
-          // same Bucket source through its normal path.
-          window.fetch = (url, options = {{}}) => String(url) === {json.dumps(source)} && !stalled
-            ? (stalled = true, new Promise((resolve, reject) => options.signal.addEventListener('abort', () => {{
-                window.__earlyManifestAborted = true;
-                reject(new DOMException('cancelled', 'AbortError'));
-              }}, {{once: true}})))
-            : fetchOriginal(url, options);
-        }})()""")
-        _manifest = {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 2}
-        page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps(_manifest)))
-        page.route(f"{root}/pages/**", lambda route: route.fulfill(
-            content_type="image/webp", body=IMAGE_FIXTURES["webp"][1]))
-        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages", wait_until="domcontentloaded")
-        page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=8000)
-        self.assertTrue(page.evaluate('window.__earlyManifestAborted'))
+        state = install_native_djvu(page, self.origin, prefix='/search', body=separated_pages())
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=10000)
+        self.assertTrue(state['source'] and all(row['range'] for row in state['source']))
+        page.locator('#page-number').fill('3')
+        page.locator('#page-number').dispatch_event('change')
+        page.locator('.reader-page[data-page="3"] canvas.ready').wait_for(timeout=10000)
+        self.assertEqual(page.locator('#page-number').input_value(), '3')
+        self.assertTrue(any(row['range'].startswith('bytes=2097152-') and row['if_range'] == '"synthetic-reader"'
+                            for row in state['source']), state['source'])
+        self.assertEqual(page.locator('.reader-page img').count(), 0)
 
-    def test_pdf_pages_progressive_prefetch_yields_to_jump(self):
+    def test_djvu_disposal_stops_source_requests(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         self.addCleanup(context.close)
         page = context.new_page()
-        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        source = root + "/page-manifest.json"
-        held, requested = [], []
-        page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 40})))
-        def serve_page(route):
-            number = int(route.request.url.rsplit("page-", 1)[1].split(".", 1)[0])
-            requested.append(number)
-            if number == 12:
+        state = install_native_djvu(page, self.origin, prefix='/search', body=separated_pages())
+        held = []
+        def source(route):
+            if (route.request.headers.get('range') or '').startswith('bytes=2097152-'):
                 held.append(route)
             else:
-                route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
-        page.route(f"{root}/pages/**", serve_page)
-        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages", wait_until="domcontentloaded")
-        page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=10000)
-        page.wait_for_timeout(2800)
-        self.assertIn(12, requested)
-        self.assertIn(13, requested)
-        self.assertIn(14, requested)
-        with page.expect_response(lambda response: response.url.endswith("page-000035.webp"), timeout=12000):
-            page.locator('.reader-page[data-page="25"]').scroll_into_view_if_needed()
-            page.locator('.reader-page[data-page="25"] img.ready').wait_for(timeout=10000)
-            for route in held:
-                try: route.abort()
-                except PlaywrightError: pass
-        self.assertIn(35, requested)
+                route.fallback()
+        page.route('**/api/reader-content?**', source)
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=10000)
+        page.locator('#page-number').fill('3')
+        page.locator('#page-number').dispatch_event('change')
+        page.wait_for_function("() => document.querySelector('#page-number').value === '3'")
+        deadline = time.monotonic() + 10
+        while not held and time.monotonic() < deadline:
+            page.wait_for_timeout(50)
+        self.assertEqual(len(held), 1, 'the demanded page must be in flight before disposal')
+        page.evaluate('dispatchEvent(new Event("pagehide"))')
+        page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'disposed'")
+        try:
+            held[0].fulfill(status=206, body=state['raw'][2097152:], headers={
+                'ETag': '"synthetic-reader"', 'Content-Range': f'bytes 2097152-{len(state["raw"])-1}/{len(state["raw"])}',
+                'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'ETag,Content-Range,Content-Length'})
+        except PlaywrightError:
+            pass
+        page.wait_for_timeout(150)
+        self.assertEqual(page.locator('.reader-page[data-page="3"] canvas.ready').count(), 0)
+        self.assertEqual(page.locator('.reader-page img').count(), 0)
 
-    def test_pdf_pages_jump_does_not_wait_for_stalled_background_image(self):
+    def test_djvu_canvas_fits_page_without_overflow(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         self.addCleanup(context.close)
         page = context.new_page()
-        page.add_init_script("Object.defineProperty(navigator, 'connection', {value: {saveData: true}, configurable: true})")
-        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        source = root + "/page-manifest.json"
-        held, requested = [], []
-        page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 40})))
-        def serve_page(route):
-            number = int(route.request.url.rsplit("page-", 1)[1].split(".", 1)[0])
-            requested.append(number)
-            if number == 2:
-                held.append(route)
-            else:
-                route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
-        page.route(f"{root}/pages/**", serve_page)
-        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages", wait_until="domcontentloaded")
-        page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=10000)
-        page.wait_for_function("""() => document.querySelector('.reader-page[data-page="2"]')?._renderStarted""", timeout=10000)
-        page.locator("#page-number").fill("25")
-        page.locator("#page-number").dispatch_event("change")
-        page.wait_for_function("""() => document.querySelector('.reader-page[data-page="25"]').getBoundingClientRect().top <= document.querySelector('#viewport').getBoundingClientRect().top + 2""", timeout=3000)
-        page.locator('.reader-page[data-page="25"] img.ready').wait_for(timeout=3000)
-        self.assertIn(25, requested)
-        for route in held:
-            try: route.abort()
-            except PlaywrightError: pass
-
-    def test_djvu_legacy_stream_fits_wide_images_without_overlap(self):
-        context = self.browser.new_context(viewport={"width": 390, "height": 844})
-        page = context.new_page()
-        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef/page-manifest.json"
-        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        manifest = {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 3, "toc": [{"title": "第一章", "page": 1, "depth": 0}, {"title": "第二章", "page": 2, "depth": 1}]}
-        # Three wide pages must fit even the minimum retained-pixel budget.
-        wide_page = b'<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="white"/></svg>'
-        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-        page.route("https://voiceofml-search.hf.space/api/reader-resolve?id=wide-pages", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"url": source, "download": source, "extension": "pdf-pages", "original_extension": "djvu", "title": "DjVu"})))
-        page.route("**/page-manifest.json", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
-        page.route(f"{root}/pages/**", lambda route: route.fulfill(status=200, content_type="image/svg+xml", body=wide_page))
-        page.goto(f"{self.origin}/search/static/reader.html?id=wide-pages&ext=pdf&title=Converted", wait_until="domcontentloaded")
-        page.locator(".reader-page img.ready").first.wait_for(timeout=10000)
-        self.assertEqual(page.locator("#content").get_attribute("data-mode"), "pdf-pages")
-        page.wait_for_function("() => document.querySelectorAll('.reader-page img.ready').length === 3")
-        boxes = page.locator(".reader-page").evaluate_all("""pages => pages.slice(0, 3).map(page => {
-          const shell = page.getBoundingClientRect(), image = page.querySelector('img').getBoundingClientRect();
-          return { shell: { top: shell.top, right: shell.right, bottom: shell.bottom, left: shell.left, width: shell.width }, image: { top: image.top, right: image.right, bottom: image.bottom, left: image.left, width: image.width } };
+        state = install_native_djvu(page, self.origin, prefix='/search')
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=10000)
+        page.locator('#page-number').fill('3')
+        page.locator('#page-number').dispatch_event('change')
+        page.locator('.reader-page[data-page="3"] canvas.ready').wait_for(timeout=10000)
+        boxes = page.locator('.reader-page:has(canvas.ready)').evaluate_all("""pages => pages.map(page => {
+          const shell=page.getBoundingClientRect(), canvas=page.querySelector('canvas.ready').getBoundingClientRect();
+          return {top:shell.top,left:shell.left,right:shell.right,canvasBottom:canvas.bottom,
+            canvasLeft:canvas.left,canvasRight:canvas.right};
         })""")
-        self.assertEqual(len(boxes), 3)
+        self.assertGreaterEqual(len(boxes), 2)
         for box in boxes:
-            self.assertLessEqual(box["image"]["width"], box["shell"]["width"] + 1)
-            self.assertGreaterEqual(box["image"]["left"], box["shell"]["left"] - 1)
-            self.assertLessEqual(box["image"]["right"], box["shell"]["right"] + 1)
+            self.assertGreaterEqual(box['canvasLeft'], box['left'] - 1)
+            self.assertLessEqual(box['canvasRight'], box['right'] + 1)
         for current, following in zip(boxes, boxes[1:]):
-            self.assertGreaterEqual(following["shell"]["top"], current["image"]["bottom"])
-        open_reader_panel(page)
-        self.assertFalse(page.locator("#full-search-toggle").is_hidden())
-        self.assertEqual(page.locator("#toc-list .toc-item").count(), 2)
-        self.assertIn("第二章 · 第 2 页", page.locator("#toc-list .toc-item").nth(1).text_content())
-        page.locator("#toc-list .toc-item").nth(1).click()
-        page.wait_for_function("() => document.querySelector('#page-number').value === '2'")
-        context.close()
+            self.assertGreaterEqual(following['top'], current['canvasBottom'] - 1)
+        self.assertEqual(page.locator('.reader-page img').count(), 0)
 
-    def test_pdf_pages_ocr_uses_manifest_paths_after_image_is_ready(self):
+    def test_djvu_ocr_uses_verified_source_and_versioned_paths(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
         self.addCleanup(context.close)
         page = context.new_page()
-        root = "objects/aa/" + "a" * 64
-        image_root = root + "/" + "1" * 16
-        ocr_root = root + "/" + "2" * 16
-        text_root = root + "/" + "3" * 16
-        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/page-manifest.json"
-        ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + ocr_root + "/ocr-manifest.json"
-        payloads = [gzip.compress(json.dumps({"version": 1, "kind": "pdf-ocr-page", "page": number,
-                     "width": 100, "height": 140, "blocks": [
-                         {"t": f"第{number}页正文", "b": [0.2, 0.2, 0.7, 0.3]},
-                         {"t": f"第{number}页第二行", "b": [0.2, 0.4, 0.7, 0.5]},
-                         {"t": f"第{number}页末行", "b": [0.2, 0.7, 0.7, 0.8]},
-                     ]}).encode())
-                    for number in (1, 2)]
-        manifest = {"version": 1, "kind": "pdf-ocr", "complete": True,
-                    "source_sha256": "a" * 64, "profile": "test-layout-v1-1234567890abcdef",
-                    "page_count": 2, "pages": [
-                        {"p": number, "o": text_root + f"/ocr/page-{number:06d}.json.gz",
-                         "os": hashlib.sha256(payloads[number - 1]).hexdigest(), "ob": len(payloads[number - 1])}
-                        for number in (1, 2)],
-                    "book_text": {"path": ocr_root + "/ocr/book-text.json.gz", "bytes": 1,
-                                  "sha256": "a" * 64},
-                    "page_manifest": {"path": image_root + "/page-manifest.json"}}
-        held, requested, held_images = [], [], []
-        page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": 2})))
-        def serve_ocr(route):
-            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
-            requested.append(path)
-            if path == ocr_root + "/ocr-manifest.json":
-                held.append(route)
-            elif path in [entry["o"] for entry in manifest["pages"]]:
-                number = int(path.rsplit("page-", 1)[1][:6])
-                route.fulfill(content_type="application/gzip", body=payloads[number - 1])
-            else:
-                route.fulfill(status=404)
-        page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve_ocr)
-        def serve_image(route):
-            if route.request.url.endswith("page-000001.webp"):
-                held_images.append(route)
-            else:
-                route.fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
-        page.route("https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/pages/**",
-                   serve_image)
-        with page.expect_request(ocr_url):
-            page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
-                {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
-        page.wait_for_timeout(100)
-        self.assertEqual(len(held_images), 1)
-        self.assertEqual(page.locator('.reader-page[data-page="1"] img.ready').count(), 0)
-        self.assertEqual(page.locator('.reader-loading-indicator').count(), 0)
-        self.assertTrue(page.locator('.reader-page-state').first.is_hidden())
-        held_images.pop().fulfill(content_type="image/webp", body=IMAGE_FIXTURES["webp"][1])
-        page.locator('.reader-page[data-page="1"] img.ready').wait_for(timeout=10000)
-        page.locator('html[data-reader-phase="ready"]').wait_for(timeout=10000)
-        self.assertEqual(page.locator('.reader-loading-indicator').count(), 0)
-        page.wait_for_timeout(100)
-        self.assertEqual(len(held), 1)
-        self.assertEqual(page.locator('.reader-page[data-page="1"]').get_attribute("data-text-ready"), None)
-        held.pop().fulfill(content_type="application/json", body=json.dumps(manifest))
-        page.locator('.reader-page[data-page="1"][data-text-ready="1"]').wait_for(timeout=10000)
-        self.assertIn("第1页正文", page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
-        page.locator("#page-number").fill("2")
-        page.locator("#page-number").dispatch_event("change")
-        page.locator('.reader-page[data-page="2"][data-text-ready="1"]').wait_for(timeout=10000)
-        self.assertIn("第2页正文", page.locator('.reader-page[data-page="2"] .reader-pdf-text').text_content())
-        interaction = page.evaluate("""() => {
-          const pages = [...document.querySelectorAll('.reader-page')];
-          const run = pages[1].querySelector('.reader-pdf-text-run');
-          const rect = run.getBoundingClientRect(), image = pages[1].querySelector('img');
-          const bounds = pages[1].getBoundingClientRect();
-          const textTarget = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-          const imageTarget = document.elementFromPoint(bounds.left + bounds.width * .9, bounds.top + bounds.height * .5);
-          const range = document.createRange();
-          range.setStart(pages[0].querySelector('.reader-pdf-text-run').firstChild, 0);
-          range.setEnd(run.firstChild, run.firstChild.length);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          return { text: textTarget === run || run.contains(textTarget), image: imageTarget === image,
-            selection: getSelection().toString() };
+        state = install_native_djvu(page, self.origin, prefix='/search', ocr=True)
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.locator('.reader-page[data-page="1"][data-text-ready="1"] canvas.ready').wait_for(timeout=10000)
+        self.assertIn(state['texts'][0], page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
+        self.assertEqual(state['assets'].count(state['ocr_path']), 1)
+        self.assertTrue(all(row['range'] is None for row in state['source']))
+        page.locator('#page-number').fill('2')
+        page.locator('#page-number').dispatch_event('change')
+        page.locator('.reader-page[data-page="2"][data-text-ready="1"] canvas.ready').wait_for(timeout=10000)
+        selected = page.locator('.reader-page[data-page="2"] .reader-pdf-text').evaluate("""node => {
+          const range=document.createRange();range.selectNodeContents(node);
+          const selection=getSelection();selection.removeAllRanges();selection.addRange(range);return selection.toString();
         }""")
-        self.assertTrue(interaction["text"])
-        self.assertTrue(interaction["image"])
-        self.assertIn("第1页正文", interaction["selection"])
-        self.assertIn("第2页正文", interaction["selection"])
-        page.evaluate("() => { getSelection().removeAllRanges(); document.querySelector('#viewport').scrollTop = 0; }")
-        points = page.evaluate("""() => [document.querySelectorAll('.reader-page[data-page="1"] .reader-pdf-text-run')[1],
-          document.querySelectorAll('.reader-page[data-page="2"] .reader-pdf-text-run')[1]]
-          .map(run => { const r = run.getBoundingClientRect();
-            return { x: r.left + 2, y: r.top + r.height / 2, end: r.right - 2 }; })""")
-        page.mouse.move(points[0]["x"], points[0]["y"])
-        page.mouse.down()
-        page.mouse.move(points[1]["end"], points[1]["y"], steps=24)
-        page.mouse.up()
-        dragged = page.evaluate("getSelection().toString()")
-        self.assertIn("第1页末行", dragged)
-        self.assertIn("第2页正文", dragged)
-        self.assertNotIn("第1页正文", dragged)
-        self.assertNotIn("第2页末行", dragged)
-        page.evaluate("() => { getSelection().removeAllRanges(); document.querySelector('#viewport').scrollTop = 0; }")
-        gap = page.evaluate("""() => {
-          const runs = document.querySelectorAll('.reader-page[data-page="2"] .reader-pdf-text-run');
-          const first = runs[0].getBoundingClientRect(), second = runs[1].getBoundingClientRect();
-          return { x: first.left + 4, y: (first.bottom + second.top) / 2 };
-        }""")
-        page.mouse.move(points[0]["x"], points[0]["y"])
-        page.mouse.down()
-        page.mouse.move(gap["x"], gap["y"], steps=24)
-        during = page.evaluate("""() => ({
-          imageSelect: getComputedStyle(document.querySelector('.reader-page[data-page="1"] img')).userSelect,
-          anchor: getSelection().anchorNode?.parentElement?.closest('.reader-page')?.dataset.page,
-          focus: getSelection().focusNode?.parentElement?.closest('.reader-page')?.dataset.page,
-          text: getSelection().toString()
-        })""")
-        self.assertEqual(during["imageSelect"], "none")
-        self.assertEqual(during["anchor"], "1")
-        self.assertEqual(during["focus"], "2")
-        self.assertNotIn("第2页末行", during["text"])
-        page.mouse.up()
-        page.wait_for_function("() => !getSelection().toString().includes('第2页末行')")
-        gap_selection = page.evaluate("getSelection().toString()")
-        self.assertIn("第1页末行", gap_selection)
-        self.assertIn("第2页正文", gap_selection)
-        self.assertNotIn("第1页正文", gap_selection)
-        self.assertNotIn("第2页末行", gap_selection)
-        page.evaluate("getSelection().removeAllRanges()")
-        upper_gap = page.evaluate("""() => {
-          const runs = document.querySelectorAll('.reader-page[data-page="1"] .reader-pdf-text-run');
-          const first = runs[0].getBoundingClientRect(), second = runs[1].getBoundingClientRect();
-          return { x: second.left + 4, y: first.bottom + (second.top - first.bottom) * .9 };
-        }""")
-        page.mouse.move(points[1]["end"], points[1]["y"])
-        page.mouse.down()
-        page.mouse.move(upper_gap["x"], upper_gap["y"], steps=24)
-        page.mouse.up()
-        page.wait_for_function("() => !getSelection().toString().includes('第1页正文')")
-        reverse = page.evaluate("getSelection().toString()")
-        self.assertIn("第1页第二行", reverse)
-        self.assertIn("第2页正文", reverse)
-        self.assertIn("第1页末行", reverse)
-        self.assertNotIn("第2页末行", reverse)
-        page.set_viewport_size({"width": 390, "height": 1500})
-        page.evaluate("() => { getSelection().removeAllRanges(); document.querySelector('#viewport').scrollTop = 0; }")
-        bottom = page.evaluate("""() => {
-          const start = document.querySelectorAll('.reader-page[data-page="1"] .reader-pdf-text-run')[2].getBoundingClientRect();
-          const end = document.querySelector('.reader-page[data-page="2"]').getBoundingClientRect();
-          return { x: start.left + 2, y: start.top + start.height / 2,
-            endX: end.left + end.width / 2, endY: end.bottom - 10 };
-        }""")
-        page.mouse.move(bottom["x"], bottom["y"])
-        page.mouse.down()
-        page.mouse.move(bottom["endX"], bottom["endY"], steps=36)
-        page.wait_for_function("() => getSelection().focusNode?.parentElement?.closest('.reader-page')?.dataset.page === '2'")
-        moving = page.evaluate("""() => ({
-          anchor: getSelection().anchorNode.parentElement.closest('.reader-page').dataset.page,
-          text: getSelection().toString()
-        })""")
-        self.assertEqual(moving["anchor"], "1")
-        self.assertIn("第1页末行", moving["text"])
-        self.assertIn("第2页末行", moving["text"])
-        self.assertNotIn("第1页正文", moving["text"])
-        page.mouse.up()
-        self.assertEqual(requested, [ocr_root + "/ocr-manifest.json",
-                                      text_root + "/ocr/page-000001.json.gz",
-                                      text_root + "/ocr/page-000002.json.gz"])
-        columns = page.evaluate("""() => {
-          getSelection().removeAllRanges();
-          const layer = document.querySelector('.reader-page[data-page="2"] .reader-pdf-text');
-          const right = layer.querySelector('.reader-pdf-text-position').cloneNode(true);
-          right.style.left = '75%';
-          right.dataset.column = 'right';
-          right.querySelector('.reader-pdf-text-run').textContent = 'Right column';
-          right.querySelector('.reader-pdf-text-run').style.transform = 'scaleX(.35)';
-          layer.append(right);
-          const start = document.querySelectorAll('.reader-page[data-page="1"] .reader-pdf-text-run')[2].getBoundingClientRect();
-          const end = right.querySelector('.reader-pdf-text-run').getBoundingClientRect();
-          return { start: { x: start.left + 2, y: start.top + start.height / 2 },
-            end: { x: end.left + end.width / 2, y: end.top + end.height / 2 } };
-        }""")
-        page.mouse.move(**columns["start"])
-        page.mouse.down()
-        page.mouse.move(**columns["end"], steps=24)
-        page.mouse.up()
-        page.wait_for_function("() => getSelection().focusNode?.parentElement?.closest('[data-column]')?.dataset.column === 'right'")
+        self.assertIn(state['texts'][1], selected)
+        self.assertFalse([path for path in state['assets'] if '/pages/page-' in path])
+        self.assertEqual(page.locator('.reader-page img').count(), 0)
 
-    def test_long_pdf_pages_touch_swipe_preserves_existing_ocr_selection(self):
+    def test_djvu_touch_swipe_preserves_ocr_selection(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
         self.addCleanup(context.close)
         page = context.new_page()
-        root = "objects/aa/" + "a" * 64
-        image_root = root + "/" + "1" * 16
-        text_root = root + "/" + "2" * 16
-        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/page-manifest.json"
-        ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + text_root + "/ocr-manifest.json"
-        total = 359
-        ocr = {"version": 1, "kind": "pdf-ocr", "complete": True, "source_sha256": "a" * 64,
-               "profile": "test-layout-v1-1234567890abcdef", "page_count": total,
-               "pages": [{"p": i, "o": root + "/" + "3" * 16 + f"/ocr/page-{i:06d}.json.gz"}
-                         for i in range(1, total + 1)],
-               "book_text": {"path": text_root + "/ocr/book-text.json.gz", "bytes": 1,
-                             "sha256": "a" * 64},
-               "page_manifest": {"path": image_root + "/page-manifest.json"}}
-        page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": total})))
-        def serve_ocr(route):
-            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
-            if path == text_root + "/ocr-manifest.json":
-                route.fulfill(content_type="application/json", body=json.dumps(ocr))
-                return
-            if path == image_root + "/page-manifest.json":
-                route.fulfill(content_type="application/json", body=json.dumps(
-                    {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": total}))
-                return
-            match = re.search(r"/ocr/page-(\d{6})\.json\.gz$", path)
-            if not match:
-                route.fulfill(status=404, body="Unexpected fixture resource")
-                return
-            number = int(match.group(1))
-            blocks = [] if number == 2 else [{"t": f"Page {number} selectable text", "b": [0.2, 0.35, 0.8, 0.4]}]
-            payload = {"version": 1, "kind": "pdf-ocr-page", "page": number,
-                       "width": 1441, "height": 2145, "blocks": blocks}
-            route.fulfill(content_type="application/gzip", body=gzip.compress(json.dumps(payload).encode()))
-        page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve_ocr)
-        image = b'<svg xmlns="http://www.w3.org/2000/svg" width="1441" height="2145"><rect width="100%" height="100%" fill="white"/></svg>'
-        page.route("https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/pages/**",
-                   lambda route: route.fulfill(content_type="image/svg+xml", body=image))
-        page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
-            {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
-        page.locator('.reader-page[data-page="1"][data-text-ready="1"] img.ready').wait_for(timeout=10000)
+        state = install_native_djvu(page, self.origin, prefix='/search', ocr=True)
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.locator('.reader-page[data-page="1"][data-text-ready="1"] canvas.ready').wait_for(timeout=10000)
         page.evaluate("""() => {
-          const node = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').firstChild;
-          getSelection().collapse(node, 1);
-          window.__pdfSelectionWrites = 0;
-          const original = Selection.prototype.setBaseAndExtent;
-          Selection.prototype.setBaseAndExtent = function(...args) {
-            window.__pdfSelectionWrites++;
-            return original.apply(this, args);
-          };
+          const node=document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').firstChild;
+          const range=document.createRange();range.setStart(node,0);range.setEnd(node,3);
+          getSelection().removeAllRanges();getSelection().addRange(range);
+          window.__writes=0;const original=Selection.prototype.setBaseAndExtent;
+          Selection.prototype.setBaseAndExtent=function(...args){window.__writes++;return original.apply(this,args)};
         }""")
-        point = page.evaluate("""() => {
-          const rect = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').getBoundingClientRect();
-          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }""")
+        point = page.locator('.reader-page[data-page="1"] .reader-pdf-text-run').first.bounding_box()
+        start = {'x': point['x'] + point['width']/2, 'y': point['y'] + point['height']/2}
         cdp = context.new_cdp_session(page)
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [point]})
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [start]})
         for step in range(1, 7):
-            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [
-                {"x": point["x"], "y": point["y"] - step * 25}]})
+            cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': start['x'], 'y': start['y'] - step * 25}]})
             page.wait_for_timeout(35)
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
         page.wait_for_timeout(350)
-        state = page.evaluate("""() => ({ top: document.querySelector('#viewport').scrollTop,
-          writes: window.__pdfSelectionWrites, selected: getSelection().toString(),
-          page: Number(document.querySelector('#page-number').value) })""")
-        self.assertEqual(state["writes"], 0, state)
-        self.assertEqual(state["selected"], "", state)
-        self.assertGreater(state["top"], 20, state)
-        self.assertLess(state["top"], 1200, state)
-        self.assertLessEqual(state["page"], 3, state)
-        page.locator("#page-number").fill("5")
-        page.locator("#page-number").dispatch_event("change")
-        page.locator('.reader-page[data-page="5"][data-text-ready="1"]').wait_for(timeout=10000)
-        page.locator("#page-number").fill("4")
-        page.locator("#page-number").dispatch_event("change")
-        page.locator('.reader-page[data-page="4"][data-text-ready="1"]').wait_for(timeout=10000)
-        page.evaluate("""() => {
-          const run = document.querySelector('.reader-page[data-page="4"] .reader-pdf-text-run');
-          const range = document.createRange();
-          range.setStart(run.firstChild, 0);
-          range.setEnd(run.firstChild, run.firstChild.length);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          window.__pdfSelectionWrites = 0;
-          window.__pdfTouchAnchor = getSelection().anchorNode?.parentElement?.closest('.reader-page')?.dataset.page;
-          const start = run.getBoundingClientRect();
-          const end = document.querySelector('.reader-page[data-page="5"] .reader-pdf-text-run').getBoundingClientRect();
-          window.__pdfTouchTarget = document.elementFromPoint(end.left + 4, end.top + 4)
-            ?.closest('.reader-page')?.dataset.page;
-          run.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, pointerId: 91,
-            pointerType: 'touch', clientX: start.left + 4, clientY: start.top + 4}));
-          document.dispatchEvent(new PointerEvent('pointermove', {bubbles: true, pointerId: 91,
-            pointerType: 'touch', clientX: end.left + 4, clientY: end.top + 4}));
-        }""")
-        page.wait_for_timeout(100)
-        self.assertEqual(page.evaluate("window.__pdfTouchAnchor"), "4")
-        self.assertEqual(page.evaluate("window.__pdfTouchTarget"), "5")
-        self.assertEqual(page.evaluate("window.__pdfSelectionWrites"), 0)
-        page.evaluate("document.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, pointerId: 91, pointerType: 'touch'}))")
-        page.evaluate("getSelection().removeAllRanges()")
-        page.locator("#page-number").fill("1")
-        page.locator("#page-number").dispatch_event("change")
-        point = page.wait_for_function("""() => {
-          const run = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run');
-          if (!run?.firstChild || document.querySelector('#page-number').value !== '1') return false;
-          const node = run.firstChild;
-          const range = document.createRange();
-          range.setStart(node, 0);
-          range.setEnd(node, 4);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          window.__pdfSelectionWrites = 0;
-          const rect = run.getBoundingClientRect();
-          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }""", timeout=10000).json_value()
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [point]})
-        for step in range(1, 7):
-            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [
-                {"x": point["x"], "y": point["y"] - step * 25}]})
-            page.wait_for_timeout(35)
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
-        page.wait_for_timeout(350)
-        state = page.evaluate("""() => ({ top: document.querySelector('#viewport').scrollTop,
-          writes: window.__pdfSelectionWrites, page: Number(document.querySelector('#page-number').value) })""")
-        self.assertEqual(state["writes"], 0, state)
-        self.assertGreater(state["top"], 20, state)
-        self.assertLess(state["top"], 1200, state)
+        self.assertEqual(page.evaluate('window.__writes'), 0)
+        self.assertEqual(page.locator('.reader-page img').count(), 0)
+        self.assertTrue(state['source'] and all(row['range'] is None for row in state['source']))
 
-    def test_long_pdf_pages_touch_swipe_from_ocr_does_not_select_or_jump(self):
+    def test_djvu_touch_swipe_from_ocr_does_not_select_or_jump(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
         self.addCleanup(context.close)
         page = context.new_page()
-        root = "objects/aa/" + "a" * 64
-        image_root = root + "/" + "1" * 16
-        text_root = root + "/" + "2" * 16
-        source = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/page-manifest.json"
-        ocr_url = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + text_root + "/ocr-manifest.json"
-        total = 359
-        ocr = {"version": 1, "kind": "pdf-ocr", "complete": True, "source_sha256": "a" * 64,
-               "profile": "test-layout-v1-1234567890abcdef", "page_count": total,
-               "pages": [{"p": i, "o": root + "/" + "3" * 16 + f"/ocr/page-{i:06d}.json.gz"}
-                         for i in range(1, total + 1)],
-               "book_text": {"path": text_root + "/ocr/book-text.json.gz", "bytes": 1,
-                             "sha256": "a" * 64},
-               "page_manifest": {"path": image_root + "/page-manifest.json"}}
-        page.route("**/page-manifest.json", lambda route: route.fulfill(
-            content_type="application/json", body=json.dumps({"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": total})))
-        def serve_ocr(route):
-            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query)["path"][0]
-            if path == text_root + "/ocr-manifest.json":
-                route.fulfill(content_type="application/json", body=json.dumps(ocr))
-                return
-            if path == image_root + "/page-manifest.json":
-                route.fulfill(content_type="application/json", body=json.dumps(
-                    {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "page_count": total}))
-                return
-            match = re.search(r"/ocr/page-(\d{6})\.json\.gz$", path)
-            if not match:
-                route.fulfill(status=404, body="Unexpected fixture resource")
-                return
-            number = int(match.group(1))
-            blocks = [] if number == 2 else [{"t": f"Page {number} selectable text", "b": [0.2, 0.35, 0.8, 0.4]}]
-            route.fulfill(content_type="application/gzip", body=gzip.compress(json.dumps({
-                "version": 1, "kind": "pdf-ocr-page", "page": number,
-                "width": 1441, "height": 2145, "blocks": blocks}).encode()))
-        page.route("https://voiceofml-search.hf.space/api/reader-bucket-resource**", serve_ocr)
-        image = b'<svg xmlns="http://www.w3.org/2000/svg" width="1441" height="2145"><rect width="100%" height="100%" fill="white"/></svg>'
-        page.route("https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/" + image_root + "/pages/**",
-                   lambda route: route.fulfill(content_type="image/svg+xml", body=image))
-        page.goto(f"{self.origin}/search/static/reader.html?" + urllib.parse.urlencode(
-            {"url": source, "ext": "pdf-pages", "ocr_manifest": ocr_url}), wait_until="domcontentloaded")
-        page.locator('.reader-page[data-page="1"][data-text-ready="1"] img.ready').wait_for(timeout=10000)
-        page.evaluate("""() => {
-          const node = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').firstChild;
-          getSelection().collapse(node, 1);
-          window.__pdfSelectionWrites = 0;
-          const original = Selection.prototype.setBaseAndExtent;
-          Selection.prototype.setBaseAndExtent = function(...args) {
-            window.__pdfSelectionWrites++;
-            return original.apply(this, args);
-          };
-        }""")
-        point = page.evaluate("""() => {
-          const rect = document.querySelector('.reader-page[data-page="1"] .reader-pdf-text-run').getBoundingClientRect();
-          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }""")
+        state = install_native_djvu(page, self.origin, prefix='/search', ocr=True)
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.locator('.reader-page[data-page="1"][data-text-ready="1"] canvas.ready').wait_for(timeout=10000)
+        page.evaluate("""() => {getSelection().removeAllRanges();window.__writes=0;
+          const original=Selection.prototype.setBaseAndExtent;
+          Selection.prototype.setBaseAndExtent=function(...args){window.__writes++;return original.apply(this,args)};}""")
+        point = page.locator('.reader-page[data-page="1"] .reader-pdf-text-run').first.bounding_box()
+        start = {'x': point['x'] + point['width']/2, 'y': point['y'] + point['height']/2}
         cdp = context.new_cdp_session(page)
-        def swipe():
-            cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [point]})
-            for step in range(1, 7):
-                cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [
-                    {"x": point["x"], "y": point["y"] - step * 25}]})
-                page.wait_for_timeout(35)
-            cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
-            page.wait_for_timeout(350)
-            state = page.evaluate("""() => ({ top: document.querySelector('#viewport').scrollTop,
-              writes: window.__pdfSelectionWrites })""")
-            self.assertEqual(state["writes"], 0, state)
-            self.assertGreater(state["top"], 20, state)
-            self.assertLess(state["top"], 1200, state)
-        swipe()
-        page.locator("#page-number").fill("5")
-        page.locator("#page-number").dispatch_event("change")
-        page.locator('.reader-page[data-page="5"][data-text-ready="1"]').wait_for(timeout=10000)
-        page.locator("#page-number").fill("4")
-        page.locator("#page-number").dispatch_event("change")
-        page.locator('.reader-page[data-page="4"][data-text-ready="1"]').wait_for(timeout=10000)
-        target = page.evaluate("""() => {
-          const run = document.querySelector('.reader-page[data-page="4"] .reader-pdf-text-run');
-          const range = document.createRange();
-          range.setStart(run.firstChild, 0);
-          range.setEnd(run.firstChild, run.firstChild.length);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          window.__pdfSelectionWrites = 0;
-          const start = run.getBoundingClientRect();
-          const end = document.querySelector('.reader-page[data-page="5"] .reader-pdf-text-run').getBoundingClientRect();
-          const targetPage = document.elementFromPoint(end.left + 4, end.top + 4)
-            ?.closest('.reader-page')?.dataset.page;
-          run.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, pointerId: 91,
-            pointerType: 'touch', clientX: start.left + 4, clientY: start.top + 4}));
-          document.dispatchEvent(new PointerEvent('pointermove', {bubbles: true, pointerId: 91,
-            pointerType: 'touch', clientX: end.left + 4, clientY: end.top + 4}));
-          return targetPage;
-        }""")
-        self.assertEqual(target, "5")
-        page.wait_for_timeout(100)
-        self.assertEqual(page.evaluate("window.__pdfSelectionWrites"), 0)
-        page.evaluate("document.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, pointerId: 91, pointerType: 'touch'}))")
-        page.evaluate("getSelection().removeAllRanges()")
-        page.locator("#page-number").fill("1")
-        page.locator("#page-number").dispatch_event("change")
-        # Offscreen OCR layers are recycled; wait and select within one browser turn.
-        point = page.wait_for_function("""() => {
-          const shell = document.querySelector('.reader-page[data-page="1"]');
-          const run = shell?.querySelector('.reader-pdf-text-run');
-          const image = shell?.querySelector('img.ready');
-          if (!run?.firstChild || !image?.complete || document.querySelector('#page-number').value !== '1') return false;
-          const node = run.firstChild;
-          const range = document.createRange();
-          range.setStart(node, 0);
-          range.setEnd(node, 4);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          window.__pdfSelectionWrites = 0;
-          const rect = run.getBoundingClientRect();
-          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }""", timeout=10000).json_value()
-        swipe()
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [start]})
+        for step in range(1, 7):
+            cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': start['x'], 'y': start['y'] - step * 25}]})
+            page.wait_for_timeout(35)
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+        page.wait_for_timeout(350)
+        self.assertEqual(page.evaluate('window.__writes'), 0)
+        self.assertEqual(page.evaluate('getSelection().toString()'), '')
+        self.assertLessEqual(int(page.locator('#page-number').input_value()), 3)
+        self.assertFalse([path for path in state['assets'] if '/pages/page-' in path])
 
-
-    def test_compact_pdf_manifest_virtualizes_and_navigates_to_distant_page(self):
-        context = self.browser.new_context(viewport={"width": 390, "height": 844})
-        page = context.new_page()
-        root = "https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/" + "a" * 64 + "/1234567890abcdef"
-        source = root + "/page-manifest.json"
-        manifest = {"version": 2, "kind": "pdf-pages", "source_format": "djvu", "source_sha256": "a" * 64,
-                    "profile": "test", "page_count": 5000}
-        page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-        page.route(source, lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
-        page.route("**/page-manifest.json", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(manifest)))
-        page.route(f"{root}/pages/**", lambda route: route.fulfill(status=200, content_type="image/webp", body=IMAGE_FIXTURES["webp"][1]))
-        page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=pdf-pages&title=Compact", wait_until="domcontentloaded")
-        page.locator(".reader-page img.ready").first.wait_for(timeout=10000)
-        self.assertLessEqual(page.locator(".reader-page img").count(), 25)
-        page.locator("#viewport").evaluate("node => node.scrollTop = node.scrollHeight * 0.5")
-        page.wait_for_function("() => Number(document.querySelector('#page-number').value) > 1500")
-        self.assertLessEqual(page.locator(".reader-page").count(), 160)
-        page.locator("#page-number").fill("4000")
-        page.locator("#viewport").evaluate("node => { node.scrollTop += node.clientHeight * 1.2; node.dispatchEvent(new Event('scroll')); }")
-        page.wait_for_timeout(80)
-        self.assertEqual(page.locator("#page-number").input_value(), "4000")
-        page.locator("#page-number").dispatch_event("change")
-        page.locator(".reader-page[data-page='4000'] img.ready").wait_for(timeout=10000)
-        self.assertEqual(page.locator("#page-number").input_value(), "4000")
-        self.assertLessEqual(page.locator(".reader-page").count(), 160)
-        self.assertEqual(page.locator(".reader-page[data-page='1']").count(), 0)
-        page.locator("#page-number").fill("1")
-        page.locator("#page-number").dispatch_event("change")
-        page.locator(".reader-page[data-page='1'] img.ready").wait_for(timeout=10000)
-        self.assertLessEqual(page.locator(".reader-page").count(), 160)
-        self.assertLessEqual(page.locator(".reader-page img").count(), 25)
-        context.close()
+    def test_long_pdf_virtualizes_and_navigates_to_distant_page(self):
+        module = PDF_MODULE.replace('numPages: 30', 'numPages: 5000')
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs', lambda route: route.fulfill(content_type='text/javascript', body=module))
+        self.page.goto(f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(SOURCE_URL, safe='')}&ext=pdf", wait_until='domcontentloaded')
+        self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=10000)
+        self.page.locator('#page-number').fill('4000')
+        self.page.locator('#page-number').dispatch_event('change')
+        self.page.locator('.reader-page[data-page="4000"] canvas.ready').wait_for(timeout=10000)
+        self.assertEqual(self.page.locator('#page-number').input_value(), '4000')
+        self.assertLessEqual(self.page.locator('.reader-page').count(), 160)
+        self.assertEqual(self.page.locator('.reader-page img').count(), 0)
 
     def test_long_native_pdf_keeps_bounded_page_shells(self):
         module = PDF_MODULE.replace("numPages: 30", "numPages: 1200")

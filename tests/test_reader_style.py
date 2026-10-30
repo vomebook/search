@@ -16,6 +16,7 @@ from tests.test_reader_performance import (
     zip_bytes,
 )
 from tests import test_reader_performance as support
+from tests.reader_native_fixture import install as install_native_djvu
 
 
 @unittest.skipIf(sync_playwright is None, "install requirements-test.txt for reader style tests")
@@ -235,19 +236,13 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.locator('#content').evaluate("node => node.dataset.mode = 'image-pages'")
         self.assertEqual(self.page.locator('.reader-page canvas').first.evaluate("e => getComputedStyle(e).filter"), 'none')
 
-    def test_pdf_page_images_follow_theme_but_original_images_do_not(self):
-        output = io.BytesIO()
-        Image.new('RGB', (600, 800), 'white').save(output, 'WEBP')
-        self.page.route('**/page-manifest.json', lambda route: route.fulfill(
-            json={"version": 2, "kind": "pdf-pages", "page_count": 1, "source_format": "djvu"}))
-        self.page.route('**/pages/page-*.webp', lambda route: route.fulfill(
-            content_type='image/webp', body=output.getvalue()))
-        source = urllib.parse.quote('https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/objects/aa/' + 'a' * 64 + '/1234567890abcdef/page-manifest.json', safe='')
-        self.page.goto(f'{self.origin}/search/static/reader.html?url={source}&ext=pdf-pages')
-        image = self.page.locator('.reader-page img.ready').first
-        image.wait_for()
-        original = image.get_attribute('src')
-        self.assertEqual(image.evaluate('e => getComputedStyle(e).filter'), 'none')
+    def test_pdf_page_djvu_canvas_inverts_without_affecting_original_images(self):
+        state = install_native_djvu(self.page, self.origin, prefix='/search')
+        self.page.goto(state['url'])
+        canvas = self.page.locator('.reader-page canvas.ready').first
+        canvas.wait_for()
+        original = canvas.evaluate('c => c.toDataURL()')
+        self.assertEqual(canvas.evaluate('e => getComputedStyle(e).filter'), 'none')
         self.page.locator('#history').click()
         self.page.locator('#page-invert-toggle').click()
         self.page.locator('#history').click()
@@ -256,12 +251,20 @@ class ReaderStyleTests(unittest.TestCase):
             for theme in ('dark', 'light', 'dark'):
                 self.page.evaluate("theme => {document.documentElement.dataset.theme = theme; document.documentElement.dataset.pageInverted = String(theme === 'dark');}", theme)
                 self.settle()
-                bounds = image.bounding_box()
+                bounds = canvas.bounding_box()
                 png = Image.open(io.BytesIO(self.page.screenshot())).convert('RGB')
                 pixel = png.getpixel((round(bounds['x'] + bounds['width'] * .8), round(bounds['y'] + 30)))
                 self.assertTrue(max(pixel) < 50 if theme == 'dark' else min(pixel) > 240, (theme, pixel))
-                self.assertEqual(image.get_attribute('src'), original)
-        self.page.evaluate("document.querySelector('#content').dataset.mode = 'image-pages'")
+                self.assertEqual(canvas.evaluate('c => c.toDataURL()'), original)
+        self.assertEqual(self.page.locator('.reader-page img').count(), 0)
+        self.page.route('**/api/reader-content?**', lambda route: route.fulfill(
+            content_type='image/webp', body=support.IMAGE_FIXTURES['webp'][1],
+            headers={'Access-Control-Allow-Origin': '*'}))
+        source = urllib.parse.quote('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/style.webp', safe='')
+        self.page.goto(f'{self.origin}/search/static/reader.html?url={source}&ext=webp')
+        image = self.page.locator('img.reader-image')
+        image.wait_for()
+        self.page.evaluate("document.documentElement.dataset.pageInverted='true'")
         self.assertEqual(image.evaluate('e => getComputedStyle(e).filter'), 'none')
 
     def test_page_inversion_remembers_explicit_choice_and_fits_sidebar(self):
