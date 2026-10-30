@@ -221,17 +221,23 @@ assert.strictEqual(JSON.stringify(runtimeMatrix.unsupported), JSON.stringify({ t
 const registry = reader.match(/function\s+registerReaderFormatAdapters\s*\(\)\s*\{[\s\S]*?\n\}/)
 assert.ok(registry, 'format adapter registry')
 const expected = {
-  pdf: ['loadPdfDocument', 'renderPdf'], image: ['loadImageDocument', 'renderImageDocument'],
+  image: ['loadImageDocument', 'renderImageDocument'],
   text: ['loadTextDocument', 'renderTextDocument'], markdown: ['loadMarkdownDocument', 'renderMarkdownDocument'],
   html: ['loadHtmlDocument', 'renderHtml'], 'epub-chapters': ['loadChapterManifestDocument', 'renderChapterManifest'],
   foliate: ['loadMediaDocument', 'renderFoliate'],
   swf: ['loadSwfDocument', 'renderSwf'],
 }
 const registered = new Map(), calls = []
-const registryContext = { formatAdapters: { register: (mode, adapter) => registered.set(mode, adapter) } }
-for (const name of [...new Set(Object.values(expected).flat()), 'preloadPdfFirstPage', 'fetchReaderResponse', 'renderPdfPages', 'renderImagePages', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
+const registryContext = { extension: 'pdf', formatAdapters: { register: (mode, adapter) => registered.set(mode, adapter) } }
+for (const name of [...new Set(Object.values(expected).flat()), 'loadPdfDocument', 'renderPdf', 'preloadPdfFirstPage', 'fetchReaderResponse', 'renderPdfPages', 'renderImagePages', 'renderMedia', 'restoreFormat', 'disposeFormatResources']) registryContext[name] = (...args) => calls.push([name, ...args])
 vm.runInNewContext(registry[0] + '; registerReaderFormatAdapters();', registryContext)
-assert.deepStrictEqual([...registered.keys()].sort(), [...Object.keys(expected), 'pdf-pages', 'image-pages', 'audio', 'video'].sort())
+assert.deepStrictEqual([...registered.keys()].sort(), [...Object.keys(expected), 'pdf', 'pdf-pages', 'image-pages', 'audio', 'video'].sort())
+registered.get('pdf').open()
+assert.deepStrictEqual(calls.splice(0), [['loadPdfDocument']], 'ordinary PDF uses PDF.js loader')
+assert.strictEqual(registered.get('pdf').render, registryContext.renderPdf)
+assertCode(registry[0], 'if (extension !== "djvu") return loadPdfDocument()')
+assertCode(registry[0], 'releasePdfWorker?.()')
+assert.match(registry[0], /import\(["'][^"']*\/reader-djvu-loader\.mjs["']\)\.then\(module\s*=>\s*module\.openNativeDjvu\(readerContext\)\)/)
 for (const [mode, [open, render]] of Object.entries(expected)) {
   assert.strictEqual(registered.get(mode).open, registryContext[open], mode + ' loader')
   assert.strictEqual(registered.get(mode).render, registryContext[render], mode + ' renderer')

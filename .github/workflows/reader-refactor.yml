@@ -66,6 +66,10 @@ jobs:
         run: |
           node tests/test_reader_djvu_only.mjs
           node tests/test_reader_djvu_png.mjs
+          node tests/test_reader_djvu_range.mjs
+          node tests/test_reader_djvu_range_fallback.mjs
+          node tests/test_reader_djvu_worker.mjs
+          node tests/test_reader_djvu_source_integrity.mjs
           node tests/test_reader_image_memory.mjs
       - name: Run multi-format preparation and navigation gates
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
@@ -156,6 +160,10 @@ jobs:
         run: |
           node tests/test_reader_djvu_only.mjs
           node tests/test_reader_djvu_png.mjs
+          node tests/test_reader_djvu_range.mjs
+          node tests/test_reader_djvu_range_fallback.mjs
+          node tests/test_reader_djvu_worker.mjs
+          node tests/test_reader_djvu_source_integrity.mjs
           node tests/test_reader_image_memory.mjs
           python3 -B -m unittest -v tests.test_reader_pdf_hybrid
       - name: Run multi-format preparation and navigation gates
