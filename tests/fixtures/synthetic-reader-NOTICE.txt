@@ -1,0 +1,10 @@
+Synthetic Reader fixture
+
+synthetic-reader.djvu is a 3-page document generated for this test suite;
+it contains no scanned book, OCR corrections, or production content.
+
+Each page is a 96 x 128 grayscale PGM composed of white pixels and generated
+horizontal bars. DjVuLibre c44 -dpi 100 encoded each page. djvused added the
+synthetic hidden text "PageNtext Fixture", djvm -c bundled the pages, and
+djvused added a two-entry outline. SHA-256:
+0fa11878b3e842aa145617a612cbb7cbf7fe45cb563543da5242562360084dbf
