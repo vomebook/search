@@ -197,13 +197,15 @@ export function createReaderPdfTextRuntime(readerContext) {
   }
 
   async function renderPdfOcrText(shell) {
-    if (shell.dataset.textReady === "1" || !readerContext.ocrManifestUrl) return;
+    if ((shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1") || !readerContext.ocrManifestUrl) return;
     if (shell._ocrPromise) return shell._ocrPromise;
     const layer = shell.querySelector(".reader-pdf-text");
     if (!layer) return;
     const epoch = shell._textEpoch || 0;
     const task = (async () => {
       try {
+         // Never replace the DOM underneath an active native-text selection.
+         if (shell.dataset.nativeTextFallback === "1" && readerContext.pdfSelectionIntersects?.(shell)) return;
          const page = Number(shell.dataset.page);
          await readerContext.acquirePdfTextSlot(readerContext.isPdfPageVisible(shell));
         try {
@@ -211,6 +213,10 @@ export function createReaderPdfTextRuntime(readerContext) {
           const payload = await readerContext.loadPdfOcrPage(page, readerContext.isPdfPageVisible(shell) ? "high" : "low");
           readerContext.assertReaderActive();
           if (epoch !== (shell._textEpoch || 0)) return;
+          if (shell.dataset.nativeTextFallback === "1" && readerContext.pdfSelectionIntersects?.(shell)) return;
+          // An empty external layer must not mask text embedded in the original.
+          if (payload.kind === "pdf-text-layer" ? !payload.text?.trim() :
+              !(payload.blocks || []).some(block => String(block?.t || "").trim())) return;
           if (payload.kind === "pdf-text-layer") {
             readerContext.populateIndependentTextLayer(layer, payload);
             shell._bookmarkTextItems = payload.regions.map(region => ({ text: region.text, y: region.box[1] }));
@@ -220,6 +226,7 @@ export function createReaderPdfTextRuntime(readerContext) {
             shell._bookmarkTextItems = payload.blocks.map((block) => ({ text: block.t, y: block.b?.[1] || 0 }));
           }
           shell.dataset.textReady = "1";
+          delete shell.dataset.nativeTextFallback;
           readerContext.highlightPdfText(shell);
         } finally {
           readerContext.releasePdfTextSlot();
@@ -234,7 +241,12 @@ export function createReaderPdfTextRuntime(readerContext) {
   }
 
   async function renderPdfText(page, shell, signal = null) {
-    if (readerContext.ocrManifestUrl) return readerContext.renderPdfOcrText(shell);
+    if (readerContext.ocrManifestUrl) {
+      await readerContext.renderPdfOcrText(shell);
+      // If a historical external text object disappeared or failed to load,
+      // the source's own text remains usable without creating another copy.
+      if (signal?.aborted || (shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1")) return;
+    }
     if (shell.dataset.textReady === "1") return;
     const layer = shell.querySelector(".reader-pdf-text");
     if (!layer || typeof page.getTextContent !== "function") return;
@@ -244,6 +256,8 @@ export function createReaderPdfTextRuntime(readerContext) {
       const text = await readerContext.loadPdfTextContent(pageNumber, page);
       readerContext.assertReaderActive();
       if (signal?.aborted) return;
+      if (readerContext.ocrManifestUrl && !text.items?.some(item => String(item.str || "").trim())) return;
+      if (shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1") return;
       readerContext.cachePdfTextContent(pageNumber, text);
       if (epoch !== (shell._textEpoch || 0) || !shell.isConnected) return;
       const pdfViewport = page.getViewport({ scale: 1 });
@@ -257,6 +271,7 @@ export function createReaderPdfTextRuntime(readerContext) {
           }));
         readerContext.populateIndependentTextLayer(layer,{text:raw,regions});
         shell._bookmarkTextItems=regions.map(region=>({text:region.text,y:region.box[1]}));
+        if (readerContext.ocrManifestUrl) shell.dataset.nativeTextFallback="1";
         shell.dataset.textReady="1";
         readerContext.highlightPdfText(shell);
         return;
@@ -274,6 +289,7 @@ export function createReaderPdfTextRuntime(readerContext) {
           };
         });
       readerContext.populatePdfTextLayer(layer, text.items, pdfViewport, text.styles);
+      if (readerContext.ocrManifestUrl) shell.dataset.nativeTextFallback = "1";
       shell.dataset.textReady = "1";
       readerContext.highlightPdfText(shell);
     } catch (error) {

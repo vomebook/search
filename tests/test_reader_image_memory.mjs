@@ -67,10 +67,12 @@ function fixture() {
 
 {
   const value = fixture();
+  value.shell.dataset.nativeTextFallback = '1';
   value.reader.trimPdfSurfaces(null);
   assert.equal(value.shell.image, null);
   assert.equal(value.shell.dataset.renderState, 'idle');
   assert.equal(value.shell.dataset.textReady, '0');
+  assert.equal(value.shell.dataset.nativeTextFallback, undefined);
   for (let i = 0; i < 100; i++) {
     await value.reader.renderPdfImageShell(value.shell, false, 1);
     value.reader.trimPdfSurfaces(null);
