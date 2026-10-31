@@ -149,13 +149,28 @@ export function createReaderSource(readerContext) {
         target.origin === location.origin &&
         target.pathname === "/search/" &&
         target.hash.startsWith("#/")
-      )
+      ) {
+        // Legacy explicit targets only carry the direct-folder filter. Keep
+        // that filter authoritative and mirror it into the sidebar route.
+        const split = target.hash.indexOf("?");
+        const route = split < 0 ? target.hash : target.hash.slice(0, split);
+        const query = new URLSearchParams(split < 0 ? "" : target.hash.slice(split + 1));
+        const direct = query.getAll("folder_self");
+        if (direct.length === 1 && !query.has("folder_subtree") && !query.has("folder")) {
+          if (direct[0]) query.set("path", direct[0]);
+          else query.delete("path");
+          target.hash = route + (query.size ? "?" + query.toString() : "");
+        }
         readerContext.folderNavigationTarget = target;
+      }
     } catch (_) {}
     if (!readerContext.folderNavigationTarget && data?.repo) {
       readerContext.folderNavigationTarget = new URL("/search/", location.origin);
       const query = new URLSearchParams();
-      if (folder) query.set("folder_self", folder);
+      if (folder) {
+        query.set("folder_self", folder);
+        query.set("path", folder);
+      }
       readerContext.folderNavigationTarget.hash =
         "#/" + encodeURIComponent(data.repo) + (query.size ? "?" + query.toString() : "");
     }
@@ -163,6 +178,13 @@ export function createReaderSource(readerContext) {
     readerContext.readerPath.hidden = !value;
     readerContext.readerPath.disabled = !readerContext.folderNavigationTarget;
     readerContext.readerPath.setAttribute("aria-label", `筛选文件夹：${value}`);
+    const panelPath = document.querySelector("#reader-panel-path");
+    if (panelPath) {
+      panelPath.textContent = `所在目录：${value}`;
+      panelPath.hidden = !value || !readerContext.folderNavigationTarget;
+      panelPath.setAttribute("aria-label", `打开所在目录：${value}`);
+      panelPath.title = value;
+    }
   }
 
   function validSource(raw) {
