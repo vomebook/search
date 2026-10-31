@@ -306,6 +306,7 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(params['sort'], 'size')
         self.assertEqual(params['ext'], 'pdf,txt')
         self.assertEqual(params['folder_self'], 'a.b/书')
+        self.assertEqual(params['path'], 'a.b/书')
         self.assertEqual(params['min_size'], '2KB')
         self.assertEqual(params['max_size'], '8KB')
         self.assertEqual(params['search_folders'], 'false')
@@ -313,6 +314,48 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(params['history'], '0')
         self.assertEqual(params['local'], '0')
         self.assertEqual(params['q'], 'current query')
+
+    def test_reader_folder_url_root_and_special_characters_are_unambiguous(self):
+        result = self.page.evaluate('''() => {
+          const decode=record=>Object.fromEntries(new URLSearchParams(new URL(getReaderFolderUrl(record)).hash.split('?')[1] || ''));
+          return {root:decode({Repo:'VoiceOfML/Test',Folder:[]}),
+            special:decode({Repo:'VoiceOfML/Test',Folder:['a%2F &','#书?']})};
+        }''')
+        self.assertNotIn('path', result['root'])
+        self.assertNotIn('folder_self', result['root'])
+        self.assertEqual(result['special']['path'], 'a%2F &/#书?')
+        self.assertEqual(result['special']['folder_self'], result['special']['path'])
+
+    def test_reader_folder_message_positions_sidebar_without_changing_filter_scope(self):
+        for width in (1280, 390):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({'width': width, 'height': 800})
+                result = self.page.evaluate('''async width => {
+                  STATE.isMobile=width<600;applyMobileMode();
+                  STATE.leftSidebarOpen=width>=600;STATE.rightSidebarOpen=false;updateSidebarVisibility();
+                  STATE.query='paging';DOM.searchInput.value='paging';STATE.filterExtensions=['txt'];STATE.sort='size';
+                  STATE.filterMinSize=1024;STATE.filterMaxSize=8192;STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];
+                  getFolderContents=async (_repo,path)=>({folders:[],files:[{name:path || 'root',ext:'txt',size:1}]});
+                  fetchFolderTree=async()=>[];loadSidebarInitial=async()=>null;
+                  const folder='a%2F &/#书?',target=getReaderFolderUrl({Repo:'VoiceOfML/Test',Folder:['a%2F &','#书?']});
+                  navigateToReader('/search/static/reader.html?ext=txt');
+                  const frame=readerOverlay;
+                  handleReaderMessage({origin:location.origin,source:frame.contentWindow,data:{type:'voice-reader-navigate',url:target}});
+                  return {folder,target,reader:!!readerOverlay};
+                }''', width)
+                self.page.wait_for_function('''folder=>STATE.repo==='Test' && STATE.browserPath===folder &&
+                  document.querySelector('.sidebar-breadcrumb .current')?.dataset.path===folder''', arg=result['folder'])
+                self.assertFalse(result['reader'])
+                self.assertEqual(self.page.evaluate('STATE.filterFolderSelfs'), [result['folder']])
+                self.assertEqual(self.page.evaluate('STATE.filterFolderSubtrees'), [])
+                self.assertEqual(self.page.evaluate('[STATE.query,STATE.filterExtensions,STATE.sort,STATE.filterMinSize,STATE.filterMaxSize]'),
+                                 ['paging', ['txt'], 'size', 1024, 8192])
+                self.assertEqual(self.page.evaluate('STATE.leftSidebarOpen'), width >= 600)
+                self.assertEqual(self.page.evaluate('STATE.rightSidebarOpen'), False)
+                if width < 600:
+                    self.page.locator('#hamburger-btn').click()
+                    self.assertTrue(self.page.locator('#left-sidebar').evaluate("n=>n.classList.contains('open')"))
+                    self.assertEqual(self.page.locator('.sidebar-breadcrumb .current').get_attribute('data-path'), result['folder'])
 
     def test_reader_return_captures_cleared_query_before_search_finishes(self):
         result = self.page.evaluate('''() => {

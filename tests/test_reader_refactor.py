@@ -2853,6 +2853,7 @@ class ReaderRefactorTest(unittest.TestCase):
         prefix = base.path[:-len("/static/reader.html")]
         folder = (self.origin + prefix + "/#/Test?folder_self=docs") if prefix else (self.origin + "/Test?folder_self=docs")
         reader += "&" + urllib.parse.urlencode({"folder_url": folder})
+        folder += "&path=docs"
         home = self.origin + (prefix + "/" if prefix else "/")
         host_origin = self.origin.replace("127.0.0.1", "localhost") if cross_origin else self.origin
         self.assertNotEqual(host_origin == self.origin, cross_origin)
@@ -3166,8 +3167,8 @@ class ReaderRefactorTest(unittest.TestCase):
         # With a top-level Reader, the explicit folder URL must win after metadata resolves.
         self.page.route(self.origin + "/search/", lambda route: route.fulfill(content_type="text/html", body="Folder"))
         self.page.locator("#reader-path").click()
-        self.page.wait_for_url(folder)
-        self.assertEqual(self.page.url, folder)
+        self.page.wait_for_url(folder + "&path=explicit")
+        self.assertEqual(self.page.url, folder + "&path=explicit")
 
     def test_chapter_manifest_restores_structured_history_and_bookmark(self):
         source = "https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/" + "a" * 64 + "/1234567890abcdef/chapter-manifest.json"
@@ -3239,7 +3240,79 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(self.origin + "/search/static/reader.html?id=folder-id&ext=txt")
         self.page.route(self.origin + "/search/", lambda route: route.fulfill(content_type="text/html", body="Folder"))
         self.page.locator("#reader-path").click()
-        self.page.wait_for_url(self.origin + "/search/#/Test?folder_self=books%2Fwith+spaces")
+        self.page.wait_for_url(self.origin + "/search/#/Test?folder_self=books%2Fwith+spaces&path=books%2Fwith+spaces")
+
+    def test_folder_navigation_legacy_target_preserves_query_and_encoded_path(self):
+        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/folder.txt"
+        folder_name = "a%2F &/#书?"
+        query = urllib.parse.urlencode({"folder_self": folder_name, "q": "查询", "sort": "size", "sidebar": "0", "path": "stale"})
+        folder = self.origin + "/search/#/Test?" + query
+        self.page.add_init_script("sessionStorage.setItem('reader-resolve:legacy-folder', " + json.dumps(json.dumps({
+            "url": source, "extension": "txt", "title": "Folder", "repo": "Test", "folder": ["different"]
+        })) + ")")
+        self.serve("Folder document")
+        self.page.goto(self.origin + "/search/static/reader.html?" + urllib.parse.urlencode({
+            "id": "legacy-folder", "ext": "txt", "folder_url": folder
+        }))
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.page.route(self.origin + "/search/", lambda route: route.fulfill(content_type="text/html", body="Folder"))
+        self.page.locator("#reader-path").click()
+        self.page.wait_for_url("**/search/#/Test?**")
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.url).fragment.split('?', 1)[1])
+        self.assertEqual(params, {"folder_self": [folder_name], "path": [folder_name],
+                                  "q": ["查询"], "sort": ["size"], "sidebar": ["0"]})
+
+    def test_mobile_folder_action_is_keyboard_reachable_and_navigates(self):
+        self.page.set_viewport_size({'width': 320, 'height': 700})
+        self.page.emulate_media(reduced_motion='reduce')
+        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/folder.txt"
+        self.page.add_init_script("sessionStorage.setItem('reader-resolve:mobile-folder', " + json.dumps(json.dumps({
+            "url": source, "extension": "txt", "repo": "Test", "folder": ["docs", "子"]
+        })) + ")")
+        self.serve("Folder document")
+        self.open(self.origin + "/search/static/reader.html?id=mobile-folder&ext=txt")
+        self.assertTrue(self.page.locator('#reader-path').is_hidden())
+        self.assertEqual(self.page.locator('.reader-toolbar').bounding_box()['height'], 36)
+        self.assertTrue(self.page.locator('#history-panel').evaluate('node=>node.inert'))
+        self.page.locator('#reader-panel-path').evaluate('node=>node.focus()')
+        self.assertNotEqual(self.page.evaluate('document.activeElement.id'), 'reader-panel-path')
+        self.page.locator('#history').press('Enter')
+        action = self.page.get_by_role('button', name='打开所在目录：Test/docs/子', exact=True)
+        action.wait_for(state='visible')
+        action.focus()
+        self.assertNotEqual(action.evaluate('node=>getComputedStyle(node).outlineStyle'), 'none')
+        self.page.keyboard.press('Escape')
+        self.assertEqual(self.page.evaluate('document.activeElement.id'), 'history')
+        self.page.locator('#history').press('Enter')
+        self.page.route(self.origin + '/search/', lambda route: route.fulfill(content_type='text/html', body='Folder'))
+        action.press('Enter')
+        self.page.wait_for_url(self.origin + '/search/#/Test?folder_self=docs%2F%E5%AD%90&path=docs%2F%E5%AD%90')
+
+    def test_reader_root_metadata_navigates_to_repository_root(self):
+        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/root.txt"
+        self.page.add_init_script("sessionStorage.setItem('reader-resolve:root-folder', " + json.dumps(json.dumps({
+            "url": source, "extension": "txt", "repo": "Test", "folder": []
+        })) + ")")
+        self.serve("Root document")
+        self.open(self.origin + "/search/static/reader.html?id=root-folder&ext=txt")
+        self.page.route(self.origin + "/search/", lambda route: route.fulfill(content_type="text/html", body="Folder"))
+        self.page.locator("#reader-path").click()
+        self.page.wait_for_url(self.origin + "/search/#/Test")
+
+    def test_ambiguous_explicit_folder_targets_are_not_rewritten(self):
+        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/mixed.txt"
+        self.page.add_init_script("sessionStorage.setItem('reader-resolve:mixed-folder', " + json.dumps(json.dumps({
+            "url": source, "extension": "txt", "repo": "Test", "folder": ["metadata"]
+        })) + ")")
+        folder = self.origin + "/search/#/Test?folder_self=one&folder_self=two&path=kept"
+        self.serve("Mixed document")
+        self.page.goto(self.origin + "/search/static/reader.html?" + urllib.parse.urlencode({
+            "id": "mixed-folder", "ext": "txt", "folder_url": folder
+        }))
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.page.route(self.origin + "/search/", lambda route: route.fulfill(content_type="text/html", body="Folder"))
+        self.page.locator("#reader-path").click()
+        self.page.wait_for_url(folder)
 
     def test_foliate_cfi_selects_accented_and_inline_ranges_after_repeated_search(self):
         with zipfile.ZipFile(io.BytesIO(support.epub_with_many_chapters())) as archive:

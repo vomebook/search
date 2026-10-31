@@ -358,6 +358,7 @@ export function createReaderBindings(readerContext) {
     readerContext.applyReaderTheme(readerContext.readerTheme, false, false);
 
     readerContext.readerPath.addEventListener("click", readerContext.navigateReaderFolder);
+    document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
     document.querySelector("#back").addEventListener("click", async () => {
       clearTimeout(readerContext.saveTimer);
       await Promise.race([readerContext.saveProgress(), new Promise((resolve) => setTimeout(resolve, 300))]);
