@@ -249,6 +249,35 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.open(self.reader_url('epub-chapters', url=base + 'chapter-manifest.json'))
         return requested, held
 
+    def test_chapter_restore_icon_returns_to_original_chapter_after_progress_seek(self):
+        self.chapter_book()
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.page.emulate_media(reduced_motion='reduce')
+        self.assertTrue(self.page.evaluate('__goChapter(4)'))
+        self.page.wait_for_function('''()=>{
+          const node=document.querySelector('.reader-epub-chapter[data-chapter="4"]');
+          return node && Math.abs(node.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top)<3;
+        }''')
+        if self.page.locator('#history').get_attribute('aria-expanded') != 'true':
+            self.page.locator('#history').click()
+        self.page.wait_for_function("document.querySelector('#history').getAttribute('aria-expanded')==='true'")
+        slider=self.page.get_by_role('slider',name='阅读进度')
+        slider.dispatch_event('pointerdown')
+        slider.fill('80')
+        slider.dispatch_event('pointerup')
+        self.page.wait_for_function('''()=>{
+          const node=document.querySelector('.reader-epub-chapter[data-chapter="49"]');
+          const rect=node?.getBoundingClientRect(),viewport=document.querySelector('#viewport').getBoundingClientRect();
+          return rect && rect.top<=viewport.top+10 && rect.bottom>viewport.top+10;
+        }''')
+        button=self.page.get_by_role('button',name='撤销进度调整',exact=True)
+        button.click()
+        self.page.wait_for_function('''()=>{
+          const node=document.querySelector('.reader-epub-chapter[data-chapter="4"]');
+          return node && Math.abs(node.getBoundingClientRect().top-document.querySelector('#viewport').getBoundingClientRect().top)<3;
+        }''')
+        self.assertTrue(button.is_hidden())
+
     def test_chapter_demand_overtakes_stalled_prefetch_and_close_cancels_queue(self):
         requested, held = self.chapter_book(hold=True)
         self.page.expose_function('__heldCount', lambda: len(held))

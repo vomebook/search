@@ -78,6 +78,25 @@ class PdfFollowupTests(unittest.TestCase):
         self.page.locator('#full-search-input').fill(query)
         self.page.wait_for_function("total=>document.querySelector('#full-search-status').textContent===total+' 个结果'",arg=total)
 
+    def test_pdf_progress_restore_button_returns_to_previous_view(self):
+        self.open()
+        self.page.evaluate('''()=>{
+          const shell=document.querySelector('.reader-page[data-page="3"]'),viewport=document.querySelector('#viewport');
+          viewport.scrollTop+=shell.getBoundingClientRect().top-viewport.getBoundingClientRect().top+10;
+          viewport.dispatchEvent(new Event('scroll'));
+        }''')
+        before=self.page.locator('#viewport').evaluate('node=>node.scrollTop')
+        self.assertGreater(before, 100)
+        if self.page.locator('#history').get_attribute('aria-expanded') != 'true':
+            self.page.locator('#history').click()
+        slider=self.page.get_by_role('slider',name='阅读进度')
+        slider.press('End')
+        self.page.wait_for_function('before=>document.querySelector("#viewport").scrollTop>before+100',arg=before)
+        button=self.page.get_by_role('button',name='撤销进度调整',exact=True)
+        button.click()
+        self.page.wait_for_function('before=>Math.abs(document.querySelector("#viewport").scrollTop-before)<2',arg=before)
+        self.assertTrue(button.is_hidden())
+
     def test_scroll_demand_preempts_a_stalled_offscreen_page(self):
         self.page.add_init_script('window.__holdSecond=true;')
         self.open()
