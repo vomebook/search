@@ -141,7 +141,7 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertTrue(toggle.is_disabled())
 
     def test_landmarks_names_and_skip_preserve_result_position(self):
-        for role, name in [('searchbox', '搜索文件'), ('combobox', '结果排序:')]:
+        for role, name in [('searchbox', '搜索文件'), ('combobox', '排序:')]:
             self.assertEqual(self.page.get_by_role(role, name=name, exact=True).count(), 1)
         self.page.locator('#settings-btn').press('Enter')
         for role, name in [('spinbutton', '最小文件大小'), ('spinbutton', '最大文件大小'),
@@ -154,6 +154,35 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'results-container')
         self.assertEqual(self.page.evaluate('getResultScrollTop()'), before)
         self.assertEqual(self.page.url, url)
+
+    def test_mobile_status_controls_fit_and_sort_remains_accessible(self):
+        self.page.evaluate('''()=>{
+          STATE.isMobile=true;applyMobileMode();STATE.total=120375;
+          STATE.filterExtensions=['txt'];updateStatusBar();
+        }''')
+        selectors = ['#result-count', '#multi-toggle-label', '#clear-filters-btn', '.sort-label', '#sort-select']
+        for width in (360, 375, 390):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({'width': width, 'height': 844})
+                self.assertEqual(self.page.locator('#result-count').inner_text(), '共 120,375 条结果')
+                self.assertEqual(self.page.locator('.sort-label').inner_text(), '排序:')
+                boxes = [self.page.locator(selector).bounding_box() for selector in selectors]
+                self.assertTrue(all(boxes), boxes)
+                centers = [box['y'] + box['height'] / 2 for box in boxes]
+                self.assertLess(max(centers) - min(centers), 2, boxes)
+                for left, right in zip(boxes, boxes[1:]):
+                    self.assertLessEqual(left['x'] + left['width'], right['x'] + 0.5, boxes)
+                self.assertGreaterEqual(boxes[0]['x'], 0)
+                self.assertLessEqual(boxes[-1]['x'] + boxes[-1]['width'], width)
+        # Very narrow screens may wrap naturally, but must not clip controls.
+        self.page.set_viewport_size({'width': 320, 'height': 844})
+        for selector in selectors:
+            box = self.page.locator(selector).bounding_box()
+            self.assertIsNotNone(box, selector)
+            self.assertGreaterEqual(box['x'], 0, selector)
+            self.assertLessEqual(box['x'] + box['width'], 320, selector)
+        self.page.get_by_role('combobox', name='排序:', exact=True).select_option('name')
+        self.assertEqual(self.page.evaluate('STATE.sort'), 'name')
 
     def test_switches_have_real_keyboard_and_visible_focus_in_both_themes(self):
         self.page.locator('#settings-btn').press('Enter')
