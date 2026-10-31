@@ -117,12 +117,16 @@ export function createReaderChapterFormat(readerContext) {
         entry.chapterIndex === chapter.index && !entry.fragment && normalizeTocLabel(entry.label));
       if (!missing.length) return;
       const wanted = new Set(missing.map(entry => normalizeTocLabel(entry.label)));
+      const idCounts = new Map();
+      for (const node of article.querySelectorAll("[id], [name]"))
+        for (const id of new Set([node.id, node.getAttribute("name")]))
+          if (id) idCounts.set(id, (idCounts.get(id) || 0) + 1);
       const targets = new Map();
       for (const link of article.querySelectorAll('a[href^="#chm-page-"]')) {
         const label = normalizeTocLabel(link.textContent);
         if (!wanted.has(label)) continue;
         const fragment = link.getAttribute("href").slice(1);
-        if (!/^chm-page-\d+$/.test(fragment) || !chapterTarget(article, fragment)) continue;
+        if (!/^chm-page-\d+$/.test(fragment) || idCounts.get(fragment) !== 1 || !chapterTarget(article, fragment)) continue;
         if (!targets.has(label)) targets.set(label, new Set());
         targets.get(label).add(fragment);
       }
