@@ -202,6 +202,9 @@ class PdfLoadingTests(unittest.TestCase):
         self.page.route('**/api/reader-content**', serve)
         self.open()
         self.page.locator('.reader-page[data-page="1"][data-text-ready="1"] canvas.ready').wait_for(timeout=30000)
+        # First paint can precede complete page-tree validation. The corrected
+        # count is only authoritative once the reader transitions to ready.
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
         self.assertEqual(self.page.locator('#status').text_content(), '130 页')
         self.assertEqual(self.page.evaluate('window.__actualPdfChunk'), 16384, ranges)
         self.page.locator('#page-number').fill('130')
