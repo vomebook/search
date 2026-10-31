@@ -78,6 +78,28 @@ class PdfLoadingTests(unittest.TestCase):
             self.assertIn(f'Issue 8088 - Page {number}', page.locator('.reader-pdf-text').text_content())
         self.assertEqual(self.errors, [])
 
+    def test_real_pdf_native_text_double_click_and_drag_selection(self):
+        fixture = Path(__file__).parent / 'fixtures/issue8088.pdf'
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='application/pdf', body=fixture.read_bytes()))
+        self.open()
+        shell = self.page.locator('.reader-page[data-page="1"][data-text-ready="1"]')
+        shell.locator('canvas.ready').wait_for()
+        run = shell.locator('.reader-pdf-text-run').filter(has_text='Issue 8088').first
+        run.dblclick()
+        self.page.wait_for_timeout(100)
+        self.assertTrue(self.page.evaluate('getSelection().toString()').strip())
+        self.page.evaluate('getSelection().removeAllRanges()')
+        box = run.bounding_box()
+        y = box['y'] + box['height'] / 2
+        self.page.mouse.move(box['x'] + 2, y)
+        self.page.mouse.down()
+        self.page.mouse.move(box['x'] + box['width'] - 2, y, steps=10)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(100)
+        self.assertIn('Issue 8088', self.page.evaluate('getSelection().toString()'))
+        self.assertEqual(self.errors, [])
+
     def test_sparse_mode_malformed_page_tree_still_uses_real_pdfjs_validation(self):
         # Based on PDF.js issue8088: the first of two child page-tree nodes is
         # empty, so assuming every child is one page silently shifts page IDs.
