@@ -19,8 +19,16 @@ export function createReaderSource(readerContext) {
     return `https://voiceofml-search.hf.space${path}`;
   }
 
+  function readerOriginalFilename(fallback) {
+    // Do not infer a filename from the display title: the indexed stem can
+    // itself end in the same suffix and can contain meaningful spaces/case.
+    const name = readerContext.resolvedReaderData?.filename;
+    return typeof name === "string" && name.trim() && !/[\/\\\x00-\x1f\x7f]/.test(name)
+      ? name : fallback;
+  }
+
   function readerDownloadUrl(filename, link) {
-    return readerContext.readerDownloadApiUrl(`/api/download?file=${encodeURIComponent(filename || "file")}&link=${encodeURIComponent(link || "")}`);
+    return readerContext.readerDownloadApiUrl(`/api/download?file=${encodeURIComponent(readerOriginalFilename(filename || "file"))}&link=${encodeURIComponent(link || "")}`);
   }
 
   async function startReaderDownload(event) {
