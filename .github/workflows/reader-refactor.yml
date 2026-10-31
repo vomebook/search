@@ -177,8 +177,9 @@ jobs:
           node tests/test_reader_request_manager.js
           node tests/test_reader_initial_recovery.js
           node tests/test_reader_pdf_range_transport.mjs
+          node tests/test_reader_pdf_first_page_worker.mjs
           python3 -B -m unittest -v tests.test_reader_timeout
-          python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+          python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
       - name: Check DjVu-only streams and image memory eviction
         working-directory: huggingface-search
         run: |
