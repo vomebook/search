@@ -428,6 +428,10 @@ body {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.reader-progress-undo svg {
+  width: 22px;
+  height: 22px;
+}
 .reader-progress-undo[hidden],
 .reader-chapter-prev[hidden],
 .reader-chapter-next[hidden] {
