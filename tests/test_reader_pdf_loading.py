@@ -61,6 +61,48 @@ class PdfLoadingTests(unittest.TestCase):
         self.assertEqual(len(self.modules), 1)
         self.assertNotIn('reader-module-retry', self.modules[0])
 
+    def test_resolved_original_download_name_keeps_exact_repeated_extension(self):
+        original='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/poster.jpg.jpg'
+        image=b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+        self.page.route('**/api/reader-resolve?id=filename-test',lambda route:route.fulfill(json={
+            'url':original,'download':original,'extension':'jpg','original_extension':'jpg',
+            'title':'poster.jpg','filename':'poster.jpg.jpg'}))
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='image/gif',body=image))
+        self.page.goto(self.origin+'/search/static/reader.html?id=filename-test&ext=jpg',wait_until='domcontentloaded')
+        self.page.locator('.reader-image').wait_for()
+        query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.locator('#download').get_attribute('href')).query)
+        self.assertEqual(query['file'],['poster.jpg.jpg'])
+        self.assertEqual(query['link'],[original])
+
+    def test_malformed_original_filename_metadata_is_not_used_for_download(self):
+        source='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/safe.txt'
+        self.page.route('**/api/reader-resolve?id=filename-invalid',lambda route:route.fulfill(json={
+            'url':source,'download':source,'extension':'txt','original_extension':'txt',
+            'title':'safe','filename':'../unsafe.txt'}))
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/plain',body='safe'))
+        self.page.goto(self.origin+'/search/static/reader.html?id=filename-invalid&ext=txt',wait_until='domcontentloaded')
+        self.page.locator('.reader-text').wait_for()
+        query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.locator('#download').get_attribute('href')).query)
+        self.assertEqual(query['file'],['safe.txt'])
+
+    def test_original_download_name_survives_title_change_and_button_handoff(self):
+        source='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/Sample%20.PDF'
+        checks=[]
+        self.page.route('**/api/reader-resolve?id=filename-click',lambda route:route.fulfill(json={
+            'url':source,'download':source,'extension':'txt','original_extension':'pdf',
+            'title':'Sample ','filename':'Sample .PDF'}))
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/plain',body='safe'))
+        self.page.route('**/api/download/check?**',lambda route:route.fulfill(json={'ok':True}))
+        self.page.route('**/api/download?**',lambda route:(checks.append(route.request.url),route.fulfill(body='file')))
+        self.page.goto(self.origin+'/search/static/reader.html?id=filename-click&ext=txt',wait_until='domcontentloaded')
+        self.page.locator('.reader-text').wait_for()
+        self.page.locator('#download').click()
+        self.page.wait_for_function("()=>document.querySelector('#download-feedback')?.textContent.includes('已发起下载')")
+        self.assertEqual(len(checks),1)
+        query=urllib.parse.parse_qs(urllib.parse.urlsplit(checks[0]).query)
+        self.assertEqual(query['file'],['Sample .PDF'])
+        self.assertEqual(query['link'],[source])
+
     def test_real_pdf_malformed_page_tree_preserves_all_page_numbers_and_text(self):
         fixture = Path(__file__).parent / 'fixtures/issue8088.pdf'
         self.page.route('**/api/reader-content**', lambda route: route.fulfill(
