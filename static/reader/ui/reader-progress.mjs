@@ -20,6 +20,7 @@ export function createReaderProgress(readerContext) {
       !readerContext.documentState.restorationReady ||
       !readerContext.validSource(readerContext.sourceUrl) ||
       readerContext.historySuppressed ||
+      readerContext.pdfDocument?._pdfInfo?.readerPageCountPending ||
       readerContext.mediaElement?._readerSourceRetry
     )
       return;
