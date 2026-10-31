@@ -23,6 +23,8 @@ on:
       - "static/foliate-reader/**"
       - "tests/test_reader_refactor.py"
       - "tests/test_search_accessibility_browser.py"
+      - "tests/test_sidebar_keyboard.py"
+      - "tests/test_paging_recovery.py"
       - "tests/test_position_controls.py"
       - "tests/test_reader_chapter_search.mjs"
       - "tests/test_reader_*.py"
@@ -97,7 +99,7 @@ jobs:
             tests.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll \
             tests.test_reader_toc_navigation.TocNavigationTests.test_merged_chm_missing_toc_anchors_use_unique_in_book_links
       - name: Run search accessibility keyboard gates
-        run: python3 -B -m unittest -v tests.test_search_accessibility_browser
+        run: python3 -B -m unittest -v tests.test_search_accessibility_browser tests.test_sidebar_keyboard
       - name: Check Firefox footer counter geometry
         env:
           SEARCH_POSITION_BROWSER: firefox
@@ -197,7 +199,7 @@ jobs:
             tests.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll
       - name: Run search accessibility keyboard gates
         working-directory: huggingface-search
-        run: python3 -B -m unittest -v tests.test_search_accessibility_browser
+        run: python3 -B -m unittest -v tests.test_search_accessibility_browser tests.test_sidebar_keyboard
       - name: Check Firefox footer counter geometry
         working-directory: huggingface-search
         env:

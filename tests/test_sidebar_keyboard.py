@@ -119,7 +119,95 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(result, dict(
             synced=dict(common,q='phone',repo='Test',min_size='1024',max_size='2097152'),
             navigated=dict(common,min_size='1KB',max_size='2MB'),
-            folder=dict(common,q='phone',min_size='1KB',max_size='2MB',folder_self='docs/中文')))
+            folder=dict(common,q='phone',min_size='1KB',max_size='2MB',path='docs/中文',folder_subtree='docs/中文')))
+
+    def test_result_breadcrumb_opens_subtree_sidebar_and_supports_history(self):
+        # Replace only the local test corpus, not the real search data. Include
+        # direct files, deep descendants, a similarly named sibling and a root.
+        self.page.evaluate('''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
+          history.replaceState(null,'','#/');
+          const data={v:2,rp:['VoiceOfML/Test'],fd:[[],['docs'],['docs','子'],['docs2']],rc:[
+            [0,'root','txt',0,1,0],[0,'direct','txt',1,1,0],
+            [0,'deep','txt',2,1,0],[0,'sibling','txt',3,1,0]]};
+          await corpusWorkerRequest('replace-corpus',{data});STATE.dataLoaded=true;
+          const tree=[{name:'docs',path:'docs',count:2,hasDirectFiles:true,hasChildren:true,children:[
+            {name:'子',path:'docs/子',count:1,hasDirectFiles:true,hasChildren:false,children:[]}]},
+            {name:'docs2',path:'docs2',count:1,hasDirectFiles:true,hasChildren:false,children:[]}];
+          getFolderContents=async (_repo,path)=>({folders:[],files:[{name:(path||'ROOT')+'.txt',ext:'txt',size:1}]});
+          folderTreeCache.set('VoiceOfML/Test',tree);
+          fetchFolderTree=async()=>tree;
+          loadSidebarInitial=async()=>null;
+          apiAvailable=false;STATE.useLocalMode=true;STATE.query='';STATE.filterExtensions=[];
+          STATE.filterMinSize=null;STATE.filterMaxSize=null;STATE.filterRepos=[];
+          STATE.mode='global';STATE.repo=null;STATE.repoFull=null;STATE.browserPath='';
+          STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];STATE.filterFolders=[];
+          window.__breadcrumbClick=(folder)=>{
+            const row=document.createElement('div');row.innerHTML=buildResultHTML({Repo:'VoiceOfML/Test',
+              File:'deep',Extension:'txt',Folder:['docs','子'],Size:1},0);
+            DOM.resultsList.append(row);
+            Array.from(row.querySelectorAll('.path-folder')).find(link=>link.dataset.folder===folder).click();};
+        }''')
+        self.page.evaluate("__breadcrumbClick('docs')")
+        self.page.wait_for_function("""() => STATE.repo==='Test' && STATE.browserPath==='docs' &&
+          STATE.filterFolderSubtrees.join()==='docs' && !STATE.isLoading && STATE.total===2 &&
+          document.querySelector('.sidebar-breadcrumb .current')?.dataset.path==='docs'""", timeout=30000)
+        self.assertEqual(set(self.page.evaluate('STATE.results.map(r=>r.File)')), {'direct','deep'})
+        self.assertEqual(self.page.evaluate('STATE.filterFolderSelfs'), [])
+        self.page.wait_for_function("document.querySelector('#filter-folder-tree [data-path=\"docs\"] input')?.checked")
+        self.assertTrue(self.page.locator('#filter-folder-tree [data-path="docs/子"] input').is_checked())
+        self.page.evaluate("renderBrowser('docs2', routeRenderId)")
+        self.page.wait_for_function("STATE.browserPath==='docs2'")
+        self.page.evaluate("__breadcrumbClick('docs')")
+        self.page.wait_for_function("STATE.browserPath==='docs' && STATE.filterFolderSubtrees.join()==='docs'")
+
+        self.page.evaluate("__breadcrumbClick('docs/子')")
+        self.page.wait_for_function("STATE.browserPath==='docs/子' && STATE.total===1 && !STATE.isLoading")
+        self.assertEqual(self.page.evaluate('STATE.results.map(r=>r.File)'), ['deep'])
+        self.assertEqual(self.page.locator('.sidebar-breadcrumb .current').get_attribute('data-path'), 'docs/子')
+        self.page.go_back(wait_until='domcontentloaded')
+        self.page.wait_for_function("STATE.browserPath==='docs' && STATE.total===2 && !STATE.isLoading")
+        self.page.go_forward(wait_until='domcontentloaded')
+        self.page.wait_for_function("STATE.browserPath==='docs/子' && STATE.total===1 && !STATE.isLoading")
+
+        self.page.evaluate("__breadcrumbClick('')")
+        self.page.wait_for_function("STATE.browserPath==='' && !STATE.filterFolderSubtrees.length && STATE.total===4 && !STATE.isLoading")
+        self.assertEqual(self.page.locator('.sidebar-breadcrumb .current').get_attribute('data-path'), '')
+        self.assertEqual(set(self.page.evaluate('STATE.results.map(r=>r.File)')), {'root','direct','deep','sibling'})
+
+    def test_rapid_result_breadcrumbs_do_not_replace_latest_sidebar(self):
+        result = self.page.evaluate('''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
+          const pending={};STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';
+          STATE.useLocalMode=true;STATE.dataLoaded=true;STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];
+          history.replaceState(null,'','#/Test');
+          getFolderContents=(_repo,path)=>new Promise(resolve=>{pending[path]=resolve});
+          renderFilters=()=>Promise.resolve();searchWithInitialFallback=()=>{};
+          const click=folder=>{const link=document.createElement('span');link.className='path-folder';
+            link.dataset.repo='Test';link.dataset.folder=folder;DOM.resultsList.append(link);link.click();};
+          click('old');await new Promise(resolve=>setTimeout(resolve,0));
+          click('new');await new Promise(resolve=>setTimeout(resolve,0));
+          pending.new({folders:[],files:[{name:'NEW.txt',ext:'txt',size:1}]});
+          await new Promise(resolve=>setTimeout(resolve,0));
+          pending.old({folders:[],files:[{name:'OLD.txt',ext:'txt',size:1}]});
+          await new Promise(resolve=>setTimeout(resolve,0));
+          return {path:STATE.browserPath,selection:STATE.filterFolderSubtrees.slice(),
+            visible:DOM.sidebarContent.textContent.includes('NEW.txt'),stale:DOM.sidebarContent.textContent.includes('OLD.txt')};
+        }''')
+        self.assertEqual(result, dict(path='new',selection=['new'],visible=True,stale=False))
+
+    def test_result_breadcrumb_keyboard_opens_matching_path(self):
+        self.page.evaluate('''() => {
+          STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';STATE.useLocalMode=true;
+          getFolderContents=async()=>({folders:[],files:[]});renderFilters=()=>Promise.resolve();
+          searchWithInitialFallback=()=>{};history.replaceState(null,'','#/Test');
+          DOM.resultsList.innerHTML='<span role="button" tabindex="0" class="path-folder" data-repo="Test" data-folder="docs/子">子</span>';
+        }''')
+        link=self.page.locator('.path-folder[role="button"]')
+        link.focus()
+        self.page.keyboard.press('Enter')
+        self.page.wait_for_function("STATE.browserPath==='docs/子' && STATE.filterFolderSubtrees.join()==='docs/子'")
+        self.assertEqual(self.page.locator('.sidebar-breadcrumb .current').get_attribute('data-path'), 'docs/子')
 
     def test_collapsed_tree_avoids_hidden_dom_and_keeps_selection(self):
         result = self.page.evaluate('''async () => {
