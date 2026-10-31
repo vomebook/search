@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {choosePdfRangeChunkSize, openPdfRangeTask, preparePdfInitialRange, PDF_METADATA_RANGE_CONCURRENCY}
+import {choosePdfRangeChunkSize, isFirstPageCandidate, openPdfRangeTask, preparePdfInitialRange, PDF_METADATA_RANGE_CONCURRENCY}
   from '../static/reader/pdf/reader-pdf-network.mjs';
 
 globalThis.location = {href: 'https://reader.test/'};
@@ -11,6 +11,17 @@ const sparse = Array.from({length: 160}, (_, i) => 4 + i * 6);
 const clustered = Array.from({length: 160}, (_, i) => 5 + i);
 
 assert.equal(choosePdfRangeChunkSize(pageTree(sparse), large), 16384);
+assert.equal(isFirstPageCandidate(pageTree(sparse),large,16384),true);
+assert.equal(isFirstPageCandidate(pageTree(clustered),large,262144),false);
+const splitRoot = bytes('%PDF-1.4\n2 0 obj\n<</Count 499/Kids[3 0 R 11 0 R]/Type/Pages>>\nendobj\n');
+assert.equal(isFirstPageCandidate(splitRoot,large,262144),true);
+assert.equal(isFirstPageCandidate(splitRoot,1024*1024,262144),false);
+assert.equal(isFirstPageCandidate(bytes('%PDF-1.4\n1 0 obj\n<< /Length 5 >>\nstream\n'+new TextDecoder().decode(splitRoot)),large,262144),false);
+assert.equal(isFirstPageCandidate(bytes('%PDF-1.4\n2 0 obj\n<</Count 499 0 R/Kids[3 0 R 11 0 R]/Type/Pages>>\nendobj\n'),large,262144),false);
+assert.equal(isFirstPageCandidate(bytes('%PDF-1.4\n2 0 obj\n<</Count 499/Kids[3 0 R evil 11 0 R]/Type/Pages>>\nendobj\n'),large,262144),false);
+assert.equal(isFirstPageCandidate(bytes('%PDF-1.5\n1 0 obj\n<< /Linearized 1 /L '+large+' >>\nendobj\n'),large,262144),true);
+assert.equal(isFirstPageCandidate(bytes('%PDF-1.5\n1 0 obj\n<< /Linearized 1 /L '+(large+1)+' >>\nendobj\n'+new TextDecoder().decode(splitRoot).slice(9)),large,262144),false);
+assert.equal(isFirstPageCandidate(bytes('%PDF-1.5\n1 0 obj\n<< /Linearized 1 /L '+(large-1)+' >>\nendobj\n'),large,262144),true);
 assert.equal(choosePdfRangeChunkSize(pageTree(clustered), large), 262144);
 assert.equal(choosePdfRangeChunkSize(pageTree(sparse.slice(0, 127)), large), 262144);
 assert.equal(choosePdfRangeChunkSize(pageTree(sparse), 1024 * 1024), 262144);

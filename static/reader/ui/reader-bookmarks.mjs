@@ -371,6 +371,7 @@ export function createReaderBookmarks(readerContext) {
   }
 
   function openBookmarkPopover(invoker = readerContext.bookmarkRibbon, entry = null) {
+    if (!entry && readerContext.pdfDocument?._pdfInfo?.readerPageCountPending) return;
     if (!readerContext.bookmarkPopover.hidden) return;
     readerContext.bookmarkInvoker = invoker;
     readerContext.pendingBookmarkSnapshot = entry ? null : readerContext.captureBookmarkSnapshot();
