@@ -50,6 +50,7 @@ export function makeFirstPageWorkerSource(source) {
     const {`,
     `async readerInstallPageTree(pagesTree, provisional = false) {
     const { catalog, pdfManager } = this;
+    if (provisional && pdfManager.readerValidationCommitted) return;
     this.#pagePromises.clear();
     catalog.pageKidsCountCache.clear();
     catalog.pageIndexCache.clear();
@@ -157,7 +158,6 @@ export function makeFirstPageWorkerSource(source) {
       return pages.map(item => item.ref.toString());
     }
     handler.on("ReaderGetPagePrefix", function ({limit}) {
-      if (readerValidation) return readerPrefix?.map(item => item.ref.toString()) || [];
       const previous = readerPrefixWork;
       readerPrefixWork = (async () => {
         if (previous) await previous;
@@ -276,6 +276,8 @@ export function makeFirstPageWorkerSource(source) {
         // Finish any prefix installation before committing the authoritative map.
         if (readerInstallPrefix) await readerInstallPrefix;
         const pagesTree = await readerCollectPageTree(manager.pdfDocument.catalog);
+        manager.readerValidationCommitted = true;
+        if (readerInstallPrefix) await readerInstallPrefix;
         if (readerPrefix) {
           for (let index = 0; index < readerPrefix.length; index++) {
             const ref = pagesTree.get(index)?.[1];
@@ -294,7 +296,7 @@ export function makeFirstPageWorkerSource(source) {
     let readerInstallPrefix = null;
     handler.on("ReaderInstallPagePrefix", function () {
       if (!readerPrefix) return {refs:[],firstChanged:false};
-      if (readerValidation) return {refs:[],firstChanged:false};
+      if (pdfManager.readerValidationCommitted) return {refs:[],firstChanged:false};
       const previous = readerInstallPrefix;
       const installing = readerPrefix.slice();
       readerInstallPrefix = (async () => {
