@@ -11,7 +11,7 @@ import "/search/static/reader/core/reader-runtime.js";
 import "/search/static/reader/formats/reader-format-adapters.js";
 import "/search/static/reader/core/reader-security.js";
 import { paintTextHit, hitBoxes } from "/search/static/reader/search/reader-book-text.js";
-import { createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange } from "./reader/pdf/reader-pdf-network.mjs";
+import { createPdfFetchPolicy, openPdfRangeTask, preparePdfInitialRange, isFirstPageCandidate } from "./reader/pdf/reader-pdf-network.mjs";
 import { createV3Repository, validateResource, validateReadingManifest, validatePageMap, datasetPrimaryUrl } from "./reader/pdf/reader-v3.mjs";
 import { populateIndependentTextLayer, independentTextCaret } from "./reader/pdf/reader-pdf-text.js";
 let pdfFetchPolicy = null;
@@ -53,6 +53,7 @@ import {
 const readerContext = {
   get openPdfRangeTask() { return openPdfRangeTask; },
   get preparePdfInitialRange() { return preparePdfInitialRange; },
+  get isFirstPageCandidate() { return isFirstPageCandidate; },
   get DISCOURSE_HTML_STYLE() { return DISCOURSE_HTML_STYLE; },
   get DISCOURSE_POST_SELECTOR() { return DISCOURSE_POST_SELECTOR; },
   get DISCOURSE_TITLE_SELECTOR() { return DISCOURSE_TITLE_SELECTOR; },

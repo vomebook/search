@@ -240,6 +240,9 @@ export function createReaderPdfSearch(readerContext) {
     const pdf = readerContext.pdfDocument, groups = [], firstPage = [],
       pattern = new RegExp(readerContext.fullSearchEscape(readerContext.normalizePdfSearchText(query)), "giu");
     if (!pdf) return [];
+    // The preview's PDF.js count is provisional: do not publish or persist a
+    // partial page-one search as if it covered the complete document.
+    if (pdf._pdfInfo?.readerPageCountPending) throw new Error("正在检查文档，请稍后搜索全文");
     const pending = new Map();
     let nextPage = 1;
     const fill = () => {

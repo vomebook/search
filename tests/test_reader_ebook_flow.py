@@ -71,6 +71,33 @@ class EbookFlowTests(unittest.TestCase):
         self.page.evaluate('''()=>{window.__seekDone=false;__ebook.seek(100*8.2/15,__ebook.begin()).then(()=>__seekDone=true);}''')
         self.page.wait_for_function('()=>window.__seekDone',timeout=1500)
 
+    def test_initial_restore_does_not_wait_for_previous_chapter(self):
+        self.page.goto(self.origin+support.PREFIX+'/static/manifest.json')
+        self.page.add_script_tag(url=self.origin+support.PREFIX+'/static/reader/core/reader-store.js')
+        source='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/flow.epub'
+        self.page.evaluate('''async source=>{await VoiceOfMLReaderStore.clearHistory();
+          await VoiceOfMLReaderStore.put({url:source,foliateSection:10,foliateOffset:0,zoom:100});}''',source)
+        def hold_previous(route):
+            response=route.fetch();script=response.text()
+            needle='const source = await readerContext.awaitReader(section.createDocument(), signal);'
+            self.assertIn(needle,script)
+            route.fulfill(response=response,body=script.replace(needle,
+                'if (index === 9) { window.__heldPrevious = true; await new Promise(resolve => { window.__releasePrevious = resolve; }); }\n'+needle))
+        self.page.route('**/static/reader/formats/reader-foliate-format.mjs*',hold_previous)
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='application/epub+zip',body=epub_with_many_chapters(),headers={'Access-Control-Allow-Origin':'*'}))
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(url=source,ext='epub')),wait_until='domcontentloaded')
+        self.page.wait_for_function('()=>!!window.__heldPrevious',timeout=5000)
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=2000)
+        article=self.page.locator('article[data-section="10"]')
+        self.assertTrue(article.is_visible())
+        self.assertIn('章节 10',article.locator('.reader-section-body').inner_text())
+        before=self.page.locator('#viewport').evaluate('node=>node.scrollTop')
+        self.page.evaluate('window.__releasePrevious()')
+        self.page.wait_for_function('''()=>!!document.querySelector('article[data-section="9"]:not(.foliate-section-placeholder)')''',timeout=5000)
+        self.page.wait_for_timeout(150)
+        self.assertLess(abs(article.evaluate('node=>node.getBoundingClientRect().top-document.querySelector("#viewport").getBoundingClientRect().top')),20)
+        self.assertGreaterEqual(self.page.locator('#viewport').evaluate('node=>node.scrollTop'),before)
+
     def test_native_jump_keeps_previous_chapter_reachable_and_position_stable(self):
         self.native()
         self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===14")

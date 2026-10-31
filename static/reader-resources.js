@@ -12,6 +12,11 @@
       file: "pdf.worker.min.mjs",
       sha256: "9536359f1b8367850d485731ca1d5e45c159a7b7a0912325e539937aa21ceb18"
     },
+    pdfWorkerSource: {
+      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/build/pdf.worker.mjs",
+      file: "pdf.worker.mjs",
+      sha256: "07ceb740d746e5d9012fcf9f27d5c7dea09f7d2f5e74f5c8109e5787551a2333"
+    },
     marked: {
       url: "https://cdn.jsdelivr.net/npm/marked@18.1.0/lib/marked.umd.js",
       file: "marked.min.js",
@@ -97,6 +102,7 @@
   ]);
   const readerFiles = Object.freeze([
     "reader-resources.js",
+    "reader/pdf/pdf-first-page-worker-adapter.mjs",
     "reader/pdf/pdf-worker-wrapper.mjs",
     "reader/pdf/reader-engine-preload.js",
     "reader/search/workers/reader-chapter-search-worker.mjs",
@@ -147,6 +153,7 @@
     "reader/search/reader-chapter-search.mjs",
     "reader/search/workers/reader-pdf-book-search-worker.mjs",
     "reader/search/reader-pdf-book-search.mjs",
+    "reader/pdf/pdf-first-page-worker-adapter.mjs",
     "reader/pdf/pdf-worker-wrapper.mjs"
   ]);
   const vendorUrl = (name, base) => base + vendors[name].path;

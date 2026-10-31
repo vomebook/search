@@ -24,7 +24,15 @@ const pendingMessages = [];
 const bufferMessage = event => pendingMessages.push(event);
 self.addEventListener("message", bufferMessage);
 
-import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "../../")).then(() => {
+const staged = new URL(self.location.href).searchParams.get("reader-first-page") === "1";
+const opening = staged
+  ? import("./pdf-first-page-worker-adapter.mjs").then(adapter =>
+      adapter.installFirstPageWorker(VoiceOfMLReaderResources.vendorUrl("pdfWorkerSource", "../../"),
+        VoiceOfMLReaderResources.vendors.pdfWorkerSource.sha256)
+    ).then(handler => { globalThis.pdfjsWorker = {WorkerMessageHandler:handler}; })
+      .catch(() => import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "../../")))
+  : import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "../../"));
+opening.then(() => {
   self.removeEventListener("message", bufferMessage);
   for (const event of pendingMessages) self.dispatchEvent(new MessageEvent("message", { data: event.data }));
-});
+}).catch(error => { setTimeout(() => { throw error; }); });

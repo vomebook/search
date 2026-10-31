@@ -617,8 +617,14 @@ export function createReaderFoliateFormat(readerContext) {
     readerContext.initialReaderTargetSection = readerContext.readerRestorationEntry?.foliateSection == null ? null : initialSection;
     readerContext.setupFoliateWindow(stream, sections);
     if (sections[initialSection]) await readerContext.foliateChapterRepository.load(initialSection);
-    if (initialSection > 0) await readerContext.foliateChapterRepository.load(initialSection - 1);
     readerContext.assertReaderActive();
+    readerContext.markReaderContentReady();
+    // Restoration targets the selected section; an unrelated slow previous
+    // section is loaded in the background and remains retryable.
+    if (initialSection > 0) readerContext.foliateChapterRepository.load(initialSection - 1).catch(error => {
+      if (!readerContext.readerAbortController.signal.aborted)
+        console.warn("Previous EPUB chapter could not be loaded", error);
+    });
     // Resolving every TOC href can be expensive for large books. The first
     // chapter is already visible, so finish the opening path before enriching
     // the navigation panel in the background.
