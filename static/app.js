@@ -4950,6 +4950,12 @@ function announceSearchStatus(message, resultKey = '') {
 
 function updateStatusBar() {
   DOM.resultsContainer?.setAttribute('aria-busy', String(STATE.isLoading));
+  // Once an empty search has settled there is no visible multi-select toggle.
+  // Exit the mode as well, so its action bar and selection cannot linger.
+  if (!STATE.isLoading && STATE._loadedPage > 0 && STATE.total === 0 && DOM.multiSelectToggle?.checked) {
+    DOM.multiSelectToggle.checked = false;
+    updateSelectionUI();
+  }
   if (DOM.announcement && !STATE.isLoading && STATE._loadedPage > 0) {
     const key = STATE.query + '\0' + STATE.total;
     if (DOM.announcement.dataset.resultKey !== key)
