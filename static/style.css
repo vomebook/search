@@ -1976,6 +1976,7 @@ body.theme-transitioning .footer {
 
 body.mobile .multi-action-btn {
   flex-shrink: 0;
+  padding-inline: 4px;
 }
 
 .result-checkbox {
