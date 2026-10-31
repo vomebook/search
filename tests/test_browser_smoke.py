@@ -134,6 +134,34 @@ class BrowserBehaviorTest(unittest.TestCase):
                 self.assertIn('data-action="read"', rendered["html"], extension)
                 self.assertIn("在线阅读", rendered["html"], extension)
 
+    def test_aac_filter_count_and_converted_audio_action_preserve_original(self):
+        self.load()
+        self.page.wait_for_function("STATE.dataLoaded === true", timeout=30000)
+        self.page.locator('#settings-btn').click()
+        aac = self.page.locator('#filter-ext-list input[value="aac"]')
+        aac.wait_for(state='attached')
+        self.assertEqual(int(aac.locator('..').locator('.checkbox-count').inner_text().replace(',', '')),
+                         self.page.evaluate('extensionCounts.aac'))
+        self.assertEqual(self.page.locator('#filter-ext-list .ext-other-children input[value="aac"]').count(), 0)
+        aac.check()
+        self.page.wait_for_function("STATE.filterExtensions.includes('aac') && !filterSearchTimer && !STATE.isLoading")
+        self.assertEqual(self.page.evaluate("STATE.filterExtensions"), ['aac'])
+        result = self.page.evaluate('''() => {
+          const repo='VoiceOfML/MLMRL-Hub';
+          const record={Repo:repo,File:'sample',Extension:'aac',Folder:['music'],Size:100};
+          const path=buildRecordRelativePath(record),source=buildRecordLink(record),hash='a'.repeat(64);
+          readerAssets = {[repo+'\\0'+path]:{s:2,m:'a',b:'vomebook/reader-assets-v2',p:`media/audio/aac/${hash}/audio.mp3`}};
+          const converted=applyReaderAsset(record,repo,path,source);
+          return {source,download:converted.DownloadLink,readerLink:converted.ReaderLink,
+            mode:converted.ReaderExtension,icon:getFileIconType('aac'),html:buildResultHTML(record,0)};
+        }''')
+        self.assertEqual(result['icon'], 'audio')
+        self.assertEqual(result['mode'], 'audio')
+        self.assertEqual(result['download'], result['source'])
+        self.assertIn('media%2Faudio%2Faac%2F', result['readerLink'])
+        self.assertIn('在线播放', result['html'])
+        self.assertEqual(self.page_errors, [])
+
     def test_system_back_exits_reader_in_one_step_with_panel_or_search_open(self):
         # Like the Back button, one system back leaves the Reader. It must not
         # re-push a history entry (Chromium would mark the search page skippable).
