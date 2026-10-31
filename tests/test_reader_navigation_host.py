@@ -93,6 +93,23 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertIsNotNone(result['expected'])
         self.assertEqual(result['captured'], result['expected'])
 
+    def test_directory_preserves_repeated_filename_extension_for_read_and_download(self):
+        result = self.page.evaluate('''() => {
+          const repo='VoiceOfML/Test', folder='目录', files=[
+            {name:'poster.jpg',ext:'jpg',size:1}, {name:'normal',ext:'jpg',size:1},
+            {name:'book.PDF',ext:'pdf',size:1}, {name:'README',ext:'',size:1}];
+          const list=document.createElement('div');list.className='browser-list';DOM.sidebarContent.append(list);
+          renderBrowserListItems(list,{folders:[],files},repo,folder);
+          return [...list.querySelectorAll('.browser-item')].map(row=>({filename:row.dataset.filename,
+            link:decodeURIComponent(new URL(row.dataset.link).pathname),
+            reader:row.dataset.readerUrl ? new URL(row.dataset.readerUrl,location.href).searchParams.get('id') : null}));
+        }''')
+        self.assertEqual([row['filename'] for row in result],
+                         ['poster.jpg.jpg','normal.jpg','book.PDF.pdf','README'])
+        for row in result:
+            self.assertTrue(row['link'].endswith('/目录/'+row['filename']))
+        self.assertTrue(result[0]['reader'])
+
     def test_explicit_close_ignores_late_panel_state_before_history_pop(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()

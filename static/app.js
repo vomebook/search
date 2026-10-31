@@ -836,7 +836,8 @@ function getBrowserFileName(file) {
   var name = file && file.name ? String(file.name) : "file";
   var ext = file && file.ext ? String(file.ext) : "";
   if (!ext) return name;
-  if (name.toLowerCase().endsWith("." + ext.toLowerCase())) return name;
+  // Directory entries carry File and Extension separately. File may itself
+  // end in the same suffix (e.g. "poster.jpg" + "jpg" => "poster.jpg.jpg").
   return name + "." + ext;
 }
 
