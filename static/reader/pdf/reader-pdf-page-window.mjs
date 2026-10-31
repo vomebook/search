@@ -624,6 +624,103 @@ export function createReaderPdfPageWindow(readerContext) {
   async function renderPdf(prepared) {
     const pdf = await prepared;
     readerContext.assertReaderActive();
+    let previewShell = null;
+    if (pdf._pdfInfo?.readerPageCountPending === true) {
+      // Until validation succeeds neither navigation nor history receives an
+      // untrusted count. The preview uses the original page and renderer.
+      const navigation = readerContext.readerRuntime.currentGeneration("navigation");
+      const saved = readerContext.readerRestorationPromise
+        ? await readerContext.awaitReader(readerContext.readerRestorationPromise) : null;
+      const lifetime = new AbortController();
+      const untrackPreview = readerContext.trackReaderResource(() => {
+        lifetime.abort(readerContext.readerAbortError());
+        previewShell?._renderCancel?.();
+        previewShell?.remove();
+      });
+      let controls = null, controlsHidden = false, previousDisabled = false;
+      let bookmarkDisabled = false;
+      let verifiedCount = null;
+      let previewWidth = null, previewZoom = null;
+      let provisionalDocument = false;
+      try {
+        if (!readerContext.restorationFailed && !saved && !readerContext.ocrManifestUrl &&
+            !readerContext.pdfV3Map && !pdf.isPureXfa &&
+            navigation === readerContext.readerRuntime.currentGeneration("navigation")) {
+          const page = await readerContext.awaitReader(pdf.getPage(1), lifetime.signal);
+          const base = page.getViewport({scale:1});
+          previewShell = document.createElement("section");
+          previewShell.className = "reader-page reader-pdf-opening";
+          previewShell.dataset.page = "1";
+          previewShell.style.aspectRatio = `${base.width} / ${base.height}`;
+          previewShell.setAttribute("role", "region");
+          previewShell.setAttribute("aria-label", "第 1 页，正在检查文档");
+          const text = document.createElement("div");
+          text.className = "reader-pdf-text";
+          text.setAttribute("role", "document");
+          text.setAttribute("aria-label", "第 1 页正文");
+          previewShell.append(text);
+          readerContext.content.appendChild(previewShell);
+          previousDisabled = readerContext.pageInput.disabled;
+          readerContext.pageInput.disabled = true;
+          bookmarkDisabled = readerContext.bookmarkRibbon.disabled;
+          readerContext.bookmarkRibbon.disabled = true;
+          readerContext.status.textContent = "正在检查文档";
+          document.querySelector("#page-total").textContent = "";
+          controls = document.querySelector(".page-controls");
+          controlsHidden = controls.hidden;
+          controls.hidden = true;
+          readerContext.pdfDocument = pdf;
+          provisionalDocument = true;
+          const pdfGeneration = readerContext.readerRuntime.currentGeneration("pdf");
+          await readerContext.renderPdfShell(previewShell, false, true);
+          readerContext.assertReaderActive();
+          previewShell.dataset.previewReady = "1";
+          previewShell.dataset.previewPdfGeneration = String(pdfGeneration);
+          previewWidth = previewShell.clientWidth;
+          previewZoom = readerContext.documentState.zoom;
+          readerContext.markReaderContentReady();
+          // Let the browser paint before validation competes for network/CPU.
+          await Promise.race([readerContext.waitForReader(0, true), readerContext.waitForReader(100)]);
+        }
+        const timed = Promise.withResolvers();
+        const timer = setTimeout(() => timed.reject(Object.assign(new Error("PDF 检查超时，请重试加载。"),
+          {code:"READER_PDF_TRANSPORT"})), readerContext.READER_PROXY_TIMEOUT_MS);
+        try {
+          const verified = await readerContext.awaitReader(Promise.race([
+            pdf._transport.messageHandler.sendWithPromise("ReaderValidatePageCount", null), timed.promise
+          ]), lifetime.signal);
+          if (!Number.isSafeInteger(verified?.count) || verified.count < 1 ||
+              verified.count > VoiceOfMLReaderSecurity.LIMITS.pdfPages) throw new Error("PDF 页数验证失败");
+          verifiedCount = verified.count;
+        } finally { clearTimeout(timer); }
+      } catch (error) {
+        if (provisionalDocument && readerContext.pdfDocument === pdf) readerContext.pdfDocument = null;
+        previewShell?.remove();
+        throw error;
+      } finally {
+        untrackPreview();
+        if (!lifetime.signal.aborted && controls) {
+          controls.hidden = controlsHidden;
+          readerContext.pageInput.disabled = previousDisabled;
+          readerContext.bookmarkRibbon.disabled = bookmarkDisabled;
+        }
+      }
+      readerContext.assertReaderActive();
+      pdf._pdfInfo.numPages = verifiedCount;
+      pdf._transport.pagesMapper.pagesNumber = verifiedCount;
+      delete pdf._pdfInfo.readerPageCountPending;
+      if (previewShell) {
+        if (String(readerContext.readerRuntime.currentGeneration("pdf")) !== previewShell.dataset.previewPdfGeneration ||
+            previewWidth !== previewShell.clientWidth || previewZoom !== readerContext.documentState.zoom)
+          delete previewShell.dataset.renderState;
+        previewShell.classList.remove("reader-pdf-opening");
+        previewShell.setAttribute("aria-label", "第 1 页");
+        delete previewShell.dataset.previewReady;
+        delete previewShell.dataset.previewPdfGeneration;
+        previewShell.tabIndex = 0;
+        previewShell.addEventListener("focus", () => readerContext.renderPdfInBackground(previewShell));
+      }
+    }
     readerContext.pdfDocument = pdf;
     readerContext.updateDocumentState({ pageCount: pdf.numPages });
     if (pdf.sourceSha256 && readerContext.ocrManifestUrl) {
@@ -725,8 +822,9 @@ export function createReaderPdfPageWindow(readerContext) {
       observeShell(shell);
       return shell;
     };
-    const firstShell = createShell(1);
-    readerContext.content.appendChild(firstShell);
+    const firstShell = previewShell || createShell(1);
+    if (!previewShell) readerContext.content.appendChild(firstShell);
+    else observeShell(firstShell);
     readerContext.pdfShellWindow = readerContext.createPdfShellWindow(pdf.numPages, firstShell, createShell, (shell) => {
       observer.unobserve(shell);
       visibleObserver.unobserve(shell);
@@ -739,10 +837,10 @@ export function createReaderPdfPageWindow(readerContext) {
         : (await readerContext.pdfShellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
       if (!targetShell) throw new Error("PDF initial page shell missing");
       readerContext.markReaderContentReady();
-      readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
+      if (!previewShell) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       await readerContext.renderPdfShell(targetShell, false, true);
       readerContext.markReaderContentReady();
-      readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
+      if (!previewShell) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
     } finally {
       releaseInitialRenderGate();
     }

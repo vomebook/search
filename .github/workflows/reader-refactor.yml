@@ -62,7 +62,8 @@ jobs:
           node-version: "26.11.1"
       - name: Install test dependencies
         run: |
-          python -m pip install playwright==1.63.0 Pillow==12.3.0
+          python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.14.2
+          sudo apt-get update && sudo apt-get install -y qpdf
           python -m playwright install --with-deps chromium firefox
           node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
           node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
@@ -76,7 +77,12 @@ jobs:
         run: |
           node tests/test_reader_request_manager.js
           node tests/test_reader_pdf_sparse_ranges.mjs
-          python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+          node tests/test_reader_pdf_first_page_worker.mjs
+          python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+      - name: Check staged PDF opening in Firefox
+        env:
+          READER_TEST_BROWSER: firefox
+        run: python3 -B -m unittest -v tests.test_reader_pdf_first_page
       - name: Check DjVu-only streams and image memory eviction
         run: |
           node tests/test_reader_djvu_only.mjs
