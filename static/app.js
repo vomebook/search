@@ -287,7 +287,10 @@ function getReaderFolderUrl(rec) {
   if (!repo) return "";
   var folder = Array.isArray(rec.Folder) ? rec.Folder.join("/") : "";
   var sp = currentReaderSearchParams();
-  if (folder) sp.append("folder_self", folder);
+  if (folder) {
+    sp.append("folder_self", folder);
+    sp.set("path", folder);
+  }
   var target = new URL("/search/", location.origin);
   target.hash = "#/" + repo + (sp.toString() ? "?" + sp.toString() : "");
   return target.href;
