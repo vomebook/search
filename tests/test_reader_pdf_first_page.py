@@ -247,7 +247,12 @@ class PdfFirstPageTests(unittest.TestCase):
             context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
             page=context.new_page();self.open(page,source)
             page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=15000)
-            page.wait_for_timeout(300)
+            deadline=time.monotonic()+5
+            while time.monotonic()<deadline:
+                with lock:
+                    active=state['active']
+                if active>1:break
+                page.wait_for_timeout(50)
             with lock:
                 self.assertLess(len(state["requests"]), 15)
                 self.assertGreater(state["active"],1)
@@ -342,7 +347,8 @@ class PdfFirstPageTests(unittest.TestCase):
             page.route('**/static/reader/pdf/reader-pdf-renderer.mjs*',delay)
             self.open(page,source)
             page.wait_for_function("()=>document.querySelector('#page-number')?.hidden",timeout=15000)
-            page.locator('#page-next').click();state['block'].set()
+            page.locator('#page-next').click()
+            state['block'].set()
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
             page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
             self.assertEqual(page.locator('#page-number').input_value(),'2')
@@ -560,6 +566,28 @@ class PdfFirstPageTests(unittest.TestCase):
             page=context.new_page();self.open(page,source)
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='failed'",timeout=30000)
             self.assertNotEqual(page.locator('#page-number').get_attribute('max'),'130')
+
+    def test_slow_page_prefix_can_open_while_validation_runs(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            def delay(route):
+                script=route.fetch().text()
+                needle='pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:2})'
+                self.assertIn(needle,script)
+                script=script.replace(needle,'new Promise(resolve=>setTimeout(resolve,900)).then(()=>'+needle+')')
+                route.fulfill(content_type='text/javascript',body=script)
+            page.route('**/static/reader/pdf/reader-pdf-page-window.mjs*',delay)
+            self.open(page,source)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden",timeout=15000)
+            page.locator('#page-next').click()
+            page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').input_value(),'2')
 
     def test_understated_nested_tree_deep_history_rebuilds_order(self):
         if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')

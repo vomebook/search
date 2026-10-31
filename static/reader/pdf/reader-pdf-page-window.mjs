@@ -650,6 +650,8 @@ export function createReaderPdfPageWindow(readerContext) {
       let previewActive = true, previewCount = 1, previewPage = 1;
       let prefixTask = null, previewRefs = null;
       let warmTask = null, cancelWarm = null;
+      let startValidation = null;
+      let validationTimer = 0;
       let removePreviewControls = () => {};
       let disconnectPreviewObserver = () => {};
       let releasePrefixTimeout = () => {};
@@ -711,17 +713,17 @@ export function createReaderPdfPageWindow(readerContext) {
           // The reader stays on the original PDF. Its bounded prefix is ordered
           // by a left-to-right page-tree walk, never by unverified /Count.
           const prefixDeadline = Promise.withResolvers();
-          const prefixTimer = setTimeout(() => prefixDeadline.resolve(null), 1500);
+          const prefixTimer = setTimeout(() => prefixDeadline.resolve(null), 5000);
           releasePrefixTimeout = () => { clearTimeout(prefixTimer); prefixDeadline.resolve(null); };
           const prefix = Promise.race([
             pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:2}), prefixDeadline.promise
           ]).finally(() => clearTimeout(prefixTimer));
           prefixTask = prefix.then(async refs => {
-            if (!previewActive || !Array.isArray(refs) || refs.length < 2 || refs.length > 4) return;
+            if (!previewActive || !Array.isArray(refs) || refs.length < 2 || refs.length > 4) { startValidation?.(); return; }
             const installed = await readerContext.awaitReader(
               pdf._transport.messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
             if (!previewActive || installed?.refs?.length !== refs.length ||
-                installed.refs.some((ref, index) => ref !== refs[index])) return;
+                installed.refs.some((ref, index) => ref !== refs[index])) { startValidation?.(); return; }
             previewRefs = refs;
             const count = refs.length;
             previewCount = count;
@@ -860,30 +862,31 @@ export function createReaderPdfPageWindow(readerContext) {
               if (previousLabel === null) previous.removeAttribute("aria-label"); else previous.setAttribute("aria-label", previousLabel);
               if (nextLabel === null) next.removeAttribute("aria-label"); else next.setAttribute("aria-label", nextLabel);
             };
-            // Once page two is interactive, discover up to two more prefix
-            // pages without delaying background validation or page-two paint.
-            pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:4}).then(async more => {
-              if (!previewActive || more.length <= previewCount || more.length > 4) return;
-              const expanded = await readerContext.awaitReader(
-                pdf._transport.messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
-              if (!previewActive || expanded?.refs?.length !== more.length ||
-                  expanded.refs.some((ref,index) => ref !== more[index])) return;
-              previewRefs = more;
-              previewCount = more.length;
-              pdf._transport.pagesMapper.pagesNumber = more.length;
-              ensureSequentialShells();
-            }).catch(() => {});
-          }).catch(() => {});
+            startValidation?.();
+          }).catch(() => { startValidation?.(); });
         }
         const timed = Promise.withResolvers();
         const timer = setTimeout(() => timed.reject(Object.assign(new Error("PDF 检查超时，请重试加载。"),
           {code:"READER_PDF_TRANSPORT"})), readerContext.READER_PROXY_TIMEOUT_MS);
         try {
-          if (prefixTask) await readerContext.awaitReader(Promise.race([prefixTask, timed.promise]), lifetime.signal);
+          let validation = null;
+          const validationStarted = Promise.withResolvers();
+          startValidation = () => {
+            if (!validation) {
+              validation = pdf._transport.messageHandler.sendWithPromise("ReaderValidatePageCount", null);
+              validationStarted.resolve(validation);
+            }
+            return validation;
+          };
+          if (prefixTask) validationTimer = setTimeout(() => startValidation(),350);
+          else startValidation();
           const verified = await readerContext.awaitReader(Promise.race([
-            pdf._transport.messageHandler.sendWithPromise("ReaderValidatePageCount", null), timed.promise
+            validationStarted.promise, timed.promise
           ]), lifetime.signal);
           previewActive = false;
+          // A prefix install sent just before validation completed must settle
+          // before the verified count/pagesMapper are exposed to the Reader.
+          if (prefixTask) await Promise.race([prefixTask, readerContext.waitForReader(1000)]);
           if (!Number.isSafeInteger(verified?.count) || verified.count < 1 ||
               verified.count > VoiceOfMLReaderSecurity.LIMITS.pdfPages) throw new Error("PDF 页数验证失败");
           verifiedCount = verified.count;
@@ -898,6 +901,7 @@ export function createReaderPdfPageWindow(readerContext) {
         throw error;
       } finally {
         previewActive = false;
+        clearTimeout(validationTimer);
         releasePrefixTimeout();
         cancelWarm?.();
         cleanupControls();
