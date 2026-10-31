@@ -184,6 +184,60 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.page.get_by_role('combobox', name='排序:', exact=True).select_option('name')
         self.assertEqual(self.page.evaluate('STATE.sort'), 'name')
 
+    def test_mobile_multiselect_zero_results_resets_and_future_search_is_normal(self):
+        self.page.set_viewport_size({'width': 375, 'height': 667})
+        self.page.evaluate('STATE.isMobile=true;applyMobileMode()')
+        self.page.locator('#multi-select-toggle').check()
+        self.page.locator('.result-checkbox').first.check()
+        self.assertEqual(self.page.evaluate('Object.keys(selectedIndices).length'), 1)
+
+        # A temporary zero total during loading must not end multi-select.
+        self.page.evaluate('STATE.isLoading=true;STATE.total=0;updateStatusBar()')
+        self.assertTrue(self.page.locator('#multi-select-toggle').is_checked())
+        self.page.evaluate('''()=>{
+          STATE.isLoading=false;STATE.total=301;updateStatusBar();
+          window.pagingTotal=0;STATE.query='paging-empty';doSearch(false, true);
+        }''')
+        self.page.wait_for_function('!STATE.isLoading && STATE.total===0 && STATE._loadedPage===1')
+        self.assertTrue(self.page.locator('#multi-toggle-label').is_hidden())
+        self.assertFalse(self.page.locator('#multi-select-toggle').is_checked())
+        self.assertTrue(self.page.locator('#multi-action-bar').is_hidden())
+        self.assertTrue(self.page.locator('#mobile-selected-count').is_hidden())
+        self.assertFalse(self.page.evaluate('document.body.classList.contains("multiselect")'))
+        self.assertEqual(self.page.evaluate('Object.keys(selectedIndices).length'), 0)
+
+        self.page.evaluate("window.pagingTotal=301;STATE.query='paging-again';doSearch(false, true)")
+        self.page.wait_for_function('!STATE.isLoading && STATE.total===301 && STATE._loadedPage===1')
+        self.assertTrue(self.page.locator('#multi-toggle-label').is_visible())
+        self.assertFalse(self.page.locator('#multi-select-toggle').is_checked())
+        self.assertTrue(self.page.locator('#multi-action-bar').is_hidden())
+        self.assertTrue(self.page.locator('.result-checkbox').first.is_hidden())
+
+    def test_mobile_select_all_labels_and_selects_only_loaded_results(self):
+        self.page.set_viewport_size({'width': 320, 'height': 700})
+        self.page.evaluate('STATE.isMobile=true;applyMobileMode()')
+        self.page.locator('#multi-select-toggle').check()
+        button = self.page.get_by_role('button', name='全选或取消全选已加载的结果', exact=True)
+        self.assertEqual(button.inner_text(), '全选已加载')
+        bar = self.page.locator('#multi-action-bar')
+        buttons = bar.locator('button').all()
+        boxes = [item.bounding_box() for item in buttons]
+        self.assertTrue(all(boxes), boxes)
+        for left, right in zip(boxes, boxes[1:]):
+            self.assertLessEqual(left['x'] + left['width'], right['x'] + 0.5, boxes)
+        self.assertLessEqual(boxes[-1]['x'] + boxes[-1]['width'], 320)
+        self.assertEqual(bar.evaluate('node=>node.scrollWidth'), bar.evaluate('node=>node.clientWidth'))
+        button.click()
+        self.assertEqual(self.page.evaluate('[STATE.total, STATE.results.filter(Boolean).length, Object.keys(selectedIndices).length]'), [301, 100, 100])
+        self.assertEqual(self.page.locator('#mobile-selected-count').inner_text(), '已选100')
+        self.page.evaluate("window.pagingMode='normal';maybeLoadNextPage(false, true);releaseStalePage()")
+        self.page.wait_for_function('STATE._loadedPage===2 && !STATE.isLoading')
+        self.assertEqual(self.page.evaluate('[STATE.results.filter(Boolean).length, Object.keys(selectedIndices).length]'), [200, 100])
+        button.click()
+        self.assertEqual(self.page.evaluate('Object.keys(selectedIndices).length'), 200)
+        button.click()
+        self.assertEqual(self.page.evaluate('Object.keys(selectedIndices).length'), 0)
+
     def test_switches_have_real_keyboard_and_visible_focus_in_both_themes(self):
         self.page.locator('#settings-btn').press('Enter')
         # The exact-search switch is visible and focusable in both backends. If

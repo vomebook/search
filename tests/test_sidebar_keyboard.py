@@ -236,20 +236,27 @@ class SidebarKeyboardTests(unittest.TestCase):
                                       excluded=True, final=1001, siblings=True))
 
     def test_tree_rerender_has_one_delegated_action_and_respects_nested_collapse(self):
-        result = self.page.evaluate('''() => {
+        result = self.page.evaluate('''async () => {
           STATE.folderTree=[{name:'a',path:'a',count:3,selfCount:1,showSelfToggle:true,children:[
             {name:'b',path:'a/b',count:2,selfCount:1,children:[{name:'c',path:'a/b/c',count:1,selfCount:1,children:[]}]}]}];
           STATE.folderTreeCollapsed={'a':false,'a/b':true};
           STATE.filterFolderSubtrees=[];STATE.filterFolderSelfs=[];STATE.filterFolders=[];
-          renderFilterFolderTree();renderFilterFolderTree();
+          // Force the first batch beyond its time budget, as can happen on a
+          // busy runner, to exercise the asynchronous continuation explicitly.
+          const append=appendFilterTreeNode;let deferred;
+          appendFilterTreeNode=(...args)=>{append(...args);const end=performance.now()+6;while(performance.now()<end) {}};
+          try {renderFilterFolderTree();renderFilterFolderTree();deferred=folderTreeRenderQueue.length>0;}
+          finally {appendFilterTreeNode=append;}
+          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,0));
           const rows=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           DOM.filterFolderTree.querySelector('.folder-self-toggle').click();
           const selected=STATE.filterFolderSelfs.includes('a');
           DOM.filterFolderTree.querySelector('[data-path="a/b"] .tree-toggle').click();
-          return {rows,selected,final:DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length,
+          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,0));
+          return {deferred,rows,selected,final:DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length,
             childChecked:DOM.filterFolderTree.querySelector('[data-path="a/b/c"] input').checked};
         }''')
-        self.assertEqual(result, dict(rows=2, selected=True, final=3, childChecked=False))
+        self.assertEqual(result, dict(deferred=True, rows=2, selected=True, final=3, childChecked=False))
 
     def test_batched_expansion_cancels_and_refreshes_selection_for_late_rows(self):
         result=self.page.evaluate('''async () => {
