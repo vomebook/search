@@ -624,28 +624,55 @@ export function createReaderPdfPageWindow(readerContext) {
   async function renderPdf(prepared) {
     const pdf = await prepared;
     readerContext.assertReaderActive();
-    let previewShell = null;
+    let previewShell = null, previewAnchor = null;
+    let previewNavigationChanged = false;
+    const previewPages = new Map();
     if (pdf._pdfInfo?.readerPageCountPending === true) {
       // Until validation succeeds neither navigation nor history receives an
       // untrusted count. The preview uses the original page and renderer.
       const navigation = readerContext.readerRuntime.currentGeneration("navigation");
       const saved = readerContext.readerRestorationPromise
         ? await readerContext.awaitReader(readerContext.readerRestorationPromise) : null;
+      const savedPage = Number(saved?.page);
+      const canPreview = !saved || (savedPage === 1 && Number(saved?.pageOffset || 0) === 0 && !saved?.id);
       const lifetime = new AbortController();
+      let preservePreview = false;
       const untrackPreview = readerContext.trackReaderResource(() => {
         lifetime.abort(readerContext.readerAbortError());
-        previewShell?._renderCancel?.();
-        previewShell?.remove();
+        if (preservePreview) return;
+        for (const shell of previewPages.values()) { shell._renderCancel?.(); shell.remove(); }
       });
-      let controls = null, controlsHidden = false, previousDisabled = false;
+      let controls = null, previousDisabled = false;
       let bookmarkDisabled = false;
       let verifiedCount = null;
       let previewWidth = null, previewZoom = null;
       let provisionalDocument = false;
+      let previewActive = true, previewCount = 1, previewPage = 1;
+      let prefixTask = null, previewRefs = null;
+      let warmTask = null, cancelWarm = null;
+      let removePreviewControls = () => {};
+      let disconnectPreviewObserver = () => {};
+      let releasePrefixTimeout = () => {};
+      const cleanupControls = () => {
+        removePreviewControls(); removePreviewControls = () => {};
+        disconnectPreviewObserver(); disconnectPreviewObserver = () => {};
+      };
+      readerContext.status.textContent = "正在检查文档";
+      document.querySelector("#page-total").textContent = "";
+      const gateControls = document.querySelector(".page-controls"), gateWasHidden = gateControls.hidden;
+      gateControls.hidden = true;
       try {
-        if (!readerContext.restorationFailed && !saved && !readerContext.ocrManifestUrl &&
+        if (!readerContext.restorationFailed && canPreview && !readerContext.ocrManifestUrl &&
             !readerContext.pdfV3Map && !pdf.isPureXfa &&
             navigation === readerContext.readerRuntime.currentGeneration("navigation")) {
+          // Prefix identities come from the current catalog, even when an old
+          // linearized first-page hint exists after an incremental update.
+          const refs = await readerContext.awaitReader(
+            pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:1}), lifetime.signal);
+          const installed = await readerContext.awaitReader(
+            pdf._transport.messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
+          if (!Array.isArray(refs) || refs.length !== 1 || installed?.refs?.[0] !== refs[0]) throw new Error("PDF_PREFIX_INVALID");
+          previewRefs = refs;
           const page = await readerContext.awaitReader(pdf.getPage(1), lifetime.signal);
           const base = page.getViewport({scale:1});
           previewShell = document.createElement("section");
@@ -660,6 +687,7 @@ export function createReaderPdfPageWindow(readerContext) {
           text.setAttribute("aria-label", "第 1 页正文");
           previewShell.append(text);
           readerContext.content.appendChild(previewShell);
+          previewPages.set(1, previewShell);
           previousDisabled = readerContext.pageInput.disabled;
           readerContext.pageInput.disabled = true;
           bookmarkDisabled = readerContext.bookmarkRibbon.disabled;
@@ -667,7 +695,6 @@ export function createReaderPdfPageWindow(readerContext) {
           readerContext.status.textContent = "正在检查文档";
           document.querySelector("#page-total").textContent = "";
           controls = document.querySelector(".page-controls");
-          controlsHidden = controls.hidden;
           controls.hidden = true;
           readerContext.pdfDocument = pdf;
           provisionalDocument = true;
@@ -681,26 +708,204 @@ export function createReaderPdfPageWindow(readerContext) {
           readerContext.markReaderContentReady();
           // Let the browser paint before validation competes for network/CPU.
           await Promise.race([readerContext.waitForReader(0, true), readerContext.waitForReader(100)]);
+          // The reader stays on the original PDF. Its bounded prefix is ordered
+          // by a left-to-right page-tree walk, never by unverified /Count.
+          const prefixDeadline = Promise.withResolvers();
+          const prefixTimer = setTimeout(() => prefixDeadline.resolve(null), 1500);
+          releasePrefixTimeout = () => { clearTimeout(prefixTimer); prefixDeadline.resolve(null); };
+          const prefix = Promise.race([
+            pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:2}), prefixDeadline.promise
+          ]).finally(() => clearTimeout(prefixTimer));
+          prefixTask = prefix.then(async refs => {
+            if (!previewActive || !Array.isArray(refs) || refs.length < 2 || refs.length > 4) return;
+            const installed = await readerContext.awaitReader(
+              pdf._transport.messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
+            if (!previewActive || installed?.refs?.length !== refs.length ||
+                installed.refs.some((ref, index) => ref !== refs[index])) return;
+            previewRefs = refs;
+            const count = refs.length;
+            previewCount = count;
+            pdf._transport.pagesMapper.pagesNumber = count;
+            // Warm only the next page the reader can actually request. The
+            // detached canvas is disposable and yields to visible rendering.
+            warmTask = pdf.getPage(2).then(async page => {
+              if (!previewActive) return;
+              const warmController = new AbortController();
+              const acquire = readerContext.acquirePdfRenderSlot(true, null, warmController.signal);
+              let acquired = false;
+              const cancelQueued = () => warmController.abort(readerContext.readerAbortError());
+              cancelWarm = cancelQueued;
+              try {
+                await readerContext.awaitReader(acquire, lifetime.signal);
+                acquired = true;
+                if (!previewActive) return;
+                const base = page.getViewport({scale:1});
+                const scale = Math.min(pdf.readerRenderScaleLimit ?? 3, previewShell.clientWidth / base.width);
+                const viewport = page.getViewport({scale});
+                const outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
+                const canvas = document.createElement("canvas");
+                const width = Math.ceil(viewport.width * outputScale), height = Math.ceil(viewport.height * outputScale);
+                if (width * height > readerContext.pdfPixelBudget()) return;
+                canvas.width = width; canvas.height = height;
+                const task = page.render({canvasContext:canvas.getContext("2d"),viewport,
+                  transform:outputScale === 1 ? null : [outputScale,0,0,outputScale,0,0]});
+                cancelWarm = () => { cancelQueued(); task.cancel?.(); };
+                const untrack = readerContext.trackReaderResource(() => task.cancel?.());
+                try { await readerContext.awaitReader(task.promise, lifetime.signal); }
+                finally { untrack(); canvas.width = canvas.height = 0; }
+              } finally {
+                cancelWarm = null;
+                if (acquired) readerContext.releasePdfRenderSlot();
+              }
+            });
+            warmTask.catch(() => {});
+            controls.hidden = false;
+            const total = document.querySelector("#page-total"), previous = document.querySelector("#page-prev"), next = document.querySelector("#page-next");
+            const inputHidden = readerContext.pageInput.hidden, totalHidden = total.hidden;
+            const previousLabel = previous.getAttribute("aria-label"), nextLabel = next.getAttribute("aria-label");
+            const previousWasDisabled = previous.disabled, nextWasDisabled = next.disabled;
+            readerContext.pageInput.hidden = true;
+            total.hidden = true;
+            previous.disabled = false; next.disabled = false;
+            previous.setAttribute("aria-label", "上一页");
+            next.setAttribute("aria-label", "下一页");
+            readerContext.status.textContent = "正在检查文档，可顺序阅读";
+            const turn = delta => {
+              cancelWarm?.();
+              if (!previewNavigationChanged && saved) readerContext.beginReaderNavigation();
+              previewPage = Math.min(previewCount, Math.max(1, previewPage + delta));
+              previewNavigationChanged = true;
+              previewAnchor = {page:previewPage, top:null};
+              let shell = previewPages.get(previewPage);
+              if (!shell) {
+                shell = document.createElement("section");
+                shell.className = "reader-page reader-pdf-opening";
+                shell.dataset.page = String(previewPage);
+                shell.style.aspectRatio = previewShell.style.aspectRatio;
+                shell.setAttribute("role", "region");
+                shell.setAttribute("aria-label", `第 ${previewPage} 页，正在检查文档`);
+                const text = document.createElement("div");
+                text.className = "reader-pdf-text"; text.setAttribute("role", "document");
+                text.setAttribute("aria-label", `第 ${previewPage} 页正文`); shell.append(text);
+                const after = [...previewPages.entries()].find(([number]) => number > previewPage)?.[1];
+                if (after) readerContext.content.insertBefore(shell, after); else readerContext.content.appendChild(shell);
+                previewPages.set(previewPage, shell);
+              }
+              shell.scrollIntoView({block:"start"});
+              const generation = readerContext.readerRuntime.currentGeneration("pdf");
+              readerContext.renderPdfShell(shell, false, true).then(() => {
+                if (!previewActive) return;
+                shell.dataset.previewPageReady = "1";
+                shell.dataset.previewPdfGeneration = String(generation);
+                shell.dataset.previewWidth = String(shell.clientWidth);
+                shell.dataset.previewZoom = String(readerContext.documentState.zoom);
+              }).catch(() => {});
+            };
+            const onPrevious = event => { event.stopImmediatePropagation(); turn(-1); };
+            const onNext = event => { event.stopImmediatePropagation(); turn(1); };
+            const ensureSequentialShells = () => {
+              for (let number=2; number<=previewCount; number++) {
+                if (previewPages.has(number)) continue;
+                const shell=document.createElement("section");
+                shell.className="reader-page reader-pdf-opening";
+                shell.dataset.page=String(number);
+                shell.style.aspectRatio=previewShell.style.aspectRatio;
+                shell.setAttribute("role","region");
+                shell.setAttribute("aria-label",`第 ${number} 页，正在检查文档`);
+                const text=document.createElement("div");
+                text.className="reader-pdf-text";text.setAttribute("role","document");
+                text.setAttribute("aria-label",`第 ${number} 页正文`);shell.append(text);
+                const after=[...previewPages.entries()].filter(([page])=>page>number).sort((a,b)=>a[0]-b[0])[0]?.[1];
+                if (after) readerContext.content.insertBefore(shell,after); else readerContext.content.appendChild(shell);
+                previewPages.set(number,shell);
+                previewObserver.observe(shell);
+              }
+            };
+            const previewObserver=new IntersectionObserver(entries=>{
+              for (const entry of entries) {
+                if (!previewActive || !entry.isIntersecting || entry.target.dataset.renderState === "rendered") continue;
+                cancelWarm?.();
+                const shell=entry.target;
+                const generation=readerContext.readerRuntime.currentGeneration("pdf");
+                readerContext.renderPdfShell(shell,false,true).then(()=>{
+                  if (!previewActive) return;
+                  shell.dataset.previewPageReady="1";
+                  shell.dataset.previewPdfGeneration=String(generation);
+                  shell.dataset.previewWidth=String(shell.clientWidth);
+                  shell.dataset.previewZoom=String(readerContext.documentState.zoom);
+                }).catch(()=>{});
+              }
+            },{root:readerContext.viewport,rootMargin:"200px 0px"});
+            disconnectPreviewObserver=()=>previewObserver.disconnect();
+            ensureSequentialShells();
+            const onScroll = () => {
+              const shell = readerContext.pageAtMarker();
+              const number = Number(shell?.dataset.page);
+              if (previewActive && number >= 1 && number <= previewCount) {
+                if (number !== 1 && !previewNavigationChanged && saved) readerContext.beginReaderNavigation();
+                if (number !== 1) previewNavigationChanged = true;
+                previewPage = number;
+                previewAnchor = {page:number, top:shell.getBoundingClientRect().top};
+              }
+            };
+            readerContext.viewport.addEventListener("scroll", onScroll, {passive:true});
+            previous.addEventListener("click", onPrevious, true);
+            next.addEventListener("click", onNext, true);
+            removePreviewControls = () => {
+              previous.removeEventListener("click", onPrevious, true);
+              next.removeEventListener("click", onNext, true);
+              readerContext.viewport.removeEventListener("scroll", onScroll);
+              readerContext.pageInput.hidden = inputHidden; total.hidden = totalHidden;
+              previous.disabled = previousWasDisabled; next.disabled = nextWasDisabled;
+              if (previousLabel === null) previous.removeAttribute("aria-label"); else previous.setAttribute("aria-label", previousLabel);
+              if (nextLabel === null) next.removeAttribute("aria-label"); else next.setAttribute("aria-label", nextLabel);
+            };
+            // Once page two is interactive, discover up to two more prefix
+            // pages without delaying background validation or page-two paint.
+            pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:4}).then(async more => {
+              if (!previewActive || more.length <= previewCount || more.length > 4) return;
+              const expanded = await readerContext.awaitReader(
+                pdf._transport.messageHandler.sendWithPromise("ReaderInstallPagePrefix", null), lifetime.signal);
+              if (!previewActive || expanded?.refs?.length !== more.length ||
+                  expanded.refs.some((ref,index) => ref !== more[index])) return;
+              previewRefs = more;
+              previewCount = more.length;
+              pdf._transport.pagesMapper.pagesNumber = more.length;
+              ensureSequentialShells();
+            }).catch(() => {});
+          }).catch(() => {});
         }
         const timed = Promise.withResolvers();
         const timer = setTimeout(() => timed.reject(Object.assign(new Error("PDF 检查超时，请重试加载。"),
           {code:"READER_PDF_TRANSPORT"})), readerContext.READER_PROXY_TIMEOUT_MS);
         try {
+          if (prefixTask) await readerContext.awaitReader(Promise.race([prefixTask, timed.promise]), lifetime.signal);
           const verified = await readerContext.awaitReader(Promise.race([
             pdf._transport.messageHandler.sendWithPromise("ReaderValidatePageCount", null), timed.promise
           ]), lifetime.signal);
+          previewActive = false;
           if (!Number.isSafeInteger(verified?.count) || verified.count < 1 ||
               verified.count > VoiceOfMLReaderSecurity.LIMITS.pdfPages) throw new Error("PDF 页数验证失败");
           verifiedCount = verified.count;
+          if (previewRefs && (verified.refs?.length < previewRefs.length ||
+              previewRefs.some((ref, index) => verified.refs[index] !== ref)))
+            throw new Error("PDF_PREFIX_CHANGED");
         } finally { clearTimeout(timer); }
       } catch (error) {
+        cancelWarm?.();
         if (provisionalDocument && readerContext.pdfDocument === pdf) readerContext.pdfDocument = null;
-        previewShell?.remove();
+        for (const shell of previewPages.values()) { shell._renderCancel?.(); shell.remove(); }
         throw error;
       } finally {
+        previewActive = false;
+        releasePrefixTimeout();
+        cancelWarm?.();
+        cleanupControls();
+        preservePreview = verifiedCount !== null && !readerContext.readerAbortController.signal.aborted;
         untrackPreview();
-        if (!lifetime.signal.aborted && controls) {
-          controls.hidden = controlsHidden;
+        if (!readerContext.readerAbortController.signal.aborted) gateControls.hidden = gateWasHidden;
+        if (!readerContext.readerAbortController.signal.aborted && controls) {
+          controls.hidden = gateWasHidden;
           readerContext.pageInput.disabled = previousDisabled;
           readerContext.bookmarkRibbon.disabled = bookmarkDisabled;
         }
@@ -710,6 +915,32 @@ export function createReaderPdfPageWindow(readerContext) {
       pdf._transport.pagesMapper.pagesNumber = verifiedCount;
       delete pdf._pdfInfo.readerPageCountPending;
       if (previewShell) {
+        const anchor = previewNavigationChanged && previewAnchor ? previewPages.get(previewAnchor.page) : readerContext.pageAtMarker();
+        if (anchor && previewPages.has(Number(anchor.dataset.page)))
+          previewAnchor = {page:Number(anchor.dataset.page),top:anchor.getBoundingClientRect().top};
+        for (const [number, shell] of [...previewPages]) {
+          if (number === 1) continue;
+          const incomplete = !shell.querySelector("canvas.ready");
+          if (shell._renderPromise) {
+            if (incomplete) shell._renderCancel?.();
+            await shell._renderPromise.catch(() => {});
+          }
+          if (incomplete || !shell.querySelector("canvas.ready")) {
+            if (previewAnchor?.page === number) {
+              previewAnchor = {page:1,top:previewShell.getBoundingClientRect().top};
+            }
+            shell.remove(); previewPages.delete(number); continue;
+          }
+          shell.classList.remove("reader-pdf-opening");
+          shell.setAttribute("aria-label", `第 ${number} 页`);
+          if (String(readerContext.readerRuntime.currentGeneration("pdf")) !== shell.dataset.previewPdfGeneration ||
+              Number(shell.dataset.previewWidth) !== shell.clientWidth || Number(shell.dataset.previewZoom) !== readerContext.documentState.zoom)
+            delete shell.dataset.renderState;
+          delete shell.dataset.previewPageReady; delete shell.dataset.previewPdfGeneration;
+          delete shell.dataset.previewWidth; delete shell.dataset.previewZoom;
+          shell.tabIndex = 0;
+          shell.addEventListener("focus", () => readerContext.renderPdfInBackground(shell));
+        }
         if (String(readerContext.readerRuntime.currentGeneration("pdf")) !== previewShell.dataset.previewPdfGeneration ||
             previewWidth !== previewShell.clientWidth || previewZoom !== readerContext.documentState.zoom)
           delete previewShell.dataset.renderState;
@@ -720,6 +951,7 @@ export function createReaderPdfPageWindow(readerContext) {
         previewShell.tabIndex = 0;
         previewShell.addEventListener("focus", () => readerContext.renderPdfInBackground(previewShell));
       }
+      if (previewAnchor && !previewPages.has(previewAnchor.page)) previewAnchor = null;
     }
     readerContext.pdfDocument = pdf;
     readerContext.updateDocumentState({ pageCount: pdf.numPages });
@@ -795,6 +1027,13 @@ export function createReaderPdfPageWindow(readerContext) {
       pageObserver.disconnect();
     });
     const createShell = (page) => {
+      if (previewPages.has(page)) {
+        const existing = previewPages.get(page);
+        // Virtual-window eviction must not resurrect stale canvas/text.
+        previewPages.delete(page);
+        observeShell(existing);
+        return existing;
+      }
       const shell = document.createElement("section");
       shell.className = "reader-page";
       shell.dataset.page = String(page);
@@ -836,6 +1075,17 @@ export function createReaderPdfPageWindow(readerContext) {
         ? readerContext.pdfShellWindow.ensure(initialPage)
         : (await readerContext.pdfShellsReady, readerContext.content.querySelector(`.reader-page[data-page="${initialPage}"]`));
       if (!targetShell) throw new Error("PDF initial page shell missing");
+      if (previewAnchor) {
+        const anchor = readerContext.content.querySelector(`.reader-page[data-page="${previewAnchor.page}"]`);
+        if (anchor) {
+          readerContext.viewport.scrollTop += anchor.getBoundingClientRect().top - previewAnchor.top;
+          readerContext.updateDocumentState({page:previewAnchor.page});
+          readerContext.pageInput.value = String(previewAnchor.page);
+          readerContext.pageNavigationLockUntil = performance.now() + 500;
+          // Initial restoration uses this generation; marker sync is locked
+          // briefly while the verified shell window takes ownership.
+        }
+      }
       readerContext.markReaderContentReady();
       if (!previewShell) readerContext.viewport.scrollTop = readerContext.readerPageScrollTop(targetShell);
       await readerContext.renderPdfShell(targetShell, false, true);

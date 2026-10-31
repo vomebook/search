@@ -22,6 +22,14 @@ assert.equal(isFirstPageCandidate(bytes('%PDF-1.4\n2 0 obj\n<</Count 499/Kids[3 
 assert.equal(isFirstPageCandidate(bytes('%PDF-1.5\n1 0 obj\n<< /Linearized 1 /L '+large+' >>\nendobj\n'),large,262144),true);
 assert.equal(isFirstPageCandidate(bytes('%PDF-1.5\n1 0 obj\n<< /Linearized 1 /L '+(large+1)+' >>\nendobj\n'+new TextDecoder().decode(splitRoot).slice(9)),large,262144),false);
 assert.equal(isFirstPageCandidate(bytes('%PDF-1.5\n1 0 obj\n<< /Linearized 1 /L '+(large-1)+' >>\nendobj\n'),large,262144),true);
+const tailTree = bytes('%PDF-1.6\n1 0 obj\n<</Type/Page/Contents[9 0 R]/Parent 18274 0 R/Resources 7 0 R>>\nendobj\n2 0 obj\n<</Length 4>>\nstream\ntest\nendstream\nendobj');
+assert.equal(isFirstPageCandidate(tailTree,large,262144),true);
+assert.equal(choosePdfRangeChunkSize(tailTree,large),262144, 'late page tree is not parsed from the prefix');
+assert.equal(isFirstPageCandidate(bytes(new TextDecoder().decode(tailTree).replace('18274 0 R','127 0 R')),large,262144),false);
+assert.equal(isFirstPageCandidate(bytes(new TextDecoder().decode(tailTree).replace('/Type/Page','/Type/Pages')),large,262144),false);
+assert.equal(isFirstPageCandidate(bytes(new TextDecoder().decode(tailTree).replace('endobj','stream')),large,262144),false);
+assert.equal(isFirstPageCandidate(bytes('%PDF-1.6\n1 0 obj\n<</Length 40>>\nstream\n'+new TextDecoder().decode(tailTree)),large,262144),false);
+assert.equal(isFirstPageCandidate(bytes('%PDF-1.6\nstream\n'+new TextDecoder().decode(tailTree)),large,262144),false);
 assert.equal(choosePdfRangeChunkSize(pageTree(clustered), large), 262144);
 assert.equal(choosePdfRangeChunkSize(pageTree(sparse.slice(0, 127)), large), 262144);
 assert.equal(choosePdfRangeChunkSize(pageTree(sparse), 1024 * 1024), 262144);

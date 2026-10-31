@@ -240,7 +240,7 @@ export function createReaderPdfEngine(readerContext) {
             optional(Promise.resolve(restoration).then(value => ({value})))
           ]);
         } catch (_) { readerContext.assertReaderActive(); }
-        if (first && !first.complete && saved && !saved.value && !readerContext.restorationFailed &&
+        if (first && !first.complete && saved && !readerContext.restorationFailed &&
             readerContext.isFirstPageCandidate(first.bytes, first.total, first.rangeChunkSize) &&
             navigation === readerContext.readerRuntime?.currentGeneration("navigation")) {
           readerContext.releasePdfWorker?.();
