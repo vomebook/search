@@ -1,12 +1,51 @@
+// The current MOBI chapter manifest for this five-volume edition contains
+// cross-volume sidebar targets that point back into volume 1. Its own verified
+// "总目录" links and each volume's adjacent "书名页" independently identify
+// these destinations. Never apply this correction to another manifest version.
+const REVIEWED_TOC_CORRECTIONS = new Map([
+  ["7b150f1ba768d3bf4380b805676a32b8b2c18d7a8b4efb75be49a38da1dbf3a8", [
+    [1, "费曼物理学讲义：新千年版．第1卷", 4, "", 4, "chapter", 3],
+    [2, "封面", 4, "", 4, "chapter", 3],
+    [355, "费曼物理学讲义：新千年版．第2卷", 50, "2NI-3c4a5b77066c4db48850b1e309e1eb0b", 306, "chapter", 357],
+    [356, "封面", 50, "2NI-3c4a5b77066c4db48850b1e309e1eb0b", 306, "chapter", 357],
+    [684, "费曼物理学讲义：新千年版．第3卷", 84, "68C-3c4a5b77066c4db48850b1e309e1eb0b", 595, "chapter", 686],
+    [685, "封面", 84, "68C-3c4a5b77066c4db48850b1e309e1eb0b", 595, "chapter", 686],
+    [855, "费曼物理学讲义补编", 109, "88V-3c4a5b77066c4db48850b1e309e1eb0b", 744, "chapter", 857],
+    [856, "封面", 109, "88V-3c4a5b77066c4db48850b1e309e1eb0b", 744, "chapter", 857],
+    [875, "费曼物理学讲义习题集：新千年版", 118, "9LP-3c4a5b77066c4db48850b1e309e1eb0b", 763, "chapter", 877],
+    [876, "封面", 118, "9LP-3c4a5b77066c4db48850b1e309e1eb0b", 763, "chapter", 877]
+  ]]
+]);
+const REVIEWED_MOBI_SOURCE = "chapters/ebook/mobi/046c991cc6fb1b05e4c95e24fea7dd34112a9ba239ff4e2f22d68221bb8fd6aa/6df0c142735b1a1a/chapter-manifest.json";
+
+export function applyReviewedTocCorrections(manifest, bytes, manifestUrl) {
+  const url = new URL(manifestUrl, location.href);
+  const path = url.searchParams.get("path") || decodeURIComponent(url.pathname);
+  if (!path.endsWith(REVIEWED_MOBI_SOURCE) || !globalThis.crypto?.subtle || !Array.isArray(manifest.toc)) return manifest;
+  return crypto.subtle.digest("SHA-256", bytes).then((digest) => {
+    const hex = [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, "0")).join("");
+    const corrections = REVIEWED_TOC_CORRECTIONS.get(hex);
+    if (!corrections) return manifest;
+    for (const [index, title, chapter, fragment, target, , titleIndex] of corrections) {
+      const entry = manifest.toc[index], titlePage = manifest.toc[titleIndex];
+      if (!entry || entry.title !== title || entry.chapter !== chapter || entry.fragment !== fragment ||
+          !titlePage || titlePage.title !== "书名页" || titlePage.chapter !== target ||
+          !manifest.chapters[target - 1]) return manifest;
+    }
+    const toc = manifest.toc.map(entry => ({ ...entry }));
+    for (const [index, , , , chapter, fragment] of corrections) Object.assign(toc[index], { chapter, fragment });
+    return { ...manifest, toc };
+  }).catch(() => manifest);
+}
+
 export function createReaderChapterFormat(readerContext) {
   async function renderChapterManifest(prepared) {
     const response = await prepared;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const manifest = VoiceOfMLReaderSecurity.validateChapterManifest(
-      JSON.parse(
-        await VoiceOfMLReaderSecurity.readText(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes)
-      )
-    );
+    const manifestBytes = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.manifestBytes);
+    let manifest = VoiceOfMLReaderSecurity.validateChapterManifest(JSON.parse(new TextDecoder().decode(manifestBytes)));
+    manifest = await applyReviewedTocCorrections(manifest, manifestBytes,
+      readerContext.chapterManifestUrl || readerContext.sourceUrl);
     readerContext.assertReaderActive();
     const frame = document.createElement("div");
     frame.className = "epub-frame";
@@ -19,6 +58,7 @@ export function createReaderChapterFormat(readerContext) {
     const chapterPrefetchCount = 6;
     const chapterPrefetchMaxCount = 10, chapterPrefetchBytes = 128 * 1024;
     let chapterFocusIndex = 1, chapterWindowFrame = 0, chapterWindowReady = false;
+    let navigationTargetChapter = 0, navigationProtectionCleanup = null;
     let chapterNavigating = 0;
     let chapterPreviousObserver = null;
     const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
@@ -230,29 +270,54 @@ export function createReaderChapterFormat(readerContext) {
     };
     const activateChapter = async (chapter, generation, destination = "") => {
       chapterFocusIndex = chapter.index;
+      navigationProtectionCleanup?.();
+      navigationTargetChapter = chapter.index;
       chapterNavigating++;
-      try { await fetchChapter(chapter, true, chapterWindowReady); }
-      finally { chapterNavigating--; }
-      if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-      const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
-      let id = (typeof destination === "string" ? destination : destination.fragment || "").replace(/^#/, "");
+      let landingProtected = false;
       try {
-        id = decodeURIComponent(id);
-      } catch (_) {}
-      const anchor = chapterTarget(node, id);
-      if (!anchor) throw new Error("EPUB_MISSING_ANCHOR");
-      readerContext.foliateScrollAnchors.invalidate();
-      // Measure the anchor instead of using scrollIntoView: the demanded landing line is
-      // this viewport's top edge, and scrollIntoView can also move ancestor scrollers.
-      const landing = readerContext.alignReaderDestination(anchor);
-      readerContext.foliateScrollAnchors.remember();
-      // Chapter images and lazy placeholders keep changing height after the jump; hold
-      // the anchor on the landing line until the layout settles.
-      readerContext.holdReaderDestination(anchor);
-      readerContext.syncHeadingLocation();
-      readerContext.updateProgressTools();
-      readerContext.scheduleSave();
-      return true;
+        await fetchChapter(chapter, true, chapterWindowReady);
+        if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
+        const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
+        let id = (typeof destination === "string" ? destination : destination.fragment || "").replace(/^#/, "");
+        try {
+          id = decodeURIComponent(id);
+        } catch (_) {}
+        const anchor = chapterTarget(node, id);
+        if (!anchor) throw new Error("EPUB_MISSING_ANCHOR");
+        readerContext.foliateScrollAnchors.invalidate();
+        // Measure the anchor instead of using scrollIntoView: the demanded landing line is
+        // this viewport's top edge, and scrollIntoView can also move ancestor scrollers.
+        readerContext.alignReaderDestination(anchor);
+        readerContext.foliateScrollAnchors.remember();
+        // Chapter images and lazy placeholders keep changing height after the jump; hold
+        // the anchor on the landing line until the layout settles.
+        readerContext.holdReaderDestination(anchor);
+        // Keep the demanded chapter out of the trim queue while its landing
+        // stabilizes. Scroll-anchoring and delayed images can otherwise mark a
+        // previous chapter as current and remove the destination mid-jump.
+        let timer = 0;
+        const unlock = () => {
+          clearTimeout(timer);
+          for (const name of ["wheel", "touchstart", "pointerdown", "keydown"])
+            readerContext.viewport.removeEventListener(name, unlock);
+          if (navigationTargetChapter === chapter.index) navigationTargetChapter = 0;
+          if (navigationProtectionCleanup === unlock) navigationProtectionCleanup = null;
+        };
+        navigationProtectionCleanup = unlock;
+        landingProtected = true;
+        for (const name of ["wheel", "touchstart", "pointerdown", "keydown"])
+          readerContext.viewport.addEventListener(name, unlock, { once: true, passive: true });
+        timer = setTimeout(unlock, 16000);
+        readerContext.syncHeadingLocation();
+        readerContext.updateProgressTools();
+        readerContext.scheduleSave();
+        return true;
+      } finally {
+        chapterNavigating--;
+        if (!landingProtected && navigationTargetChapter === chapter.index && !navigationProtectionCleanup)
+          navigationTargetChapter = 0;
+        scheduleChapterWindow();
+      }
     };
     frame.addEventListener("click", async (event) => {
       const link = event.target.closest?.("a[href]");
@@ -300,6 +365,7 @@ export function createReaderChapterFormat(readerContext) {
       getIndex: article => Number(article.dataset.chapter),
       getHeight: article => article.getBoundingClientRect().height,
       canVirtualize: article => {
+        if (Number(article.dataset.chapter) === navigationTargetChapter) return false;
         const rect = article.getBoundingClientRect(), view = readerContext.viewport.getBoundingClientRect();
         const selection = window.getSelection();
         return (rect.bottom < view.top - 800 || rect.top > view.bottom + 800) &&
@@ -332,7 +398,7 @@ export function createReaderChapterFormat(readerContext) {
       preserve: change => readerContext.foliateScrollAnchors.preserve(change)
     });
     function trimChapterWindow() {
-      if (chapterWindowReady) chapterVirtualizer.trim(chapterFocusIndex);
+      if (chapterWindowReady && !chapterNavigating) chapterVirtualizer.trim(navigationTargetChapter || chapterFocusIndex);
     }
     function chapterPrefetchIndices() {
       if (document.hidden) return [];
@@ -391,6 +457,7 @@ export function createReaderChapterFormat(readerContext) {
     readerContext.chapterManifestCleanup = () => {
       if (chapterCleaned) return;
       chapterCleaned = true;
+      navigationProtectionCleanup?.();
       chapterWindowReady = false;
       cancelAnimationFrame(chapterWindowFrame);
       readerContext.viewport.removeEventListener("scroll", scheduleChapterWindow);

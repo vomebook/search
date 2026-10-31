@@ -98,6 +98,7 @@ jobs:
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
       - name: Check TOC landing ownership and cancellation
         run: |
+          node tests/test_reader_feynman_toc_reviewed.mjs
           python3 -B -m unittest -v \
             tests.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
             tests.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
@@ -199,6 +200,7 @@ jobs:
       - name: Check TOC landing ownership and cancellation
         working-directory: huggingface-search
         run: |
+          node tests/test_reader_feynman_toc_reviewed.mjs
           python3 -B -m unittest -v \
             tests.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
             tests.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
