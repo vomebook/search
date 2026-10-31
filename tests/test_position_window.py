@@ -289,7 +289,9 @@ class PositionWindowTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('keptRow===DOM.resultsList.querySelector(\'[data-index="49850"]\')'))
         self.assertTrue(self.page.evaluate('''() => {
           const button=keptRow.querySelector('[data-action="read"]'), before=button.dataset.readerUrl;
-          readerAssets={[getResultStableId(STATE.results[49850])]:{s:2,m:'p',p:'objects/00/'+'0'.repeat(64)+'/linearized.pdf'}};
+          // The retired linearized.pdf path is deliberately rejected. Use a
+          // currently accepted synthetic asset that changes the Reader mode.
+          readerAssets={[getResultStableId(STATE.results[49850])]:{s:2,m:'h',p:'objects/00/'+'0'.repeat(64)+'/profile/document.html'}};
           refreshResultReaderActions();renderVisible();
           return keptRow===DOM.resultsList.querySelector('[data-index="49850"]') &&
             button===keptRow.querySelector('[data-action="read"]') && button.dataset.readerUrl!==before;
