@@ -1,3 +1,8 @@
+export const PDF_METADATA_RANGE_CONCURRENCY = 24;
+const PDF_ADAPTIVE_CHUNK_BYTES = 16384;
+const PDF_DEFAULT_CHUNK_BYTES = 262144;
+const PDF_MIN_SPARSE_PAGES = 128;
+
 // A search-tab-owned, bounded memory cache. Every opening still fetches its
 // fresh range to establish a strong ETag/total before any reuse. No disk,
 // Service Worker body cache or change to the PDF HTTP no-store policy is involved.
@@ -224,6 +229,49 @@ function firstPageSectionEnd(bytes, total, chunkSize) {
   return Math.min(total, Math.ceil(end / chunkSize) * chunkSize);
 }
 
+// This is a scheduling hint, not a PDF parser or a source of page identities.
+// For a directly declared large flat /Pages node, PDF.js still validates the
+// entire page tree, but its dispersed metadata is cheaper to read in smaller
+// chunks. Ambiguous, indirect or compressed structures keep the normal path.
+export function choosePdfRangeChunkSize(bytes, total, fallback = PDF_DEFAULT_CHUNK_BYTES) {
+  if (!(bytes instanceof Uint8Array) || !Number.isSafeInteger(total) || total < 8 * 1024 * 1024 ||
+      !Number.isSafeInteger(fallback) || fallback !== PDF_DEFAULT_CHUNK_BYTES) return fallback;
+  const head = new TextDecoder('latin1').decode(bytes.subarray(0, PDF_ADAPTIVE_CHUNK_BYTES));
+  if (!head.startsWith('%PDF-') || /\/Linearized\b/.test(head.slice(0, 1024))) return fallback;
+  const objectHeader = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<</g;
+  const stream = /\bstream(?:\r\n|\r|\n)/.exec(head);
+  // Never match a fake object inside a preceding stream. If an object is
+  // incomplete in the bounded prefix, stay on the standard range strategy.
+  const stop = stream ? stream.index : head.length;
+  let object;
+  while ((object = objectHeader.exec(head)) && object.index < stop) {
+    const end = head.indexOf('endobj', objectHeader.lastIndex);
+    if (end < 0 || end > stop) return fallback;
+    const text = head.slice(object.index, end);
+    objectHeader.lastIndex = end + 6;
+    if (!/\/Type\s*\/Pages(?=[\s/>]|$)/.test(text)) continue;
+    const count = /\/Count\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/.exec(text);
+    const kids = /\/Kids\s*\[([^\]]*)\]/.exec(text);
+    if (!count || !kids || Number(count[1]) < PDF_MIN_SPARSE_PAGES) continue;
+    // Counting only conventional indirect references avoids relying on random
+    // byte strings in an arbitrary content stream or on a malformed array.
+    const refs = kids[1].match(/\b\d+\s+\d+\s+R\b/g) || [];
+    if (refs.length < PDF_MIN_SPARSE_PAGES || refs.length > 4096 || refs.length > Number(count[1]) ||
+        kids[1].replace(/\b\d+\s+\d+\s+R\b/g, '').trim() !== '') continue;
+    const numbers = refs.map(ref => Number.parseInt(ref, 10));
+    if (!numbers.every(Number.isSafeInteger)) continue;
+    let ordered = true;
+    for (let i = 1; i < numbers.length; i++)
+      if (numbers[i] <= numbers[i - 1]) { ordered = false; break; }
+    if (!ordered) continue;
+    // Sequential page objects are typically clustered even in flat trees;
+    // leave those PDFs on the normal larger chunks. This deliberately misses
+    // some edge cases rather than penalizing ordinary books.
+    if (numbers[numbers.length - 1] - numbers[0] >= refs.length * 2) return PDF_ADAPTIVE_CHUNK_BYTES;
+  }
+  return fallback;
+}
+
 // The first demand overlaps engine preparation. After its complete validation,
 // a qualified page-one file may overlap at most three more existing chunks.
 export async function preparePdfInitialRange(options, hooks) {
@@ -266,7 +314,9 @@ export async function preparePdfInitialRange(options, hooks) {
       const last = Math.min(end, begin + options.rangeChunkSize * 2);
       openingRanges.push(preparePdfRangeHint(options, begin, last, {...hooks, signal}, first));
     }
-    return {...first, tail, openingRanges, cancelInitial:reason => owner.abort(reason)};
+    const rangeChunkSize = first.complete ? options.rangeChunkSize :
+      choosePdfRangeChunkSize(first.bytes, first.total, options.rangeChunkSize);
+    return {...first, tail, openingRanges, rangeChunkSize, cancelInitial:reason => owner.abort(reason)};
   } catch (error) {
     owner.abort(error);
     throw error;
@@ -276,16 +326,54 @@ export async function preparePdfInitialRange(options, hooks) {
 export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, rangeLimit = limit, onError, initial = null,
   rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false, admitRange = null}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
-  const chunkSize = options.rangeChunkSize;
+  let chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
   const active = AbortSignal.any([signal, owner.signal]);
   let task = null, stopped = false, prepared = null;
   const failure = Promise.withResolvers();
   failure.promise.catch(() => {});
+  const rangeWaiters = [], demandQueue = [];
+  let demandScheduled = false;
+  let rangeReads = 0, metadataAdmission = false;
+  const drainRanges = () => {
+    while (rangeWaiters.length && rangeReads < PDF_METADATA_RANGE_CONCURRENCY)
+      rangeWaiters.shift().resolve();
+  };
+  const admitMetadata = () => {
+    if (!metadataAdmission) return Promise.resolve(null);
+    active.throwIfAborted();
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      rangeReads--;
+      drainRanges();
+    };
+    if (rangeReads < PDF_METADATA_RANGE_CONCURRENCY) {
+      rangeReads++;
+      return Promise.resolve(release);
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = {resolve: () => {
+        active.removeEventListener('abort', abort);
+        rangeReads++;
+        resolve(release);
+      }};
+      const abort = () => {
+        const index = rangeWaiters.indexOf(waiter);
+        if (index >= 0) rangeWaiters.splice(index, 1);
+        reject(active.reason);
+      };
+      active.addEventListener('abort', abort, {once:true});
+      rangeWaiters.push(waiter);
+      if (active.aborted) abort();
+    });
+  };
   const stop = reason => {
     if (stopped) return;
     stopped = true;
     owner.abort(reason);
+    for (const row of demandQueue.splice(0)) row.reject(active.reason);
     prepared?.cancelInitial?.(reason);
     signal.removeEventListener("abort", cancelled);
   };
@@ -294,12 +382,45 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   // Optional admission for demand reads only: the bootstrap, tail and opening
   // hints are already bounded. A queued read is cancelled with its document.
   const read = async (begin, end, expected = null) => {
-    const release = admitRange ? await admitRange(active) : null;
+    const metadataRelease = await admitMetadata();
+    let release = null;
     try {
+      release = admitRange ? await admitRange(active) : null;
       return await readPdfRange(options, begin, end, {signal:active, readBytes, limit, rangeLimit, rangeCache}, expected);
     } finally {
       release?.();
+      metadataRelease?.();
     }
+  };
+  // Coalesce only ranges PDF.js has already requested. Adjacent metadata
+  // chunks can travel together; never read across a gap or speculate on images.
+  const flushDemand = () => {
+    demandScheduled = false;
+    if (active.aborted) {
+      for (const row of demandQueue.splice(0)) row.reject(active.reason);
+      return;
+    }
+    const pending = demandQueue.splice(0).sort((a, b) => a.begin - b.begin || a.end - b.end);
+    const groups = [];
+    for (const row of pending) {
+      const previous = groups.at(-1);
+      if (previous && row.begin <= previous.end && Math.max(previous.end, row.end) - previous.begin <= PDF_DEFAULT_CHUNK_BYTES) {
+        previous.end = Math.max(previous.end, row.end);
+        previous.rows.push(row);
+      } else groups.push({begin:row.begin, end:row.end, rows:[row]});
+    }
+    for (const group of groups) read(group.begin, group.end, prepared).then(result => {
+      for (const row of group.rows)
+        row.resolve({bytes:result.bytes.slice(row.begin - group.begin, row.end - group.begin)});
+    }, error => { for (const row of group.rows) row.reject(error); });
+  };
+  const demand = (begin, end) => {
+    if (!metadataAdmission) return read(begin, end, prepared);
+    if (active.aborted) return Promise.reject(active.reason);
+    return new Promise((resolve, reject) => {
+      demandQueue.push({begin, end, resolve, reject});
+      if (!demandScheduled) { demandScheduled = true; queueMicrotask(flushDemand); }
+    });
   };
   try {
     const first = prepared = await (initial || preparePdfInitialRange(options,
@@ -313,6 +434,12 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       stop();
       return pdfjs.getDocument({...options, data:first.bytes});
     }
+    // The initial prefix and tail remain available at their original size;
+    // only PDF.js's subsequent demand chunk granularity changes.
+    const candidate = first.rangeChunkSize ?? choosePdfRangeChunkSize(first.bytes, first.total, options.rangeChunkSize);
+    if (candidate === PDF_ADAPTIVE_CHUNK_BYTES && options.rangeChunkSize === PDF_DEFAULT_CHUNK_BYTES)
+      chunkSize = candidate;
+    metadataAdmission = chunkSize < options.rangeChunkSize;
     // PDF.js owns parsing and range demand; the bootstrap is the first real range.
     const transport = new pdfjs.PDFDataRangeTransport(first.total, first.bytes, true);
     transport.abort = () => stop(new DOMException("PDF transport closed", "AbortError"));
@@ -335,7 +462,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       streamEnd > first.bytes.byteLength && streamEnd <= first.total;
     // One chunk only; deep restorations and non-v3/native URLs do not opt in.
     const openingRanges = first.openingRanges || [];
-    const prefix = first.total > chunkSize * 4 && openingStreamContinues && canPrefetchOpening() &&
+    const prefix = !metadataAdmission && first.total > chunkSize * 4 && openingStreamContinues && canPrefetchOpening() &&
       !openingRanges.some(range => range.begin <= chunkSize && range.end >= chunkSize * 2)
       ? {begin:chunkSize, end:chunkSize * 2,
         promise:read(chunkSize, chunkSize * 2, first).catch(() => null)}
@@ -343,10 +470,10 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     const fetchOrdinaryRange = (begin, end) => prefix && begin >= prefix.begin && end <= prefix.end
       ? prefix.promise.then(result => result
         ? {bytes:result.bytes.slice(begin - prefix.begin, end - prefix.begin)}
-        : read(begin, end, first))
+        : demand(begin, end))
       : tail && begin >= tail.begin && end <= first.total
-      ? tail.read(begin, end).then(result => result || read(begin, end, first))
-      : read(begin, end, first);
+      ? tail.read(begin, end).then(result => result || demand(begin, end))
+      : demand(begin, end);
     const fetchRange = (begin, end) => {
       const parts = [];
       let offset = begin;
@@ -361,7 +488,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       if (offset !== end) return fetchOrdinaryRange(begin, end);
       return Promise.all(parts.map(({range, from, last}) => range.read(from, last).then(result => result
         ? result.bytes
-        : read(from, last, first).then(row => row.bytes)))).then(values => {
+        : demand(from, last).then(row => row.bytes)))).then(values => {
         const bytes = new Uint8Array(end - begin);
         let at = 0;
         for (const value of values) { bytes.set(value, at); at += value.byteLength; }
@@ -381,7 +508,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         if (!stopped) transport.onDataRange(begin,result.bytes);
       }).catch(fail);
     };
-    task = pdfjs.getDocument({...options, range:transport});
+    task = pdfjs.getDocument({...options, rangeChunkSize:chunkSize, range:transport});
     task.promise.catch(error => stop(error));
     return {
       promise:Promise.race([task.promise,failure.promise]),
