@@ -6782,18 +6782,21 @@ function setupResultDelegation() {
     if (folderLink) {
       const folder = folderLink.dataset.folder;
       const frepo = folderLink.dataset.repo;
-      if (frepo && STATE.mode === "global") {
-        let hash = "#/" + frepo;
+      if (frepo && folder !== undefined) {
+        // A result breadcrumb selects the complete directory subtree and
+        // opens the same path in the left browser in one history entry.
+        let hash = "#/" + encodeURIComponent(frepo);
         const sp = buildSearchURLParams({ displaySizes: true });
-        if (folder) sp.append("folder_self", folder);
+        if (folder) {
+          sp.set("path", folder);
+          sp.append("folder_subtree", folder);
+        }
         const qs = sp.toString();
-        window.location.hash = qs ? hash + "?" + qs : hash;
-      } else if (folder !== undefined) {
-        STATE.filterFolders = folder ? [folder] : [];
-        STATE.filterFolderSubtrees = [];
-        STATE.filterFolderSelfs = folder ? [folder] : [];
-        renderFilters(routeRenderId);
-        doFilterSearch(true);
+        const nextHash = qs ? hash + "?" + qs : hash;
+        // A user may browse the sidebar elsewhere without changing filters,
+        // then click the already-selected breadcrumb to return to it.
+        if (window.location.hash === nextHash) renderBrowser(folder, routeRenderId);
+        else window.location.hash = nextHash;
       }
       return;
     }
