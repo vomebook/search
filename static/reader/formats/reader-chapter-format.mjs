@@ -126,13 +126,15 @@ export function createReaderChapterFormat(readerContext) {
         const label = normalizeTocLabel(link.textContent);
         if (!wanted.has(label)) continue;
         const fragment = link.getAttribute("href").slice(1);
-        if (!/^chm-page-\d+$/.test(fragment) || idCounts.get(fragment) !== 1 || !chapterTarget(article, fragment)) continue;
+        if (!/^chm-page-\d+$/.test(fragment)) continue;
         if (!targets.has(label)) targets.set(label, new Set());
         targets.get(label).add(fragment);
       }
       for (const entry of missing) {
         const candidates = targets.get(normalizeTocLabel(entry.label));
-        if (candidates?.size === 1) entry.fragment = candidates.values().next().value;
+        if (candidates?.size !== 1) continue;
+        const fragment = candidates.values().next().value;
+        if (idCounts.get(fragment) === 1 && chapterTarget(article, fragment)) entry.fragment = fragment;
       }
     };
     const mergedChmToc = manifest.chapters.some(chapter =>
