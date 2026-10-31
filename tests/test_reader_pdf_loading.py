@@ -1,6 +1,7 @@
 """Actual module imports and PDF.js with cold cache and transport faults."""
 import contextlib
 import json
+from pathlib import Path
 import re
 import threading
 import time
@@ -59,6 +60,91 @@ class PdfLoadingTests(unittest.TestCase):
         self.ready()
         self.assertEqual(len(self.modules), 1)
         self.assertNotIn('reader-module-retry', self.modules[0])
+
+    def test_real_pdf_malformed_page_tree_preserves_all_page_numbers_and_text(self):
+        fixture = Path(__file__).parent / 'fixtures/issue8088.pdf'
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='application/pdf', body=fixture.read_bytes()))
+        self.open()
+        self.page.locator('.reader-page[data-page="1"][data-text-ready="1"] canvas.ready').wait_for()
+        self.assertEqual(self.page.locator('#status').text_content(), '3 页')
+        for number in (1, 2, 3):
+            if number > 1:
+                self.page.locator('#page-number').fill(str(number))
+                self.page.locator('#page-number').dispatch_event('change')
+            page = self.page.locator(f'.reader-page[data-page="{number}"]')
+            page.locator('canvas.ready').wait_for()
+            self.page.wait_for_function('number => document.querySelector(`.reader-page[data-page="${number}"]`)?.dataset.textReady === "1"', arg=number)
+            self.assertIn(f'Issue 8088 - Page {number}', page.locator('.reader-pdf-text').text_content())
+        self.assertEqual(self.errors, [])
+
+    def test_sparse_mode_malformed_page_tree_still_uses_real_pdfjs_validation(self):
+        # Based on PDF.js issue8088: the first of two child page-tree nodes is
+        # empty, so assuming every child is one page silently shifts page IDs.
+        # Padding pushes the nested catalog past the sparse detector's first
+        # 16 KiB without changing the visible page text or source object order.
+        kids = [4 + 6 * i for i in range(129)] + [800]
+        objects = {
+            1: b'<< /Type /Catalog /Pages 2 0 R >>',
+            2: (f'<< /Type /Pages /Count 130 /Kids [{" ".join(f"{n} 0 R" for n in kids)}] >>').encode(),
+            3: b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+            800: b'<< /Type /Pages /Parent 2 0 R /Count 1 /Kids [801 0 R 802 0 R] >>',
+            801: b'<< /Type /Pages /Parent 800 0 R /Count 0 /Kids [] >>',
+            802: b'<< /Type /Pages /Parent 800 0 R /Count 1 /Kids [803 0 R] >>',
+        }
+        for number in range(129):
+            objects[kids[number]] = (f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] '
+                f'/Resources << /Font << /F1 3 0 R >> >> /Contents {2000 + number} 0 R >>').encode()
+            stream = f'BT /F1 14 Tf 10 20 Td (Page {number + 1}) Tj ET'.encode()
+            objects[2000 + number] = (f'<< /Length {len(stream)} >>\nstream\n'.encode() + stream +
+                                      b'\nendstream')
+        objects[803] = (b'<< /Type /Page /Parent 802 0 R /MediaBox [0 0 200 50] '
+                        b'/Resources << /Font << /F1 3 0 R >> >> /Contents 2129 0 R >>')
+        stream = b'BT /F1 14 Tf 10 20 Td (Page 130 final) Tj ET'
+        objects[2129] = f'<< /Length {len(stream)} >>\nstream\n'.encode() + stream + b'\nendstream'
+        # Place page dictionaries far apart to exercise range admission.
+        payload, offsets = bytearray(b'%PDF-1.7\n'), {}
+        for number in sorted(objects):
+            if number == 800:
+                pad = 9 * 1024 * 1024
+                payload.extend(b'1999 0 obj\n<< /Length ' + str(pad).encode() + b' >>\nstream\n' +
+                               b'x' * pad + b'\nendstream\nendobj\n')
+            offsets[number] = len(payload)
+            payload.extend(f'{number} 0 obj\n'.encode() + objects[number] + b'\nendobj\n')
+        xref = len(payload)
+        payload.extend(f'xref\n0 {max(objects) + 1}\n0000000000 65535 f \n'.encode())
+        for number in range(1, max(objects) + 1):
+            payload.extend((f'{offsets[number]:010d} 00000 n \n' if number in offsets else
+                            '0000000000 00000 f \n').encode())
+        payload.extend(f'trailer\n<< /Size {max(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+        ranges = []
+        def record_engine(route):
+            response = route.fetch()
+            code = response.text()
+            needle = 'task = pdfjs.getDocument({...options, rangeChunkSize:chunkSize, range:transport});'
+            self.assertEqual(code.count(needle), 1)
+            route.fulfill(response=response, body=code.replace(needle,
+                'window.__actualPdfChunk = chunkSize; ' + needle))
+        self.page.route('**/static/reader/pdf/reader-pdf-network.mjs*', record_engine)
+        def serve(route):
+            match = re.fullmatch(r'bytes=(\d+)-(\d+)', route.request.headers.get('range', ''))
+            self.assertIsNotNone(match)
+            start, end = int(match[1]), min(int(match[2]), len(payload) - 1)
+            ranges.append((start, end))
+            route.fulfill(status=206, content_type='application/pdf', body=bytes(payload[start:end + 1]),
+                          headers={'Content-Range': f'bytes {start}-{end}/{len(payload)}', 'ETag': '"sparse-malformed"',
+                                   'Access-Control-Allow-Origin': '*',
+                                   'Access-Control-Expose-Headers': 'Content-Range,ETag,Content-Length'})
+        self.page.route('**/api/reader-content**', serve)
+        self.open()
+        self.page.locator('.reader-page[data-page="1"][data-text-ready="1"] canvas.ready').wait_for(timeout=30000)
+        self.assertEqual(self.page.locator('#status').text_content(), '130 页')
+        self.assertEqual(self.page.evaluate('window.__actualPdfChunk'), 16384, ranges)
+        self.page.locator('#page-number').fill('130')
+        self.page.locator('#page-number').dispatch_event('change')
+        self.page.locator('.reader-page[data-page="130"][data-text-ready="1"] canvas.ready').wait_for(timeout=30000)
+        self.assertIn('Page 130 final', self.page.locator('.reader-page[data-page="130"] .reader-pdf-text').text_content())
+        self.assertEqual(self.errors, [])
 
     def test_first_range_overlaps_held_engine_and_is_consumed_once(self):
         held = []

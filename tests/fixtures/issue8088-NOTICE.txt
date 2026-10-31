@@ -1,0 +1,4 @@
+issue8088.pdf is the PDF.js malformed page-tree regression fixture.
+Source: https://github.com/mozilla/pdf.js/blob/v6.4.299/test/pdfs/issue8088.pdf
+Copyright Mozilla and PDF.js contributors; see pdfjs-LICENSE.txt (Apache 2.0).
+It contains no user document and is used only for local, offline regression tests.
