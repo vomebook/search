@@ -1161,6 +1161,35 @@ class BrowserBehaviorTest(unittest.TestCase):
         }""")
         self.assertTrue(target["hash"].startswith("#/VOMEBOOK?"))
         self.assertEqual(target["folders"], ["一级目录/二级目录"])
+        self.page.wait_for_function("STATE.browserPath === '一级目录/二级目录' && document.querySelector('.sidebar-breadcrumb .current')?.dataset.path === STATE.browserPath")
+        self.assertEqual(self.page_errors, [])
+
+    def test_mobile_reader_overlay_path_opens_matching_sidebar_and_survives_reload(self):
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.load('#/?q=目录&ext=txt&sort=name&sidebar=0')
+        self.page.wait_for_function("STATE.query === '目录' && STATE.filterExtensions.includes('txt')")
+        self.page.evaluate('''()=>{
+          getFolderContents=async (_repo,path)=>({folders:[],files:[{name:'sample',ext:'txt',size:1}]});
+          const url=getReaderLink({Repo:'VoiceOfML/VOMEBOOK',File:'测试',Extension:'txt',
+            Folder:['一级目录','二级目录'],Link:'https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/reader.txt'});
+          navigateToReader(url);
+        }''')
+        reader = self.page.frame_locator('iframe.reader-overlay')
+        reader.locator('#reader-panel-path:not([hidden])').wait_for(state='attached')
+        reader.locator('#history').click()
+        path = reader.locator('#reader-panel-path')
+        path.wait_for(state='visible')
+        self.assertEqual(path.inner_text(), '所在目录：VOMEBOOK/一级目录/二级目录')
+        path.click()
+        self.page.locator('iframe.reader-overlay').wait_for(state='detached')
+        self.page.wait_for_function("STATE.browserPath==='一级目录/二级目录' && STATE.filterFolderSelfs.join()==='一级目录/二级目录'")
+        self.assertEqual(self.page.evaluate('[STATE.query,STATE.filterExtensions,STATE.sort]'), ['目录', ['txt'], 'name'])
+        self.assertFalse(self.page.evaluate('STATE.leftSidebarOpen'))
+        self.page.locator('#hamburger-btn').click()
+        self.assertEqual(self.page.locator('.sidebar-breadcrumb .current').get_attribute('data-path'), '一级目录/二级目录')
+        self.page.reload(wait_until='domcontentloaded')
+        self.page.wait_for_function("STATE.browserPath==='一级目录/二级目录' && document.querySelector('.sidebar-breadcrumb .current')?.dataset.path===STATE.browserPath")
+        self.assertEqual(self.page.evaluate('STATE.filterFolderSelfs'), ['一级目录/二级目录'])
         self.assertEqual(self.page_errors, [])
 
     def test_reader_back_closes_overlay_without_reloading_search(self):

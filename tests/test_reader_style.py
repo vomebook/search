@@ -415,6 +415,55 @@ class ReaderStyleTests(unittest.TestCase):
                     else:
                         self.assertAlmostEqual(metrics["video"], height - expected_toolbar, delta=1)
 
+    def test_mobile_folder_action_lives_in_options_without_expanding_toolbar(self):
+        self.page.evaluate('''()=>{
+          document.querySelector('#reader-panel-path').hidden=false;
+          document.querySelector('#reader-panel-path').textContent='所在目录：Test';
+          document.querySelector('#reader-panel-path').setAttribute('aria-label','打开所在目录：Test');
+        }''')
+        self.page.emulate_media(reduced_motion='reduce')
+        for width, height in ((320, 568), (390, 844), (600, 500), (601, 500)):
+            with self.subTest(width=width, height=height):
+                self.page.set_viewport_size({'width': width, 'height': height})
+                self.assertEqual(self.page.locator('.reader-toolbar').bounding_box()['height'], 36 if width <= 600 else 44)
+                self.assertEqual(self.page.locator('#reader-path').is_visible(), width > 600)
+                self.page.locator('#history').click()
+                self.page.wait_for_function("document.querySelector('#history').getAttribute('aria-expanded') === 'true'")
+                action = self.page.locator('#reader-panel-path')
+                self.assertEqual(action.is_visible(), width <= 600)
+                if width <= 600:
+                    self.assertEqual(action.inner_text(), '所在目录：Test')
+                    self.assertEqual(action.get_attribute('aria-label'), '打开所在目录：Test')
+                    box = action.bounding_box()
+                    self.assertGreaterEqual(box['x'], 0)
+                    self.assertLessEqual(box['x'] + box['width'], width)
+                    self.assertGreaterEqual(box['height'], 40)
+                self.page.locator('#history-close').click()
+                self.page.wait_for_function("document.querySelector('#history').getAttribute('aria-expanded') === 'false'")
+
+    def test_mobile_folder_action_has_contrast_and_stays_out_of_header(self):
+        self.page.set_viewport_size({'width': 320, 'height': 568})
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.evaluate('''()=>{
+          const n=document.querySelector('#reader-panel-path');n.hidden=false;
+          n.textContent='所在目录：Test/一个非常长的目录/子目录/文件所在位置';
+        }''')
+        self.page.locator('#history').click()
+        action = self.page.locator('#reader-panel-path')
+        action.wait_for(state='visible')
+        for theme in ('dark', 'light'):
+            with self.subTest(theme=theme):
+                self.page.evaluate('theme=>document.documentElement.dataset.theme=theme', theme)
+                self.assert_contrast('#reader-panel-path')
+                action.hover()
+                self.assert_contrast('#reader-panel-path')
+                geometry = action.evaluate('''node=>{
+                  const a=node.getBoundingClientRect(),h=document.querySelector('#history-panel > header').getBoundingClientRect();
+                  const tabs=document.querySelector('.reader-panel-tabs').getBoundingClientRect();
+                  return {belowHeader:a.top>=h.bottom,aboveTabs:a.bottom<=tabs.top,ellipsized:node.scrollWidth>node.clientWidth};
+                }''')
+                self.assertTrue(all(geometry.values()), geometry)
+
     def test_theme_transition_preserves_drawer_and_filter_motion(self):
         self.page.locator("#history").click()
         self.page.locator("#bookmarks-tab").click()

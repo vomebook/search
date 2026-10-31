@@ -248,6 +248,42 @@ body {
   font-size: 12px;
   white-space: nowrap;
 }
+.reader-panel-path {
+  display: none;
+}
+@media (max-width: 600px) {
+  .reader-panel-path:not([hidden]) {
+    display: block;
+    flex: none;
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 12px;
+    border: 0;
+    border-bottom: 1px solid #34383d;
+    background: transparent;
+    color: #c7d9f6;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .reader-panel-path:not([hidden]):hover,
+  .reader-panel-path:not([hidden]):focus-visible {
+    background: #292d31;
+    text-decoration: underline;
+  }
+  :root[data-theme="light"] .reader-panel-path:not([hidden]) {
+    color: #185abc;
+    border-bottom-color: #d5d9dc;
+  }
+  :root[data-theme="light"] .reader-panel-path:not([hidden]):hover,
+  :root[data-theme="light"] .reader-panel-path:not([hidden]):focus-visible {
+    background: #e7eaed;
+  }
+}
 #page-invert-toggle[hidden] {
   display: none;
 }
