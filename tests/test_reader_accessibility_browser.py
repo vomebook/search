@@ -4,8 +4,10 @@ Controlled Chromium verifies DOM/AX contracts, not actual screen-reader speech o
 universal WCAG conformance. Uses the existing pinned two-site Reader fixtures.
 """
 import unittest
+from io import BytesIO
 from urllib.parse import urlencode
 
+from PIL import Image
 from tests import test_reader_pdf_followup as support
 
 
@@ -150,6 +152,53 @@ class ReaderAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.page.locator('.reader-progress-undo').count(), 1)
         self.assertTrue(self.page.locator('.reader-progress-undo').evaluate('node=>node.hidden'))
         self.assertTrue(slider.evaluate('node=>node===document.activeElement'))
+
+    def test_restore_icon_matches_reference_shape_in_reader_panel(self):
+        self.open_book('txt', 'Long plain text\n' * 2000)
+        self.page.locator('#history').press('Enter')
+        self.page.get_by_role('slider', name='阅读进度').press('End')
+        button = self.page.get_by_role('button', name='撤销进度调整', exact=True)
+        button.wait_for(state='visible')
+        svg = button.locator('svg')
+        self.assertEqual(svg.get_attribute('aria-hidden'), 'true')
+        self.assertEqual(svg.get_attribute('focusable'), 'false')
+        self.assertEqual(svg.get_attribute('viewBox'), '0 0 100 100')
+        for width in (320, 390, 1280):
+            self.page.set_viewport_size({'width': width, 'height': 844})
+            for theme in ('dark', 'light'):
+                with self.subTest(width=width, theme=theme):
+                    self.page.evaluate("theme=>document.documentElement.dataset.theme=theme", theme)
+                    info = button.evaluate('''node=>{
+                      const r=node.getBoundingClientRect(),s=node.querySelector('svg').getBoundingClientRect();
+                      const svg=node.querySelector('svg');
+                      return {button:[r.width,r.height],svg:[s.width,s.height],
+                        left:r.left,right:r.right,inner:s.left>=r.left&&s.right<=r.right&&s.top>=r.top&&s.bottom<=r.bottom,
+                        fills:[...svg.querySelectorAll('path,circle')].map(n=>getComputedStyle(n).fill)};
+                    }''')
+                    self.assertEqual(info['button'], [28, 28])
+                    self.assertEqual(info['svg'], [22, 22])
+                    self.assertTrue(info['inner'] and info['left'] >= 0 and info['right'] <= width, info)
+                    self.assertEqual(len(set(info['fills'])), 1)
+                    self.assertNotEqual(info['fills'][0], 'none')
+        # Raster geometry: a gap at lower left, broad downward arrow at left,
+        # and a separate central dot. This distinguishes the reference from a
+        # generic counterclockwise arrow without depending on platform fonts.
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.page.evaluate("document.documentElement.dataset.theme='dark'")
+        image = Image.open(BytesIO(svg.screenshot(scale='css'))).convert('RGB')
+        ink = lambda x, y: max(image.getpixel((x, y))) > 100
+        self.assertTrue(ink(11, 11), 'central dot')
+        self.assertTrue(ink(6, 6), 'upper-left ring')
+        self.assertTrue(ink(18, 11), 'right ring')
+        self.assertTrue(ink(10, 17), 'bottom ring')
+        self.assertTrue(ink(2, 11) and ink(3, 12) and max(image.getpixel((4, 13))) > 60, 'downward arrow')
+        self.assertFalse(ink(4, 17), 'gap below arrow')
+        self.page.emulate_media(forced_colors='active', reduced_motion='reduce')
+        forced = button.evaluate('''node=>{
+          const paths=[...node.querySelectorAll('path,circle')];
+          return {color:getComputedStyle(node).color,fills:paths.map(n=>getComputedStyle(n).fill)};
+        }''')
+        self.assertTrue(all(fill == forced['color'] for fill in forced['fills']), forced)
 
     def test_bookmark_names_delete_focus_and_modal_priority(self):
         self.open_book('txt', 'A document\n' * 200)
