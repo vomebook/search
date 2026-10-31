@@ -66,6 +66,17 @@ jobs:
           node scripts/build/build_static_assets.mjs
           python3 scripts/build/seo.py --project pages --output _site
           node scripts/build/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
+      - name: Check content-addressed PDF opening
+        run: |
+          python3 -m pip install playwright==1.63.0 pypdf==6.14.2
+          sudo apt-get update && sudo apt-get install -y qpdf
+          python3 -m playwright install --with-deps chromium
+          READER_BUILT_SITE="$GITHUB_WORKSPACE/_site" READER_BUILT_PROJECT=github python3 -B -m unittest -v \
+            tests.test_reader_pdf_first_page.PdfFirstPageTests.test_first_page_reused_and_wrong_count_corrected \
+            tests.test_reader_pdf_first_page.PdfFirstPageTests.test_nested_tree_first_page_does_not_wait_for_other_pages \
+            tests.test_reader_pdf_first_page.PdfFirstPageTests.test_incremental_linearized_preview_uses_current_first_page \
+            tests.test_reader_pdf_first_page.PdfFirstPageTests.test_full_text_search_waits_for_verified_count \
+            tests.test_reader_pdf_first_page.PdfFirstPageTests.test_progress_panel_cannot_add_bookmark_during_validation
       - name: Setup Pages
         uses: actions/configure-pages@v6
       - name: Upload artifact

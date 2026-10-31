@@ -272,6 +272,38 @@ export function choosePdfRangeChunkSize(bytes, total, fallback = PDF_DEFAULT_CHU
   return fallback;
 }
 
+// A scheduling hint only: PDF.js still parses and validates the original tree.
+// Recognize a bounded large two-child root (cover plus remaining subtree),
+// without inspecting stream contents or scanning the entire document.
+export function isFirstPageCandidate(bytes, total, rangeChunkSize) {
+  if (!(bytes instanceof Uint8Array) || !Number.isSafeInteger(total) || total < 8 * 1024 * 1024) return false;
+  if (rangeChunkSize === PDF_ADAPTIVE_CHUNK_BYTES) return true;
+  const head = new TextDecoder("latin1").decode(bytes.subarray(0, PDF_ADAPTIVE_CHUNK_BYTES));
+  if (!head.startsWith("%PDF-")) return false;
+  const first = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<<([^]*?)>>/.exec(head.slice(0, 4096));
+  if (first && /\/Linearized\s+1(?:\.0+)?(?=[\s/>]|$)/.test(first[1])) {
+    const length = /\/L\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/.exec(first[1]);
+    return !!length && Number.isSafeInteger(Number(length[1])) && Number(length[1]) > 0 && Number(length[1]) <= total;
+  }
+  const stream = /\bstream(?:\r\n|\r|\n)/.exec(head);
+  const stop = stream ? stream.index : head.length;
+  const objects = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<</g;
+  let object;
+  while ((object = objects.exec(head)) && object.index < stop) {
+    const end = head.indexOf("endobj", objects.lastIndex);
+    if (end < 0 || end > stop) return false;
+    const text = head.slice(object.index, end);
+    objects.lastIndex = end + 6;
+    if (!/\/Type\s*\/Pages(?=[\s/>]|$)/.test(text)) continue;
+    const count = /\/Count\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/.exec(text);
+    const kids = /\/Kids\s*\[([^\]]*)\]/.exec(text);
+    if (!count || Number(count[1]) < PDF_MIN_SPARSE_PAGES || !kids) continue;
+    const refs = kids[1].match(/\b\d+\s+\d+\s+R\b/g) || [];
+    if (refs.length === 2 && kids[1].replace(/\b\d+\s+\d+\s+R\b/g, "").trim() === "") return true;
+  }
+  return false;
+}
+
 // The first demand overlaps engine preparation. After its complete validation,
 // a qualified page-one file may overlap at most three more existing chunks.
 export async function preparePdfInitialRange(options, hooks) {
@@ -324,7 +356,8 @@ export async function preparePdfInitialRange(options, hooks) {
 }
 
 export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, rangeLimit = limit, onError, initial = null,
-  rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false, admitRange = null}) {
+  rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false, admitRange = null,
+  boundedMetadata = false}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
   let chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
@@ -439,7 +472,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     const candidate = first.rangeChunkSize ?? choosePdfRangeChunkSize(first.bytes, first.total, options.rangeChunkSize);
     if (candidate === PDF_ADAPTIVE_CHUNK_BYTES && options.rangeChunkSize === PDF_DEFAULT_CHUNK_BYTES)
       chunkSize = candidate;
-    metadataAdmission = chunkSize < options.rangeChunkSize;
+    metadataAdmission = boundedMetadata || chunkSize < options.rangeChunkSize;
     // PDF.js owns parsing and range demand; the bootstrap is the first real range.
     const transport = new pdfjs.PDFDataRangeTransport(first.total, first.bytes, true);
     transport.abort = () => stop(new DOMException("PDF transport closed", "AbortError"));

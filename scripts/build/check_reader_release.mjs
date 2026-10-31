@@ -224,7 +224,8 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/core/reader-diagnostics.mjs", "reader/core/reader-lifecycle.mjs", "reader/ui/reader-bookmarks.mjs",
     "reader/formats/reader-media-format.mjs", "reader/core/reader-document-loader.mjs", "reader/formats/reader-html-format.mjs",
     "reader/formats/reader-text-format.mjs", "reader/formats/reader-chapter-format.mjs",
-    "reader/pdf/pdf-worker-wrapper.mjs", "reader/ui/reader-speech.mjs", "tts-client.js"
+    "reader/pdf/pdf-worker-wrapper.mjs", "reader/pdf/pdf-first-page-worker-adapter.mjs",
+    "reader/ui/reader-speech.mjs", "tts-client.js"
   ];
   for (const file of exact) {
     assert(
