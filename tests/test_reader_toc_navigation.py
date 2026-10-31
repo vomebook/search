@@ -182,6 +182,40 @@ class TocNavigationTests(unittest.TestCase):
                             f"第{chapter}章 第二节 fragment did not land")
             self.assertEqual(self.landed_chapter(), chapter)
 
+    def test_merged_chm_missing_toc_anchors_use_unique_in_book_links(self):
+        self.expose()
+        body = (f'<main><section id="chm-page-1"><h1>目录</h1>'
+                '<a href="#chm-page-4">抗日战争胜利后的新形势和新任务[1]</a>'
+                '<a href="#chm-page-5">目前党的方针及新四军的工作部署</a>'
+                '<a href="#chm-page-4">有歧义的条目</a>'
+                '<a href="#chm-page-5">有歧义的条目</a>'
+                '<a href="#chm-page-999">不存在的目的地</a></section>'
+                f'<section id="chm-page-4"><h1>文章一</h1>{BODY}</section>'
+                f'<section id="chm-page-5"><h1>文章二</h1>{BODY}</section></main>')
+        manifest = {'version':1,'kind':'epub-chapters',
+            'chapters':[{'index':1,'path':'chapters/chapter-0001.xhtml','source_path':'chm-fallback.html',
+                         'bytes':len(body.encode())}],
+            'toc':[{'title':title,'chapter':1,'fragment':fragment,'depth':0} for title,fragment in [
+                ('抗日战争胜利后的新形势和新任务[1]',''),('目前党的方针及新四军的工作部署',''),
+                ('有歧义的条目',''),('不存在的目的地',''),('已有的目标','chm-page-5')]]}
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(
+            json=manifest) if 'chapter-manifest' in route.request.url else route.fulfill(
+            content_type='text/html',body=body))
+        source=('https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/chm/'
+                + 'a'*64 + '/1234567890abcdef/chapter-manifest.json')
+        self.page.goto(self.origin + support.PREFIX + '/static/reader.html?' +
+                       urlencode(dict(url=source, ext='epub-chapters')),wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.page.wait_for_function("()=>!!document.querySelector('#chm-page-5')")
+        self.assertEqual(self.page.evaluate('()=>__toc.nav().tocEntries.map(x=>x.fragment)'),
+                         ['chm-page-4','chm-page-5','','','chm-page-5'])
+        for index, target in ((0,'chm-page-4'),(1,'chm-page-5')):
+            self.click_entry(index)
+            offset=self.offset_of('#'+target)
+            self.assertIsNotNone(offset)
+            self.assertLess(abs(offset),2,f'{target} did not land')
+        self.assertFalse(self.errors)
+
     def test_rejump_after_target_chapter_was_trimmed(self):
         self.open_chapters(300)
         self.click_entry(49)

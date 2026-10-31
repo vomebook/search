@@ -108,9 +108,33 @@ export function createReaderChapterFormat(readerContext) {
     const chapterTarget = (article, fragment) =>
       !fragment || article.id === fragment ? article :
         article.querySelector(`[id="${CSS.escape(fragment)}"], [name="${CSS.escape(fragment)}"]`);
-    const setChapterToc = () =>
-      readerContext.setToc(
-        (manifest.toc ?? manifest.chapters.map((item) => ({
+    const normalizeTocLabel = value => String(value || "").replace(/\s+/gu, "").toLowerCase();
+    // Old merged CHM bundles can lose the TOC fragment while retaining the
+    // original, functioning book-internal link. Accept only a unique exact
+    // label that points to an existing generated page in the same chapter.
+    const repairMergedChmToc = (article, chapter) => {
+      const missing = readerContext.navigationState.tocEntries.filter(entry =>
+        entry.chapterIndex === chapter.index && !entry.fragment && normalizeTocLabel(entry.label));
+      if (!missing.length) return;
+      const wanted = new Set(missing.map(entry => normalizeTocLabel(entry.label)));
+      const targets = new Map();
+      for (const link of article.querySelectorAll('a[href^="#chm-page-"]')) {
+        const label = normalizeTocLabel(link.textContent);
+        if (!wanted.has(label)) continue;
+        const fragment = link.getAttribute("href").slice(1);
+        if (!/^chm-page-\d+$/.test(fragment) || !chapterTarget(article, fragment)) continue;
+        if (!targets.has(label)) targets.set(label, new Set());
+        targets.get(label).add(fragment);
+      }
+      for (const entry of missing) {
+        const candidates = targets.get(normalizeTocLabel(entry.label));
+        if (candidates?.size === 1) entry.fragment = candidates.values().next().value;
+      }
+    };
+    const mergedChmToc = manifest.chapters.some(chapter =>
+      chapter.source_path === "chm-fallback.html");
+    const setChapterToc = () => {
+      const entries = (manifest.toc ?? manifest.chapters.map((item) => ({
           title: item.title || `章节 ${item.index}`, chapter: item.index, depth: 0, fragment: ""
         }))).map((item) => ({
           label: item.title,
@@ -118,8 +142,11 @@ export function createReaderChapterFormat(readerContext) {
           fragment: item.fragment,
           depth: item.depth,
           activate: (generation) => activateChapter(manifest.chapters[item.chapter - 1], generation, item.fragment)
-        }))
-      );
+        }));
+      readerContext.setToc(entries);
+      for (const entry of readerContext.navigationState.tocEntries)
+        entry.activate = generation => activateChapter(chapterAt(entry.chapterIndex), generation, entry);
+    };
     const chapterScheduler = VoiceOfMLReaderChapters.createChapterScheduler({
       create: async (index, signal, priority) => {
         const chapter = chapterAt(index);
@@ -166,6 +193,7 @@ export function createReaderChapterFormat(readerContext) {
           loaded.add(chapter.index);
           retainedBytes.set(chapter.index, bytes.byteLength);
           inserted = true;
+          if (mergedChmToc) repairMergedChmToc(article, chapter);
           for (const entry of readerContext.navigationState.tocEntries)
             if (entry.chapterIndex === chapter.index)
               entry.target = chapterTarget(article, entry.fragment);
@@ -194,14 +222,14 @@ export function createReaderChapterFormat(readerContext) {
         throw error;
       });
     };
-    const activateChapter = async (chapter, generation, fragment = "") => {
+    const activateChapter = async (chapter, generation, destination = "") => {
       chapterFocusIndex = chapter.index;
       chapterNavigating++;
       try { await fetchChapter(chapter, true, chapterWindowReady); }
       finally { chapterNavigating--; }
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
       const node = frame.querySelector(`.reader-epub-chapter[data-chapter="${chapter.index}"]`);
-      let id = fragment.replace(/^#/, "");
+      let id = (typeof destination === "string" ? destination : destination.fragment || "").replace(/^#/, "");
       try {
         id = decodeURIComponent(id);
       } catch (_) {}
