@@ -222,7 +222,7 @@ export function createReaderPdfEngine(readerContext) {
       readerContext.assertReaderActive();
       rangeTransportAvailable = typeof pdfjs.PDFDataRangeTransport === "function";
       const restoration = readerContext.readerRestorationPromise;
-      const eligible = rangeTransportAvailable && readerContext.capability.mode === "pdf" &&
+      const eligible = rangeTransportAvailable && readerContext.capability?.mode === "pdf" &&
         readerContext.extension === "pdf" && restoration && !readerContext.ocrManifestUrl &&
         !readerContext.pdfV3Manifest && !readerContext.pdfHybridUrl;
       if (eligible) {
