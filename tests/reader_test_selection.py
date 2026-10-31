@@ -44,6 +44,7 @@ CATEGORY_METHODS = {
         "test_converted_pdf_pages_reject_invalid_manifest_and_missing_first_page",
         "test_djvu_legacy_stream_is_rejected_without_page_images",
         "test_djvu_canvas_fits_page_without_overflow",
+        "test_djvu_embedded_text_double_click_and_drag_select",
         "test_djvu_ocr_uses_verified_source_and_versioned_paths",
         "test_djvu_touch_swipe_from_ocr_does_not_select_or_jump",
         "test_djvu_touch_swipe_preserves_ocr_selection",

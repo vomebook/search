@@ -878,6 +878,44 @@ class ReaderPerformanceTest(unittest.TestCase):
             self.assertGreaterEqual(following['top'], current['canvasBottom'] - 1)
         self.assertEqual(page.locator('.reader-page img').count(), 0)
 
+    def test_djvu_embedded_text_double_click_and_drag_select(self):
+        context = self.browser.new_context(viewport={"width": 1100, "height": 800})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        state = install_native_djvu(page, self.origin, prefix='/search')
+        page.goto(state['url'], wait_until='domcontentloaded')
+        page.locator('.reader-page[data-page="1"][data-text-ready="1"] canvas.ready').wait_for(timeout=10000)
+        run = page.locator('.reader-page[data-page="1"] .reader-pdf-text-run').filter(has_text='Page1text').first
+        run.dblclick()
+        page.wait_for_timeout(100)
+        self.assertIn('Page1text', page.evaluate('getSelection().toString()'))
+        page.evaluate('getSelection().removeAllRanges()')
+        box = run.bounding_box()
+        y = box['y'] + box['height'] / 2
+        page.mouse.move(box['x'] + 2, y)
+        page.mouse.down()
+        page.mouse.move(box['x'] + box['width'] - 2, y, steps=10)
+        page.mouse.up()
+        page.wait_for_timeout(100)
+        self.assertTrue(page.evaluate('getSelection().toString()').strip())
+        # Moving past the viewport must not let the browser auto-scroll into
+        # another page while independently positioned text owns the drag.
+        page.evaluate('getSelection().removeAllRanges()')
+        run.scroll_into_view_if_needed()
+        page.wait_for_timeout(150)
+        box = run.bounding_box()
+        viewport = page.locator('#viewport').bounding_box()
+        before = page.locator('#viewport').evaluate('node => node.scrollTop')
+        page.mouse.move(box['x'] + min(8, box['width'] / 2), box['y'] + box['height'] / 2)
+        page.mouse.down()
+        page.mouse.move(box['x'] + box['width'] / 2, viewport['y'] + viewport['height'] - 1, steps=10)
+        page.wait_for_timeout(500)
+        during = page.locator('#viewport').evaluate('node => node.scrollTop')
+        page.mouse.up()
+        self.assertLess(abs(during - before), 3, 'independent text drag unexpectedly auto-scrolled')
+        self.assertTrue(page.evaluate('getSelection().toString()').strip())
+        self.assertTrue(state['source'] and all(row['range'] for row in state['source']))
+
     def test_djvu_ocr_uses_verified_source_and_versioned_paths(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
         self.addCleanup(context.close)

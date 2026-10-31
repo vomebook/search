@@ -635,17 +635,19 @@ export function createReaderBindings(readerContext) {
         ? selection.anchorNode?.parentElement?.closest(".reader-pdf-text-run") : null;
       const origin = run || selectedRun;
       const caret = !event.shiftKey && event.button === 0 ? readerContext.independentTextCaret(document, event.clientX, event.clientY) : null;
-      if (caret && run) {
-        // Independently positioned text owns caret mapping. Native drag
-        // selection also auto-scrolls near the viewport edge and can move the
-        // page under a stationary pointer into the previous page's text.
-        event.preventDefault();
-        selection?.setBaseAndExtent(caret.node, caret.offset, caret.node, caret.offset);
-      }
       readerContext.pdfSelectionPointer = origin
         ? { id: event.pointerId, x: event.clientX, y: event.clientY, frame: 0,
             page: origin.closest(".reader-page"), anchorNode: caret?.node || (run ? null : selection.anchorNode),
-            anchorOffset: caret?.offset ?? (run ? 0 : selection.anchorOffset) } : null;
+            anchorOffset: caret?.offset ?? (run ? 0 : selection.anchorOffset), caret: run ? caret : null } : null;
+    }, { passive: false });
+    readerContext.viewport.addEventListener("mousedown", (event) => {
+      const caret = readerContext.pdfSelectionPointer?.caret;
+      if (!caret || event.button !== 0 || event.shiftKey || event.detail > 1) return;
+      // Start independent-text drags at the mapped caret, without native
+      // edge auto-scroll. PointerEvent.detail is always zero in Chromium;
+      // use MouseEvent.detail so double/triple clicks retain native selection.
+      event.preventDefault();
+      document.getSelection()?.setBaseAndExtent(caret.node, caret.offset, caret.node, caret.offset);
     }, { passive: false });
     document.addEventListener("pointermove", (event) => {
       const start = readerContext.pdfSelectionPointer;
