@@ -349,7 +349,7 @@ function getReaderLink(rec, returnUrl, cacheMetadata = true) {
     readerRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath));
   }
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
-  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", pdf_document: readerRecord.ReaderPdfDocument || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
+  if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, filename: String(readerRecord.File || "") + (readerRecord.Extension ? "." + readerRecord.Extension : ""), extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", pdf_document: readerRecord.ReaderPdfDocument || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
   return readerUrl;
 }
 

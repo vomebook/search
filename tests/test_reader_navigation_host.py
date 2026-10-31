@@ -110,6 +110,14 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertTrue(row['link'].endswith('/目录/'+row['filename']))
         self.assertTrue(result[0]['reader'])
 
+    def test_session_handoff_keeps_exact_original_filename(self):
+        result=self.page.evaluate('''()=>{
+          const record={Repo:'VoiceOfML/Test',Folder:['docs'],File:'poster.jpg',Extension:'JPG'};
+          const url=getReaderLink(record),id=new URL(url,location.href).searchParams.get('id');
+          return JSON.parse(sessionStorage.getItem('reader-source:'+id));
+        }''')
+        self.assertEqual(result['filename'],'poster.jpg.JPG')
+
     def test_explicit_close_ignores_late_panel_state_before_history_pop(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")')
         self.page.frame_locator('.reader-overlay').locator('body').wait_for()
