@@ -16,6 +16,7 @@ on:
       - "static/search/**"
       - "scripts/build/**"
       - "scripts/benchmarks/benchmark_djvu.py"
+      - "scripts/benchmarks/benchmark_pdf_ranges.py"
       - "scripts/benchmarks/compare_djvu.py"
       - "static/reader*.css"
       - "static/reader*.html"
@@ -33,6 +34,9 @@ on:
       - "tests/fixtures/synthetic-reader-NOTICE.txt"
       - "tests/fixtures/synthetic-djvu-benchmark.djvu"
       - "tests/fixtures/synthetic-djvu-benchmark-NOTICE.txt"
+      - "tests/fixtures/issue8088.pdf"
+      - "tests/fixtures/issue8088-NOTICE.txt"
+      - "tests/fixtures/pdfjs-LICENSE.txt"
       - "requirements*.txt"
       - ".github/workflows/reader-refactor.yml"
 
@@ -69,6 +73,7 @@ jobs:
       - name: Run Reader request and PDF loading regressions
         run: |
           node tests/test_reader_request_manager.js
+          node tests/test_reader_pdf_sparse_ranges.mjs
           python3 -B -m unittest -v tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
       - name: Check DjVu-only streams and image memory eviction
         run: |
