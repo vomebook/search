@@ -921,20 +921,18 @@ export function createReaderPdfPageWindow(readerContext) {
         for (const [number, shell] of [...previewPages]) {
           if (number === 1) continue;
           const incomplete = !shell.querySelector("canvas.ready");
-          if (shell._renderPromise) {
+          const requested = previewNavigationChanged && previewAnchor?.page === number;
+          if (shell._renderPromise && !requested) {
             if (incomplete) shell._renderCancel?.();
             await shell._renderPromise.catch(() => {});
           }
-          if (incomplete || !shell.querySelector("canvas.ready")) {
-            if (previewAnchor?.page === number) {
-              previewAnchor = {page:1,top:previewShell.getBoundingClientRect().top};
-            }
+          if (!requested && (incomplete || !shell.querySelector("canvas.ready"))) {
             shell.remove(); previewPages.delete(number); continue;
           }
           shell.classList.remove("reader-pdf-opening");
           shell.setAttribute("aria-label", `第 ${number} 页`);
-          if (String(readerContext.readerRuntime.currentGeneration("pdf")) !== shell.dataset.previewPdfGeneration ||
-              Number(shell.dataset.previewWidth) !== shell.clientWidth || Number(shell.dataset.previewZoom) !== readerContext.documentState.zoom)
+          if (!incomplete && (String(readerContext.readerRuntime.currentGeneration("pdf")) !== shell.dataset.previewPdfGeneration ||
+              Number(shell.dataset.previewWidth) !== shell.clientWidth || Number(shell.dataset.previewZoom) !== readerContext.documentState.zoom))
             delete shell.dataset.renderState;
           delete shell.dataset.previewPageReady; delete shell.dataset.previewPdfGeneration;
           delete shell.dataset.previewWidth; delete shell.dataset.previewZoom;
@@ -973,7 +971,7 @@ export function createReaderPdfPageWindow(readerContext) {
     document.querySelector("#page-total").textContent = `/ ${readerContext.documentState.pageCount}`;
     readerContext.status.textContent = `${pdf.numPages} 页`;
     await readerContext.getInitialReaderRestoration();
-    const initialPage = readerContext.initialReaderPage(pdf.numPages);
+    const initialPage = previewAnchor?.page || readerContext.initialReaderPage(pdf.numPages);
     let initialRenderGate = true;
     const firstPage = await readerContext.measurePdf(readerContext.awaitReader(pdf.getPage(initialPage)), "page", initialPage);
     readerContext.assertReaderActive();

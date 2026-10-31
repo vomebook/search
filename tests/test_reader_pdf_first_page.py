@@ -325,6 +325,28 @@ class PdfFirstPageTests(unittest.TestCase):
             self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
             self.assertEqual(page.locator('#page-number').input_value(),'2')
 
+    def test_pending_second_page_survives_validation_handoff(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            def delay(route):
+                script=route.fetch().text()
+                needle='function renderPdfShell(shell, force = false, priority = false) {'
+                self.assertIn(needle,script)
+                script=script.replace(needle,needle+'''\n    if (shell.dataset.page === "2" && !shell.dataset.testDelayed) {
+                  shell.dataset.testDelayed="1"; return new Promise(resolve=>setTimeout(resolve,2500)).then(()=>renderPdfShell(shell,force,priority));
+                }''')
+                route.fulfill(content_type='text/javascript',body=script)
+            page.route('**/static/reader/pdf/reader-pdf-renderer.mjs*',delay)
+            self.open(page,source)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden",timeout=15000)
+            page.locator('#page-next').click();state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
+            self.assertEqual(page.locator('#page-number').input_value(),'2')
+
     def test_closing_during_prefix_does_not_write_unverified_progress(self):
         if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
         with range_source(sparse_pdf()) as (source,state,_lock):
