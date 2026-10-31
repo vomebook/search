@@ -10,9 +10,9 @@ assert.match(patched, /ReaderValidatePageCount/);
 assert.match(patched, /readerPageCountPending/);
 assert.match(patched, /ensureDoc\("checkLastPage", \[false\]\)/);
 assert.match(patched, /requestLoadedStream\(\)/);
-assert.match(patched, /readerFirstPageOnly/);
+assert.match(patched, /ReaderGetPagePrefix/);
 assert.throws(() => makeFirstPageWorkerSource(source.replace('const workerVersion = "6.4.299";', 'const workerVersion = "9.0.0";')),
   /PDF_PREVIEW_WORKER_VERSION_MISMATCH/);
-assert.throws(() => makeFirstPageWorkerSource(source.replace('promise = catalog.getPageDict(pageIndex);', '')),
+assert.throws(() => makeFirstPageWorkerSource(source.replace('async checkLastPage(recoveryMode = false) {', '')),
   /PDF_PREVIEW_WORKER_VERSION_MISMATCH/);
 console.log("Pinned PDF first-page worker adapter and fail-closed checks passed");

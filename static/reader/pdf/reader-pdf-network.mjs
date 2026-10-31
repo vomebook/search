@@ -281,11 +281,25 @@ export function isFirstPageCandidate(bytes, total, rangeChunkSize) {
   const head = new TextDecoder("latin1").decode(bytes.subarray(0, PDF_ADAPTIVE_CHUNK_BYTES));
   if (!head.startsWith("%PDF-")) return false;
   const first = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<<([^]*?)>>/.exec(head.slice(0, 4096));
+  const stream = /\bstream(?:\r\n|\r|\n)/.exec(head);
   if (first && /\/Linearized\s+1(?:\.0+)?(?=[\s/>]|$)/.test(first[1])) {
     const length = /\/L\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/.exec(first[1]);
     return !!length && Number.isSafeInteger(Number(length[1])) && Number(length[1]) > 0 && Number(length[1]) <= total;
   }
-  const stream = /\bstream(?:\r\n|\r|\n)/.exec(head);
+  // Some large PDFs begin with a page dictionary but put their edited page
+  // tree at the end. A large indirect parent number is only a hint that the
+  // tree may be expensive; never use it to infer which page this object is,
+  // or to publish a count. The staged worker still asks PDF.js for page one
+  // and performs the same last-page validation and recovery as every other
+  // staged candidate. An ambiguous or incomplete first object stays normal.
+  if (first && first.index < 1024 && (!stream || stream.index > first.index + first[0].length) &&
+      /\/Type\s*\/Page(?=[\s/>]|$)/.test(first[1]) &&
+      /\/Contents(?=[\s/\[>]|$)/.test(first[1]) && /\/Resources(?=[\s/>]|$)/.test(first[1])) {
+    const parent = /\/Parent\s+(\d+)\s+(\d+)\s+R(?=[\s/>]|$)/.exec(first[1]);
+    const end = first.index + first[0].length;
+    if (parent && Number.isSafeInteger(Number(parent[1])) && Number(parent[1]) >= 4096 &&
+        Number.isSafeInteger(Number(parent[2])) && /^\s*endobj\b/.test(head.slice(end))) return true;
+  }
   const stop = stream ? stream.index : head.length;
   const objects = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<</g;
   let object;

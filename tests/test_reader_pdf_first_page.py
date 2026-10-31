@@ -21,13 +21,16 @@ from tests.browser_support import ROOT, SearchHandler, ServerState, local_server
 SOURCE = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/first-page-staged.pdf"
 
 
-def sparse_pdf(count=130, declared=None, stride=71680, nested=False, linked_padding=False, xfa=False):
+def sparse_pdf(count=130, declared=None, stride=71680, nested=False, linked_padding=False, xfa=False, root_at_end=False):
     declared = count if declared is None else declared
     ids = [10 + 3 * index for index in range(count)]
+    root, catalog = (5000, 5001) if root_at_end else (2, 1)
+    if root_at_end and (nested or xfa):
+        raise ValueError('tail fixture is intentionally a simple page tree')
     objects = {
-        1: b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA [ (template) 5 0 R (datasets) 6 0 R ] >> >>" if xfa
-           else b"<< /Type /Catalog /Pages 2 0 R >>",
-        2: (f'<< /Type /Pages /Count {declared} /Kids [{"10 0 R 4 0 R" if nested else " ".join(f"{n} 0 R" for n in ids)}] >>').encode(),
+        catalog: b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA [ (template) 5 0 R (datasets) 6 0 R ] >> >>" if xfa
+           else f"<< /Type /Catalog /Pages {root} 0 R >>".encode(),
+        root: (f'<< /Type /Pages /Count {declared} /Kids [{"10 0 R 4 0 R" if nested else " ".join(f"{n} 0 R" for n in ids)}] >>').encode(),
         3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     }
     if nested:
@@ -35,24 +38,32 @@ def sparse_pdf(count=130, declared=None, stride=71680, nested=False, linked_padd
     if xfa:
         objects[5]=b"<< /Length 35 >>\nstream\n<template xmlns='http://www.xfa.org'/>\nendstream"
         objects[6]=b"<< /Length 11 >>\nstream\n<datasets/>\nendstream"
+    if root_at_end:
+        objects[7]=b"<< /Font << /F1 3 0 R >> >>"
     for index, number in enumerate(ids):
         text = f"BT /F1 14 Tf 10 20 Td (Page {index + 1}) Tj ET".encode()
         if linked_padding:
             text += b'\n%' + hashlib.shake_256(str(index).encode()).hexdigest(stride//2).encode() + b'\n'
-        parent = 4 if nested and index else 2
+        parent = 4 if nested and index else root
+        resources = "7 0 R" if root_at_end else "<< /Font << /F1 3 0 R >> >>"
         objects[number] = (f"<< /Type /Page /Parent {parent} 0 R /MediaBox [0 0 200 50] "
-                           f"/Resources << /Font << /F1 3 0 R >> >> /Contents {number + 1} 0 R >>").encode()
+                           f"/Resources {resources} /Contents {number + 1} 0 R >>").encode()
         objects[number + 1] = f"<< /Length {len(text)} >>\nstream\n".encode() + text + b"\nendstream"
         objects[number + 2] = f"<< /Length {stride} >>\nstream\n".encode() + b"x" * stride + b"\nendstream"
     payload, offsets = bytearray(b"%PDF-1.7\n"), {}
-    for number, body in sorted(objects.items()):
+    order = sorted(objects)
+    if root_at_end:
+        order.remove(ids[0])
+        order.insert(0, ids[0])
+    for number in order:
+        body = objects[number]
         offsets[number] = len(payload)
         payload.extend(f"{number} 0 obj\n".encode() + body + b"\nendobj\n")
     xref = len(payload)
     payload.extend(f"xref\n0 {max(objects) + 1}\n0000000000 65535 f \n".encode())
     for number in range(1, max(objects) + 1):
         payload.extend((f"{offsets[number]:010d} 00000 n \n" if number in offsets else "0000000000 00000 f \n").encode())
-    payload.extend(f"trailer\n<< /Size {max(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+    payload.extend(f"trailer\n<< /Size {max(objects) + 1} /Root {catalog} 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
     return bytes(payload)
 
 
@@ -104,7 +115,8 @@ def reordered_linearized_pdf():
 @contextlib.contextmanager
 def range_source(payload):
     identity = '"' + hashlib.sha256(payload).hexdigest() + '"'
-    state = {"block": threading.Event(), "requests": [], "changed": False, "active": 0, "peak": 0, "fail_from": None}
+    state = {"block": threading.Event(), "requests": [], "changed": False, "active": 0, "peak": 0, "fail_from": None,
+             "block_from": 262144}
     lock = threading.Lock()
 
     built = Path(os.environ['READER_BUILT_SITE']) if os.environ.get('READER_BUILT_SITE') else None
@@ -135,7 +147,7 @@ def range_source(payload):
                 state["requests"].append((begin, end))
                 state["active"] += 1
                 state["peak"] = max(state["peak"],state["active"])
-            if begin >= 262144 and end < len(payload) - 524288:
+            if begin >= state['block_from'] and end < len(payload) - 524288:
                 state["block"].wait(timeout=15)
             with lock:
                 etag = '"changed"' if state["changed"] and begin >= 262144 and end < len(payload) - 524288 else identity
@@ -203,9 +215,10 @@ class PdfFirstPageTests(unittest.TestCase):
             self.open(page, source)
             opening = page.locator('.reader-page[data-preview-ready="1"]')
             opening.locator("canvas.ready").wait_for(timeout=15000)
-            self.assertEqual(page.locator("#status").text_content(), "正在检查文档")
+            self.assertIn("正在检查文档", page.locator("#status").text_content())
             self.assertEqual(page.locator("#page-total").text_content(), "")
-            self.assertTrue(page.locator(".page-controls").is_hidden())
+            if page.locator('.page-controls').is_visible():
+                self.assertTrue(page.locator('#page-number').is_hidden())
             self.assertTrue(page.locator("#bookmark-ribbon").is_disabled())
             page.wait_for_function("()=>document.querySelector('.reader-pdf-opening .reader-pdf-text')?.textContent.includes('Page 1')")
             page.evaluate('''() => {
@@ -239,12 +252,91 @@ class PdfFirstPageTests(unittest.TestCase):
                 self.assertLess(len(state["requests"]), 15)
                 self.assertGreater(state["active"],1)
                 self.assertLessEqual(state["peak"],26)  # 24 demand reads plus initial/tail
-            self.assertTrue(page.locator('.page-controls').is_hidden())
+            if page.locator('.page-controls').is_visible():
+                self.assertTrue(page.locator('#page-number').is_hidden())
             state["block"].set()
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
             self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
             page.locator('#page-number').fill('130');page.locator('#page-number').dispatch_event('change')
             page.locator('.reader-page[data-page="130"] canvas.ready').wait_for(timeout=15000)
+
+    def test_tail_page_tree_is_staged_but_count_still_recovers(self):
+        with range_source(sparse_pdf(declared=135, root_at_end=True)) as (source,state,_lock):
+            context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=15000)
+            if page.locator('.page-controls').is_visible():
+                self.assertTrue(page.locator('#page-number').is_hidden())
+            self.assertEqual(page.locator('#page-total').text_content(),'')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            page.locator('#page-number').fill('130');page.locator('#page-number').dispatch_event('change')
+            page.locator('.reader-page[data-page="130"] canvas.ready').wait_for(timeout=15000)
+
+    def test_understated_page_count_is_rebuilt_before_navigation(self):
+        with range_source(sparse_pdf(declared=2, root_at_end=True)) as (source,state,_lock):
+            state['block'].set()
+            context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            page.locator('#page-number').fill('130');page.locator('#page-number').dispatch_event('change')
+            page.locator('.reader-page[data-page="130"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="130"]')?.dataset.textReady==='1' ''')
+            self.assertIn('Page 130',page.locator('.reader-page[data-page="130"] .reader-pdf-text').text_content())
+
+    def test_sequential_second_page_before_full_validation(self):
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from'] = 1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden",timeout=15000)
+            self.assertIn('正在检查文档',page.locator('#status').text_content())
+            self.assertTrue(page.locator('#page-number').is_hidden())
+            page.locator('#page-next').click()
+            shell=page.locator('.reader-page[data-page="2"]')
+            shell.locator('canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="2"]')?.dataset.textReady==='1' ''')
+            self.assertIn('Page 2',shell.locator('.reader-pdf-text').text_content())
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            self.assertTrue(page.locator('#bookmark-ribbon').is_disabled())
+            before=shell.evaluate('node=>node.getBoundingClientRect().top')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            self.assertAlmostEqual(before,shell.evaluate('node=>node.getBoundingClientRect().top'),delta=4)
+            self.assertEqual(page.locator('#page-number').input_value(),'2')
+
+    def test_scroll_to_second_page_before_full_validation(self):
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            shell=page.locator('.reader-page[data-page="2"]')
+            shell.wait_for(timeout=15000)
+            shell.scroll_into_view_if_needed()
+            shell.locator('canvas.ready').wait_for(timeout=15000)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            self.assertEqual(page.locator('#page-number').input_value(),'2')
+
+    def test_closing_during_prefix_does_not_write_unverified_progress(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden",timeout=15000)
+            page.locator('#page-next').click()
+            page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
+            page.evaluate('''()=>window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}))''')
+            entry=page.evaluate('async source=>await VoiceOfMLReaderStore.get(source)',SOURCE)
+            self.assertIsNone(entry)
 
     def test_full_text_search_waits_for_verified_count(self):
         with range_source(sparse_pdf()) as (source,state,_lock):
@@ -334,7 +426,7 @@ class PdfFirstPageTests(unittest.TestCase):
             time.sleep(.3)
             with lock: self.assertEqual(len(state["requests"]),at_close)
 
-    def test_history_page_uses_stock_path(self):
+    def test_history_page_restores_after_full_validation(self):
         if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
         with range_source(sparse_pdf()) as (source, state, _lock):
             state["block"].set()
@@ -348,6 +440,126 @@ class PdfFirstPageTests(unittest.TestCase):
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
             self.assertEqual(page.locator('#page-number').input_value(),'50')
             self.assertEqual(page.locator('.reader-pdf-opening').count(),0)
+
+    def test_changed_source_keeps_existing_deep_history(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
+        with range_source(sparse_pdf(root_at_end=True)) as (source,state,lock):
+            context=self.browser.new_context(service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();page.goto(source+'/search/static/manifest.json')
+            page.add_script_tag(url=source+'/search/static/reader/core/reader-store.js')
+            page.evaluate('''async source=>{await VoiceOfMLReaderStore.clearHistory();
+              await VoiceOfMLReaderStore.put({url:source,page:50,pageCount:130,zoom:100});}''',SOURCE)
+            self.open(page,source)
+            page.wait_for_function("()=>document.querySelector('#status')?.textContent.includes('检查')",timeout=15000)
+            with lock: state['changed']=True
+            state['block'].set()
+            page.locator('#reader-engine-retry').wait_for(timeout=30000)
+            entry=page.evaluate('async source=>await VoiceOfMLReaderStore.get(source)',SOURCE)
+            self.assertEqual(entry['page'],50)
+            self.assertEqual(entry['pageCount'],130)
+
+    def test_reopening_saved_page_one_keeps_early_navigation(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();page.goto(source+'/search/static/manifest.json')
+            page.add_script_tag(url=source+'/search/static/reader/core/reader-store.js')
+            page.evaluate('''async source=>{await VoiceOfMLReaderStore.clearHistory();
+              await VoiceOfMLReaderStore.put({url:source,page:1,pageOffset:0,pageCount:130,zoom:100});}''',SOURCE)
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.locator('#page-next').wait_for(state='visible',timeout=15000)
+            page.locator('#page-next').click()
+            page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').input_value(),'2')
+
+    def test_preview_page_recreated_after_virtual_window_eviction(self):
+        with range_source(sparse_pdf(count=300,stride=32768)) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden",timeout=15000)
+            page.locator('#page-next').click()
+            shell=page.locator('.reader-page[data-page="2"]');shell.locator('canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="2"]')?.dataset.textReady==='1' ''')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            page.locator('#page-number').fill('299');page.locator('#page-number').dispatch_event('change')
+            page.locator('.reader-page[data-page="299"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>!document.querySelector('.reader-page[data-page="2"]')''',timeout=15000)
+            page.locator('#page-number').fill('2');page.locator('#page-number').dispatch_event('change')
+            shell=page.locator('.reader-page[data-page="2"]');shell.locator('canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="2"]')?.dataset.textReady==='1' ''')
+            self.assertIn('Page 2',shell.locator('.reader-pdf-text').text_content())
+
+    def test_stalled_second_prefix_does_not_prevent_validation(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            def stall(route):
+                script=route.fetch().text()
+                needle='pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit:2})'
+                self.assertIn(needle,script)
+                route.fulfill(content_type='text/javascript',body=script.replace(needle,'new Promise(()=>{})'))
+            page.route('**/static/reader/pdf/reader-pdf-page-window.mjs*',stall)
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+
+    def test_cyclic_tree_never_commits_count(self):
+        payload=sparse_pdf(root_at_end=True)
+        needle=b'/Kids [10 0 R 13 0 R'
+        self.assertIn(needle,payload)
+        payload=payload.replace(needle,b'/Kids [10 0 R 10 0 R',1)
+        with range_source(payload) as (source,state,_lock):
+            context=self.browser.new_context(service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.wait_for_function("()=>document.querySelector('#status')?.textContent.includes('检查') || document.documentElement.dataset.readerPhase==='failed'",timeout=15000)
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='failed'",timeout=30000)
+            self.assertEqual(page.locator('html').get_attribute('data-reader-phase'),'failed')
+            self.assertNotEqual(page.locator('#page-number').get_attribute('max'),'130')
+
+    def test_unknown_or_missing_child_never_commits_count(self):
+        payload=sparse_pdf(root_at_end=True)
+        needle=b'/Kids [10 0 R 13 0 R'
+        self.assertIn(needle,payload)
+        payload=payload.replace(needle,b'/Kids [10 0 R 03 0 R',1)
+        with range_source(payload) as (source,state,_lock):
+            state['block'].set()
+            context=self.browser.new_context(service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='failed'",timeout=30000)
+            self.assertNotEqual(page.locator('#page-number').get_attribute('max'),'130')
+
+    def test_understated_nested_tree_deep_history_rebuilds_order(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
+        payload=sparse_pdf(nested=True,declared=2)
+        with range_source(payload) as (source,state,_lock):
+            state['block'].set()
+            context=self.browser.new_context(service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();page.goto(source+'/search/static/manifest.json')
+            page.add_script_tag(url=source+'/search/static/reader/core/reader-store.js')
+            page.evaluate('''async source=>{await VoiceOfMLReaderStore.clearHistory();
+              await VoiceOfMLReaderStore.put({url:source,page:50,pageCount:130,zoom:100});}''',SOURCE)
+            page.route('**/static/reader/pdf/reader-pdf-network.mjs*',lambda route:route.fulfill(
+                content_type='text/javascript',body=(ROOT/'static/reader/pdf/reader-pdf-network.mjs').read_text().replace(
+                  'if (!(bytes instanceof Uint8Array) || !Number.isSafeInteger(total) || total < 8 * 1024 * 1024) return false;',
+                  'if (!(bytes instanceof Uint8Array) || !Number.isSafeInteger(total) || total < 8 * 1024 * 1024) return false; return true;')))
+            self.open(page,source)
+            page.locator('.reader-page[data-page="50"] canvas.ready').wait_for(timeout=30000)
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            self.assertEqual(page.locator('#page-number').input_value(),'50')
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="50"]')?.dataset.textReady==='1' ''')
+            self.assertIn('Page 50',page.locator('.reader-page[data-page="50"] .reader-pdf-text').text_content())
 
     def test_hung_history_does_not_start_untrusted_preview(self):
         if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
