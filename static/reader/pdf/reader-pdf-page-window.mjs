@@ -647,7 +647,7 @@ export function createReaderPdfPageWindow(readerContext) {
       let verifiedCount = null;
       let previewWidth = null, previewZoom = null;
       let provisionalDocument = false;
-      let previewActive = true, previewCount = 1, previewPage = 1;
+      let previewActive = true, previewCount = 1, previewPage = 1, previewTurnUntil = 0;
       let prefixTask = null, previewRefs = null;
       let warmTask = null, cancelWarm = null;
       let startValidation = null;
@@ -777,6 +777,7 @@ export function createReaderPdfPageWindow(readerContext) {
               if (!previewNavigationChanged && saved) readerContext.beginReaderNavigation();
               previewPage = Math.min(previewCount, Math.max(1, previewPage + delta));
               previewNavigationChanged = true;
+              previewTurnUntil = performance.now() + 1500;
               previewAnchor = {page:previewPage, top:null};
               let shell = previewPages.get(previewPage);
               if (!shell) {
@@ -841,6 +842,7 @@ export function createReaderPdfPageWindow(readerContext) {
             disconnectPreviewObserver=()=>previewObserver.disconnect();
             ensureSequentialShells();
             const onScroll = () => {
+              if (performance.now() < previewTurnUntil) return;
               const shell = readerContext.pageAtMarker();
               const number = Number(shell?.dataset.page);
               if (previewActive && number >= 1 && number <= previewCount) {

@@ -348,6 +348,8 @@ class PdfFirstPageTests(unittest.TestCase):
             self.open(page,source)
             page.wait_for_function("()=>document.querySelector('#page-number')?.hidden",timeout=15000)
             page.locator('#page-next').click()
+            page.locator('#viewport').evaluate('node=>node.scrollTop=0')
+            page.wait_for_timeout(100)
             state['block'].set()
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
             page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
