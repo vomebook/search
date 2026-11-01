@@ -184,10 +184,10 @@ export function createReaderSource(readerContext) {
       const filename = authoritativeName || readerContext.documentState.title || "";
       const label = authoritativeName ? "文件" : "标题";
       document.querySelector(".reader-panel-filename").textContent = filename ? `${label}：${filename}` : "";
-      panelPath.querySelector(".reader-panel-folder").textContent = `所在目录：${value}`;
-      panelPath.hidden = !value || !readerContext.folderNavigationTarget;
-      document.querySelector("#reader-panel-location").hidden = panelPath.hidden;
-      panelPath.setAttribute("aria-label", `打开所在目录：${value}${filename ? `；${label}：${filename}` : ""}`);
+      const folderLabel = value || "不可用";
+      panelPath.querySelector(".reader-panel-folder").textContent = `所在目录：${folderLabel}`;
+      panelPath.disabled = !value || !readerContext.folderNavigationTarget;
+      panelPath.setAttribute("aria-label", `${panelPath.disabled ? "所在目录" : "打开所在目录"}：${folderLabel}${filename ? `；${label}：${filename}` : ""}`);
       panelPath.title = [filename, value].filter(Boolean).join("\n");
     }
   }
