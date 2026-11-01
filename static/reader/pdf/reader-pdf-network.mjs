@@ -467,13 +467,23 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   const failure = Promise.withResolvers();
   failure.promise.catch(() => {});
   const rangeWaiters = [], demandQueue = [];
+  const priorityRanges = [];
   let demandScheduled = false;
   let rangeReads = 0, metadataAdmission = false;
+  // Reserve one existing transport slot for current foreground demand ranges.
+  // This promotes a PDF.js demand already in the queue; it never fetches a
+  // guessed page range and never raises the document's concurrency ceiling.
+  const isPriority = row => priorityRanges.some(range => row.begin < range.end && row.end > range.begin);
   const drainRanges = () => {
-    while (rangeWaiters.length && rangeReads < PDF_METADATA_RANGE_CONCURRENCY)
-      rangeWaiters.shift().resolve();
+    while (rangeWaiters.length && rangeReads < PDF_METADATA_RANGE_CONCURRENCY) {
+      const priority = rangeWaiters.findIndex(isPriority);
+      const index = priority >= 0 ? priority :
+        (!boundedMetadata || rangeReads < PDF_METADATA_RANGE_CONCURRENCY - 1 ? 0 : -1);
+      if (index < 0) return;
+      rangeWaiters.splice(index,1)[0].resolve();
+    }
   };
-  const admitMetadata = () => {
+  const admitMetadata = (begin,end) => {
     if (!metadataAdmission) return Promise.resolve(null);
     active.throwIfAborted();
     let released = false;
@@ -483,12 +493,14 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       rangeReads--;
       drainRanges();
     };
-    if (rangeReads < PDF_METADATA_RANGE_CONCURRENCY) {
+    const row = {begin,end};
+    if (rangeReads < PDF_METADATA_RANGE_CONCURRENCY &&
+        (isPriority(row) || !boundedMetadata || rangeReads < PDF_METADATA_RANGE_CONCURRENCY - 1)) {
       rangeReads++;
       return Promise.resolve(release);
     }
     return new Promise((resolve, reject) => {
-      const waiter = {resolve: () => {
+      const waiter = {begin,end,resolve: () => {
         active.removeEventListener('abort', abort);
         rangeReads++;
         resolve(release);
@@ -516,7 +528,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   // Optional admission for demand reads only: the bootstrap, tail and opening
   // hints are already bounded. A queued read is cancelled with its document.
   const read = async (begin, end, expected = null) => {
-    const metadataRelease = await admitMetadata();
+    const metadataRelease = await admitMetadata(begin,end);
     let release = null;
     try {
       release = admitRange ? await admitRange(active) : null;
@@ -647,8 +659,19 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       onError?.(error);
     };
     for (const hint of [tail, extendedTail, ...openingRanges]) hint?.onFailure(fail);
+    const prioritizeRange = ({begin,end} = {}) => {
+      if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin || end > first.total) return;
+      // Keep a small rolling set of PDF.js misses. Hints only reorder existing
+      // requests; they neither fetch bytes nor identify a page.
+      if (priorityRanges.some(range => range.begin <= begin && range.end >= end)) { drainRanges(); return; }
+      priorityRanges.push({begin,end});
+      if (priorityRanges.length > 32) priorityRanges.shift();
+      drainRanges();
+    };
     transport.requestDataRange = (begin, end) => {
       fetchRange(begin,end).then(result => {
+        for (let index=priorityRanges.length-1;index>=0;index--)
+          if (begin <= priorityRanges[index].begin && end >= priorityRanges[index].end) priorityRanges.splice(index,1);
         if (!stopped) transport.onDataRange(begin,result.bytes);
       }).catch(fail);
     };
@@ -656,6 +679,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     task.promise.catch(error => stop(error));
     return {
       promise:Promise.race([task.promise,failure.promise]),
+      prioritizeRange,
       destroy() {transport.abort();return task.destroy();}
     };
   } catch (error) {

@@ -118,7 +118,7 @@ def reordered_linearized_pdf():
 def range_source(payload):
     identity = '"' + hashlib.sha256(payload).hexdigest() + '"'
     state = {"block": threading.Event(), "requests": [], "changed": False, "active": 0, "peak": 0, "fail_from": None,
-             "block_from": 262144}
+             "block_from": 262144, "block_timeout": 15, "delay": 0, "delay_from": 0}
     lock = threading.Lock()
 
     built = Path(os.environ['READER_BUILT_SITE']) if os.environ.get('READER_BUILT_SITE') else None
@@ -149,8 +149,11 @@ def range_source(payload):
                 state["requests"].append((begin, end))
                 state["active"] += 1
                 state["peak"] = max(state["peak"],state["active"])
+                delay = state['delay'] if begin >= state['delay_from'] and end < len(payload) - 524288 else 0
+            if delay:
+                time.sleep(delay)
             if begin >= state['block_from'] and end < len(payload) - 524288:
-                state["block"].wait(timeout=15)
+                state["block"].wait(timeout=state['block_timeout'])
             with lock:
                 etag = '"changed"' if state["changed"] and begin >= 262144 and end < len(payload) - 524288 else identity
                 fail = state['fail_from'] is not None and begin >= state['fail_from'] and end < len(payload) - 524288
@@ -281,19 +284,26 @@ class PdfFirstPageTests(unittest.TestCase):
             page.locator('#page-number').fill('130');page.locator('#page-number').dispatch_event('change')
             page.locator('.reader-page[data-page="130"] canvas.ready').wait_for(timeout=15000)
 
-    def test_understated_page_count_is_rebuilt_before_navigation(self):
-        with range_source(sparse_pdf(declared=2, root_at_end=True)) as (source,state,_lock):
+    def test_large_inline_page_parent_is_staged_and_readable(self):
+        with range_source(sparse_pdf(declared=135,root_at_end=True,parent_id=3232,inline_resources=True)) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();workers=[]
+            page.on('request',lambda r:workers.append(r.url) if 'pdf-worker-wrapper' in r.url else None)
+            self.open(page,source)
+            page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=20000)
+            self.assertTrue(any('reader-first-page=1' in url for url in workers))
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in (2,3,4):
+                page.locator('#page-next').click()
+                page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
             state['block'].set()
-            context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
-            page=context.new_page();self.open(page,source)
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
             self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
-            page.locator('#page-number').fill('130');page.locator('#page-number').dispatch_event('change')
-            page.locator('.reader-page[data-page="130"] canvas.ready').wait_for(timeout=15000)
-            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="130"]')?.dataset.textReady==='1' ''')
-            self.assertIn('Page 130',page.locator('.reader-page[data-page="130"] .reader-pdf-text').text_content())
+            self.assertEqual(page.locator('#page-number').input_value(),'4')
 
-    def test_page_first_inline_resources_uses_actual_tree_order(self):
+    def test_first_serialized_page_is_not_assumed_to_be_first_tree_page(self):
         payload=sparse_pdf(root_at_end=True,parent_id=3232,inline_resources=True)
         needle=b'/Kids [10 0 R 13 0 R'
         self.assertIn(needle,payload)
@@ -307,9 +317,22 @@ class PdfFirstPageTests(unittest.TestCase):
             page.wait_for_function('''()=>document.querySelector('.reader-pdf-opening .reader-pdf-text')?.textContent.includes('Page 2')''',timeout=15000)
             self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
             self.assertNotIn('Page 1',shell.locator('.reader-pdf-text').text_content())
-            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
             self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
             self.assertIn('Page 2',page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
+
+    def test_understated_page_count_is_rebuilt_before_navigation(self):
+        with range_source(sparse_pdf(declared=2, root_at_end=True)) as (source,state,_lock):
+            state['block'].set()
+            context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            page.locator('#page-number').fill('130');page.locator('#page-number').dispatch_event('change')
+            page.locator('.reader-page[data-page="130"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="130"]')?.dataset.textReady==='1' ''')
+            self.assertIn('Page 130',page.locator('.reader-page[data-page="130"] .reader-pdf-text').text_content())
 
     def test_sequential_second_page_before_full_validation(self):
         with range_source(sparse_pdf()) as (source,state,_lock):
@@ -333,6 +356,315 @@ class PdfFirstPageTests(unittest.TestCase):
             self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
             self.assertAlmostEqual(before,shell.evaluate('node=>node.getBoundingClientRect().top'),delta=4)
             self.assertEqual(page.locator('#page-number').input_value(),'2')
+
+    def test_continuous_pages_before_validation_and_handoff(self):
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=2*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=30000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,8):
+                page.locator('#page-next').click()
+                shell=page.locator(f'.reader-page[data-page="{number}"]')
+                shell.locator('canvas.ready').wait_for(timeout=15000)
+                page.wait_for_function('''n=>document.querySelector(`.reader-page[data-page="${n}"]`)?.dataset.textReady==='1' ''',arg=number,timeout=15000)
+                self.assertIn(f'Page {number}',shell.locator('.reader-pdf-text').text_content())
+                self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            self.assertTrue(page.locator('#page-number').is_hidden())
+            self.assertEqual(page.locator('#page-total').text_content(),'')
+            self.assertTrue(page.locator('#bookmark-ribbon').is_disabled())
+            before=page.locator('.reader-page[data-page="7"]').evaluate('node=>node.getBoundingClientRect().top')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            self.assertEqual(page.locator('#page-number').input_value(),'7')
+            self.assertAlmostEqual(before,page.locator('.reader-page[data-page="7"]').evaluate('node=>node.getBoundingClientRect().top'),delta=4)
+            self.assertEqual(errors,[])
+
+    def test_delayed_frontier_click_survives_validation(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            def hold_frontier(route):
+                script=route.fetch().text()
+                needle='pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit}), lifetime.signal'
+                self.assertIn(needle,script)
+                script=script.replace(needle,'new Promise(()=>{}), lifetime.signal')
+                route.fulfill(content_type='text/javascript',body=script)
+            page.route('**/static/reader/pdf/reader-pdf-page-window.mjs*',hold_frontier)
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            page.locator('#page-next').click()
+            page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
+            page.locator('#page-next').click()
+            self.assertIn('正在加载下一页',page.locator('#status').text_content())
+            self.assertEqual(page.locator('.reader-page[data-page="3"]').count(),0)
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            page.locator('.reader-page[data-page="3"] canvas.ready').wait_for(timeout=15000)
+            self.assertEqual(page.locator('#page-number').input_value(),'3')
+
+    def test_understated_count_does_not_cap_continuous_prefix(self):
+        with range_source(sparse_pdf(declared=2,root_at_end=True)) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,6):
+                page.locator('#page-next').click()
+                shell=page.locator(f'.reader-page[data-page="{number}"]')
+                shell.locator('canvas.ready').wait_for(timeout=15000)
+                page.wait_for_function('''n=>document.querySelector(`.reader-page[data-page="${n}"]`)?.dataset.textReady==='1' ''',arg=number,timeout=15000)
+                self.assertIn(f'Page {number}',shell.locator('.reader-pdf-text').text_content())
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            self.assertEqual(page.locator('#page-number').input_value(),'5')
+
+    def test_closing_after_many_prefix_pages_keeps_history_unwritten(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,6):
+                page.locator('#page-next').click()
+                page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            page.evaluate('''()=>window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}))''')
+            self.assertIsNone(page.evaluate('async source=>await VoiceOfMLReaderStore.get(source)',SOURCE))
+
+    def test_prevalidation_navigation_does_not_replace_prior_page_one_history(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();page.goto(source+'/search/static/manifest.json')
+            page.add_script_tag(url=source+'/search/static/reader/core/reader-store.js')
+            page.evaluate('''async source=>{await VoiceOfMLReaderStore.clearHistory();
+              await VoiceOfMLReaderStore.put({url:source,page:1,pageCount:130,zoom:100});}''',SOURCE)
+            self.open(page,source);page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,6):
+                page.locator('#page-next').click();page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            page.evaluate('''()=>window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}))''')
+            entry=page.evaluate('async source=>await VoiceOfMLReaderStore.get(source)',SOURCE)
+            self.assertEqual(entry['page'],1);self.assertEqual(entry['pageCount'],130)
+
+    def test_scroll_continues_past_second_page_during_validation(self):
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            for number in range(2,6):
+                shell=page.locator(f'.reader-page[data-page="{number}"]')
+                shell.wait_for(timeout=15000);shell.scroll_into_view_if_needed()
+                shell.locator('canvas.ready').wait_for(timeout=15000)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').input_value(),'5')
+
+    def test_actual_scroll_after_button_updates_anchor(self):
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,5):
+                page.locator('#page-next').click()
+                page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            viewport=page.locator('#viewport')
+            viewport.dispatch_event('wheel',{'deltaY':-100})
+            page.locator('.reader-page[data-page="3"]').scroll_into_view_if_needed()
+            page.wait_for_timeout(100)
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').input_value(),'3')
+
+    def test_user_scroll_cancels_queued_next_page_demand(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            def hold_frontier(route):
+                script=route.fetch().text()
+                needle='pdf._transport.messageHandler.sendWithPromise("ReaderGetPagePrefix", {limit}), lifetime.signal'
+                self.assertIn(needle,script)
+                route.fulfill(content_type='text/javascript',body=script.replace(needle,'new Promise(()=>{}), lifetime.signal'))
+            page.route('**/static/reader/pdf/reader-pdf-page-window.mjs*',hold_frontier)
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            page.locator('#page-next').click();page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
+            page.locator('#page-next').click();self.assertIn('正在加载下一页',page.locator('#status').text_content())
+            page.locator('#viewport').dispatch_event('wheel',{'deltaY':-100})
+            page.locator('.reader-page[data-page="1"]').scroll_into_view_if_needed()
+            page.wait_for_timeout(100)
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').input_value(),'1')
+
+    def test_user_key_scroll_after_button_updates_anchor(self):
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,5):
+                page.locator('#page-next').click();page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            page.locator('#viewport').evaluate('node=>node.tabIndex=0')
+            page.locator('#viewport').focus();page.keyboard.press('PageUp')
+            page.wait_for_timeout(500)
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertLess(int(page.locator('#page-number').input_value()),4)
+
+    def test_visible_page_preempts_stalled_opening_render(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            def stall(route):
+                script=route.fetch().text()
+                needle='const pdf = readerContext.pdfDocument;\n        if (!pdf) throw readerContext.readerAbortError();'
+                self.assertIn(needle,script)
+                script=script.replace(needle,'''if (shell.dataset.page === "2") {
+                  await readerContext.awaitReader(new Promise(()=>{}), renderController.signal);
+                }
+        '''+needle,1)
+                route.fulfill(content_type='text/javascript',body=script)
+            page.route('**/static/reader/pdf/reader-pdf-renderer.mjs*',stall)
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            page.locator('#page-next').click()
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="2"]')?.dataset.renderState==='rendering' ''',timeout=15000)
+            page.locator('.reader-page[data-page="3"]').wait_for(timeout=15000)
+            page.locator('#page-next').click()
+            page.locator('.reader-page[data-page="3"] canvas.ready').wait_for(timeout=5000)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').input_value(),'3')
+
+    def test_duplicate_later_page_tree_ref_never_becomes_a_wrong_page(self):
+        payload=sparse_pdf(root_at_end=True)
+        needle=b'19 0 R 22 0 R'
+        self.assertIn(needle,payload)
+        payload=payload.replace(needle,b'19 0 R 19 0 R',1)
+        with range_source(payload) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.wait_for_function("()=>!!document.querySelector('.reader-page[data-page=\"1\"] canvas.ready') || document.documentElement.dataset.readerPhase==='failed'",timeout=30000)
+            if page.locator('html').get_attribute('data-reader-phase')=='failed':
+                self.assertEqual(page.locator('.reader-page[data-page="5"] canvas.ready').count(),0)
+                self.assertNotEqual(page.locator('#page-number').get_attribute('max'),'130')
+                return
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in (2,3,4):
+                if page.locator('html').get_attribute('data-reader-phase')=='failed':break
+                page.locator('#page-next').click()
+                page.wait_for_function('''n=>!!document.querySelector(`.reader-page[data-page="${n}"] canvas.ready`) ||
+                    document.documentElement.dataset.readerPhase==='failed' ''',arg=number,timeout=15000)
+            if page.locator('html').get_attribute('data-reader-phase')!='failed':page.locator('#page-next').click()
+            page.wait_for_function("()=>document.querySelector('#status')?.textContent.includes('下一页暂不可用') || document.documentElement.dataset.readerPhase==='failed'",timeout=15000)
+            self.assertEqual(page.locator('.reader-page[data-page="5"] canvas.ready').count(),0)
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='failed'",timeout=30000)
+            self.assertNotEqual(page.locator('#page-number').get_attribute('max'),'130')
+
+    def test_changed_source_after_reading_several_prefix_pages_fails_closed(self):
+        with range_source(sparse_pdf()) as (source,state,lock):
+            state['block_from']=2*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,6):
+                page.locator('#page-next').click();page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            with lock:state['changed']=True
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='failed'",timeout=30000)
+            self.assertEqual(page.locator('.reader-page').count(),0)
+            self.assertNotEqual(page.locator('#page-number').get_attribute('max'),'130')
+
+    def test_stalled_frontier_does_not_block_whole_tree_validation(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source worker adapter is bundled in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            def stall(route):
+                script=route.fetch().text()
+                # Intercept the adapter source template, not the generated worker.
+                needle='const refs = await readerWalkPagePrefix(limit);'
+                self.assertIn(needle,script)
+                script=script.replace(needle,'const refs = limit > 2 ? await new Promise(()=>{}) : await readerWalkPagePrefix(limit);')
+                route.fulfill(content_type='text/javascript',body=script)
+            page.route('**/static/reader/pdf/pdf-first-page-worker-adapter.mjs*',stall)
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            page.locator('#page-next').click();page.locator('.reader-page[data-page="2"] canvas.ready').wait_for(timeout=15000)
+            page.locator('#page-next').click()
+            self.assertIn('正在加载下一页',page.locator('#status').text_content())
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            page.locator('.reader-page[data-page="3"] canvas.ready').wait_for(timeout=15000)
+            self.assertEqual(page.locator('#page-number').input_value(),'3')
+
+    def test_prefix_waiting_in_shared_chunk_promotes_real_foreground_demand(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source test hooks are bundled in a built artifact')
+        with range_source(sparse_pdf(stride=200000)) as (source,state,lock):
+            state['block_from']=2*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            def trace_ranges(route):
+                script=route.fetch().text()
+                needle='const prioritizeRange = ({begin,end} = {}) => {'
+                self.assertIn(needle,script)
+                script=script.replace(needle,needle+'''\n      (window.__promoted ||= []).push([begin,end]);''')
+                route.fulfill(content_type='text/javascript',body=script)
+            page.route('**/static/reader/pdf/reader-pdf-network.mjs*',trace_ranges)
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,5):
+                page.locator('#page-next').click()
+                page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('()=>window.__promoted?.length>0',timeout=10000)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            with lock:self.assertLessEqual(state['peak'],26)
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+
+    def test_read_several_pages_during_slow_whole_tree_validation(self):
+        with range_source(sparse_pdf(stride=200000)) as (source,state,_lock):
+            state['block'].set()
+            state['delay']=0.2
+            state['delay_from']=262144
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();start=time.monotonic();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,7):
+                page.locator('#page-next').click()
+                page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=10000)
+                self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready',f'page {number} arrived only after validation')
+            self.assertLess(time.monotonic()-start,10)
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
 
     def test_scroll_to_second_page_before_full_validation(self):
         with range_source(sparse_pdf()) as (source,state,_lock):
@@ -728,6 +1060,201 @@ class PdfFirstPageTests(unittest.TestCase):
             self.assertEqual(page.locator('#page-number').get_attribute('max'),'20')
             self.assertEqual(page.locator('.reader-pdf-opening').count(),0)
             self.assertEqual(worker_sources,[])
+
+    def test_large_ordinary_layout_uses_staged_worker_without_heuristic(self):
+        # A first page object with an ordinary low parent number must not need a
+        # specific producer, root shape, object-number threshold or page count.
+        payload=sparse_pdf(count=30,stride=310000,root_at_end=True,parent_id=200,inline_resources=True)
+        self.assertGreater(len(payload),8*1024*1024)
+        needle=b'/Kids [10 0 R 13 0 R';self.assertIn(needle,payload)
+        payload=payload.replace(needle,b'/Kids [13 0 R 10 0 R',1)
+        with range_source(payload) as (source,state,_lock):
+            state['block_from']=2*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();workers=[];page.on('request',lambda request:workers.append(request.url) if 'pdf-worker-wrapper' in request.url else None)
+            self.open(page,source)
+            shell=page.locator('.reader-page[data-preview-ready="1"]')
+            shell.locator('canvas.ready').wait_for(timeout=20000)
+            page.wait_for_function('''()=>document.querySelector('.reader-pdf-opening .reader-pdf-text')?.textContent.includes('Page 2')''',timeout=15000)
+            self.assertTrue(any('reader-first-page=1' in url for url in workers),workers)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'30')
+
+    def test_large_nonpdf_signature_does_not_use_staged_worker(self):
+        payload=b'NOTPDF---'+b'Z'*(9*1024*1024)
+        with range_source(payload) as (source,state,_lock):
+            state['block'].set()
+            context=self.browser.new_context(service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();workers=[];page.on('request',lambda request:workers.append(request.url) if 'pdf-worker-wrapper' in request.url else None)
+            self.open(page,source)
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='failed'",timeout=30000)
+            self.assertFalse(any('reader-first-page=1' in url for url in workers),workers)
+
+    def test_large_ordinary_deep_restoration_does_not_use_new_staging_rule(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
+        payload=sparse_pdf(count=30,stride=310000,root_at_end=True,parent_id=200,inline_resources=True)
+        with range_source(payload) as (source,state,_lock):
+            state['block'].set()
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();workers=[]
+            page.goto(source+'/search/static/manifest.json')
+            page.add_script_tag(url=source+'/search/static/reader/core/reader-store.js')
+            page.evaluate('''async source=>{await VoiceOfMLReaderStore.clearHistory();
+              await VoiceOfMLReaderStore.put({url:source,page:20,pageCount:30,zoom:100});}''',SOURCE)
+            page.on('request',lambda request:workers.append(request.url) if 'pdf-worker-wrapper' in request.url else None)
+            self.open(page,source)
+            page.locator('.reader-page[data-page="20"] canvas.ready').wait_for(timeout=30000)
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').input_value(),'20')
+            self.assertFalse(any('reader-first-page=1' in url for url in workers),workers)
+
+    def test_continuous_handoff_preserves_large_nonvirtual_window_order(self):
+        # Verify the transition for fewer than 257 pages as well as the large
+        # virtual window: no duplicate provisional shells or stale spacer.
+        payload=sparse_pdf(count=30,stride=310000,root_at_end=True,parent_id=200,inline_resources=True)
+        with range_source(payload) as (source,state,_lock):
+            state['block_from']=3*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,6):
+                page.locator('#page-next').click()
+                page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            before=page.locator('.reader-page[data-page="5"]').evaluate('node=>node.getBoundingClientRect().top')
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').input_value(),'5')
+            self.assertEqual(page.locator('.reader-page').count(),30)
+            self.assertEqual(page.locator('.reader-page').evaluate_all('xs=>xs.map(x=>Number(x.dataset.page))'),list(range(1,31)))
+            self.assertAlmostEqual(before,page.locator('.reader-page[data-page="5"]').evaluate('node=>node.getBoundingClientRect().top'),delta=4)
+
+    def test_nonvirtual_handoff_keeps_selected_text(self):
+        payload=sparse_pdf(count=30,stride=310000,root_at_end=True,parent_id=200,inline_resources=True)
+        with range_source(payload) as (source,state,_lock):
+            state['block_from']=3*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in (2,3,4,5):
+                page.locator('#page-next').click();page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="5"]')?.dataset.textReady==='1' ''',timeout=15000)
+            page.evaluate('''()=>{window.__selectedShells=[document.querySelector('.reader-page[data-page="4"]'),document.querySelector('.reader-page[data-page="5"]')]}''')
+            page.evaluate('''()=>{const layer=document.querySelector('.reader-page[data-page="4"] .reader-pdf-text');
+              const other=document.querySelector('.reader-page[data-page="5"] .reader-pdf-text');
+              const range=document.createRange();range.setStart(layer,0);range.setEnd(other,other.childNodes.length);
+              getSelection().removeAllRanges();getSelection().addRange(range)}''')
+            self.assertIn('Page 4',page.evaluate('()=>getSelection().toString()'))
+            self.assertIn('Page 5',page.evaluate('()=>getSelection().toString()'))
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertTrue(page.evaluate('''()=>window.__selectedShells.every((shell,i)=>shell===document.querySelector(`.reader-page[data-page="${i+4}"]`))'''))
+            self.assertIn('Page 4',page.evaluate('()=>getSelection().toString()'))
+            self.assertIn('Page 5',page.evaluate('()=>getSelection().toString()'))
+
+    def test_virtual_handoff_keeps_selected_text(self):
+        with range_source(sparse_pdf(count=300,stride=32768)) as (source,state,_lock):
+            # Use the same prefix machinery with a virtual-window-sized tree.
+            state['block_from']=2*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':250},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in (2,3,4,5):
+                page.locator('#page-next').click();page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="5"]')?.dataset.textReady==='1' ''',timeout=15000)
+            page.evaluate('''()=>{const layer=document.querySelector('.reader-page[data-page="4"] .reader-pdf-text');
+              const other=document.querySelector('.reader-page[data-page="5"] .reader-pdf-text');
+              const range=document.createRange();range.setStart(layer,0);range.setEnd(other,other.childNodes.length);
+              getSelection().removeAllRanges();getSelection().addRange(range)}''')
+            self.assertIn('Page 4',page.evaluate('()=>getSelection().toString()'))
+            self.assertIn('Page 5',page.evaluate('()=>getSelection().toString()'))
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertIn('Page 4',page.evaluate('()=>getSelection().toString()'))
+            self.assertIn('Page 5',page.evaluate('()=>getSelection().toString()'))
+
+    def test_virtual_handoff_keeps_selection_across_chunk_boundary(self):
+        with range_source(sparse_pdf(count=300,stride=32768)) as (source,state,_lock):
+            state['block_from']=4*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=20000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,34):
+                page.locator('#page-next').click();page.locator(f'.reader-page[data-page="{number}"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''()=>[32,33].every(n=>document.querySelector(`.reader-page[data-page="${n}"]`)?.dataset.textReady==='1')''',timeout=15000)
+            page.evaluate('''()=>{const a=document.querySelector('.reader-page[data-page="32"] .reader-pdf-text');
+              const b=document.querySelector('.reader-page[data-page="33"] .reader-pdf-text');
+              const r=document.createRange();r.setStart(a,0);r.setEnd(b,b.childNodes.length);getSelection().removeAllRanges();getSelection().addRange(r)}''')
+            self.assertIn('Page 32',page.evaluate('()=>getSelection().toString()'))
+            self.assertIn('Page 33',page.evaluate('()=>getSelection().toString()'))
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertIn('Page 32',page.evaluate('()=>getSelection().toString()'))
+            self.assertIn('Page 33',page.evaluate('()=>getSelection().toString()'))
+    def test_prefix_crosses_virtual_chunk_before_validation(self):
+        payload=sparse_pdf(count=300,stride=32768)
+        with range_source(payload) as (source,state,_lock):
+            state['block_from']=4*1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=20000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,36):
+                page.locator('#page-next').click()
+                shell=page.locator(f'.reader-page[data-page="{number}"]')
+                shell.locator('canvas.ready').wait_for(timeout=15000)
+                page.wait_for_function('''n=>document.querySelector(`.reader-page[data-page="${n}"]`)?.dataset.textReady==='1' ''',arg=number,timeout=15000)
+                self.assertIn(f'Page {number}',shell.locator('.reader-pdf-text').text_content())
+                self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            before=page.locator('.reader-page[data-page="35"]').evaluate('node=>node.getBoundingClientRect().top')
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            page.locator('.reader-page[data-page="35"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_timeout(1000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'300')
+            self.assertEqual(page.locator('#page-number').input_value(),'35')
+            self.assertEqual(page.locator('.reader-page[data-page="35"]').count(),1)
+            numbers=page.locator('.reader-page').evaluate_all('xs=>xs.map(x=>Number(x.dataset.page))')
+            self.assertEqual(numbers,sorted(set(numbers)))
+            self.assertAlmostEqual(before,page.locator('.reader-page[data-page="35"]').evaluate('node=>node.getBoundingClientRect().top'),delta=4)
+            self.assertEqual(errors,[])
+
+    def test_late_preview_pages_remount_in_virtual_window_after_handoff(self):
+        payload=sparse_pdf(count=500,stride=20000)
+        with range_source(payload) as (source,state,_lock):
+            state['block_from']=4*1024*1024
+            state['block_timeout']=180
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            # This intentionally long 134-page interaction checks virtualization,
+            # not transport timeout; avoid a test timeout masquerading as failure.
+            page.add_init_script('''const nativeSetTimeout=window.setTimeout.bind(window);window.setTimeout=(fn,ms,...args)=>
+              nativeSetTimeout(fn,ms===120000?300000:ms,...args)''')
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=20000)
+            page.wait_for_function("()=>document.querySelector('#page-number')?.hidden && !document.querySelector('.page-controls').hidden",timeout=15000)
+            for number in range(2,135):
+                page.locator('#page-next').click()
+                page.wait_for_function('''n=>!!document.querySelector(`.reader-page[data-page="${n}"]`) || document.documentElement.dataset.readerPhase==='failed' ''',arg=number,timeout=15000)
+                self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'failed')
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            page.wait_for_timeout(500)
+            self.assertEqual(page.locator('#page-number').input_value(),'134')
+            page.locator('#page-number').fill('1');page.locator('#page-number').dispatch_event('change')
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=15000)
+            numbers=page.locator('.reader-page').evaluate_all('xs=>xs.map(x=>Number(x.dataset.page))')
+            self.assertEqual(numbers,sorted(set(numbers)))
+            self.assertEqual(page.locator('.reader-page[data-page="134"]').count(),0,'old offscreen preview must be virtualized')
+            page.locator('#page-number').fill('134');page.locator('#page-number').dispatch_event('change')
+            shell=page.locator('.reader-page[data-page="134"]')
+            try:shell.locator('canvas.ready').wait_for(timeout=15000)
+            except Exception as error:
+                self.fail(str({'error':str(error),'phase':page.locator('html').get_attribute('data-reader-phase'),
+                    'status':page.locator('#status').text_content(),'input':page.locator('#page-number').input_value(),
+                    'shell':shell.count(),'pages':page.locator('.reader-page').evaluate_all('xs=>xs.map(x=>({n:x.dataset.page,state:x.dataset.renderState,ready:!!x.querySelector("canvas.ready")}))')}))
+            page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="134"]')?.dataset.textReady==='1' ''',timeout=15000)
+            self.assertIn('Page 134',shell.locator('.reader-pdf-text').text_content())
 
     def test_xfa_document_does_not_show_unvalidated_preview(self):
         with range_source(sparse_pdf(xfa=True)) as (source,state,_lock):

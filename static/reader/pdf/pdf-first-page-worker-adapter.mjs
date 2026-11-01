@@ -89,6 +89,57 @@ export function makeFirstPageWorkerSource(source) {
     this.#pagePromises.clear();
     catalog.pageKidsCountCache.clear();`, "page-identity-check");
   source = replaceOnce(source,
+    `if (!provisional) {
+      for (const [index, expected] of pagesTree) {`,
+    `if (provisional && this.readerProvisionalRefs) {
+      // Preserve pages already used by PDF.js while extending the ordered
+      // prefix; replacing their page objects can break an in-flight render.
+      for (const [index, [pageDict, ref]] of pagesTree) {
+        const old = this.readerProvisionalRefs.get(index);
+        if (old) {
+          if (!(ref instanceof Ref) || old !== ref.toString()) throw new Error("PDF_PREFIX_CHANGED");
+          continue;
+        }
+        const promise = Promise.resolve(new Page({
+          pdfManager, xref: this.xref, pageIndex:index, pageDict, ref,
+          globalIdFactory:this._globalIdFactory, fontCache:catalog.fontCache,
+          builtInCMapCache:catalog.builtInCMapCache, standardFontDataCache:catalog.standardFontDataCache,
+          globalColorSpaceCache:catalog.globalColorSpaceCache, globalImageCache:catalog.globalImageCache,
+          systemFontCache:catalog.systemFontCache, nonBlendModesSet:catalog.nonBlendModesSet, xfaFactory:null
+        }));
+        this.#pagePromises.set(index, promise);
+        this.readerProvisionalRefs.set(index, ref.toString());
+        catalog.pageIndexCache.put(ref, index);
+      }
+      return;
+    }
+    if (provisional) this.readerProvisionalRefs = new Map(
+      [...pagesTree].map(([index, [, ref]]) => [index, ref.toString()]));
+    if (!provisional) {
+      for (const [index, expected] of pagesTree) {`, "extend-page-prefix");
+  source = replaceOnce(source,
+    `async fetchAsync(ref, suppressEncryption) {
+    try {`,
+    `async readerFetchPrefixValue(read) {
+    try { return read(); }
+    catch (ex) {
+      if (!(ex instanceof MissingDataException)) throw ex;
+      this.pdfManager.streamManager?.msgHandler.send("ReaderPrioritizeRange", {begin:ex.begin,end:ex.end});
+      await this.pdfManager.requestRange(ex.begin, ex.end);
+      return this.readerFetchPrefixValue(read);
+    }
+  }
+  async readerFetchPrefixAccess(ref) {
+    return this.readerFetchPrefixValue(() => this.fetch(ref));
+  }
+  async fetchAsync(ref, suppressEncryption) {
+    try {`, "prioritize-prefix-range");
+  source = replaceOnce(source,
+    `await this.xref.stream.manager.requestRanges(pendingRequests);`,
+    `for (const range of pendingRequests.slice(0, 32))
+        this.xref.pdfManager.streamManager?.msgHandler.send("ReaderPrioritizeRange", range);
+      await this.xref.stream.manager.requestRanges(pendingRequests);`, "prioritize-page-resources");
+  source = replaceOnce(source,
     'const workerHandlerName = docId + "_worker";\n    let handler = new MessageHandler(workerHandlerName, docId, port);',
     'const workerHandlerName = docId + "_worker";\n    let readerCountPending = false;\n    let handler = new MessageHandler(workerHandlerName, docId, port);', "document-state");
   source = replaceOnce(source,
@@ -112,48 +163,54 @@ export function makeFirstPageWorkerSource(source) {
         handler.send("GetDoc", {`, "document-result");
   source = replaceOnce(source,
     'handler.on("GetPage", async function ({\n      pageIndex\n    }) {',
-    `let readerValidation = null, readerPrefix = null, readerPrefixWork = null;
+    `let readerValidation = null, readerPrefix = null, readerPrefixWork = null, readerPrefixWalk = null;
     // Enumerate strictly from the left edge without using any subtree /Count.
     // Other siblings are not fetched, so this prefix can be used before full
     // validation. Pending UI must discard it if recovery changes identities.
     async function readerWalkPagePrefix(limit) {
       ensureNotTerminated();
       if (readerPrefix?.length >= limit) return readerPrefix.slice(0,limit).map(item => item.ref.toString());
-      if (!Number.isInteger(limit) || limit < 1 || limit > 4) throw new Error("PDF_PREFIX_LIMIT");
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100000 || limit > (readerPrefix?.length || 0) + 2)
+        throw new Error("PDF_PREFIX_LIMIT");
       const manager = pdfManager, catalog = manager.pdfDocument.catalog, xref = catalog.xref;
-      const stack = [{value:catalog.toplevelPagesDict, ref:null}], seenRefs = new Set(), seenDirect = new WeakSet(), pages = [];
-      const root = catalog.readerPageTreeRootRef();
-      if (root instanceof Ref) seenRefs.add(root.toString());
-      let visited = 0;
+      if (!readerPrefixWalk) {
+        const seenRefs = new Set(), root = catalog.readerPageTreeRootRef();
+        if (root instanceof Ref) seenRefs.add(root.toString());
+        readerPrefixWalk = {catalog, stack:[{value:catalog.toplevelPagesDict,ref:null}],
+          seenRefs, seenDirect:new WeakSet(), pages:[], visited:0};
+      }
+      const walk = readerPrefixWalk, {stack,seenRefs,seenDirect,pages} = walk;
+      if (walk.catalog !== catalog) throw new Error("PDF_PREFIX_CHANGED");
       while (stack.length && pages.length < limit) {
         ensureNotTerminated();
-        if (++visited > 10000) throw new Error("PDF_PREFIX_LIMIT");
+        if (++walk.visited > 200000) throw new Error("PDF_PREFIX_LIMIT");
         const {value, ref} = stack.pop();
         if (ref instanceof Ref) {
           if (seenRefs.has(ref.toString())) throw new Error("PDF_PAGE_TREE_CYCLE");
           seenRefs.add(ref.toString());
         }
-        const obj = value instanceof Ref ? await xref.fetchAsync(value) : value;
+        // Do not join validation's pending fetch promise: inspecting the same
+        // ref synchronously lets us promote its precise missing range.
+        const obj = value instanceof Ref ? await xref.readerFetchPrefixAccess(value) : value;
         if (!(obj instanceof Dict) || seenDirect.has(obj)) throw new Error("PDF_PAGE_TREE_INVALID");
         seenDirect.add(obj);
-        let type = obj.getRaw("Type");
-        if (type instanceof Ref) type = await xref.fetchAsync(type);
+        let type = await xref.readerFetchPrefixValue(() => obj.getRaw("Type"));
+        if (type instanceof Ref) type = await xref.readerFetchPrefixAccess(type);
         if (type != null && !isName(type, "Page") && !isName(type, "Pages")) throw new Error("PDF_PAGE_TREE_INVALID");
-        if (isName(type, "Page") || !obj.has("Kids")) {
+        if (isName(type, "Page") || !await xref.readerFetchPrefixValue(() => obj.has("Kids"))) {
           if (!(ref instanceof Ref)) throw new Error("PDF_PAGE_TREE_DIRECT_PAGE");
           pages.push({ref, dict:obj});
           continue;
         }
-        let kids = obj.getRaw("Kids");
-        if (kids instanceof Ref) kids = await xref.fetchAsync(kids);
+        let kids = await xref.readerFetchPrefixValue(() => obj.getRaw("Kids"));
+        if (kids instanceof Ref) kids = await xref.readerFetchPrefixAccess(kids);
         if (!Array.isArray(kids) || kids.length > 100000) throw new Error("PDF_PAGE_TREE_INVALID");
         for (let index = kids.length - 1; index >= 0; index--) {
           const kid = kids[index]; stack.push({value:kid,ref:kid instanceof Ref ? kid : null});
         }
       }
       if (!pages.length) throw new Error("PDF_PAGE_TREE_EMPTY");
-      if (readerPrefix && readerPrefix.some((item,index) => item.ref.toString() !== pages[index]?.ref.toString()))
-        throw new Error("PDF_PREFIX_CHANGED");
+      if (manager.pdfDocument.catalog !== catalog) throw new Error("PDF_PREFIX_CHANGED");
       readerPrefix = pages;
       return pages.map(item => item.ref.toString());
     }
@@ -161,7 +218,9 @@ export function makeFirstPageWorkerSource(source) {
       const previous = readerPrefixWork;
       readerPrefixWork = (async () => {
         if (previous) await previous;
-        return readerWalkPagePrefix(limit);
+        if (pdfManager.readerValidationCommitted) return null;
+        const refs = await readerWalkPagePrefix(limit);
+        return pdfManager.readerValidationCommitted ? null : refs;
       })();
       return readerPrefixWork;
     });
@@ -274,14 +333,17 @@ export function makeFirstPageWorkerSource(source) {
         }
         ensureNotTerminated();
         // Finish any prefix installation before committing the authoritative map.
+        // A stalled look-ahead must not block the whole-tree validation.
+        // A walk finishing after commit cannot be installed as a prefix.
         if (readerInstallPrefix) await readerInstallPrefix;
         const pagesTree = await readerCollectPageTree(manager.pdfDocument.catalog);
         manager.readerValidationCommitted = true;
         if (readerInstallPrefix) await readerInstallPrefix;
-        if (readerPrefix) {
-          for (let index = 0; index < readerPrefix.length; index++) {
+        const installedPrefix = manager.pdfDocument.readerProvisionalRefs;
+        if (installedPrefix) {
+          for (const [index, expected] of installedPrefix) {
             const ref = pagesTree.get(index)?.[1];
-            if (!(ref instanceof Ref) || ref.toString() !== readerPrefix[index].ref.toString())
+            if (!(ref instanceof Ref) || ref.toString() !== expected)
               throw new Error("PDF_PREFIX_CHANGED");
           }
         }
@@ -289,7 +351,7 @@ export function makeFirstPageWorkerSource(source) {
         delete manager.pdfDocument.numPages;
         const count = await manager.ensureDoc("numPages");
         if (!Number.isSafeInteger(count) || count < 1) throw new Error("PDF_PAGE_COUNT_INVALID");
-        return {count, refs:readerPrefix?.map(item => item.ref.toString()) || []};
+        return {count, refs:installedPrefix ? [...installedPrefix.values()] : []};
       })();
       return readerValidation;
     });

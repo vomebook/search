@@ -60,6 +60,9 @@ export function createReaderPdfEngine(readerContext) {
             destroy();
             return;
           }
+          if (typeof task?.prioritizeRange === "function" && document._pdfInfo?.readerPageCountPending) {
+            document._transport.messageHandler.on("ReaderPrioritizeRange", range => task?.prioritizeRange?.(range));
+          }
           resolve(document);
         },
         (error) => {
@@ -266,8 +269,21 @@ export function createReaderPdfEngine(readerContext) {
             optional(Promise.resolve(restoration).then(value => ({value})))
           ]);
         } catch (_) { readerContext.assertReaderActive(); }
-        if (first && !first.complete && saved && !readerContext.restorationFailed &&
-            readerContext.isFirstPageCandidate(first.bytes, first.total, first.rangeChunkSize) &&
+        // All sufficiently large, strongly versioned native PDFs can use the
+        // same staged parser on a fresh page-one open. Object numbers, xref
+        // offsets, catalog layout and producer strings are not evidence of
+        // page identity: the worker traverses the current PDF.js tree.
+        // Keep the existing targeted path for saved deep pages; broadening
+        // that path needs a separate restoration performance evaluation.
+        const entry = saved?.value;
+        const freshPageOne = saved && (!entry || (Number(entry.page) === 1 &&
+          Number(entry.pageOffset || 0) === 0 && !entry.id));
+        const stagedCandidate = first && !first.complete && first.bytes instanceof Uint8Array &&
+          first.bytes[0] === 0x25 && first.bytes[1] === 0x50 && first.bytes[2] === 0x44 &&
+          first.bytes[3] === 0x46 && first.bytes[4] === 0x2d && (
+          readerContext.isFirstPageCandidate(first.bytes, first.total, first.rangeChunkSize) ||
+          (freshPageOne && first.total >= 8 * 1024 * 1024));
+        if (stagedCandidate && saved && !readerContext.restorationFailed &&
             navigation === readerContext.readerRuntime?.currentGeneration("navigation")) {
           readerContext.releasePdfWorker?.();
           await readerContext.preparePdfWorker(pdfjs, true);
