@@ -807,10 +807,10 @@ export function createReaderBindings(readerContext) {
       if (restoreFocus) readerContext.progressRange.focus({ preventScroll: true });
     });
     readerContext.chapterPrev.addEventListener("click", () =>
-      readerContext.activateChapter(readerContext.navigationState.currentChapterIndex - 1)
+      readerContext.activateChapter(readerContext.adjacentTocIndex(-1))
     );
     readerContext.chapterNext.addEventListener("click", () =>
-      readerContext.activateChapter(readerContext.navigationState.currentChapterIndex + 1)
+      readerContext.activateChapter(readerContext.adjacentTocIndex(1))
     );
   }
 
