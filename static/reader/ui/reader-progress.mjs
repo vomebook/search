@@ -424,7 +424,7 @@ export function createReaderProgress(readerContext) {
     )
       return;
     try {
-      await readerContext.navigateTocEntry(index);
+      await readerContext.navigateTocEntry(index, { closePanel: false });
     } finally {
       readerContext.updateProgressTools();
     }
