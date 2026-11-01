@@ -30,6 +30,7 @@ on:
       - "tests/test_reader_*.py"
       - "tests/test_reader_*.mjs"
       - "tests/test_reader_*.js"
+      - "tests/test_static_contract.js"
       - "tests/reader_native_fixture.py"
       - "tests/reader_test_selection.py"
       - "tests/fixtures/synthetic-reader.djvu"
@@ -109,6 +110,8 @@ jobs:
             tests.test_reader_toc_navigation.TocNavigationTests.test_merged_chm_missing_toc_anchors_use_unique_in_book_links
       - name: Run search accessibility keyboard gates
         run: python3 -B -m unittest -v tests.test_search_accessibility_browser tests.test_sidebar_keyboard
+      - name: Check static dependency contracts
+        run: node tests/test_static_contract.js
       - name: Check Firefox footer counter geometry
         env:
           SEARCH_POSITION_BROWSER: firefox
@@ -233,6 +236,9 @@ jobs:
       - name: Run search accessibility keyboard gates
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_search_accessibility_browser tests.test_sidebar_keyboard
+      - name: Check static dependency contracts
+        working-directory: huggingface-search
+        run: python3 -B -m unittest -v tests.test_static_contract
       - name: Check Firefox footer counter geometry
         working-directory: huggingface-search
         env:
