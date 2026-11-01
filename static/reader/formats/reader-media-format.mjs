@@ -37,6 +37,9 @@ export function createReaderMediaFormat(readerContext) {
         readerContext.saveProgress();
       });
     readerContext.mediaElement = media;
+    // Media opens the playback tab instead of TOC; keep the same scrollable
+    // folder action available there rather than hiding it behind a missing tab.
+    readerContext.mediaPanel.prepend(document.querySelector("#reader-panel-location"));
     let sourceRetried = false, retryPosition = null, idle, deadline, settled = false, resolveMetadata, rejectMetadata;
     const metadata = new Promise((resolve, reject) => { resolveMetadata = resolve; rejectMetadata = reject; });
     const clearDeadlines = () => { clearTimeout(idle); clearTimeout(deadline); idle = deadline = null; };

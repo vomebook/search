@@ -94,6 +94,7 @@ const readerContext = {
   get pdfHybridPreviewGrace() { return pdfHybridPreviewGrace; }, set pdfHybridPreviewGrace(value) { pdfHybridPreviewGrace = value; },
   get applyPdfShellGeometry() { return applyPdfShellGeometry; }, set applyPdfShellGeometry(value) { applyPdfShellGeometry = value; },
   get pdfHybridLookahead() { return pdfHybridLookahead; }, set pdfHybridLookahead(value) { pdfHybridLookahead = value; },
+  get pdfOutputScale() { return pdfOutputScale; }, set pdfOutputScale(value) { pdfOutputScale = value; },
   get admitPdfRange() { return admitPdfRange; }, set admitPdfRange(value) { admitPdfRange = value; },
   get drainPdfRangeWaiters() { return drainPdfRangeWaiters; }, set drainPdfRangeWaiters(value) { drainPdfRangeWaiters = value; },
   get startPdfHybridDocument() { return startPdfHybridDocument; }, set startPdfHybridDocument(value) { startPdfHybridDocument = value; },
@@ -676,7 +677,7 @@ let {
 } = createReaderHtmlFormat(readerContext);
 
 let {
-  setPdfPageLoadingState, isPdfPageVisible, pdfPagePriority, normalizePdfPriority,
+  pdfOutputScale, setPdfPageLoadingState, isPdfPageVisible, pdfPagePriority, normalizePdfPriority,
   renderPdfInBackground, pdfPrimarySource, renderPdfManifestShell, renderHybridPdfCanvas,
   renderPdfImageShell, renderPdfShell, resetPdfLatencySamples, notePdfLatency, pdfHybridPreviewGrace,
   applyPdfShellGeometry, pdfHybridLookahead

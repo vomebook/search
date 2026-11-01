@@ -165,7 +165,8 @@ export function createReaderToc(readerContext) {
     const state = readerContext.tocVirtualState;
     if (!state) return;
     const height = Math.max(320, state.panelView.clientHeight),
-      start = Math.max(0, Math.floor(state.panelView.scrollTop / readerContext.TOC_VIRTUAL_ROW_HEIGHT) - 12),
+      listTop = state.list.getBoundingClientRect().top - state.panelView.getBoundingClientRect().top + state.panelView.scrollTop,
+      start = Math.max(0, Math.floor((state.panelView.scrollTop - listTop) / readerContext.TOC_VIRTUAL_ROW_HEIGHT) - 12),
       end = Math.min(state.entries.length, start + Math.ceil(height / readerContext.TOC_VIRTUAL_ROW_HEIGHT) + 24),
       fragment = document.createDocumentFragment();
     state.list.replaceChildren();
