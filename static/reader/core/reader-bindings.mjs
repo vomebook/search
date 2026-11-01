@@ -375,13 +375,22 @@ export function createReaderBindings(readerContext) {
       event.currentTarget.setAttribute("aria-expanded", String(open));
     });
     document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
+    let closing = false;
+    window.addEventListener("pageshow", event => { if (event.persisted) closing = false; });
     document.querySelector("#back").addEventListener("click", async () => {
+      if (closing) return;
+      closing = true;
       clearTimeout(readerContext.saveTimer);
-      await Promise.race([readerContext.saveProgress(), new Promise((resolve) => setTimeout(resolve, 300))]);
       if (readerContext.isReaderOverlayFrame()) {
-        window.parent.postMessage({ type: "voice-reader-close" }, location.origin);
+        const progress = readerContext.captureProgressEntry();
+        if (progress) {
+          readerContext.lastSavedProgress = JSON.stringify(progress);
+          progress.closeTime = Date.now();
+        }
+        window.parent.postMessage({ type: "voice-reader-close", progress }, location.origin);
         return;
       }
+      await Promise.race([readerContext.saveProgress(), new Promise((resolve) => setTimeout(resolve, 300))]);
       readerContext.clearReturnNavigation();
       try {
         const target = new URL(readerContext.normalizeReaderReturnUrl(readerContext.returnUrl), location.origin);

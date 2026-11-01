@@ -14,7 +14,7 @@ export function createReaderProgress(readerContext) {
     );
   }
 
-  async function saveProgress(event) {
+  function captureProgressEntry(event) {
     if (
       readerContext.readerLifecycle.disposed ||
       !readerContext.documentState.restorationReady ||
@@ -35,7 +35,7 @@ export function createReaderProgress(readerContext) {
     const htmlScrollTop = readerContext.htmlFrame && readerContext.htmlFrame.contentWindow ? readerContext.htmlFrame.contentWindow.scrollY : 0;
     const readerUrl = readerContext.currentReaderUrl();
     const foliatePosition = readerContext.captureFoliateBookmarkPosition() || readerContext.captureChapterPosition();
-    const progress = {
+    return {
       url: readerContext.sourceUrl,
       title: readerContext.documentState.title,
       extension: readerContext.extension,
@@ -50,6 +50,12 @@ export function createReaderProgress(readerContext) {
       zoom: Math.round(readerContext.documentState.zoom * 100),
       ...(foliatePosition || {})
     };
+  }
+
+  async function saveProgress(event) {
+    const progress = captureProgressEntry(event);
+    if (!progress) return;
+    const capturedAt = Date.now();
     const signature = JSON.stringify(progress);
     if (signature === readerContext.lastSavedProgress) return readerContext.progressSaveChain;
     readerContext.lastSavedProgress = signature;
@@ -57,7 +63,7 @@ export function createReaderProgress(readerContext) {
       .catch(() => {})
       .then(() => {
         if (!readerContext.historySuppressed)
-          return VoiceOfMLReaderStore.put({ ...progress, lastReadAt: Date.now() });
+          return VoiceOfMLReaderStore.put({ ...progress, lastReadAt: capturedAt });
       })
       .catch((error) => {
         if (readerContext.lastSavedProgress === signature) readerContext.lastSavedProgress = "";
@@ -441,6 +447,7 @@ export function createReaderProgress(readerContext) {
   return {
     scheduleSave,
     saveProgress,
+    captureProgressEntry,
     placeReadingProgress,
     currentReaderUrl,
     loadReaderRestoration,
