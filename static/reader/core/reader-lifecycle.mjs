@@ -69,6 +69,7 @@ export function createReaderLifecycle(readerContext) {
   }
 
   function classifyReaderError(error, fallback = "READER_PARSE") {
+    if (error?.code === "READER_PDF_RATE_LIMIT") return "READER_PDF_TRANSPORT";
     if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT"].includes(error?.code)) return error.code;
     const value = `${error?.name || ""} ${error?.message || error || ""}`;
     if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK";
