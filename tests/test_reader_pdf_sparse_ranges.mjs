@@ -299,6 +299,39 @@ try {
                    [[262144,16384],[278528,16384],[311296,16384]]);
   await third.destroy();
 
+  // Foreground prefix demand may promote a range already queued by the tree
+  // checker. A reserved slot serves it without exceeding the overall bound.
+  calls = active = peak = 0; releases = [];
+  const seenRanges = [];
+  globalThis.fetch = async (_url, init) => {
+    const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
+    const begin=Number(a),end=Number(b);seenRanges.push(begin);active++;peak=Math.max(peak,active);calls++;
+    await new Promise((resolve,reject)=>{
+      const finish=()=>{init.signal.removeEventListener('abort',abort);resolve();};
+      const abort=()=>reject(init.signal.reason);init.signal.addEventListener('abort',abort,{once:true});releases.push(finish);
+    });
+    active--;
+    return new Response(new Uint8Array(end-begin+1),{status:206,headers:{
+      'Content-Range':`bytes ${begin}-${end}/${large}`,ETag:'"fixed"'}});
+  };
+  const priorityController=new AbortController();
+  const priorityTask=await openPdfRangeTask(pdfjs,{url:'https://reader.test/book.pdf',rangeChunkSize:262144},{
+    signal:priorityController.signal,readBytes:async response=>new Uint8Array(await response.arrayBuffer()),
+    limit:large,rangeCache:null,initial:Promise.resolve(initial),boundedMetadata:true});
+  for(let i=0;i<PDF_METADATA_RANGE_CONCURRENCY+6;i++)
+    transport.requestDataRange(262144+i*32768,262144+i*32768+16384);
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(calls,PDF_METADATA_RANGE_CONCURRENCY-1,'reserve one foreground slot');
+  const promoted=262144+(PDF_METADATA_RANGE_CONCURRENCY+3)*32768;
+  assert.ok(!seenRanges.includes(promoted));
+  priorityTask.prioritizeRange({begin:promoted+50,end:promoted+51});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(seenRanges.at(-1),promoted,'a queued requested range must be promoted');
+  assert.equal(peak,PDF_METADATA_RANGE_CONCURRENCY,'no additional requests beyond the bound');
+  priorityController.abort(new DOMException('closed','AbortError'));
+  await new Promise(resolve=>setTimeout(resolve,10));
+  await priorityTask.destroy();
+
   // Strong validators bind every adaptive/coalesced read to the same source.
   const changed = new AbortController(), errors = [];
   const fourth = await openPdfRangeTask(pdfjs, {url:'https://reader.test/book.pdf', rangeChunkSize:262144}, {
