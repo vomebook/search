@@ -62,7 +62,7 @@ jobs:
           node-version: "26.11.1"
       - name: Install test dependencies
         run: |
-          python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.14.2
+          python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.21.4
           sudo apt-get update && sudo apt-get install -y qpdf
           python -m playwright install --with-deps chromium firefox
           node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
