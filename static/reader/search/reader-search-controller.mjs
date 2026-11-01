@@ -8,7 +8,8 @@ export function createReaderSearchController({
     page: null, failedPage: null, complete: false,
     pdfInProgress: false, chapterInProgress: false, pageLoader: null
   };
-  let inputTimer = 0, disposed = false;
+  let inputTimer = 0, disposed = false, confirmedNoText = false;
+  let searchViewActive = false;
   let renderedResults = [], renderedOffset = -1;
   const listeners = [];
   const active = () => !disposed && !signal.aborted;
@@ -149,6 +150,7 @@ export function createReaderSearchController({
   }
   function close() {
     const restoreFocus = view.contains(document.activeElement);
+    const closingButtonFocused = document.activeElement === button;
     clearInputTimer();
     if (busy()) state.complete = false;
     nextGeneration();
@@ -158,7 +160,13 @@ export function createReaderSearchController({
     cancel.hidden = retry.hidden = true;
     panel.hide();
     updateButton(false);
-    if (restoreFocus && panel.isOpen()) button.focus({ preventScroll: true });
+    const hiding = confirmedNoText || button.hidden;
+    if ((restoreFocus || (hiding && closingButtonFocused)) && panel.isOpen())
+      (hiding ? document.querySelector("#history") : button).focus({ preventScroll: true });
+    if (confirmedNoText) button.hidden = true;
+  }
+  function resetAvailability() {
+    confirmedNoText = false;
   }
   async function run() {
     if (!active()) return;
@@ -190,8 +198,13 @@ export function createReaderSearchController({
       status.textContent = total ? `${total}${!state.page && total === 100 ? "+" : ""} 个结果` : "未找到正文匹配";
     } catch (error) {
       if (current(generation)) {
-        status.textContent = error.message || "正文搜索不可用";
-        retry.hidden = !pagedMode();
+        const noText = error?.code === "READER_NO_SEARCHABLE_TEXT";
+        status.textContent = noText ? "此文件没有可搜索文字" : (error.message || "正文搜索不可用");
+        retry.hidden = noText || !pagedMode();
+        if (noText) {
+          confirmedNoText = true;
+          if (!panel.isOpen() || view.hidden) button.hidden = true;
+        }
       }
     } finally {
       if (current(generation)) {
@@ -298,7 +311,10 @@ export function createReaderSearchController({
   }
 
   listeners.push(runtime.events.on("state:panel", ({ panel: state }) => {
-    updateButton(state.open && state.selected === "full-search");
+    const activeView = state.open && state.selected === "full-search";
+    if (searchViewActive && !activeView && confirmedNoText) button.hidden = true;
+    searchViewActive = activeView;
+    updateButton(activeView);
   }));
 
   listen(retry, "click", async () => {
@@ -343,6 +359,6 @@ export function createReaderSearchController({
   }
   return Object.freeze({
     state, elements: Object.freeze({ view, button, input, status, results, pagination, cancel, retry }),
-    render, updatePagination, applyChapterPage, loadPage, run, close, activate, move, dispose
+    render, updatePagination, applyChapterPage, loadPage, run, close, resetAvailability, activate, move, dispose
   });
 }

@@ -136,9 +136,19 @@ jobs:
           python3 -B -m unittest -v \
             tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
             tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_short_filename_has_no_expand_control_and_adapts_on_resize \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_expands_without_leaving_directory \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_short_filename_does_not_scroll_and_long_name_adapts_on_resize \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_scrolls_without_expanding_or_hiding_folder \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_filename_accepts_horizontal_touch_swipe \
             tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_searches_all_entries_and_clears \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_small_directory_search_shows_empty_state_and_resets \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_multiple_virtual_results_remain_after_successful_chapter_jump \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_search_handles_groups_replacements_and_repeated_matches \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_composition_end_with_unchanged_query_keeps_directory_scroll \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_toc_search_keyboard_only_navigation \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_renders_results_when_list_starts_at_viewport_bottom \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_covers_bottom_after_fractional_scroll \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_directory_filter_keeps_rendering_bounded_for_large_books \
             tests.test_reader_performance.ReaderPerformanceTest.test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab \
             tests.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
       - name: Run full Reader refactor suite
@@ -249,9 +259,19 @@ jobs:
           python3 -B -m unittest -v \
             tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
             tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_short_filename_has_no_expand_control_and_adapts_on_resize \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_expands_without_leaving_directory \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_short_filename_does_not_scroll_and_long_name_adapts_on_resize \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_scrolls_without_expanding_or_hiding_folder \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_filename_accepts_horizontal_touch_swipe \
             tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_searches_all_entries_and_clears \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_small_directory_search_shows_empty_state_and_resets \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_multiple_virtual_results_remain_after_successful_chapter_jump \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_search_handles_groups_replacements_and_repeated_matches \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_composition_end_with_unchanged_query_keeps_directory_scroll \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_toc_search_keyboard_only_navigation \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_renders_results_when_list_starts_at_viewport_bottom \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_covers_bottom_after_fractional_scroll \
+            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_directory_filter_keeps_rendering_bounded_for_large_books \
             tests.test_reader_performance.ReaderPerformanceTest.test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab \
             tests.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
       - name: Run Reader proxy cancellation and cached-range gate

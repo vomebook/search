@@ -97,6 +97,215 @@ class PdfFollowupTests(unittest.TestCase):
         self.page.wait_for_function('before=>Math.abs(document.querySelector("#viewport").scrollTop-before)<2',arg=before)
         self.assertTrue(button.is_hidden())
 
+    def test_no_text_search_is_hidden_only_after_every_native_page_is_checked(self):
+        engine=ENGINE.replace('numPages:12','numPages:3').replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            "if(number===3) await new Promise(resolve=>window.__releaseLast=resolve); return {items:[],styles:{}};")
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.open()
+        self.page.wait_for_function('()=>!!window.__releaseLast')
+        self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+        self.page.evaluate('__releaseLast()')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-toggle').hidden")
+
+    def test_text_on_later_native_page_keeps_full_search_available(self):
+        engine=ENGINE.replace('numPages:12','numPages:3').replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            "return {items:number===3?[{str:'later searchable text',transform:[12,0,0,12,20,40]}]:[],styles:{}};")
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.open()
+        self.page.wait_for_function('()=>Object.keys(window.__textCalls||{}).length===3')
+        self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+        self.search('later',1)
+
+    def test_failed_text_extraction_does_not_hide_full_search(self):
+        engine=ENGINE.replace('numPages:12','numPages:3').replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            "if(number===3) throw new Error('temporary text failure');return {items:[],styles:{}};")
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.open()
+        self.page.wait_for_function('()=>!!window.__textCalls?.[3]')
+        self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+
+    def test_all_empty_while_search_is_open_shows_reason_then_hides_button(self):
+        engine=ENGINE.replace('numPages:12','numPages:3').replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            "if(number===3) await new Promise(resolve=>window.__releaseLast=resolve); return {items:[],styles:{}};")
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.open()
+        self.page.wait_for_function('()=>!!window.__releaseLast')
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.assertTrue(self.page.locator('#full-search-view').is_visible())
+        self.page.evaluate('__releaseLast()')
+        self.assertTrue(self.page.locator('#full-search-view').is_visible())
+        self.page.locator('#full-search-input').fill('anything')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='此文件没有可搜索文字'")
+        self.assertTrue(self.page.locator('#full-search-retry').is_hidden())
+        self.page.locator('#full-search-toggle').click()
+        self.assertTrue(self.page.locator('#full-search-view').is_hidden())
+        self.assertTrue(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+        self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'),'true')
+        self.assertNotEqual(self.page.evaluate('document.activeElement.id'),'full-search-toggle')
+
+    def test_confirmed_empty_search_hides_when_switching_to_bookmarks(self):
+        engine=ENGINE.replace('numPages:12','numPages:3').replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            "if(number===3) await new Promise(resolve=>window.__releaseLast=resolve); return {items:[],styles:{}};")
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.open()
+        self.page.wait_for_function('()=>!!window.__releaseLast')
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.evaluate('__releaseLast()')
+        self.page.locator('#full-search-input').fill('anything')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='此文件没有可搜索文字'")
+        self.page.locator('#bookmarks-tab').click()
+        self.assertTrue(self.page.locator('#full-search-view').is_hidden())
+        self.assertTrue(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+        self.assertEqual(self.page.locator('#bookmarks-tab').get_attribute('aria-selected'),'true')
+        self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'),'true')
+
+    def test_confirmed_empty_search_restores_keyboard_focus_when_closed(self):
+        engine=ENGINE.replace('numPages:12','numPages:3').replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            "if(number===3) await new Promise(resolve=>window.__releaseLast=resolve); return {items:[],styles:{}};")
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.open()
+        self.page.wait_for_function('()=>!!window.__releaseLast')
+        self.page.locator('#history').press('Enter')
+        self.page.locator('#full-search-toggle').press('Enter')
+        self.page.evaluate('__releaseLast()')
+        self.page.locator('#full-search-input').fill('anything')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='此文件没有可搜索文字'")
+        self.page.locator('#full-search-toggle').focus()
+        self.page.locator('#full-search-toggle').press('Enter')
+        self.assertTrue(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+        self.assertEqual(self.page.evaluate('document.activeElement.id'),'history')
+
+    def test_real_pdf_with_only_last_page_text_keeps_full_search(self):
+        from tests.test_reader_speech import sparse_pdf
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.unroute('**/api/reader-content**')
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(
+            content_type='application/pdf',body=sparse_pdf(8),headers={'Access-Control-Allow-Origin':'*'}))
+        self.open()
+        self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+        self.search('Information Page Text',1)
+        self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+
+    def test_potential_external_text_keeps_search_even_if_native_pages_are_empty(self):
+        engine=ENGINE.replace('numPages:12','numPages:1').replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            "return {items:[],styles:{}};")
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        source='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/persistent.pdf'
+        self.page.goto(self.origin+PREFIX+'/static/reader.html?'+urlencode(dict(
+            url=source,ext='pdf',ocr_manifest='https://voiceofml-search.hf.space/api/reader-bucket-resource?path=missing/ocr-manifest.json')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.page.wait_for_function('()=>!!window.__textCalls?.[1]')
+        self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+
+    def test_prepared_pdf_text_evidence_does_not_scan_ahead_of_rendering(self):
+        from tests.test_reader_speech import sparse_pdf, record_pdf_pages
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        record_pdf_pages(self.page)
+        self.page.unroute('**/api/reader-content**')
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(
+            content_type='application/pdf',body=sparse_pdf(40),headers={'Access-Control-Allow-Origin':'*'}))
+        self.open()
+        self.page.wait_for_function('()=>window.__pdfRecord?.text.length>0')
+        self.page.wait_for_timeout(800)
+        record=self.page.evaluate('window.__pdfRecord')
+        self.assertFalse(set(record['text'])-set(record['drawn']),record)
+        self.assertNotIn(40,record['text'])
+        self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+
+    def test_later_valid_text_restores_search_after_an_empty_observation(self):
+        def instrument(route):
+            response=route.fetch()
+            route.fulfill(response=response,body=response.text()+'''
+              window.__replaceExtractedText=async()=>{pdfTextContentCache.clear();pdfTextContentCacheBytes=0;
+                return loadPdfTextContent(1,{getTextContent:async()=>({items:[{str:'recovered text'}],styles:{}})});};
+            ''')
+        self.page.route('**/static/reader.js*',instrument)
+        engine=ENGINE.replace('numPages:12','numPages:1').replace(
+            "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",
+            "return {items:[],styles:{}};")
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route:route.fulfill(content_type='text/javascript',body=engine))
+        self.open()
+        self.page.wait_for_function("()=>document.querySelector('#full-search-toggle').hidden")
+        self.page.evaluate('()=>window.__replaceExtractedText()')
+        self.page.wait_for_function("()=>!document.querySelector('#full-search-toggle').hidden")
+
+    def test_explicit_search_confirms_a_fully_empty_native_pdf(self):
+        from tests.test_reader_speech import sparse_pdf
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.unroute('**/api/reader-content**')
+        empty=sparse_pdf(30)
+        empty=empty.replace(b'Information Page Text.',b'                      ')
+        def serve(route):
+            route.fulfill(content_type='application/pdf',body=empty,headers={
+                'ETag':'"all-empty-pdf"','Accept-Ranges':'bytes','Access-Control-Allow-Origin':'*',
+                'Access-Control-Expose-Headers':'ETag,Accept-Ranges,Content-Length'})
+        self.page.route('**/api/reader-content**',serve)
+        self.open()
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('notfound')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='此文件没有可搜索文字'",timeout=20000)
+        self.page.locator('#full-search-toggle').click()
+        self.assertTrue(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+
+    def test_empty_search_reuses_persistent_cache_on_reopen(self):
+        from tests.test_reader_speech import sparse_pdf, record_pdf_pages
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        record_pdf_pages(self.page)
+        self.page.unroute('**/api/reader-content**')
+        empty=sparse_pdf(30).replace(b'Information Page Text.',b'                      ')
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(
+            content_type='application/pdf',body=empty,headers={'ETag':'"all-empty-v1"',
+              'Access-Control-Allow-Origin':'*','Access-Control-Expose-Headers':'ETag,Content-Length'}))
+        self.open()
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('notfound')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='此文件没有可搜索文字'",timeout=20000)
+        self.page.wait_for_function("()=>VoiceOfMLReaderPdfDiagnostics.snapshot().cache?.writes>0",timeout=10000)
+        self.page.wait_for_timeout(1000)
+        self.page.reload(wait_until='domcontentloaded')
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.page.locator('#history').click()
+        self.page.locator('#full-search-toggle').click()
+        self.page.locator('#full-search-input').fill('notfound')
+        self.page.wait_for_function("()=>document.querySelector('#full-search-status').textContent==='此文件没有可搜索文字'",timeout=20000)
+        self.assertGreater(self.page.evaluate('VoiceOfMLReaderPdfDiagnostics.snapshot().cache.hits'),0)
+        self.page.locator('#bookmarks-tab').click()
+        self.assertTrue(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+
+    def test_empty_evidence_from_cancelled_old_pdf_cannot_hide_new_document_search(self):
+        def instrument(route):
+            response=route.fetch()
+            route.fulfill(response=response,body=response.text()+'''
+              window.__replacePdfDuringTextProbe=async()=>{let release;
+                const old=pdfDocument;const pending=loadPdfTextContent(99,{getTextContent:()=>new Promise(r=>release=r)});
+                await new Promise(r=>setTimeout(r,0));pdfDocument={numPages:1};release({items:[],styles:{}});
+                await pending;return {oldHidden:!!old.readerNoSearchableText,newHidden:!!pdfDocument.readerNoSearchableText};};
+            ''')
+        self.page.route('**/static/reader.js*',instrument)
+        self.open()
+        result=self.page.evaluate('()=>window.__replacePdfDuringTextProbe()')
+        self.assertEqual(result,{'oldHidden':False,'newHidden':False})
+        self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
+
     def test_scroll_demand_preempts_a_stalled_offscreen_page(self):
         self.page.add_init_script('window.__holdSecond=true;')
         self.open()
