@@ -744,7 +744,7 @@ export function createReaderPdfPageWindow(readerContext) {
                 const base = page.getViewport({scale:1});
                 const scale = Math.min(pdf.readerRenderScaleLimit ?? 3, previewShell.clientWidth / base.width);
                 const viewport = page.getViewport({scale});
-                const outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
+                const outputScale = readerContext.pdfOutputScale(viewport);
                 const canvas = document.createElement("canvas");
                 const width = Math.ceil(viewport.width * outputScale), height = Math.ceil(viewport.height * outputScale);
                 if (width * height > readerContext.pdfPixelBudget()) return;

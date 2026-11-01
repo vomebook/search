@@ -248,33 +248,62 @@ body {
   font-size: 12px;
   white-space: nowrap;
 }
+.reader-panel-location,
 .reader-panel-path {
   display: none;
 }
 @media (max-width: 600px) {
+  .reader-panel-location:not([hidden]) {
+    display: block;
+    border-bottom: 1px solid #34383d;
+    color: #c7d9f6;
+    font-size: 12px;
+  }
+  .reader-panel-file {
+    padding: 5px 10px 0;
+  }
+  .reader-panel-filename {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  .reader-panel-file[open] {
+    max-height: min(40dvh, 240px);
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  .reader-panel-file[open] .reader-panel-filename {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   .reader-panel-path:not([hidden]) {
     display: block;
-    flex: none;
     width: 100%;
-    min-height: 40px;
-    padding: 8px 12px;
+    min-height: 32px;
+    padding: 4px 10px 5px;
     border: 0;
-    border-bottom: 1px solid #34383d;
     background: transparent;
     color: #c7d9f6;
     font: inherit;
     font-size: 12px;
     text-align: left;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  .reader-panel-folder {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    cursor: pointer;
   }
   .reader-panel-path:not([hidden]):hover,
   .reader-panel-path:not([hidden]):focus-visible {
     background: #292d31;
     text-decoration: underline;
   }
+  :root[data-theme="light"] .reader-panel-location:not([hidden]),
   :root[data-theme="light"] .reader-panel-path:not([hidden]) {
     color: #185abc;
     border-bottom-color: #d5d9dc;
@@ -1494,7 +1523,7 @@ body {
   outline-offset: -3px;
 }
 :is(.reader-toolbar, .reader-panel, .bookmark-popover)
-  :is(button, a, input, textarea, [tabindex]):focus-visible {
+  :is(button, a, input, textarea, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--reader-focus-color);
   outline-offset: 2px;
 }
@@ -1575,6 +1604,50 @@ body {
   :root {
     --reader-toolbar-height: 36px;
     --reader-popover-top: 78px;
+  }
+  .reader-panel {
+    width: 85vw;
+  }
+  .reader-panel > header {
+    height: 42px;
+    gap: 2px;
+    padding: 0 4px 0 8px;
+  }
+  .reader-panel > header > strong {
+    font-size: 12px;
+  }
+  .reader-panel > header > .text-action {
+    min-width: 0;
+    padding: 4px 2px;
+    font-size: 11px;
+  }
+  .reader-panel-tabs button {
+    min-height: 36px;
+    font-size: 12px;
+  }
+  .panel-view-header {
+    min-height: 34px;
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+  .reader-panel .panel-item {
+    min-height: 38px;
+    padding: 6px 10px;
+    gap: 3px 6px;
+  }
+  .reader-panel .panel-item-main {
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .reader-panel .toc-item {
+    padding-left: calc(10px + var(--toc-depth, 0) * 12px);
+  }
+  .reader-progress-tools {
+    padding: 6px 8px 8px;
+  }
+  .reader-progress-row {
+    gap: 4px;
   }
   .panel-search-toggle {
     min-width: 42px;
