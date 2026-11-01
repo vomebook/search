@@ -240,7 +240,8 @@ export function createReaderFormatController(readerContext) {
       if (readerContext.readerAbortController.signal.aborted || error?.name === "AbortError") return;
       console.error(error);
       readerContext.fail(
-        error && error.message ? error.message : "原文件加载失败",
+        error?.code === "READER_PDF_RATE_LIMIT" ? "请求过于频繁，请稍后重试加载。" :
+          error && error.message ? error.message : "原文件加载失败",
         readerContext.classifyReaderError(error, readerContext.capability.mode === "foliate" ? "READER_CORRUPT" : "READER_PARSE")
       );
     }

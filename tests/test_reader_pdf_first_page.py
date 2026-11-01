@@ -211,6 +211,28 @@ class PdfFirstPageTests(unittest.TestCase):
         prefix = "/static" if os.environ.get('READER_BUILT_PROJECT') == 'hf' else "/search/static"
         page.goto(source + prefix + "/reader.html?" + urlencode({"url": SOURCE, "ext": "pdf"}), wait_until="domcontentloaded")
 
+    def test_long_retry_after_on_initial_range_never_retries_early(self):
+        payload=sparse_pdf()
+        with range_source(payload) as (source,state,_lock):
+            context=self.browser.new_context(service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();attempts=[]
+            def rate_limit(route):
+                attempts.append(route.request.headers.get('range'))
+                route.fulfill(status=429,headers={'Retry-After':'60'},body='busy')
+            page.route('**/api/reader-content?**',rate_limit)
+            self.open(page,source)
+            try:page.locator('#reader-engine-retry').wait_for(timeout=20000)
+            except Exception as error:
+                self.fail(str({'error':str(error),'attempts':attempts,
+                  'state':page.evaluate('''()=>({phase:document.documentElement.dataset.readerPhase,status:document.querySelector('#status')?.textContent,
+                    error:document.querySelector('.reader-error')?.textContent})''')}))
+            self.assertEqual(page.locator('#status').text_content(),'无法打开')
+            self.assertEqual(page.locator('#content').get_attribute('data-error-code'),'READER_PDF_TRANSPORT')
+            self.assertIn('请求过于频繁',page.locator('.reader-error').text_content())
+            page.wait_for_timeout(1200)
+            self.assertEqual(len(attempts),1,'long Retry-After must not trigger nested early retries')
+            self.assertEqual(state['requests'],[])
+
     def test_first_page_reused_and_wrong_count_corrected(self):
         with range_source(sparse_pdf(declared=135)) as (source, state, lock):
             context = self.browser.new_context(viewport={"width":390,"height":844}, service_workers="block")
