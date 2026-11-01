@@ -9,6 +9,8 @@ const pageTree = (numbers, extra = '') => bytes('%PDF-1.7\n2 0 obj\n<< /Type /Pa
   ' /Kids [' + numbers.map(n => `${n} 0 R`).join(' ') + `] ${extra} >>\nendobj\n`);
 const sparse = Array.from({length: 160}, (_, i) => 4 + i * 6);
 const clustered = Array.from({length: 160}, (_, i) => 5 + i);
+const tailPage = bytes('%PDF-1.7\n1 0 obj\n<</Type/Page/Contents 2 0 R/Parent 3232 0 R/Resources<</XObject<</Im0 3 0 R>>>>>>\nendobj\n');
+assert.equal(isFirstPageCandidate(tailPage,56806517,262144),true,'large indirect parent must permit staged parsing, not define a page');
 const imageHint = '%PDF-1.7\n3 0 obj\n<</Type/Page/Resources 4 0 R>>\nendobj\n4 0 obj\n<</XObject<</Im1 2 0 R>>>>\nendobj\n1 0 obj\n<</Length 3>>\nstream\nabc\nendstream\nendobj\n'+
   '2 0 obj\n<</Type/XObject/Subtype/Image/Length 600000>>\nstream\n';
 
@@ -75,7 +77,7 @@ try {
   // restoration. This first page descriptor is not itself a page identity.
   {
     const total=10*1024*1024, requests=[];
-    const first=bytes('%PDF-1.7\n1 0 obj\n<</Type/Page/Contents[9 0 R]/Parent 18274 0 R/Resources 7 0 R>>\nendobj\n');
+    const first=bytes('%PDF-1.7\n1 0 obj\n<</Type/Page/Contents[9 0 R]/Parent 3232 0 R/Resources<</XObject<</Im0 3 0 R>>>>>>\nendobj\n');
     globalThis.fetch=async (_url,init)=>{
       const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
       const begin=Number(a),end=Number(b);requests.push([begin,end]);
