@@ -12,9 +12,33 @@ const fail = (id, code) => self.postMessage({ id, ok: false, error: code });
 async function prepareEngine() {
   if (engine) return;
   const simd = WebAssembly.validate(SIMD128_PROBE);
-  const candidate = simd ? await import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js')
-                         : await import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs.js');
-  await candidate.default();
+  // Both URLs are pinned components of the selected decoder, not book bytes.
+  // Fetch the Wasm while importing its glue instead of waiting for the glue
+  // to finish before discovering the Wasm URL. The decoder still consumes the
+  // same Response and preserves its streaming/MIME fallback behavior.
+  const controller = new AbortController();
+  const wasmUrl = simd
+    ? new URL('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs_bg.wasm', import.meta.url)
+    : new URL('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs_bg.wasm', import.meta.url);
+  let candidate;
+  let response;
+  try {
+    const [module,wasmResponse] = await Promise.all([
+      simd ? import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js')
+           : import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs.js'),
+      fetch(wasmUrl, {signal:controller.signal}).then(value => {
+        if (controller.signal.aborted) { value.body?.cancel().catch(() => {}); throw controller.signal.reason; }
+        response = value;
+        return value;
+      })
+    ]);
+    candidate = module;
+    await candidate.default({module_or_path:wasmResponse});
+  } catch (error) {
+    controller.abort(error);
+    await response?.body?.cancel().catch(() => {});
+    throw error;
+  }
   engine = candidate;
 }
 
