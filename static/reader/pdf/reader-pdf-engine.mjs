@@ -233,10 +233,36 @@ export function createReaderPdfEngine(readerContext) {
             Promise.resolve(promise).then(resolve, reject);
           })).finally(() => clearTimeout(timer));
         };
+        const initialRange = async () => {
+          // If the initial strong-ETag range times out or fails transiently,
+          // retry it while the engine is preparing. The old fallback could
+          // permanently select the serial stock worker on a slow connection,
+          // even if the next range attempt recovered moments later.
+          for (let attempt = 0; attempt < 3 && initial; attempt++) {
+            const pending = initial;
+            try { return await readerContext.awaitReader(pending); }
+            catch (error) {
+              readerContext.assertReaderActive();
+              if (error?.name === "AbortError" || !readerContext.retryableReaderProxyError(error) || attempt === 2) throw error;
+              await readerContext.waitForReader(350 * (attempt + 1));
+              readerContext.assertReaderActive();
+              if (initial !== pending) return null;
+              initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
+                signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
+                readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
+                rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfRangeDocumentBytes,
+                canPrefetchFirstPage: () => pageOneKnown && !owner.signal.aborted &&
+                  navigation === readerContext.readerRuntime?.currentGeneration("navigation")
+              });
+              initial.catch(() => {});
+            }
+          }
+          return null;
+        };
         let first = null, saved = null;
         try {
           [first, saved] = await Promise.all([
-            initial ? optional(initial) : null,
+            initial ? initialRange() : null,
             optional(Promise.resolve(restoration).then(value => ({value})))
           ]);
         } catch (_) { readerContext.assertReaderActive(); }

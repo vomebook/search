@@ -591,6 +591,62 @@ class PdfFirstPageTests(unittest.TestCase):
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
             self.assertEqual(page.locator('#page-number').input_value(),'2')
 
+    def test_first_range_failure_retries_before_selecting_staged_worker(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf(root_at_end=True)) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();workers=[]
+            page.route('**/api/reader-content?**',lambda route:route.fulfill(status=503,body='temporary'),times=1)
+            page.on('request',lambda request:workers.append(request.url) if 'pdf-worker-wrapper' in request.url else None)
+            self.open(page,source)
+            page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=20000)
+            self.assertTrue(any('reader-first-page=1' in url for url in workers),workers)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+
+    def test_delayed_first_range_keeps_staged_worker_selection(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf(root_at_end=True)) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();workers=[]
+            def compress_timeout(route):
+                script=route.fetch().text()
+                self.assertIn('timer = setTimeout(() => resolve(null), 5000)',script)
+                route.fulfill(content_type='text/javascript',body=script.replace('timer = setTimeout(() => resolve(null), 5000)',
+                    'timer = setTimeout(() => resolve(null), 50)'))
+            page.route('**/static/reader/pdf/reader-pdf-engine.mjs*',compress_timeout)
+            def hold_first(route):
+                time.sleep(.5);route.continue_()
+            page.route('**/api/reader-content?**',hold_first,times=1)
+            page.on('request',lambda request:workers.append(request.url) if 'pdf-worker-wrapper' in request.url else None)
+            self.open(page,source)
+            page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=20000)
+            self.assertTrue(any('reader-first-page=1' in url for url in workers),workers)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            state['block'].set()
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+
+    def test_pdf_worker_unavailable_does_not_wait_for_slow_initial_range(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf(root_at_end=True)) as (source,state,_lock):
+            state['block'].set()
+            context=self.browser.new_context(service_workers='block');self.addCleanup(context.close)
+            page=context.new_page()
+            page.add_init_script('''const original=window.setTimeout.bind(window);window.setTimeout=(fn,ms,...args)=>original(fn,
+              ms===20000?150:ms===500?10:ms===1000?20:ms,...args)''')
+            page.route('**/static/vendor/pdf.worker.*.mjs*',lambda route:route.abort('failed'))
+            def stall(route):
+                time.sleep(3);route.continue_()
+            page.route('**/api/reader-content?**',stall,times=1)
+            self.open(page,source)
+            page.locator('#reader-engine-retry').wait_for(timeout=5000)
+            self.assertEqual(page.locator('#status').text_content(),'无法打开')
+
     def test_understated_nested_tree_deep_history_rebuilds_order(self):
         if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
         payload=sparse_pdf(nested=True,declared=2)
