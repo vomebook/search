@@ -18,14 +18,14 @@
       sha256: "07ceb740d746e5d9012fcf9f27d5c7dea09f7d2f5e74f5c8109e5787551a2333"
     },
     marked: {
-      url: "https://cdn.jsdelivr.net/npm/marked@18.1.0/lib/marked.umd.js",
+      url: "https://cdn.jsdelivr.net/npm/marked@18.1.2/lib/marked.umd.js",
       file: "marked.min.js",
-      sha256: "f424dcb508fdf93e0137a970cfce8f3207ea2e3f37eca5f7556a52875683632a"
+      sha256: "9eb730d2362ae1a8c6201698f17009e16671be6946d3d06503ddc0575283db7c"
     },
     purify: {
-      url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js",
+      url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js",
       file: "purify.min.js",
-      sha256: "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2"
+      sha256: "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31"
     },
     ruffle: {
       url: "https://unpkg.com/@ruffle-rs/ruffle@0.7.1/ruffle.js",
@@ -64,7 +64,7 @@
       sha256: "0a1df3a083d0c010560aa342e87959c8c1070e6fd54545741f083f22d0c8b551"
     },
     zipLicense: {
-      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.23.0/LICENSE",
+      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.24.0/LICENSE",
       file: "LICENSE_zipjs",
       sha256: "1b7ebc8d7889ed25491484ab2b102370742ca6c0b26650a0c62cc2269b579b84"
     },
@@ -74,9 +74,9 @@
       sha256: "b7ca4450b19559a1d50eb381adcee94b82449674be4cd17789d9beba7e6122a1"
     },
     zip: {
-      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.23.0/index.min.js",
+      url: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.24.0/index.min.js",
       file: "zip.js",
-      sha256: "1b4d7f05a108b7e5815b429f116f17deb36af1949e1aff5aedcf47292d65c8ed"
+      sha256: "6c13caf4b90e08323f404f596c51549cdc6b01010bd43935a0bdc6a25bd61021"
     },
     textLayer: {
       url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.4.299/web/text_layer_builder.css",

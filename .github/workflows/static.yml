@@ -68,7 +68,7 @@ jobs:
           node scripts/build/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
       - name: Check content-addressed PDF opening
         run: |
-          python3 -m pip install playwright==1.63.0 pypdf==6.14.2
+          python3 -m pip install playwright==1.63.0 pypdf==6.21.4
           sudo apt-get update && sudo apt-get install -y qpdf
           python3 -m playwright install --with-deps chromium
           READER_BUILT_SITE="$GITHUB_WORKSPACE/_site" READER_BUILT_PROJECT=github python3 -B -m unittest -v \
