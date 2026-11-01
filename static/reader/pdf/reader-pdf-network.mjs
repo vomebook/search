@@ -396,7 +396,7 @@ export function isFirstPageCandidate(bytes, total, rangeChunkSize) {
 }
 
 // The first demand overlaps engine preparation. After its complete validation,
-// a qualified page-one file may overlap at most three more existing chunks.
+// qualified page-one files may overlap bounded opening or tail range hints.
 export async function preparePdfInitialRange(options, hooks) {
   hooks = {...hooks, rangeCache:hooks.rangeCache === undefined ? sharedPdfRangeCache() : hooks.rangeCache};
   const owner = new AbortController();
