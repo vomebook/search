@@ -28,6 +28,7 @@ export function createReaderPdfEngine(readerContext) {
         limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
         rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfRangeDocumentBytes,
         boundedMetadata: !!documentOptions.worker?.readerFirstPageWorker,
+        ratePriority: (begin,end) => readerContext.pdfFetchPolicy?.prioritizeRange?.(begin,end,url),
         canPrefetchOpening: () => !!readerContext.pdfV3Manifest && readerContext.readerRestorationLoaded &&
           (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) <= 1),
         canPrefetchFirstPage: () => readerContext.capability?.mode === "pdf" &&
@@ -246,7 +247,7 @@ export function createReaderPdfEngine(readerContext) {
             try { return await readerContext.awaitReader(pending); }
             catch (error) {
               readerContext.assertReaderActive();
-              if (error?.name === "AbortError" || !readerContext.retryableReaderProxyError(error) || attempt === 2) throw error;
+              if (error?.name === "AbortError" || error?.code === "READER_PDF_RATE_LIMIT" || !readerContext.retryableReaderProxyError(error) || attempt === 2) throw error;
               await readerContext.waitForReader(350 * (attempt + 1));
               readerContext.assertReaderActive();
               if (initial !== pending) return null;

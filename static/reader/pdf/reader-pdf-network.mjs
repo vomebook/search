@@ -458,7 +458,7 @@ export async function preparePdfInitialRange(options, hooks) {
 
 export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit, rangeLimit = limit, onError, initial = null,
   rangeCache = sharedPdfRangeCache(), canPrefetchFirstPage = () => false, canPrefetchOpening = () => false, admitRange = null,
-  boundedMetadata = false}) {
+  boundedMetadata = false, ratePriority = null}) {
   if (typeof pdfjs.PDFDataRangeTransport !== "function") return pdfjs.getDocument(options);
   let chunkSize = options.rangeChunkSize;
   const owner = new AbortController();
@@ -661,6 +661,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     for (const hint of [tail, extendedTail, ...openingRanges]) hint?.onFailure(fail);
     const prioritizeRange = ({begin,end} = {}) => {
       if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin || end > first.total) return;
+      ratePriority?.(begin,end);
       // Keep a small rolling set of PDF.js misses. Hints only reorder existing
       // requests; they neither fetch bytes nor identify a page.
       if (priorityRanges.some(range => range.begin <= begin && range.end >= end)) { drainRanges(); return; }
@@ -689,12 +690,105 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
 }
 
 export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
-  initialIdleMs = 10000, initialTotalMs = 120000} = {}) {
+  initialIdleMs = 10000, initialTotalMs = 120000,
+  rateLimitDelayMs = 1000, rateLimitSpacingMs = 100, maxRateLimitDelayMs = 10000,
+  rateLimitRecoveryMs = 3000} = {}) {
   const documents = new Set();
   const versions = new Map(), timings = [];
   const controller = new AbortController();
   const nativeFetch = globalThis.fetch;
   let version = null, inconsistent = false;
+  // Shared per-document admission activates only after HTTP 429. The 100ms
+  // recovery spacing is a conservative retry policy, not a claimed origin
+  // limit; normal traffic is unaffected and all waiters remain cancellable.
+  let throttled = false, throttleUntil = 0, nextRateStart = 0, recovering = false, rateGeneration = 0;
+  const blockedUntil = new Map();
+  const ratePriorityRanges = [];
+  const rateAdmissions = [];
+  let recoveryIdle = 0, rateTimer = 0, normalRecoveryAdmissions = 0;
+  const now = () => performance.now();
+  const drainRate = () => {
+    clearTimeout(rateTimer); rateTimer=0;
+    if (controller.signal.aborted) {
+      for (const item of rateAdmissions.splice(0)) item.reject(controller.signal.reason);
+      return;
+    }
+    if (!rateAdmissions.length) return;
+    const delay=Math.max(throttleUntil,nextRateStart)-now();
+    if (delay > 0) {rateTimer=setTimeout(drainRate,delay);return;}
+    const priority=rateAdmissions.findIndex(item=>ratePriority(item.start,item.end,item.url));
+    const chosen=rateAdmissions.splice(priority < 0 ? 0 : priority,1)[0];
+    if (chosen.signal.aborted) chosen.reject(chosen.signal.reason);
+    else {
+      nextRateStart=now()+rateLimitSpacingMs;
+      normalRecoveryAdmissions++;
+      chosen.resolve();
+    }
+    if (rateAdmissions.length) rateTimer=setTimeout(drainRate,Math.max(0,nextRateStart-now()));
+  };
+  const noteRateLimit = (response,url) => {
+    rateGeneration++;
+    normalRecoveryAdmissions = 0;
+    clearTimeout(recoveryIdle);
+    const value = response.headers.get("Retry-After");
+    let delay = rateLimitDelayMs;
+    if (value && /^\d+$/.test(value.trim())) delay = Number(value.trim()) * 1000;
+    else if (value) { const at = Date.parse(value); if (Number.isFinite(at)) delay = Math.max(0,at-Date.now()); }
+    if (!Number.isFinite(delay) || delay > maxRateLimitDelayMs) {
+      const until=Number.isFinite(delay) ? now()+delay : Infinity;
+      blockedUntil.set(url,Math.max(blockedUntil.get(url) || 0,until));
+      // A longer response must reject existing queued admissions as well as
+      // future ones. Never retry before the server's announced time.
+      for (let index=rateAdmissions.length-1;index>=0;index--) {
+        const item=rateAdmissions[index];
+        if (item.url!==url) continue;
+        rateAdmissions.splice(index,1);
+        item.reject(Object.assign(new Error("PDF rate limited"),{status:429,code:"READER_PDF_RATE_LIMIT",retryable:false}));
+      }
+      if (!rateAdmissions.length) {clearTimeout(rateTimer);rateTimer=0;}
+      return false;
+    }
+    throttled = true;
+    recovering = true;
+    throttleUntil = Math.max(throttleUntil, now() + Math.max(delay,rateLimitDelayMs));
+    return true;
+  };
+  const noteRateSuccess = generation => {
+    if (!recovering || !throttled || generation !== rateGeneration) return;
+    clearTimeout(recoveryIdle);
+    recoveryIdle = setTimeout(() => {
+      if (now() >= throttleUntil && normalRecoveryAdmissions > 0 && !rateAdmissions.length) {
+        throttled = false;recovering = false;clearTimeout(rateTimer);rateTimer=0;
+      }
+    },rateLimitRecoveryMs);
+  };
+  const enqueueRangePriority = (begin,end,url) => {
+    if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin) return;
+    try {url = url ? new URL(url,location.href).href : null;} catch (_) {return;}
+    ratePriorityRanges.push({begin,end,url});
+    if (ratePriorityRanges.length > 32) ratePriorityRanges.shift();
+  };
+  const ratePriority = (start,end,url) => ratePriorityRanges.some(range=>(!range.url || range.url===url) && start < range.end && end >= range.begin);
+  const rateAdmission = async (signal,start,end,url) => {
+    signal.throwIfAborted();
+    if ((blockedUntil.get(url) || 0) > now())
+      throw Object.assign(new Error("PDF rate limited"),{status:429,code:"READER_PDF_RATE_LIMIT",retryable:false});
+    blockedUntil.delete(url);
+    if (!throttled) return;
+    let complete;
+    const admitted = new Promise((resolve,reject)=>{complete={resolve,reject};});
+    const row={signal,start,end,url,...complete};rateAdmissions.push(row);
+    const cancel = () => {
+      const index=rateAdmissions.indexOf(row);
+      if (index>=0) rateAdmissions.splice(index,1);
+      if (!rateAdmissions.length) {clearTimeout(rateTimer);rateTimer=0;}
+      row.reject(signal.reason);
+    };
+    signal.addEventListener("abort",cancel,{once:true});
+    if (signal.aborted) cancel();
+    if (!rateTimer) drainRate();
+    return admitted.finally(()=>signal.removeEventListener("abort",cancel));
+  };
   const remember = (response, url) => {
     const etag = response.headers.get("ETag");
     const range = /^bytes \d+-\d+\/(\d+)$/.exec(response.headers.get("Content-Range") || "");
@@ -727,9 +821,19 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       .some(name=>headers.has(name));
     const eligible = method === "GET" && match && Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
       start <= end && end - start < 2 * 1024 * 1024 && !conditional;
+    const clearRatePriority = () => {
+      if (!eligible) return;
+      for (let index=ratePriorityRanges.length-1;index>=0;index--) {
+        const range=ratePriorityRanges[index];
+        if ((!range.url || range.url===url) && start <= range.begin && end+1 >= range.end)
+          ratePriorityRanges.splice(index,1);
+      }
+    };
     const initialRecovery = method === "GET" && !headers.has("Range") && !conditional;
     const initialAt = performance.now();
-    let attempt = 0, record, response, reader, length = 0, delivered = 0, validator = null, stopped = false;
+    const admissionRemaining = () => Math.max(0, (initialRecovery ? initialTotalMs : attemptMs * 2) -
+      (performance.now()-initialAt));
+    let attempt = 0, rateRetried = false, record, response, reader, length = 0, delivered = 0, validator = null, stopped = false;
     function finish(error = null) {
       if (!record || record.finished) return;
       record.finished = true;
@@ -759,15 +863,27 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
         ? initialTotalMs-(performance.now()-initialAt) : attemptMs-(performance.now()-record.row.at)));
     }
     function retryable(error) {
-      return !signal.aborted && attempt === 0 && (initialRecovery
-        ? performance.now()-initialAt < initialTotalMs : eligible && (!delivered || validator)) &&
-        (error?.retryable || error?.name === "TimeoutError" || error instanceof TypeError);
+      const valid = !signal.aborted && (initialRecovery
+        ? performance.now()-initialAt < initialTotalMs : eligible && (!delivered || validator));
+      if (!valid) return false;
+      if (error?.status === 429) return !rateRetried && error.retryable;
+      return attempt === 0 && (error?.retryable || error?.name === "TimeoutError" || error instanceof TypeError);
+    }
+    function advance(error) {
+      if (error?.status === 429) rateRetried = true;
+      else attempt++;
     }
     async function open() {
       signal.throwIfAborted();
+      if (eligible || initialRecovery) {
+        const remaining=admissionRemaining();
+        if (!remaining) throw new DOMException("PDF recovery deadline elapsed", "TimeoutError");
+        const admissionSignal=AbortSignal.any([signal,AbortSignal.timeout(Math.ceil(remaining))]);
+        await rateAdmission(admissionSignal,start,end,url);
+      }
       response = null;
       const owner = new AbortController();
-      record = {owner, active:AbortSignal.any([signal,owner.signal]),
+      record = {owner, active:AbortSignal.any([signal,owner.signal]), generation:rateGeneration,
         row:{at:performance.now(),attempt,range:match?[start,end]:null,headersMs:0,bodyMs:0,bytes:0}};
       if (eligible || initialRecovery) arm();
       response = await abortable(Promise.resolve(nativeFetch.call(globalThis,input,{...init,cache:"no-store",signal:record.active}))
@@ -778,11 +894,18 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       record.row.headersMs = performance.now()-record.row.at;
       record.row.status = response.status;
       record.row.serverTiming = (response.headers.get("Server-Timing") || "").slice(0,512);
-      if ((eligible || initialRecovery) && [408,429,500,502,503,504].includes(response.status))
+      if ((eligible || initialRecovery) && response.status === 429) {
+        const retryable = noteRateLimit(response,url);
+        throw Object.assign(new Error("PDF rate limited"),{retryable,status:429,code:"READER_PDF_RATE_LIMIT"});
+      }
+      if ((eligible || initialRecovery) && [408,500,502,503,504].includes(response.status))
         throw Object.assign(new Error("PDF temporary upstream failure"),{retryable:true});
       // PDF.js needs headers immediately to cancel the full GET and demand ranges.
       // Initial recovery must not read or wait for this potentially large body.
-      if (response.ok) remember(response,url);
+      if (response.ok) {
+        remember(response,url);
+        if (eligible || initialRecovery) noteRateSuccess(record.generation);
+      }
       if (!eligible || response.status !== 206) {
         if (delivered) throw new Error("PDF_RANGE_INVALID");
         return false;
@@ -803,7 +926,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
     let streaming;
     while (true) {
       try {streaming = await open();break;}
-      catch(error) {const retry = retryable(error);finish(error);if (!retry) throw error;attempt++;}
+      catch(error) {const retry = retryable(error);finish(error);if (!retry) throw error;advance(error);}
     }
     if (!streaming) {finish();return response;}
     const firstResponse = response;
@@ -824,7 +947,7 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
             if (stopped) return;
             if (chunk.done) {
               if (record.row.bytes !== length) throw Object.assign(new Error("PDF_RANGE_TRUNCATED"),{retryable:true});
-              stopped=true;finish();signal.removeEventListener("abort",abort);control.close();return;
+              stopped=true;clearRatePriority();finish();signal.removeEventListener("abort",abort);control.close();return;
             }
             const offset = record.row.bytes;
             record.row.bytes += chunk.value.byteLength;
@@ -838,14 +961,15 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
             delivered += value.byteLength;control.enqueue(value);return;
           } catch(error) {
             if (stopped) return;
-            const retry = retryable(error);finish(error);
-            if (retry) {
-              attempt++;
+            finish(error);
+            while (retryable(error)) {
+              advance(error);
               try {
-                if (await open()) continue;
+                if (await open()) {error=null;break;}
                 error = new Error("PDF_RANGE_INVALID");finish(error);
               } catch(next) {error=next;finish(error);}
             }
+            if (!error) continue;
             stopped=true;signal.removeEventListener("abort",abort);control.error(error);return;
           }
         }
@@ -862,10 +986,15 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
       for (const url of urls) documents.add(new URL(url, location.href).href);
     },
     get identity() { return inconsistent ? null : version; },
+    get queuedAdmissions() { return rateAdmissions.length; },
+    prioritizeRange: enqueueRangePriority,
     get timings() { return timings.map(row => ({...row,range:row.range?.slice() || null})); },
     dispose() {
+      clearTimeout(recoveryIdle);
+      clearTimeout(rateTimer);rateTimer=0;
       controller.abort(new DOMException("Reader closed", "AbortError"));
       documents.clear();
+      blockedUntil.clear();
       versions.clear(); timings.length = 0;
       if (globalThis.fetch === pdfFetch) globalThis.fetch = nativeFetch;
     }
