@@ -25,13 +25,29 @@ const bufferMessage = event => pendingMessages.push(event);
 self.addEventListener("message", bufferMessage);
 
 const staged = new URL(self.location.href).searchParams.get("reader-first-page") === "1";
-const opening = staged
-  ? import("./pdf-first-page-worker-adapter.mjs").then(adapter =>
-      adapter.installFirstPageWorker(VoiceOfMLReaderResources.vendorUrl("pdfWorkerSource", "../../"),
-        VoiceOfMLReaderResources.vendors.pdfWorkerSource.sha256)
-    ).then(handler => { globalThis.pdfjsWorker = {WorkerMessageHandler:handler}; })
-      .catch(() => import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "../../")))
-  : import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "../../"));
+let opening;
+if (staged) {
+  // Adapter code and its pinned worker source are independent immutable
+  // assets. Fetch concurrently, but never execute the source before the
+  // existing size, checksum and adapter-version checks complete.
+  const owner = new AbortController();
+  const timer = setTimeout(() => owner.abort(), 20000);
+  const source = VoiceOfMLReaderResources.vendorUrl("pdfWorkerSource", "../../");
+  const response = fetch(source, {signal:owner.signal, credentials:"same-origin", cache:"force-cache"});
+  response.then(value => {
+    if (owner.signal.aborted) value.body?.cancel().catch(() => {});
+  }, () => {});
+  opening = import("./pdf-first-page-worker-adapter.mjs").then(adapter =>
+    adapter.installFirstPageWorker(source, VoiceOfMLReaderResources.vendors.pdfWorkerSource.sha256,
+      {signal:owner.signal, response})
+  ).then(handler => { globalThis.pdfjsWorker = {WorkerMessageHandler:handler}; })
+    .catch(() => {
+      owner.abort();
+      response.then(value => value.body?.cancel().catch(() => {}), () => {});
+      return import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "../../"));
+    })
+    .finally(() => clearTimeout(timer));
+} else opening = import(VoiceOfMLReaderResources.vendorUrl("pdfWorker", "../../"));
 opening.then(() => {
   self.removeEventListener("message", bufferMessage);
   for (const event of pendingMessages) self.dispatchEvent(new MessageEvent("message", { data: event.data }));

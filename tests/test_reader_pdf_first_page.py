@@ -1348,3 +1348,18 @@ class PdfFirstPageTests(unittest.TestCase):
                 self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
                 self.assertEqual(page.locator('.reader-pdf-opening').count(),0)
                 self.assertEqual(len(attempts),1)
+
+    def test_staged_adapter_failure_stops_source_fetch_and_uses_stock(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')
+        with range_source(sparse_pdf()) as (source,state,_lock):
+            state['block'].set()
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+            page.route('**/static/reader/pdf/pdf-first-page-worker-adapter.mjs*',
+                       lambda route:route.fulfill(status=503,body='unavailable'))
+            self.open(page,source)
+            page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=30000)
+            page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            self.assertEqual(page.locator('.reader-pdf-opening').count(),0)
+            self.assertEqual(errors,[])

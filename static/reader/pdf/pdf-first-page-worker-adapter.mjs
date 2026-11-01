@@ -3,6 +3,15 @@
 // different bytes or unexpected source instead of weakening validation.
 const MAX_BYTES = 3 * 1024 * 1024;
 
+function abortable(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, {once:true});
+    if (signal.aborted) abort();
+    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 function replaceOnce(source, needle, replacement, label) {
   const first = source.indexOf(needle);
   if (first < 0 || source.indexOf(needle, first + needle.length) >= 0)
@@ -396,22 +405,29 @@ export function makeFirstPageWorkerSource(source) {
   return source;
 }
 
-export async function installFirstPageWorker(url, expectedDigest) {
-  const owner = new AbortController();
+export async function installFirstPageWorker(url, expectedDigest, {signal, response:pendingResponse} = {}) {
+  const owner = new AbortController(), active = signal ? AbortSignal.any([signal, owner.signal]) : owner.signal;
   const timer = setTimeout(() => owner.abort(), 20000);
   try {
-    const response = await fetch(url, {signal:owner.signal, credentials:"same-origin", cache:"force-cache"});
-    if (!response.ok) throw new Error(`PDF_PREVIEW_WORKER_HTTP_${response.status}`);
+    active.throwIfAborted();
+    const response = await abortable(pendingResponse ||
+      fetch(url, {signal:active, credentials:"same-origin", cache:"force-cache"}), active);
+    if (active.aborted) { await response.body?.cancel().catch(() => {}); throw active.reason; }
+    if (!response.ok) { await response.body?.cancel().catch(() => {}); throw new Error(`PDF_PREVIEW_WORKER_HTTP_${response.status}`); }
     const encoded = response.headers.get("Content-Encoding");
     const declared = encoded && encoded !== "identity" ? 0 : Number(response.headers.get("Content-Length") || 0);
-    if (!Number.isSafeInteger(declared) || declared < 0 || declared > MAX_BYTES) throw new Error("PDF_PREVIEW_WORKER_SIZE");
+    if (!Number.isSafeInteger(declared) || declared < 0 || declared > MAX_BYTES) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error("PDF_PREVIEW_WORKER_SIZE");
+    }
     const reader = response.body?.getReader();
     if (!reader) throw new Error("PDF_PREVIEW_WORKER_STREAM");
     const chunks = [];
     let size = 0;
     try {
       while (true) {
-        const {value, done} = await reader.read();
+        const {value, done} = await abortable(reader.read(), active);
+        active.throwIfAborted();
         if (done) break;
         if (!value?.byteLength) continue;
         size += value.byteLength;
@@ -430,6 +446,7 @@ export async function installFirstPageWorker(url, expectedDigest) {
       .map(value => value.toString(16).padStart(2, "0")).join("");
     if (!/^[0-9a-f]{64}$/.test(expectedDigest || "") || digest !== expectedDigest)
       throw new Error("PDF_PREVIEW_WORKER_INTEGRITY");
+    active.throwIfAborted();
     const source = makeFirstPageWorkerSource(new TextDecoder().decode(bytes));
     const blob = URL.createObjectURL(new Blob([source], {type:"text/javascript"}));
     try {
