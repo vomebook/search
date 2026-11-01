@@ -248,13 +248,21 @@ body {
   font-size: 12px;
   white-space: nowrap;
 }
+.reader-location-toggle,
 .reader-panel-location,
 .reader-panel-path {
   display: none;
 }
 @media (max-width: 600px) {
+  .reader-panel > header > .reader-location-toggle {
+    display: inline-grid;
+  }
   .reader-panel-location:not([hidden]) {
     display: block;
+    flex: none;
+    max-height: min(35dvh, 220px);
+    overflow: auto;
+    overscroll-behavior: contain;
     border-bottom: 1px solid #34383d;
     color: #c7d9f6;
     font-size: 12px;
@@ -302,6 +310,12 @@ body {
   .reader-panel-path:not([hidden]):focus-visible {
     background: #292d31;
     text-decoration: underline;
+  }
+  .reader-panel-path:disabled,
+  .reader-panel-path:disabled:hover {
+    cursor: default;
+    background: transparent;
+    text-decoration: none;
   }
   :root[data-theme="light"] .reader-panel-location:not([hidden]),
   :root[data-theme="light"] .reader-panel-path:not([hidden]) {
@@ -1615,6 +1629,10 @@ body {
   }
   .reader-panel > header > strong {
     font-size: 12px;
+  }
+  .reader-panel > header > .theme-toggle,
+  .reader-panel > header > #history-close {
+    width: 26px;
   }
   .reader-panel > header > .text-action {
     min-width: 0;

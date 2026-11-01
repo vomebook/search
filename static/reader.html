@@ -124,11 +124,16 @@
     <aside id="history-panel" class="reader-panel" aria-labelledby="reader-panel-title" hidden inert>
       <header>
         <strong id="reader-panel-title">阅读选项</strong>
+        <button id="reader-location-toggle" class="icon-button reader-location-toggle" type="button" aria-label="文件信息" title="文件信息" aria-controls="reader-panel-location" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h6l2 2h8v9.5H4z"/><path d="M9 12h6M9 15h4"/></svg></button>
         <button id="full-search-toggle" class="text-action" type="button">全文搜索</button>
         <button id="page-invert-toggle" class="text-action" type="button" aria-pressed="false" hidden>页面反色</button>
         <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换主题"></button>
         <button id="history-close" class="icon-button" type="button" aria-label="关闭阅读选项" title="关闭阅读选项">&times;</button>
       </header>
+      <div id="reader-panel-location" class="reader-panel-location" hidden>
+        <details class="reader-panel-file"><summary class="reader-panel-filename"></summary></details>
+        <button id="reader-panel-path" class="reader-panel-path" type="button"><span class="reader-panel-folder"></span></button>
+      </div>
       <nav class="reader-panel-tabs" role="tablist" aria-label="阅读面板">
         <button
           id="toc-tab"
@@ -168,10 +173,6 @@
         hidden
       >
         <div class="panel-view-header"><strong>目录</strong></div>
-        <div id="reader-panel-location" class="reader-panel-location" hidden>
-          <details class="reader-panel-file"><summary class="reader-panel-filename"></summary></details>
-          <button id="reader-panel-path" class="reader-panel-path" type="button" hidden><span class="reader-panel-folder"></span></button>
-        </div>
         <div id="toc-list" class="panel-list"></div>
       </section>
       <section

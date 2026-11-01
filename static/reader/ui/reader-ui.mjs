@@ -164,6 +164,10 @@ export function createReaderUi(readerContext) {
         panel.querySelector('#history-close')).focus({ preventScroll: true });
       return;
     }
+    const location = document.querySelector("#reader-panel-location");
+    location.hidden = true;
+    location.querySelector(".reader-panel-file").open = false;
+    document.querySelector("#reader-location-toggle").setAttribute("aria-expanded", "false");
     panel.classList.remove("is-open");
     panel.inert = true;
     readerContext.panelAnimationTimer = setTimeout(() => {
