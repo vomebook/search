@@ -3267,7 +3267,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.emulate_media(reduced_motion='reduce')
         source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/folder.txt"
         self.page.add_init_script("sessionStorage.setItem('reader-resolve:mobile-folder', " + json.dumps(json.dumps({
-            "url": source, "extension": "txt", "repo": "Test", "folder": ["docs", "子"]
+            "url": source, "extension": "txt", "repo": "Test", "folder": ["docs", "子"], "filename": "原件.txt.txt"
         })) + ")")
         self.serve("Folder document")
         self.open(self.origin + "/search/static/reader.html?id=mobile-folder&ext=txt")
@@ -3277,8 +3277,10 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.locator('#reader-panel-path').evaluate('node=>node.focus()')
         self.assertNotEqual(self.page.evaluate('document.activeElement.id'), 'reader-panel-path')
         self.page.locator('#history').press('Enter')
-        action = self.page.get_by_role('button', name='打开所在目录：Test/docs/子', exact=True)
+        action = self.page.locator('#reader-panel-path')
         action.wait_for(state='visible')
+        self.assertIn('打开所在目录：Test/docs/子', action.get_attribute('aria-label'))
+        self.assertEqual(self.page.locator('.reader-panel-filename').inner_text(), '文件：原件.txt.txt')
         action.focus()
         self.assertNotEqual(action.evaluate('node=>getComputedStyle(node).outlineStyle'), 'none')
         self.page.keyboard.press('Escape')

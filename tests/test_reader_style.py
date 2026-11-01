@@ -418,7 +418,9 @@ class ReaderStyleTests(unittest.TestCase):
     def test_mobile_folder_action_lives_in_options_without_expanding_toolbar(self):
         self.page.evaluate('''()=>{
           document.querySelector('#reader-panel-path').hidden=false;
-          document.querySelector('#reader-panel-path').textContent='所在目录：Test';
+          document.querySelector('#reader-panel-location').hidden=false;
+          document.querySelector('.reader-panel-filename').textContent='文件：测试.pdf';
+          document.querySelector('.reader-panel-folder').textContent='所在目录：Test';
           document.querySelector('#reader-panel-path').setAttribute('aria-label','打开所在目录：Test');
         }''')
         self.page.emulate_media(reduced_motion='reduce')
@@ -432,12 +434,13 @@ class ReaderStyleTests(unittest.TestCase):
                 action = self.page.locator('#reader-panel-path')
                 self.assertEqual(action.is_visible(), width <= 600)
                 if width <= 600:
-                    self.assertEqual(action.inner_text(), '所在目录：Test')
+                    self.assertEqual(self.page.locator('.reader-panel-filename').inner_text(), '文件：测试.pdf')
+                    self.assertEqual(action.locator('.reader-panel-folder').inner_text(), '所在目录：Test')
                     self.assertEqual(action.get_attribute('aria-label'), '打开所在目录：Test')
                     box = action.bounding_box()
                     self.assertGreaterEqual(box['x'], 0)
                     self.assertLessEqual(box['x'] + box['width'], width)
-                    self.assertGreaterEqual(box['height'], 40)
+                    self.assertGreaterEqual(box['height'], 32)
                 self.page.locator('#history-close').click()
                 self.page.wait_for_function("document.querySelector('#history').getAttribute('aria-expanded') === 'false'")
 
@@ -446,7 +449,8 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.emulate_media(reduced_motion='reduce')
         self.page.evaluate('''()=>{
           const n=document.querySelector('#reader-panel-path');n.hidden=false;
-          n.textContent='所在目录：Test/一个非常长的目录/子目录/文件所在位置';
+          document.querySelector('#reader-panel-location').hidden=false;
+          n.querySelector('.reader-panel-folder').textContent='所在目录：Test/一个非常长的目录/子目录/文件所在位置';
         }''')
         self.page.locator('#history').click()
         action = self.page.locator('#reader-panel-path')
@@ -460,9 +464,58 @@ class ReaderStyleTests(unittest.TestCase):
                 geometry = action.evaluate('''node=>{
                   const a=node.getBoundingClientRect(),h=document.querySelector('#history-panel > header').getBoundingClientRect();
                   const tabs=document.querySelector('.reader-panel-tabs').getBoundingClientRect();
-                  return {belowHeader:a.top>=h.bottom,aboveTabs:a.bottom<=tabs.top,ellipsized:node.scrollWidth>node.clientWidth};
+                  const text=node.querySelector('.reader-panel-folder');
+                  return {belowHeader:a.top>=h.bottom,belowTabs:a.top>=tabs.bottom,ellipsized:text.scrollWidth>text.clientWidth};
                 }''')
                 self.assertTrue(all(geometry.values()), geometry)
+
+    def test_mobile_panel_is_compact_and_folder_scrolls_with_directory(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.evaluate('''()=>{
+          document.querySelector('#reader-panel-path').hidden=false;
+          document.querySelector('#reader-panel-location').hidden=false;
+          document.querySelector('.reader-panel-filename').textContent='文件：original.pdf';
+          document.querySelector('.reader-panel-folder').textContent='所在目录：Test/docs';
+          document.querySelector('#toc-list').innerHTML=Array.from({length:40},(_,i)=>
+            `<div class="panel-item toc-item"><div class="panel-item-main">目录第${i+1}项</div></div>`).join('');
+          document.querySelector('#history-list').innerHTML='<div class="panel-item"><button class="panel-item-main">历史</button></div>';
+        }''')
+        for width in (320, 390, 600):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({'width':width,'height':700})
+                self.page.locator('#history').click()
+                metrics=self.page.evaluate('''()=>{const panel=document.querySelector('#history-panel'),
+                  toc=document.querySelector('#toc-panel'),path=document.querySelector('#reader-panel-location'),
+                  a=document.querySelector('#toc-list .panel-item-main'),b=document.querySelector('#history-list .panel-item-main');
+                  return {width:panel.getBoundingClientRect().width, tocFont:getComputedStyle(a).fontSize,
+                    historyFont:getComputedStyle(b).fontSize, pathInToc:toc.contains(path),
+                    rowHeight:a.parentElement.getBoundingClientRect().height};}''')
+                self.assertAlmostEqual(metrics['width'],width*.85,delta=1)
+                self.assertEqual(metrics['tocFont'],metrics['historyFont'])
+                self.assertEqual(metrics['tocFont'],'13px')
+                self.assertTrue(metrics['pathInToc'])
+                self.assertLessEqual(metrics['rowHeight'],40)
+                self.page.locator('#toc-panel').evaluate('n=>n.scrollTop=500')
+                self.assertTrue(self.page.locator('#reader-panel-location').evaluate('''n=>n.getBoundingClientRect().bottom<=n.parentElement.getBoundingClientRect().top'''))
+                self.page.locator('#bookmarks-tab').click()
+                self.assertTrue(self.page.locator('#reader-panel-path').is_hidden())
+                self.page.locator('#history-close').click()
+
+    def test_mobile_long_filename_expands_without_leaving_directory(self):
+        self.page.set_viewport_size({'width':320,'height':700})
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.evaluate('''()=>{document.querySelector('#reader-panel-location').hidden=false;
+          document.querySelector('#reader-panel-path').hidden=false;
+          document.querySelector('.reader-panel-filename').textContent='文件：'+('很长的文件名称'.repeat(15))+'.pdf';}''')
+        self.page.locator('#history').click()
+        name=self.page.locator('.reader-panel-filename')
+        self.assertTrue(name.evaluate('n=>n.scrollWidth>n.clientWidth'))
+        name.click()
+        self.assertTrue(self.page.locator('.reader-panel-file').evaluate('n=>n.open'))
+        self.assertEqual(name.evaluate('n=>getComputedStyle(n).whiteSpace'),'normal')
+        self.assertTrue(self.page.locator('#history-panel').is_visible())
+        name.click()
+        self.assertFalse(self.page.locator('.reader-panel-file').evaluate('n=>n.open'))
 
     def test_theme_transition_preserves_drawer_and_filter_motion(self):
         self.page.locator("#history").click()

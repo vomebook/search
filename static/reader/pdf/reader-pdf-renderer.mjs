@@ -1,3 +1,15 @@
+// Preserve the previous 2x baseline on desktops and low-memory devices, but
+// use high-density mobile pixels when the additional canvas fits the budget.
+export function pdfOutputScale(viewport) {
+  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1), baseline = Math.min(2, dpr);
+  if (!matchMedia("(max-width: 700px)").matches || (Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 2))
+    return baseline;
+  const width = Number(viewport.width), height = Number(viewport.height);
+  if (!(width > 0 && height > 0 && Number.isFinite(width) && Number.isFinite(height))) return baseline;
+  const affordable = Math.sqrt(6_000_000 / ((width + 1) * (height + 1)));
+  return Math.max(baseline, Math.min(3, dpr, affordable));
+}
+
 export function createReaderPdfRenderer(readerContext) {
   function setPdfPageLoadingState(pageState, page) {
     pageState.dataset.state = "loading";
@@ -388,7 +400,7 @@ export function createReaderPdfRenderer(readerContext) {
             throw new Error("PDF_V3_DOCUMENT_GEOMETRY_MISMATCH");
         }
         const view = page.getViewport({ scale: Math.min(3, shell.clientWidth / base.width) });
-        const outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
+        const outputScale = pdfOutputScale(view);
         canvas = document.createElement("canvas");
         canvas.setAttribute("aria-hidden", "true");
         canvas.width = Math.ceil(view.width * outputScale);
@@ -618,7 +630,7 @@ export function createReaderPdfRenderer(readerContext) {
           const base = page.getViewport({ scale: 1 }),
             scale = Math.min(pdf.readerRenderScaleLimit ?? 3, shell.clientWidth / base.width),
             viewport = page.getViewport({ scale }),
-            outputScale = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
+            outputScale = pdfOutputScale(viewport);
           if (readerContext.pdfV3Map) {
             const geometry = readerContext.pdfV3Map.pages[pageNumber - 1];
             if (Math.abs((base.width / base.height) / (geometry.width / geometry.height) - 1) > .01)
@@ -692,6 +704,7 @@ export function createReaderPdfRenderer(readerContext) {
   }
 
   return {
+    pdfOutputScale,
     setPdfPageLoadingState,
     isPdfPageVisible,
     pdfPagePriority,

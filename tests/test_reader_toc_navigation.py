@@ -433,6 +433,24 @@ class TocNavigationTests(unittest.TestCase):
             self.assertEqual(self.landed_chapter(), index + 1,
                              f"virtualized row {index} landed on the wrong entry")
 
+    def test_virtualized_directory_accounts_for_scrolling_folder_and_search(self):
+        self.page.set_viewport_size({'width':390,'height':844})
+        self.open_chapters(1200)
+        self.page.evaluate('''()=>{const p=document.querySelector('#reader-panel-path');p.hidden=false;
+          document.querySelector('#reader-panel-location').hidden=false;
+          document.querySelector('.reader-panel-filename').textContent='文件：original.epub';
+          p.querySelector('.reader-panel-folder').textContent='所在目录：Test/books';
+          if(document.querySelector('#history').getAttribute('aria-expanded')!=='true')document.querySelector('#history').click();}''')
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        for index in (30, 400, 900, 1190):
+            self.page.evaluate('''index=>{const s=__toc.state(),offset=s.list.getBoundingClientRect().top-
+              s.panelView.getBoundingClientRect().top+s.panelView.scrollTop;
+              s.panelView.scrollTop=offset+index*40;s.panelView.dispatchEvent(new Event('scroll'));}''',index)
+            self.page.wait_for_function('index=>!!document.querySelector(`#toc-list [data-toc-index="${index}"]`)',arg=index)
+            self.click_entry(index)
+            self.assertEqual(self.landed_chapter(), index+1)
+            if not self.panel_open(): self.page.locator('#history').click()
+
     # ---- landing re-assertion ----
 
     def test_landing_holds_while_chapters_above_keep_growing(self):

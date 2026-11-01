@@ -180,10 +180,15 @@ export function createReaderSource(readerContext) {
     readerContext.readerPath.setAttribute("aria-label", `筛选文件夹：${value}`);
     const panelPath = document.querySelector("#reader-panel-path");
     if (panelPath) {
-      panelPath.textContent = `所在目录：${value}`;
+      const authoritativeName = readerOriginalFilename("");
+      const filename = authoritativeName || readerContext.documentState.title || "";
+      const label = authoritativeName ? "文件" : "标题";
+      document.querySelector(".reader-panel-filename").textContent = filename ? `${label}：${filename}` : "";
+      panelPath.querySelector(".reader-panel-folder").textContent = `所在目录：${value}`;
       panelPath.hidden = !value || !readerContext.folderNavigationTarget;
-      panelPath.setAttribute("aria-label", `打开所在目录：${value}`);
-      panelPath.title = value;
+      document.querySelector("#reader-panel-location").hidden = panelPath.hidden;
+      panelPath.setAttribute("aria-label", `打开所在目录：${value}${filename ? `；${label}：${filename}` : ""}`);
+      panelPath.title = [filename, value].filter(Boolean).join("\n");
     }
   }
 
