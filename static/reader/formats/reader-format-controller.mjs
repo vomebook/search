@@ -231,6 +231,18 @@ export function createReaderFormatController(readerContext) {
       const restored = await readerContext.awaitReader(restorationPromise);
       await readerContext.applyInitialRestoration(restored, generation);
       readerContext.assertReaderActive();
+      // A Markdown cross-document link may request a specific anchor. It takes
+      // precedence over saved progress, unless the user navigated during load.
+      if (readerContext.capability.mode === "markdown" && location.hash &&
+          readerContext.isReaderGenerationCurrent("navigation", generation)) {
+        try {
+          const id = decodeURIComponent(location.hash.slice(1));
+          const article = readerContext.content.querySelector(".reader-markdown");
+          const target = [...(article?.querySelectorAll("[id], [name]") || [])]
+            .find(element => element.id === id || element.getAttribute("name") === id);
+          target?.scrollIntoView({ block: "start" });
+        } catch (_) {}
+      }
       if (!readerContext.setReaderPhase("ready")) return;
       readerContext.updateDocumentState({ restorationReady: !readerContext.restorationFailed });
       readerContext.schedulePdfBookSearchPrefetch();

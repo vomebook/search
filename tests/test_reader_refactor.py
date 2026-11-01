@@ -80,6 +80,128 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.goto(url)
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
 
+    def markdown_link_fixture(self):
+        support.route_local_vendor_fallback(self.page)
+        # The checked-in Reader source loads these locally in production builds;
+        # use the same real Marked and DOMPurify in browser regression tests.
+        base = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/books/'
+        index = '''# Index
+
+[chapter](chapter%20one.md)
+
+[book](book.epub)
+
+[fragment](chapter%20one.md#section)
+
+[self](index.md#local)
+
+[local](#local)
+
+[outside](https://example.org/article.md)
+
+[foreign](https://huggingface.co/datasets/Other/Test/resolve/main/book.md)
+
+[unsupported](archive.chm)
+
+[query](chapter%20one.md?download=true)
+
+[pdf-fragment](book.pdf#page=4)
+
+[mirror](https://hf-mirror.com/datasets/VoiceOfML/Test/resolve/main/mirror.md)
+
+[malicious](https://huggingface.co.evil.test/datasets/VoiceOfML/Test/resolve/main/book.md)
+
+<a download href="https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/books/chapter%20one.md">download</a>
+
+[unsafe](javascript:alert(1))
+
+<a id="local"></a> Local anchor
+'''
+        chapter = ('# Chapter one\n\n' + ('A paragraph.\n\n' * 90) +
+                   '<a id="section"></a>\n\n## Section target\n\n' + ('More text.\n\n' * 60))
+        def serve(route):
+            source = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('url', [''])[0]
+            path = urllib.parse.unquote(urllib.parse.urlsplit(source).path)
+            if path.endswith('/books/index.md'):
+                route.fulfill(content_type='text/markdown', body=index)
+            elif path.endswith('/books/chapter one.md'):
+                route.fulfill(content_type='text/markdown', body=chapter)
+            elif path.endswith('/books/book.epub'):
+                route.fulfill(content_type='application/epub+zip', body=support.minimal_epub())
+            else:
+                route.fulfill(status=404, body='missing')
+        self.page.route('**/api/reader-content**', serve)
+        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(
+            content_type='text/markdown', body=index))
+        return base
+
+    def test_markdown_dataset_links_open_in_reader_and_keep_navigation(self):
+        base = self.markdown_link_fixture()
+        self.open(self.reader_url('md', name='books/index'))
+        article = self.page.locator('.reader-markdown')
+        for label, filename, ext in [('chapter', 'chapter one.md', 'md'), ('book', 'book.epub', 'epub')]:
+            href = article.get_by_role('link', name=label, exact=True).get_attribute('href')
+            target = urllib.parse.urlsplit(href)
+            args = urllib.parse.parse_qs(target.query)
+            self.assertTrue(target.path.endswith('/static/reader.html'))
+            self.assertEqual(urllib.parse.unquote(args['url'][0]), base + filename)
+            self.assertEqual(args['ext'][0], ext)
+        self.assertEqual(article.get_by_role('link', name='local', exact=True).get_attribute('href'), '#local')
+        self.assertEqual(article.get_by_role('link', name='self', exact=True).get_attribute('href'), '#local')
+        self.assertEqual(article.get_by_role('link', name='outside').get_attribute('href'), 'https://example.org/article.md')
+        self.assertTrue(article.get_by_role('link', name='foreign').get_attribute('href').startswith('https://huggingface.co/datasets/Other/'))
+        self.assertEqual(article.get_by_role('link', name='unsupported').get_attribute('href'), 'archive.chm')
+        self.assertEqual(article.get_by_role('link', name='query').get_attribute('href'), 'chapter%20one.md?download=true')
+        self.assertEqual(article.get_by_role('link', name='pdf-fragment').get_attribute('href'), 'book.pdf#page=4')
+        self.assertIn('ext=md', article.get_by_role('link', name='mirror').get_attribute('href'))
+        self.assertTrue(article.get_by_role('link', name='malicious').get_attribute('href').startswith('https://huggingface.co.evil.test/'))
+        self.assertTrue(article.get_by_role('link', name='download').get_attribute('href').startswith(base))
+        self.assertEqual(article.get_by_text('unsafe').evaluate('node => node.closest("a")?.getAttribute("href") || null'), None)
+        article.get_by_role('link', name='chapter', exact=True).click()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('.reader-markdown')?.textContent.includes('Chapter one')")
+        self.assertEqual(urllib.parse.unquote(urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.url).query)['url'][0]), base + 'chapter one.md')
+        self.page.evaluate("() => VoiceOfMLReaderStore.put({url: new URL(location.href).searchParams.get('url'), title:'Chapter', extension:'md', lastReadAt:Date.now(), scrollTop:0})")
+        self.page.go_back()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('.reader-markdown')?.textContent.includes('Index')")
+        self.page.locator('.reader-markdown').get_by_role('link', name='fragment', exact=True).click()
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && !!document.querySelector('.reader-markdown #section')")
+        self.assertEqual(urllib.parse.urlsplit(self.page.url).fragment, 'section')
+        self.page.wait_for_function("() => { const n=document.querySelector('#section'), v=document.querySelector('#viewport'); return n && Math.abs(n.getBoundingClientRect().top-v.getBoundingClientRect().top)<40; }")
+
+    def test_markdown_cached_source_relative_links_use_original_download(self):
+        base = self.markdown_link_fixture()
+        cache = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=documents/text/md/' + 'a'*64 + '/document.md'
+        self.open(self.reader_url('md', name='cache', url=cache, download=base + 'index.md'))
+        href = self.page.locator('.reader-markdown').get_by_role('link', name='chapter', exact=True).get_attribute('href')
+        self.assertEqual(urllib.parse.unquote(urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)['url'][0]), base + 'chapter one.md')
+
+    def test_markdown_epub_link_opens_book_without_downloading(self):
+        base = self.markdown_link_fixture()
+        self.open(self.reader_url('md', name='books/index'))
+        downloads = []
+        self.page.on('download', lambda download: downloads.append(download))
+        self.page.locator('.reader-markdown').get_by_role('link', name='book', exact=True).click()
+        self.page.wait_for_url('**/reader.html?*ext=epub*')
+        self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        self.assertEqual(urllib.parse.unquote(urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.url).query)['url'][0]), base + 'book.epub')
+        self.assertEqual(downloads, [])
+
+    def test_markdown_dataset_link_in_search_overlay_uses_parent_navigation(self):
+        self.markdown_link_fixture()
+        reader = self.reader_url('md', name='books/index')
+        shell = ('<!doctype html><body><script>window.__messages=[];'
+                 'addEventListener("message", e => __messages.push(e.data));</script>'
+                 '<iframe class="reader-overlay" style="width:1000px;height:700px" src=' + json.dumps(reader) + '></iframe></body>')
+        self.page.route(self.origin + '/markdown-host', lambda route: route.fulfill(content_type='text/html', body=shell))
+        self.page.goto(self.origin + '/markdown-host')
+        frame = next(item for item in self.page.frames if '/static/reader.html?' in item.url)
+        frame.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+        frame.locator('.reader-markdown').get_by_role('link', name='chapter', exact=True).click()
+        self.page.wait_for_function("() => __messages.some(m => m.type === 'voice-reader-open')")
+        message = self.page.evaluate("() => __messages.find(m => m.type === 'voice-reader-open')")
+        self.assertIn('/static/reader.html?', message['url'])
+        self.assertIn('chapter%2520one.md', message['url'])
+
     def test_zoom_changed_during_preparation_survives_late_restoration(self):
         store = support.STORE_SCRIPT.replace(
             "get: () => new Promise((resolve) => setTimeout(() => resolve(null), 300)),",
