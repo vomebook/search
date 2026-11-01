@@ -105,7 +105,7 @@ export function createReaderFoliateFormat(readerContext) {
     });
   }
 
-  async function activateFoliateTocEntry(entry, generation = readerContext.beginReaderNavigation()) {
+  async function activateFoliateTocEntry(entry, generation = readerContext.beginReaderNavigation(), { closePanel = true } = {}) {
     const book = readerContext.epubRendition?.book,
       href = String(entry.href || ""),
       target = await readerContext.epubRendition?.book?.resolveHref(href);
@@ -146,7 +146,7 @@ export function createReaderFoliateFormat(readerContext) {
     readerContext.updateTocCurrentMark();
     readerContext.updateProgressTools();
     readerContext.scheduleSave();
-    readerContext.setReaderPanelOpen(false, true);
+    if (closePanel) readerContext.setReaderPanelOpen(false, true);
     readerContext.foliateScrollAnchors.remember();
     return true;
   }

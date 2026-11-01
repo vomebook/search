@@ -86,7 +86,7 @@ class TocNavigationTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate("()=>typeof window.__toc"), "object",
                          "reader.js instrumentation did not load")
 
-    def open_chapters(self, count=300, fragments=False, min_rows=4):
+    def open_chapters(self, count=300, fragments=False, min_rows=4, before_open=None):
         manifest = chapter_manifest(count, fragments)
         self.expose()
 
@@ -99,6 +99,8 @@ class TocNavigationTests(unittest.TestCase):
             route.fulfill(content_type="text/html", body=chapter_body(index))
 
         self.page.route("**/api/reader-bucket-resource**", resource)
+        if before_open:
+            before_open()
         source = ("https://voiceofml-search.hf.space/api/reader-bucket-resource?path=chapters/ebook/epub/"
                   + "a" * 64 + "/1234567890abcdef/chapter-manifest.json")
         self.page.goto(self.origin + support.PREFIX + "/static/reader.html?" +
@@ -162,6 +164,178 @@ class TocNavigationTests(unittest.TestCase):
 
     def panel_open(self):
         return self.page.evaluate("()=>document.querySelector('#history').getAttribute('aria-expanded') === 'true'")
+
+    def test_chapter_bundle_buttons_keep_directory_open_in_both_directions(self):
+        self.open_chapters(12)
+        for width in (390, 1280):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({'width':width,'height':844})
+                self.page.emulate_media(reduced_motion='reduce')
+                self.click_entry(3)
+                self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='false'")
+                self.page.locator('#history').click()
+                self.page.locator('#toc-tab').click()
+                for selector, index, chapter in [('.reader-chapter-next',4,5),('.reader-chapter-prev',3,4)]:
+                    self.page.locator(selector).click()
+                    self.page.wait_for_function('index=>__toc.nav().currentChapterIndex===index',arg=index)
+                    self.assertTrue(self.panel_open(), selector)
+                    self.assertTrue(self.page.locator('#history-panel').evaluate("n=>n.classList.contains('is-open')&&!n.inert"))
+                    self.assertEqual(self.page.locator('#toc-tab').get_attribute('aria-selected'), 'true')
+                    self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').get_attribute('title'), f'第{chapter}章')
+                    self.assertEqual(self.landed_chapter(),chapter)
+                self.page.locator('.reader-chapter-next').focus()
+                self.page.locator('.reader-chapter-next').press('Enter')
+                self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===4')
+                self.assertTrue(self.panel_open())
+                self.assertEqual(self.page.evaluate('document.activeElement.className'),'reader-chapter-next')
+                self.page.keyboard.press('Escape')
+                self.assertFalse(self.panel_open())
+                self.assertEqual(self.page.evaluate('document.activeElement.id'),'history')
+
+    def test_foliate_chapter_buttons_skip_group_headings_and_keep_directory_open(self):
+        self.open_epub(epub_with_group_headings(6,groups=2))
+        self.page.wait_for_function("()=>document.querySelectorAll('#toc-list .toc-item').length===8")
+        for width in (390, 1280):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({'width':width,'height':844})
+                self.page.emulate_media(reduced_motion='reduce')
+                self.click_entry(3)
+                self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='false'")
+                self.page.locator('#history').click()
+                self.page.locator('#toc-tab').click()
+                for selector,index in [('.reader-chapter-next',5),('.reader-chapter-prev',3)]:
+                    self.page.locator(selector).click()
+                    self.page.wait_for_function('index=>__toc.nav().currentChapterIndex===index',arg=index)
+                    self.assertTrue(self.panel_open(),selector)
+                    self.assertEqual(self.page.locator('#toc-tab').get_attribute('aria-selected'),'true')
+                    self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').count(),1)
+
+    def test_chapter_buttons_boundaries_do_not_close_directory(self):
+        self.open_chapters(6)
+        self.click_entry(0)
+        self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.assertTrue(self.page.locator('.reader-chapter-prev').is_disabled())
+        self.assertTrue(self.panel_open())
+        self.click_entry(5)
+        self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.assertTrue(self.page.locator('.reader-chapter-next').is_disabled())
+        self.assertTrue(self.panel_open())
+
+    def test_failed_chapter_button_does_not_close_directory(self):
+        failed=[]
+        def install_failure():
+            def resource(route):
+                path=unquote(route.request.url)
+                if 'chapter-0010.xhtml' in path:
+                    failed.append(path)
+                    route.fulfill(status=503,body='unavailable')
+                elif 'chapter-manifest' in path: route.fulfill(json=chapter_manifest(12))
+                else:
+                    index=int(re.search(r'chapter-(\d+)\.xhtml',path).group(1))
+                    route.fulfill(content_type='text/html',body=chapter_body(index))
+            self.page.route('**/api/reader-bucket-resource**',resource)
+        self.open_chapters(12,before_open=install_failure)
+        self.click_entry(8)
+        self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('.reader-chapter-next').click()
+        self.page.wait_for_function("()=>document.querySelector('.reader-chapter-sentinel[data-chapter=\"10\"]')?.classList.contains('reader-chapter-load-error')")
+        self.assertTrue(failed)
+        self.assertTrue(self.panel_open())
+        self.assertEqual(self.page.evaluate('__toc.nav().currentChapterIndex'),8)
+
+    def test_html_chapter_buttons_keep_directory_and_ordinary_toc_click_closes(self):
+        self.expose()
+        html=''.join(f'<h1 id="chapter-{i}">第{i}章</h1><p style="height:1400px">正文</p>' for i in range(1,5))
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/html',body=html))
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/chapters.html',ext='html')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready' && __toc.nav().tocEntries.length===4")
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('.reader-chapter-next').click()
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===1')
+        self.assertTrue(self.panel_open())
+        self.assertEqual(self.page.locator('#toc-list [aria-current="location"]').get_attribute('title'),'第2章')
+        self.page.locator('.reader-chapter-prev').click()
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===0')
+        self.assertTrue(self.panel_open())
+        self.page.locator('#toc-list .toc-item[data-toc-index="2"] .panel-item-main').click()
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===2')
+        self.assertFalse(self.panel_open())
+
+    def test_delayed_chapter_completion_does_not_reopen_a_manually_closed_panel(self):
+        held=[]
+        def install_delay():
+            def delay(route):
+                path=unquote(route.request.url)
+                if 'chapter-0010.xhtml' in path: held.append(route)
+                elif 'chapter-manifest' in path: route.fulfill(json=chapter_manifest(12))
+                else:
+                    index=int(re.search(r'chapter-(\d+)\.xhtml',path).group(1))
+                    route.fulfill(content_type='text/html',body=chapter_body(index))
+            self.page.route('**/api/reader-bucket-resource**',delay)
+        self.open_chapters(12,before_open=install_delay)
+        self.click_entry(8)
+        self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('.reader-chapter-next').click()
+        self.assertTrue(held,'target chapter request was not delayed')
+        self.assertTrue(self.panel_open())
+        self.page.locator('#history-close').click()
+        self.assertFalse(self.panel_open())
+        for route in held:
+            try: route.fulfill(content_type='text/html',body=chapter_body(10))
+            except Exception: pass
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===9')
+        self.assertFalse(self.panel_open(),'late completion must not reopen the panel')
+
+    def test_rapid_chapter_switching_is_last_request_wins_and_keeps_panel(self):
+        held=[]
+        def install_delay():
+            def delay(route):
+                path=unquote(route.request.url)
+                if 'chapter-0006.xhtml' in path: held.append(route)
+                elif 'chapter-manifest' in path: route.fulfill(json=chapter_manifest(12))
+                else:
+                    index=int(re.search(r'chapter-(\d+)\.xhtml',path).group(1))
+                    route.fulfill(content_type='text/html',body=chapter_body(index))
+            self.page.route('**/api/reader-bucket-resource**',delay)
+        self.open_chapters(12,before_open=install_delay)
+        self.click_entry(4)
+        self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('.reader-chapter-next').click()
+        self.assertTrue(held,'target chapter request was not delayed')
+        self.page.locator('.reader-chapter-prev').click()
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===3')
+        for route in held:
+            try: route.fulfill(content_type='text/html',body=chapter_body(6))
+            except Exception: pass
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.page.evaluate('__toc.nav().currentChapterIndex'),3)
+        self.assertTrue(self.panel_open())
+        self.assertEqual(self.landed_chapter(),4)
+
+    def test_virtualized_directory_tracks_current_chapter_without_jumping_scroll(self):
+        self.open_chapters(1100, min_rows=4)
+        self.page.wait_for_function('()=>!!__toc.state()')
+        self.page.evaluate('''()=>{if(document.querySelector('#history').getAttribute('aria-expanded')!=='true')
+          document.querySelector('#history').click();const s=__toc.state();s.panelView.scrollTop=700*40;
+          s.panelView.dispatchEvent(new Event('scroll'));}''')
+        self.page.wait_for_function('()=>!!document.querySelector(\'#toc-list [data-toc-index="700"]\')')
+        self.page.locator('#toc-list [data-toc-index="700"] .panel-item-main').click()
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===700')
+        self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        before=self.page.locator('#toc-panel').evaluate('n=>n.scrollTop')
+        self.page.locator('.reader-chapter-next').click()
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===701')
+        self.assertTrue(self.panel_open())
+        self.assertEqual(self.page.locator('#toc-list .is-current').get_attribute('data-toc-index'),'701')
+        self.assertAlmostEqual(self.page.locator('#toc-panel').evaluate('n=>n.scrollTop'),before,delta=1)
 
     # ---- sidebar jump accuracy ----
 
