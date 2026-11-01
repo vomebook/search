@@ -229,6 +229,83 @@ function firstPageSectionEnd(bytes, total, chunkSize) {
   return Math.min(total, Math.ceil(end / chunkSize) * chunkSize);
 }
 
+// A separately downloaded, bounded tail hint can overlap PDF.js's normal
+// two-chunk trailer read. It is only a transport hint: no PDF object, page
+// count or identity is derived from these bytes. Restrict it to the rare
+// large-parent, page-first layout recognized below and to fresh page-one opens.
+function firstPageTailHintStart(bytes, total, chunkSize) {
+  if (!(bytes instanceof Uint8Array) || total <= chunkSize * 8 ||
+      !isFirstPageCandidate(bytes,total,chunkSize)) return 0;
+  const head = new TextDecoder("latin1").decode(bytes.subarray(0,4096));
+  const first = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<<([^]*?)>>/.exec(head);
+  const parent = first && /\/Parent\s+(\d+)\s+\d+\s+R(?=[\s/>]|$)/.exec(first[1]);
+  if (!first || !/\/Type\s*\/Page(?=[\s/>]|$)/.test(first[1]) || !parent ||
+      !Number.isSafeInteger(Number(parent[1])) || Number(parent[1]) < 4096) return 0;
+  const tail = Math.floor((total - 1) / chunkSize) * chunkSize - chunkSize;
+  return Math.max(chunkSize,tail - chunkSize * 3);
+}
+
+// A bounded read-ahead hint only: recognize the first direct image stream in
+// the validated opening bytes. It must be complete as a dictionary before
+// stream data begins, and its direct length must fit in three more bootstrap
+// chunks. PDF.js still resolves the current catalog/page tree and consumes
+// original bytes; this never supplies a page identity, total, or decoded image.
+function firstImageSectionEnd(bytes, total, chunkSize) {
+  if (!(bytes instanceof Uint8Array) || total <= chunkSize * 6) return 0;
+  const head = new TextDecoder("latin1").decode(bytes.subarray(0, Math.min(bytes.length, 65536)));
+  if (!head.startsWith("%PDF-") || /\/Linearized\b/.test(head.slice(0,1024))) return 0;
+  const header = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<</g;
+  let object, scanned = 0, image = null, firstPage = null;
+  while ((object = header.exec(head)) && scanned++ < 64) {
+    const endObject = head.indexOf("endobj",header.lastIndex), stream = /\bstream(?:\r\n|\r|\n)/g;
+    stream.lastIndex = header.lastIndex;
+    const match = stream.exec(head);
+    if (!match || (endObject >= 0 && endObject < match.index)) {
+      if (endObject < 0) return 0;
+      const body = head.slice(object.index,endObject);
+      if (!firstPage && /\/Type\s*\/Page(?=[\s/>]|$)/.test(body)) firstPage = body;
+      header.lastIndex = endObject + 6;
+      continue;
+    }
+    const dictionary = head.slice(object.index,match.index);
+    if (!/>>\s*$/.test(dictionary)) return 0;
+    const lengths = [...dictionary.matchAll(/\/Length\s+(\d+)(?!\s+\d+\s+R)(?=[\s/>]|$)/g)];
+    if (lengths.length !== 1) return 0;
+    const length = Number(lengths[0][1]), streamEnd = match.index + match[0].length + length;
+    if (!Number.isSafeInteger(length) || length < 1 || !Number.isSafeInteger(streamEnd)) return 0;
+    if (/\/Type\s*\/XObject(?=[\s/>]|$)/.test(dictionary) && /\/Subtype\s*\/Image(?=[\s/>]|$)/.test(dictionary)) {
+      if (streamEnd <= chunkSize || streamEnd > chunkSize * 4 || streamEnd >= total - chunkSize * 2) return 0;
+      const id = /(?:^|[\r\n])\s*(\d+)\s+(\d+)\s+obj\s*<</.exec(object[0]);
+      if (!id || id[1].length > 15 || id[2].length > 15 ||
+          !Number.isSafeInteger(Number(id[1])) || !Number.isSafeInteger(Number(id[2]))) return 0;
+      image = {number:id[1],generation:id[2],end:Math.ceil(streamEnd / chunkSize) * chunkSize};
+      break;
+    }
+    // Only cross a previous stream when its direct length and terminators fit
+    // completely in the bounded header; never scan binary data for objects.
+    if (streamEnd >= head.length || !/^\s*endstream\b/.test(head.slice(streamEnd))) return 0;
+    const afterStream = head.indexOf("endobj",streamEnd);
+    if (afterStream < 0) return 0;
+    header.lastIndex = afterStream + 6;
+  }
+  if (!image) return 0;
+  // Do not speculate on an unrelated image. In the already received, bounded
+  // prefix, require a page resource dictionary to name this exact image ref.
+  // This is still only a hint; PDF.js resolves the real page independently.
+  const safe = head.slice(0,object.index), resources = firstPage && /\/Resources\s+(\d+)\s+(\d+)\s+R(?=[\s/>]|$)/.exec(firstPage);
+  if (!resources || resources[1].length > 15 || resources[2].length > 15 ||
+      !Number.isSafeInteger(Number(resources[1])) || !Number.isSafeInteger(Number(resources[2]))) return 0;
+  const resourceHeader = new RegExp(String.raw`(?:^|[\r\n])\s*${resources[1]}\s+${resources[2]}\s+obj\s*<<`,"g");
+  const matches = [...safe.matchAll(resourceHeader)];
+  if (matches.length !== 1) return 0;
+  const resourceEnd = safe.indexOf("endobj",matches[0].index);
+  if (resourceEnd < 0) return 0;
+  const resourceBody = safe.slice(matches[0].index,resourceEnd);
+  const ref = new RegExp(String.raw`/[^\s/<>\[\]()]+\s+${image.number}\s+${image.generation}\s+R(?=[\s/>\]]|$)`);
+  if (!/\/XObject(?=[\s/<]|$)/.test(resourceBody) || !ref.test(resourceBody)) return 0;
+  return image.end;
+}
+
 // This is a scheduling hint, not a PDF parser or a source of page identities.
 // For a directly declared large flat /Pages node, PDF.js still validates the
 // entire page tree, but its dispersed metadata is cheaper to read in smaller
@@ -324,7 +401,7 @@ export async function preparePdfInitialRange(options, hooks) {
   hooks = {...hooks, rangeCache:hooks.rangeCache === undefined ? sharedPdfRangeCache() : hooks.rangeCache};
   const owner = new AbortController();
   const signal = AbortSignal.any([hooks.signal, owner.signal]);
-  let tail = null;
+  let tail = null, extendedTail = null;
   try {
     const onHeaders = metadata => {
       if (metadata.total <= options.rangeChunkSize * 4) return;
@@ -354,15 +431,21 @@ export async function preparePdfInitialRange(options, hooks) {
     first ||= await readPdfRange(options, 0, options.rangeChunkSize, {...hooks, signal}, null, onHeaders);
     if (!first) { owner.abort(); return first; }
     const openingRanges = [];
-    const end = !first.complete && hooks.canPrefetchFirstPage?.()
-      ? firstPageSectionEnd(first.bytes, first.total, options.rangeChunkSize) : 0;
+    const pageOne = !first.complete && hooks.canPrefetchFirstPage?.();
+    const connection = globalThis.navigator?.connection;
+    const extraLookahead = pageOne && !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType);
+    const tailStart = extraLookahead ? firstPageTailHintStart(first.bytes, first.total, options.rangeChunkSize) : 0;
+    if (tailStart && tail) extendedTail = preparePdfRangeHint(options, tailStart, tail.begin, {...hooks, signal}, first);
+    const end = pageOne
+      ? firstPageSectionEnd(first.bytes, first.total, options.rangeChunkSize) ||
+        (extraLookahead ? firstImageSectionEnd(first.bytes, first.total, options.rangeChunkSize) : 0) : 0;
     for (let begin = options.rangeChunkSize; begin < end; begin += options.rangeChunkSize * 2) {
       const last = Math.min(end, begin + options.rangeChunkSize * 2);
       openingRanges.push(preparePdfRangeHint(options, begin, last, {...hooks, signal}, first));
     }
     const rangeChunkSize = first.complete ? options.rangeChunkSize :
       choosePdfRangeChunkSize(first.bytes, first.total, options.rangeChunkSize);
-    return {...first, tail, openingRanges, rangeChunkSize, cancelInitial:reason => owner.abort(reason)};
+    return {...first, tail, extendedTail, openingRanges, rangeChunkSize, cancelInitial:reason => owner.abort(reason)};
   } catch (error) {
     owner.abort(error);
     throw error;
@@ -494,6 +577,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     // cross-reference table), demanding those chunks one round trip at a
     // time. Fetch the last two aligned chunks once, alongside its startup.
     let tail = first.tail || null;
+    const extendedTail = first.extendedTail || null;
     if (!tail && first.total > chunkSize * 4) {
       const begin = Math.floor((first.total - 1) / chunkSize) * chunkSize - chunkSize;
       tail = preparePdfRangeHint(options, begin, first.total, {signal:active, readBytes, limit, rangeLimit, rangeCache}, first);
@@ -520,6 +604,15 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
         : demand(begin, end))
       : tail && begin >= tail.begin && end <= first.total
       ? tail.read(begin, end).then(result => result || demand(begin, end))
+      : extendedTail && tail && begin >= extendedTail.begin && begin < extendedTail.end &&
+        end > tail.begin && end <= first.total
+      ? Promise.all([extendedTail.read(begin,extendedTail.end),tail.read(tail.begin,end)]).then(([a,b]) => {
+        if (!a || !b) return demand(begin,end);
+        const bytes = new Uint8Array(end-begin); bytes.set(a.bytes); bytes.set(b.bytes,a.bytes.length);
+        return {bytes};
+      })
+      : extendedTail && begin >= extendedTail.begin && end <= extendedTail.end
+      ? extendedTail.read(begin, end).then(result => result || demand(begin, end))
       : demand(begin, end);
     const fetchRange = (begin, end) => {
       const parts = [];
@@ -549,7 +642,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       task?.destroy()?.catch?.(() => {});
       onError?.(error);
     };
-    for (const hint of [tail, ...openingRanges]) hint?.onFailure(fail);
+    for (const hint of [tail, extendedTail, ...openingRanges]) hint?.onFailure(fail);
     transport.requestDataRange = (begin, end) => {
       fetchRange(begin,end).then(result => {
         if (!stopped) transport.onDataRange(begin,result.bytes);
