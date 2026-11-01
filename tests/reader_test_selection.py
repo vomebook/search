@@ -34,6 +34,7 @@ CATEGORY_METHODS = {
         "test_markdown_extension_aliases_render_content",
         "test_image_aliases_decode_real_image_bytes",
         "test_native_media_uses_proxy_controls_and_mobile_layout",
+        "test_mobile_audio_keeps_folder_action_in_playback_panel",
         "test_audio_extension_aliases_use_native_reader_controls",
         "test_cold_cache_first_read_with_real_format_engines",
     ),

@@ -1816,8 +1816,8 @@ class ReaderPerformanceTest(unittest.TestCase):
           };
         }""")
         self.assertEqual(metrics["dpr"], 3)
-        self.assertGreaterEqual(metrics["backingWidth"], metrics["cssWidth"] * 1.9)
-        self.assertGreaterEqual(metrics["backingHeight"], metrics["cssHeight"] * 1.9)
+        self.assertGreaterEqual(metrics["backingWidth"], metrics["cssWidth"] * 2.9)
+        self.assertGreaterEqual(metrics["backingHeight"], metrics["cssHeight"] * 2.9)
         self.assertAlmostEqual(metrics["shellAspect"], metrics["cssAspect"], delta=0.01)
         self.assertAlmostEqual(metrics["cssAspect"], metrics["backingAspect"], delta=0.01)
         self.assertAlmostEqual(metrics["cssWidth"], metrics["canvasCssWidth"], delta=0.01)
@@ -2078,6 +2078,27 @@ class ReaderPerformanceTest(unittest.TestCase):
                 self.assertTrue(page.locator(".zoom-controls").is_hidden())
                 self.assertTrue(page.locator("#bookmark-ribbon").is_visible())
                 context.close()
+
+    def test_mobile_audio_keeps_folder_action_in_playback_panel(self):
+        context = self.browser.new_context(viewport={'width':390,'height':844})
+        page = context.new_page()
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/music.wav'
+        metadata = {'url':source,'extension':'wav','repo':'Test','folder':['音乐'],'filename':'原件.wav'}
+        page.add_init_script("sessionStorage.setItem('reader-resolve:mobile-audio', " + json.dumps(json.dumps(metadata)) + ")")
+        page.route('**/api/reader-content**', lambda route: route.fulfill(content_type='audio/wav',body=minimal_wav()))
+        page.goto(f'{self.origin}/search/static/reader.html?id=mobile-audio&ext=wav',wait_until='domcontentloaded')
+        page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        open_reader_panel(page)
+        path=page.locator('#reader-panel-path')
+        path.wait_for(state='visible')
+        self.assertTrue(path.evaluate("n=>n.closest('#reader-panel-location').parentElement.id==='media-panel'"))
+        self.assertEqual(page.locator('.reader-panel-filename').inner_text(),'文件：原件.wav')
+        self.assertEqual(path.locator('.reader-panel-folder').inner_text(),'所在目录：Test/音乐')
+        page.locator('#bookmarks-tab').click()
+        self.assertTrue(path.is_hidden())
+        page.locator('#media-tab').click()
+        self.assertTrue(path.is_visible())
+        context.close()
 
     def test_supported_formats_start_loading_while_history_restores(self):
         cases = [

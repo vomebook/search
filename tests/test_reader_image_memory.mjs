@@ -5,11 +5,30 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 const root = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const load = name => import(pathToFileURL(path.join(root, 'static/reader', name)).href);
 const {createReaderPdfScheduler} = await load('pdf/reader-pdf-scheduler.mjs');
-const {createReaderPdfRenderer} = await load('pdf/reader-pdf-renderer.mjs');
+const {createReaderPdfRenderer, pdfOutputScale} = await load('pdf/reader-pdf-renderer.mjs');
 
 globalThis.window = {devicePixelRatio: 1};
 Object.defineProperty(globalThis, 'navigator', {configurable: true, value: {connection: {saveData: true}}});
 globalThis.matchMedia = () => ({matches: false});
+
+// The sharper high-density mobile canvas is bounded, while low-memory,
+// desktop, and already-large pages retain the previous baseline.
+{
+  globalThis.matchMedia = () => ({matches: true});
+  window.devicePixelRatio = 3;
+  assert.equal(pdfOutputScale({width: 370, height: 520}), 3);
+  const limited = pdfOutputScale({width: 1000, height: 800});
+  assert.ok(limited > 2 && limited < 3);
+  assert.ok(Math.ceil(1000 * limited) * Math.ceil(800 * limited) <= 6_000_000);
+  assert.equal(pdfOutputScale({width: 1600, height: 1200}), 2);
+  assert.equal(pdfOutputScale({width: Infinity, height: 100}), 2);
+  navigator.deviceMemory = 2;
+  assert.equal(pdfOutputScale({width: 370, height: 520}), 2);
+  delete navigator.deviceMemory;
+  globalThis.matchMedia = () => ({matches: false});
+  assert.equal(pdfOutputScale({width: 370, height: 520}), 2);
+  window.devicePixelRatio = 1;
+}
 
 function fixture() {
   let visible = false, loads = 0, released = 0, epoch = 0;
