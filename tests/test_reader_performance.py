@@ -1354,6 +1354,27 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.page.evaluate("window.__releaseOutline()")
         self.page.locator("#toc-list .toc-item").first.wait_for(state="attached")
 
+    def test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab(self):
+        module = PDF_MODULE.replace("getOutline: () => Promise.resolve(window.__pdfOutlineEnabled ? [{title: '第一章', dest: [{}], items: []}] : null)",
+            "getOutline: () => new Promise(resolve => { window.__releaseOutline = () => resolve([{title: '第一章', dest: [{}], items: []}]); })")
+        self.page.set_viewport_size({'width':390,'height':844})
+        self.page.unroute('**/static/vendor/pdf.min.*.mjs')
+        self.page.route('**/static/vendor/pdf.min.*.mjs',lambda route: route.fulfill(content_type='text/javascript',body=module))
+        self.open_reader()
+        self.page.locator("html[data-reader-phase='ready']").wait_for()
+        self.page.locator('.reader-page canvas.ready').first.wait_for()
+        open_reader_panel(self.page)
+        tools=self.page.locator('.reader-progress-tools')
+        self.assertTrue(tools.evaluate("n=>n.classList.contains('reader-no-toc')&&n.parentElement.id==='toc-panel'"))
+        self.assertEqual(self.page.locator('#toc-panel .panel-view-header strong').inner_text(),'阅读状态')
+        self.page.evaluate('window.__releaseOutline()')
+        self.page.locator('#toc-list .toc-item').first.wait_for(state='attached')
+        self.assertTrue(tools.evaluate("n=>!n.classList.contains('reader-no-toc')&&n.parentElement.id==='history-panel'"))
+        self.assertTrue(self.page.locator('.reader-progress-summary').is_hidden())
+        self.assertEqual(self.page.locator('#toc-panel .panel-view-header strong').inner_text(),'目录')
+        self.assertEqual(self.page.locator('#toc-tab').get_attribute('aria-selected'),'true')
+        self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'),'true')
+
     def test_pdf_outline_click_navigates_to_declared_page(self):
         self.page.add_init_script("window.__pdfOutlineEnabled = true")
         module = PDF_MODULE.replace("[{title: '第一章', dest: [{}], items: []}]", "[{title: '第三章', dest: [{}], items: []}]").replace("getPageIndex: () => Promise.resolve(0)", "getPageIndex: () => Promise.resolve(2)")

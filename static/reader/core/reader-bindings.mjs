@@ -358,11 +358,53 @@ export function createReaderBindings(readerContext) {
     readerContext.applyReaderTheme(readerContext.readerTheme, false, false);
 
     readerContext.readerPath.addEventListener("click", readerContext.navigateReaderFolder);
+    const info = document.querySelector("#reader-panel-location"),
+      file = info.querySelector(".reader-panel-file"), summary = file.querySelector(".reader-panel-filename");
+    let measureFrame = 0, measureDisposed = false;
+    const measureFilename = () => {
+      if (info.hidden || !info.getClientRects().length || !summary.getClientRects().length) return;
+      // Measure the full name against the width available *without* a marker;
+      // otherwise the marker can create the overflow that justifies itself.
+      const style = getComputedStyle(file),
+        width = file.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+        probe = document.createElement("span");
+      probe.className = "reader-filename-measure";
+      probe.setAttribute("aria-hidden", "true");
+      probe.textContent = summary.textContent;
+      file.appendChild(probe);
+      const textWidth = probe.getBoundingClientRect().width;
+      probe.remove();
+      const fits = textWidth <= width + 0.5;
+      file.dataset.expandable = String(!fits);
+      summary.tabIndex = fits ? -1 : 0;
+      if (fits) file.open = false;
+    };
+    const scheduleFilenameMeasure = () => {
+      if (measureDisposed) return;
+      if (measureFrame) cancelAnimationFrame(measureFrame);
+      measureFrame = requestAnimationFrame(() => { measureFrame = 0; measureFilename(); });
+    };
+    const textObserver = new MutationObserver(scheduleFilenameMeasure),
+      sizeObserver = new ResizeObserver(scheduleFilenameMeasure);
+    textObserver.observe(summary, { childList: true, characterData: true, subtree: true });
+    sizeObserver.observe(file);
+    window.addEventListener("resize", scheduleFilenameMeasure);
+    document.fonts?.ready.then(scheduleFilenameMeasure).catch(() => {});
+    readerContext.trackReaderResource(() => {
+      measureDisposed = true;
+      textObserver.disconnect(); sizeObserver.disconnect();
+      window.removeEventListener("resize", scheduleFilenameMeasure);
+      if (measureFrame) cancelAnimationFrame(measureFrame);
+    });
+    summary.addEventListener("click", (event) => {
+      if (file.dataset.expandable !== "true") event.preventDefault();
+    });
     document.querySelector("#reader-location-toggle").addEventListener("click", (event) => {
-      const info = document.querySelector("#reader-panel-location"), open = info.hidden;
+      const open = info.hidden;
       info.hidden = !open;
       event.currentTarget.setAttribute("aria-expanded", String(open));
       if (!open) info.querySelector(".reader-panel-file").open = false;
+      else scheduleFilenameMeasure();
     });
     document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
     document.querySelector("#back").addEventListener("click", async () => {
