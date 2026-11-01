@@ -396,7 +396,9 @@ var readerUiState = "base";
 var readerClosing = false;
 const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html", {
   // "返回阅读" on the background-reading bar reopens the kept Reader.
-  resume: (url) => navigateToReader(url)
+  resume: (url) => navigateToReader(url),
+  close: () => { if (readerOverlay) handleReaderMessage({ origin: location.origin,
+    source: readerOverlay.contentWindow, data: { type: "voice-reader-close" } }); }
 });
 var readerReturnScrollState = null;
 var readerReturnSnapshot = null;
@@ -500,8 +502,10 @@ function handleReaderMessage(event) {
   var message = event.data || {};
   if (message.type === "voice-reader-close") {
     if (readerClosing) return;
+    readerNavigation.persistProgress(message.progress);
     readerClosing = true;
     readerUiState = "base";
+    readerNavigation.dismiss();
     try {
       var readerUrl = new URL(readerOverlay.src, location.origin);
       var returnUrl = readerUrl.searchParams.get("return");

@@ -387,6 +387,7 @@ const readerContext = {
   get sanitizeFoliateStyles() { return sanitizeFoliateStyles; }, set sanitizeFoliateStyles(value) { sanitizeFoliateStyles = value; },
   get saveDeadline() { return saveDeadline; }, set saveDeadline(value) { saveDeadline = value; },
   get saveProgress() { return saveProgress; }, set saveProgress(value) { saveProgress = value; },
+  get captureProgressEntry() { return captureProgressEntry; },
   get saveTimer() { return saveTimer; }, set saveTimer(value) { saveTimer = value; },
   get scheduleFoliateScrollSync() { return scheduleFoliateScrollSync; }, set scheduleFoliateScrollSync(value) { scheduleFoliateScrollSync = value; },
   get scheduleMarkerSync() { return scheduleMarkerSync; }, set scheduleMarkerSync(value) { scheduleMarkerSync = value; },
@@ -630,7 +631,7 @@ let {
 } = createReaderFoliateFormat(readerContext);
 
 let {
-  scheduleSave, saveProgress, placeReadingProgress, currentReaderUrl,
+  scheduleSave, saveProgress, captureProgressEntry, placeReadingProgress, currentReaderUrl,
   loadReaderRestoration, getInitialReaderRestoration, initialReaderPage, readerProgressPercent,
   pageAtMarker, syncCurrentPageFromMarker, scheduleMarkerSync, restoreFormat,
   restoreInitialPosition, applyInitialRestoration, updateReadingProgressSummary, updateProgressTools,

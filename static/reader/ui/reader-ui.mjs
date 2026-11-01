@@ -206,7 +206,7 @@ export function createReaderUi(readerContext) {
     panel.inert = true;
     readerContext.panelAnimationTimer = setTimeout(() => {
       if (!panel.classList.contains("is-open")) panel.hidden = true;
-    }, 250);
+    }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 190);
     readerContext.notifyReaderUiState("base");
     if (restoreFocus || focusWasInside) document.querySelector("#history").focus({ preventScroll: true });
   }
@@ -227,7 +227,7 @@ export function createReaderUi(readerContext) {
     input.classList.remove("is-open");
     setTimeout(() => {
       if (!input.classList.contains("is-open")) input.hidden = true;
-    }, 190);
+    }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 150);
     button.focus();
   }
 
