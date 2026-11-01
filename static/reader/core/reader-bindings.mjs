@@ -358,6 +358,12 @@ export function createReaderBindings(readerContext) {
     readerContext.applyReaderTheme(readerContext.readerTheme, false, false);
 
     readerContext.readerPath.addEventListener("click", readerContext.navigateReaderFolder);
+    document.querySelector("#reader-location-toggle").addEventListener("click", (event) => {
+      const info = document.querySelector("#reader-panel-location"), open = info.hidden;
+      info.hidden = !open;
+      event.currentTarget.setAttribute("aria-expanded", String(open));
+      if (!open) info.querySelector(".reader-panel-file").open = false;
+    });
     document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
     document.querySelector("#back").addEventListener("click", async () => {
       clearTimeout(readerContext.saveTimer);
