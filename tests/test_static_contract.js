@@ -517,8 +517,12 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(vendorScript, /relative\.startsWith\("wasm\/"\)/);
   assert.match(vendorScript, /86269b40170eb41740ea05ad2102d71d33de4f122b34eb2f478be0ea7779c415/);
   assert.match(vendorScript, /57456c8e0c81e46be31174b499ef77f2b9f5ee46d04412ba627320a36755d4c2/);
-  assert.match(vendorScript, /marked@18\.1\.0\/lib\/marked\.umd\.js/);
-  assert.match(vendorScript, /dompurify@3\.4\.16/);
+  assert.match(vendorScript, /marked@18\.1\.2\/lib\/marked\.umd\.js/);
+  assert.match(vendorScript, /9eb730d2362ae1a8c6201698f17009e16671be6946d3d06503ddc0575283db7c/);
+  assert.match(vendorScript, /dompurify@3\.4\.17/);
+  assert.match(vendorScript, /cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31/);
+  assert.match(vendorScript, /@zip\.js\/zip\.js@2\.24\.0\/index\.min\.js/);
+  assert.match(vendorScript, /6c13caf4b90e08323f404f596c51549cdc6b01010bd43935a0bdc6a25bd61021/);
   assert.doesNotMatch(vendorScript, /writeFileSync\(join\(output, target\)\)/);
   for (const path of ["pdf.min.mjs", "pdf.worker.min.mjs", "marked.min.js", "purify.min.js"]) assert.ok(!sw.includes("static/vendor/" + path));
   assert.match(sw, /url\.pathname === "\/search\/static\/reader\.html"/);
