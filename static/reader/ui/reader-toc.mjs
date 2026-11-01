@@ -166,14 +166,19 @@ export function createReaderToc(readerContext) {
     if (!state) return;
     const height = Math.max(320, state.panelView.clientHeight),
       listTop = state.list.getBoundingClientRect().top - state.panelView.getBoundingClientRect().top + state.panelView.scrollTop,
-      start = Math.max(0, Math.floor((state.panelView.scrollTop - listTop) / readerContext.TOC_VIRTUAL_ROW_HEIGHT) - 12),
-      end = Math.min(state.entries.length, start + Math.ceil(height / readerContext.TOC_VIRTUAL_ROW_HEIGHT) + 24),
+      visibleTop = Math.max(0, state.panelView.scrollTop - listTop),
+      visibleHeight = Math.max(0, height - Math.max(0, listTop - state.panelView.scrollTop)),
+      indices = state.matches,
+      first = Math.floor(visibleTop / readerContext.TOC_VIRTUAL_ROW_HEIGHT),
+      start = Math.max(0, first - 12),
+      end = Math.min(indices.length, first + Math.ceil(visibleHeight / readerContext.TOC_VIRTUAL_ROW_HEIGHT) + 13),
       fragment = document.createDocumentFragment();
     state.list.replaceChildren();
-    for (let index = start; index < end; index++) {
-      const row = readerContext.createTocRow(state.entries[index], index);
+    for (let position = start; position < end; position++) {
+      const index = indices[position], row = readerContext.createTocRow(state.entries[index], index);
       row.classList.add("toc-virtual-row");
-      row.style.top = `${index * readerContext.TOC_VIRTUAL_ROW_HEIGHT}px`;
+      row.style.top = `${position * readerContext.TOC_VIRTUAL_ROW_HEIGHT}px`;
+      if (state.query) readerContext.highlightPanelItem(row, state.query);
       fragment.appendChild(row);
     }
     state.list.appendChild(fragment);
@@ -247,6 +252,8 @@ export function createReaderToc(readerContext) {
       list = previousList.cloneNode(false);
     readerContext.tocVirtualState?.destroy();
     readerContext.tocVirtualState = null;
+    list.classList.remove("toc-list-virtualized");
+    list.style.removeProperty("height");
     previousList.replaceWith(list);
     const virtualizationThreshold = readerContext.chapterManifestUrl ? 2000 : readerContext.TOC_VIRTUALIZATION_THRESHOLD;
     if (normalizedEntries.length > virtualizationThreshold) {
@@ -264,6 +271,8 @@ export function createReaderToc(readerContext) {
       panelView.addEventListener("scroll", onScroll, { passive: true });
       readerContext.tocVirtualState = {
         entries: normalizedEntries,
+        matches: normalizedEntries.map((_, index) => index),
+        query: "",
         list,
         panelView,
         render: readerContext.renderVirtualToc,
@@ -277,6 +286,7 @@ export function createReaderToc(readerContext) {
       for (const [index, entry] of normalizedEntries.entries())
         list.appendChild(readerContext.createTocRow(entry, index));
     }
+    readerContext.filterPanel(document.querySelector('#toc-panel'), {resetScroll:false});
     readerContext.updateTocCurrentMark();
     // PDF outlines can arrive after the reader is already ready and the
     // no-TOC progress summary has been placed inside this panel.

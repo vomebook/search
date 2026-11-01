@@ -122,9 +122,39 @@ export function createReaderUi(readerContext) {
     }
   }
 
-  function filterPanel(view) {
+  function filterPanel(view, {resetScroll = true} = {}) {
+    const input = view.querySelector(".panel-search");
+    const query = input.hidden ? "" : (input.value || "").trim().toLowerCase();
+    let status = view.querySelector(".panel-filter-empty");
+    if (!status) {
+      status = document.createElement("div");
+      status.className = "panel-filter-empty panel-empty";
+      status.setAttribute("role", "status");
+      status.textContent = "没有匹配的内容";
+      status.hidden = true;
+      view.appendChild(status);
+    }
+    const state = view.id === "toc-panel" ? readerContext.tocVirtualState : null;
+    if (state) {
+      // Filter the full logical TOC, not just the currently mounted window.
+      if (query === state.query) {
+        status.hidden = !query || state.matches.length > 0;
+        return;
+      }
+      readerContext.clearSearchHighlights(view);
+      state.query = query;
+      state.matches = [];
+      state.entries.forEach((entry, index) => {
+        if (!query || entry.label.toLowerCase().includes(query)) state.matches.push(index);
+      });
+      state.list.style.height = `${state.matches.length * readerContext.TOC_VIRTUAL_ROW_HEIGHT}px`;
+      if (resetScroll) state.panelView.scrollTop = 0;
+      state.render();
+      status.hidden = !query || state.matches.length > 0;
+      return;
+    }
     readerContext.clearSearchHighlights(view);
-    const query = (view.querySelector(".panel-search").value || "").trim().toLowerCase();
+    let count = 0;
     for (const item of view.querySelectorAll(".panel-item")) {
       const searchableText = [...item.children]
         .filter((child) => !child.classList.contains("panel-item-remove"))
@@ -132,8 +162,13 @@ export function createReaderUi(readerContext) {
         .join(" ")
         .toLowerCase();
       item.hidden = !!query && !searchableText.includes(query);
-      if (query && !item.hidden) readerContext.highlightPanelItem(item, query);
+      if (!item.hidden) {
+        count++;
+        if (query) readerContext.highlightPanelItem(item, query);
+      }
     }
+    const empty = view.querySelector(".panel-list > .panel-empty");
+    status.hidden = !query || count > 0 || !!empty;
   }
 
   function notifyReaderUiState(state) {
@@ -166,7 +201,6 @@ export function createReaderUi(readerContext) {
     }
     const location = document.querySelector("#reader-panel-location");
     location.hidden = true;
-    location.querySelector(".reader-panel-file").open = false;
     document.querySelector("#reader-location-toggle").setAttribute("aria-expanded", "false");
     panel.classList.remove("is-open");
     panel.inert = true;
@@ -178,7 +212,7 @@ export function createReaderUi(readerContext) {
   }
 
   function setPanelSearchOpen(button, open) {
-    const input = button.closest(".reader-panel-view").querySelector(".panel-search");
+    const view = button.closest(".reader-panel-view"), input = view.querySelector(".panel-search");
     button.setAttribute("aria-expanded", String(open));
     input.inert = !open;
     if (open) {
@@ -188,6 +222,8 @@ export function createReaderUi(readerContext) {
       input.focus();
       return;
     }
+    if (input.value) { input.value = ""; readerContext.filterPanel(view); }
+    if (view.id === "toc-panel") view.querySelector(".panel-filter-empty")?.setAttribute("hidden", "");
     input.classList.remove("is-open");
     setTimeout(() => {
       if (!input.classList.contains("is-open")) input.hidden = true;

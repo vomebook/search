@@ -107,6 +107,34 @@ export function createReaderPdfTextRuntime(readerContext) {
     return Math.max(128, bytes);
   }
 
+  function recordNativePdfTextEvidence(pdf, page, content) {
+    // Do not fetch extra pages to decide this: only successful, already
+    // extracted pages count. A blank cover alone says nothing about the book.
+    if (!pdf || readerContext.capability?.mode !== "pdf" || readerContext.ocrManifestUrl || readerContext.ocrUrl || pdf !== readerContext.pdfDocument ||
+        pdf._pdfInfo?.readerPageCountPending || !Number.isInteger(pdf.numPages) ||
+        !Number.isInteger(page) || page < 1 || page > pdf.numPages || !Array.isArray(content?.items)) return;
+    let evidence = pdf.readerNativeTextEvidence;
+    if (!evidence || evidence.count !== pdf.numPages)
+      evidence = pdf.readerNativeTextEvidence = {count: pdf.numPages, pages: new Set(), hasText: false};
+    if (content.items.some(item => typeof item?.str === "string" && !!item.str.trim())) {
+      evidence.hasText = true;
+      evidence.pages.clear();
+      if (pdf.readerNoSearchableText) {
+        pdf.readerNoSearchableText = false;
+        readerContext.fullSearchController.resetAvailability();
+        readerContext.syncCapabilityControls();
+      }
+      return;
+    }
+    if (evidence.hasText) return;
+    evidence.pages.add(page);
+    if (!evidence.hasText && evidence.pages.size === evidence.count &&
+        !readerContext.readerAbortController.signal.aborted && readerContext.pdfDocument === pdf && !readerContext.ocrManifestUrl && !readerContext.ocrUrl) {
+      pdf.readerNoSearchableText = true;
+      readerContext.syncCapabilityControls();
+    }
+  }
+
   function cachePdfTextContent(page, content) {
     const bytes = readerContext.estimatePdfTextContentBytes(content);
     if (bytes > readerContext.PDF_TEXT_CONTENT_CACHE_BYTES) return;
@@ -133,8 +161,9 @@ export function createReaderPdfTextRuntime(readerContext) {
 
   function loadPdfTextContent(page, pdfPage, generation = null) {
     readerContext.assertReaderActive();
+    const sourcePdf = readerContext.pdfDocument;
     const cached = readerContext.cachedPdfTextContent(page);
-    if (cached) return Promise.resolve(cached);
+    if (cached) { recordNativePdfTextEvidence(sourcePdf, page, cached); return Promise.resolve(cached); }
     const pending = readerContext.pdfTextContentPromises.get(page);
     if (pending) {
       if (generation === null) pending.request.demanded = true;
@@ -152,6 +181,7 @@ export function createReaderPdfTextRuntime(readerContext) {
         if (!request.demanded && !readerContext.isReaderGenerationCurrent("search", request.generation)) throw readerContext.readerAbortError();
         const text = await readerContext.awaitReader(pdfPage.getTextContent());
         readerContext.cachePdfTextContent(page, text);
+        recordNativePdfTextEvidence(sourcePdf, page, text);
         return text;
       } finally {
         readerContext.releasePdfTextSlot(background);

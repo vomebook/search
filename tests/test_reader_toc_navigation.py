@@ -71,6 +71,7 @@ class TocNavigationTests(unittest.TestCase):
         def instrument(route):
             response = route.fetch()
             route.fulfill(response=response, body=response.text() + '''
+              window.__replaceTocForSearch=setToc;
               window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i),
                 state:()=>tocVirtualState,
                 align:(selector, offset)=>alignReaderDestination(document.querySelector(selector), offset || 0),
@@ -450,6 +451,205 @@ class TocNavigationTests(unittest.TestCase):
             self.click_entry(index)
             self.assertEqual(self.landed_chapter(), index+1)
             if not self.panel_open(): self.page.locator('#history').click()
+
+    def test_virtualized_directory_searches_all_entries_and_clears(self):
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        field.fill('第2099章')
+        self.page.wait_for_function("()=>document.querySelector('#toc-list [data-toc-index=\"2098\"]')")
+        self.assertEqual(self.page.locator('#toc-list .toc-item').count(),1)
+        self.assertEqual(self.page.locator('#toc-list mark.search-match').inner_text(),'第2099章')
+        self.assertLess(self.page.locator('#toc-panel').evaluate('n=>n.scrollHeight'),1500)
+        self.page.locator('#toc-panel').evaluate('n=>n.scrollTop=n.scrollHeight')
+        self.page.wait_for_timeout(100)
+        self.assertEqual(self.page.locator('#toc-list .toc-item').count(),1)
+        self.click_entry(2098)
+        self.assertEqual(self.landed_chapter(),2099)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.assertEqual(field.input_value(),'第2099章')
+        field.fill('不存在QXYZ')
+        self.assertTrue(self.page.get_by_role('status').filter(has_text='没有匹配的内容').is_visible())
+        self.assertEqual(self.page.locator('#toc-list .toc-item').count(),0)
+        field.fill('第20')
+        self.assertGreater(self.page.locator('#toc-list .toc-item').count(),1)
+        self.assertTrue(all('第20' in text for text in self.page.locator('#toc-list .toc-item').all_text_contents()))
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        self.assertEqual(field.input_value(),'')
+        self.assertTrue(self.page.get_by_role('status').filter(has_text='没有匹配的内容').is_hidden())
+        self.page.wait_for_function("()=>document.querySelector('#toc-list [data-toc-index=\"0\"]')")
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field.fill('第2099章')
+        self.page.locator('#toc-list [role=link]').press('Enter')
+        self.page.wait_for_function("()=>__toc.nav().currentChapterIndex===2098")
+        self.assertEqual(field.input_value(),'第2099章')
+
+    def test_small_directory_search_shows_empty_state_and_resets(self):
+        self.open_chapters(12)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        field.fill('没有这个章节')
+        self.assertTrue(self.page.get_by_role('status').filter(has_text='没有匹配的内容').is_visible())
+        field.fill('第2章')
+        self.assertEqual(self.page.locator('#toc-list .toc-item:visible').count(),1)
+        self.assertTrue(self.page.get_by_role('status').filter(has_text='没有匹配的内容').is_hidden())
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        self.assertEqual(self.page.locator('#toc-list .toc-item:visible').count(),12)
+
+    def test_multiple_virtual_results_remain_after_successful_chapter_jump(self):
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        field.fill('第20')
+        first=self.page.locator('#toc-list .toc-item[data-toc-index="19"] [role=link]')
+        self.assertTrue(first.is_visible())
+        first.click()
+        self.page.wait_for_function("()=>__toc.nav().currentChapterIndex===19")
+        self.assertEqual(self.landed_chapter(),20)
+        self.assertFalse(self.panel_open())
+        self.page.locator('#history').click()
+        self.assertEqual(field.input_value(),'第20')
+        self.assertGreater(self.page.locator('#toc-list .toc-item').count(),1)
+        self.assertTrue(all('第20' in text for text in self.page.locator('#toc-list .toc-item').all_text_contents()))
+
+    def test_virtualized_directory_search_handles_groups_replacements_and_repeated_matches(self):
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        field.fill('第20')
+        expected=self.page.evaluate("()=>__toc.nav().tocEntries.filter(x=>x.label.includes('第20')).length")
+        actual=[]
+        for step in range(10):
+            self.page.locator('#toc-panel').evaluate('(n,step)=>n.scrollTop=step*500',step)
+            self.page.wait_for_timeout(40)
+            actual.extend(int(x) for x in self.page.locator('#toc-list .toc-item:visible').evaluate_all('rows=>rows.map(r=>r.dataset.tocIndex)'))
+        self.assertEqual(len(set(actual)),expected)
+        self.assertEqual(len(set(actual)),111)
+        # A grouped heading has no navigation target, but remains searchable.
+        self.page.evaluate('''()=>{const entries=__toc.nav().tocEntries.slice();entries[2100-1]={label:'特殊分组',group:true,depth:0};__replaceTocForSearch(entries)}''')
+        field.fill('特殊分组')
+        self.assertEqual(self.page.locator('#toc-list [role=heading]').inner_text(),'特殊分组')
+        field.fill('不存在')
+        self.assertTrue(self.page.locator('#toc-panel .panel-filter-empty').is_visible())
+        self.page.evaluate("()=>__replaceTocForSearch([{label:'不存在但新到达',activate:()=>true}])")
+        self.assertTrue(self.page.locator('#toc-list .toc-item').is_visible())
+        self.assertTrue(self.page.locator('#toc-panel .panel-filter-empty').is_hidden())
+        self.assertFalse(self.page.locator('#toc-list').evaluate("n=>n.classList.contains('toc-list-virtualized')"))
+        self.assertLess(self.page.locator('#toc-panel').evaluate('n=>n.scrollHeight'),1500)
+
+    def test_composition_end_with_unchanged_query_keeps_directory_scroll(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        field.fill('第20')
+        panel=self.page.locator('#toc-panel')
+        panel.evaluate('n=>n.scrollTop=1600')
+        self.page.wait_for_timeout(100)
+        before=panel.evaluate('n=>n.scrollTop')
+        field.dispatch_event('compositionend')
+        self.assertAlmostEqual(panel.evaluate('n=>n.scrollTop'),before,delta=5)
+        self.assertGreater(self.page.locator('#toc-list mark.search-match').count(),0)
+
+    def test_empty_filtered_toc_refresh_removes_stale_empty_message(self):
+        self.open_chapters(12)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        field.fill('missing')
+        self.assertTrue(self.page.locator('#toc-panel .panel-filter-empty').is_visible())
+        field.fill('')
+        self.page.evaluate("()=>__replaceTocForSearch([{label:'new directory',activate:()=>true}])")
+        self.assertTrue(self.page.locator('#toc-panel .panel-filter-empty').is_hidden())
+        self.assertTrue(self.page.locator('#toc-list .toc-item').is_visible())
+
+    def test_virtual_toc_search_keyboard_only_navigation(self):
+        self.page.set_viewport_size({'width':1200,'height':800})
+        self.open_chapters(2100)
+        if self.panel_open(): self.page.locator('#history-close').click()
+        self.page.locator('#history').press('Enter')
+        self.page.get_by_role('button',name='搜索目录',exact=True).press('Enter')
+        field=self.page.locator('#toc-panel .panel-search')
+        field.fill('第2099章')
+        link=self.page.locator('#toc-list [data-toc-index="2098"] [role=link]')
+        link.focus()
+        self.assertTrue(link.evaluate('n=>n===document.activeElement'))
+        self.page.keyboard.press('Enter')
+        self.page.wait_for_function("()=>__toc.nav().currentChapterIndex===2098")
+        self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded')==='false'")
+        self.assertEqual(self.page.evaluate('document.activeElement.id'),'history')
+        self.page.locator('#history').press('Enter')
+        self.assertEqual(field.input_value(),'第2099章')
+        self.assertEqual(self.page.locator('#toc-list .toc-item').count(),1)
+
+    def test_hidden_stale_search_does_not_filter_late_directory(self):
+        self.open_chapters(12)
+        self.page.evaluate('''()=>{const input=document.querySelector('#toc-panel .panel-search');
+          input.hidden=true;input.value='old query';
+          __replaceTocForSearch([{label:'new directory',activate:()=>true}]);}''')
+        self.assertEqual(self.page.locator('#toc-list .toc-item').count(),1)
+        self.assertFalse(self.page.locator('#toc-list .toc-item').evaluate('n=>n.hidden'))
+        self.assertTrue(self.page.locator('#toc-panel .panel-filter-empty').is_hidden())
+
+    def test_virtual_search_renders_results_when_list_starts_at_viewport_bottom(self):
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        field.fill('第20')
+        self.page.evaluate('''()=>{const list=document.querySelector('#toc-list');
+          const spacer=document.createElement('div');spacer.id='toc-test-spacer';spacer.style.height='680px';list.before(spacer);}''')
+        panel=self.page.locator('#toc-panel')
+        panel.evaluate('n=>{n.scrollTop=0;n.dispatchEvent(new Event("scroll"))}')
+        self.page.wait_for_timeout(100)
+        panel.evaluate('n=>{n.scrollTop=100;n.dispatchEvent(new Event("scroll"))}')
+        self.page.wait_for_timeout(100)
+        metrics=self.page.evaluate('''()=>{const view=document.querySelector('#toc-panel').getBoundingClientRect(),
+          list=document.querySelector('#toc-list').getBoundingClientRect(),last=document.querySelector('#toc-list .toc-item:last-child').getBoundingClientRect();
+          return {viewBottom:view.bottom,listTop:list.top,lastBottom:last.bottom}}''')
+        self.assertLess(metrics['listTop'],metrics['viewBottom'])
+        self.assertGreaterEqual(metrics['lastBottom'],metrics['viewBottom']-1)
+
+    def test_virtual_search_covers_bottom_after_fractional_scroll(self):
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        self.page.locator('#toc-panel .panel-search').fill('第20')
+        panel=self.page.locator('#toc-panel')
+        panel.evaluate('n=>{n.scrollTop=801;n.dispatchEvent(new Event("scroll"))}')
+        self.page.wait_for_timeout(100)
+        metrics=self.page.evaluate('''()=>{const s=__toc.state(),n=s.panelView,top=s.list.getBoundingClientRect().top-
+          n.getBoundingClientRect().top+n.scrollTop, first=Math.max(0,n.scrollTop-top),
+          bottom=first+n.clientHeight;const last=s.list.querySelector('.toc-item:last-child');
+          return {bottom,lastEnd:parseFloat(last.style.top)+40};}''')
+        self.assertGreaterEqual(metrics['lastEnd'],metrics['bottom'])
+
+    def test_virtual_directory_filter_keeps_rendering_bounded_for_large_books(self):
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        values=self.page.evaluate('''()=>{const entries=__toc.nav().tocEntries;
+          const large=Array.from({length:20000},(_,i)=>({label:'Entry '+String(i).padStart(5,'0'),activate:()=>true}));
+          const started=performance.now();__replaceTocForSearch(large);return {ms:performance.now()-started};}''')
+        field.fill('Entry 1')
+        self.assertEqual(self.page.evaluate('()=>__toc.state().matches.length'),10000)
+        for position in (0,50000,200000,399000):
+            self.page.locator('#toc-panel').evaluate('(n,y)=>{n.scrollTop=y;n.dispatchEvent(new Event("scroll"))}',position)
+            self.page.wait_for_timeout(40)
+            self.assertLess(self.page.locator('#toc-list .toc-item').count(),100)
+            self.assertTrue(all('Entry 1' in x for x in self.page.locator('#toc-list .toc-item').all_text_contents()))
+        self.assertLess(values['ms'],3000)
 
     # ---- landing re-assertion ----
 
