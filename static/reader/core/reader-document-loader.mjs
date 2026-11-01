@@ -46,7 +46,7 @@ export function createReaderDocumentLoader(readerContext) {
       try {
         return await open();
       } catch (error) {
-        if (attempt >= 2 || !readerContext.retryableReaderProxyError(error)) throw error;
+        if (attempt >= 2 || error?.code === "READER_PDF_RATE_LIMIT" || !readerContext.retryableReaderProxyError(error)) throw error;
         await readerContext.waitForReader(350 * (attempt + 1));
       }
     }
