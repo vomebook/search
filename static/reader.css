@@ -268,7 +268,18 @@ body {
     font-size: 12px;
   }
   .reader-panel-file {
+    position: relative;
     padding: 5px 10px 0;
+  }
+  .reader-filename-measure {
+    position: absolute;
+    visibility: hidden;
+    display: block;
+    width: max-content;
+    white-space: nowrap;
+    pointer-events: none;
+    font: inherit;
+    line-height: 1.35;
   }
   .reader-panel-filename {
     overflow: hidden;
@@ -276,6 +287,13 @@ body {
     white-space: nowrap;
     line-height: 1.35;
     cursor: pointer;
+  }
+  .reader-panel-file:not([data-expandable="true"]) .reader-panel-filename {
+    display: block;
+    cursor: default;
+  }
+  .reader-panel-file:not([data-expandable="true"]) .reader-panel-filename::-webkit-details-marker {
+    display: none;
   }
   .reader-panel-file[open] {
     max-height: min(40dvh, 240px);

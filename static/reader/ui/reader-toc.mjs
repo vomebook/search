@@ -278,6 +278,11 @@ export function createReaderToc(readerContext) {
         list.appendChild(readerContext.createTocRow(entry, index));
     }
     readerContext.updateTocCurrentMark();
+    // PDF outlines can arrive after the reader is already ready and the
+    // no-TOC progress summary has been placed inside this panel.
+    readerContext.updateReadingProgressSummary();
+    readerContext.placeReadingProgress();
+    readerContext.updateProgressTools();
     hintReaderToc();
   }
 

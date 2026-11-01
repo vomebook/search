@@ -75,6 +75,25 @@ class ReaderTocLatencyTests(unittest.TestCase):
         self.page.wait_for_timeout(100)
         self.assertTrue(self.page.locator('#history-panel').evaluate('node=>node.hidden'))
 
+    def test_late_directory_preserves_tab_selection_and_in_progress_seek(self):
+        self.page.set_viewport_size({'width':390,'height':844})
+        self.expose_toc()
+        self.open_text()
+        self.page.locator('#history').click()
+        self.page.locator('#history-tab').click()
+        self.page.evaluate('''()=>{__replaceToc([{label:'First',activate:()=>true},{label:'Second',activate:()=>true}]);}''')
+        self.assertEqual(self.page.locator('#history-tab').get_attribute('aria-selected'),'true')
+        self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'),'true')
+        self.assertTrue(self.page.locator('.reader-progress-tools').is_hidden())
+        self.page.locator('#toc-tab').click()
+        self.assertEqual(self.page.locator('#toc-panel .panel-view-header strong').inner_text(),'目录')
+        self.page.locator('.reader-progress-range').dispatch_event('pointerdown')
+        self.page.evaluate("__replaceToc([{label:'Updated',activate:()=>true}])")
+        self.assertTrue(self.page.locator('.reader-progress-tools').evaluate("n=>n.parentElement.id==='history-panel'&&!n.classList.contains('reader-no-toc')"))
+        self.assertTrue(self.page.locator('.reader-progress-summary').is_hidden())
+        self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'),'true')
+        self.page.locator('.reader-progress-range').dispatch_event('pointerup')
+
     def test_click_outside_closes_but_panel_content_keeps_it_open(self):
         self.open_text()
         self.page.locator('#history').click()

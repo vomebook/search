@@ -94,6 +94,7 @@ CATEGORY_METHODS = {
         "test_reader_starts_with_session_metadata_before_document_load",
         "test_document_preparation_overlaps_delayed_history_restore",
         "test_pdf_outline_does_not_delay_ready",
+        "test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab",
         "test_pagehide_before_restoration_does_not_overwrite_progress",
         "test_blocked_v1_upgrade_does_not_block_document_loading",
         "test_stale_bookmark_query_cannot_overwrite_all_bookmarks",
