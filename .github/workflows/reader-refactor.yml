@@ -133,6 +133,7 @@ jobs:
         run: |
           python3 -B -m unittest -v \
             tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
             tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_expands_without_leaving_directory \
             tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
             tests.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
@@ -241,6 +242,7 @@ jobs:
         run: |
           python3 -B -m unittest -v \
             tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
             tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_expands_without_leaving_directory \
             tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
             tests.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion

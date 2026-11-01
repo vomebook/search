@@ -1175,8 +1175,11 @@ class BrowserBehaviorTest(unittest.TestCase):
           navigateToReader(url);
         }''')
         reader = self.page.frame_locator('iframe.reader-overlay')
-        reader.locator('#reader-panel-path:not([hidden])').wait_for(state='attached')
+        reader.locator('#reader-panel-path').wait_for(state='attached')
+        reader.locator('html[data-reader-phase="ready"]').wait_for(state='attached')
         reader.locator('#history').click()
+        reader.locator('#history-tab').click()
+        reader.locator('#reader-location-toggle').click()
         path = reader.locator('#reader-panel-path')
         path.wait_for(state='visible')
         self.assertEqual(path.locator('.reader-panel-folder').inner_text(), '所在目录：VOMEBOOK/一级目录/二级目录')
