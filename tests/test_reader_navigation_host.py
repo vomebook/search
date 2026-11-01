@@ -224,6 +224,36 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         for route in held:
             route.fulfill(content_type='text/html', body='<body>cancelled</body>')
 
+    def test_pending_shell_can_leave_even_when_history_traversal_stalls(self):
+        held = []
+        self.page.unroute('**/static/reader.html?**')
+        self.page.route('**/static/reader.html?**', lambda route: held.append(route))
+        present = self.page.evaluate('''() => {window.__nativeBack=history.back;history.back=()=>{};
+          navigateToReader('/search/static/reader.html?ext=txt');
+          const button=document.querySelector('.reader-overlay-opening button');button?.click();return !!button;}''')
+        self.assertTrue(present)
+        self.page.wait_for_function('() => !readerClosing', timeout=3000)
+        self.page.locator('.reader-overlay-opening').wait_for(state='detached', timeout=3000)
+        self.assertFalse(self.page.evaluate('readerClosing'))
+        self.page.evaluate('() => {history.back=window.__nativeBack;}')
+        for route in held:
+            route.fulfill(content_type='text/html', body='<body>cancelled</body>')
+
+    def test_closing_a_speech_reader_does_not_leave_the_reopened_frame_hidden(self):
+        self.page.evaluate('navigateToReader("/search/static/reader.html?id=speech-resume&ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.wait_for_function('() => !document.querySelector(".reader-overlay-opening")')
+        result = self.page.evaluate('''() => {
+          const frame=readerOverlay;
+          frame.contentWindow.CCRDSpeech={state:()=>({active:true,playing:true}),reveal:()=>{}};
+          const target=frame.src;
+          readerNavigation.dismiss();closeReaderOverlay();
+          navigateToReader(target);
+          return {same:readerOverlay===frame, opacity:getComputedStyle(frame).opacity,
+            pointer:getComputedStyle(frame).pointerEvents};
+        }''')
+        self.assertEqual(result, dict(same=True, opacity='1', pointer='auto'))
+
     def test_shell_is_warmed_without_pointer_intent_or_reader_execution(self):
         self.page.wait_for_function('warmedReaderAssets.has("/search/static/reader.html")')
         # Under SW control the link follows the cached shell fetch.

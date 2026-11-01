@@ -63,6 +63,21 @@ class ReaderTocLatencyTests(unittest.TestCase):
         self.page.wait_for_timeout(100)
         self.assertTrue(self.page.locator('#history-panel').evaluate('node=>node.hidden'))
 
+    def test_panel_animation_can_reverse_and_respects_reduced_motion(self):
+        self.open_text()
+        self.page.locator('#history').click()
+        panel = self.page.locator('#history-panel')
+        self.assertTrue(panel.evaluate('n => getComputedStyle(n).transitionDuration.includes("0.18s")'))
+        self.page.evaluate('''() => {document.querySelector('#history-close').click();
+          document.querySelector('#history').click();}''')
+        self.page.wait_for_timeout(250)
+        self.assertTrue(panel.is_visible())
+        self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'), 'true')
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.locator('#history-close').click()
+        self.page.wait_for_function("()=>document.querySelector('#history-panel').hidden", timeout=1000)
+        self.assertEqual(self.page.locator('#history').get_attribute('aria-expanded'), 'false')
+
     def test_no_toc_stays_closed_and_late_toc_respects_user_choice(self):
         self.expose_toc()
         self.open_text()
