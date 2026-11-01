@@ -6,6 +6,8 @@
   const MAX_ENTRIES = 200;
   const SCHEMA_VERSION = 1;
   const DB_VERSION = 3;
+  const STORE_VERSION = root.document?.currentScript?.dataset.readerStoreVersion ||
+    /reader-store\.([0-9a-f]{12})\.js(?:\?|$)/.exec(root.document?.currentScript?.src || "")?.[1] || "";
   let databasePromise = null;
   const subscribers = new Set();
   const storeChannel =
@@ -257,6 +259,7 @@
     DB_VERSION,
     MAX_ENTRIES,
     SCHEMA_VERSION,
+    STORE_VERSION,
     get,
     put,
     list,

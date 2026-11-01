@@ -1,6 +1,42 @@
 (function (root) {
   "use strict";
+  // The search document outlives an overlay. Its store can finish a progress
+  // transaction after the Reader iframe has already been detached.
+  let progressStorePromise = null;
+  const progressStores = new Map();
+  function progressStore(url, version) {
+    const key = (version || "unversioned") + "|" + url;
+    if (progressStores.has(key)) return Promise.resolve(progressStores.get(key));
+    if (root.VoiceOfMLReaderStore && (root.VoiceOfMLReaderStore.STORE_VERSION || "") === (version || ""))
+      return Promise.resolve(root.VoiceOfMLReaderStore);
+    if (progressStorePromise) return progressStorePromise.catch(() => null).then(() => progressStore(url, version));
+    progressStorePromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = url;
+      if (version) script.dataset.readerStoreVersion = version;
+      script.onload = () => root.VoiceOfMLReaderStore ? resolve(root.VoiceOfMLReaderStore) : reject(new Error("Reader store unavailable"));
+      script.onerror = () => reject(new Error("Reader store unavailable"));
+      document.head.append(script);
+    }).then(store => { progressStores.set(key, store); progressStorePromise = null; return store; },
+      error => { progressStorePromise = null; throw error; });
+    return progressStorePromise;
+  }
   function createNavigation(readerPath, options = {}) {
+    function persistProgress(progress) {
+      if (!progress || typeof progress.url !== "string" || !progress.url) return;
+      let readerStoreUrl;
+      try {
+        const script = frame?.contentDocument?.querySelector('script[src*="/reader/core/reader-store"]');
+        readerStoreUrl = new URL(script?.getAttribute("src") || readerPath.replace(/reader\.html$/, "reader/core/reader-store.js"), location.origin);
+        const prefix = readerPath.slice(0, -"reader.html".length) + "reader/core/";
+        if (readerStoreUrl.origin !== location.origin || !readerStoreUrl.pathname.startsWith(prefix) ||
+            !/^reader-store(?:\.[0-9a-f]{12})?\.js$/.test(readerStoreUrl.pathname.slice(prefix.length))) return;
+      } catch (_) { return; }
+      const { closeTime, ...snapshot } = progress;
+      const entry = { ...snapshot, lastReadAt: Number.isFinite(closeTime) ? closeTime : Date.now() };
+      const version = /^reader-store\.([0-9a-f]{12})\.js$/.exec(readerStoreUrl.pathname.split("/").pop())?.[1];
+      progressStore(readerStoreUrl.href, version).then(store => store.put(entry)).catch(error => console.warn("Reader progress was not saved", error));
+    }
     let frame = null;
     let returnFocus = null;
     let background = [];
@@ -202,6 +238,8 @@
         returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         frame = kept;
         kept.classList.remove("reader-overlay-parked");
+        kept.style.removeProperty("opacity");
+        kept.style.removeProperty("pointer-events");
         kept.removeAttribute("inert");
         kept.removeAttribute("aria-hidden");
         shade(kept);
@@ -229,7 +267,10 @@
       back.type = "button";
       back.setAttribute("aria-label", "返回搜索");
       back.textContent = "\u2190";
-      back.addEventListener("click", () => history.back());
+      back.addEventListener("click", () => {
+        if (typeof options.close === "function") options.close();
+        else history.back();
+      });
       const status = document.createElement("span");
       status.setAttribute("role", "status");
       status.textContent = "正在打开阅读器...";
@@ -258,6 +299,14 @@
         }
       );
       return next;
+    }
+    function dismiss() {
+      // Visually return immediately; history and resource cleanup still own
+      // the actual close, including the stalled-history fallback.
+      for (const target of [frame, opening]) if (target) {
+        target.style.setProperty("opacity", "0", "important");
+        target.style.setProperty("pointer-events", "none", "important");
+      }
     }
     // `keepSpeech` parks a Reader that is reading aloud instead of disposing it.
     function unmount(keepSpeech = true) {
@@ -356,7 +405,9 @@
       prepare,
       remember,
       mount,
+      dismiss,
       unmount,
+      persistProgress,
       replace,
       accepts,
       disposeBackground: disposeParked,

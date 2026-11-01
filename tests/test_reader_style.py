@@ -617,7 +617,7 @@ class ReaderStyleTests(unittest.TestCase):
             return style.transitionDelay.split(',')[style.transitionProperty.split(',')
                 .findIndex(value => value.trim() === 'visibility')].trim();
         }""")
-        self.assertEqual(delay, "0.24s")
+        self.assertEqual(delay, "0.18s")
         self.page.emulate_media(reduced_motion="reduce")
         for selector in ("#history-panel", "#bookmarks-panel .panel-search"):
             values = self.page.locator(selector).evaluate("""element => {
