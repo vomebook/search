@@ -240,7 +240,7 @@ function firstPageTailHintStart(bytes, total, chunkSize) {
   const first = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<<([^]*?)>>/.exec(head);
   const parent = first && /\/Parent\s+(\d+)\s+\d+\s+R(?=[\s/>]|$)/.exec(first[1]);
   if (!first || !/\/Type\s*\/Page(?=[\s/>]|$)/.test(first[1]) || !parent ||
-      !Number.isSafeInteger(Number(parent[1])) || Number(parent[1]) < 4096) return 0;
+      !Number.isSafeInteger(Number(parent[1])) || Number(parent[1]) < 2048) return 0;
   const tail = Math.floor((total - 1) / chunkSize) * chunkSize - chunkSize;
   return Math.max(chunkSize,tail - chunkSize * 3);
 }
@@ -364,18 +364,22 @@ export function isFirstPageCandidate(bytes, total, rangeChunkSize) {
     return !!length && Number.isSafeInteger(Number(length[1])) && Number(length[1]) > 0 && Number(length[1]) <= total;
   }
   // Some large PDFs begin with a page dictionary but put their edited page
-  // tree at the end. A large indirect parent number is only a hint that the
+  // tree at the end. An indirect parent number is only a hint that the
   // tree may be expensive; never use it to infer which page this object is,
   // or to publish a count. The staged worker still asks PDF.js for page one
   // and performs the same last-page validation and recovery as every other
   // staged candidate. An ambiguous or incomplete first object stays normal.
   if (first && first.index < 1024 && (!stream || stream.index > first.index + first[0].length) &&
-      /\/Type\s*\/Page(?=[\s/>]|$)/.test(first[1]) &&
-      /\/Contents(?=[\s/\[>]|$)/.test(first[1]) && /\/Resources(?=[\s/>]|$)/.test(first[1])) {
+      /\/Type\s*\/Page(?=[\s/>]|$)/.test(first[1])) {
     const parent = /\/Parent\s+(\d+)\s+(\d+)\s+R(?=[\s/>]|$)/.exec(first[1]);
-    const end = first.index + first[0].length;
-    if (parent && Number.isSafeInteger(Number(parent[1])) && Number(parent[1]) >= 4096 &&
-        Number.isSafeInteger(Number(parent[2])) && /^\s*endobj\b/.test(head.slice(end))) return true;
+    const end = head.indexOf("endobj", first.index + first[0].length);
+    if (parent && Number.isSafeInteger(Number(parent[1])) && Number(parent[1]) >= 2048 &&
+        Number.isSafeInteger(Number(parent[2])) && end >= 0 && end < 4096 &&
+        (!stream || end < stream.index)) {
+      const pageObject = head.slice(first.index,end);
+      if (/>>\s*$/.test(pageObject) && /\/Contents(?=[\s/\[>]|$)/.test(pageObject) &&
+          /\/Resources(?=[\s/<>]|$)/.test(pageObject)) return true;
+    }
   }
   const stop = stream ? stream.index : head.length;
   const objects = /(?:^|[\r\n])\s*\d+\s+\d+\s+obj\s*<</g;
