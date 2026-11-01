@@ -451,6 +451,69 @@ export function createReaderHtmlFormat(readerContext) {
     return nestedBody || doc.body || doc.documentElement;
   }
 
+  function readerMarkdownLink(raw, source) {
+    const value = String(raw || "").trim();
+    if (!value || value.startsWith("#") || /[\u0000-\u001f\u007f\\]/.test(value)) return null;
+    try {
+      // Converted text lives in a cache; relative links belong to the original
+      // document, not to the cache object or the Reader's own HTML page.
+      // A source-less/bucket-only document can still have absolute dataset links.
+      const base = source ? new URL(source) : null;
+      const url = base ? new URL(value, base) : new URL(value);
+      if (url.protocol !== "https:" || !["huggingface.co", "hf-mirror.com"].includes(url.hostname) ||
+          url.username || url.password || url.port || url.search ||
+          !/^\/datasets\/VoiceOfML\/[^/]+\/(?:resolve|raw)\/[^/]+\/.+/.test(url.pathname)) return null;
+      const filename = decodeURIComponent(url.pathname.split("/").pop() || "");
+      const match = /\.([a-z0-9]+)$/i.exec(filename);
+      const ext = match?.[1]?.toLowerCase();
+      if (!ext || VoiceOfMLReader.capability(ext).readerMode !== VoiceOfMLReader.ReaderMode.ORIGINAL) return null;
+      const fragment = url.hash;
+      if (fragment && !["md", "markdown"].includes(ext)) return null;
+      url.hash = "";
+      if (base) {
+        const baseFile = new URL(base.href);
+        baseFile.hash = "";
+        if (fragment && url.href === baseFile.href) return fragment;
+      }
+      const reader = new URL(location.pathname, location.origin);
+      reader.searchParams.set("url", url.href);
+      reader.searchParams.set("ext", ext);
+      reader.hash = fragment;
+      return reader.href;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function prepareMarkdownLinks(article) {
+    const original = readerContext.downloadUrl || readerContext.sourceUrl;
+    const readerLinks = new WeakSet();
+    for (const link of article.querySelectorAll("a[href]")) {
+      if (link.hasAttribute("download")) continue;
+      const target = readerMarkdownLink(link.getAttribute("href"), original);
+      if (target) {
+        link.setAttribute("href", target);
+        if (!target.startsWith("#")) readerLinks.add(link);
+      }
+    }
+    article.addEventListener("click", (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const link = event.target.closest?.("a[href]");
+      if (!link || !readerLinks.has(link) || !article.contains(link) || link.hasAttribute("download") ||
+          (link.target && link.target.toLowerCase() !== "_self")) return;
+      try {
+        const target = new URL(link.href);
+        if (target.origin !== location.origin || target.pathname !== location.pathname || !target.searchParams.has("url")) return;
+        // Standalone readers use ordinary browser navigation, retaining the
+        // previous document in history. The search overlay needs its host to
+        // replace the child Reader and update its own URL instead.
+        if (!readerContext.isReaderOverlayFrame()) return;
+        event.preventDefault();
+        readerContext.navigateReader(target.href);
+      } catch (_) {}
+    });
+  }
+
   async function renderText(markdown, prepared) {
     let response = await prepared.response;
     if (!response.ok) response = await readerContext.fetchReaderResponse();
@@ -462,6 +525,7 @@ export function createReaderHtmlFormat(readerContext) {
       const article = document.createElement("article");
       article.className = "reader-markdown";
       article.innerHTML = DOMPurify.sanitize(marked.parse(stripMarkdownFrontMatter(text)), { USE_PROFILES: { html: true } });
+      prepareMarkdownLinks(article);
       readerContext.content.appendChild(article);
       readerContext.setToc(readerContext.headingTocEntries(article));
     }
