@@ -21,10 +21,11 @@ from tests.browser_support import ROOT, SearchHandler, ServerState, local_server
 SOURCE = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/first-page-staged.pdf"
 
 
-def sparse_pdf(count=130, declared=None, stride=71680, nested=False, linked_padding=False, xfa=False, root_at_end=False):
+def sparse_pdf(count=130, declared=None, stride=71680, nested=False, linked_padding=False, xfa=False, root_at_end=False,
+               parent_id=5000, inline_resources=False):
     declared = count if declared is None else declared
     ids = [10 + 3 * index for index in range(count)]
-    root, catalog = (5000, 5001) if root_at_end else (2, 1)
+    root, catalog = (parent_id, parent_id+1) if root_at_end else (2, 1)
     if root_at_end and (nested or xfa):
         raise ValueError('tail fixture is intentionally a simple page tree')
     objects = {
@@ -45,9 +46,10 @@ def sparse_pdf(count=130, declared=None, stride=71680, nested=False, linked_padd
         if linked_padding:
             text += b'\n%' + hashlib.shake_256(str(index).encode()).hexdigest(stride//2).encode() + b'\n'
         parent = 4 if nested and index else root
-        resources = "7 0 R" if root_at_end else "<< /Font << /F1 3 0 R >> >>"
-        objects[number] = (f"<< /Type /Page /Parent {parent} 0 R /MediaBox [0 0 200 50] "
-                           f"/Resources {resources} /Contents {number + 1} 0 R >>").encode()
+        resources = "7 0 R" if root_at_end and not inline_resources else "<< /Font << /F1 3 0 R >> >>"
+        page_fields = (f"/Contents {number + 1} 0 R /Resources {resources}" if inline_resources else
+                       f"/Resources {resources} /Contents {number + 1} 0 R")
+        objects[number] = (f"<< /Type /Page /Parent {parent} 0 R /MediaBox [0 0 200 50] {page_fields} >>").encode()
         objects[number + 1] = f"<< /Length {len(text)} >>\nstream\n".encode() + text + b"\nendstream"
         objects[number + 2] = f"<< /Length {stride} >>\nstream\n".encode() + b"x" * stride + b"\nendstream"
     payload, offsets = bytearray(b"%PDF-1.7\n"), {}
@@ -290,6 +292,24 @@ class PdfFirstPageTests(unittest.TestCase):
             page.locator('.reader-page[data-page="130"] canvas.ready').wait_for(timeout=15000)
             page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="130"]')?.dataset.textReady==='1' ''')
             self.assertIn('Page 130',page.locator('.reader-page[data-page="130"] .reader-pdf-text').text_content())
+
+    def test_page_first_inline_resources_uses_actual_tree_order(self):
+        payload=sparse_pdf(root_at_end=True,parent_id=3232,inline_resources=True)
+        needle=b'/Kids [10 0 R 13 0 R'
+        self.assertIn(needle,payload)
+        payload=payload.replace(needle,b'/Kids [13 0 R 10 0 R',1)
+        with range_source(payload) as (source,state,_lock):
+            state['block_from']=1024*1024
+            context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
+            page=context.new_page();self.open(page,source)
+            shell=page.locator('.reader-page[data-preview-ready="1"]')
+            shell.locator('canvas.ready').wait_for(timeout=20000)
+            page.wait_for_function('''()=>document.querySelector('.reader-pdf-opening .reader-pdf-text')?.textContent.includes('Page 2')''',timeout=15000)
+            self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
+            self.assertNotIn('Page 1',shell.locator('.reader-pdf-text').text_content())
+            state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
+            self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
+            self.assertIn('Page 2',page.locator('.reader-page[data-page="1"] .reader-pdf-text').text_content())
 
     def test_sequential_second_page_before_full_validation(self):
         with range_source(sparse_pdf()) as (source,state,_lock):
