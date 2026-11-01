@@ -108,20 +108,20 @@ export function createReaderToc(readerContext) {
     }
   }
 
-  async function navigateTocEntry(index) {
+  async function navigateTocEntry(index, { closePanel = true } = {}) {
     if (index < 0 || index >= readerContext.navigationState.tocEntries.length) return;
     if (readerContext.navigationState.tocEntries[index].group) return;
     const generation = readerContext.beginReaderNavigation(),
       entry = readerContext.navigationState.tocEntries[index];
     try {
       const activated = readerContext.foliateContinuous
-        ? await readerContext.activateFoliateTocEntry(entry, generation)
+        ? await readerContext.activateFoliateTocEntry(entry, generation, { closePanel: false })
         : await entry.activate(generation);
       if (activated === false || !readerContext.isReaderGenerationCurrent("navigation", generation)) return;
       readerContext.updateNavigationState({ currentChapterIndex: index });
       readerContext.updateTocCurrentMark();
       readerContext.updateProgressTools();
-      readerContext.setReaderPanelOpen(false, true);
+      if (closePanel) readerContext.setReaderPanelOpen(false, true);
     } catch (error) {
       readerContext.reportNavigationError(error, generation);
     }
