@@ -286,9 +286,18 @@ export function createReaderPdfSearch(readerContext) {
         await readerContext.waitForReader(0, true);
       }
     }
-    if (!hasText) throw new Error(readerContext.extension === "djvu"
-      ? "此 DjVu 原件尚无可搜索文字层，需要已有 OCR 文本后才能搜索正文"
-      : "此 PDF 尚无可搜索文字层，需要完成 OCR 后才能搜索正文");
+    if (!hasText) {
+      if (readerContext.readerAbortController.signal.aborted || readerContext.pdfDocument !== pdf ||
+          !readerContext.isReaderGenerationCurrent("search", generation))
+        return [];
+      const verified = !readerContext.ocrManifestUrl && !readerContext.ocrUrl;
+      if (verified) {
+        pdf.readerNoSearchableText = true;
+        readerContext.syncCapabilityControls();
+      }
+      throw Object.assign(new Error(verified ? "此文件没有可搜索文字" : "当前未能找到可搜索文字"),
+        {code:verified ? "READER_NO_SEARCHABLE_TEXT" : "READER_TEXT_UNCONFIRMED"});
+    }
     readerContext.publishPdfSearchProgress(generation, groups, total, pattern, firstPage, pdf.numPages, pdf.numPages);
     return readerContext.fullSearchSession.page.results;
   }

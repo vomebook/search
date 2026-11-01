@@ -9,6 +9,7 @@ export function createReaderFormatController(readerContext) {
       readerContext.swfPlayer = null;
     }
     if (["pdf", "pdf-pages", "image-pages"].includes(mode)) {
+      readerContext.fullSearchController.resetAvailability();
       readerContext.pdfDocument = null;
       readerContext.pdfPageManifest = null;
       readerContext.pdfOcrManifest = null;
@@ -253,10 +254,16 @@ export function createReaderFormatController(readerContext) {
     document.querySelector(".page-controls").hidden = !readerContext.capability.features.pagination;
     document.querySelector(".zoom-controls").hidden = !readerContext.capability.features.zoom;
     readerContext.mediaTab.hidden = !readerContext.capability.features.media;
-    readerContext.fullSearchButton.hidden = !readerContext.capability.features.search;
+    const noNativeText = !!readerContext.pdfDocument?.readerNoSearchableText && !readerContext.ocrManifestUrl && !readerContext.ocrUrl;
+    const searchOpen = readerContext.panelState.selected === "full-search";
+    if (noNativeText && !searchOpen && document.activeElement === readerContext.fullSearchButton)
+      document.querySelector("#history").focus({ preventScroll: true });
+    readerContext.fullSearchButton.hidden = !readerContext.capability.features.search || (noNativeText && !searchOpen);
     readerContext.bookmarkRibbon.hidden = !readerContext.capability.features.bookmarks;
     readerContext.readingProgressSummary.querySelector(".reader-progress-bookmark").hidden =
       !readerContext.capability.features.bookmarks;
+    if (readerContext.panelState.selected === "full-search" && readerContext.fullSearchButton.hidden)
+      readerContext.closeFullSearchView();
     if (
       (readerContext.panelState.selected === "media" && readerContext.mediaTab.hidden) ||
       (readerContext.panelState.selected === "full-search" && readerContext.fullSearchButton.hidden)

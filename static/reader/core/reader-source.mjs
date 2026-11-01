@@ -183,7 +183,12 @@ export function createReaderSource(readerContext) {
       const authoritativeName = readerOriginalFilename("");
       const filename = authoritativeName || readerContext.documentState.title || "";
       const label = authoritativeName ? "文件" : "标题";
-      document.querySelector(".reader-panel-filename").textContent = filename ? `${label}：${filename}` : "";
+      const fileLabel = document.querySelector(".reader-panel-filename");
+      const nameText = filename ? `${label}：${filename}` : "";
+      if (fileLabel.textContent !== nameText) {
+        fileLabel.textContent = nameText;
+        fileLabel.scrollLeft = 0;
+      }
       const folderLabel = value || "不可用";
       panelPath.querySelector(".reader-panel-folder").textContent = `所在目录：${folderLabel}`;
       panelPath.disabled = !value || !readerContext.folderNavigationTarget;
