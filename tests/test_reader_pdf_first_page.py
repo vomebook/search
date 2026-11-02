@@ -830,6 +830,46 @@ class PdfFirstPageTests(unittest.TestCase):
             time.sleep(.3)
             with lock: self.assertEqual(len(state["requests"]),at_close)
 
+    def test_explicit_close_stops_new_validation_fetches(self):
+        # Record fetch dispatch in the browser, rather than server accept times:
+        # already-dispatched requests can reach the HTTP fixture after close.
+        with range_source(sparse_pdf()) as (source, state, lock):
+            context = self.browser.new_context(service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.add_init_script('''(() => {
+              const original = window.fetch;
+              const trace = window.__validationFetchTrace = [];
+              let closed = false;
+              window.addEventListener('voice-reader-dispose', () => {
+                closed = true;
+                trace.push({kind:'close'});
+              }, {capture:true});
+              window.fetch = (input, init) => {
+                const url = typeof input === 'string' ? input : input.url;
+                if (url.includes('/api/reader-content?'))
+                  trace.push({kind:'fetch', closed, range:new Headers(init?.headers || input.headers).get('Range')});
+                return original(input, init);
+              };
+            })()''')
+            self.open(page, source)
+            page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=15000)
+            page.wait_for_function('''() => window.__validationFetchTrace.filter(item =>
+              item.kind === 'fetch' && item.range && !item.range.startsWith('bytes=0-')).length >= 2''')
+            with lock:
+                self.assertGreater(state['active'], 0, 'fixture must have blocked validation reads')
+            page.evaluate("() => window.dispatchEvent(new Event('voice-reader-dispose'))")
+            trace = page.evaluate("() => window.__validationFetchTrace.slice()")
+            self.assertEqual(trace[-1], {'kind': 'close'})
+            page.wait_for_timeout(500)
+            after = page.evaluate("() => window.__validationFetchTrace.slice()")
+            self.assertEqual(after, trace, f'validation fetch dispatched after disposal: {after}')
+            # Unblock already-dispatched responses and let PDF.js/Worker
+            # continuations run; none may schedule fresh reads after disposal.
+            state['block'].set()
+            page.wait_for_timeout(500)
+            self.assertEqual(page.evaluate("() => window.__validationFetchTrace.slice()"), trace)
+
     def test_history_page_restores_after_full_validation(self):
         if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
         with range_source(sparse_pdf()) as (source, state, _lock):
