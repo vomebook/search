@@ -498,7 +498,7 @@ test("injectable compact-v2 payload loads without network and returns bounded me
     { name: "md", count: 1 }, { name: "pdf", count: 1 }, { name: "txt", count: 7 },
   ]);
   assert.deepStrictEqual(metadata.extensionsByRepo["Repo/A"], [{ name: "pdf", count: 1 }, { name: "txt", count: 1 }]);
-  assert.deepStrictEqual(metadata.txt, { available: true, count: 3, byRepo: { "Repo/A": 1, "Repo/B": 1, "Repo/C": 1 } });
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(metadata, "txt"), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(metadata, "records"), false);
 });
 test("invalid compact generation is rejected", async () => {
@@ -677,13 +677,13 @@ test("empty searches with record filters retain the general filtering path", asy
   assert.strictEqual(calls, 1);
   assert.deepStrictEqual(result.records.map((record) => record.File), ["beta alpha"]);
 });
-test("random record and TXT requests honor repository filters", async () => {
+test("random record and reader requests honor repository filters", async () => {
   const { worker } = await loaded();
   let result = await worker.request("random-record", { repo: "Repo/B", randomValue: 0 });
   assert.strictEqual(result.record.Repo, "Repo/B");
-  result = await worker.request("random-record", { repo: "Repo/B", txtOnly: true, randomValue: 0 });
+  result = await worker.request("random-record", { repo: "Repo/B", readerOnly: true, randomValue: 0 });
   assert.strictEqual(result.record.File, "beta notes");
-  result = await worker.request("random-record", { repo: "Repo/D", txtOnly: true });
+  result = await worker.request("random-record", { repo: "Missing", readerOnly: true });
   assert.strictEqual(result.record, null);
 });
 test("folder contents request returns only one directory", async () => {
