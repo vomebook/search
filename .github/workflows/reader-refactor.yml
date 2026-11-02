@@ -180,7 +180,7 @@ jobs:
             tests.test_reader_range_flights tests.test_reader_v3_catalog tests.test_search_order_cache tests.test_search_execution \
             tests.test_security tests.test_upstream_http tests.test_seo_routes tests.test_reader_ocr_validation \
             tests.test_search_filters_contract tests.test_search_words_contract tests.test_mixed_folder_performance \
-            tests.test_exact_search_performance tests.test_fuzzy_search_performance
+            tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
           python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" backend-coverage-debt.json
           python -B scripts/check_search_words_mutation.py
