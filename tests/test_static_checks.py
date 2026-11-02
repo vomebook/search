@@ -16,9 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class StaticGateTests(unittest.TestCase):
     def setUp(self):
-        # Use the system temp directory even if a caller set TMPDIR to the
-        # checkout; otherwise eslint may discover fixtures during its own scan.
-        self.temp = tempfile.TemporaryDirectory(prefix="static-gate-", dir="/tmp")
+        # Honour a disk-backed TMPDIR, but keep fixtures outside the checkout so
+        # eslint never discovers them during its own scan.
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        if temp_root == ROOT or ROOT in temp_root.parents:
+            temp_root = Path("/tmp")
+        self.temp = tempfile.TemporaryDirectory(prefix="static-gate-", dir=temp_root)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for filename in ("eslint.config.mjs", "ruff.toml"):
@@ -102,6 +105,20 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "")
         source.write_text('/** @type {number} */ let value = "wrong";\nconsole.log(value);\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_strict_javascript_gate_rejects_implicit_any(self):
+        config = json.loads((ROOT / "jsconfig.strict.json").read_text())
+        self.assertTrue(config["compilerOptions"]["strict"])
+        for relative in config["files"]:
+            source = self.root / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, source)
+        (self.root / "jsconfig.strict.json").write_text(json.dumps(config))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", "jsconfig.strict.json"]
+        self.assert_check(self.run_check(*check), True, "")
+        source = self.root / config["files"][0]
+        source.write_text(source.read_text() + "\nfunction strictProbe(value) { return value; }\nstrictProbe(1);\n")
+        self.assert_check(self.run_check(*check), False, "TS7006")
 
     def test_reader_type_contract_rejects_wrong_arguments(self):
         source = self.root / "static/reader-usage.js"
@@ -217,6 +234,9 @@ class StaticGateTests(unittest.TestCase):
         if (ROOT / "pyrightconfig.json").exists():
             self.assertTrue((ROOT / "backend/app.py").is_file())
             self.assertEqual(json.loads((ROOT / "pyrightconfig.json").read_text())["include"], ["app.py", "backend"])
+            strict = json.loads((ROOT / "pyrightconfig.strict.json").read_text())
+            self.assertEqual(strict["typeCheckingMode"], "strict")
+            self.assertIn("backend/search_execution.py", strict["include"])
 
     @unittest.skipUnless((ROOT / "pyrightconfig.json").exists(), "HF backend-only type gate")
     def test_pyright_checks_selected_backend_modules(self):
