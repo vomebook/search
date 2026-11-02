@@ -53,7 +53,12 @@
     function showTitle(target, title) {
       if (frame !== target || titleDismissed || typeof title !== "string" || !title.trim()) return;
       target.title = title;
+      if (document.title === title) return;
       document.title = title;
+    }
+    function initialTitle(url) {
+      const title = url.searchParams.get("title");
+      return title && title.trim() ? title : "";
     }
     // A Reader closed while reading aloud stays alive, hidden, with a small
     // player on the search page; reopening the same book reuses it.
@@ -278,6 +283,9 @@
       next.classList.add("reader-overlay-pending");
       returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       frame = next;
+      // The initial filename is known at the search click. Publish it before
+      // creating the history entry, instead of waiting for the iframe lookup.
+      showTitle(next, initialTitle(url));
       opening = document.createElement("div");
       opening.className = "reader-overlay-opening";
       const back = document.createElement("button");
@@ -306,16 +314,20 @@
       };
       window.addEventListener("message", onShell);
       releaseOpening = () => { window.removeEventListener("message", onShell); releaseOpening = null; };
-      document.body.append(next, opening);
-      back.focus();
-      shade(next);
       next.addEventListener(
         "load",
         () => {
           if (next.contentDocument?.URL === "about:blank") return;
+          try {
+            const title = next.contentDocument?.title;
+            if (title && title !== "VoiceOfML Reader") showTitle(next, title);
+          } catch (_) {}
           reveal();
         }
       );
+      document.body.append(next, opening);
+      back.focus();
+      shade(next);
       return next;
     }
     function dismiss() {

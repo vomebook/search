@@ -102,8 +102,36 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }''')
         self.assertEqual(result, dict(firstTitle='第一本.txt - VoiceOfML Reader',
           frameTitle='第一本.txt - VoiceOfML Reader', rejected='第一本.txt - VoiceOfML Reader',
-          duringReplace='搜索原始标题', stale='搜索原始标题', next='第二本.pdf - VoiceOfML Reader',
+          duringReplace='second', stale='second', next='第二本.pdf - VoiceOfML Reader',
           dismissed='搜索原始标题', closed='搜索原始标题'))
+
+    def test_filename_is_set_before_reader_history_entry(self):
+        result = self.page.evaluate('''() => {
+          const before=document.title, original=history.pushState, seen=[];
+          history.pushState=function(...args){seen.push({title:document.title,url:String(args[2])});return original.apply(this,args)};
+          try {
+            navigateToReader('/search/static/reader.html?id=sample&ext=html&title=bb_204.html');
+            const title=document.title, share=location.href;
+            closeReaderOverlay();
+            return {before,title,share,seen,restored:document.title};
+          } finally {history.pushState=original}
+        }''')
+        self.assertEqual(result['title'], 'bb_204.html')
+        self.assertEqual(result['seen'][0]['title'], 'bb_204.html')
+        self.assertIn('title=bb_204.html', result['share'])
+        self.assertEqual(result['restored'], result['before'])
+
+    def test_older_embedded_reader_still_refreshes_host_title_on_load(self):
+        self.page.unroute('**/static/reader.html?**')
+        self.page.evaluate("()=>caches.keys().then(keys=>Promise.all(keys.map(key=>caches.delete(key))))")
+        self.fixture.context.route('**/static/reader.html?**', lambda route: route.fulfill(content_type='text/html',
+            body='<title>旧阅读器文档.txt</title><body>reader</body>'))
+        before=self.page.title()
+        self.page.evaluate('navigateToReader("/search/static/reader.html?id=older&ext=txt")')
+        self.page.frame_locator('iframe.reader-overlay').locator('body').wait_for()
+        self.page.wait_for_function("()=>document.title==='旧阅读器文档.txt'")
+        self.page.evaluate('closeReaderOverlay()')
+        self.assertEqual(self.page.title(),before)
 
     def test_parked_reader_title_is_restored_only_when_reopened(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?id=speech-title&ext=txt")')

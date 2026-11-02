@@ -358,16 +358,6 @@ export function createReaderBindings(readerContext) {
     readerContext.applyReaderTheme(readerContext.readerTheme, false, false);
 
     readerContext.readerPath.addEventListener("click", readerContext.navigateReaderFolder);
-    document.querySelector("#title").addEventListener("keydown", (event) => {
-      const amount = event.currentTarget.clientWidth * 0.8;
-      if (event.currentTarget.scrollWidth <= event.currentTarget.clientWidth) return;
-      if (event.key === "ArrowRight") event.currentTarget.scrollLeft += amount;
-      else if (event.key === "ArrowLeft") event.currentTarget.scrollLeft -= amount;
-      else if (event.key === "Home") event.currentTarget.scrollLeft = 0;
-      else if (event.key === "End") event.currentTarget.scrollLeft = event.currentTarget.scrollWidth;
-      else return;
-      event.preventDefault();
-    });
     document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
     let closing = false;
     window.addEventListener("pageshow", event => { if (event.persisted) closing = false; });

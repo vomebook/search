@@ -112,10 +112,8 @@ jobs:
             tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
             tests.test_reader_style.ReaderStyleTests.test_mobile_folder_action_and_title_follow_breakpoint \
             tests.test_reader_style.ReaderStyleTests.test_mobile_title_and_controls_fit_all_formats \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_overflowing_toolbar_supports_touch_swipe \
             tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_short_filename_does_not_scroll_and_long_name_adapts_on_resize \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_scrolls_without_expanding_or_hiding_folder \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_filename_accepts_horizontal_touch_swipe \
             tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
             tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_searches_all_entries_and_clears \
             tests.test_reader_toc_navigation.TocNavigationTests.test_small_directory_search_shows_empty_state_and_resets \
@@ -251,10 +249,8 @@ jobs:
             tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
             tests.test_reader_style.ReaderStyleTests.test_mobile_folder_action_and_title_follow_breakpoint \
             tests.test_reader_style.ReaderStyleTests.test_mobile_title_and_controls_fit_all_formats \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_overflowing_toolbar_supports_touch_swipe \
             tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_short_filename_does_not_scroll_and_long_name_adapts_on_resize \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_scrolls_without_expanding_or_hiding_folder \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_filename_accepts_horizontal_touch_swipe \
             tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
             tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_searches_all_entries_and_clears \
             tests.test_reader_toc_navigation.TocNavigationTests.test_small_directory_search_shows_empty_state_and_resets \
