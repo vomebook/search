@@ -97,7 +97,7 @@ function partitions(values, count, complete, source) {
   }
   if (complete && end !== count) invalid();
 }
-export function createV3Repository({ readJson, readBytes, resourceUrl, signal, pageCount, sourceSha }) {
+export function createV3Repository({ readJson, resourceUrl, signal, pageCount, sourceSha }) {
   const cache = new Map(), pending = new Map();
   let bytes = 0, disposed = false, index = null, textPending = null, indexKey = "";
   const active = () => { if (disposed || signal?.aborted) throw new DOMException("Reader closed", "AbortError"); };
@@ -163,48 +163,6 @@ export function createV3Repository({ readJson, readBytes, resourceUrl, signal, p
       validateResource(entry.resource, sourceSha);
       if (!entry.resource.path.endsWith(`/text/page-${String(page).padStart(6, "0")}.json.gz`)) invalid();
       return validateTextLayer(await read(entry.resource), entry, sourceSha);
-    },
-    async preview(manifest, map, page, signal = null) {
-      active();
-      signal?.throwIfAborted?.();
-      const part = partitionFor(manifest.preview.partitions, page);
-      if (!part) throw new Error("PDF_V3_PREVIEW_PENDING");
-      const data = await read(part.resource);
-      if (data.version !== 3 || data.kind !== "pdf-preview-partition" || data.source_sha256 !== sourceSha ||
-          data.page_map_sha256 !== manifest.page_map.sha256 || data.start !== part.start || data.end !== part.end ||
-          !Array.isArray(data.pages) || data.pages.length > part.end - part.start + 1) invalid();
-      let previous = part.start - 1;
-      for (const entry of data.pages) {
-        if (!integer(entry.page) || entry.page <= previous || entry.page > part.end ||
-            entry.page_identity !== map.pages[entry.page - 1].identity ||
-            !["png", "webp", "jpeg", "svg", "jxl"].includes(entry.codec) || !integer(entry.width) || !integer(entry.height)) invalid();
-        const geometry = map.pages[entry.page - 1];
-        if ((["bitonal-image", "unknown"].includes(geometry.classification) && entry.codec !== "png") ||
-            Math.abs((entry.width / entry.height) / (geometry.width / geometry.height) - 1) > .01) invalid();
-        validateResource(entry.resource, sourceSha);
-        const filename = `page-${String(entry.page).padStart(6, "0")}.${entry.codec}`;
-        if (!entry.resource.path.endsWith(`/preview/${filename}`) &&
-            !(["jxl", "png"].includes(entry.codec) && entry.resource.path.endsWith(`/pages/${filename}`))) invalid();
-        previous = entry.page;
-      }
-      if (part.complete && data.pages.length !== part.end - part.start + 1) invalid();
-      const entry = data.pages.find(p => p.page === page);
-      if (!entry) throw new Error("PDF_V3_PREVIEW_PENDING");
-      if (entry.codec === "jxl") {
-        const url = new URL(resourceUrl(entry.resource), location.href);
-        url.searchParams.set("sha256", entry.resource.sha256);
-        url.searchParams.set("bytes", String(entry.resource.bytes));
-        return { entry, url: url.href, progressive: true };
-      }
-      const url = new URL(resourceUrl(entry.resource), location.href);
-      if (entry.codec === "png") {
-        url.searchParams.set("sha256", entry.resource.sha256);
-        url.searchParams.set("bytes", String(entry.resource.bytes));
-      }
-      const packed = await readBytes(url.href, entry.resource, signal);
-      active();
-      signal?.throwIfAborted?.();
-      return { entry, blob: new Blob([packed], { type: entry.codec === "svg" ? "image/svg+xml" : `image/${entry.codec}` }) };
     },
     dispose() { disposed = true; cache.clear(); bytes = 0; index = null; }
   };

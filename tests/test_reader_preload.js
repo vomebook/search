@@ -68,7 +68,7 @@ async function main() {
   assert.strictEqual(valid.state.url, source);
   assert.strictEqual(valid.state.cancels, 0);
   assert.strictEqual(valid.timers.size, 0);
-  assert.strictEqual(valid.preload.image, null);
+  assert.strictEqual(valid.preload.image, undefined);
 
   const relative = loadPreload({ url: source.replace("https://voiceofml-search.hf.space", ""), chunks: [Buffer.from("ok")] });
   assert.strictEqual(relative.state.url, source);
@@ -84,7 +84,7 @@ async function main() {
   const imageRequest = image.preload.manifest;
   image.preload.dispose();
   image.preload.dispose();
-  assert.strictEqual(image.preload.image, null);
+  assert.strictEqual(image.preload.image, undefined);
   assert.strictEqual(image.listeners.has("pagehide"), false);
   await imageRequest;
 
@@ -92,10 +92,10 @@ async function main() {
   const bfcacheListener = bfcache.listeners.get("pagehide");
   bfcacheListener({ persisted: true });
   assert.strictEqual(bfcache.listeners.has("pagehide"), true);
-  assert.strictEqual(bfcache.preload.image, null);
+  assert.strictEqual(bfcache.preload.image, undefined);
   bfcacheListener({ persisted: false });
   assert.strictEqual(bfcache.listeners.has("pagehide"), false);
-  assert.strictEqual(bfcache.preload.image, null);
+  assert.strictEqual(bfcache.preload.image, undefined);
   await bfcache.preload.manifest;
 
   const oversized = loadPreload({ header: "9" });
