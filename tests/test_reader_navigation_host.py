@@ -76,6 +76,80 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }''')
         self.assertTrue(all(result.values()), result)
 
+    def test_reader_title_tracks_foreground_and_restores_search(self):
+        result = self.page.evaluate('''async () => {
+          document.title='搜索原始标题';
+          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          const send=(source,title,origin=location.origin)=>window.dispatchEvent(new MessageEvent('message',
+            {origin,source,data:{type:'voice-reader-title',title}}));
+          navigateToReader(path+'?ext=txt'); const first=readerOverlay;
+          send(first.contentWindow,'第一本.txt - VoiceOfML Reader');
+          const firstTitle=document.title, frameTitle=first.title;
+          send(window,'错误来源');send(first.contentWindow,'错误域名','https://example.invalid');
+          const rejected=document.title;
+          handleReaderMessage({origin:location.origin,source:first.contentWindow,
+            data:{type:'voice-reader-open',url:path+'?ext=txt&title=second'}});
+          const second=readerOverlay, duringReplace=document.title;
+          send(first.contentWindow,'迟到的旧标题');
+          const stale=document.title;
+          send(second.contentWindow,'第二本.pdf - VoiceOfML Reader');
+          const next=document.title;
+          readerNavigation.dismiss();
+          send(second.contentWindow,'关闭后的迟到标题');
+          const dismissed=document.title;
+          closeReaderOverlay();
+          return {firstTitle,frameTitle,rejected,duringReplace,stale,next,dismissed,closed:document.title};
+        }''')
+        self.assertEqual(result, dict(firstTitle='第一本.txt - VoiceOfML Reader',
+          frameTitle='第一本.txt - VoiceOfML Reader', rejected='第一本.txt - VoiceOfML Reader',
+          duringReplace='搜索原始标题', stale='搜索原始标题', next='第二本.pdf - VoiceOfML Reader',
+          dismissed='搜索原始标题', closed='搜索原始标题'))
+
+    def test_parked_reader_title_is_restored_only_when_reopened(self):
+        self.page.evaluate('navigateToReader("/search/static/reader.html?id=speech-title&ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.wait_for_function('() => !document.querySelector(".reader-overlay-opening")')
+        result = self.page.evaluate('''() => {
+          const frame=readerOverlay, url=frame.src;
+          frame.contentDocument.title='朗读中.txt - VoiceOfML Reader';
+          frame.contentWindow.CCRDSpeech={state:()=>({active:true,playing:true}),reveal:()=>{}};
+          window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:frame.contentWindow,
+            data:{type:'voice-reader-title',title:frame.contentDocument.title}}));
+          const playing=document.title;closeReaderOverlay();const parked=document.title;
+          window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:frame.contentWindow,
+            data:{type:'voice-reader-title',title:'后台迟到标题'}}));
+          const late=document.title;navigateToReader(url);const reopened=document.title;
+          readerNavigation.disposeBackground();closeReaderOverlay();
+          return {playing,parked,late,reopened};
+        }''')
+        self.assertEqual(result['playing'], '朗读中.txt - VoiceOfML Reader')
+        self.assertEqual(result['parked'], 'VoiceOfML Search')
+        self.assertEqual(result['late'], 'VoiceOfML Search')
+        self.assertEqual(result['reopened'], result['playing'])
+
+    def test_foreground_opened_from_parked_reader_keeps_search_title(self):
+        self.page.evaluate('navigateToReader("/search/static/reader.html?id=first-speech&ext=txt")')
+        self.page.frame_locator('.reader-overlay').locator('body').wait_for()
+        self.page.wait_for_function('() => !document.querySelector(".reader-overlay-opening")')
+        result = self.page.evaluate('''() => {
+          const first=readerOverlay;
+          first.contentDocument.title='第一本 - VoiceOfML Reader';
+          first.contentWindow.CCRDSpeech={state:()=>({active:true,playing:true}),reveal:()=>{}};
+          window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:first.contentWindow,
+            data:{type:'voice-reader-title',title:first.contentDocument.title}}));
+          closeReaderOverlay();const search=document.title;
+          navigateToReader('/search/static/reader.html?id=second-book&ext=txt');
+          const second=readerOverlay;
+          window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:second.contentWindow,
+            data:{type:'voice-reader-title',title:'第二本 - VoiceOfML Reader'}}));
+          navigateToReader(first.src);
+          const reopened=document.title;
+          closeReaderOverlay();return {search,reopened,restored:document.title};
+        }''')
+        self.assertEqual(result['search'], 'VoiceOfML Search')
+        self.assertEqual(result['reopened'], '第一本 - VoiceOfML Reader')
+        self.assertEqual(result['restored'], result['search'])
+
     def test_click_replenishes_evicted_reader_metadata(self):
         result = self.page.evaluate('''() => {
            const button=DOM.resultsList.querySelector('[data-action="read"]');
