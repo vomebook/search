@@ -93,6 +93,12 @@ interface ChapterScheduler<T> {
   readonly activeCount: number;
   readonly pendingCount: number;
 }
+interface ChapterRepositoryState<T> {
+  readonly status: "idle" | "loading" | "ready" | "error";
+  readonly attempts: number;
+  readonly value: T | null;
+  readonly error: unknown;
+}
 interface ReaderChaptersApi {
   createChapterScheduler<T>(options: {
     create(index: number, signal: AbortSignal, priority: "high" | "low"): T | Promise<T>;
@@ -101,11 +107,12 @@ interface ReaderChaptersApi {
   }): ChapterScheduler<T>;
   createChapterRepository<T>(options: {
     count: number;
-    find(index: number): T | null;
+    find(index: number): T | null | undefined;
     create(index: number): T | Promise<T>;
     commit?(index: number, value: T): T;
   }): {
     load(index: number): Promise<T | null>;
+    state(index: number): ChapterRepositoryState<T> | null;
     release(index: number): boolean;
     dispose(): void;
     readonly pending: Promise<T | null>[];
