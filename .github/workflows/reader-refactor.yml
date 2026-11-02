@@ -38,6 +38,7 @@ jobs:
       - name: Check source and exercise static gates
         run: |
           npm run check:static
+          npx --no-install pyright --project pyrightconfig.strict.json
           python -B scripts/check_python_static.py
           python -B -m unittest -v tests.test_static_checks
       - name: Run chapter-search unit tests
