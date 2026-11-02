@@ -15,6 +15,12 @@
       ],
       "/search/static/*": [
         "./static/*"
+      ],
+      "/static/foliate-reader/view.js": [
+        "./typings/foliate/view.d.ts"
+      ],
+      "/search/static/foliate-reader/view.js?reader-v1": [
+        "./typings/foliate/view.d.ts"
       ]
     }
   },
@@ -74,6 +80,9 @@
     "static/search/download-controller.js",
     "static/search/reader-navigation.js",
     "static/search/search-session.js",
-    "static/tts-client.js"
+    "static/tts-client.js",
+    "static/app.js",
+    "static/reader.js",
+    "static/reader/reader-components.mjs"
   ]
 }

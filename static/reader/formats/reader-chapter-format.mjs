@@ -2,6 +2,7 @@
 // cross-volume sidebar targets that point back into volume 1. Its own verified
 // "总目录" links and each volume's adjacent "书名页" independently identify
 // these destinations. Never apply this correction to another manifest version.
+/** @type {Map<string, [number, string, number, string, number, string, number][]>} */
 const REVIEWED_TOC_CORRECTIONS = new Map([
   ["7b150f1ba768d3bf4380b805676a32b8b2c18d7a8b4efb75be49a38da1dbf3a8", [
     [1, "费曼物理学讲义：新千年版．第1卷", 4, "", 4, "chapter", 3],
@@ -223,7 +224,7 @@ export function createReaderChapterFormat(readerContext) {
               }
             if (element.hasAttribute("srcset")) element.removeAttribute("srcset");
           }
-          const article = document.createElement("article");
+          const article = /** @type {HTMLElement & {_chapterSearchHead?: Node | null}} */ (document.createElement("article"));
           article.className = "reader-markdown reader-epub-chapter";
           article.dataset.chapter = String(chapter.index);
           if (doc.body?.id) article.id = doc.body.id;
@@ -268,6 +269,7 @@ export function createReaderChapterFormat(readerContext) {
         throw error;
       });
     };
+    /** @param {string | {fragment?: string}} destination */
     const activateChapter = async (chapter, generation, destination = "") => {
       chapterFocusIndex = chapter.index;
       navigationProtectionCleanup?.();
@@ -320,8 +322,8 @@ export function createReaderChapterFormat(readerContext) {
       }
     };
     frame.addEventListener("click", async (event) => {
-      const link = event.target.closest?.("a[href]");
-      const article = link?.closest(".reader-epub-chapter");
+      const link = /** @type {Element} */ (event.target).closest?.("a[href]");
+      const article = /** @type {HTMLElement | null | undefined} */ (link?.closest(".reader-epub-chapter"));
       if (
         !article ||
         event.button !== 0 ||
@@ -361,7 +363,7 @@ export function createReaderChapterFormat(readerContext) {
     });
     const chapterVirtualizer = VoiceOfMLReaderVirtual.createSectionVirtualizer({
       limit: 12,
-      getLoaded: () => [...frame.querySelectorAll(":scope > .reader-epub-chapter")],
+      getLoaded: () => [.../** @type {NodeListOf<HTMLElement & {_chapterSearchHead?: Node | null}>} */ (frame.querySelectorAll(":scope > .reader-epub-chapter"))],
       getIndex: article => Number(article.dataset.chapter),
       getHeight: article => article.getBoundingClientRect().height,
       canVirtualize: article => {
@@ -376,7 +378,7 @@ export function createReaderChapterFormat(readerContext) {
       },
       virtualize: (article, index, height) => {
         loaded.delete(index);
-        const marker = ensureSentinel(chapterAt(index));
+        const marker = /** @type {HTMLButtonElement} */ (ensureSentinel(chapterAt(index)));
         const style = getComputedStyle(article);
         marker.classList.add("reader-chapter-placeholder");
         marker.style.height = `${height}px`;
@@ -419,7 +421,7 @@ export function createReaderChapterFormat(readerContext) {
       chapterWindowFrame = 0;
       if (!chapterWindowReady || readerContext.readerAbortController.signal.aborted) return;
       const view = readerContext.viewport.getBoundingClientRect();
-      const rows = [...frame.querySelectorAll(":scope > [data-chapter]")];
+      const rows = [...frame.querySelectorAll(":scope > [data-chapter]")].map(row => /** @type {HTMLElement} */ (row));
       const current = rows.find(row => {
         const rect = row.getBoundingClientRect();
         return rect.top <= view.top + 80 && rect.bottom > view.top + 80;
@@ -446,7 +448,7 @@ export function createReaderChapterFormat(readerContext) {
       if (!chapterWindowReady || chapterNavigating || readerContext.readerAbortController.signal.aborted) return;
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
-        const chapter = chapterAt(Number(entry.target.dataset.chapter));
+        const chapter = chapterAt(Number(/** @type {HTMLElement} */ (entry.target).dataset.chapter));
         if (chapter) fetchChapter(chapter).catch(() => {});
       }
     }, { root: readerContext.viewport });
