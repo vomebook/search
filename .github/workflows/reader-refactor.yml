@@ -184,6 +184,8 @@ jobs:
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
           python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" backend-coverage-debt.json
           python -B scripts/check_search_words_mutation.py
+          python -B scripts/check_search_words_mutation.py --module search_matching
+          python -B scripts/check_search_words_mutation.py --module data_formats
       - name: Install browser dependencies
         working-directory: huggingface-search
         run: python -m playwright install --with-deps chromium firefox
