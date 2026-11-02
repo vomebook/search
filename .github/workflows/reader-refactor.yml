@@ -168,6 +168,22 @@ jobs:
           npx --no-install pyright --project pyrightconfig.strict.json
           python -B scripts/check_python_static.py
           python -B -m unittest -v tests.test_static_checks
+      - name: Check backend coverage and quality inventory
+        working-directory: huggingface-search
+        run: |
+          python -B scripts/build/build_search_index_native.py --output-dir .
+          python -B -m unittest -v tests.test_quality_inventory
+          COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage run --branch --source=backend,app -m unittest -q \
+            tests.test_api_contract tests.test_cache_and_malformed tests.test_async_proxy tests.test_coverage_safety \
+            tests.test_data_decoding tests.test_fastapi_endpoints tests.test_native_search_indexes tests.test_proxy_ownership \
+            tests.test_reader_backend tests.test_search_behavior tests.test_search tests.test_reader_index_warming \
+            tests.test_reader_range_flights tests.test_reader_v3_catalog tests.test_search_order_cache tests.test_search_execution \
+            tests.test_security tests.test_upstream_http tests.test_seo_routes tests.test_reader_ocr_validation \
+            tests.test_search_filters_contract tests.test_search_words_contract tests.test_mixed_folder_performance \
+            tests.test_exact_search_performance tests.test_fuzzy_search_performance
+          COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
+          python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json"
+          python -B scripts/check_search_words_mutation.py
       - name: Install browser dependencies
         working-directory: huggingface-search
         run: python -m playwright install --with-deps chromium firefox
