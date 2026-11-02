@@ -1,4 +1,6 @@
 export function createReaderPdfEngine(readerContext) {
+  let pdfModulePreload = null, pdfWorkerPreloadOwner = null;
+
   function loadPdfTaskWithTimeout(pdfjs, options, url, initial = null) {
     readerContext.assertReaderActive();
     let task = null, documentReady = false;
@@ -79,31 +81,55 @@ export function createReaderPdfEngine(readerContext) {
   }
 
   function preloadPdfEngine() {
-    if (!readerContext.pdfEnginePreload) readerContext.pdfEnginePreload = readerContext.loadPdfEngine().then(readerContext.preparePdfWorker);
+    if (!readerContext.pdfEnginePreload) {
+      pdfWorkerPreloadOwner = new AbortController();
+      const signal = pdfWorkerPreloadOwner.signal;
+      pdfModulePreload = readerContext.loadPdfEngine();
+      readerContext.pdfEnginePreload = pdfModulePreload.then(pdfjs => readerContext.preparePdfWorker(pdfjs, false, signal));
+    }
     return readerContext.pdfEnginePreload;
   }
 
-  async function preparePdfWorker(pdfjs, firstPage = false) {
+  async function preparePdfWorker(pdfjs, firstPage = false, signal = null) {
     for (let attempt = 0; attempt < 3; attempt++) {
       readerContext.assertReaderActive();
-      if (attempt && !firstPage) await readerContext.waitForReader(attempt * 500);
+      if (signal?.aborted) throw readerContext.readerAbortError();
+      if (attempt && !firstPage) await readerContext.awaitReader(readerContext.waitForReader(attempt * 500), signal);
       try {
-        return await readerContext.preparePdfWorkerAttempt(pdfjs, attempt, firstPage);
+        return await readerContext.preparePdfWorkerAttempt(pdfjs, attempt, firstPage, signal);
       } catch (error) {
         readerContext.assertReaderActive();
+        if (signal?.aborted) throw readerContext.readerAbortError();
         if (error?.code !== "READER_ENGINE_NETWORK" || attempt === 2) throw error;
       }
     }
   }
 
-  async function preparePdfWorkerAttempt(pdfjs, attempt, firstPage = false) {
+  async function preparePdfWorkerAttempt(pdfjs, attempt, firstPage = false, signal = null) {
     readerContext.assertReaderActive();
+    if (signal?.aborted) throw readerContext.readerAbortError();
     if (readerContext.capability.mode !== "pdf" && !readerContext.pdfPrimarySource()) return pdfjs;
     const query = new URLSearchParams();
     if (firstPage && attempt === 0) query.set("reader-first-page", "1");
     if (attempt) query.set("reader-worker-retry", String(attempt));
     pdfjs.GlobalWorkerOptions.workerSrc = readerContext.PDFJS_WORKER_URL + (query.size ? `?${query}` : "");
-    const worker = new pdfjs.PDFWorker();
+    // PDF.js 6.4.299 does not expose or terminate its native Worker until the
+    // ready handshake completes. Capture that synchronously-created Worker so
+    // cancellation can also release a stalled handshake. Restore the global
+    // constructor immediately; PDF.js still owns initialization and fallback.
+    const NativeWorker = globalThis.Worker;
+    let nativeWorker = null, worker;
+    if (typeof NativeWorker === "function") {
+      globalThis.Worker = new Proxy(NativeWorker, {
+        construct(target, args) {
+          const instance = Reflect.construct(target, args);
+          nativeWorker ||= instance;
+          return instance;
+        }
+      });
+    }
+    try { worker = new pdfjs.PDFWorker(); }
+    finally { if (typeof NativeWorker === "function") globalThis.Worker = NativeWorker; }
     worker.readerFirstPageWorker = firstPage && attempt === 0;
     readerContext.pdfWorker = worker;
     let timer, destroyed = false;
@@ -111,7 +137,9 @@ export function createReaderPdfEngine(readerContext) {
       if (destroyed) return;
       destroyed = true;
       clearTimeout(timer);
-      worker.destroy();
+      const port = worker.port;
+      try { worker.destroy(); }
+      finally { if (nativeWorker && nativeWorker !== port) nativeWorker.terminate(); }
       if (readerContext.pdfWorker === worker) {
         readerContext.pdfWorker = null;
         readerContext.releasePdfWorker = null;
@@ -125,13 +153,14 @@ export function createReaderPdfEngine(readerContext) {
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error("PDF worker timeout")), 20000);
         })
-      ]));
+      ]), signal);
       readerContext.assertReaderActive();
       return pdfjs;
     } catch (error) {
       untrack();
       destroy();
       readerContext.assertReaderActive();
+      if (signal?.aborted) throw readerContext.readerAbortError();
       throw Object.assign(new Error("PDF 阅读组件下载失败，请检查网络后重试加载，或下载原文件。"),
         { code: "READER_ENGINE_NETWORK", cause: error });
     } finally {
@@ -220,7 +249,15 @@ export function createReaderPdfEngine(readerContext) {
       if (pending && rangeTransportAvailable) initialHandedOff = true;
       return pending;
     };
-    const openingEngine = readerContext.preloadPdfEngine().then(async pdfjs => {
+    const workerPreload = readerContext.preloadPdfEngine();
+    const workerPreloadOwner = pdfWorkerPreloadOwner;
+    // Fail immediately if the ordinary preloader genuinely fails while range
+    // or restoration is slow. An intentionally superseded preload is not an
+    // engine failure; the selected first-page Worker still has to initialize.
+    const workerFailure = new Promise((_, reject) => workerPreload.catch(error => {
+      if (!workerPreloadOwner?.signal.aborted || error?.name !== "AbortError") reject(error);
+    }));
+    const selectingEngine = (pdfModulePreload || workerPreload).then(async pdfjs => {
       readerContext.assertReaderActive();
       rangeTransportAvailable = typeof pdfjs.PDFDataRangeTransport === "function";
       const restoration = readerContext.readerRestorationPromise;
@@ -285,12 +322,16 @@ export function createReaderPdfEngine(readerContext) {
           (freshPageOne && first.total >= 8 * 1024 * 1024));
         if (stagedCandidate && saved && !readerContext.restorationFailed &&
             navigation === readerContext.readerRuntime?.currentGeneration("navigation")) {
+          workerPreloadOwner?.abort();
+          await workerPreload.catch(error => { if (error?.name !== "AbortError") throw error; });
           readerContext.releasePdfWorker?.();
           await readerContext.preparePdfWorker(pdfjs, true);
+          return pdfjs;
         }
       }
-      return pdfjs;
+      return workerPreload;
     });
+    const openingEngine = Promise.race([selectingEngine, workerFailure]);
     return readerContext.measurePdf(openingEngine, "engine").then(pdfjs => {
       readerContext.assertReaderActive();
       const stagedWorker = readerContext.pdfWorker?.readerFirstPageWorker;
