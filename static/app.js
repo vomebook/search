@@ -243,6 +243,7 @@ function loadReaderAssets() {
     readerAssets = assets;
     readerAssetsRetryAt = 0;
     convertedReaderRecords = null;
+    convertedReaderRecordsByRepo = null;
     return readerAssets;
   }).catch(function() {
     readerAssetsRetryAt = Date.now() + 5000;
@@ -257,25 +258,67 @@ function applyReaderAsset(record, repo, relativePath, originalLink) {
   return fields ? Object.assign({}, record, fields, { DownloadLink: originalLink }) : record;
 }
 
-function getConvertedReaderRecords(repo) {
-  if (!convertedReaderRecords) {
-    convertedReaderRecords = [];
-    Object.keys(readerAssets || {}).forEach(function(key) {
-      var separator = key.indexOf("\0");
-      if (separator <= 0) return;
-      var sourceRepo = key.substring(0, separator);
-      var relativePath = key.substring(separator + 1);
-      var parts = relativePath.split("/");
-      var filename = parts.pop() || "";
-      var dot = filename.lastIndexOf(".");
-      if (!sourceRepo.startsWith("VoiceOfML/") || dot <= 0 || parts.some(function(part) { return !part || part === "." || part === ".."; })) return;
-      var record = { Repo: sourceRepo, File: filename.substring(0, dot), Extension: filename.substring(dot + 1), Folder: parts, HasTxt: false };
-      var originalLink = buildRecordLink(record);
-      var converted = applyReaderAsset(record, sourceRepo, relativePath, originalLink);
-      if (converted !== record) convertedReaderRecords.push(converted);
-    });
+let convertedReaderRecordsByRepo = null;
+let convertedReaderRecordsPending = null;
+const CONVERTED_READER_BATCH_SIZE = 256;
+let convertedReaderYieldChannel = null;
+const convertedReaderYieldQueue = [];
+
+function yieldConvertedReaderBuild() {
+  if (typeof MessageChannel === "undefined") return new Promise(resolve => setTimeout(resolve, 0));
+  if (!convertedReaderYieldChannel) {
+    convertedReaderYieldChannel = new MessageChannel();
+    convertedReaderYieldChannel.port1.onmessage = () => convertedReaderYieldQueue.shift()?.();
   }
-  return repo ? convertedReaderRecords.filter(function(record) { return record.Repo === repo; }) : convertedReaderRecords;
+  return new Promise(resolve => { convertedReaderYieldQueue.push(resolve); convertedReaderYieldChannel.port2.postMessage(null); });
+}
+
+async function getConvertedReaderRecords(repo) {
+  // The sidecar can have tens of thousands of entries. Build one complete
+  // snapshot in small tasks so a first click or filter change cannot block UI.
+  while (readerAssets && !convertedReaderRecords) {
+    const snapshot = readerAssets;
+    if (!convertedReaderRecordsPending || convertedReaderRecordsPending.snapshot !== snapshot) {
+      const pending = { snapshot, promise: null };
+      pending.promise = (async function() {
+        const all = [], byRepo = Object.create(null), keys = Object.keys(snapshot);
+        for (let i = 0; i < keys.length; i++) {
+          if (readerAssets !== snapshot) return;
+          const key = keys[i];
+          const separator = key.indexOf("\0");
+          if (separator > 0) {
+            const sourceRepo = key.substring(0, separator);
+            const relativePath = key.substring(separator + 1);
+            const parts = relativePath.split("/");
+            const filename = parts.pop() || "";
+            const dot = filename.lastIndexOf(".");
+            if (sourceRepo.startsWith("VoiceOfML/") && dot > 0 && !parts.some(function(part) { return !part || part === "." || part === ".."; })) {
+              const record = { Repo: sourceRepo, File: filename.substring(0, dot), Extension: filename.substring(dot + 1), Folder: parts, HasTxt: false };
+              const originalLink = buildRecordLink(record);
+              const converted = applyReaderAsset(record, sourceRepo, relativePath, originalLink);
+              if (converted !== record) {
+                all.push(converted);
+                (byRepo[sourceRepo] || (byRepo[sourceRepo] = [])).push(converted);
+              }
+            }
+          }
+          if ((i + 1) % CONVERTED_READER_BATCH_SIZE === 0 && i + 1 < keys.length) {
+            await yieldConvertedReaderBuild();
+          }
+        }
+        if (readerAssets === snapshot) {
+          convertedReaderRecords = all;
+          convertedReaderRecordsByRepo = byRepo;
+        }
+      })();
+      convertedReaderRecordsPending = pending;
+    }
+    const pending = convertedReaderRecordsPending;
+    try { await pending.promise; }
+    finally { if (convertedReaderRecordsPending === pending) convertedReaderRecordsPending = null; }
+  }
+  if (!convertedReaderRecords) return [];
+  return repo ? (convertedReaderRecordsByRepo[repo] || []) : convertedReaderRecords;
 }
 
 function getRecordLink(rec) {
@@ -2463,10 +2506,18 @@ async function updateRandomTxtVisibility() {
   const id = ++randomTxtStatusId;
   DOM.randomTxtBtn.style.display = "none";
   if (STATE.dataLoaded) {
+    const originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
+    if (originalCount) {
+      // Native files already make the action available. Neither a slow sidecar
+      // nor a full converted-pool build should delay showing this control.
+      loadReaderAssets();
+      DOM.randomTxtBtn.style.display = "";
+      return;
+    }
     await loadReaderAssets();
     if (id !== randomTxtStatusId) return;
-    const originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
-    const count = originalCount + getConvertedReaderRecords(STATE.repoFull || "").length;
+    const count = (await getConvertedReaderRecords(STATE.repoFull || "")).length;
+    if (id !== randomTxtStatusId) return;
     DOM.randomTxtBtn.style.display = count > 0 ? "" : "none";
     return;
   }
@@ -6190,7 +6241,8 @@ async function randomTxt() {
       var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
       if (!originalCount && !readerAssets) await loadReaderAssets();
       else loadReaderAssets();
-      var converted = getConvertedReaderRecords(STATE.repoFull || "");
+      var converted = await getConvertedReaderRecords(STATE.repoFull || "");
+      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
       var localRec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
@@ -6213,7 +6265,8 @@ async function randomTxt() {
       var originalCount = STATE.repoFull ? (readerMetadata.byRepo[STATE.repoFull] || 0) : (readerMetadata.count || 0);
       if (!originalCount && !readerAssets) await loadReaderAssets();
       else loadReaderAssets();
-      var converted = getConvertedReaderRecords(STATE.repoFull || "");
+      var converted = await getConvertedReaderRecords(STATE.repoFull || "");
+      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       var useConverted = converted.length > 0 && Math.random() * (originalCount + converted.length) >= originalCount;
       var rec = useConverted ? converted[Math.floor(Math.random() * converted.length)] : await getRandomLocal(true);
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;

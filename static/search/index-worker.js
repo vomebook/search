@@ -47,6 +47,14 @@ const FULLTEXT_FOLDER_CACHE_UNITS = 65536;
 const directoryIndexes = new Map();
 const DIRECTORY_INDEX_MAX = 4;
 const recordNameCollator = new Intl.Collator("zh");
+// Native file extensions understood by the Reader. Converted-only formats
+// are supplied separately by the asset sidecar, not by this pool.
+const NATIVE_READER_EXTENSIONS = new Set([
+  "pdf", "djvu", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "html", "htm",
+  "txt", "md", "markdown", "vcf", "ini", "jpg", "jpeg", "png", "gif", "bmp",
+  "tif", "tiff", "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga",
+  "wma", "ape", "amr", "swf"
+]);
 
 function emptyMetadata() {
   return { count: 0, repos: [], extensions: [], extensionsByRepo: {}, txt: { available: false, count: 0, byRepo: {} }, reader: { available: false, count: 0, byRepo: {} } };
@@ -339,7 +347,7 @@ function replaceCorpus(nextRecords) {
       if (!repoTxtRecordIndices[repo]) repoTxtRecordIndices[repo] = [];
       repoTxtRecordIndices[repo].push(i);
     }
-    if (["pdf", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "html", "htm", "txt", "md", "markdown", "jpg", "jpeg", "png", "gif", "bmp", "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga"].indexOf(extension) >= 0) {
+    if (NATIVE_READER_EXTENSIONS.has(extension)) {
       readerRecordIndices.push(i);
       readerByRepo[repo] = (readerByRepo[repo] || 0) + 1;
       if (!repoReaderRecordIndices[repo]) repoReaderRecordIndices[repo] = [];
