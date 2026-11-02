@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "files": [
+    "static/reader/core/reader-diagnostics.mjs",
+    "static/reader/core/reader-request-manager.js",
+    "static/reader/core/reader-runtime.js",
+    "static/reader/formats/reader-chapter-repository.js",
+    "static/reader/formats/reader-format-adapters.js",
+    "static/reader/formats/reader-image-loader.mjs",
+    "static/reader/pdf/pdf-first-page-worker-adapter.mjs",
+    "static/reader/pdf/reader-pdf-text.js",
+    "static/reader/pdf/reader-v3.mjs",
+    "static/reader/search/reader-book-text.js",
+    "static/reader/search/reader-dom-search.mjs",
+    "static/reader/search/reader-search-controller.mjs",
+    "static/reader/search/workers/reader-chapter-search-worker.mjs",
+    "static/reader/ui/reader-document-styles.mjs",
+    "static/reader/ui/reader-scroll-anchor.js",
+    "static/reader-resources.js",
+    "static/search/reader-navigation.js",
+    "static/search/search-session.js",
+    "static/reader/search/reader-pdf-book-search.mjs"
+  ]
+}
