@@ -193,7 +193,8 @@ jobs:
             tests.test_reader_range_flights tests.test_reader_v3_catalog tests.test_search_order_cache tests.test_search_execution \
             tests.test_security tests.test_upstream_http tests.test_seo_routes tests.test_reader_ocr_validation \
             tests.test_search_filters_contract tests.test_search_words_contract tests.test_mixed_folder_performance \
-            tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract
+            tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract \
+            tests.test_reader_identity_contract tests.test_cache_core_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
           python -B scripts/check_strict_inventory.py "$RUNNER_TEMP/hf-quality-baseline/strict-inventory-debt.json"
           python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" "$RUNNER_TEMP/hf-quality-baseline/backend-coverage-debt.json"
@@ -201,6 +202,8 @@ jobs:
           python -B scripts/check_search_words_mutation.py --module search_matching
           python -B scripts/check_search_words_mutation.py --module data_formats
           python -B scripts/check_search_words_mutation.py --module search_indexes
+          python -B scripts/check_search_words_mutation.py --module reader_identity
+          python -B scripts/check_search_words_mutation.py --module cache_core
       - name: Install browser dependencies
         working-directory: huggingface-search
         run: python -m playwright install --with-deps chromium firefox
