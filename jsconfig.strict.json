@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "files": [
+    "static/reader/core/reader-diagnostics.mjs",
+    "static/reader/formats/reader-image-loader.mjs",
+    "static/reader/ui/reader-document-styles.mjs",
+    "static/search/search-session.js"
+  ]
+}
