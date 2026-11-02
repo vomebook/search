@@ -103,8 +103,10 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(reader, /disableStream: true/);
   assert.match(reader, /capability = readerRuntime\.negotiate\(VoiceOfMLReader\.capability\(extension\)\)/);
   assert.match(reader, /resolved\.extension[\s\S]*content\.dataset\.mode = capability\.mode/);
-  const imageRule = readerCss.match(/\.reader-content\[data-mode="pdf-pages"\]\s+\.reader-page\s*>\s*img\s*,\s*\.reader-content\[data-mode="image-pages"\]\s+\.reader-page\s*>\s*img\s*\{([^}]+)\}/);
-  assert.ok(imageRule, 'PDF image sizing rule');
+  const imageRule = readerCss.match(/\.reader-content\[data-mode="image-pages"\]\s+\.reader-page\s*>\s*img\s*\{([^}]+)\}/);
+  assert.ok(imageRule, 'ordinary image-page sizing rule');
+  assert.doesNotMatch(readerCss, /\.reader-content\[data-mode="pdf-pages"\]\s+\.reader-page\s*>\s*img\.ready/);
+  assert.doesNotMatch(reader, /renderHybridPdfCanvas|renderPdfManifestShell/);
   for (const [property, value] of [['display', 'block'], ['width', '100%'], ['max-width', '100%'], ['height', 'auto']]) {
     assert.match(imageRule[1], new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*${value}\\s*(?:;|$)`));
   }
