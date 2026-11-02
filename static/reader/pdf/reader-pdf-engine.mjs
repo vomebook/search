@@ -200,7 +200,12 @@ export function createReaderPdfEngine(readerContext) {
     const untrack = readerContext.trackReaderResource(() => owner.abort(readerContext.readerAbortError()));
     let pageOneKnown = false;
     const navigation = readerContext.readerRuntime?.currentGeneration("navigation");
+    // Keep the actual restoration outcome independently of the short opening
+    // timeout. It can settle while the initial range is still being retried.
+    /** @type {{value: {page?: number | string, pageOffset?: number | string, id?: string} | null | undefined} | null} */
+    let settledRestoration = null;
     readerContext.readerRestorationPromise?.then(entry => {
+      settledRestoration = {value:entry};
       pageOneKnown = readerContext.capability?.mode === "pdf" && !readerContext.restorationFailed &&
         (!entry || Number(entry.page) === 1);
     }).catch(() => {});
@@ -270,6 +275,7 @@ export function createReaderPdfEngine(readerContext) {
             optional(Promise.resolve(restoration).then(value => ({value})))
           ]);
         } catch (_) { readerContext.assertReaderActive(); }
+        saved ||= settledRestoration;
         // All sufficiently large, strongly versioned native PDFs can use the
         // same staged parser on a fresh page-one open. Object numbers, xref
         // offsets, catalog layout and producer strings are not evidence of
