@@ -366,6 +366,39 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertEqual(urllib.parse.parse_qs(download_url.query).get('link'), [source])
         self.assertFalse(any('docx-preview' in url or 'jszip' in url.lower() for url in requests))
 
+    def test_tiff_image_pages_remain_readable_without_document_page_streams(self):
+        prefix = 'pages/image/tiff/' + 'a' * 64 + '/'
+        source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path': prefix+'page-manifest.json'})
+        original = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/original.tiff'
+        data = support.IMAGE_FIXTURES['webp'][1]
+        manifest = dict(version=1, kind='image-page-stream', page_count=3,
+                        pages=[dict(path=f'pages/page-{page:06}.webp', bytes=len(data), sha256='a'*64)
+                               for page in range(1, 4)])
+        requested = []
+        def asset(route):
+            path = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get('path', [''])[0]
+            requested.append(path)
+            if path == prefix+'page-manifest.json':
+                route.fulfill(json=manifest)
+            elif path.startswith(prefix+'pages/page-') and path.endswith('.webp'):
+                route.fulfill(content_type='image/webp', body=data)
+            else:
+                route.fulfill(status=404, body='unexpected resource')
+        self.page.route('**/api/reader-bucket-resource?**', asset)
+        query = urllib.parse.urlencode({'url': source, 'ext': 'image-pages', 'download': original})
+        self.open(self.origin+'/search/static/reader.html?'+query)
+        self.page.locator('.reader-page[data-page="1"] img.ready').wait_for(state='visible')
+        self.assertEqual(self.page.locator('#content').get_attribute('data-mode'), 'image-pages')
+        self.assertEqual(self.page.locator('#page-total').inner_text(), '/ 3')
+        self.page.locator('#page-number').fill('3')
+        self.page.locator('#page-number').dispatch_event('change')
+        self.page.locator('.reader-page[data-page="3"] img.ready').wait_for(state='visible')
+        self.page.locator('#zoom-in').click()
+        self.assertTrue(self.page.locator('.reader-page[data-page="3"] img.ready').evaluate('image => image.naturalWidth > 0'))
+        self.assertTrue(any(path == prefix+'pages/page-000003.webp' for path in requested))
+        self.assertFalse(any(path.startswith('objects/') for path in requested))
+        self.assertTrue(self.page.locator('#download').get_attribute('href'))
+
     def test_missing_image_manifest_or_page_recovers_original_without_changing_book_identity(self):
         prefix = 'pages/image/bmp/' + 'a' * 64 + '/'
         source = 'https://voiceofml-search.hf.space/api/reader-bucket-resource?' + urllib.parse.urlencode({'path':prefix+'page-manifest.json'})

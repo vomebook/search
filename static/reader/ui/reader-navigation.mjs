@@ -116,7 +116,7 @@ export function createReaderNavigation(readerContext) {
       }
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
       if (!shell) return false;
-      const imagePage = ["pdf-pages", "image-pages"].includes(readerContext.capability.mode);
+      const imagePage = readerContext.capability.mode === "image-pages";
       if (imagePage && shell.dataset.renderState !== "rendered")
         readerContext.prioritizePdfManifestPrefetch(readerContext.pdfPageManifest?.pageUrl(page));
       const pendingPdf =

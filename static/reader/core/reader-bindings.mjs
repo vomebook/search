@@ -219,7 +219,6 @@ export function createReaderBindings(readerContext) {
 
   function ownIndependentPdfResources() {
     readerContext.trackReaderResource(() => {
-      for (const release of [...readerContext.pdfV3BlobReleases]) release();
       readerContext.pdfV3Repository?.dispose(); readerContext.pdfTextLayerRepository?.dispose();
     });
   }
