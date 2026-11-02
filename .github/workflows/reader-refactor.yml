@@ -281,7 +281,9 @@ jobs:
           from backend import app
           import httpx
 
-          suite = unittest.defaultTestLoader.loadTestsFromName('tests.test_reader_backend')
+          suite = unittest.defaultTestLoader.loadTestsFromNames([
+              'tests.test_reader_backend', 'tests.test_reader_ocr_validation',
+          ])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
           if not result.wasSuccessful() or not result.testsRun or result.skipped:
               sys.exit(1)
