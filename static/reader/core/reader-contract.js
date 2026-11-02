@@ -27,7 +27,6 @@
       if (!sourceInfo) return;
       const security = root.VoiceOfMLReaderSecurity;
       if (!security) return;
-      const pageUrl = new URL(sourceInfo.pageUrl(1));
       const controller = new AbortController(),
         directSource = ["huggingface.co", "hf-mirror.com"].includes(manifestUrl.hostname),
         timer = setTimeout(() => controller.abort(), directSource ? 1500 : 10000);
@@ -38,10 +37,6 @@
         disposed = true;
         clearTimeout(timer);
         controller.abort();
-        if (preload?.image) {
-          preload.image.src = "";
-          preload.image = null;
-        }
         root.removeEventListener?.("pagehide", onPageHide);
       };
       const onPageHide = (event) => {
@@ -63,8 +58,6 @@
       preload = {
         manifestUrl: manifestUrl.href,
         manifest: manifestRequest,
-        pageUrl: pageUrl.href,
-        image: null,
         dispose
       };
       preload.manifest.catch(() => {});
@@ -338,7 +331,7 @@
       if (!["page-manifest.json", "ocr-manifest.json", "reading-manifest.json"].includes(filename) ||
           !path.endsWith(`/${filename}`)) return null;
       const rootPath = path.slice(0, -filename.length - 1);
-      return {
+      const source = {
         root: rootPath,
         assetUrl(relativePath) {
           if (!isBucketPath(relativePath, true, bucketName) ||
@@ -348,14 +341,17 @@
           if (bucket) target.searchParams.set("path", relativePath);
           else target.pathname = `${bucketPrefix}${relativePath}`;
           return target.href;
-        },
-        pageUrl(page) {
+        }
+      };
+      if (bucketName === "vomebook/reader-assets-v2" && filename === "page-manifest.json") {
+        source.pageUrl = (page) => {
           if (!Number.isInteger(page) || page < 1 || page > 999999)
             throw new Error("PDF_PAGE_INVALID");
           const filename = `pages/page-${String(page).padStart(6, "0")}.webp`;
-          return this.assetUrl(`${rootPath}/${filename}`);
-        }
-      };
+          return source.assetUrl(`${rootPath}/${filename}`);
+        };
+      }
+      return source;
     } catch (_) {
       return null;
     }
