@@ -928,11 +928,15 @@ class BrowserBehaviorTest(unittest.TestCase):
 
     def test_deselected_self_files_button_has_neutral_hover_border(self):
         self.load("#/VOMEBOOK?filters=1")
-        self.page.wait_for_function("() => STATE.mode === 'repo'")
+        # Initial local-corpus enrichment can re-render the filter tree after
+        # the route is ready. Let it settle before installing this test tree.
+        self.page.evaluate("() => ensureLocalDataLoaded(false, true)")
+        self.page.wait_for_function("() => STATE.mode === 'repo' && filterRenderToken > 0 && filterRenderDone === filterRenderToken")
         self.page.evaluate("""() => {
             STATE.folderTree = [{name:'根', path:'', count:2, isRoot:true,
                 showSelfToggle:true, hasDirectFiles:true, hasChildren:true,
                 children:[{name:'docs', path:'docs', count:1, hasDirectFiles:true, hasChildren:false, children:[]}]}];
+            folderTreeCache.set(STATE.repoFull, STATE.folderTree);
             STATE.folderTreeCollapsed = {};
             renderFilterFolderTree();
         }""")
@@ -943,7 +947,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         selected_border = button.evaluate("node => getComputedStyle(node).borderTopColor")
         button.click()
         self.assertEqual(button.get_attribute("aria-pressed"), "false")
-        self.page.wait_for_function("selected => getComputedStyle(document.querySelector('#filter-folder-tree .folder-self-toggle')).borderTopColor !== selected", arg=selected_border)
+        self.page.wait_for_function("selected => { const button = document.querySelector('#filter-folder-tree .folder-self-toggle'); return !!button && getComputedStyle(button).borderTopColor !== selected; }", arg=selected_border)
         self.assertFalse(button.evaluate("node => node.classList.contains('active')"))
         self.assertEqual(self.page_errors, [])
 
