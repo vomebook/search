@@ -159,7 +159,7 @@ export function createReaderFormatController(readerContext) {
       readerContext.readerRuntime.update("source", { extension: readerContext.extension });
       readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability(readerContext.extension));
       readerContext.content.dataset.mode = readerContext.capability.mode;
-      document.querySelector(".page-controls").hidden = true;
+      /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = true;
     }
     readerContext.syncCapabilityControls();
     readerContext.downloadButton.href = readerContext.readerDownloadUrl(readerContext.documentState.title, readerContext.downloadUrl);
@@ -171,7 +171,7 @@ export function createReaderFormatController(readerContext) {
     readerContext.formatAdapters.activate(readerContext.capability.mode);
     readerContext.applyReaderMetadata(readerContext.resolvedReaderData);
     if (readerContext.validOcr(readerContext.ocrUrl)) {
-      const ocr = document.querySelector("#ocr") || document.createElement("a");
+      const ocr = /** @type {HTMLAnchorElement} */ (document.querySelector("#ocr")) || document.createElement("a");
       ocr.id = "ocr";
       ocr.className = "text-button";
       ocr.target = "_blank";
@@ -263,13 +263,13 @@ export function createReaderFormatController(readerContext) {
   function syncCapabilityControls() {
     readerContext.content.dataset.mode = readerContext.capability.mode || "unsupported";
     readerContext.pageInvertToggle.hidden = !["pdf", "pdf-pages"].includes(readerContext.capability.mode);
-    document.querySelector(".page-controls").hidden = !readerContext.capability.features.pagination;
-    document.querySelector(".zoom-controls").hidden = !readerContext.capability.features.zoom;
+    /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = !readerContext.capability.features.pagination;
+    /** @type {HTMLElement} */ (document.querySelector(".zoom-controls")).hidden = !readerContext.capability.features.zoom;
     readerContext.mediaTab.hidden = !readerContext.capability.features.media;
     const noNativeText = !!readerContext.pdfDocument?.readerNoSearchableText && !readerContext.ocrManifestUrl && !readerContext.ocrUrl;
     const searchOpen = readerContext.panelState.selected === "full-search";
     if (noNativeText && !searchOpen && document.activeElement === readerContext.fullSearchButton)
-      document.querySelector("#history").focus({ preventScroll: true });
+      /** @type {HTMLElement} */ (document.querySelector("#history")).focus({ preventScroll: true });
     readerContext.fullSearchButton.hidden = !readerContext.capability.features.search || (noNativeText && !searchOpen);
     readerContext.bookmarkRibbon.hidden = !readerContext.capability.features.bookmarks;
     readerContext.readingProgressSummary.querySelector(".reader-progress-bookmark").hidden =

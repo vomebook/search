@@ -445,7 +445,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(app, /const scheduleReaderAssetsLoad = function\(\) \{[\s\S]*?pointerdown/);
   assert.match(app, /setTimeout\(load, 6000\)/);
   assert.match(readerHtml, /id="page-number"/);
-  assert.match(reader, /document\.querySelector\("\.page-controls"\)\.hidden = !capability\.features\.pagination/);
+  assert.match(reader, /document\.querySelector\("\.page-controls"\)\)\.hidden = !capability\.features\.pagination/);
   assert.match(reader, /document\.createElement\(mode\)/);
   assert.match(reader, /media\.preload = "metadata"/);
   assert.match(reader, /media\.playsInline = true/);
