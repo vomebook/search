@@ -103,6 +103,32 @@ class StaticGateTests(unittest.TestCase):
         source.write_text('/** @type {number} */ let value = "wrong";\nconsole.log(value);\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_reader_type_contract_rejects_wrong_arguments(self):
+        source = self.root / "static/reader-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": False, "skipLibCheck": True, "target": "esnext"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), "static/reader-usage.js"]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        source.write_text('VoiceOfMLReaderSecurity.createByteBudget(42);\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text('VoiceOfMLReaderSecurity.createByteBudget("not a number");\n')
+        self.assert_check(self.run_check(*check), False, "TS2345")
+
+    def test_worker_type_contract_rejects_invalid_responses(self):
+        source = self.root / "static/worker.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": False, "skipLibCheck": True, "target": "esnext", "lib": ["esnext", "webworker"]},
+            "files": ["static/worker.js"]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        source.write_text('const scope = /** @type {ServiceWorkerGlobalScope} */ (/** @type {unknown} */ (self));\n'
+                          'scope.addEventListener("fetch", event => event.respondWith(Promise.resolve(new Response())));\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text('const scope = /** @type {ServiceWorkerGlobalScope} */ (/** @type {unknown} */ (self));\n'
+                          'scope.addEventListener("fetch", event => event.respondWith(Promise.resolve(42)));\n')
+        self.assert_check(self.run_check(*check), False, "TS2345")
+
     def test_source_inventory_includes_production_trees(self):
         config = (ROOT / "eslint.config.mjs").read_text()
         package = json.loads((ROOT / "package.json").read_text())
@@ -118,6 +144,7 @@ class StaticGateTests(unittest.TestCase):
             self.assertIn(expected, paths)
         if (ROOT / "pyrightconfig.json").exists():
             self.assertTrue((ROOT / "backend/app.py").is_file())
+            self.assertEqual(json.loads((ROOT / "pyrightconfig.json").read_text())["include"], ["app.py", "backend"])
 
     @unittest.skipUnless((ROOT / "pyrightconfig.json").exists(), "HF backend-only type gate")
     def test_pyright_checks_selected_backend_modules(self):
