@@ -251,6 +251,20 @@ class StaticGateTests(unittest.TestCase):
         module.write_text("def value() -> int:\n    return 'wrong'\n")
         self.assert_check(self.run_check(*check), False, "reportReturnType")
 
+    def test_pyright_strict_seo_gate_rejects_unknown_parameter(self):
+        config = json.loads((ROOT / "pyrightconfig.strict.json").read_text())
+        self.assertEqual(config["typeCheckingMode"], "strict")
+        self.assertIn("scripts/build/seo.py", config["include"])
+        source = self.root / "scripts/build/seo.py"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / "scripts/build/seo.py", source)
+        (self.root / "pyrightconfig.strict.json").write_text(json.dumps(config))
+        check = ["node", ROOT / "node_modules/pyright/index.js", "--pythonpath", sys.executable,
+                 "--project", "pyrightconfig.strict.json"]
+        self.assert_check(self.run_check(*check), True, "0 errors")
+        source.write_text(source.read_text() + "\ndef strict_probe(value):\n    return value\n")
+        self.assert_check(self.run_check(*check), False, "reportUnknownParameterType")
+
 
 if __name__ == "__main__":
     unittest.main()

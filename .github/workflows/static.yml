@@ -41,7 +41,9 @@ jobs:
       - name: Check JavaScript, HTML, CSS and JavaScript types
         run: npm run check:static
       - name: Check all own Python source and tests
-        run: python -B scripts/check_python_static.py
+        run: |
+          python -B scripts/check_python_static.py
+          npx --no-install pyright --project pyrightconfig.strict.json
       - name: Verify static gates catch injected errors
         run: python -B -m unittest -v tests.test_static_checks
   # Single deploy job since we're just deploying

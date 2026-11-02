@@ -49,6 +49,19 @@ class CatalogTests(unittest.TestCase):
         for broken in ({}, {**self.payload, "v": 3}, {**self.payload, "rc": [[99, "bad", "pdf", 0, 1, 0]]}):
             with self.subTest(broken=broken), self.assertRaises(ValueError): seo.decode_corpus(broken)
 
+    def test_compact_invalid_types_and_indices_fail_closed(self):
+        rows = [None, "not a row", [], [True, "a", "txt", 0, 0, 0],
+                [0, "a", "txt", False, 0, 0], [-1, "a", "txt", 0, 0, 0],
+                [0, "a", "txt", -1, 0, 0], [0, None, "txt", 0, 0, 0],
+                [0, "a", 2, 0, 0, 0]]
+        for row in rows:
+            with self.subTest(row=row), self.assertRaises(ValueError):
+                seo.decode_corpus({**self.payload, "rc": [row]})
+        for field, value in (("rp", "not a list"), ("fd", [None]), ("fd", [["valid", 7]]),
+                             ("rp", ["foreign/Repo"])):
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                seo.decode_corpus({**self.payload, field: value, "rc": [[0, "a", "txt", 0, 0, 0]]})
+
     def test_all_counts_and_complete_leaf_are_preserved(self):
         result = self.build()
         self.assertEqual(result["manifest"]["record_count"], 3)

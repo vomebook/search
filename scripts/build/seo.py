@@ -13,13 +13,32 @@ from html import escape
 import json
 from pathlib import Path
 import re
+from typing import TypedDict, cast
 from urllib.parse import quote, urlencode
+
+
+class CatalogRecord(TypedDict):
+    Repo: str
+    File: str
+    Extension: str
+    Folder: list[str]
+    Size: object
+
+
+class Pilot(TypedDict):
+    samples: list[list[str]]
+    folder: list[str]
+
+
+class CatalogResult(TypedDict):
+    files: dict[str, str]
+    manifest: dict[str, object]
 
 
 PAGES = "https://vomebook.github.io/search/"
 HF = "https://voiceofml-search.hf.space/"
 DESCRIPTION = "检索 VoiceOfML 公开资料的文件名、路径和格式，浏览文库目录，在线阅读或下载原始文件。"
-PILOT = {
+PILOT: Pilot = {
     "samples": [
         ["VoiceOfML/VOMEBOOK", "马列之声ebook小组第二批成果集成赞助部分/jiang/中国社会主义时代的教育革命 研究资料集成pdf（近800种）/工农兵大学生/工农兵学员的优秀代表----曹谊林.txt"],
         ["VoiceOfML/SovMaterials", "重要中文文献/斯大林著作各种/斯大林语录.txt"],
@@ -83,28 +102,37 @@ def enrich_search_shell(html: str, repo: str | None = None, count: int | None = 
     return html
 
 
-def decode_corpus(payload: object) -> list[dict]:
-    if not isinstance(payload, dict) or payload.get("v") != 2:
+def decode_corpus(payload: object) -> list[CatalogRecord]:
+    if not isinstance(payload, dict):
+        raise ValueError("SEO requires the current compact-v2 corpus")
+    payload = cast(dict[str, object], payload)
+    if payload.get("v") != 2:
         raise ValueError("SEO requires the current compact-v2 corpus")
     repos, folders, rows = payload.get("rp"), payload.get("fd"), payload.get("rc")
     if not (isinstance(repos, list) and isinstance(folders, list) and isinstance(rows, list)):
         raise ValueError("Invalid compact tables")
-    result = []
-    for row in rows:
-        if (not isinstance(row, list) or len(row) < 6 or type(row[0]) is not int
+    repos, folders, rows = cast(list[object], repos), cast(list[object], folders), cast(list[object], rows)
+    result: list[CatalogRecord] = []
+    for raw_row in rows:
+        if not isinstance(raw_row, list):
+            raise ValueError("Invalid compact record reference")
+        row = cast(list[object], raw_row)
+        if (len(row) < 6 or type(row[0]) is not int
                 or not 0 <= row[0] < len(repos) or type(row[3]) is not int or not 0 <= row[3] < len(folders)):
             raise ValueError("Invalid compact record reference")
-        record = dict(Repo=repos[row[0]], File=row[1], Extension=row[2], Folder=folders[row[3]], Size=row[4])
-        if (not isinstance(record["Repo"], str) or not re.fullmatch(r"VoiceOfML/[A-Za-z0-9._-]+", record["Repo"])
-                or not all(isinstance(record[key], str) for key in ("File", "Extension"))
-                or not isinstance(record["Folder"], list)
-                or not all(isinstance(part, str) for part in record["Folder"])):
+        repo, filename, extension, folder = repos[row[0]], row[1], row[2], folders[row[3]]
+        if (not isinstance(repo, str) or not re.fullmatch(r"VoiceOfML/[A-Za-z0-9._-]+", repo)
+                or not isinstance(filename, str) or not isinstance(extension, str)
+                or not isinstance(folder, list)
+                or not all(isinstance(part, str) for part in cast(list[object], folder))):
             raise ValueError("Invalid compact record fields")
+        record: CatalogRecord = {"Repo": repo, "File": filename, "Extension": extension,
+                                 "Folder": cast(list[str], folder), "Size": row[4]}
         result.append(record)
     return result
 
 
-def relative_path(record: dict) -> str:
+def relative_path(record: CatalogRecord) -> str:
     name = record["File"] + ("." + record["Extension"] if record["Extension"] else "")
     path = "/".join([*record["Folder"], name])
     if any(part in (".", "..") for part in path.split("/")) or "\x00" in path or "\\" in path:
@@ -112,11 +140,11 @@ def relative_path(record: dict) -> str:
     return path
 
 
-def source_url(record: dict, action: str = "resolve") -> str:
+def source_url(record: CatalogRecord, action: str = "resolve") -> str:
     return f'https://huggingface.co/datasets/{record["Repo"]}/{action}/main/{quote(relative_path(record), safe="/")}'
 
 
-def source_id(record: dict) -> str:
+def source_id(record: CatalogRecord) -> str:
     value = 1469598103934665603
     for byte in source_url(record).encode("utf-8"):
         value = ((value ^ byte) * 1099511628211) & ((1 << 64) - 1)
@@ -128,7 +156,7 @@ def source_id(record: dict) -> str:
     return result.rjust(13, "0")
 
 
-def build_catalog(records: list[dict], *, project: str, corpus_identity: str, pilot: dict | None = None) -> dict:
+def build_catalog(records: list[CatalogRecord], *, project: str, corpus_identity: str, pilot: Pilot | None = None) -> CatalogResult:
     if project not in ("pages", "hf"):
         raise ValueError("Unknown project")
     pilot = PILOT if pilot is None else pilot
@@ -137,15 +165,15 @@ def build_catalog(records: list[dict], *, project: str, corpus_identity: str, pi
     catalog = "catalog/"
     repo_prefix = "" if primary else catalog
     book_prefix = "book/" if primary else catalog + "book/"
-    grouped = defaultdict(list)
-    by_key = {}
+    grouped: defaultdict[str, list[CatalogRecord]] = defaultdict(list)
+    by_key: dict[tuple[str, str], CatalogRecord] = {}
     for record in records:
         grouped[record["Repo"]].append(record)
         key = (record["Repo"], relative_path(record))
         if key in by_key and any(by_key[key].get(field) != record.get(field) for field in ("File", "Extension", "Folder", "Size")):
             raise ValueError("Conflicting source identity")
         by_key[key] = record
-    selected = {}
+    selected: dict[tuple[str, str], CatalogRecord] = {}
     for repo, path in pilot["samples"]:
         record = by_key.get((repo, path))
         if record is None:
@@ -165,21 +193,21 @@ def build_catalog(records: list[dict], *, project: str, corpus_identity: str, pi
         raise ValueError("SEO source-ID collision")
     folder_id = hashlib.sha256((folder_repo + "\0" + folder_path).encode()).hexdigest()[:16]
     folder_route = catalog + "folders/" + folder_id + "/"
-    pages = {}
-    page_urls = []
+    pages: dict[str, str] = {}
+    page_urls: list[str] = []
 
-    def anchor(route, label):
+    def anchor(route: str, label: str) -> str:
         return f'<a href="{escape(origin + route, quote=True)}">{escape(label)}</a>'
 
-    def search_link(repo, folder=""):
+    def search_link(repo: str, folder: str = "") -> str:
         short = quote(repo.split("/")[-1], safe="")
         return origin + ("#/" + short if primary else short + "/") + ("?" + urlencode({"path": folder}) if folder else "")
 
-    def entries(values):
+    def entries(values: list[CatalogRecord]) -> str:
         return "<ul>" + "".join("<li>" + anchor(book_prefix + source_id(record) + "/", record["File"])
                                  + " — " + escape(record["Extension"].upper()) + "</li>" for record in values) + "</ul>"
 
-    def page(route, title, description, body, entity):
+    def page(route: str, title: str, description: str, body: str, entity: dict[str, object]) -> None:
         url = origin + route
         graph = {"@context": "https://schema.org", "@graph": [
             {"@type": "WebSite", "@id": origin + "#website", "name": "VoiceOfML", "url": origin},
@@ -248,7 +276,7 @@ def build_catalog(records: list[dict], *, project: str, corpus_identity: str, pi
     sitemap_urls = [PAGES, *page_urls] if primary else []
     if primary:
         pages['sitemap.xml'] = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join('<url><loc>' + escape(url) + '</loc></url>' for url in sitemap_urls) + '</urlset>'
-    manifest = {'version': 1, 'profile': 'metadata-catalog-pilot-v1', 'project': project,
+    manifest: dict[str, object] = {'version': 1, 'profile': 'metadata-catalog-pilot-v1', 'project': project,
                 'corpus_identity': corpus_identity, 'record_count': len(records),
                 'repo_counts': {repo: len(grouped[repo]) for repo in sorted(grouped)},
                 'detail_count': len(selected_records), 'folder_count': 1, 'urls': page_urls,
