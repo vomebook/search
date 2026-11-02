@@ -64,6 +64,7 @@ jobs:
         run: |
           node tests/test_reader_djvu_only.mjs
           node tests/test_reader_djvu_png.mjs
+          node tests/test_reader_v3_ocr_retained.mjs
           node tests/test_reader_djvu_range.mjs
           node tests/test_reader_djvu_range_fallback.mjs
           node tests/test_reader_djvu_worker.mjs
@@ -223,6 +224,7 @@ jobs:
         run: |
           node tests/test_reader_djvu_only.mjs
           node tests/test_reader_djvu_png.mjs
+          node tests/test_reader_v3_ocr_retained.mjs
           node tests/test_reader_djvu_range.mjs
           node tests/test_reader_djvu_range_fallback.mjs
           node tests/test_reader_djvu_worker.mjs
