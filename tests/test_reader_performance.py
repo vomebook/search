@@ -2113,7 +2113,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         path=page.locator('#reader-panel-path')
         path.wait_for(state='visible')
         self.assertTrue(path.evaluate("n=>n.closest('#reader-panel-location').parentElement.id==='history-panel'"))
-        self.assertTrue(page.locator('#title').is_visible())
+        self.assertTrue(page.locator('#title').is_hidden())
         self.assertEqual(path.locator('.reader-panel-folder').inner_text(),'所在目录：Test/音乐')
         page.locator('#bookmarks-tab').click()
         self.assertTrue(path.is_visible())
