@@ -34,15 +34,8 @@ export function createReaderPdfEngine(readerContext) {
         canPrefetchFirstPage: () => readerContext.capability?.mode === "pdf" &&
           readerContext.readerRestorationLoaded && !readerContext.restorationFailed &&
           (!readerContext.readerRestorationEntry || Number(readerContext.readerRestorationEntry.page) === 1),
-        // A still-opening hybrid primary yields its demand reads to page images.
-        admitRange: readerContext.admitPdfRange,
         onError(error) {
           if (!documentReady || readerContext.readerAbortController.signal.aborted) return;
-          // A hybrid PDF-pages book keeps its image stream as the only surface.
-          if (readerContext.capability.mode === "pdf-pages" && readerContext.pdfHybridUrl) {
-            readerContext.leavePdfHybridMode(undefined, error);
-            return;
-          }
           if (readerContext.capability.mode !== "pdf") return;
           // Page retries cannot revive a destroyed PDF.js document. Capture an
           // eligible position before failure stops work; reload owns recovery.
@@ -233,7 +226,7 @@ export function createReaderPdfEngine(readerContext) {
       const restoration = readerContext.readerRestorationPromise;
       const eligible = rangeTransportAvailable && readerContext.capability?.mode === "pdf" &&
         readerContext.extension === "pdf" && restoration && !readerContext.ocrManifestUrl &&
-        !readerContext.pdfV3Manifest && !readerContext.pdfHybridUrl;
+        !readerContext.pdfV3Manifest;
       if (eligible) {
         const optional = promise => {
           let timer;

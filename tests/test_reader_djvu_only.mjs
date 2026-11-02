@@ -62,6 +62,11 @@ for (const legacy of [false, true]) {
   assert.equal(calls.at(-1), 'render');
   assert.equal(reader.pdfPageManifest, undefined, 'never install an image-stream page URL');
 }
+{
+  const {reader, calls} = fixture();
+  await reader.preloadPdfFirstPage(2);
+  assert.deepEqual(calls, [], 'document manifests never preload page images');
+}
 for (const outcome of ['failed', 'wrong-count']) {
   const {reader, calls} = fixture(outcome);
   await assert.rejects(reader.renderPdfPages(new Response(JSON.stringify(reading()))),

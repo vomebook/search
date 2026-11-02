@@ -1022,7 +1022,6 @@ body {
 .reader-content[data-mode="image-pages"] .reader-page {
   width: calc(100% * var(--reader-zoom));
 }
-.reader-content[data-mode="pdf-pages"] .reader-page > img,
 .reader-content[data-mode="image-pages"] .reader-page > img {
   display: block;
   width: 100%;
@@ -1030,12 +1029,9 @@ body {
   height: auto;
   user-select: none;
   -webkit-user-select: none;
-   /* Progressive document pages are visible during decoding; other surfaces
-      become visible once their decoder finishes. */
+  /* Ordinary image pages become visible once their decoder finishes. */
   opacity: 0;
 }
-.reader-content[data-mode="pdf-pages"] .reader-page > img.ready,
-.reader-content[data-mode="pdf-pages"] .reader-page > img.progressive,
 .reader-content[data-mode="image-pages"] .reader-page > img.ready {
   opacity: 1;
 }

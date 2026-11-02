@@ -15,11 +15,8 @@ export function createReaderFormatController(readerContext) {
       readerContext.pdfOcrManifest = null;
       readerContext.pdfOcrManifestPromise = null;
       readerContext.pdfV3Repository?.dispose(); readerContext.pdfTextLayerRepository?.dispose();
-      for (const shell of readerContext.pdfManifestShells) shell?._v3PreviewRelease?.();
       readerContext.pdfV3Repository = readerContext.pdfTextLayerRepository = null;
       readerContext.pdfV3Manifest = readerContext.pdfV3Map = null;
-      readerContext.pdfHybridUrl = ""; readerContext.pdfHybridDocumentPromise = null;
-      readerContext.pdfHybridSearchUnavailable = false;
       readerContext.pdfTextContentCache.clear();
       readerContext.pdfTextContentPromises.clear();
       readerContext.pdfTextContentCacheBytes = 0;
