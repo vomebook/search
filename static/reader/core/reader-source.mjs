@@ -120,8 +120,19 @@ export function createReaderSource(readerContext) {
       .replace(/^\./, "");
     const value = title + (suffix && !title.toLowerCase().endsWith(`.${suffix}`) ? `.${suffix}` : "");
     readerContext.updateDocumentState({ title: value });
-    document.querySelector("#title").textContent = value;
-    document.title = `${value} - VoiceOfML Reader`;
+    // Prefer the exact original name when metadata supplies it. The display
+    // title can omit a repeated suffix or normalize meaningful whitespace.
+    const displayName = readerOriginalFilename(value);
+    const heading = document.querySelector("#title");
+    if (heading.textContent !== displayName) {
+      heading.textContent = displayName;
+      heading.scrollLeft = 0;
+    }
+    heading.title = displayName;
+    heading.setAttribute("aria-label", `书名：${displayName}；可横向滚动`);
+    document.title = `${displayName} - VoiceOfML Reader`;
+    if (readerContext.isReaderOverlayFrame())
+      window.parent.postMessage({ type: "voice-reader-title", title: document.title }, location.origin);
     readerContext.applyReaderPathMetadata(readerContext.resolvedReaderData);
   }
 
@@ -180,20 +191,11 @@ export function createReaderSource(readerContext) {
     readerContext.readerPath.setAttribute("aria-label", `筛选文件夹：${value}`);
     const panelPath = document.querySelector("#reader-panel-path");
     if (panelPath) {
-      const authoritativeName = readerOriginalFilename("");
-      const filename = authoritativeName || readerContext.documentState.title || "";
-      const label = authoritativeName ? "文件" : "标题";
-      const fileLabel = document.querySelector(".reader-panel-filename");
-      const nameText = filename ? `${label}：${filename}` : "";
-      if (fileLabel.textContent !== nameText) {
-        fileLabel.textContent = nameText;
-        fileLabel.scrollLeft = 0;
-      }
       const folderLabel = value || "不可用";
       panelPath.querySelector(".reader-panel-folder").textContent = `所在目录：${folderLabel}`;
       panelPath.disabled = !value || !readerContext.folderNavigationTarget;
-      panelPath.setAttribute("aria-label", `${panelPath.disabled ? "所在目录" : "打开所在目录"}：${folderLabel}${filename ? `；${label}：${filename}` : ""}`);
-      panelPath.title = [filename, value].filter(Boolean).join("\n");
+      panelPath.setAttribute("aria-label", `${panelPath.disabled ? "所在目录" : "打开所在目录"}：${folderLabel}`);
+      panelPath.title = value;
     }
   }
 

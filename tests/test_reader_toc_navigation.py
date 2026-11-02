@@ -438,10 +438,9 @@ class TocNavigationTests(unittest.TestCase):
         self.page.set_viewport_size({'width':390,'height':844})
         self.open_chapters(1200)
         self.page.evaluate('''()=>{const p=document.querySelector('#reader-panel-path');
-          document.querySelector('.reader-panel-filename').textContent='文件：original.epub';
           p.querySelector('.reader-panel-folder').textContent='所在目录：Test/books';
           if(document.querySelector('#history').getAttribute('aria-expanded')!=='true')document.querySelector('#history').click();}''')
-        self.page.locator('#reader-location-toggle').click()
+        self.assertTrue(self.page.locator('#reader-panel-location').is_visible())
         self.page.locator('#toc-panel .panel-search-toggle').click()
         for index in (30, 400, 900, 1190):
             self.page.evaluate('''index=>{const s=__toc.state(),offset=s.list.getBoundingClientRect().top-
