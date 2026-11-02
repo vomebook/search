@@ -897,6 +897,9 @@ class BrowserBehaviorTest(unittest.TestCase):
             location.hash = '#/VOMEBOOK?' + params;
             ROUTER.apply();
         }""")
+        # Filter rendering is deferred to the next animation frame; keep the
+        # identity assertion, but wait for the scheduled render to complete.
+        self.page.wait_for_function("() => !window.__originalFilterRow.isConnected && window.__filterRuns > 0")
         self.assertFalse(self.page.evaluate("window.__originalFilterRow.isConnected"))
         self.assertGreater(self.page.evaluate("window.__searchRuns"), 0)
         self.assertGreater(self.page.evaluate("window.__filterRuns"), 0)
