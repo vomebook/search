@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 // Node's coverage thresholds alone accept an empty report as 100%. Require
 // the exact source row as well as full coverage so an unloaded file fails.
 const result = spawnSync(process.execPath, [
-  "--test", "--experimental-test-coverage",
+  "--test", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/reader/formats/reader-format-adapters.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
   "tests/test_reader_adapter_registry.js"
