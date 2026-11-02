@@ -1,7 +1,18 @@
 (function (root) {
   "use strict";
 
+  /**
+   * @template T
+   * @typedef {{ status: "idle" | "loading" | "ready" | "error", attempts: number,
+   *   value: T | null, error: unknown, promise: Promise<T | null> | null }} ChapterRecord
+   */
+  /**
+   * @template T
+   * @param {{count: number, find: (index: number) => T | null | undefined,
+   *   create: (index: number) => T | Promise<T>, commit?: (index: number, value: T) => T}} options
+   */
   function createChapterRepository({ count, find, create, commit = (_index, value) => value }) {
+    /** @type {ChapterRecord<T>[]} */
     const records = Array.from({ length: count }, () => ({
       status: "idle",
       attempts: 0,
@@ -11,6 +22,7 @@
     }));
     let disposed = false;
 
+    /** @param {number} index @returns {Promise<T | null>} */
     function load(index) {
       if (disposed)
         return Promise.reject(new DOMException("Chapter repository disposed", "AbortError"));
@@ -33,7 +45,9 @@
         .then((value) => {
           if (disposed) return null;
           record.status = "ready";
-          record.value = find(index) || commit(index, value);
+          // The earlier null sentinel requires disposed=true, and dispose is
+          // monotonic, so it cannot reach commit after the guard above.
+          record.value = find(index) || commit(index, /** @type {T} */ (value));
           return record.value;
         })
         .catch((error) => {
@@ -50,6 +64,7 @@
       return promise;
     }
 
+    /** @param {number} index */
     function state(index) {
       const record = records[index];
       return record
@@ -62,6 +77,7 @@
         : null;
     }
 
+    /** @param {number} index */
     function release(index) {
       if (disposed || !Number.isInteger(index) || index < 0 || index >= records.length)
         return false;
@@ -97,10 +113,24 @@
     });
   }
 
+  /**
+   * @template T
+   * @typedef {{index: number, demand: boolean, started: boolean, controller: AbortController,
+   *   promise: Promise<T>, resolve: (value: T | PromiseLike<T>) => void, reject: (reason: unknown) => void}} SchedulerRecord
+   */
+  /**
+   * @template T
+   * @param {{create: (index: number, signal: AbortSignal, priority: "high" | "low") => T | Promise<T>,
+   *   concurrency?: number, speculativeLimit?: number}} options
+   */
   function createChapterScheduler({ create, concurrency = 3, speculativeLimit = 2 }) {
-    const records = new Map(), active = new Set();
+    /** @type {Map<number, SchedulerRecord<T>>} */
+    const records = new Map(),
+    /** @type {Set<SchedulerRecord<T>>} */
+      active = new Set();
     let disposed = false, scheduled = false;
     const abortError = () => new DOMException("Chapter load cancelled", "AbortError");
+    /** @param {SchedulerRecord<T>} record */
     function cancel(record) {
       if (records.get(record.index) !== record) return;
       records.delete(record.index);
@@ -136,6 +166,7 @@
       scheduled = true;
       Promise.resolve().then(pump);
     }
+    /** @param {number} index @param {boolean} [demand] @param {boolean} [exclusive] */
     function load(index, demand = true, exclusive = false) {
       if (disposed) return Promise.reject(abortError());
       if (demand && exclusive)
@@ -151,12 +182,16 @@
         schedule();
         return record.promise;
       }
-      record = { index, demand, started: false, controller: new root.AbortController() };
+      // The Promise executor synchronously installs resolve/reject before the
+      // record is published to the queue or used by any scheduler callback.
+      record = /** @type {SchedulerRecord<T>} */ (/** @type {unknown} */ (
+        { index, demand, started: false, controller: new root.AbortController() }));
       record.promise = new Promise((resolve, reject) => Object.assign(record, { resolve, reject }));
       records.set(index, record);
       schedule();
       return record.promise;
     }
+    /** @param {number[]} indices */
     function prefetch(indices) {
       const wanted = new Set(indices);
       for (const record of records.values())

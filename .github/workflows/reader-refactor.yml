@@ -107,6 +107,7 @@ jobs:
         run: python3 -B -m unittest -v tests.test_reader_ebook_flow tests.test_reader_toc_latency
       - name: Run chapter-bundle browser gate
         run: |
+          node tests/test_reader_chapter_repository.js
           node tests/test_reader_chapter_scheduler.js
           node tests/test_reader_chapter_preload.js
           python3 -B -m unittest -v tests.test_reader_optimizations
@@ -191,7 +192,7 @@ jobs:
           python -B -m unittest -v tests.test_quality_inventory
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage run --branch --source=backend,app -m unittest -q \
             tests.test_api_contract tests.test_cache_and_malformed tests.test_async_proxy tests.test_coverage_safety \
-            tests.test_data_decoding tests.test_fastapi_endpoints tests.test_native_search_indexes tests.test_proxy_ownership \
+            tests.test_data_decoding tests.test_fastapi_endpoints tests.test_native_search_indexes tests.test_proxy_ownership tests.test_proxy_streams_contract \
             tests.test_reader_backend tests.test_search_behavior tests.test_search tests.test_reader_index_warming \
             tests.test_reader_range_flights tests.test_reader_v3_catalog tests.test_search_order_cache tests.test_search_execution \
             tests.test_security tests.test_upstream_http tests.test_seo_routes tests.test_seo_catalog tests.test_reader_ocr_validation \
@@ -286,6 +287,7 @@ jobs:
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
+          node tests/test_reader_chapter_repository.js
           node tests/test_reader_chapter_scheduler.js
           node tests/test_reader_chapter_preload.js
           python3 -B -m unittest -v tests.test_reader_optimizations
@@ -337,7 +339,7 @@ jobs:
           PY
       - name: Run Reader upstream ownership gate
         working-directory: huggingface-search
-        run: timeout 120s python3 -B -m unittest -v tests.test_async_proxy tests.test_reader_range_flights tests.test_proxy_ownership tests.test_coverage_safety tests.test_reader_index_warming tests.test_search_execution tests.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
+        run: timeout 120s python3 -B -m unittest -v tests.test_async_proxy tests.test_reader_range_flights tests.test_proxy_ownership tests.test_proxy_streams_contract tests.test_coverage_safety tests.test_reader_index_warming tests.test_search_execution tests.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
       - name: Run full Reader refactor suite
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_reader_refactor
