@@ -209,6 +209,38 @@ try {
     assert.match(errors[0].message,/PDF_RANGE_INVALID/);
     await opened.destroy();tasks.length=0;
   }
+  {
+    // Closing while a tail-hint waiter is blocked must never schedule a
+    // fallback request or deliver bytes to the disposed PDF.js document.
+    const total=10*1024*1024, chunk=262144, requests=[], errors=[];
+    let tailController;
+    globalThis.fetch=async (_url,init)=>{
+      const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
+      const begin=Number(a),end=Number(b),length=end-begin+1;requests.push([begin,end]);
+      if(begin===total-2*chunk)return new Response(new ReadableStream({
+        start(controller){tailController=controller;}
+      }),{status:206,headers:{'Content-Range':`bytes ${begin}-${end}/${total}`,ETag:'"stable"'}});
+      return new Response(new Uint8Array(length),{status:206,headers:{
+        'Content-Range':`bytes ${begin}-${end}/${total}`,ETag:'"stable"'}});
+    };
+    const owner=new AbortController();
+    const row=await preparePdfInitialRange({url:'https://reader.test/close.pdf',rangeChunkSize:chunk},{
+      signal:owner.signal,readBytes:async response=>new Uint8Array(await response.arrayBuffer()),limit:total,rangeCache:null});
+    const opened=await openPdfRangeTask(pdfjs,{url:'https://reader.test/close.pdf',rangeChunkSize:chunk},{
+      signal:owner.signal,readBytes:async response=>new Uint8Array(await response.arrayBuffer()),limit:total,
+      rangeCache:null,initial:Promise.resolve(row),onError:error=>errors.push(error)});
+    transport.requestDataRange(row.tail.begin,row.tail.begin+16384);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    const count=requests.length;
+    owner.abort(new DOMException('closed','AbortError'));
+    await opened.destroy();
+    try {tailController.close();} catch (_) {}
+    await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(requests.length,count,'no fallback range may start after disposal');
+    assert.equal(transport.delivered.length,0,'closed readers cannot publish hinted bytes');
+    assert.deepEqual(errors,[],'normal disposal is not a transport error');
+    tasks.length=0;
+  }
   // A server without a strong validator must keep the original safe path;
   // metadata heuristics cannot turn an unvalidated 206 into a range source.
   globalThis.fetch = async (_url, init) => {
