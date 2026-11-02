@@ -70,10 +70,106 @@ interface ReaderRequestManagerApi { createReaderRequestManager(options?: object)
 interface ReaderRuntimeApi { createReaderRuntime(): any }
 interface ReaderAdaptersApi { createAdapterRegistry(): any }
 interface ReaderScrollApi { createScrollAnchorManager(options: {viewport: Element; candidates: () => unknown}): any }
+interface ChapterScheduler<T> {
+  load(index: number, demand?: boolean, exclusive?: boolean): Promise<T>;
+  prefetch(indices: number[]): void;
+  dispose(): void;
+  readonly activeCount: number;
+  readonly pendingCount: number;
+}
+interface ReaderChaptersApi {
+  createChapterScheduler<T>(options: {
+    create(index: number, signal: AbortSignal, priority: "high" | "low"): T | Promise<T>;
+    concurrency?: number;
+    speculativeLimit?: number;
+  }): ChapterScheduler<T>;
+  createChapterRepository<T>(options: {
+    count: number;
+    find(index: number): T | null;
+    create(index: number): T | Promise<T>;
+    commit?(index: number, value: T): T;
+  }): {
+    load(index: number): Promise<T | null>;
+    release(index: number): boolean;
+    dispose(): void;
+    readonly pending: Promise<T | null>[];
+    readonly disposed: boolean;
+  };
+}
+interface ReaderVirtualApi {
+  createSectionVirtualizer<T extends Element>(options: {
+    limit: number;
+    getLoaded(): T[];
+    getIndex(node: T): number;
+    getHeight(node: T): number;
+    virtualize(node: T, index: number, height: number): unknown;
+    release(index: number): unknown;
+    preserve?(change: () => void): void;
+    canVirtualize?(node: T, index: number): boolean;
+  }): { trim(centerIndex: number): {removed: number; retained: number}; dispose(): void; readonly limit: number };
+}
 declare var VoiceOfMLReaderRequests: ReaderRequestManagerApi;
 declare var VoiceOfMLReaderRuntime: ReaderRuntimeApi;
 declare var VoiceOfMLReaderAdapters: ReaderAdaptersApi;
 declare var VoiceOfMLReaderScroll: ReaderScrollApi;
+declare var VoiceOfMLReaderChapters: ReaderChaptersApi;
+declare var VoiceOfMLReaderVirtual: ReaderVirtualApi;
+
+interface SearchSessionApi {
+  createSearchSession(options: {canPersist(): boolean; canRestore(target?: URL): boolean}): {
+    openSearchSessionDB(): Promise<IDBDatabase>;
+    persistSearchSession(): Promise<void>;
+    restoreSearchSession(): Promise<boolean>;
+  };
+}
+interface DownloadControllerApi {
+  createDownloadController(options: {
+    buildCheckUrl(link: string): string;
+    buildDownloadUrl(filename: string, link: string): string;
+    triggerDownload(url: string): void;
+    showToast(message: string, duration?: number): void;
+    isSpeculativeAllowed?(): boolean;
+    isBatchActive?(): boolean;
+    timeout?: number;
+  }): {
+    downloadChecks: Map<string, unknown>;
+    downloadCheckQueue: unknown[];
+    pendingDownloads: Map<string, unknown>;
+    checkDownload(link: string, speculative?: boolean, signal?: AbortSignal): Promise<boolean | string>;
+    runDownloadCheck(item: unknown): Promise<void>;
+    pumpDownloadChecks(): void;
+    scheduleDownloadLaunch(filename: string, link: string, cancelled: () => boolean): Promise<boolean>;
+    downloadFile(filename: string, link: string, options?: {button?: HTMLElement; quiet?: boolean; skipCheck?: boolean; signal?: AbortSignal; batch?: object}): Promise<boolean>;
+    readonly activeDownloadChecks: number;
+  };
+}
+interface SearchReaderNavigationApi {
+  createNavigation(readerPath: string, options?: {resume?(url: string): void; close?(): void}): {
+    parse(raw: string): URL;
+    mergeSearchParams(target: string | URL, source: URLSearchParams | string, options?: {hashRoute?: boolean; keys?: readonly string[]}): URL;
+    saved(): {readerUrl?: string; shareUrl?: string; returnScroll?: unknown} | null;
+    prepare(raw: string, returnUrl: string): URL;
+    remember(url: URL, returnScroll: object, replace?: boolean): void;
+    mount(url: URL): HTMLIFrameElement;
+    unmount(keepSpeech?: boolean): HTMLElement | null;
+    dismiss(): void;
+    replace(raw: string, returnScroll: object): HTMLIFrameElement;
+    accepts(event: MessageEvent): boolean;
+    persistProgress(progress: object): void;
+    readonly returnFocus: HTMLElement | null;
+  };
+}
+declare var VoiceOfMLSearchSession: SearchSessionApi;
+declare var VoiceOfMLDownloadController: DownloadControllerApi;
+declare var VoiceOfMLReaderNavigation: SearchReaderNavigationApi;
+
+// The imported module registers this custom element; it does not export the
+// book to our code. The concrete sections are provided by the chosen engine.
+interface FoliateViewElement extends HTMLElement {
+  open(file: File): Promise<void>;
+  book: { sections: Array<{linear?: string}> };
+}
+interface HTMLElementTagNameMap { "foliate-view": FoliateViewElement }
 declare var DOMPurify: {
   sanitize(input: string, options: {RETURN_DOM_FRAGMENT: true; [key: string]: unknown}): DocumentFragment;
   sanitize(input: string, options?: object): string;
@@ -106,10 +202,15 @@ interface Window {
   VoiceOfMLReaderRuntime: ReaderRuntimeApi;
   VoiceOfMLReaderAdapters: ReaderAdaptersApi;
   VoiceOfMLReaderScroll: ReaderScrollApi;
+  VoiceOfMLReaderChapters: ReaderChaptersApi;
+  VoiceOfMLReaderVirtual: ReaderVirtualApi;
+  VoiceOfMLSearchSession: SearchSessionApi;
+  VoiceOfMLDownloadController: DownloadControllerApi;
+  VoiceOfMLReaderNavigation: SearchReaderNavigationApi;
   __VOICE_PDF_PRELOAD__?: any;
   __VOICE_READER_CHAPTER_PRELOAD__?: any;
   __VOICE_READER_RESOLVE__?: any;
-  __VOICE_READER_EARLY_BACK__?: boolean;
+  __VOICE_READER_EARLY_BACK__?: () => boolean;
   VoiceOfMLReaderPdfDiagnostics?: any;
   fetchFile?: any;
   RufflePlayer?: any;

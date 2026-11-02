@@ -817,7 +817,7 @@ function renderDownloadBatch() {
     panel.setAttribute("aria-label", "批量下载");
     panel.innerHTML = '<span role="status" aria-live="polite"></span><button type="button" data-queue="cancel">取消待下载</button><button type="button" data-queue="retry">重试失败项</button><button type="button" data-queue="close">关闭</button>';
     panel.addEventListener("click", event => {
-      const action = event.target.dataset.queue;
+      const action = /** @type {HTMLElement} */ (event.target).dataset.queue;
       if (action === "cancel") {
         downloadBatch.cancelled = true;
         downloadBatch.abortController?.abort();
@@ -829,9 +829,9 @@ function renderDownloadBatch() {
     document.body.appendChild(panel);
   }
   panel.querySelector('[role="status"]').textContent = `${batch.cancelled ? "已取消待下载 · " : ""}已发起 ${batch.started}/${batch.items.length} · 失败 ${batch.failed.length}。请在浏览器下载列表查看文件进度。`;
-  panel.querySelector('[data-queue="cancel"]').hidden = batch.done || batch.cancelled;
-  panel.querySelector('[data-queue="retry"]').hidden = !batch.done || !batch.failed.length;
-  panel.querySelector('[data-queue="close"]').hidden = !batch.done;
+  /** @type {HTMLElement} */ (panel.querySelector('[data-queue="cancel"]')).hidden = batch.done || batch.cancelled;
+  /** @type {HTMLElement} */ (panel.querySelector('[data-queue="retry"]')).hidden = !batch.done || !batch.failed.length;
+  /** @type {HTMLElement} */ (panel.querySelector('[data-queue="close"]')).hidden = !batch.done;
 }
 
 function getSelectedFiles() {
@@ -1002,7 +1002,7 @@ function renderDropdown() {
   DOM.historyDropdown.innerHTML = html;
   DOM.historyDropdown.style.display = "";
   if (row) {
-    var index = list.indexOf(row.dataset.query);
+    var index = list.indexOf(/** @type {HTMLElement} */ (row).dataset.query);
     var selector = index >= 0 && active.matches('.history-del') ? '.history-del' : '.history-text';
     DOM.historyDropdown.querySelectorAll('.history-item')[index >= 0 ? index : Math.min(oldIndex, list.length - 1)]
       .querySelector(selector).focus({ preventScroll: true });
@@ -1130,9 +1130,7 @@ async function loadData() {
 }
 
 function makeWorkerError(code, message) {
-  var error = new Error(message || code);
-  error.code = code;
-  return error;
+  return Object.assign(new Error(message || code), {code});
 }
 
 function rejectCorpusWorkerPending(error) {
@@ -2928,7 +2926,7 @@ function validSearchPosition(value) {
 }
 
 async function initSearchPositions() {
-  await new Promise(resolve => {
+  await /** @type {Promise<void>} */ (new Promise(resolve => {
     const timer = setTimeout(resolve, 1500);
     try {
       const request = indexedDB.open("voice-search-positions", 4);
@@ -2958,7 +2956,7 @@ async function initSearchPositions() {
         transaction.oncomplete = transaction.onabort = () => { clearTimeout(timer); resolve(); };
       };
     } catch (_) { clearTimeout(timer); resolve(); }
-  });
+  }));
 }
 
 function rememberDisplayedSearchView() {
@@ -3232,7 +3230,7 @@ function isRecoverableSearchError(error) {
 }
 
 function waitForSearchRecovery(signal, delay, local) {
-  return new Promise((resolve, reject) => {
+  return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
     let elapsed = false;
     const cleanup = () => {
       clearTimeout(timer);
@@ -3251,7 +3249,7 @@ function waitForSearchRecovery(signal, delay, local) {
     window.addEventListener("online", ready);
     window.addEventListener("pageshow", ready);
     if (signal.aborted) abort();
-  });
+  }));
 }
 
 async function fetchPositionPageWithRecovery(query, page, signal, anchorId, demanded = () => true) {
@@ -3765,7 +3763,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   renderResults(false);
   updateStatusBar();
   updateLoadInfo();
-  syncStateToURL(true);
+  syncStateToURL();
   startSnapshotClone();
   return true;
 }
@@ -4592,7 +4590,7 @@ function layoutResultScrollSegment(topH, endH, totalH, logicalTop) {
 
 function reconcileVirtualRows(items, start, end, topH, bottomH) {
   const focused = document.activeElement;
-  const focusedRow = DOM.resultsList.contains(focused) ? focused.closest('.result-item') : null;
+  const focusedRow = DOM.resultsList.contains(focused) ? /** @type {HTMLElement} */ (focused.closest('.result-item')) : null;
   const focusedRecord = focusedRow && resultRowRecords.get(focusedRow);
   // Validate once before reusing rows, not once for every new row.
   ensureResultTemplateCache();
@@ -4636,7 +4634,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
     const sameRecord = replacement && focusedRecord && resultRowRecords.get(replacement) === focusedRecord;
     const control = sameRecord && (focused === focusedRow ? replacement :
       Array.from(replacement.querySelectorAll('button,a,input,[role="button"]')).find(node =>
-        node.className === focused.className && node.dataset.action === focused.dataset.action &&
+        node.className === focused.className && node.dataset.action === /** @type {HTMLElement} */ (focused).dataset.action &&
         node.getAttribute('aria-label') === focused.getAttribute('aria-label')));
     if (!control) keyboardResultIndex = findVirtualIndex(logicalTop) - 1;
     (control || DOM.resultsContainer).focus({ preventScroll: true });
@@ -4647,8 +4645,8 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
   }
 }
 
-function scheduleVirtualRender() {
-  const afterScroll = arguments[0] === true;
+function scheduleVirtualRender(scrollIntent = false) {
+  const afterScroll = scrollIntent === true;
   if (afterScroll && !VSCROLL.renderAfterScroll) {
     VSCROLL.renderAfterScroll = true;
     if (!VSCROLL.isDraggingThumb) maybeLoadNextPage();
@@ -5082,7 +5080,7 @@ function scheduleFilterSearch(clearResults = false) {
   searchRequestId++;
   STATE.isLoading = true;
   setSearchVisualLoading(true);
-  syncStateToURL(true);
+  syncStateToURL();
   filterSearchTimer = setTimeout(() => {
     filterSearchTimer = null;
     doFilterSearch();
@@ -5090,15 +5088,15 @@ function scheduleFilterSearch(clearResults = false) {
 }
 
 function updateCurrentResultPosition() {
-  const label = document.getElementById("current-result-position");
+  const label = /** @type {HTMLInputElement | null} */ (document.getElementById("current-result-position"));
   if (!label) return;
   const editing = document.activeElement === label;
   label.hidden = !editing;
   if (STATE.results.length || STATE.total) {
     const index = findVirtualIndex(getResultScrollTop());
-    if (!editing && label.value !== String(index + 1)) label.value = index + 1;
+    if (!editing && label.value !== String(index + 1)) label.value = String(index + 1);
     const display = document.getElementById('result-position-display');
-    if (display && display.textContent !== String(index + 1)) display.textContent = index + 1;
+    if (display && display.textContent !== String(index + 1)) display.textContent = String(index + 1);
   }
   updateSearchPositionControls();
 }
@@ -5146,7 +5144,7 @@ function renderRepoListItems(repos) {
   DOM.sidebarContent.innerHTML = html;
   DOM.sidebarContent.querySelectorAll('svg').forEach(node => node.setAttribute('aria-hidden', 'true'));
   if (focused) (Array.from(DOM.sidebarContent.querySelectorAll('.repo-list-item'))
-    .find(node => node.dataset.repo === focused.dataset.repo) || DOM.leftSidebar).focus({ preventScroll: true });
+    .find(node => node.dataset.repo === /** @type {HTMLElement} */ (focused).dataset.repo) || DOM.leftSidebar).focus({ preventScroll: true });
   restoreSidebarScroll();
   updateSidebarHeader();
 }
@@ -5236,7 +5234,7 @@ function createSidebarBreadcrumb(path) {
   }
   breadcrumb.querySelectorAll(".crumb-item").forEach(function(item) {
     item.addEventListener("click", function() {
-      if (!item.classList.contains("current")) ROUTER.navigate("repo", STATE.repo, item.dataset.path);
+      if (!item.classList.contains("current")) ROUTER.navigate("repo", STATE.repo, /** @type {HTMLElement} */ (item).dataset.path);
     });
   });
   return breadcrumb;
@@ -5268,8 +5266,9 @@ async function renderBrowser(path, routeId) {
       const file = (displayedData.files || [])[index];
       if (!file) return;
       const readerUrl = getBrowserReaderUrl(file, currentRepo, path);
-      if (readerUrl) row.dataset.readerUrl = readerUrl;
-      else delete row.dataset.readerUrl;
+      const fileRow = /** @type {HTMLElement} */ (row);
+      if (readerUrl) fileRow.dataset.readerUrl = readerUrl;
+      else delete fileRow.dataset.readerUrl;
       row.querySelector('.browser-name').setAttribute('aria-label', (readerUrl ? '打开阅读器：' : '下载文件：') + getBrowserFileName(file));
     });
   });
@@ -6015,7 +6014,7 @@ function renderFilterTreeNodes(container, nodes, depth) {
 
 function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, lookup) {
     const has = node.children && node.children.length > 0;
-    const row = document.createElement("div");
+    const row = /** @type {HTMLDivElement & {_folderNode?: unknown}} */ (document.createElement("div"));
     row.className = "filter-folder-item";
     row.style.setProperty("--fdepth", depth);
     row.dataset.path = node.path;
@@ -6033,7 +6032,7 @@ function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, looku
     applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
     container.appendChild(row);
     if (has) {
-      const childDiv = document.createElement("div");
+      const childDiv = /** @type {HTMLDivElement & {_folderPath?: string, _folderNode?: unknown, _folderDepth?: number, _childrenRendered?: boolean}} */ (document.createElement("div"));
       childDiv.className = "tree-children";
       childDiv.id = 'filter-folder-children-' + ++folderTreeControlId;
       childDiv.inert = collapsed;
@@ -6211,8 +6210,9 @@ async function fetchRandomReaderRecord(url, requestId, returnUrl) {
       const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
       if (!response.ok) {
         await response.body?.cancel();
-        const error = new Error(`HTTP ${response.status}`);
-        error.permanent = response.status < 500 && ![408, 429].includes(response.status);
+        const error = Object.assign(new Error(`HTTP ${response.status}`), {
+          permanent: response.status < 500 && ![408, 429].includes(response.status)
+        });
         throw error;
       }
       return await response.json();
@@ -6311,7 +6311,7 @@ function isResultsAtBottom() {
 
 function updatePagingStatus() {
   if (!DOM.loadInfo) return;
-  let button = document.getElementById("paging-status");
+  let button = /** @type {HTMLButtonElement | null} */ (document.getElementById("paging-status"));
   if (!button) {
     button = document.createElement("button");
     button.id = "paging-status";
@@ -6676,7 +6676,7 @@ function toggleRightSidebar(event) {
 }
 
 function updateSidebarVisibility() {
-  const main = document.querySelector('#main-content');
+  const main = /** @type {HTMLElement} */ (document.querySelector('#main-content'));
   const covered = STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen);
   const focusCovered = covered && main.contains(document.activeElement);
   main.inert = covered;
@@ -6721,7 +6721,7 @@ function setupKeyboard() {
     event.preventDefault(); hideSearchHistory();
     if (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) {
       STATE.leftSidebarOpen = false; STATE.rightSidebarOpen = false;
-      updateSidebarVisibility(); syncStateToURL(true);
+      updateSidebarVisibility(); syncStateToURL();
     }
     DOM.resultsContainer.focus({ preventScroll: true });
   });
@@ -6734,7 +6734,7 @@ function setupKeyboard() {
       else closeLeftSidebar();
       return;
     }
-    const isInput = target.isContentEditable || !!target.closest("input, textarea, select");
+    const isInput = (target instanceof HTMLElement && target.isContentEditable) || !!target.closest("input, textarea, select");
     if (isInput && !(target === DOM.searchInput && e.key === "Escape")) return;
     if (["Enter", "ArrowDown", "ArrowUp"].includes(e.key) && target.closest("button, a, [role='button']")) return;
     if (e.key === "/" && !isInput) {
