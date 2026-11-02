@@ -6,42 +6,8 @@ on:
     - cron: "17 2 * * *"
   push:
     branches: ["main"]
-    paths:
-      - "static/app.js"
-      - "static/index.html"
-      - "static/style.css"
-      - "static/reader*.js"
-      - "static/reader*.mjs"
-      - "static/reader/**"
-      - "static/search/**"
-      - "scripts/build/**"
-      - "scripts/benchmarks/benchmark_djvu.py"
-      - "scripts/benchmarks/benchmark_pdf_ranges.py"
-      - "scripts/benchmarks/compare_djvu.py"
-      - "static/reader*.css"
-      - "static/reader*.html"
-      - "static/foliate-reader/**"
-      - "tests/test_reader_refactor.py"
-      - "tests/test_search_accessibility_browser.py"
-      - "tests/test_sidebar_keyboard.py"
-      - "tests/test_paging_recovery.py"
-      - "tests/test_position_controls.py"
-      - "tests/test_reader_chapter_search.mjs"
-      - "tests/test_reader_*.py"
-      - "tests/test_reader_*.mjs"
-      - "tests/test_reader_*.js"
-      - "tests/test_static_contract.js"
-      - "tests/reader_native_fixture.py"
-      - "tests/reader_test_selection.py"
-      - "tests/fixtures/synthetic-reader.djvu"
-      - "tests/fixtures/synthetic-reader-NOTICE.txt"
-      - "tests/fixtures/synthetic-djvu-benchmark.djvu"
-      - "tests/fixtures/synthetic-djvu-benchmark-NOTICE.txt"
-      - "tests/fixtures/issue8088.pdf"
-      - "tests/fixtures/issue8088-NOTICE.txt"
-      - "tests/fixtures/pdfjs-LICENSE.txt"
-      - "requirements*.txt"
-      - ".github/workflows/reader-refactor.yml"
+    paths-ignore:
+      - "data/**"
 
 concurrency:
   group: reader-refactor-sites
@@ -63,11 +29,17 @@ jobs:
           node-version: "26.11.1"
       - name: Install test dependencies
         run: |
-          python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.21.4
+          python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.21.4 -r requirements-static-check.txt
+          npm ci --ignore-scripts --no-audit --no-fund
           sudo apt-get update && sudo apt-get install -y qpdf
           python -m playwright install --with-deps chromium firefox
           node scripts/build/fetch_foliate_reader.mjs static/foliate-reader
           node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
+      - name: Check source and exercise static gates
+        run: |
+          npm run check:static
+          python -B scripts/check_python_static.py
+          python -B -m unittest -v tests.test_static_checks
       - name: Run chapter-search unit tests
         run: |
           node tests/test_reader_architecture.js
@@ -168,7 +140,9 @@ jobs:
       READER_TEST_TIMEOUT_MS: "60000"
     steps:
       - name: Checkout Hugging Face Search Space
-        run: git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
+        run: |
+          git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
+          git -C huggingface-search rev-parse HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -177,7 +151,16 @@ jobs:
           node-version: "26.11.1"
       - name: Install test dependencies
         working-directory: huggingface-search
-        run: python -m pip install -r requirements.txt playwright==1.63.0 Pillow==12.3.0 httpx==0.28.1
+        run: |
+          python -m pip install -r requirements.txt -r requirements-static-check.txt playwright==1.63.0 Pillow==12.3.0 httpx==0.28.1
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check source and exercise static gates
+        working-directory: huggingface-search
+        run: |
+          npm run check:static
+          npx --no-install pyright --project pyrightconfig.json
+          python -B scripts/check_python_static.py
+          python -B -m unittest -v tests.test_static_checks
       - name: Install browser dependencies
         working-directory: huggingface-search
         run: python -m playwright install --with-deps chromium firefox

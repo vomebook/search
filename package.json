@@ -1,0 +1,22 @@
+{
+  "name": "reader-static-checks",
+  "private": true,
+  "scripts": {
+    "lint": "eslint static scripts tests --max-warnings 0",
+    "markup": "node scripts/check_markup.mjs",
+    "types": "tsc --project jsconfig.check.json",
+    "check:static": "npm run lint && npm run markup && npm run types"
+  },
+  "_overrideNote": "minimatch 11.0.3 addresses GHSA-g3hv-75wg-m249 in the 10.x dependency; rerun checker regressions when updating ESLint.",
+  "overrides": { "minimatch": "11.0.3" },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.14.0",
+    "espree": "11.2.0",
+    "globals": "17.14.0",
+    "parse5": "8.1.0",
+    "postcss": "8.5.32",
+    "pyright": "1.1.414",
+    "typescript": "7.0.2"
+  }
+}

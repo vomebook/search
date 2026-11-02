@@ -405,7 +405,9 @@ export function makeFirstPageWorkerSource(source) {
   return source;
 }
 
-export async function installFirstPageWorker(url, expectedDigest, {signal, response:pendingResponse} = {}) {
+/** @param {{signal?: AbortSignal, response?: Promise<Response>}} [options] */
+export async function installFirstPageWorker(url, expectedDigest, options = {}) {
+  const {signal, response:pendingResponse} = options;
   const owner = new AbortController(), active = signal ? AbortSignal.any([signal, owner.signal]) : owner.signal;
   const timer = setTimeout(() => owner.abort(), 20000);
   try {
