@@ -135,8 +135,12 @@ const bucket = assetRoot + 'b'.repeat(16) + '/page-manifest.json'
 const bucketUrl = 'https://huggingface.co/buckets/vomebook/pdf-pages-v2/resolve/' + bucket
 const parsed = assets.pdfPageSource(bucketUrl, 'https://site.test', 'https://api.test')
 assert.strictEqual(parsed.root, assetRoot + 'b'.repeat(16))
-assert.strictEqual(parsed.pageUrl(2), bucketUrl.replace('page-manifest.json', 'pages/page-000002.webp'))
-assert.throws(() => parsed.pageUrl(0), /PDF_PAGE_INVALID/)
+assert.strictEqual(parsed.pageUrl, undefined, 'PDF page manifests cannot construct retired image URLs')
+const imageBucket = 'pages/image/tiff/' + 'c'.repeat(64) + '/page-manifest.json'
+const imageUrl = 'https://huggingface.co/buckets/vomebook/reader-assets-v2/resolve/' + imageBucket
+const imageSource = assets.imagePageSource(imageUrl, 'https://site.test', 'https://api.test')
+assert.strictEqual(imageSource.pageUrl(2), imageUrl.replace('page-manifest.json', 'pages/page-000002.webp'))
+assert.throws(() => imageSource.pageUrl(0), /PDF_PAGE_INVALID/)
 assert.ok(assets.pdfPageSource('https://api.test/api/reader-bucket-resource?path=' + encodeURIComponent(bucket), 'https://site.test', 'https://api.test'))
 for (const url of [
   'https://evil.test/buckets/vomebook/pdf-pages-v2/resolve/' + bucket,
