@@ -119,6 +119,11 @@ class StaticGateTests(unittest.TestCase):
         source = self.root / config["files"][0]
         source.write_text(source.read_text() + "\nfunction strictProbe(value) { return value; }\nstrictProbe(1);\n")
         self.assert_check(self.run_check(*check), False, "TS7006")
+        shutil.copyfile(ROOT / config["files"][0], source)
+        source = self.root / "static/reader/pdf/reader-engine-preload.js"
+        self.assertIn(str(source.relative_to(self.root)), config["files"])
+        source.write_text(source.read_text() + "\nfunction strictPreloadProbe(value) { return value; }\nstrictPreloadProbe(1);\n")
+        self.assert_check(self.run_check(*check), False, "TS7006")
 
     def test_reader_type_contract_rejects_wrong_arguments(self):
         source = self.root / "static/reader-usage.js"
