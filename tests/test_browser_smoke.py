@@ -1182,7 +1182,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         path = reader.locator('#reader-panel-path')
         path.wait_for(state='visible')
         self.assertEqual(path.locator('.reader-panel-folder').inner_text(), '所在目录：VOMEBOOK/一级目录/二级目录')
-        self.assertIn('测试', reader.locator('#title').inner_text())
+        self.assertIn('测试', reader.locator('#title').text_content())
         path.click()
         self.page.locator('iframe.reader-overlay').wait_for(state='detached')
         self.page.wait_for_function("STATE.browserPath==='一级目录/二级目录' && STATE.filterFolderSelfs.join()==='一级目录/二级目录'")

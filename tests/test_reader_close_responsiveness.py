@@ -32,7 +32,7 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
         self.page.evaluate('url => navigateToReader(url)', url)
         frame = self.page.frame_locator('iframe.reader-overlay')
         frame.locator('html[data-reader-phase="ready"]').wait_for()
-        self.page.wait_for_function("()=>document.title==='真实书名.txt - VoiceOfML Reader'")
+        self.page.wait_for_function("()=>document.title==='真实书名.txt'")
         self.assertEqual(frame.locator('#title').inner_text(), '真实书名.txt')
         self.assertEqual(frame.locator('body').evaluate('()=>document.title'), self.page.title())
         self.page.evaluate('history.back()')
@@ -40,10 +40,45 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
         self.assertEqual(self.page.title(), original)
         self.page.evaluate('history.forward()')
         frame.locator('html[data-reader-phase="ready"]').wait_for()
-        self.page.wait_for_function("()=>document.title==='真实书名.txt - VoiceOfML Reader'")
+        self.page.wait_for_function("()=>document.title==='真实书名.txt'")
         frame.locator('#back').click()
         self.page.locator('iframe.reader-overlay').wait_for(state='detached')
         self.assertEqual(self.page.title(), original)
+
+    def test_html_filename_titles_search_history_before_embedded_reader_loads(self):
+        self.page.set_viewport_size({'width':390,'height':844})
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bb_204.html'
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(content_type='text/html',
+            body='<html><head><title>页面文章标题</title></head><body><h1>文章标题</h1><p>正文</p></body></html>'))
+        original = self.page.title()
+        url = '/search/static/reader.html?' + urlencode(dict(url=source, ext='html', title='bb_204.html'))
+        state=self.page.evaluate('''url=>{
+          const native=history.pushState;let atPush=null;
+          history.pushState=function(...args){atPush=document.title;return native.apply(this,args)};
+          try{navigateToReader(url);return {atPush,title:document.title}}finally{history.pushState=native}
+        }''',url)
+        self.assertEqual(state, dict(atPush='bb_204.html',title='bb_204.html'))
+        frame=self.page.frame_locator('iframe.reader-overlay')
+        frame.locator('html[data-reader-phase="ready"]').wait_for()
+        self.page.wait_for_function("()=>document.title==='bb_204.html'")
+        self.assertEqual(frame.locator('iframe.html-frame').content_frame.locator('h1').inner_text(),'文章标题')
+        self.assertEqual(frame.locator('#title').text_content(),'bb_204.html')
+        self.assertTrue(frame.locator('#title').is_hidden())
+        self.assertEqual(frame.locator('.reader-toolbar').bounding_box()['height'],36)
+        frame.locator('#back').click()
+        self.page.locator('iframe.reader-overlay').wait_for(state='detached')
+        self.assertEqual(self.page.title(),original)
+
+    def test_standalone_html_uses_original_filename_as_title(self):
+        self.page.set_viewport_size({'width':390,'height':844})
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/bb_204.html'
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(content_type='text/html',
+            body='<h1>文章标题</h1><p>正文</p>'))
+        self.page.goto(self.fixture.origin+'/search/static/reader.html?'+urlencode(dict(url=source,ext='html',title='bb_204.html')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.title(),'bb_204.html')
+        self.assertTrue(self.page.locator('#title').is_hidden())
+        self.assertEqual(self.page.locator('.reader-toolbar').bounding_box()['height'],36)
 
     def test_slow_old_write_cannot_delay_close_or_overwrite_last_position(self):
         source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/responsive.txt'
