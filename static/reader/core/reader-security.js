@@ -15,9 +15,7 @@
     chapterTotalBytes: 512 * 1024 * 1024
   });
   function error(code) {
-    const value = new Error(code);
-    value.code = code;
-    return value;
+    return Object.assign(new Error(code), { code });
   }
   function assertResponseSize(response, limit) {
     const length = Number(response?.headers?.get?.("content-length"));

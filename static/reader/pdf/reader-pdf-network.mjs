@@ -63,10 +63,11 @@ export function createPdfRangeCache({maxBytes = 8 * 1024 * 1024, maxEntries = 64
 
 function sharedPdfRangeCache() {
   if (typeof window === "undefined") return null;
+  /** @type {Window} */
   let owner = window;
   try {
     if (parent !== window && parent.location.origin === location.origin &&
-        [...parent.document.querySelectorAll("iframe.reader-overlay")].some(frame => frame.contentWindow === window)) owner = parent;
+        [...parent.document.querySelectorAll("iframe.reader-overlay")].some(frame => /** @type {HTMLIFrameElement} */ (frame).contentWindow === window)) owner = parent;
   } catch (_) {}
   const key = Symbol.for("voice-reader-pdf-ranges-v1");
   try {
@@ -659,7 +660,9 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       onError?.(error);
     };
     for (const hint of [tail, extendedTail, ...openingRanges]) hint?.onFailure(fail);
-    const prioritizeRange = ({begin,end} = {}) => {
+    /** @param {{begin?: number, end?: number}} [range] */
+    const prioritizeRange = (range = {}) => {
+      const {begin,end} = range;
       if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin || end > first.total) return;
       ratePriority?.(begin,end);
       // Keep a small rolling set of PDF.js misses. Hints only reorder existing

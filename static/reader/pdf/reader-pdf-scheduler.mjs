@@ -315,7 +315,7 @@ export function createReaderPdfScheduler(readerContext) {
       admit();
       return Promise.resolve();
     }
-    return new Promise((resolve, reject) => {
+    return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       const lifetime = signal ? AbortSignal.any([signal, readerContext.readerAbortController.signal])
         : readerContext.readerAbortController.signal;
       const waiter = {
@@ -331,7 +331,7 @@ export function createReaderPdfScheduler(readerContext) {
       lifetime.addEventListener("abort", abort, { once: true });
       pdfPreviewWaiters.push(waiter);
       if (!preemptPdfPreview(priority, shell)) drainPdfPreviewWaiters();
-    });
+    }));
   }
 
   function drainPdfPreviewWaiters() {
@@ -410,7 +410,7 @@ export function createReaderPdfScheduler(readerContext) {
       readerContext.pdfActiveRenders++;
       return Promise.resolve();
     }
-    return new Promise((resolve, reject) => {
+    return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       let settled = false;
       const remove = () => {
         const index = readerContext.pdfRenderWaiters.indexOf(waiter);
@@ -445,7 +445,7 @@ export function createReaderPdfScheduler(readerContext) {
       const index = readerContext.pdfRenderWaiters.findIndex((item) => item.priority < priority);
       if (index < 0) readerContext.pdfRenderWaiters.push(waiter);
       else readerContext.pdfRenderWaiters.splice(index, 0, waiter);
-    });
+    }));
   }
 
   function releasePdfRenderSlot() {

@@ -9,7 +9,7 @@
     virtualize,
     release,
     preserve = (change) => change(),
-    canVirtualize = () => true
+    canVirtualize = (_node, _index) => true
   }) {
     const maximum = Math.max(3, Number(limit) || 9);
     let disposed = false;
