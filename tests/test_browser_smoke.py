@@ -1368,9 +1368,18 @@ class BrowserBehaviorTest(unittest.TestCase):
           Link: "https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/second.txt"
         }), location.origin).href""")
         search_url = self.page.url
+        # A deferred history-store script can finish after the visible toolbar.
+        # Force that timing so this regression does not depend on CI load.
+        store_path = "/search/static/reader/core/reader-store.js"
+        with self.server_state.lock:
+            self.server_state.delays[store_path] = 1
+        self.addCleanup(self.clear_server_delay, store_path)
         self.page.evaluate("url => navigateToReader(url)", first_url)
         self.page.frame_locator("iframe.reader-overlay").locator("#back").wait_for()
         reader_frame = next(frame for frame in self.page.frames if frame.parent_frame is not None and "/search/static/reader.html" in frame.url)
+        # The toolbar is parsed before deferred reader-store.js executes. A
+        # visible #back button therefore does not imply the history API exists.
+        reader_frame.wait_for_function("() => typeof window.VoiceOfMLReaderStore?.put === 'function'")
         reader_frame.evaluate("""async (readerUrl) => VoiceOfMLReaderStore.put({
           url: 'https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/second.txt',
           title: '第二本.txt', extension: 'txt', readerUrl, page: 1, pageCount: 0, lastReadAt: Date.now()
@@ -1390,6 +1399,10 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.locator("iframe.reader-overlay").wait_for(state="detached")
         self.assertEqual(self.page.url, search_url)
         self.assertEqual(self.page_errors, [])
+
+    def clear_server_delay(self, path):
+        with self.server_state.lock:
+            self.server_state.delays.pop(path, None)
 
     def test_indexeddb_restores_last_search_but_explicit_url_wins(self):
         self.load("#/?q=持久搜索&ext=pdf&filters=1")
