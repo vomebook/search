@@ -179,7 +179,7 @@ export function createReaderUi(readerContext) {
 
   function setReaderPanelOpen(open, restoreFocus = false, focusPanel = false) {
     readerContext.readerRuntime.update("panel", { open });
-    const panel = document.querySelector("#history-panel");
+    const panel = /** @type {HTMLElement} */ (document.querySelector("#history-panel"));
     const focusWasInside = panel.contains(document.activeElement);
     clearTimeout(readerContext.panelAnimationTimer);
     document.querySelector("#history").setAttribute("aria-expanded", String(open));
@@ -194,7 +194,7 @@ export function createReaderUi(readerContext) {
       readerContext.notifyReaderUiState(readerContext.panelState.selected === "full-search" ? "full-search" : "panel");
       // Only an explicit keyboard/assistive activation moves focus. Automatic
       // directory discovery and ordinary pointer opening leave reading alone.
-      if (focusPanel) (panel.querySelector('#full-search-view:not([hidden]) input') ||
+      if (focusPanel) /** @type {HTMLElement} */ (panel.querySelector('#full-search-view:not([hidden]) input') ||
         panel.querySelector('.reader-panel-tabs button[aria-selected="true"]:not([hidden])') ||
         panel.querySelector('#history-close')).focus({ preventScroll: true });
       return;
@@ -205,7 +205,7 @@ export function createReaderUi(readerContext) {
       if (!panel.classList.contains("is-open")) panel.hidden = true;
     }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 190);
     readerContext.notifyReaderUiState("base");
-    if (restoreFocus || focusWasInside) document.querySelector("#history").focus({ preventScroll: true });
+    if (restoreFocus || focusWasInside) /** @type {HTMLElement} */ (document.querySelector("#history")).focus({ preventScroll: true });
   }
 
   function setPanelSearchOpen(button, open) {
@@ -232,12 +232,12 @@ export function createReaderUi(readerContext) {
     if (name === "media" && readerContext.mediaTab.hidden) name = "bookmarks";
     readerContext.updatePanelState({ selected: name });
     if (readerContext.progressTools) readerContext.progressTools.hidden = !["toc", "media"].includes(name);
-    for (const button of document.querySelectorAll(".reader-panel-tabs button")) {
+    for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".reader-panel-tabs button"))) {
       const selected = button.dataset.panel === name;
       button.setAttribute("aria-selected", String(selected));
       button.tabIndex = selected ? 0 : -1;
     }
-    for (const view of document.querySelectorAll(".reader-panel-view"))
+    for (const view of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(".reader-panel-view")))
       view.hidden = view.dataset.panelView !== name;
     if (name === "full-search") readerContext.notifyReaderUiState("full-search");
     else if (readerContext.panelState.open) readerContext.notifyReaderUiState("panel");

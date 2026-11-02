@@ -38,6 +38,7 @@ globalThis.CCRDSpeechPlan = (() => {
   // chunk_length_schedule. Production CPU synthesis runs at ~0.65-0.72 s per
   // second of audio (2026-10-20 cold CW:0), so a clip may be at most ~1.4x the
   // previous one or it is not ready when the previous clip's speech ends.
+  /** @type {[number, number][]} */
   const RAMP = [[16, 30], [24, 40], [34, 56], [50, 78], [72, 110]];
   function phraseEnds(text, first = false, carry = 0) {
     const cuts = wordEnds(text), chars = Array.from(text), offsets = [0], ends = [];
@@ -70,6 +71,7 @@ globalThis.CCRDSpeechPlan = (() => {
       // cuts mid-phrase: without a mark in its range it widens to the next size.
       // The preferred range follows the previous clip's actual length (<= 1.45x).
       const previous = ends.length ? ends[ends.length - 1] - (ends[ends.length - 2] || 0) : first ? 0 : carry;
+      /** @param {[number, number]} size @returns {[number, number]} */
       const fit = ([goal, limit]) => previous ? [goal, Math.min(limit, Math.max(goal + 4, Math.round(previous * 1.45)))] : [goal, limit];
       const index = !previous ? 0 : previous < 72 ? stage(previous) : -1;
       const sizes = ramping && index >= 0 ? [fit(RAMP[index]), ...RAMP.slice(index + 1), [90, 120]] : [[90, 120]];
@@ -689,7 +691,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
   }
   async function request(path, options, value, timeoutMs = 15000) {
-    const controller = new AbortController(); controller.createsJob = options?.method === "POST";
+    const controller = Object.assign(new AbortController(), {createsJob: options?.method === "POST"});
     value.controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -697,9 +699,10 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
       // HF gateway/proxy failures can return an HTML page; keep the HTTP status.
       const data = await response.json().catch(() => null);
       if (!response.ok || !data) {
-        const error = new Error(data?.error?.message || `语音请求失败（${response.status}）`);
-        error.status = response.status; error.code = data?.error?.code;
-        error.retryAfter = Math.max(2, Math.min(30, Number(response.headers.get("Retry-After")) || 5));
+        const error = Object.assign(new Error(data?.error?.message || `语音请求失败（${response.status}）`), {
+          status: response.status, code: data?.error?.code,
+          retryAfter: Math.max(2, Math.min(30, Number(response.headers.get("Retry-After")) || 5))
+        });
         throw error;
       }
       return data;
@@ -726,7 +729,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     if (!/^[A-Za-z0-9_-]{32}$/u.test(data.id) || (job.id && job.id !== data.id)) throw new Error("语音任务标识无效");
     job.id = data.id;
     if (data.state === "error") throw new Error(data.error?.message || "语音合成失败，正文未跳过");
-    if (["expired", "cancelled"].includes(data.state)) { const error = new Error("语音任务已过期"); error.status = 410; throw error; }
+    if (["expired", "cancelled"].includes(data.state)) throw Object.assign(new Error("语音任务已过期"), {status: 410});
     const parts = data.progress?.parts || [];
     if (!Array.isArray(parts) || parts.length > 64 || (data.result?.pitch_semitones ?? value.pitch) !== value.pitch) throw new Error("语音分段信息无效");
     if (data.progress && (!Number.isInteger(data.progress.total_parts) || data.progress.total_parts < 1 ||
@@ -1018,7 +1021,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
     else tools.prepend(button);
   }
   new MutationObserver(arrangeToggle).observe(document.body, { attributes: true, attributeFilter: ["class"] });
-  document.addEventListener("click", event => { if (event.target.closest("[data-speech-toggle]")) launch(); });
+  document.addEventListener("click", event => { if (/** @type {Element} */ (event.target).closest("[data-speech-toggle]")) launch(); });
   document.addEventListener("dblclick", event => {
     if (preview?.adapter || !preview?.body?.contains(event.target)) return;
     const offset = offsetAtPoint(event.clientX, event.clientY);
@@ -1049,7 +1052,7 @@ if (typeof document !== "undefined") window.CCRDSpeech = (() => {
   window.addEventListener("online", () => { if (owner?.wantsPlay) pump(owner); });
   if ("mediaSession" in navigator) {
     for (const [action, handler] of Object.entries({ play: resume, pause, stop: () => stop(), previoustrack: () => navigate(-1), nexttrack: () => navigate(1) })) {
-      try { navigator.mediaSession.setActionHandler(action, handler); } catch (_) { /* Optional. */ }
+      try { navigator.mediaSession.setActionHandler(/** @type {MediaSessionAction} */ (action), handler); } catch (_) { /* Optional. */ }
     }
   }
   controls();

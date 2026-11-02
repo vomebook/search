@@ -629,7 +629,7 @@ export function createReaderHtmlFormat(readerContext) {
     frame.setAttribute("sandbox", "allow-same-origin");
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.style.colorScheme = "only light";
-    const frameLoaded = new Promise((resolve, reject) => {
+    const frameLoaded = /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       let untrack = () => {}, frameTimer = 0, deadline = 0, started = false;
       const cleanup = () => {
         clearTimeout(frameTimer);
@@ -675,7 +675,7 @@ export function createReaderHtmlFormat(readerContext) {
       frameTimer = setTimeout(poll, 0);
       deadline = setTimeout(() => { cleanup(); reject(new Error("HTML document initialization timeout")); }, 20000);
       frame.addEventListener("load", loaded);
-    });
+    }));
     frame.srcdoc = readerContext.buildHtmlFrameSource(documentData);
     readerContext.content.appendChild(frame);
     await frameLoaded;

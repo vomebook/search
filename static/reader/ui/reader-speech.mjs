@@ -30,10 +30,10 @@ function textNodes(root) {
 
 function until(check, timeout) {
   const deadline = performance.now() + timeout;
-  return new Promise((resolve) => {
+  return /** @type {Promise<void>} */ (new Promise((resolve) => {
     const poll = () => (check() || performance.now() > deadline ? resolve() : setTimeout(poll, 100));
     poll();
-  });
+  }));
 }
 
 function rootText(root) { return textNodes(root).map((node) => node.data).join(""); }
@@ -637,7 +637,7 @@ export function createReaderSpeech(readerContext) {
     // Starting speech in a newly opened book takes over from the Reader that
     // was left reading in the background.
     document.addEventListener("click", (event) => {
-      if (!event.target?.closest?.("[data-speech-toggle]")) return;
+      if (!(/** @type {Element | null} */ (event.target))?.closest?.("[data-speech-toggle]")) return;
       if (readerContext.isReaderOverlayFrame?.())
         window.parent.postMessage({ type: "voice-reader-speech-start" }, location.origin);
     }, { capture: true });
