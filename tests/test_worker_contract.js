@@ -685,6 +685,9 @@ test("random record and reader requests honor repository filters", async () => {
   assert.strictEqual(result.record.File, "beta notes");
   result = await worker.request("random-record", { repo: "Missing", readerOnly: true });
   assert.strictEqual(result.record, null);
+  const retired = await worker.send("random-record", { repo: "Repo/B", txtOnly: true });
+  assert.strictEqual(retired.ok, false);
+  assert.strictEqual(retired.error.code, "LEGACY_TXT_RETIRED");
 });
 test("folder contents request returns only one directory", async () => {
   const { worker } = await loaded();

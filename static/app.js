@@ -6142,8 +6142,8 @@ function setupHitokoto() {
   updateHitokotoVisibility();
 }
 
-async function getRandomLocal(txtOnly) {
-  const data = await corpusWorkerRequest("random-record", { repo: STATE.repoFull || "", txtOnly: false, readerOnly: !!txtOnly }, WORKER_REQUEST_TIMEOUT);
+async function getRandomLocal(readerOnly) {
+  const data = await corpusWorkerRequest("random-record", { repo: STATE.repoFull || "", readerOnly: !!readerOnly }, WORKER_REQUEST_TIMEOUT);
   return data && data.record || null;
 }
 

@@ -761,6 +761,7 @@ function searchLocal(params) {
 }
 
 function randomRecord(params) {
+  if (params.txtOnly) throw protocolError("LEGACY_TXT_RETIRED", "Legacy OCR TXT selection is retired");
   const repo = params.repo || "";
   const readerOnly = !!params.readerOnly;
   let candidates;
