@@ -6,8 +6,9 @@
   const MAX_ENTRIES = 200;
   const SCHEMA_VERSION = 1;
   const DB_VERSION = 3;
-  const STORE_VERSION = root.document?.currentScript?.dataset.readerStoreVersion ||
-    /reader-store\.([0-9a-f]{12})\.js(?:\?|$)/.exec(root.document?.currentScript?.src || "")?.[1] || "";
+  const script = /** @type {HTMLScriptElement | null | undefined} */ (root.document?.currentScript);
+  const STORE_VERSION = script?.dataset.readerStoreVersion ||
+    /reader-store\.([0-9a-f]{12})\.js(?:\?|$)/.exec(script?.src || "")?.[1] || "";
   let databasePromise = null;
   const subscribers = new Set();
   const storeChannel =
@@ -143,7 +144,7 @@
     entry = normalizeHistoryEntry(entry);
     if (!entry) throw new TypeError("Invalid reader history entry");
     const database = await openDatabase();
-    await new Promise((resolve, reject) => {
+    await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       const tx = database.transaction(STORE_NAME, "readwrite");
       const store = tx.objectStore(STORE_NAME);
       const existing = store.get(entry.url);
@@ -172,7 +173,7 @@
       };
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
-    });
+    }));
   }
 
   async function listEntries(
@@ -219,7 +220,7 @@
     entry = normalizeBookmarkEntry(entry);
     if (!entry) throw new TypeError("Invalid reader bookmark entry");
     const database = await openDatabase();
-    await new Promise((resolve, reject) => {
+    await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       const tx = database.transaction(BOOKMARK_STORE_NAME, "readwrite");
       tx.objectStore(BOOKMARK_STORE_NAME).put(entry);
       tx.oncomplete = () => {
@@ -228,7 +229,7 @@
       };
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
-    });
+    }));
   }
   async function listBookmarks(url) {
     const entries = await listEntries(BOOKMARK_STORE_NAME, "url", normalizeBookmarkEntry, {
@@ -243,7 +244,7 @@
   }
   async function removeBookmark(id) {
     const database = await openDatabase();
-    await new Promise((resolve, reject) => {
+    await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       const tx = database.transaction(BOOKMARK_STORE_NAME, "readwrite");
       tx.objectStore(BOOKMARK_STORE_NAME).delete(id);
       tx.oncomplete = () => {
@@ -252,7 +253,7 @@
       };
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
-    });
+    }));
   }
   root.VoiceOfMLReaderStore = Object.freeze({
     DB_NAME,

@@ -48,7 +48,9 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
       next();
     });
   }
-  function request(page, priority = 0, { signal } = {}) {
+  /** @param {{signal?: AbortSignal}} [options] */
+  function request(page, priority = 0, options = {}) {
+    const { signal } = options;
     if (closed || signal?.aborted) return Promise.reject(signal?.reason || abort());
     if (!Number.isSafeInteger(page) || page < 1) return Promise.reject(new Error("DJVU_PAGE_INVALID"));
     const hit = touch(page);

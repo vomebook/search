@@ -43,7 +43,7 @@ export function createReaderLifecycle(readerContext) {
   }
 
   function waitForReader(delay = 0, animationFrame = false) {
-    return new Promise((resolve, reject) => {
+    return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       readerContext.assertReaderActive();
       const signal = readerContext.readerAbortController.signal;
       const abort = () => {
@@ -57,7 +57,7 @@ export function createReaderLifecycle(readerContext) {
       };
       const handle = animationFrame ? requestAnimationFrame(done) : setTimeout(done, delay);
       signal.addEventListener("abort", abort, { once: true });
-    });
+    }));
   }
 
   function setReaderPhase(phase) {

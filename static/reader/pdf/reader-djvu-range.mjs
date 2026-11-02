@@ -1,6 +1,9 @@
 // Bounded, identity-pinned byte ranges for a single immutable DjVu source.
 // A full-download fallback is legal only when the *first* request explicitly
 // ignores Range. Bad/mismatched responses never become image data.
+/** @param {{url?: string, signal?: AbortSignal, fetchResponse?: typeof fetch,
+ * readBytes?: (response: Response, limit: number) => Promise<Uint8Array>, windowBytes?: number,
+ * maxCacheBytes?: number, maxDocumentBytes?: number, timeoutMs?: number, retries?: number}} options */
 export async function openDjvuRange({url, signal, fetchResponse = fetch,
   readBytes = (response, limit) => VoiceOfMLReaderSecurity.readBytes(response, limit),
   windowBytes = 1024 * 1024, maxCacheBytes = 4 * 1024 * 1024,

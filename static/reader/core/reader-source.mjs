@@ -188,7 +188,7 @@ export function createReaderSource(readerContext) {
     readerContext.readerPath.hidden = !value;
     readerContext.readerPath.disabled = !readerContext.folderNavigationTarget;
     readerContext.readerPath.setAttribute("aria-label", `筛选文件夹：${value}`);
-    const panelPath = document.querySelector("#reader-panel-path");
+    const panelPath = /** @type {HTMLButtonElement | null} */ (document.querySelector("#reader-panel-path"));
     if (panelPath) {
       const folderLabel = value || "不可用";
       panelPath.querySelector(".reader-panel-folder").textContent = `所在目录：${folderLabel}`;

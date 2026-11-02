@@ -174,7 +174,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     // Rendering and search share extraction, but retain their own cancellation
     // and result ownership. Only active work lives here, not another text cache.
     const request = { demanded: generation === null, generation, page };
-    const task = Promise.resolve().then(async () => {
+    const task = Object.assign(Promise.resolve().then(async () => {
       const background = await readerContext.acquirePdfTextSlot(request.demanded, request);
       try {
         readerContext.assertReaderActive();
@@ -189,8 +189,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     })
       .finally(() => {
         if (readerContext.pdfTextContentPromises.get(page) === task) readerContext.pdfTextContentPromises.delete(page);
-      });
-    task.request = request;
+      }), { request });
     readerContext.pdfTextContentPromises.set(page, task);
     return task;
   }
@@ -335,7 +334,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT), runs = [];
     let raw = "";
     while (walker.nextNode()) {
-      const node = walker.currentNode, start = raw.length;
+      const node = /** @type {Text} */ (walker.currentNode), start = raw.length;
       raw += node.data;
       runs.push({ node, start, end: raw.length });
     }
