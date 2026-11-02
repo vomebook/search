@@ -56,6 +56,34 @@ for (const bookPath of [vectors.reportedBook.path, vectors.reportedBook.path.spl
 }
 assert.notStrictEqual(assets.shortSourceId(idPrefix + 'a%2Fb.pdf'), assets.shortSourceId(idPrefix + 'a/b.pdf'))
 assert.notStrictEqual(assets.shortSourceId(idPrefix + 'a%2528.pdf'), assets.shortSourceId(idPrefix + 'a%28.pdf'))
+// Compare the 32-bit-limb implementation to the original BigInt operation.
+// IDs are persistent reader/history/OCR keys and must be byte-for-byte stable.
+function legacyId(value) {
+  let hash = 1469598103934665603n
+  for (const byte of new TextEncoder().encode(assets.canonicalSourceUrl(value))) {
+    hash ^= BigInt(byte)
+    hash = BigInt.asUintN(64, hash * 1099511628211n)
+  }
+  return hash.toString(36).padStart(13, '0')
+}
+let seed = 0x01234567
+const alphabet = [...'abcXYZ0123/%?&# +\\.()!-_~', '文', '😀', '𠀀', '\u0000', '\ud800', '\udc00']
+for (let n = 0; n < 6000; n++) {
+  seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+  const length = seed % 120
+  let suffix = ''
+  for (let i = 0; i < length; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+    suffix += alphabet[seed % alphabet.length]
+  }
+  const input = n % 2 ? idPrefix + suffix : suffix
+  let expected
+  try { expected = legacyId(input) } catch (error) {
+    assert.throws(() => assets.shortSourceId(input), {name: error.name}, `source error mismatch at ${n}`)
+    continue
+  }
+  assert.strictEqual(assets.shortSourceId(input), expected, `source ID mismatch at ${n}`)
+}
 for (const [record, expected] of vectors.ocr) {
   const relative = [...record.Folder, record.File + (record.Extension ? '.' + record.Extension : '')].join('/')
   assert.strictEqual(assets.txtRelativePath(relative), expected)
