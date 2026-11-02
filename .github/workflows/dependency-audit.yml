@@ -1,0 +1,50 @@
+name: Dependency Audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 3 * * *"
+  push:
+    branches: ["main"]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "requirements*.txt"
+      - ".github/workflows/dependency-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  npm-pages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26.11.1"
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm audit --audit-level=moderate
+
+  huggingface:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Hugging Face Search Space
+        run: |
+          git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
+          git -C huggingface-search rev-parse HEAD
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.17"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26.11.1"
+      - name: Audit pinned tooling and Python runtime dependencies
+        working-directory: huggingface-search
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit --audit-level=moderate
+          python -m pip install -r requirements-audit.txt
+          python -m pip_audit -r requirements.txt --progress-spinner off
