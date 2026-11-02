@@ -558,9 +558,9 @@ function handleReaderMessage(event) {
   }
   if (message.type !== "voice-reader-navigate") return;
   try {
-    var target = new URL(message.url, location.origin);
-    if (target.origin !== location.origin || target.pathname !== "/search/") return;
-    var mergedTarget = readerNavigation.mergeSearchParams(target, currentReaderSearchParams(), {
+    const navigationTarget = new URL(message.url, location.origin);
+    if (navigationTarget.origin !== location.origin || navigationTarget.pathname !== "/search/") return;
+    var mergedTarget = readerNavigation.mergeSearchParams(navigationTarget, currentReaderSearchParams(), {
       hashRoute: true,
       keys: READER_RETURN_SEARCH_KEYS
     });

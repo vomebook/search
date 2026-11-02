@@ -22,8 +22,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26.11.1'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11.17'
+      - name: Install pinned static checkers
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python -m pip install -r requirements-static-check.txt
+      - name: Check JavaScript, HTML, CSS and selected JavaScript types
+        run: npm run check:static
+      - name: Check all own Python source and tests
+        run: python -B scripts/check_python_static.py
+      - name: Verify static gates catch injected errors
+        run: python -B -m unittest -v tests.test_static_checks
   # Single deploy job since we're just deploying
   deploy:
+    needs: source-checks
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

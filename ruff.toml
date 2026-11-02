@@ -1,0 +1,10 @@
+target-version = "py311"
+extend-exclude = ["static/vendor", "static/foliate-reader"]
+
+[lint]
+select = ["F", "E9"]
+# Legacy browser tests contain unused imports and sometimes keep handles alive
+# for asynchronous work. Production/build code retains these checks.
+
+[lint.per-file-ignores]
+"tests/**/*.py" = ["F401", "F841"]
