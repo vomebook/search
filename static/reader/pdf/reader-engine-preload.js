@@ -2,7 +2,7 @@
   "use strict";
   const params = new URLSearchParams(location.search);
   let pdf = params.get("ext")?.toLowerCase() === "pdf";
-  try { pdf ||= new URL(params.get("url")).pathname.toLowerCase().endsWith(".pdf"); } catch (_) {}
+  try { pdf ||= new URL(params.get("url") ?? "").pathname.toLowerCase().endsWith(".pdf"); } catch (_) {}
   const script = /** @type {HTMLScriptElement} */ (document.currentScript);
   const base = new URL("../../", script.src).href;
   const extension = pdf ? "pdf" : (params.get("ext") || "").toLowerCase();
