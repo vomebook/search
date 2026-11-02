@@ -75,7 +75,7 @@ async function main() {
   await relative.preload.manifest;
 
   const image = loadPreload({ chunks: [Buffer.from("ok")], saveData: false });
-  image.sandbox.VoiceOfMLReader = { pdfPageSource() {}, txtRelativePath() {} };
+  image.sandbox.VoiceOfMLReader = { pdfPageSource() {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/core/reader-contract.js"), "utf8"), image.sandbox);
   assert.strictEqual(typeof image.sandbox.VoiceOfMLReader.assetFields, "function");
   assert.strictEqual(image.sandbox.__VOICE_PDF_PRELOAD__, image.preload);

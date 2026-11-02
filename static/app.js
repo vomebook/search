@@ -390,10 +390,6 @@ function cacheReaderMetadata(id, data, source = false) {
 function getReaderLink(rec, returnUrl, cacheMetadata = true) {
   returnUrl = returnUrl || location.href;
   const readerRecord = Object.assign({}, rec, { Link: getRecordLink(rec), ReturnUrl: returnUrl, FolderUrl: getReaderFolderUrl(rec) });
-  if (rec.HasTxt && String(rec.Extension || "").toLowerCase() !== "txt") {
-    const relPath = buildRecordRelativePath(rec);
-    readerRecord.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(relPath));
-  }
   var readerUrl = VoiceOfMLReader.readerUrl(readerRecord, "/search/static/reader.html");
   if (cacheMetadata) try { var readerId = new URL(readerUrl, location.origin).searchParams.get("id"); if (readerId) { var sourceData = { url: readerRecord.ReaderLink || readerRecord.Link, download: readerRecord.Link, title: readerRecord.File, filename: String(readerRecord.File || "") + (readerRecord.Extension ? "." + readerRecord.Extension : ""), extension: readerRecord.ReaderExtension || readerRecord.Extension, original_extension: readerRecord.Extension, repo: String(readerRecord.Repo || "").split("/").pop(), folder: readerRecord.Folder, chapter_manifest: readerRecord.ReaderChapterManifest || "", pdf_document: readerRecord.ReaderPdfDocument || "" }; cacheReaderMetadata(readerId, sourceData, true); } } catch (_) {}
   return readerUrl;
@@ -5214,9 +5210,6 @@ function getBrowserReaderUrl(file, repo, path) {
   const link = getBrowserFileLink(repo, path || "", file);
   const assetPath = path ? path + "/" + name : name;
   let record = { File: file.name, Extension: file.ext, Link: link };
-  if (file.hasTxt && String(file.ext || "").toLowerCase() !== "txt") {
-    record.OcrUrl = API_BASE + "/txt/" + encodeRecordPath(VoiceOfMLReader.txtRelativePath(assetPath));
-  }
   record = applyReaderAsset(record, repo, assetPath, link);
   return VoiceOfMLReader.readerUrl(record, "/search/static/reader.html");
 }
