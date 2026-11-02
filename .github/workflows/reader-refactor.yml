@@ -45,6 +45,7 @@ jobs:
         run: |
           node tests/test_reader_architecture.js
           node tests/test_reader_regression.js
+          node scripts/check_adapter_coverage.mjs
           node tests/test_reader_preload.js
           node tests/test_reader_chapter_search.mjs
           node tests/test_reader_image_loader.mjs
@@ -232,6 +233,7 @@ jobs:
           node tests/test_reader_heading_cache.js
           node tests/test_reader_engine_preload.js
           node tests/test_reader_regression.js
+          node scripts/check_adapter_coverage.mjs
           node tests/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
         working-directory: huggingface-search
