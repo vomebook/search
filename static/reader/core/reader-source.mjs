@@ -123,7 +123,7 @@ export function createReaderSource(readerContext) {
     // Prefer the exact original name when metadata supplies it. The display
     // title can omit a repeated suffix or normalize meaningful whitespace.
     const displayName = readerOriginalFilename(value);
-    const heading = document.querySelector("#title");
+    const heading = /** @type {HTMLElement} */ (document.querySelector("#title"));
     if (heading.textContent !== displayName) {
       heading.textContent = displayName;
       heading.scrollLeft = 0;

@@ -137,7 +137,7 @@ self.onmessage = async ({ data }) => {
               pixels.byteLength!==width*height*4) throw new Error('DJVU_PAGE_DECODE_INVALID');
           const buffer=pixels.buffer;
           pixmap.free();pixmap=null;
-          self.postMessage({id,ok:true,width,height,dpi,rotation,pixels:buffer},[buffer]);
+          /** @type {{postMessage(message: unknown, transfer: Transferable[]): void}} */ (/** @type {unknown} */ (self)).postMessage({id,ok:true,width,height,dpi,rotation,pixels:buffer},[buffer]);
         } finally { pixmap?.free(); }
         return;
       }
@@ -158,7 +158,7 @@ self.onmessage = async ({ data }) => {
       } finally { page.free(); document.reader_trim_cache(cacheBudget); }
       // Do not publish success before cache cleanup: a cleanup failure must not
       // produce a second, contradictory response for the same operation.
-      self.postMessage(result, [result.pixels]);
+      /** @type {{postMessage(message: unknown, transfer: Transferable[]): void}} */ (/** @type {unknown} */ (self)).postMessage(result, [result.pixels]);
       return;
     }
     if (operation === 'outline') {

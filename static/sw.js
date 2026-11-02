@@ -1,3 +1,4 @@
+const readerWorkerScope = /** @type {ServiceWorkerGlobalScope} */ (/** @type {unknown} */ (self));
 importScripts("/search/static/reader-resources.js");
 const CACHE_NAME = "vomebook-search-v1.0.0";
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
@@ -72,23 +73,23 @@ const PRECACHE_URLS = [
 ];
 const READER_RUNTIME_PATHS = new Set(VoiceOfMLReaderResources.runtimePaths("/search/static/"));
 
-self.addEventListener("install", (event) => {
+readerWorkerScope.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(PRECACHE_URLS.map(revalidatedRequest));
-    }).then(() => self.skipWaiting())
+    }).then(() => readerWorkerScope.skipWaiting())
   );
 });
-self.addEventListener("activate", (event) => {
+readerWorkerScope.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
       );
-    }).then(() => caches.open(CACHE_NAME).then(cache => pruneHashedAssets(cache, true, true)).catch(() => {})).then(() => self.clients.claim())
+    }).then(() => caches.open(CACHE_NAME).then(cache => pruneHashedAssets(cache, true, true)).catch(() => {})).then(() => readerWorkerScope.clients.claim())
   );
 });
-self.addEventListener("fetch", (event) => {
+readerWorkerScope.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.hostname !== self.location.hostname || (event.request.method || "GET") !== "GET") {
     return;
