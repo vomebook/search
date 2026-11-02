@@ -16,6 +16,7 @@
     "static/search/search-session.js",
     "static/reader/pdf/reader-engine-preload.js",
     "static/reader/formats/reader-chapter-repository.js",
+    "static/reader/formats/reader-section-virtualizer.js",
     "typings/reader-globals.d.ts"
   ]
 }
