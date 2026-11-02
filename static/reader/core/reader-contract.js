@@ -486,16 +486,21 @@
   function canonicalSourceUrl(value) {
     // Normalize path bytes, not decoded URLs: %2F must remain distinct from /,
     // and %2528 must never become %28. Query/fragment delimiters stay intact.
-    return value.replace(/^(https:\/\/huggingface\.co\/datasets\/VoiceOfML\/)([^?#]*)/, (_, prefix, path) =>
-      prefix + path.replace(/%[0-9a-fA-F]{2}|[^A-Za-z0-9._~/-]/gu, (token) => {
+    return value.replace(/^(https:\/\/huggingface\.co\/datasets\/VoiceOfML\/)([^?#]*)/, (_, prefix, path) => {
+      // Canonical paths need no per-escape replacement. A lowercase/invalid
+      // escape, percent-encoded unreserved byte, or raw unsafe character must
+      // still take the established normalization and URI-error path below.
+      if (!/%(?![0-9A-F]{2})|%(?:2[DE]|3[0-9]|4[1-9A-F]|5[0-9AF]|6[1-9A-F]|7[0-9AE])|[^A-Za-z0-9._~/%-]/.test(path))
+        return prefix + path;
+      return prefix + path.replace(/%[0-9a-fA-F]{2}|[^A-Za-z0-9._~/-]/gu, (token) => {
         if (/^%[0-9a-f]{2}$/i.test(token)) {
           const char = String.fromCharCode(parseInt(token.slice(1), 16));
           return /^[A-Za-z0-9._~-]$/.test(char) ? char : token.toUpperCase();
         }
         return encodeURIComponent(token).replace(/[!'()*]/g, (char) =>
           "%" + char.charCodeAt(0).toString(16).toUpperCase());
-      })
-    );
+      });
+    });
   }
   const FNV32_MASK = 0xffffffffn;
   function shortSourceId(value) {
