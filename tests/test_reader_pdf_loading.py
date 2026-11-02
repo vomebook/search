@@ -88,18 +88,22 @@ class PdfLoadingTests(unittest.TestCase):
     def test_original_download_name_survives_title_change_and_button_handoff(self):
         source='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/Sample%20.PDF'
         checks=[]
+        self.page.on('request',lambda request:checks.append(request.url) if '/api/download?' in request.url else None)
         self.page.route('**/api/reader-resolve?id=filename-click',lambda route:route.fulfill(json={
             'url':source,'download':source,'extension':'txt','original_extension':'pdf',
             'title':'Sample ','filename':'Sample .PDF'}))
         self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/plain',body='safe'))
         self.page.route('**/api/download/check?**',lambda route:route.fulfill(json={'ok':True}))
-        self.page.route('**/api/download?**',lambda route:(checks.append(route.request.url),route.fulfill(body='file')))
+        self.page.route('**/api/download?**',lambda route:route.fulfill(body='file'))
         self.page.goto(self.origin+'/search/static/reader.html?id=filename-click&ext=txt',wait_until='domcontentloaded')
         self.page.locator('.reader-text').wait_for()
-        self.page.locator('#download').click()
-        self.page.wait_for_function("()=>document.querySelector('#download-feedback')?.textContent.includes('已发起下载')")
-        self.assertEqual(len(checks),1)
-        query=urllib.parse.parse_qs(urllib.parse.urlsplit(checks[0]).query)
+        # The UI reports that the iframe was appended, not that its request
+        # has reached Playwright. Await both independent observable events.
+        with self.page.expect_request('**/api/download?**') as requested:
+            self.page.locator('#download').click()
+            self.page.wait_for_function("()=>document.querySelector('#download-feedback')?.textContent.includes('已发起下载')")
+        self.assertEqual(checks,[requested.value.url])
+        query=urllib.parse.parse_qs(urllib.parse.urlsplit(requested.value.url).query)
         self.assertEqual(query['file'],['Sample .PDF'])
         self.assertEqual(query['link'],[source])
 
