@@ -42,6 +42,19 @@
     let background = [];
     let opening = null;
     let releaseOpening = null;
+    // The outer search document owns the browser tab. Only the active Reader
+    // may change its title; restore it on dismiss, including parked speech.
+    let searchTitle = null;
+    let titleDismissed = false;
+    function restoreTitle() {
+      if (searchTitle !== null) document.title = searchTitle;
+      searchTitle = null;
+    }
+    function showTitle(target, title) {
+      if (frame !== target || titleDismissed || typeof title !== "string" || !title.trim()) return;
+      target.title = title;
+      document.title = title;
+    }
     // A Reader closed while reading aloud stays alive, hidden, with a small
     // player on the search page; reopening the same book reuses it.
     let parked = null;
@@ -237,6 +250,9 @@
         const { frame: kept } = releaseParked();
         returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         frame = kept;
+        searchTitle = document.title;
+        titleDismissed = false;
+        try { showTitle(kept, kept.contentDocument?.title); } catch (_) {}
         kept.classList.remove("reader-overlay-parked");
         kept.style.removeProperty("opacity");
         kept.style.removeProperty("pointer-events");
@@ -253,6 +269,8 @@
       // the new Reader starts its own reading or the listener stops it.
       if (frame) unmount(true);
       if (parked && !speech(parked.frame)?.active) disposeParked();
+      searchTitle = document.title;
+      titleDismissed = false;
       const next = document.createElement("iframe");
       next.className = "reader-overlay";
       next.title = "在线阅读";
@@ -303,6 +321,8 @@
     function dismiss() {
       // Visually return immediately; history and resource cleanup still own
       // the actual close, including the stalled-history fallback.
+      titleDismissed = true;
+      restoreTitle();
       for (const target of [frame, opening]) if (target) {
         target.style.setProperty("opacity", "0", "important");
         target.style.setProperty("pointer-events", "none", "important");
@@ -311,6 +331,8 @@
     // `keepSpeech` parks a Reader that is reading aloud instead of disposing it.
     function unmount(keepSpeech = true) {
       if (!frame) return null;
+      titleDismissed = true;
+      restoreTitle();
       if (keepSpeech && opening === null && speech(frame)?.active) park(frame);
       else dispose(frame);
       frame = null;
@@ -396,6 +418,9 @@
       if (!accepts(event) || event.data?.type !== "voice-reader-speech-start") return;
       const background = parked?.frame;
       if (background && event.source !== background.contentWindow) disposeParked();
+    });
+    root.addEventListener?.("message", (event) => {
+      if (accepts(event) && event.data?.type === "voice-reader-title") showTitle(frame, event.data.title);
     });
     return Object.freeze({
       parse,

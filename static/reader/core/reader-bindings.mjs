@@ -358,8 +358,7 @@ export function createReaderBindings(readerContext) {
     readerContext.applyReaderTheme(readerContext.readerTheme, false, false);
 
     readerContext.readerPath.addEventListener("click", readerContext.navigateReaderFolder);
-    const info = document.querySelector("#reader-panel-location");
-    info.querySelector(".reader-panel-filename").addEventListener("keydown", (event) => {
+    document.querySelector("#title").addEventListener("keydown", (event) => {
       const amount = event.currentTarget.clientWidth * 0.8;
       if (event.currentTarget.scrollWidth <= event.currentTarget.clientWidth) return;
       if (event.key === "ArrowRight") event.currentTarget.scrollLeft += amount;
@@ -368,11 +367,6 @@ export function createReaderBindings(readerContext) {
       else if (event.key === "End") event.currentTarget.scrollLeft = event.currentTarget.scrollWidth;
       else return;
       event.preventDefault();
-    });
-    document.querySelector("#reader-location-toggle").addEventListener("click", (event) => {
-      const open = info.hidden;
-      info.hidden = !open;
-      event.currentTarget.setAttribute("aria-expanded", String(open));
     });
     document.querySelector("#reader-panel-path")?.addEventListener("click", readerContext.navigateReaderFolder);
     let closing = false;

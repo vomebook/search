@@ -292,7 +292,6 @@ class ReaderStyleTests(unittest.TestCase):
                 gaps: boxes.slice(1).map((rect, index) => rect.left - boxes[index].right), overflow: header.scrollWidth > header.clientWidth};
             }''')
             expected=['full-search-toggle', 'page-invert-toggle', 'theme-toggle', 'history-close']
-            if width <= 600: expected.insert(0,'reader-location-toggle')
             self.assertEqual(metrics['ids'], expected)
             self.assertTrue(metrics['fits'], metrics)
             self.assertFalse(metrics['overflow'], metrics)
@@ -408,7 +407,7 @@ class ReaderStyleTests(unittest.TestCase):
                             minHeight: parseFloat(style.minHeight), padding: style.padding,
                             video: content.firstChild?.getBoundingClientRect().height};
                     }""", mode)
-                    expected_toolbar = 36 if width <= 600 else 44
+                    expected_toolbar = 65 if width <= 600 else 44
                     self.assertEqual(metrics["toolbar"], expected_toolbar)
                     self.assertAlmostEqual(metrics["height"], height - expected_toolbar, delta=1)
                     self.assertEqual(metrics["padding"], "0px")
@@ -417,20 +416,19 @@ class ReaderStyleTests(unittest.TestCase):
                     else:
                         self.assertAlmostEqual(metrics["video"], height - expected_toolbar, delta=1)
 
-    def test_mobile_folder_action_lives_in_options_without_expanding_toolbar(self):
+    def test_mobile_folder_action_and_title_follow_breakpoint(self):
         self.page.emulate_media(reduced_motion='reduce')
         for width, height in ((320, 568), (390, 844), (600, 500), (601, 500)):
             with self.subTest(width=width, height=height):
                 self.page.set_viewport_size({'width': width, 'height': height})
-                self.assertEqual(self.page.locator('.reader-toolbar').bounding_box()['height'], 36 if width <= 600 else 44)
+                self.assertEqual(self.page.locator('.reader-toolbar').bounding_box()['height'], 65 if width <= 600 else 44)
                 self.assertEqual(self.page.locator('#reader-path').is_visible(), width > 600)
+                self.assertTrue(self.page.locator('#title').is_visible())
                 self.page.locator('#history').click()
-                self.page.wait_for_function("document.querySelector('#history').getAttribute('aria-expanded') === 'true'")
-                toggle=self.page.locator('#reader-location-toggle')
+                self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded') === 'true'")
                 info=self.page.locator('#reader-panel-location')
-                self.assertEqual(toggle.is_visible(), width <= 600)
-                self.assertTrue(info.is_hidden())
-                self.assertEqual(toggle.get_attribute('aria-expanded'),'false')
+                self.assertEqual(self.page.locator('#reader-location-toggle').count(), 0)
+                self.assertEqual(info.is_visible(), width <= 600)
                 if width <= 600:
                     header=self.page.locator('#history-panel > header')
                     self.page.evaluate("()=>document.querySelector('#page-invert-toggle').hidden=false")
@@ -440,21 +438,48 @@ class ReaderStyleTests(unittest.TestCase):
                         boxes=[buttons.nth(i).bounding_box() for i in range(buttons.count())]
                         self.assertTrue(all(boxes[i]['x']+boxes[i]['width']<=boxes[i+1]['x']+.5 for i in range(len(boxes)-1)),boxes)
                         self.assertLessEqual(boxes[-1]['x']+boxes[-1]['width'],width)
-                    toggle.click()
-                    self.assertTrue(info.is_visible())
-                    self.assertEqual(toggle.get_attribute('aria-expanded'),'true')
                 self.page.locator('#history-close').click()
-                self.page.wait_for_function("document.querySelector('#history').getAttribute('aria-expanded') === 'false'")
+                self.page.wait_for_function("()=>document.querySelector('#history').getAttribute('aria-expanded') === 'false'")
                 self.assertTrue(info.is_hidden())
-                self.assertEqual(toggle.get_attribute('aria-expanded'),'false')
                 self.page.evaluate("()=>document.querySelector('#page-invert-toggle').hidden=true")
+
+    def test_mobile_title_and_controls_fit_all_formats(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.evaluate("""()=>{
+          document.querySelector('#title').textContent='标题很长的书名'.repeat(15);
+          const tools=document.querySelector('.reader-actions');
+          const ocr=document.createElement('a');ocr.id='ocr';ocr.className='text-button';ocr.textContent='OCR';tools.prepend(ocr);
+          if (!tools.querySelector('.preview-speech-btn')) {
+            const speech=document.createElement('button');speech.className='icon-button preview-speech-btn';tools.prepend(speech);
+          }
+        }""")
+        for width in (320, 390, 600):
+            self.page.set_viewport_size({'width':width, 'height':700})
+            for pagination, zoom in ((False, False), (False, True), (True, True)):
+                with self.subTest(width=width, pagination=pagination, zoom=zoom):
+                    self.page.evaluate('''([pagination, zoom])=>{
+                      document.querySelector('.page-controls').hidden=!pagination;
+                      document.querySelector('.zoom-controls').hidden=!zoom;
+                    }''', [pagination, zoom])
+                    boxes=self.page.evaluate('''()=>{
+                      const toolbar=document.querySelector('.reader-toolbar').getBoundingClientRect();
+                      return [...document.querySelectorAll('#back,#title,#history,.reader-actions button:not([hidden]),.reader-actions input,#download,#ocr')]
+                        .filter(n=>n.getClientRects().length).map(n=>{const r=n.getBoundingClientRect();
+                        return {id:n.id,left:r.left,right:r.right,top:r.top,bottom:r.bottom,
+                          inside:r.left>=toolbar.left&&r.right<=toolbar.right&&r.top>=toolbar.top&&r.bottom<=toolbar.bottom};});
+                    }''')
+                    self.assertTrue(all(box['inside'] for box in boxes), boxes)
+                    for i, a in enumerate(boxes):
+                        for b in boxes[i+1:]:
+                            overlap=min(a['right'], b['right'])-max(a['left'], b['left'])
+                            vertical=min(a['bottom'], b['bottom'])-max(a['top'], b['top'])
+                            self.assertFalse(overlap > 0.5 and vertical > 0.5, (a, b))
 
     def test_mobile_folder_action_has_contrast_and_stays_out_of_header(self):
         self.page.set_viewport_size({'width': 320, 'height': 568})
         self.page.emulate_media(reduced_motion='reduce')
         self.page.evaluate("()=>document.querySelector('.reader-panel-folder').textContent='所在目录：Test/一个非常长的目录/子目录/文件所在位置'")
         self.page.locator('#history').click()
-        self.page.locator('#reader-location-toggle').click()
         action = self.page.locator('#reader-panel-path')
         action.wait_for(state='visible')
         for theme in ('dark', 'light'):
@@ -475,23 +500,21 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.set_viewport_size({'width':320,'height':568})
         self.page.emulate_media(reduced_motion='reduce')
         self.page.locator('#history').click()
-        toggle=self.page.get_by_role('button',name='文件信息',exact=True)
-        toggle.press('Enter')
-        self.assertEqual(toggle.get_attribute('aria-controls'),'reader-panel-location')
-        self.assertEqual(toggle.get_attribute('aria-expanded'),'true')
+        self.assertEqual(self.page.get_by_role('button',name='文件信息',exact=True).count(), 0)
         self.assertTrue(self.page.locator('#reader-panel-path').is_disabled())
-        self.assertTrue(self.page.locator('.reader-panel-filename').is_visible())
+        self.assertTrue(self.page.locator('#title').is_visible())
+        self.assertTrue(self.page.locator('#reader-panel-location').is_visible())
         self.page.locator('#history-tab').click()
         self.assertTrue(self.page.locator('#reader-panel-location').is_visible())
-        toggle.press('Enter')
+        self.page.locator('#history-close').click()
+        self.page.wait_for_function("()=>document.querySelector('#history-panel').hidden")
         self.assertTrue(self.page.locator('#reader-panel-location').is_hidden())
-        self.assertEqual(toggle.get_attribute('aria-expanded'),'false')
-        self.assertEqual(self.page.locator('#history-tab').get_attribute('aria-selected'),'true')
+        self.page.locator('#history').click()
+        self.assertTrue(self.page.locator('#reader-panel-location').is_visible())
 
     def test_mobile_panel_is_compact_and_folder_scrolls_with_directory(self):
         self.page.emulate_media(reduced_motion='reduce')
         self.page.evaluate('''()=>{
-          document.querySelector('.reader-panel-filename').textContent='文件：original.pdf';
           document.querySelector('.reader-panel-folder').textContent='所在目录：Test/docs';
           document.querySelector('#toc-list').innerHTML=Array.from({length:40},(_,i)=>
             `<div class="panel-item toc-item"><div class="panel-item-main">目录第${i+1}项</div></div>`).join('');
@@ -501,9 +524,8 @@ class ReaderStyleTests(unittest.TestCase):
             with self.subTest(width=width):
                 self.page.set_viewport_size({'width':width,'height':700})
                 self.page.locator('#history').click()
-                toggle=self.page.locator('#reader-location-toggle')
                 info=self.page.locator('#reader-panel-location')
-                self.assertTrue(info.is_hidden())
+                self.assertTrue(info.is_visible())
                 self.page.evaluate('''()=>{if(!document.querySelector('#history-list .panel-item-main'))
                   document.querySelector('#history-list').innerHTML='<div class="panel-item"><button class="panel-item-main">历史</button></div>'}''')
                 metrics=self.page.evaluate('''()=>{const panel=document.querySelector('#history-panel'),
@@ -519,26 +541,25 @@ class ReaderStyleTests(unittest.TestCase):
                 self.assertLessEqual(metrics['rowHeight'],40)
                 for tab in ('bookmarks-tab','history-tab'):
                     self.page.locator('#'+tab).click()
-                    toggle.click()
                     self.assertTrue(info.is_visible(),tab)
-                    self.assertEqual(toggle.get_attribute('aria-expanded'),'true')
                     self.assertEqual(self.page.locator('#'+tab).get_attribute('aria-selected'),'true')
-                    toggle.click()
-                    self.assertTrue(info.is_hidden())
-                toggle.click()
                 self.page.locator('#history-close').click()
+                self.page.wait_for_function("()=>document.querySelector('#history-panel').hidden")
                 self.assertTrue(info.is_hidden())
 
     def test_mobile_long_filename_scrolls_without_expanding_or_hiding_folder(self):
         self.page.set_viewport_size({'width':320,'height':700})
         self.page.emulate_media(reduced_motion='reduce')
-        self.page.evaluate("()=>document.querySelector('.reader-panel-filename').textContent='文件：'+('很长的文件名称'.repeat(15))+'.pdf'")
+        self.assertIn('Style.txt', self.page.locator('#title').get_attribute('aria-label'))
+        self.page.evaluate("()=>document.querySelector('#title').textContent=('很长的文件名称'.repeat(15))+'.pdf'")
         self.page.locator('#history').click()
-        self.page.locator('#reader-location-toggle').click()
-        name=self.page.locator('.reader-panel-filename')
+        name=self.page.locator('#title')
         self.assertTrue(name.evaluate('n=>n.scrollWidth>n.clientWidth'))
         before=name.bounding_box()['height']
         name.focus()
+        self.page.keyboard.press('Tab')
+        name.focus()
+        self.assertEqual(name.evaluate('n=>getComputedStyle(n).outlineStyle'),'solid')
         name.press('End')
         self.assertGreater(name.evaluate('n=>n.scrollLeft'),0)
         self.assertEqual(name.evaluate('n=>getComputedStyle(n).whiteSpace'),'nowrap')
@@ -554,10 +575,9 @@ class ReaderStyleTests(unittest.TestCase):
             source=urllib.parse.quote('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/touch.txt',safe='')
             page.goto(f'{self.origin}/search/static/reader.html?url={source}&ext=txt&title=Touch')
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
-            page.evaluate("()=>document.querySelector('.reader-panel-filename').textContent='文件：'+('非常长的文件名称'.repeat(20))+'.pdf'")
+            page.evaluate("()=>document.querySelector('#title').textContent=('非常长的文件名称'.repeat(20))+'.pdf'")
             page.locator('#history').click()
-            page.locator('#reader-location-toggle').click()
-            name=page.locator('.reader-panel-filename')
+            name=page.locator('#title')
             box=name.bounding_box()
             session=context.new_cdp_session(page)
             x,y=box['x']+box['width']-20,box['y']+box['height']/2
@@ -566,9 +586,9 @@ class ReaderStyleTests(unittest.TestCase):
                 session.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':x-delta,'y':y}]})
                 page.wait_for_timeout(25)
             session.send('Input.dispatchTouchEvent',{'type':'touchEnd','touchPoints':[]})
-            page.wait_for_function("()=>document.querySelector('.reader-panel-filename').scrollLeft>0")
+            page.wait_for_function("()=>document.querySelector('#title').scrollLeft>0")
             self.assertTrue(page.locator('#reader-panel-path').is_visible())
-            self.assertEqual(page.locator('#reader-location-toggle').get_attribute('aria-expanded'),'true')
+            self.assertTrue(page.locator('#reader-panel-location').is_visible())
         finally:
             context.close()
 
@@ -576,21 +596,20 @@ class ReaderStyleTests(unittest.TestCase):
         self.page.set_viewport_size({'width':390,'height':700})
         self.page.emulate_media(reduced_motion='reduce')
         self.page.locator('#history').click()
-        self.page.locator('#reader-location-toggle').click()
-        name=self.page.locator('.reader-panel-filename')
-        self.page.evaluate("()=>document.querySelector('.reader-panel-filename').textContent='文件：短文.txt'")
-        self.page.wait_for_function("()=>document.querySelector('.reader-panel-filename').scrollWidth===document.querySelector('.reader-panel-filename').clientWidth")
+        name=self.page.locator('#title')
+        self.page.evaluate("()=>document.querySelector('#title').textContent='短文.txt'")
+        self.page.wait_for_function("()=>document.querySelector('#title').scrollWidth===document.querySelector('#title').clientWidth")
         self.assertEqual(name.evaluate('n=>getComputedStyle(n).display'),'block')
         self.assertEqual(name.evaluate('n=>n.scrollWidth'),name.evaluate('n=>n.clientWidth'))
-        self.assertEqual(self.page.locator('.reader-panel-file summary').count(),0)
-        self.page.evaluate("()=>document.querySelector('.reader-panel-filename').textContent='文件：'+('很长的文件名称'.repeat(15))+'.pdf'")
+        self.assertEqual(self.page.locator('.reader-panel-filename').count(),0)
+        self.page.evaluate("()=>document.querySelector('#title').textContent=('很长的文件名称'.repeat(15))+'.pdf'")
         self.assertGreater(name.evaluate('n=>n.scrollWidth'),name.evaluate('n=>n.clientWidth'))
-        self.page.evaluate("()=>document.querySelector('.reader-panel-filename').textContent='文件：'+('宽度测试'.repeat(7))+'.pdf'")
-        self.page.wait_for_function("()=>document.querySelector('.reader-panel-filename').scrollWidth>document.querySelector('.reader-panel-filename').clientWidth")
+        self.page.evaluate("()=>document.querySelector('#title').textContent=('宽度测试'.repeat(7))+'.pdf'")
+        self.page.wait_for_function("()=>document.querySelector('#title').scrollWidth>document.querySelector('#title').clientWidth")
         self.page.set_viewport_size({'width':600,'height':700})
-        self.page.wait_for_function("()=>document.querySelector('.reader-panel-filename').scrollWidth===document.querySelector('.reader-panel-filename').clientWidth")
+        self.page.wait_for_function("()=>document.querySelector('#title').scrollWidth===document.querySelector('#title').clientWidth")
         self.page.set_viewport_size({'width':320,'height':700})
-        self.page.wait_for_function("()=>document.querySelector('.reader-panel-filename').scrollWidth>document.querySelector('.reader-panel-filename').clientWidth")
+        self.page.wait_for_function("()=>document.querySelector('#title').scrollWidth>document.querySelector('#title').clientWidth")
 
     def test_theme_transition_preserves_drawer_and_filter_motion(self):
         self.page.locator("#history").click()

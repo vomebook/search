@@ -23,6 +23,28 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
         self.assertEqual(self.fixture.errors, [])
         self.fixture.tearDown()
 
+    def test_embedded_title_follows_resolved_book_and_browser_history(self):
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/title-test.txt'
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='text/plain', body='readable title test'))
+        original = self.page.title()
+        url = '/search/static/reader.html?' + urlencode(dict(url=source, ext='txt', title='真实书名'))
+        self.page.evaluate('url => navigateToReader(url)', url)
+        frame = self.page.frame_locator('iframe.reader-overlay')
+        frame.locator('html[data-reader-phase="ready"]').wait_for()
+        self.page.wait_for_function("()=>document.title==='真实书名.txt - VoiceOfML Reader'")
+        self.assertEqual(frame.locator('#title').inner_text(), '真实书名.txt')
+        self.assertEqual(frame.locator('body').evaluate('()=>document.title'), self.page.title())
+        self.page.evaluate('history.back()')
+        self.page.locator('iframe.reader-overlay').wait_for(state='detached')
+        self.assertEqual(self.page.title(), original)
+        self.page.evaluate('history.forward()')
+        frame.locator('html[data-reader-phase="ready"]').wait_for()
+        self.page.wait_for_function("()=>document.title==='真实书名.txt - VoiceOfML Reader'")
+        frame.locator('#back').click()
+        self.page.locator('iframe.reader-overlay').wait_for(state='detached')
+        self.assertEqual(self.page.title(), original)
+
     def test_slow_old_write_cannot_delay_close_or_overwrite_last_position(self):
         source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/responsive.txt'
         self.page.route('**/api/reader-content**', lambda route: route.fulfill(
