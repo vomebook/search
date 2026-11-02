@@ -67,7 +67,24 @@ interface ReaderStoreApi {
 declare var VoiceOfMLReaderStore: ReaderStoreApi;
 interface ReaderRequestManagerApi { createReaderRequestManager(options?: object): any }
 interface ReaderRuntimeApi { createReaderRuntime(): any }
-interface ReaderAdaptersApi { createAdapterRegistry(): any }
+interface ReaderFormatAdapter {
+  open(): unknown;
+  render(prepared: unknown): unknown;
+  restore(entry: unknown, generation: number): unknown;
+  dispose(): unknown;
+}
+interface ReaderAdapterRegistry {
+  register(mode: string, adapter: ReaderFormatAdapter): Readonly<ReaderFormatAdapter & { mode: string }>;
+  activate(mode: string): Readonly<ReaderFormatAdapter & { mode: string }>;
+  get(mode: string): Readonly<ReaderFormatAdapter & { mode: string }> | null;
+  dispose(): unknown;
+  readonly active: Readonly<ReaderFormatAdapter & { mode: string }> | null;
+  readonly modes: string[];
+}
+interface ReaderAdaptersApi {
+  readonly METHODS: readonly (keyof ReaderFormatAdapter)[];
+  createAdapterRegistry(): ReaderAdapterRegistry;
+}
 interface ReaderScrollApi { createScrollAnchorManager(options: {viewport: Element; candidates: () => unknown}): any }
 interface ChapterScheduler<T> {
   load(index: number, demand?: boolean, exclusive?: boolean): Promise<T>;
