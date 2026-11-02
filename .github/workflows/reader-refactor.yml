@@ -208,6 +208,7 @@ jobs:
           python -B scripts/check_search_words_mutation.py --module reader_index
           python -B scripts/check_search_words_mutation.py --module upstream_http
           python -B scripts/check_search_words_mutation.py --module search_execution
+          python -B scripts/check_search_words_mutation.py --module record_metadata
       - name: Install browser dependencies
         working-directory: huggingface-search
         run: python -m playwright install --with-deps chromium firefox
