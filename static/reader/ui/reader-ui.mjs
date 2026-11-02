@@ -57,7 +57,7 @@ export function createReaderUi(readerContext) {
 
   function setZoom(percent, persist = true) {
     const anchor = readerContext.foliateScrollAnchors.capture();
-    const pdfAnchor = (["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability.mode) || readerContext.pdfHybridUrl)
+    const pdfAnchor = ["pdf", "pdf-pages", "image-pages"].includes(readerContext.capability.mode)
       ? readerContext.pageAtMarker() : null;
     const pdfBounds = pdfAnchor?.getBoundingClientRect();
     const pdfOffset = pdfBounds ? (readerContext.viewport.getBoundingClientRect().top - pdfBounds.top) / Math.max(1, pdfBounds.height) : 0;

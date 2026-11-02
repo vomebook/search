@@ -15,8 +15,7 @@ globalThis.VoiceOfMLReader = sandbox.VoiceOfMLReader;
 globalThis.location = {href: 'https://vomebook.github.io/search/static/reader.html'};
 Object.defineProperty(globalThis, 'crypto', {configurable: true, value: webcrypto});
 
-const {createV3Repository, isV3Path, validateResource} = await load('pdf/reader-v3.mjs');
-const {createReaderPdfTextRuntime} = await load('pdf/reader-pdf-text-runtime.mjs');
+const {isV3Path, validateResource} = await load('pdf/reader-v3.mjs');
 const {createReaderUi} = await load('ui/reader-ui.mjs');
 const source = 'a'.repeat(64), base = `objects/aa/${source}/` + 'b'.repeat(16);
 const body = new TextEncoder().encode('exact lossless DjVu reading PNG');
@@ -38,38 +37,6 @@ for (const codecs of [['png', 'png'], ['png', 'jxl'], ['png', 'webp'], ['webp', 
 }
 assert.equal(isV3Path(ref('pages/page-000001.png').path), true);
 assert.throws(() => validateResource({...ref('pages/page-000001.png'), bucket: 'vomebook/reader-assets-v2'}, source), /PDF_V3_INVALID/);
-const entry = {page: 1, page_identity: digest, codec: 'png', width: 600, height: 800, resource: ref('pages/page-000001.png')};
-const manifest = {page_map: {sha256: digest}, preview: {partitions: [{start: 1, end: 1, complete: true,
-  resource: ref('preview/partition-000001-000001-manifest.json')}]}};
-const map = {pages: [{identity: digest, width: 600, height: 800, classification: 'bitonal-image'}]};
-const partition = {version: 3, kind: 'pdf-preview-partition', source_sha256: source, page_map_sha256: digest,
-  start: 1, end: 1, pages: [entry]};
-let reads = 0;
-const repository = createV3Repository({sourceSha: source, pageCount: 1, resourceUrl: r =>
-  'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=' + encodeURIComponent(r.path),
-  readJson: async () => partition, readBytes: async (url, actual, signal) => {
-    reads++;assert.equal(actual, entry.resource);assert.equal(new URL(url).searchParams.get('sha256'), digest);
-    assert.equal(new URL(url).searchParams.get('bytes'), String(body.length));return body;
-  }});
-const preview = await repository.preview(manifest, map, 1);
-assert.equal(preview.blob.type, 'image/png');assert.notEqual(preview.progressive, true);assert.equal(reads, 1);
-assert.deepEqual(new Uint8Array(await preview.blob.arrayBuffer()), body);
-entry.resource = ref('pages/page-000002.png');
-await assert.rejects(repository.preview(manifest, map, 1), /PDF_V3_INVALID/);
-repository.dispose();await assert.rejects(repository.preview(manifest, map, 1), {name: 'AbortError'});
-{
-  const reader = {readerAbortController: new AbortController(), validateResource, createV3Repository,
-    readerDownloadApiUrl: value => value,
-    fetchReaderUrl: async () => new Response(new Uint8Array(body.length))};
-  Object.assign(reader, createReaderPdfTextRuntime(reader));
-  // Exercise production transport hashing, not a test-only image checksum.
-  const nativeRead = createV3Repository;
-  let readBytes;
-  reader.createV3Repository = options => {readBytes = options.readBytes;return nativeRead(options);};
-  const invalid = reader.createPdfV3Repository(source, 1);
-  await assert.rejects(readBytes('https://voiceofml-search.hf.space/test', ref('pages/page-000001.png')), /PDF_V3_HASH_MISMATCH/);
-  invalid.dispose();
-}
 for (const mode of ['pdf', 'pdf-pages', 'image-pages']) {
   const anchor = {isConnected: true, getBoundingClientRect: () => ({top: 238, height: 577})};
   const reader = {capability: {mode}, foliateScrollAnchors: {capture: () => null, restore() {}},
@@ -81,4 +48,4 @@ for (const mode of ['pdf', 'pdf-pages', 'image-pages']) {
   Object.assign(reader, createReaderUi(reader));reader.setZoom(110, false);
   assert.equal(reader.viewport.scrollTop, 499, mode + ' retains the short last-page anchor on zoom');
 }
-console.log('Pages historical PNG metadata, checksummed transport, disposal and zoom anchor passed');
+console.log('Pages historical PNG metadata and zoom anchor passed');

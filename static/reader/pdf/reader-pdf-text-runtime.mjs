@@ -13,17 +13,8 @@ export function createReaderPdfTextRuntime(readerContext) {
   function createPdfV3Repository(sourceSha, pageCount) {
     return readerContext.createV3Repository({ sourceSha, pageCount, signal: readerContext.readerAbortController.signal,
       resourceUrl: readerContext.v3ResourceUrl,
-        readJson: (url, ref) => readerContext.readPdfOcrJson(url,
-          VoiceOfMLReaderSecurity.LIMITS.chapterBytes, ref.sha256, ref.bytes),
-       readBytes: async (url, ref, signal) => {
-         const response = await readerContext.fetchReaderUrl(url, signal ? { signal } : {});
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const packed = await VoiceOfMLReaderSecurity.readBytes(response, VoiceOfMLReaderSecurity.LIMITS.chapterBytes);
-        const actual = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
-          .map(value => value.toString(16).padStart(2, "0")).join("");
-        if (packed.byteLength !== ref.bytes || actual !== ref.sha256) throw new Error("PDF_V3_HASH_MISMATCH");
-        return packed;
-      }
+      readJson: (url, ref) => readerContext.readPdfOcrJson(url,
+        VoiceOfMLReaderSecurity.LIMITS.chapterBytes, ref.sha256, ref.bytes)
     });
   }
 
