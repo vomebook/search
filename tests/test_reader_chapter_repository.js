@@ -6,7 +6,8 @@ const vm = require("vm");
 function createRepository(options) {
   const sandbox = { self: {}, DOMException };
   sandbox.self = sandbox;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js"), "utf8"), sandbox);
+  const filename = path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js");
+  vm.runInNewContext(fs.readFileSync(filename, "utf8"), sandbox, { filename });
   return sandbox.VoiceOfMLReaderChapters.createChapterRepository(options);
 }
 
@@ -16,9 +17,11 @@ async function main() {
   let creates = 0;
   const shared = createRepository({ count: 3, find: (index) => values.get(index), create: (index) => { creates += 1; return new Promise((resolve) => { resolveCreate = () => { const value = { index }; values.set(index, value); resolve(value); }; }); } });
   const first = shared.load(1), second = shared.load(1);
+  assert.strictEqual(shared.disposed, false);
   assert.strictEqual(first, second);
   assert.strictEqual(shared.state(1).status, "loading");
   assert.strictEqual(shared.pending.length, 1);
+  assert.strictEqual(shared.release(1), false, "an in-flight chapter cannot be released");
   await Promise.resolve();
   resolveCreate();
   assert.deepStrictEqual(await first, { index: 1 });
@@ -30,6 +33,15 @@ async function main() {
   assert.strictEqual(shared.release(1), true);
   assert.strictEqual(shared.state(1).status, "idle");
   assert.strictEqual(shared.state(1).value, null);
+
+  values.set(2, { index: 2 });
+  assert.deepStrictEqual(await shared.load(2), { index: 2 });
+  assert.strictEqual(shared.state(2).status, "ready");
+  assert.strictEqual(shared.state(2).attempts, 0, "an existing chapter must not be recreated");
+  assert.strictEqual(creates, 1);
+  assert.strictEqual(Object.isFrozen(shared.state(2)), true);
+  assert.strictEqual(shared.state(-1), null);
+  assert.strictEqual(shared.release(99), false);
 
   let attempts = 0;
   const retry = createRepository({ count: 1, find: () => null, create: () => ++attempts === 1 ? Promise.reject(new Error("temporary")) : Promise.resolve("ready") });
@@ -46,11 +58,27 @@ async function main() {
   const late = disposed.load(0);
   await Promise.resolve();
   disposed.dispose();
+  assert.strictEqual(disposed.disposed, true);
   finishLate("late");
   assert.strictEqual(await late, null);
   assert.strictEqual(commits, 0);
   assert.strictEqual(disposed.state(0).status, "idle");
+  assert.strictEqual(disposed.release(0), false);
   await assert.rejects(disposed.load(0), (error) => error.name === "AbortError");
+
+  let called = false;
+  const cancelled = createRepository({ count: 1, find: () => null, create: () => { called = true; return "late"; } });
+  const beforeStart = cancelled.load(0);
+  cancelled.dispose();
+  cancelled.dispose();
+  assert.strictEqual(await beforeStart, null);
+  assert.strictEqual(called, false, "disposing before the first microtask prevents creation");
+  assert.strictEqual(cancelled.pending.length, 0);
+
+  const fallback = { DOMException, AbortController };
+  const filename = path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js");
+  vm.runInNewContext(fs.readFileSync(filename, "utf8"), fallback, { filename });
+  assert.strictEqual(typeof fallback.VoiceOfMLReaderChapters.createChapterRepository, "function");
   console.log("reader chapter repository contracts passed");
 }
 

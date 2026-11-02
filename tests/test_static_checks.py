@@ -129,6 +129,11 @@ class StaticGateTests(unittest.TestCase):
         self.assertIn(str(source.relative_to(self.root)), config["files"])
         source.write_text(source.read_text() + "\nfunction strictAdapterProbe(value) { return value; }\nstrictAdapterProbe(1);\n")
         self.assert_check(self.run_check(*check), False, "TS7006")
+        shutil.copyfile(ROOT / "static/reader/formats/reader-format-adapters.js", source)
+        source = self.root / "static/reader/formats/reader-chapter-repository.js"
+        self.assertIn(str(source.relative_to(self.root)), config["files"])
+        source.write_text(source.read_text() + "\nfunction strictChapterProbe(value) { return value; }\nstrictChapterProbe(1);\n")
+        self.assert_check(self.run_check(*check), False, "TS7006")
 
     def test_reader_type_contract_rejects_wrong_arguments(self):
         source = self.root / "static/reader-usage.js"
@@ -187,6 +192,35 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "")
         source.write_text(create + 'chapters.load("not a chapter number");\n')
         self.assert_check(self.run_check(*check), False, "TS2345")
+
+    def test_strict_chapter_repository_and_scheduler_contracts(self):
+        source = self.root / "static/chapter-strict-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), "static/chapter-strict-usage.js"]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        valid = ('const repository = VoiceOfMLReaderChapters.createChapterRepository({count: 2, '
+                 'find: index => index === 0 ? "cached" : undefined, create: async index => `chapter-${index}`, '
+                 'commit: (_index, value) => value.toUpperCase()});\n'
+                 'repository.load(0).then(value => value?.toUpperCase());\n'
+                 'const state = repository.state(0); if (state && state.status === "ready") state.value?.toUpperCase();\n'
+                 'const chapters = VoiceOfMLReaderChapters.createChapterScheduler({create: async '
+                 '(index, signal, priority) => { signal.throwIfAborted(); return `${index}:${priority}`; }});\n'
+                 'chapters.load(0).then(value => value.toUpperCase()); chapters.prefetch([1, 2]);\n')
+        source.write_text(valid)
+        self.assert_check(self.run_check(*check), True, "")
+        for bad, diagnostic in (
+            ('repository.load("wrong");', "TS2345"),
+            ('VoiceOfMLReaderChapters.createChapterRepository({count: 1, find: () => null});', "TS2741"),
+            ('repository.state(0).status;', "TS2531"),
+            ('chapters.load(1).then(value => value.toFixed());', "TS2551"),
+            ('VoiceOfMLReaderChapters.createChapterRepository({count: 1, find: () => "x", '
+             'create: () => "x", commit: (_index, value) => value - 1});', "TS2362"),
+        ):
+            with self.subTest(bad=bad):
+                source.write_text(valid + bad + "\n")
+                self.assert_check(self.run_check(*check), False, diagnostic)
 
     def test_static_globals_match_their_runtime_implementations(self):
         # Compile the actual classic scripts with their public declarations so
