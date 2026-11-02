@@ -110,6 +110,8 @@ jobs:
         run: |
           python3 -B -m unittest -v \
             tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_folder_action_and_title_follow_breakpoint \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_title_and_controls_fit_all_formats \
             tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
             tests.test_reader_style.ReaderStyleTests.test_mobile_short_filename_does_not_scroll_and_long_name_adapts_on_resize \
             tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_scrolls_without_expanding_or_hiding_folder \
@@ -247,6 +249,8 @@ jobs:
         run: |
           python3 -B -m unittest -v \
             tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_folder_action_and_title_follow_breakpoint \
+            tests.test_reader_style.ReaderStyleTests.test_mobile_title_and_controls_fit_all_formats \
             tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
             tests.test_reader_style.ReaderStyleTests.test_mobile_short_filename_does_not_scroll_and_long_name_adapts_on_resize \
             tests.test_reader_style.ReaderStyleTests.test_mobile_long_filename_scrolls_without_expanding_or_hiding_folder \
