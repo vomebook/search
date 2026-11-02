@@ -1,7 +1,7 @@
 export function createReaderDocumentLoader(readerContext) {
   function loadScript(url) {
     readerContext.assertReaderActive();
-    return new Promise((resolve, reject) => {
+    return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       const script = document.createElement("script");
       let settled = false, timeout = 0, untrack = () => {};
       const finish = (error) => {
@@ -27,7 +27,7 @@ export function createReaderDocumentLoader(readerContext) {
       script.onerror = () => finish(networkError());
       timeout = setTimeout(() => finish(networkError()), 20000);
       document.head.appendChild(script);
-    });
+    }));
   }
 
   function fetchWithReaderTimeout(url, timeoutMs = readerContext.READER_PROXY_TIMEOUT_MS, requestInit = {}) {

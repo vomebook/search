@@ -456,15 +456,16 @@ export function createReaderPdfRenderer(readerContext) {
     }
   }
 
+  /** @param {boolean | number} priority */
   function renderPdfImageShell(shell, force = false, priority = false) {
     if (!shell) return Promise.reject(new Error("PDF page shell missing"));
     if (readerContext.capability?.mode !== "image-pages")
       return Promise.reject(new Error("PDF_PRIMARY_REQUIRED"));
     if (shell._renderPromise) return shell._renderPromise;
     if (!force && shell.dataset.renderState === "rendered") return Promise.resolve();
-    priority = readerContext.normalizePdfPriority(priority || readerContext.pdfPagePriority(shell));
+    let imagePriority = /** @type {number} */ (readerContext.normalizePdfPriority(priority || readerContext.pdfPagePriority(shell)));
     const evicted = shell._pdfImageEvictedAt;
-    if (!force && priority < 2 && evicted && !readerContext.isPdfPageVisible(shell) &&
+    if (!force && imagePriority < 2 && evicted && !readerContext.isPdfPageVisible(shell) &&
         evicted.page === readerContext.documentState.page && evicted.zoom === readerContext.documentState.zoom &&
         evicted.direction === readerContext.pdfScrollDirection && evicted.budget === readerContext.pdfPixelBudget() &&
         evicted.width === readerContext.viewport.clientWidth && evicted.height === readerContext.viewport.clientHeight)
@@ -474,20 +475,20 @@ export function createReaderPdfRenderer(readerContext) {
     const renderController = new AbortController();
     shell._renderCancel = () => renderController.abort();
     shell._renderStarted = false;
-    shell._renderActivePriority = String(priority);
+    shell._renderActivePriority = String(imagePriority);
     const task = (async () => {
       let acquired = false;
       try {
         // Page images are network-bound, not canvas work: they use their own
         // priority-ordered pool, where visible demand preempts speculation.
-        await readerContext.measurePdf(readerContext.acquirePdfPreviewSlot(priority, shell, renderController.signal), "queue", Number(shell.dataset.page));
+        await readerContext.measurePdf(readerContext.acquirePdfPreviewSlot(imagePriority, shell, renderController.signal), "queue", Number(shell.dataset.page));
         acquired = true;
         const admittedAt = performance.now();
         shell._renderStarted = true;
         readerContext.assertReaderActive();
         // The page may have become visible while it waited for a slot.
-        priority = Math.max(priority, readerContext.pdfPagePriority(shell));
-        shell._renderActivePriority = String(priority);
+        imagePriority = Math.max(imagePriority, readerContext.pdfPagePriority(shell));
+        shell._renderActivePriority = String(imagePriority);
          const entry = readerContext.pdfPageEntry(Number(shell.dataset.page));
          if (!entry) throw new Error("PDF page entry missing");
           let target = readerContext.pdfPageManifest.pageUrl(entry.page);
@@ -516,7 +517,7 @@ export function createReaderPdfRenderer(readerContext) {
           image.decoding = "async";
           shell.appendChild(image);
         }
-         image.fetchPriority = priority >= 3 ? "high" : priority >= 1 ? "auto" : "low";
+         image.fetchPriority = imagePriority >= 3 ? "high" : imagePriority >= 1 ? "auto" : "low";
          if (progressive) {
            image.classList.add("progressive");
            const geometry = readerContext.pdfV3Map?.pages[entry.page - 1];
@@ -524,7 +525,7 @@ export function createReaderPdfRenderer(readerContext) {
              shell.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
            });
          }
-         if (priority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
+         if (imagePriority >= 2 && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
            loadText = readerContext.renderPdfOcrText(shell);
          loadText?.catch(() => {});
          await readerContext.imageLoader.load(image, target, renderController.signal);
@@ -556,7 +557,7 @@ export function createReaderPdfRenderer(readerContext) {
         // A speculative page may become visible while its image is loading.
         // The visibility observer saw "rendering" then, so it could not attach
         // text; do not keep the stale admission priority after image completion.
-        if ((priority >= 2 || readerContext.isPdfPageVisible(shell)) && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
+        if ((imagePriority >= 2 || readerContext.isPdfPageVisible(shell)) && readerContext.ocrManifestUrl && !navigator.connection?.saveData)
           loadText ||= readerContext.renderPdfOcrText(shell);
         loadText?.catch(() => {});
         if (pageState) pageState.hidden = true;
@@ -592,6 +593,7 @@ export function createReaderPdfRenderer(readerContext) {
     return task;
   }
 
+  /** @param {boolean | number} priority */
   function renderPdfShell(shell, force = false, priority = false) {
     if (shell._renderPromise) {
       if (force) shell.dataset.pendingRerender = "1";
@@ -661,7 +663,7 @@ export function createReaderPdfRenderer(readerContext) {
           const rendering = page.render({
             canvasContext: canvas.getContext("2d"),
             viewport,
-            readerPriority: Math.max(priority, readerContext.pdfPagePriority(shell)),
+            readerPriority: Math.max(Number(priority), readerContext.pdfPagePriority(shell)),
             transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0]
           });
           activeRendering = rendering;

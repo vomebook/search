@@ -324,7 +324,7 @@ export function createReaderProgress(readerContext) {
       if (readerContext.mediaElement && Number.isFinite(state.mediaTime)) {
         const media = readerContext.mediaElement;
         if (!media.readyState)
-          await new Promise((resolve, reject) => {
+          await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
             const finish = (error) => {
               media.removeEventListener("loadedmetadata", loaded);
               media.removeEventListener("error", failed);
@@ -339,7 +339,7 @@ export function createReaderProgress(readerContext) {
             const untrack = readerContext.trackReaderResource(() => finish(readerContext.readerAbortError()));
             media.addEventListener("loadedmetadata", loaded, { once: true });
             media.addEventListener("error", failed);
-          });
+          }));
         if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
         media.currentTime = state.mediaTime;
       } else if (readerContext.htmlFrame && readerContext.htmlFrame.contentWindow && Number.isFinite(state.htmlScrollTop))

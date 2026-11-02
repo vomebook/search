@@ -5,6 +5,7 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
   const worker = createWorker(workerUrl);
   let closed = false, fatal = null, active = null, sequence = 0, pageCount = 0, outlineNeedsFullSource = false, outstandingRange = 0;
   const abort = () => new DOMException('DjVu task cancelled', 'AbortError');
+  /** @param {Error} reason */
   function close(reason = abort()) {
     if (closed) return;
     closed = true; fatal = reason;
@@ -46,7 +47,9 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
       task.reject(new Error(event.data.error));
     else { active = task; close(new Error('DJVU_WORKER_PROTOCOL')); }
   };
-  async function request(operation, data = {}, { signal, transfer = [] } = {}) {
+  /** @param {{signal?: AbortSignal, transfer?: Transferable[]}} [options] */
+  async function request(operation, data = {}, options = {}) {
+    const { signal, transfer = [] } = options;
     if (closed) throw fatal || abort();
     if (signal?.aborted) { const reason = signal.reason || abort(); close(reason); throw reason; }
     if (active) throw new Error('DJVU_ADAPTER_CONCURRENT_TASK');

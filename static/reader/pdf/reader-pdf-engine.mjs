@@ -76,7 +76,7 @@ export function createReaderPdfEngine(readerContext) {
     });
   }
 
-  function loadPdfWithTimeout(pdfjs, options, target = readerContext.sourceUrl, proxy = readerContext.contentUrl, takeInitial = () => null) {
+  function loadPdfWithTimeout(pdfjs, options, target = readerContext.sourceUrl, proxy = readerContext.contentUrl, takeInitial = (_url) => null) {
     return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy))).catch((error) => {
       readerContext.assertReaderActive();
       if (error && error.name === "AbortError") throw error;
