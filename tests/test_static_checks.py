@@ -134,6 +134,11 @@ class StaticGateTests(unittest.TestCase):
         self.assertIn(str(source.relative_to(self.root)), config["files"])
         source.write_text(source.read_text() + "\nfunction strictChapterProbe(value) { return value; }\nstrictChapterProbe(1);\n")
         self.assert_check(self.run_check(*check), False, "TS7006")
+        shutil.copyfile(ROOT / "static/reader/formats/reader-chapter-repository.js", source)
+        source = self.root / "static/reader/formats/reader-section-virtualizer.js"
+        self.assertIn(str(source.relative_to(self.root)), config["files"])
+        source.write_text(source.read_text() + "\nfunction strictVirtualProbe(value) { return value; }\nstrictVirtualProbe(1);\n")
+        self.assert_check(self.run_check(*check), False, "TS7006")
 
     def test_reader_type_contract_rejects_wrong_arguments(self):
         source = self.root / "static/reader-usage.js"
@@ -217,6 +222,31 @@ class StaticGateTests(unittest.TestCase):
             ('chapters.load(1).then(value => value.toFixed());', "TS2551"),
             ('VoiceOfMLReaderChapters.createChapterRepository({count: 1, find: () => "x", '
              'create: () => "x", commit: (_index, value) => value - 1});', "TS2362"),
+        ):
+            with self.subTest(bad=bad):
+                source.write_text(valid + bad + "\n")
+                self.assert_check(self.run_check(*check), False, diagnostic)
+
+    def test_strict_section_virtualizer_type_contract(self):
+        source = self.root / "static/virtualizer-strict-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), "static/virtualizer-strict-usage.js"]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        valid = ('const sections = VoiceOfMLReaderVirtual.createSectionVirtualizer({'
+                 'limit: 9, getLoaded: () => [document.body], getIndex: node => node.tabIndex, '
+                 'getHeight: node => node.clientHeight, virtualize: (node, index, height) => '
+                 'node.style.height = `${height}px`, release: index => index, '
+                 'canVirtualize: node => !node.hidden});\nsections.trim(1); sections.dispose();\n')
+        source.write_text(valid)
+        self.assert_check(self.run_check(*check), True, "")
+        for bad, diagnostic in (
+            ('sections.trim("wrong");', "TS2345"),
+            ('VoiceOfMLReaderVirtual.createSectionVirtualizer({limit: 9});', "TS2739"),
+            ('VoiceOfMLReaderVirtual.createSectionVirtualizer({limit: 9, getLoaded: () => [document.body], '
+             'getIndex: node => node.noSuchProperty, getHeight: node => node.clientHeight, '
+             'virtualize: () => {}, release: () => {}});', "TS2339"),
         ):
             with self.subTest(bad=bad):
                 source.write_text(valid + bad + "\n")

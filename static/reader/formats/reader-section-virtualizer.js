@@ -1,6 +1,13 @@
 (function (root) {
   "use strict";
 
+  /**
+   * @template {Element} T
+   * @param {{limit: number, getLoaded: () => T[], getIndex: (node: T) => number,
+   *   getHeight: (node: T) => number, virtualize: (node: T, index: number, height: number) => unknown,
+   *   release: (index: number) => unknown, preserve?: (change: () => void) => void,
+   *   canVirtualize?: (node: T, index: number) => boolean}} options
+   */
   function createSectionVirtualizer({
     limit,
     getLoaded,
@@ -14,6 +21,7 @@
     const maximum = Math.max(3, Number(limit) || 9);
     let disposed = false;
 
+    /** @param {number} centerIndex */
     function trim(centerIndex) {
       if (disposed || !Number.isInteger(centerIndex))
         return { removed: 0, retained: getLoaded().length };
