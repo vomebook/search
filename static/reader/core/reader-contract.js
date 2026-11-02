@@ -497,12 +497,20 @@
       })
     );
   }
+  const FNV32_MASK = 0xffffffffn;
   function shortSourceId(value) {
+    // Two 32-bit halves avoid per-byte BigInt multiplication while preserving
+    // the exact FNV-1a 64-bit wraparound and the established stable IDs.
     let hash = 1469598103934665603n;
+    let high = Number(hash >> 32n), low = Number(hash & FNV32_MASK);
     for (const byte of new TextEncoder().encode(canonicalSourceUrl(value))) {
-      hash ^= BigInt(byte);
-      hash = BigInt.asUintN(64, hash * 1099511628211n);
+      low = (low ^ byte) >>> 0;
+      const product = low * 435;
+      const carry = Math.floor(product / 4294967296);
+      high = (Math.imul(high, 435) + Math.imul(low, 256) + carry) >>> 0;
+      low = product >>> 0;
     }
+    hash = (BigInt(high) << 32n) | BigInt(low);
     return hash.toString(36).padStart(13, "0");
   }
 
