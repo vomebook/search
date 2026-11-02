@@ -11,6 +11,7 @@
   "files": [
     "static/reader/core/reader-diagnostics.mjs",
     "static/reader/formats/reader-image-loader.mjs",
+    "static/reader/formats/reader-format-adapters.js",
     "static/reader/ui/reader-document-styles.mjs",
     "static/search/search-session.js",
     "static/reader/pdf/reader-engine-preload.js",

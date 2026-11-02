@@ -124,6 +124,11 @@ class StaticGateTests(unittest.TestCase):
         self.assertIn(str(source.relative_to(self.root)), config["files"])
         source.write_text(source.read_text() + "\nfunction strictPreloadProbe(value) { return value; }\nstrictPreloadProbe(1);\n")
         self.assert_check(self.run_check(*check), False, "TS7006")
+        shutil.copyfile(ROOT / "static/reader/pdf/reader-engine-preload.js", source)
+        source = self.root / "static/reader/formats/reader-format-adapters.js"
+        self.assertIn(str(source.relative_to(self.root)), config["files"])
+        source.write_text(source.read_text() + "\nfunction strictAdapterProbe(value) { return value; }\nstrictAdapterProbe(1);\n")
+        self.assert_check(self.run_check(*check), False, "TS7006")
 
     def test_reader_type_contract_rejects_wrong_arguments(self):
         source = self.root / "static/reader-usage.js"
@@ -136,6 +141,38 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "")
         source.write_text('VoiceOfMLReaderSecurity.createByteBudget("not a number");\n')
         self.assert_check(self.run_check(*check), False, "TS2345")
+
+    def test_reader_adapter_contract_rejects_invalid_mode_and_missing_methods(self):
+        source = self.root / "static/adapter-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), "static/adapter-usage.js"]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        source.write_text('const registry = VoiceOfMLReaderAdapters.createAdapterRegistry();\n'
+                          'registry.register("text", { open() {}, render() {}, restore() {}, dispose() {} });\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text('VoiceOfMLReaderAdapters.createAdapterRegistry().activate(42);\n')
+        self.assert_check(self.run_check(*check), False, "TS2345")
+        source.write_text('VoiceOfMLReaderAdapters.createAdapterRegistry().register("text", { open() {} });\n')
+        self.assert_check(self.run_check(*check), False, "TS2739")
+
+    def test_adapter_coverage_gate_fails_when_contract_tests_are_removed(self):
+        source = self.root / "static/reader/formats/reader-format-adapters.js"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / "static/reader/formats/reader-format-adapters.js", source)
+        shutil.copyfile(ROOT / "tests/test_reader_adapter_registry.js", self.root / "tests/test_reader_adapter_registry.js")
+        shutil.copyfile(ROOT / "scripts/check_adapter_coverage.mjs", self.root / "scripts/check_adapter_coverage.mjs")
+        check = ["node", "scripts/check_adapter_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "reader-format-adapters.js")
+        test = self.root / "tests/test_reader_adapter_registry.js"
+        test.write_text('const test = require("node:test"); test("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "requires exactly one fully covered source row")
+        test.write_text('const test = require("node:test"), vm = require("node:vm"), fs = require("node:fs");\n'
+                        'test("load only", () => vm.runInNewContext(fs.readFileSync("static/reader/formats/'
+                        'reader-format-adapters.js", "utf8"), {}, { filename: process.cwd() + '
+                        '"/static/reader/formats/reader-format-adapters.js" }));\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_chapter_scheduler_type_contract_rejects_invalid_index(self):
         source = self.root / "static/chapter-usage.js"
