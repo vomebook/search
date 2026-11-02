@@ -107,6 +107,7 @@ jobs:
         run: python3 -B -m unittest -v tests.test_reader_ebook_flow tests.test_reader_toc_latency
       - name: Run chapter-bundle browser gate
         run: |
+          node tests/test_reader_section_virtualizer.js
           node tests/test_reader_chapter_repository.js
           node tests/test_reader_chapter_scheduler.js
           node tests/test_reader_chapter_preload.js
@@ -288,6 +289,7 @@ jobs:
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
+          node tests/test_reader_section_virtualizer.js
           node tests/test_reader_chapter_repository.js
           node tests/test_reader_chapter_scheduler.js
           node tests/test_reader_chapter_preload.js
