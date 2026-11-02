@@ -146,6 +146,7 @@ jobs:
     env:
       READER_TEST_TIMEOUT_MS: "60000"
     steps:
+      - uses: actions/checkout@v7
       - name: Checkout Hugging Face Search Space
         run: |
           git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
@@ -169,6 +170,17 @@ jobs:
           npx --no-install pyright --project pyrightconfig.strict.json
           python -B scripts/check_python_static.py
           python -B -m unittest -v tests.test_static_checks
+      - name: Verify independent Hugging Face quality baseline
+        run: |
+          python -B -m unittest -v tests.test_hf_quality_baseline
+          mkdir -p "$RUNNER_TEMP/hf-quality-baseline"
+          baseline_revision=$(python -c 'import json; print(json.load(open(".github/quality-baselines/hf-source.json"))["revision"])')
+          for file in backend-coverage-debt.json strict-inventory-debt.json; do
+            curl --fail --location --silent --show-error \
+              "https://huggingface.co/spaces/VoiceOfML/Search/resolve/$baseline_revision/$file" \
+              --output "$RUNNER_TEMP/hf-quality-baseline/$file"
+          done
+          python -B scripts/verify_hf_quality_baseline.py "$RUNNER_TEMP/hf-quality-baseline"
       - name: Check backend coverage and quality inventory
         working-directory: huggingface-search
         run: |
@@ -183,7 +195,8 @@ jobs:
             tests.test_search_filters_contract tests.test_search_words_contract tests.test_mixed_folder_performance \
             tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
-          python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" backend-coverage-debt.json
+          python -B scripts/check_strict_inventory.py "$RUNNER_TEMP/hf-quality-baseline/strict-inventory-debt.json"
+          python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" "$RUNNER_TEMP/hf-quality-baseline/backend-coverage-debt.json"
           python -B scripts/check_search_words_mutation.py
           python -B scripts/check_search_words_mutation.py --module search_matching
           python -B scripts/check_search_words_mutation.py --module data_formats
