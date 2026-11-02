@@ -56,6 +56,35 @@ for (const bookPath of [vectors.reportedBook.path, vectors.reportedBook.path.spl
 }
 assert.notStrictEqual(assets.shortSourceId(idPrefix + 'a%2Fb.pdf'), assets.shortSourceId(idPrefix + 'a/b.pdf'))
 assert.notStrictEqual(assets.shortSourceId(idPrefix + 'a%2528.pdf'), assets.shortSourceId(idPrefix + 'a%28.pdf'))
+// Preserve the previous canonicalization exactly, including malformed UTF-16
+// errors and query/fragment boundaries: the result is a persistent ID key.
+function legacyCanonical(value) {
+  return value.replace(/^(https:\/\/huggingface\.co\/datasets\/VoiceOfML\/)([^?#]*)/, (_, prefix, path) =>
+    prefix + path.replace(/%[0-9a-fA-F]{2}|[^A-Za-z0-9._~/-]/gu, token => {
+      if (/^%[0-9a-f]{2}$/i.test(token)) {
+        const char = String.fromCharCode(parseInt(token.slice(1), 16))
+        return /^[A-Za-z0-9._~-]$/.test(char) ? char : token.toUpperCase()
+      }
+      return encodeURIComponent(token).replace(/[!'()*]/g, char =>
+        '%' + char.charCodeAt(0).toString(16).toUpperCase())
+    }))
+}
+function compareCanonical(input) {
+  let expected
+  try { expected = legacyCanonical(input) } catch (error) {
+    assert.throws(() => assets.canonicalSourceUrl(input), {name: error.name})
+    return
+  }
+  assert.strictEqual(assets.canonicalSourceUrl(input), expected)
+  assert.strictEqual(assets.shortSourceId(input), legacyId(expected))
+}
+for (let n = 0; n < 256; n++) {
+  const hex = n.toString(16).padStart(2, '0')
+  for (const token of [hex, hex.toUpperCase()]) {
+    compareCanonical(idPrefix + 'folder/a%' + token + 'b.pdf?query=%' + token + '#page=2')
+    compareCanonical(idPrefix + 'folder/%' + token + '%' + token + '/file')
+  }
+}
 // Compare the 32-bit-limb implementation to the original BigInt operation.
 // IDs are persistent reader/history/OCR keys and must be byte-for-byte stable.
 function legacyId(value) {
@@ -77,6 +106,7 @@ for (let n = 0; n < 6000; n++) {
     suffix += alphabet[seed % alphabet.length]
   }
   const input = n % 2 ? idPrefix + suffix : suffix
+  compareCanonical(input)
   let expected
   try { expected = legacyId(input) } catch (error) {
     assert.throws(() => assets.shortSourceId(input), {name: error.name}, `source error mismatch at ${n}`)
