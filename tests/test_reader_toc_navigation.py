@@ -606,17 +606,25 @@ class TocNavigationTests(unittest.TestCase):
         self.page.locator('#toc-panel .panel-search-toggle').click()
         field=self.page.locator('#toc-panel .panel-search')
         field.fill('第20')
-        self.page.evaluate('''()=>{const list=document.querySelector('#toc-list');
-          const spacer=document.createElement('div');spacer.id='toc-test-spacer';spacer.style.height='680px';list.before(spacer);}''')
         panel=self.page.locator('#toc-panel')
+        # Construct the boundary from the actual viewport: toolbar and folder
+        # heights differ between mobile/desktop and with accessibility scaling.
+        self.page.evaluate('''()=>{const list=document.querySelector('#toc-list'),view=document.querySelector('#toc-panel');
+          const spacer=document.createElement('div');spacer.id='toc-test-spacer';spacer.style.height='0px';list.before(spacer);
+          const top=list.getBoundingClientRect().top-view.getBoundingClientRect().top+view.scrollTop;
+          spacer.style.height=Math.max(0,view.clientHeight-top+50)+'px';}''')
         panel.evaluate('n=>{n.scrollTop=0;n.dispatchEvent(new Event("scroll"))}')
         self.page.wait_for_timeout(100)
+        start=self.page.evaluate('''()=>{const v=document.querySelector('#toc-panel').getBoundingClientRect(),
+          list=document.querySelector('#toc-list').getBoundingClientRect();return list.top-v.bottom}''')
+        self.assertGreater(start,0, 'the list must start below the visible viewport')
         panel.evaluate('n=>{n.scrollTop=100;n.dispatchEvent(new Event("scroll"))}')
         self.page.wait_for_timeout(100)
         metrics=self.page.evaluate('''()=>{const view=document.querySelector('#toc-panel').getBoundingClientRect(),
           list=document.querySelector('#toc-list').getBoundingClientRect(),last=document.querySelector('#toc-list .toc-item:last-child').getBoundingClientRect();
           return {viewBottom:view.bottom,listTop:list.top,lastBottom:last.bottom}}''')
         self.assertLess(metrics['listTop'],metrics['viewBottom'])
+        self.assertGreater(metrics['listTop'],metrics['viewBottom']-100)
         self.assertGreaterEqual(metrics['lastBottom'],metrics['viewBottom']-1)
 
     def test_virtual_search_covers_bottom_after_fractional_scroll(self):
