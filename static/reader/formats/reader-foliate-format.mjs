@@ -22,7 +22,7 @@ export function createReaderFoliateFormat(readerContext) {
 
   function syncFoliateScrollLocation() {
     if (!readerContext.foliateContinuous || !readerContext.navigationState.tocEntries.length) return;
-    const rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")],
+    const rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")].map(row => /** @type {HTMLElement} */ (row)),
       top = readerContext.viewport.getBoundingClientRect().top + 80;
     let sectionIndex = -1,
       sectionNode = null;
@@ -87,7 +87,7 @@ export function createReaderFoliateFormat(readerContext) {
   function trimFoliateSections() {
     if (!readerContext.foliateContinuous || !readerContext.foliateSectionVirtualizer) return;
     const marker = readerContext.viewport.getBoundingClientRect().top + 80,
-      rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")],
+      rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")].map(row => /** @type {HTMLElement} */ (row)),
       current =
         rows.find((row) => {
           const rect = row.getBoundingClientRect();
@@ -185,7 +185,7 @@ export function createReaderFoliateFormat(readerContext) {
         selected = [];
       let offset = 0;
       while (walker.nextNode()) {
-        const node = walker.currentNode,
+        const node = /** @type {Text} */ (walker.currentNode),
           end = offset + node.length;
         for (const interval of intervals)
           if (interval.start < end && interval.end > offset)
@@ -211,7 +211,7 @@ export function createReaderFoliateFormat(readerContext) {
         // Sections are prepared off-DOM; lazy images cannot enter a viewport yet.
         image.loading = "eager";
         image.decoding = "async";
-        if (!image.complete) await new Promise((resolve) => {
+        if (!image.complete) await /** @type {Promise<void>} */ (new Promise((resolve) => {
           const finish = () => {
             image.removeEventListener("load", finish);
             image.removeEventListener("error", finish);
@@ -222,7 +222,7 @@ export function createReaderFoliateFormat(readerContext) {
           image.addEventListener("load", finish, { once: true });
           image.addEventListener("error", finish, { once: true });
           if (image.complete) finish();
-        });
+        }));
         if (active) {
           try { await image.decode?.(); } catch (_) {}
         }
@@ -353,7 +353,7 @@ export function createReaderFoliateFormat(readerContext) {
     signal.throwIfAborted();
     readerContext.assertReaderActive();
     for (const node of doc.querySelectorAll("style,link")) node.remove();
-    const article = document.createElement("article");
+    const article = /** @type {HTMLElement & {_resolveSearchAnchor?: ((anchor: (source: Document) => Range) => {node: Text; start: number; end: number}[] | null) | null}} */ (document.createElement("article"));
     article.dataset.section = String(index);
     const shadow = article.attachShadow({ mode: "open" }),
       baseStyle = document.createElement("style"),

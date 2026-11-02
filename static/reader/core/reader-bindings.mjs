@@ -105,13 +105,13 @@ export function createReaderBindings(readerContext) {
         }
         if (
           ["history", "history-clear", "history-remove"].includes(change.type) &&
-          !document.querySelector("#history-panel").hidden
+          !/** @type {HTMLElement} */ (document.querySelector("#history-panel")).hidden
         )
           readerContext.renderHistory();
         if (
           ["bookmark", "bookmark-remove"].includes(change.type) &&
           (readerContext.panelState.showingAllBookmarks || !change.url || change.url === readerContext.sourceUrl) &&
-          !document.querySelector("#bookmarks-panel").hidden
+          !/** @type {HTMLElement} */ (document.querySelector("#bookmarks-panel")).hidden
         )
           readerContext.renderBookmarks();
       })
@@ -266,7 +266,7 @@ export function createReaderBindings(readerContext) {
     readerContext.applyReaderMetadata(readerContext.resolvedReaderData);
     readerContext.contentSanitizerObserver = new MutationObserver(() => {
       const seen = new Set();
-      for (const article of document.querySelectorAll(".foliate-continuous > article[data-section]")) {
+      for (const article of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(".foliate-continuous > article[data-section]"))) {
         article.querySelectorAll("style,link[rel=stylesheet]").forEach((node) => node.remove());
         const index = article.dataset.section;
         if (seen.has(index)) article.remove();
@@ -332,8 +332,8 @@ export function createReaderBindings(readerContext) {
     readerContext.mediaPanel
       .querySelector(".media-panel-bookmark")
       .addEventListener("click", (event) => readerContext.openBookmarkPopover(event.currentTarget));
-    document.querySelector(".page-controls").hidden = !readerContext.capability.features.pagination;
-    document.querySelector(".zoom-controls").hidden = !readerContext.capability.features.zoom;
+    /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = !readerContext.capability.features.pagination;
+    /** @type {HTMLElement} */ (document.querySelector(".zoom-controls")).hidden = !readerContext.capability.features.zoom;
 
     readerContext.status.hidden = true;
     readerContext.mediaTab.setAttribute("aria-controls", "media-panel");
@@ -388,15 +388,15 @@ export function createReaderBindings(readerContext) {
       location.assign("/search/");
     });
     // Replay a Back tap made before this handler was bound.
-    if (window.__VOICE_READER_EARLY_BACK__?.()) document.querySelector("#back").click();
+    if (window.__VOICE_READER_EARLY_BACK__?.()) /** @type {HTMLButtonElement} */ (document.querySelector("#back")).click();
   }
 
   function bindZoomAndPageControls() {
     readerContext.setZoom(readerContext.documentState.zoom * 100, false);
-    for (const [id, delta] of [
+    for (const [id, delta] of /** @type {[string, number][]} */ ([
       ["#zoom-out", -10],
       ["#zoom-in", 10]
-    ]) {
+    ])) {
       document.querySelector(id).addEventListener("click", () => {
         readerContext.setZoom(Number(readerContext.zoomInput.value) + delta);
       });
@@ -443,11 +443,11 @@ export function createReaderBindings(readerContext) {
 
     document.addEventListener("click", async (event) => {
       const path = event.composedPath(),
-        link = path.find((node) => node instanceof Element && node.matches?.("a[href]")),
-        article = path.find(
+        link = /** @type {Element | undefined} */ (path.find((node) => node instanceof Element && node.matches?.("a[href]"))),
+        article = /** @type {HTMLElement | undefined} */ (path.find(
           (node) =>
             node instanceof Element && node.matches?.(".foliate-continuous article[data-section]")
-        );
+        ));
       if (!link || !article || !readerContext.epubRendition?.book) return;
       const raw = link.getAttribute("href") || "";
       if (!raw || readerContext.epubRendition.book.isExternal?.(raw) || /^(?:https?:|mailto:|tel:)/i.test(raw))
@@ -472,7 +472,7 @@ export function createReaderBindings(readerContext) {
     readerContext.bookmarkRibbon.addEventListener("click", () => readerContext.openBookmarkPopover(readerContext.bookmarkRibbon));
     document.querySelector("#bookmark-cancel").addEventListener("click", readerContext.closeBookmarkPopover);
     document.querySelector("#bookmark-add").addEventListener("click", async (event) => {
-      const button = event.currentTarget,
+      const button = /** @type {HTMLButtonElement} */ (event.currentTarget),
         editing = readerContext.panelState.editingBookmark;
       const snapshot = readerContext.pendingBookmarkSnapshot || editing || readerContext.captureBookmarkSnapshot();
       const label = readerContext.bookmarkLabelInput.value.trim() || snapshot.label,
@@ -496,7 +496,7 @@ export function createReaderBindings(readerContext) {
         );
         const invoker = readerContext.bookmarkInvoker;
         readerContext.closeBookmarkPopover();
-        if (!document.querySelector("#bookmarks-panel").hidden) {
+        if (!/** @type {HTMLElement} */ (document.querySelector("#bookmarks-panel")).hidden) {
           await readerContext.renderBookmarks();
           if (editing && invoker && !invoker.isConnected && document.activeElement === document.body)
             (
@@ -531,12 +531,12 @@ export function createReaderBindings(readerContext) {
         first.focus();
       }
     });
-    for (const button of document.querySelectorAll(".reader-panel-tabs button"))
+    for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".reader-panel-tabs button")))
       button.addEventListener("click", () => readerContext.selectPanel(button.dataset.panel));
-    document.querySelector(".reader-panel-tabs").addEventListener("keydown", (event) => {
+    /** @type {HTMLElement} */ (document.querySelector(".reader-panel-tabs")).addEventListener("keydown", (event) => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      const tabs = [...document.querySelectorAll(".reader-panel-tabs button:not([hidden])")],
-        current = tabs.indexOf(document.activeElement);
+      const tabs = [.../** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".reader-panel-tabs button:not([hidden])"))],
+        current = tabs.findIndex(tab => tab === document.activeElement);
       if (current < 0) return;
       event.preventDefault();
       const next =
@@ -554,7 +554,7 @@ export function createReaderBindings(readerContext) {
       readerContext.bookmarksAllButton.setAttribute("aria-pressed", String(readerContext.panelState.showingAllBookmarks));
       readerContext.renderBookmarks();
     });
-    for (const button of document.querySelectorAll(".panel-search-toggle")) {
+    for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".panel-search-toggle"))) {
       button.classList.remove("icon-button");
       button.classList.add("text-action");
       button.textContent = "搜索";
@@ -568,7 +568,7 @@ export function createReaderBindings(readerContext) {
         readerContext.setPanelSearchOpen(button, button.getAttribute("aria-expanded") !== "true")
       );
     }
-    for (const input of document.querySelectorAll(".panel-search")) {
+    for (const input of /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll(".panel-search"))) {
       const view = input.closest(".reader-panel-view");
       input.type = "search";
       input.setAttribute(
@@ -576,7 +576,7 @@ export function createReaderBindings(readerContext) {
         `搜索${view.querySelector(".panel-view-header strong")?.textContent || "列表"}`
       );
       input.addEventListener("input", (event) => {
-        if (!event.isComposing) readerContext.filterPanel(view);
+        if (!/** @type {InputEvent} */ (event).isComposing) readerContext.filterPanel(view);
       });
       input.addEventListener("compositionend", () => readerContext.filterPanel(view));
     }
@@ -618,8 +618,7 @@ export function createReaderBindings(readerContext) {
       )
         readerContext.applyReaderTheme(event.data.theme, false);
     });
-    document
-      .querySelector("#history")
+    /** @type {HTMLButtonElement} */ (document.querySelector("#history"))
       .addEventListener("click", (event) =>
         readerContext.setReaderPanelOpen(document.querySelector("#history").getAttribute("aria-expanded") !== "true", false, event.detail === 0)
       );
@@ -707,7 +706,7 @@ export function createReaderBindings(readerContext) {
       // Separators (line ends, inter-block gaps) are selectable text nodes
       // directly inside the layer; a focus there is already valid text.
       const focusElement = selection.focusNode?.nodeType === Node.ELEMENT_NODE
-        ? selection.focusNode : selection.focusNode?.parentElement;
+        ? /** @type {Element} */ (selection.focusNode) : selection.focusNode?.parentElement;
       if (focusElement?.closest(".reader-pdf-text")) return;
       const beforeAnchor = selection.focusNode && selection.anchorNode &&
         (selection.focusNode === selection.anchorNode

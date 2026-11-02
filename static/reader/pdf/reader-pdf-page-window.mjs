@@ -547,7 +547,7 @@ export function createReaderPdfPageWindow(readerContext) {
       (items) => {
         if (readerContext.readerAbortController.signal.aborted) return;
         for (const entry of items) if (entry.isIntersecting) {
-          entry.target.dataset.renderVisible = readerContext.isPdfPageVisible(entry.target) ? "1" : "0";
+          /** @type {HTMLElement} */ (entry.target).dataset.renderVisible = readerContext.isPdfPageVisible(entry.target) ? "1" : "0";
           readerContext.renderPdfInBackground(entry.target);
         }
       },
@@ -557,11 +557,11 @@ export function createReaderPdfPageWindow(readerContext) {
       (items) => {
         if (readerContext.readerAbortController.signal.aborted) return;
         for (const entry of items) {
-          entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0";
+          /** @type {HTMLElement} */ (entry.target).dataset.renderVisible = entry.isIntersecting ? "1" : "0";
           if (entry.isIntersecting) {
             readerContext.promotePdfRenderWaiter(entry.target);
             readerContext.renderPdfInBackground(entry.target, false, readerContext.pdfPagePriority(entry.target));
-            if (entry.target.dataset.renderState === "rendered") readerContext.renderPdfOcrText(entry.target);
+            if (/** @type {HTMLElement} */ (entry.target).dataset.renderState === "rendered") readerContext.renderPdfOcrText(entry.target);
           }
         }
       },
@@ -713,7 +713,7 @@ export function createReaderPdfPageWindow(readerContext) {
       };
       readerContext.status.textContent = "正在检查文档";
       document.querySelector("#page-total").textContent = "";
-      const gateControls = document.querySelector(".page-controls"), gateWasHidden = gateControls.hidden;
+      const gateControls = /** @type {HTMLElement} */ (document.querySelector(".page-controls")), gateWasHidden = gateControls.hidden;
       gateControls.hidden = true;
       try {
         if (!readerContext.restorationFailed && canPreview && !readerContext.ocrManifestUrl &&
@@ -814,7 +814,9 @@ export function createReaderPdfPageWindow(readerContext) {
             });
             warmTask.catch(() => {});
             controls.hidden = false;
-            const total = document.querySelector("#page-total"), previous = document.querySelector("#page-prev"), next = document.querySelector("#page-next");
+            const total = /** @type {HTMLElement} */ (document.querySelector("#page-total")),
+              previous = /** @type {HTMLButtonElement} */ (document.querySelector("#page-prev")),
+              next = /** @type {HTMLButtonElement} */ (document.querySelector("#page-next"));
             const inputHidden = readerContext.pageInput.hidden, totalHidden = total.hidden;
             const previousLabel = previous.getAttribute("aria-label"), nextLabel = next.getAttribute("aria-label");
             const previousWasDisabled = previous.disabled, nextWasDisabled = next.disabled;
@@ -916,9 +918,9 @@ export function createReaderPdfPageWindow(readerContext) {
             };
             const previewObserver=new IntersectionObserver(entries=>{
               for (const entry of entries) {
-                if (!previewActive || !entry.isIntersecting || entry.target.dataset.renderState === "rendered") continue;
+                if (!previewActive || !entry.isIntersecting || /** @type {HTMLElement} */ (entry.target).dataset.renderState === "rendered") continue;
                 cancelWarm?.();
-                const shell=entry.target;
+                const shell=/** @type {HTMLElement} */ (entry.target);
                 renderPreview(shell);
                 if (Number(shell.dataset.page) === previewCount && readerContext.isPdfPageVisible(shell)) requestMore();
               }
@@ -1150,7 +1152,7 @@ export function createReaderPdfPageWindow(readerContext) {
       (entries) =>
         entries.forEach((entry) => {
           if (readerContext.readerAbortController.signal.aborted) return;
-          entry.target.dataset.renderVisible = entry.isIntersecting && readerContext.isPdfPageVisible(entry.target) ? "1" : "0";
+          /** @type {HTMLElement} */ (entry.target).dataset.renderVisible = entry.isIntersecting && readerContext.isPdfPageVisible(entry.target) ? "1" : "0";
           if (entry.isIntersecting) readerContext.renderPdfInBackground(entry.target);
         }),
       { root: document.querySelector("#viewport"), rootMargin: `${readerContext.PDF_PREFETCH_MARGIN}px 0px` }
@@ -1159,10 +1161,10 @@ export function createReaderPdfPageWindow(readerContext) {
       (entries) =>
         entries.forEach((entry) => {
           if (readerContext.readerAbortController.signal.aborted) return;
-          entry.target.dataset.renderVisible = entry.isIntersecting ? "1" : "0";
+          /** @type {HTMLElement} */ (entry.target).dataset.renderVisible = entry.isIntersecting ? "1" : "0";
           if (entry.isIntersecting) {
             readerContext.promotePdfRenderWaiter(entry.target);
-            if (readerContext.pdfUserHasScrolled || entry.target.dataset.renderState !== "rendering")
+            if (readerContext.pdfUserHasScrolled || /** @type {HTMLElement} */ (entry.target).dataset.renderState !== "rendering")
               readerContext.renderPdfInBackground(entry.target, false, readerContext.pdfPagePriority(entry.target));
           }
         }),
