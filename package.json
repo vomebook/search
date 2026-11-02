@@ -4,7 +4,7 @@
   "scripts": {
     "lint": "eslint static scripts tests --max-warnings 0",
     "markup": "node scripts/check_markup.mjs",
-    "types": "tsc --project jsconfig.check.json && tsc --project jsconfig.service-worker.json",
+    "types": "tsc --project jsconfig.check.json && tsc --project jsconfig.service-worker.json && tsc --project jsconfig.strict.json",
     "check:static": "npm run lint && npm run markup && npm run types"
   },
   "_overrideNote": "minimatch 11.0.3 addresses GHSA-g3hv-75wg-m249 in the 10.x dependency; rerun checker regressions when updating ESLint.",

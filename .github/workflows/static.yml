@@ -38,7 +38,7 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           python -m pip install -r requirements-static-check.txt
-      - name: Check JavaScript, HTML, CSS and selected JavaScript types
+      - name: Check JavaScript, HTML, CSS and JavaScript types
         run: npm run check:static
       - name: Check all own Python source and tests
         run: python -B scripts/check_python_static.py
