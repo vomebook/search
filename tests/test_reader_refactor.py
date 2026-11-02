@@ -3356,7 +3356,7 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(url + "&" + urllib.parse.urlencode({"bookmark": bookmark["id"], "bookmark_source": source}))
         self.page.wait_for_function("() => document.querySelector('.reader-epub-chapter[data-chapter=\"3\"]')")
 
-    def test_github_bucket_source_uses_external_bucket_proxy_download_and_ocr(self):
+    def test_github_bucket_source_uses_external_bucket_proxy_and_download(self):
         source = "/api/reader-bucket-resource?" + urllib.parse.urlencode({
             "path": "objects/aa/" + "a" * 64 + "/0123456789abcdef/pages/page-000001.webp"
         })
@@ -3373,7 +3373,7 @@ class ReaderRefactorTest(unittest.TestCase):
         download = self.page.locator("#download").get_attribute("href")
         self.assertTrue(download.startswith(external + "/api/download?"))
         self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(download).query)["link"], [external + source])
-        self.assertEqual(self.page.locator("#ocr").get_attribute("href"), external + "/txt/test.txt")
+        self.assertEqual(self.page.locator("#ocr").count(), 0)
         self.assertFalse(any(url.startswith(self.origin + "/api/") for url in requests))
 
     def test_github_back_preserves_hash_return_and_defaults_to_search(self):

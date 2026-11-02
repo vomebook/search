@@ -120,6 +120,14 @@ class PdfFollowupTests(unittest.TestCase):
         self.assertFalse(self.page.locator('#full-search-toggle').evaluate('n=>n.hidden'))
         self.search('later',1)
 
+    def test_retired_ocr_url_does_not_disable_native_pdf_text(self):
+        self.page.goto(self.origin+PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/persistent.pdf',
+            ext='pdf', ocr='https://voiceofml-search.hf.space/txt/old.txt')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        self.assertEqual(self.page.locator('#ocr').count(), 0)
+        self.search('needleA',12)
+
     def test_failed_text_extraction_does_not_hide_full_search(self):
         engine=ENGINE.replace('numPages:12','numPages:3').replace(
             "return {items:[{str:'needle'+version+' page '+number+' 手机 手。机',transform:[12,0,0,12,20,40]}],styles:{}};",

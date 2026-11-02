@@ -230,19 +230,6 @@ export function createReaderSource(readerContext) {
     }
   }
 
-  function validOcr(raw) {
-    try {
-      const url = new URL(raw);
-      return (
-        url.protocol === "https:" &&
-        url.hostname === "voiceofml-search.hf.space" &&
-        url.pathname.startsWith("/txt/")
-      );
-    } catch (_) {
-      return false;
-    }
-  }
-
   function readerAssetObjectFamily(raw, base = location.href) {
     try {
       const url = new URL(raw, base);
@@ -329,7 +316,6 @@ export function createReaderSource(readerContext) {
     normalizeReaderReturnUrl,
     applyReaderPathMetadata,
     validSource,
-    validOcr,
     readerAssetObjectFamily,
     trustedReaderAssetManifestUrl,
     trustedChapterUrl,
