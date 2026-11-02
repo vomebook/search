@@ -82,6 +82,10 @@ jobs:
             tests.test_reader_toc_navigation.TocNavigationTests.test_merged_chm_missing_toc_anchors_use_unique_in_book_links
       - name: Run search accessibility keyboard gates
         run: python3 -B -m unittest -v tests.test_search_accessibility_browser tests.test_sidebar_keyboard
+      - name: Check random reader pools and UI responsiveness
+        run: |
+          node tests/test_worker_contract.js
+          python3 -B -m unittest -v tests.test_converted_reader_responsiveness tests.test_browser_smoke
       - name: Check static dependency contracts
         run: node tests/test_static_contract.js
       - name: Check Firefox footer counter geometry

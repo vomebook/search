@@ -184,6 +184,27 @@ test("native Foliate books are eligible for repository-scoped random reading", a
     assert.strictEqual(record.record.Extension, extension);
   }
 });
+test("local random reading includes all native formats, but no conversion-only files", async () => {
+  const native = ["pdf", "djvu", "epub", "mobi", "azw", "azw3", "fb2", "fbz", "html", "htm",
+    "txt", "md", "markdown", "vcf", "ini", "jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff",
+    "webp", "mp3", "mp4", "wav", "m4a", "flac", "mov", "mpga", "wma", "ape", "amr", "swf"];
+  const input = native.concat(["caj", "kdh", "ps", "docx"]).map((extension, i) => ({
+    ...records[0], File: "book" + i, Extension: extension.toUpperCase(),
+  }));
+  const {worker, metadata} = await loaded(input);
+  assert.strictEqual(metadata.reader.count, native.length);
+  // Keep file-format support aligned with the Reader's own public contract.
+  const readerContext = {self:{}};
+  vm.createContext(readerContext);
+  vm.runInContext(fs.readFileSync('static/reader/core/reader-contract.js', 'utf8'), readerContext);
+  const reader = readerContext.self.VoiceOfMLReader;
+  for (const extension of native) assert.strictEqual(reader.capability(extension).article, true, extension);
+  for (const extension of ["caj", "kdh", "ps", "docx"]) assert.strictEqual(reader.capability(extension).article, false, extension);
+  for (let i = 0; i < native.length; i++) {
+    const found = await worker.request("random-record", {repo:"Repo/A", readerOnly:true, randomValue:(i + .1) / native.length});
+    assert.strictEqual(found.record.Extension.toLowerCase(), native[i]);
+  }
+});
 function scheduledWorker(options = {}) {
   const tasks = new Map();
   let nextId = 0;
