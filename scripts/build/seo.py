@@ -87,7 +87,7 @@ def decode_corpus(payload: object) -> list[dict]:
     if not isinstance(payload, dict) or payload.get("v") != 2:
         raise ValueError("SEO requires the current compact-v2 corpus")
     repos, folders, rows = payload.get("rp"), payload.get("fd"), payload.get("rc")
-    if not all(isinstance(value, list) for value in (repos, folders, rows)):
+    if not (isinstance(repos, list) and isinstance(folders, list) and isinstance(rows, list)):
         raise ValueError("Invalid compact tables")
     result = []
     for row in rows:

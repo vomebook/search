@@ -66,7 +66,7 @@ export function chapterTextMap(roots, textProfile) {
   for (const root of roots.filter(Boolean)) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
-      const node = walker.currentNode;
+      const node = /** @type {Text} */ (walker.currentNode);
       if (node.parentElement?.closest("script,style,noscript,.reader-chapter-link-error,.reader-chapter-search-heading")) continue;
       if (length) pendingSpace = { node: null, start: 0, end: 0 };
       // Python's Unicode whitespace also includes NEL and the four separators.

@@ -5,7 +5,9 @@ export async function pdfTextStoreKey({source, version, pageCount, engine}) {
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(n=>n.toString(16).padStart(2,"0")).join("");
 }
 
-export function createPdfTextStore(key, {signal, limits = PDF_TEXT_STORE_LIMITS, now = Date.now} = {}) {
+/** @param {{signal?: AbortSignal, limits?: typeof PDF_TEXT_STORE_LIMITS, now?: () => number}} [options] */
+export function createPdfTextStore(key, options = {}) {
+  const {signal, limits = PDF_TEXT_STORE_LIMITS, now = Date.now} = options;
   let database, opening, disposed = false, writes = 0, pendingBytes = 0;
   const owners = new Set();
   const stats = {hits:0, misses:0, writes:0, skipped:0};

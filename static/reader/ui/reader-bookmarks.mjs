@@ -155,7 +155,7 @@ export function createReaderBookmarks(readerContext) {
   function captureFoliateBookmarkPosition() {
     if (!readerContext.foliateContinuous) return null;
     const marker = readerContext.viewport.getBoundingClientRect().top + 8,
-      rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")];
+      rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")].map(row => /** @type {HTMLElement} */ (row));
     const article =
       rows.find((row) => {
         const rect = row.getBoundingClientRect();

@@ -120,7 +120,7 @@
           lastDownloadLaunch = Date.now();
           return true;
         });
-        downloadLaunchTail = launch.catch(() => {});
+        downloadLaunchTail = launch.then(() => {}, () => {});
         return launch;
       }
 

@@ -3,6 +3,9 @@ import {createDjvuScheduler} from './reader-djvu-scheduler.mjs';
 
 // PDF-shaped document interface, enabling the existing Reader's
 // page-window, zoom, selection, search and OCR surfaces to be reused unchanged.
+/** @param {{workerUrl: URL | string, bytes?: ArrayBuffer, pageMap?: any, signal?: AbortSignal,
+ * cacheBytes?: number, cachePages?: number, createWorker?: (url: URL | string) => Worker,
+ * rangeReader?: any, outlineFallback?: () => Promise<any>, preparedWorker?: ReturnType<typeof createDjvuWorkerAdapter>}} options */
 export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cacheBytes, cachePages, createWorker, rangeReader, outlineFallback, preparedWorker }) {
   const worker=preparedWorker || createDjvuWorkerAdapter(workerUrl,{cacheBytes,createWorker,rangeReader});
   try {

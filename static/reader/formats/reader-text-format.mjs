@@ -44,9 +44,7 @@ export function createReaderTextFormat(readerContext) {
     if (!response.body?.getReader) {
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (bytes.byteLength > limit) {
-        const error = new Error("READER_RESOURCE_LIMIT");
-        error.code = "READER_RESOURCE_LIMIT";
-        throw error;
+        throw Object.assign(new Error("READER_RESOURCE_LIMIT"), { code: "READER_RESOURCE_LIMIT" });
       }
       readerContext.assertReaderActive();
       const decoder = new TextDecoder(readerContext.detectTextEncoding(bytes, readerContext.documentState.title));
@@ -87,9 +85,7 @@ export function createReaderTextFormat(readerContext) {
         if (!value?.byteLength) continue;
         length += value.byteLength;
         if (length > limit) {
-          const error = new Error("READER_RESOURCE_LIMIT");
-          error.code = "READER_RESOURCE_LIMIT";
-          throw error;
+          throw Object.assign(new Error("READER_RESOURCE_LIMIT"), { code: "READER_RESOURCE_LIMIT" });
         }
         if (!decoder) {
           sampleChunks.push(value);
