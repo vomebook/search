@@ -124,7 +124,6 @@ let extensionCounts = {};
 let repoExtensionCounts = {};
 let repoList = [];
 let extensionList = [];
-let txtMetadata = { available: false, count: 0, byRepo: {} };
 let readerMetadata = { available: false, count: 0, byRepo: {} };
 let corpusWorker = null;
 let corpusWorkerStartPromise = null;
@@ -1115,7 +1114,6 @@ async function loadData() {
     for (const item of metadata.extensions || []) extensionCounts[item.name] = item.count || 0;
     repoExtensionCounts = metadata.extensionsByRepo || {};
     extensionList = (metadata.extensions || []).map(function(item) { return item.name; });
-    txtMetadata = metadata.txt || { available: false, count: 0, byRepo: {} };
     readerMetadata = metadata.reader || { available: false, count: 0, byRepo: {} };
     return true;
   } catch (e) {
