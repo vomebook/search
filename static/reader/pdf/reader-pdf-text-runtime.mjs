@@ -101,7 +101,7 @@ export function createReaderPdfTextRuntime(readerContext) {
   function recordNativePdfTextEvidence(pdf, page, content) {
     // Do not fetch extra pages to decide this: only successful, already
     // extracted pages count. A blank cover alone says nothing about the book.
-    if (!pdf || readerContext.capability?.mode !== "pdf" || readerContext.ocrManifestUrl || readerContext.ocrUrl || pdf !== readerContext.pdfDocument ||
+    if (!pdf || readerContext.capability?.mode !== "pdf" || readerContext.ocrManifestUrl || pdf !== readerContext.pdfDocument ||
         pdf._pdfInfo?.readerPageCountPending || !Number.isInteger(pdf.numPages) ||
         !Number.isInteger(page) || page < 1 || page > pdf.numPages || !Array.isArray(content?.items)) return;
     let evidence = pdf.readerNativeTextEvidence;
@@ -120,7 +120,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     if (evidence.hasText) return;
     evidence.pages.add(page);
     if (!evidence.hasText && evidence.pages.size === evidence.count &&
-        !readerContext.readerAbortController.signal.aborted && readerContext.pdfDocument === pdf && !readerContext.ocrManifestUrl && !readerContext.ocrUrl) {
+        !readerContext.readerAbortController.signal.aborted && readerContext.pdfDocument === pdf && !readerContext.ocrManifestUrl) {
       pdf.readerNoSearchableText = true;
       readerContext.syncCapabilityControls();
     }

@@ -41,6 +41,11 @@ for (const raw of ['\u624b \u673a \u624b\n\u673a', '\ud840\udc00 \ud840\udc01\r\
 }
 
 const assets = sandbox.self.VoiceOfMLReader
+const retiredLink = new URL(assets.readerUrl({ Link: 'https://example.test/book.pdf', Extension: 'pdf',
+  OcrUrl: 'https://voiceofml-search.hf.space/txt/book.txt',
+  ReaderOcrManifest: 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=objects%2Ftext' }), 'https://site.test')
+assert.strictEqual(retiredLink.searchParams.has('ocr'), false)
+assert.strictEqual(retiredLink.searchParams.get('ocr_manifest'), 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=objects%2Ftext')
 const vectors = require('./reader-contract-vectors.json')
 for (const [value, expected] of vectors.ids) assert.strictEqual(assets.shortSourceId(value), expected)
 const idPrefix = 'https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/'
@@ -113,10 +118,6 @@ for (let n = 0; n < 6000; n++) {
     continue
   }
   assert.strictEqual(assets.shortSourceId(input), expected, `source ID mismatch at ${n}`)
-}
-for (const [record, expected] of vectors.ocr) {
-  const relative = [...record.Folder, record.File + (record.Extension ? '.' + record.Extension : '')].join('/')
-  assert.strictEqual(assets.txtRelativePath(relative), expected)
 }
 const assetRoot = 'objects/aa/' + 'a'.repeat(64) + '/'
 const sourcePrefix = '/datasets/vomebook/Reader-Assets/resolve/main/'

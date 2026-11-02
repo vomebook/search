@@ -167,17 +167,6 @@ export function createReaderFormatController(readerContext) {
       return readerContext.fail("此文件暂不支持在线阅读，请下载原文件。", "READER_UNSUPPORTED");
     readerContext.formatAdapters.activate(readerContext.capability.mode);
     readerContext.applyReaderMetadata(readerContext.resolvedReaderData);
-    if (readerContext.validOcr(readerContext.ocrUrl)) {
-      const ocr = /** @type {HTMLAnchorElement} */ (document.querySelector("#ocr")) || document.createElement("a");
-      ocr.id = "ocr";
-      ocr.className = "text-button";
-      ocr.target = "_blank";
-      ocr.rel = "noopener noreferrer";
-      ocr.textContent = "OCR";
-      if (!ocr.parentElement) document.querySelector(".reader-actions")?.prepend(ocr);
-      ocr.href = readerContext.ocrUrl;
-      ocr.hidden = false;
-    }
     try {
       if (readerContext.capability.mode === "foliate") {
         readerContext.setReaderStage("foliate");
@@ -263,7 +252,7 @@ export function createReaderFormatController(readerContext) {
     /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = !readerContext.capability.features.pagination;
     /** @type {HTMLElement} */ (document.querySelector(".zoom-controls")).hidden = !readerContext.capability.features.zoom;
     readerContext.mediaTab.hidden = !readerContext.capability.features.media;
-    const noNativeText = !!readerContext.pdfDocument?.readerNoSearchableText && !readerContext.ocrManifestUrl && !readerContext.ocrUrl;
+    const noNativeText = !!readerContext.pdfDocument?.readerNoSearchableText && !readerContext.ocrManifestUrl;
     const searchOpen = readerContext.panelState.selected === "full-search";
     if (noNativeText && !searchOpen && document.activeElement === readerContext.fullSearchButton)
       /** @type {HTMLElement} */ (document.querySelector("#history")).focus({ preventScroll: true });

@@ -226,7 +226,6 @@ const readerContext = {
   get normalizePdfSearchText() { return normalizePdfSearchText; },
   get normalizeSourceUrl() { return normalizeSourceUrl; }, set normalizeSourceUrl(value) { normalizeSourceUrl = value; },
   get ocrManifestUrl() { return ocrManifestUrl; }, set ocrManifestUrl(value) { ocrManifestUrl = value; },
-  get ocrUrl() { return ocrUrl; },
   get pageAtMarker() { return pageAtMarker; }, set pageAtMarker(value) { pageAtMarker = value; },
   get pageInput() { return pageInput; },
   get pageInvertToggle() { return pageInvertToggle; },
@@ -421,7 +420,6 @@ const readerContext = {
   get updateSearchState() { return updateSearchState; }, set updateSearchState(value) { updateSearchState = value; },
   get updateTocCurrentMark() { return updateTocCurrentMark; }, set updateTocCurrentMark(value) { updateTocCurrentMark = value; },
   get v3ResourceUrl() { return v3ResourceUrl; }, set v3ResourceUrl(value) { v3ResourceUrl = value; },
-  get validOcr() { return validOcr; }, set validOcr(value) { validOcr = value; },
   get validSource() { return validSource; }, set validSource(value) { validSource = value; },
   get validatePageMap() { return validatePageMap; },
   get validateReadingManifest() { return validateReadingManifest; },
@@ -566,7 +564,7 @@ let {
 let {
   readerContentUrl, readerDownloadApiUrl, readerDownloadUrl, startReaderDownload,
   normalizeSourceUrl, resolveReaderId, applyReaderMetadata, normalizeReaderReturnUrl,
-  applyReaderPathMetadata, validSource, validOcr,
+  applyReaderPathMetadata, validSource,
   readerAssetObjectFamily, trustedReaderAssetManifestUrl, trustedChapterUrl, trustedChapterReferenceUrl,
   trustedChapterResourceUrl
 } = createReaderSource(readerContext);
@@ -784,7 +782,6 @@ const documentState = readerRuntime.state.document,
 
 readerBindings.initializeDocumentTitle();
 
-const ocrUrl = params.get("ocr") || "";
 let ocrManifestUrl = params.get("ocr_manifest") || "";
 
 let returnUrl = params.get("return") || "";

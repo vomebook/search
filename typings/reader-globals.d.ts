@@ -42,7 +42,6 @@ interface ReaderContractApi {
   isBucketPath(path: string, source?: boolean, bucket?: string): boolean;
   pdfPageSource(url: string, origin: string, upstream: string, filename?: string, bucketName?: string): any;
   imagePageSource(url: string, origin: string, upstream: string): any;
-  txtRelativePath(path: string): string;
   canonicalSourceUrl(value: string): string;
   shortSourceId(value: string): string;
   readerUrl(record: any, basePath?: string): string;
