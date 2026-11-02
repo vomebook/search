@@ -1,9 +1,21 @@
 (function (root) {
   "use strict";
+  /**
+   * @typedef {{
+   *   open: () => unknown,
+   *   render: (prepared: unknown) => unknown,
+   *   restore: (entry: unknown, generation: number) => unknown,
+   *   dispose: () => unknown
+   * }} FormatAdapter
+   */
+  /** @type {readonly (keyof FormatAdapter)[]} */
   const METHODS = Object.freeze(["open", "render", "restore", "dispose"]);
   function createAdapterRegistry() {
+    /** @type {Map<string, Readonly<FormatAdapter & {mode: string}>>} */
     const adapters = new Map();
+    /** @type {Readonly<FormatAdapter & {mode: string}> | null} */
     let active = null;
+    /** @param {string} mode @param {FormatAdapter} adapter */
     function register(mode, adapter) {
       if (!mode || adapters.has(mode)) throw new Error(`READER_ADAPTER_DUPLICATE:${mode}`);
       for (const method of METHODS)
@@ -13,12 +25,14 @@
       adapters.set(mode, value);
       return value;
     }
+    /** @param {string} mode */
     function activate(mode) {
       const adapter = adapters.get(mode);
       if (!adapter) throw new Error(`READER_ADAPTER_MISSING:${mode}`);
       active = adapter;
       return adapter;
     }
+    /** @param {string} mode */
     function get(mode) {
       return adapters.get(mode) || null;
     }
