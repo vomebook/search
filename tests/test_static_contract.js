@@ -315,7 +315,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.strictEqual(contractContext.self.VoiceOfMLReader.capability('docx').mode, null);
   assert.match(app, /VoiceOfMLReader\.readerUrl/);
   assert.match(app, /VoiceOfMLReader\.readerUrl/);
-  assert.match(app, /OcrUrl/);
+  assert.doesNotMatch(app, /OcrUrl/);
   assert.match(app, /api\/random-reader/);
   assert.doesNotMatch(app, /TXT_BASE/);
   assertCode(reader, 'VoiceOfMLReaderResources.vendorUrl("pdf", "/search/static/")');
@@ -352,7 +352,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(readerHtml, /aria-controls="toc-panel"/);
   assert.match(readerHtml, /role="tabpanel"/);
   assert.match(readerHtml, /https:\/\/hf-mirror\.com/);
-  assert.match(reader, /validOcr/);
+  assert.doesNotMatch(reader, /validOcr/);
   assert.match(reader, /api\/download\?file=/);
   assert.match(reader, /api\/reader-content\?url=/);
   assert.match(reader, /const requestUrl = String\(url\) === sourceUrl \? contentUrl : url/);
@@ -395,7 +395,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
    assert.match(reader, /TOC_VIRTUALIZATION_THRESHOLD/);
    assert.match(reader, /renderVirtualToc/);
    assert.match(readerCss, /toc-list-virtualized/);
-  assert.match(contract, /params\.set\("ocr"/);
+  assert.doesNotMatch(contract, /params\.set\("ocr"/);
   assert.match(contract, /params\.set\("download"/);
   assert.match(contract, /ReaderExtension/);
   assert.match(contract, /pdf-pages/);

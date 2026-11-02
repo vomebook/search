@@ -290,7 +290,7 @@ export function createReaderPdfSearch(readerContext) {
       if (readerContext.readerAbortController.signal.aborted || readerContext.pdfDocument !== pdf ||
           !readerContext.isReaderGenerationCurrent("search", generation))
         return [];
-      const verified = !readerContext.ocrManifestUrl && !readerContext.ocrUrl;
+      const verified = !readerContext.ocrManifestUrl;
       if (verified) {
         pdf.readerNoSearchableText = true;
         readerContext.syncCapabilityControls();

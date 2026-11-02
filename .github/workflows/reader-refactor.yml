@@ -44,6 +44,8 @@ jobs:
       - name: Run chapter-search unit tests
         run: |
           node tests/test_reader_architecture.js
+          node tests/test_reader_regression.js
+          node tests/test_reader_preload.js
           node tests/test_reader_chapter_search.mjs
           node tests/test_reader_image_loader.mjs
           node tests/test_reader_ocr_transport.mjs
@@ -180,6 +182,9 @@ jobs:
               "https://huggingface.co/spaces/VoiceOfML/Search/resolve/$baseline_revision/$file" \
               --output "$RUNNER_TEMP/hf-quality-baseline/$file"
           done
+          curl --fail --location --silent --show-error \
+            "https://huggingface.co/spaces/VoiceOfML/Search/resolve/$baseline_revision/backend/app.py" \
+            --output "$RUNNER_TEMP/hf-quality-baseline/app.py"
           python -B scripts/verify_hf_quality_baseline.py "$RUNNER_TEMP/hf-quality-baseline"
       - name: Check backend coverage and quality inventory
         working-directory: huggingface-search
@@ -198,7 +203,7 @@ jobs:
             tests.test_record_metadata_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
           python -B scripts/check_strict_inventory.py "$RUNNER_TEMP/hf-quality-baseline/strict-inventory-debt.json"
-          python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" "$RUNNER_TEMP/hf-quality-baseline/backend-coverage-debt.json"
+          python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" "$RUNNER_TEMP/hf-quality-baseline/backend-coverage-debt.json" "$RUNNER_TEMP/hf-quality-baseline/app.py"
           python -B scripts/check_search_words_mutation.py
           python -B scripts/check_search_words_mutation.py --module search_matching
           python -B scripts/check_search_words_mutation.py --module data_formats

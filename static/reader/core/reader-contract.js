@@ -361,12 +361,6 @@
     return pdfPageSource(raw, base, bucketOrigin, "page-manifest.json", "vomebook/reader-assets-v2");
   }
 
-  function txtRelativePath(path) {
-    const value = String(path || "");
-    const dot = value.lastIndexOf(".");
-    return (dot > value.lastIndexOf("/") ? value.slice(0, dot) : value) + ".txt";
-  }
-
   function assetFields(asset, bucketBase, originalExtension = "") {
     const path = String(asset?.p || "");
     const ocrPath = String(asset?.o || "");
@@ -447,8 +441,6 @@
     );
     if (!shortId && (record.DownloadLink || record.downloadLink))
       params.set("download", record.DownloadLink || record.downloadLink);
-    if (!shortId && (record.OcrUrl || record.ocrUrl))
-      params.set("ocr", record.OcrUrl || record.ocrUrl);
     if (!shortId && (record.ReaderOcrManifest || record.readerOcrManifest))
       params.set("ocr_manifest", record.ReaderOcrManifest || record.readerOcrManifest);
     if (!shortId && record.ReaderPdfDocument) params.set("pdf_document", record.ReaderPdfDocument);
@@ -525,7 +517,6 @@
     isBucketPath,
     pdfPageSource,
     imagePageSource,
-    txtRelativePath,
     canonicalSourceUrl,
     shortSourceId,
     readerUrl
