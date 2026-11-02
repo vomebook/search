@@ -661,8 +661,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     };
     for (const hint of [tail, extendedTail, ...openingRanges]) hint?.onFailure(fail);
     /** @param {{begin?: number, end?: number}} [range] */
-    const prioritizeRange = (range = {}) => {
-      const {begin,end} = range;
+    const prioritizeRange = ({begin,end} = {}) => {
       if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin || end > first.total) return;
       ratePriority?.(begin,end);
       // Keep a small rolling set of PDF.js misses. Hints only reorder existing

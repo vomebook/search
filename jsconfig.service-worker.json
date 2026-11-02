@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "target": "esnext",
+    "lib": ["esnext", "webworker"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force"
+  },
+  "files": ["static/sw.js", "static/search/index-worker.js", "typings/service-worker.d.ts"]
+}

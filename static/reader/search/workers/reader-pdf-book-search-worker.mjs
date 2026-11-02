@@ -19,6 +19,20 @@ function validUrl(raw, pathPattern = bookPath) {
     pathPattern.test(url.searchParams.get("path"));
 }
 
+/** @overload
+ * @param {ReadableStream<Uint8Array>} stream
+ * @param {AbortSignal} signal
+ * @param {number} expected
+ * @param {false} [text]
+ * @returns {Promise<Uint8Array<ArrayBuffer>>}
+ */
+/** @overload
+ * @param {ReadableStream<Uint8Array>} stream
+ * @param {AbortSignal} signal
+ * @param {null} expected
+ * @param {true} text
+ * @returns {Promise<string>}
+ */
 async function readBounded(stream, signal, expected = null, text = false) {
   const reader = stream.getReader(), chunks = [];
   const bytes = expected === null ? null : new Uint8Array(expected);

@@ -53,7 +53,9 @@ function hitBoxesAtOffsets(page, begin, end) {
   return boxes;
 }
 
-export async function searchBookText(book, query, { current = () => true, yieldTask = () => new Promise(r => setTimeout(r, 0)), progress = null } = {}) {
+/** @param {{current?: () => boolean, yieldTask?: () => Promise<unknown>, progress?: ((index: any, scanned: number, total: number) => Promise<unknown> | void) | null}} [options] */
+export async function searchBookText(book, query, options = {}) {
+  const { current = () => true, yieldTask = () => new Promise(r => setTimeout(r, 0)), progress = null } = options;
   const counts = [], checkpoints = [], re = pattern(query);
   let total = 0;
   if (!query) return { total: 0, page: () => ({ total: 0, offset: 0, pageSize: 50, results: [] }) };

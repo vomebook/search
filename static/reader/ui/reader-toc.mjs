@@ -245,11 +245,11 @@ export function createReaderToc(readerContext) {
       tocEntries: normalizedEntries,
       currentChapterIndex: normalizedEntries.findIndex((entry) => !entry.group)
     });
-    const tocTab = document.querySelector("#toc-tab");
+    const tocTab = /** @type {HTMLElement} */ (document.querySelector("#toc-tab"));
     tocTab.hidden = false;
     tocTab.textContent = normalizedEntries.length ? "目录" : "阅读";
     const previousList = document.querySelector("#toc-list"),
-      list = previousList.cloneNode(false);
+      list = /** @type {HTMLElement} */ (previousList.cloneNode(false));
     readerContext.tocVirtualState?.destroy();
     readerContext.tocVirtualState = null;
     list.classList.remove("toc-list-virtualized");
@@ -306,7 +306,7 @@ export function createReaderToc(readerContext) {
   }
 
   function updateTocCurrentMark() {
-    const rows = [...document.querySelectorAll("#toc-list .toc-item")];
+    const rows = [...document.querySelectorAll("#toc-list .toc-item")].map(row => /** @type {HTMLElement} */ (row));
     if (readerContext.documentState.pageCount > 1 && readerContext.documentState.page > 0) {
       let pageIndex = -1;
       for (const [index, entry] of readerContext.navigationState.tocEntries.entries()) {
@@ -317,7 +317,7 @@ export function createReaderToc(readerContext) {
     }
     for (const row of rows) {
       const index = Number(row.dataset.tocIndex);
-      let mark = row.querySelector(".toc-current-mark");
+      let mark = /** @type {HTMLElement | null} */ (row.querySelector(".toc-current-mark"));
       if (!mark) {
         mark = document.createElement("span");
         mark.className = "toc-current-mark";
@@ -334,7 +334,7 @@ export function createReaderToc(readerContext) {
   }
 
   function syncTocTab() {
-    const tab = document.querySelector("#toc-tab");
+    const tab = /** @type {HTMLElement | null} */ (document.querySelector("#toc-tab"));
     if (!tab) return;
     tab.hidden = !readerContext.navigationState.tocEntries.length;
     if (readerContext.navigationState.tocEntries.length && readerContext.navigationState.currentChapterIndex < 0)

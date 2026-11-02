@@ -61,8 +61,10 @@ function emptyMetadata() {
 }
 
 function tokenizeParts(text) {
+  /** @type {string[]} */
   const chinese = [];
   const lower = String(text || "").toLowerCase();
+  /** @type {string[]} */
   const alpha = lower.match(/[a-z0-9]+/g) || [];
   const chineseRuns = lower.match(/[\u4e00-\u9fff\u3400-\u4dbf]+/g) || [];
   for (const run of chineseRuns) {
@@ -478,7 +480,7 @@ function buildFulltext() {
 }
 
 function yieldSearchIndex() {
-  if (typeof MessageChannel === "undefined") return new Promise(resolve => typeof setTimeout === "function" ? setTimeout(resolve, 0) : resolve());
+  if (typeof MessageChannel === "undefined") return /** @type {Promise<void>} */ (new Promise(resolve => typeof setTimeout === "function" ? setTimeout(resolve, 0) : resolve()));
   if (!indexYieldChannel) {
     indexYieldChannel = new MessageChannel();
     indexYieldChannel.port1.onmessage = () => indexYieldQueue.shift()?.();
@@ -855,9 +857,7 @@ function folderTree(params) {
 }
 
 function protocolError(code, message) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
+  return Object.assign(new Error(message), {code});
 }
 
 async function dispatch(type, payload, job) {
@@ -886,7 +886,7 @@ async function dispatch(type, payload, job) {
 }
 
 self.addEventListener("message", async function(event) {
-  const message = event.data || {};
+  const message = /** @type {MessageEvent} */ (event).data || {};
   const id = message.id;
   if (message.protocol !== WORKER_PROTOCOL_VERSION) {
     self.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: "response", id, ok: false, error: { code: "PROTOCOL_MISMATCH", message: "Refresh required: app/Worker protocol mismatch" } });
