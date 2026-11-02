@@ -129,8 +129,7 @@ export function createReaderSource(readerContext) {
       heading.scrollLeft = 0;
     }
     heading.title = displayName;
-    heading.setAttribute("aria-label", `书名：${displayName}；可横向滚动`);
-    document.title = `${displayName} - VoiceOfML Reader`;
+    document.title = displayName;
     if (readerContext.isReaderOverlayFrame())
       window.parent.postMessage({ type: "voice-reader-title", title: document.title }, location.origin);
     readerContext.applyReaderPathMetadata(readerContext.resolvedReaderData);
