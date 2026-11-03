@@ -767,6 +767,51 @@ test("filtered empty relevance skips scoring while preserving pages and anchors"
   assert.strictEqual(replaced.anchor_index, 3);
   assert.notStrictEqual(replaced.snapshot_generation, first.snapshot_generation);
 });
+test("dense repository sorting can reuse prepared stable orders", async () => {
+  const input = Array.from({length:36}, (_, index) => ({...records[0],
+    Repo:"Repo/A", File:["a", "A", "中", "b"][index % 4], Extension:index % 7 ? "pdf" : "txt",
+    Size:[100, 0, -1, "unknown"][index % 4], Folder:["f" + index]}));
+  for (const sort of ["name", "size"]) {
+    const {worker} = await loaded(input);
+    const params = {q:"",repos:["Repo/A"],extensions:["pdf"],sort,pageSize:100};
+    const cold = await worker.request("local-search", params);
+    await worker.request("local-search", {q:"",repos:["Repo/A"],sort});
+    vm.runInContext('searchOrderCache.clear();', worker.context);
+    worker.context[sort === "name" ? "compareRecordName" : "compareRecordSize"] = () => { throw Error("re-sorted"); };
+    const warm = await worker.request("local-search", params);
+    assert.deepStrictEqual(warm.ids, cold.ids);
+    assert.strictEqual(warm.total, cold.total);
+  }
+});
+test("prepared sort reuse falls back for sparse, multi-repository and searched results", async () => {
+  const input = Array.from({length:30}, (_, index) => ({...records[0],
+    Repo:index < 25 ? "Repo/A" : "Repo/B", File:"same " + (index % 4),
+    Extension:index % 6 ? "pdf" : "txt", Folder:["f" + index]}));
+  const {worker} = await loaded(input);
+  await worker.request("local-search", {q:"",repos:["Repo/A"],sort:"name"});
+  vm.runInContext('globalThis.originalNameCompare = compareRecordName; globalThis.sortComparisons = 0; compareRecordName = (a,b) => {sortComparisons++; return originalNameCompare(a,b)};',worker.context);
+  const sparse = await worker.request("local-search", {q:"",repos:["Repo/A"],extensions:["txt"],sort:"name"});
+  assert.strictEqual(sparse.total, 5);
+  assert(vm.runInContext('sortComparisons > 0',worker.context));
+  vm.runInContext('sortComparisons = 0;',worker.context);
+  const multiple = await worker.request("local-search", {q:"",repos:["Repo/A","Repo/B"],extensions:["pdf"],sort:"name"});
+  assert.strictEqual(multiple.total, 25);
+  assert(vm.runInContext('sortComparisons > 0',worker.context));
+  vm.runInContext('sortComparisons = 0;',worker.context);
+  const searched = await worker.request("local-search", {q:"same",exact:true,repos:["Repo/A"],extensions:["pdf"],sort:"name"});
+  assert.strictEqual(searched.total, 20);
+  assert(vm.runInContext('sortComparisons > 0',worker.context));
+});
+test("dense sort reuse caps its temporary index set", async () => {
+  const input = Array.from({length:65537}, (_, index) => ({...records[0],
+    Repo:"Repo/A", File:"same " + index, Extension:"pdf", Folder:[]}));
+  const {worker} = await loaded(input);
+  await worker.request("local-search", {q:"",repos:["Repo/A"],sort:"size"});
+  vm.runInContext('globalThis.usedSort = false; globalThis.originalSizeCompare = compareRecordSize; compareRecordSize = (a,b) => {usedSort = true; return originalSizeCompare(a,b)};',worker.context);
+  const result = await worker.request("local-search", {q:"",repos:["Repo/A"],extensions:["pdf"],sort:"size",pageSize:1});
+  assert.strictEqual(result.total, 65537);
+  assert.strictEqual(vm.runInContext('usedSort',worker.context), true);
+});
 test("random record and reader requests honor repository filters", async () => {
   const { worker } = await loaded();
   let result = await worker.request("random-record", { repo: "Repo/B", randomValue: 0 });
