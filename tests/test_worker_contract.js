@@ -746,6 +746,27 @@ test("empty searches with record filters retain the general filtering path", asy
   assert.strictEqual(calls, 1);
   assert.deepStrictEqual(result.records.map((record) => record.File), ["beta alpha"]);
 });
+test("filtered empty relevance skips scoring while preserving pages and anchors", async () => {
+  const {worker} = await loaded();
+  worker.context.tokenize = () => { throw new Error("empty query should not score records"); };
+  const params = {q:"", extensions:["txt"], pageSize:2, anchorId:"Repo/C\0docs/delta.TXT"};
+  const first = await worker.request("local-search", params);
+  assert.strictEqual(first.total, 7);
+  assert.deepStrictEqual(first.records.map(record => record.File), ["alpha guide", "gamma"]);
+  assert.strictEqual(first.anchor_index, 3);
+  const second = await worker.request("local-search", {...params, page:2});
+  assert.deepStrictEqual(second.records.map(record => record.File), ["手机资料", "delta"]);
+  assert.strictEqual(second.anchor_index, 3);
+  const sorted = await worker.request("local-search", {...params, sort:"size", pageSize:10});
+  assert.deepStrictEqual(sorted.records.map(record => record.File), ["delta", "gamma", "alpha guide", "same", "same", "手机资料", "手。机"]);
+  const controls = await worker.request("local-search", {q:"", folderMatchMode:"mixed", folderSelfs:[""], folderSubtrees:["docs"], pageSize:20});
+  assert.deepStrictEqual(controls.records.map(record => record.File), ["alpha guide", "beta alpha", "手机资料", "delta", "手。机", "same"]);
+  await worker.request("replace-corpus", {data:compact(records.slice().reverse())});
+  const replaced = await worker.request("local-search", {...params, page:1});
+  assert.deepStrictEqual(replaced.records.map(record => record.File), ["same", "same"]);
+  assert.strictEqual(replaced.anchor_index, 3);
+  assert.notStrictEqual(replaced.snapshot_generation, first.snapshot_generation);
+});
 test("random record and reader requests honor repository filters", async () => {
   const { worker } = await loaded();
   let result = await worker.request("random-record", { repo: "Repo/B", randomValue: 0 });
