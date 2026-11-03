@@ -306,6 +306,19 @@ export function createReaderPdfEngine(readerContext) {
           ]);
         } catch (_) { readerContext.assertReaderActive(); }
         saved ||= settledRestoration;
+        if (first && !saved && !readerContext.restorationFailed &&
+            navigation === readerContext.readerRuntime?.currentGeneration("navigation")) {
+          // If the bounded history wait elapsed while the ordinary preloader
+          // is still initializing, either can finish first. A settled history
+          // can still authorize the staged path; a ready or failed ordinary
+          // Worker keeps the previous fallback/failure behavior. Never infer
+          // an empty history from the timeout itself.
+          const outcome = await readerContext.awaitReader(Promise.race([
+            Promise.resolve(restoration).then(value => ({saved:{value}})),
+            workerPreload.then(() => ({saved:null}))
+          ]));
+          saved = outcome.saved || settledRestoration;
+        }
         // All sufficiently large, strongly versioned native PDFs can use the
         // same staged parser on a fresh page-one open. Object numbers, xref
         // offsets, catalog layout and producer strings are not evidence of
