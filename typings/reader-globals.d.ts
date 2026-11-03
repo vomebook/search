@@ -10,6 +10,14 @@ declare function encodeRecordPath(path: string | null | undefined): string;
 declare function escapeHTML(text: unknown): string;
 declare function getHighlightRegex(query: string): RegExp | null;
 declare function highlightText(text: unknown, query: string | null | undefined): string;
+declare class BoundedResponseCache<T = unknown> extends Map<string, T> {
+  constructor(limit: number, ttl: number, budget?: number);
+  limit: number;
+  ttl: number;
+  budget: number;
+  bytes: number;
+  entriesInfo: Map<string, {bytes: number; time: number}>;
+}
 
 interface ReaderSecurityApi {
   readonly LIMITS: Readonly<{
