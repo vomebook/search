@@ -113,7 +113,7 @@ export function createReaderPdfEngine(readerContext) {
     if (firstPage && attempt === 0) query.set("reader-first-page", "1");
     if (attempt) query.set("reader-worker-retry", String(attempt));
     pdfjs.GlobalWorkerOptions.workerSrc = readerContext.PDFJS_WORKER_URL + (query.size ? `?${query}` : "");
-    // PDF.js 6.4.299 does not expose or terminate its native Worker until the
+    // PDF.js 6.5.438 does not expose or terminate its native Worker until the
     // ready handshake completes. Capture that synchronously-created Worker so
     // cancellation can also release a stalled handshake. Restore the global
     // constructor immediately; PDF.js still owns initialization and fallback.

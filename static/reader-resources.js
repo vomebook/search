@@ -3,19 +3,19 @@
   // Canonical resource inventory for runtime, warming, caching and static builds.
   const vendors = {
     pdf: {
-      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/build/pdf.min.mjs",
+      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/build/pdf.min.mjs",
       file: "pdf.min.mjs",
-      sha256: "57456c8e0c81e46be31174b499ef77f2b9f5ee46d04412ba627320a36755d4c2"
+      sha256: "3a88402882cfa3e7e72c2c9b5149f52f0f88baf1c5b62aa11a41abdbc2072440"
     },
     pdfWorker: {
-      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/build/pdf.worker.min.mjs",
+      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/build/pdf.worker.min.mjs",
       file: "pdf.worker.min.mjs",
-      sha256: "9536359f1b8367850d485731ca1d5e45c159a7b7a0912325e539937aa21ceb18"
+      sha256: "1e64c8240e54735ec5913b37acd5134747799cb8c6bb3777c70adbc01232d2aa"
     },
     pdfWorkerSource: {
-      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/build/pdf.worker.mjs",
+      url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/build/pdf.worker.mjs",
       file: "pdf.worker.mjs",
-      sha256: "07ceb740d746e5d9012fcf9f27d5c7dea09f7d2f5e74f5c8109e5787551a2333"
+      sha256: "43710009ea26bfbcb615524946e46e3aaf8ad927514f5e465e8ff6d18044ffe9"
     },
     marked: {
       url: "https://cdn.jsdelivr.net/npm/marked@18.1.2/lib/marked.umd.js",
@@ -44,8 +44,8 @@
     Object.freeze(vendor);
   }
   const pdfArchive = Object.freeze({
-    url: "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.4.299.tgz",
-    sha256: "86269b40170eb41740ea05ad2102d71d33de4f122b34eb2f478be0ea7779c415"
+    url: "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.5.438.tgz",
+    sha256: "7461aefcd27c4ef0dd76f9ca5760f09466eb6b3f934432670c12132e7b3d6faa"
   });
   const foliateRevision = "78914aef4466eb960965702401634c2cb348e9b1";
   const foliateArchive = Object.freeze({
@@ -79,14 +79,14 @@
       sha256: "6c13caf4b90e08323f404f596c51549cdc6b01010bd43935a0bdc6a25bd61021"
     },
     textLayer: {
-      url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.4.299/web/text_layer_builder.css",
+      url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.5.438/web/text_layer_builder.css",
       file: "pdfjs/text_layer_builder.css",
       sha256: "5b21bcb7d703cae5b8eebf9c8579435409aaf351b62e7518327ada60bdd0946f"
     },
     annotationLayer: {
-      url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.4.299/web/annotation_layer_builder.css",
+      url: "https://cdn.jsdelivr.net/gh/mozilla/pdf.js@v6.5.438/web/annotation_layer_builder.css",
       file: "pdfjs/annotation_layer_builder.css",
-      sha256: "5a692d678ff97932023adf101c9faae5a0fda623f341e6646b6dc9251e259ad8"
+      sha256: "eb7905a0db3e35b4a069c7ba47048fc131ccc2eccc8c4205e4e20dac58c80176"
     }
   };
   for (const vendor of Object.values(foliateVendors)) Object.freeze(vendor);
