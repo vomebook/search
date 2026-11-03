@@ -189,6 +189,118 @@ class StaticGateTests(unittest.TestCase):
                         '"/static/reader/formats/reader-format-adapters.js" }));\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
+    def test_pdf_network_coverage_gate_fails_closed(self):
+        paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
+                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",
+                 "scripts/check_pdf_network_mutations.mjs",
+                 "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_network_contract.mjs",
+                 "tests/test_reader_pdf_sparse_ranges.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_pdf_network_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "reader-pdf-network.mjs")
+        empty = 'import { test } from "node:test"; test("empty", () => {});\n'
+        for path in paths:
+            if path.startswith("tests/"):
+                (self.root / path).write_text(empty)
+        self.assert_check(self.run_check(*check), False, "exactly one source coverage row")
+        (self.root / "tests/test_reader_pdf_network_contract.mjs").write_text(
+            'import "../static/reader/pdf/reader-pdf-network.mjs";\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
+
+    def test_pdf_network_coverage_gate_enforces_fractional_minimum(self):
+        paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
+                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",
+                 "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_network_contract.mjs",
+                 "tests/test_reader_pdf_sparse_ranges.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        gate = self.root / "scripts/check_pdf_network_coverage.mjs"
+        source = gate.read_text()
+        self.assertIn("const minimum = [98.31, 85.65, 88.43];", source)
+        gate.write_text(source.replace("const minimum = [98.31, 85.65, 88.43];",
+                                       "const minimum = [98.32, 85.65, 88.43];"))
+        self.assert_check(self.run_check("node", "scripts/check_pdf_network_coverage.mjs"), False,
+                          "PDF network coverage gate requires passing tests")
+
+    def test_pdf_network_coverage_gate_rejects_removed_branch_coverage(self):
+        paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
+                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",
+                 "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_network_contract.mjs",
+                 "tests/test_reader_pdf_sparse_ranges.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        test = self.root / "tests/test_reader_pdf_network_contract.mjs"
+        source = test.read_text()
+        start = source.index("  // The optional shared cache belongs")
+        end = source.index("  // Once a previously validated origin", start)
+        test.write_text(source[:start] + source[end:])
+        self.assert_check(self.run_check("node", "scripts/check_pdf_network_coverage.mjs"), False,
+                          "PDF network coverage gate requires passing tests")
+
+    def test_pdf_network_coverage_gate_keeps_cancellation_test(self):
+        paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
+                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",
+                 "scripts/check_pdf_network_mutations.mjs",
+                 "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_network_contract.mjs",
+                 "tests/test_reader_pdf_sparse_ranges.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        test = self.root / "tests/test_reader_pdf_backpressure.mjs"
+        original = test.read_text()
+        begin = "  // BEGIN_PDF_ADMISSION_CANCELLATION\n"
+        end = "  // END_PDF_ADMISSION_CANCELLATION\n"
+        self.assertEqual(original.count(begin), 1)
+        self.assertEqual(original.count(end), 1)
+        start = original.index(begin)
+        finish = original.index(end, start) + len(end)
+        test.write_text(original[:start] + original[finish:])
+        # Aggregate coverage alone cannot detect loss of this regression test;
+        # the same lines execute in other paths. The explicit mutant must die.
+        self.assert_check(self.run_check("node", "scripts/check_pdf_network_mutations.mjs"), False,
+                          "post-admission cancellation mutant survived")
+
+    def test_reader_core_coverage_gate_requires_every_source(self):
+        paths = ["static/reader/formats/reader-section-virtualizer.js",
+                 "static/reader/formats/reader-chapter-repository.js",
+                 "static/reader/ui/reader-scroll-anchor.js", "static/reader/core/reader-contract.js",
+                 "static/reader/core/reader-security.js", "scripts/check_reader_core_coverage.mjs",
+                 "tests/test_reader_section_virtualizer.js", "tests/test_reader_chapter_repository.js",
+                 "tests/test_reader_chapter_scheduler.js", "tests/test_reader_chapter_preload.js",
+                 "tests/test_reader_scroll_anchor.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_reader_core_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "reader-chapter-repository.js")
+        (self.root / "tests/test_reader_scroll_anchor.js").write_text(
+            'const test = require("node:test"); test("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "reader-scroll-anchor.js")
+        (self.root / "tests/test_reader_scroll_anchor.js").write_text(
+            'require("../static/reader/ui/reader-scroll-anchor.js");\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
+
+    def test_pdf_network_safety_mutation_gate_rejects_unexpected_failure(self):
+        paths = ["static/reader/pdf/reader-pdf-network.mjs", "tests/test_reader_pdf_backpressure.mjs",
+                 "tests/test_reader_pdf_network_contract.mjs", "scripts/check_pdf_network_mutations.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_pdf_network_mutations.mjs"]
+        self.assert_check(self.run_check(*check), True, '"total":6,"killed":6,"survived":0,"errors":0')
+        (self.root / paths[1]).write_text('import "../static/reader/pdf/reader-pdf-network.mjs";\nthrow Error("unrelated");\n')
+        self.assert_check(self.run_check(*check), False, "unexpected failure, not a killed mutant")
+
     def test_chapter_scheduler_type_contract_rejects_invalid_index(self):
         source = self.root / "static/chapter-usage.js"
         config = self.root / "jsconfig.json"
