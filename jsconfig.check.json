@@ -86,6 +86,7 @@
     "static/search/response-cache.js",
     "static/search/file-types.js",
     "static/search/response-validation.js",
+    "static/search/result-identity.js",
     "static/tts-client.js",
     "static/app.js",
     "static/reader.js",

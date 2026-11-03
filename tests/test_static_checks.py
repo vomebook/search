@@ -286,6 +286,64 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(prefix + 'cache.set("a", {value: "wrong"});\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_search_result_identity_coverage_gate_fails_closed(self):
+        paths = ["static/search/result-identity.js", "static/search/record-path.js",
+                 "scripts/check_search_result_identity_coverage.mjs", "tests/test_search_stable_id_baseline.mjs", "static/app.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[2]]
+        self.assert_check(self.run_check(*check), True, "result-identity.js")
+        test = self.root / paths[3]
+        source = test.read_text()
+        name = 'path lookup remains lazy through early returns and Repo conversion'
+        self.assertEqual(source.count("test('" + name + "'"), 1)
+        test.write_text(source.replace("test('" + name + "'", "test('renamed contract'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source.replace("test('" + name + "'", "test.skip('" + name + "'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source.replace("test('" + name + "', () => {", "test('" + name + "', () => { throw new Error('identity failure');"))
+        self.assert_check(self.run_check(*check), False, "identity failure")
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source)
+        gate = self.root / paths[2]
+        gate_source = gate.read_text()
+        include = "--test-coverage-include=**/static/search/result-identity.js"
+        self.assertEqual(gate_source.count(include), 1)
+        gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-identity.js"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+
+    def test_search_result_identity_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        self.assertIn("static/search/result-identity.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/result-identity.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = "declare var VoiceOfMLSearchIdentity: {getResultStableId(result: unknown): string};"
+        self.assertEqual(original.count(before), 1)
+        declaration.write_text(original.replace(before, before.replace("): string};", "): number};")))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_search_result_identity_rejects_wrong_return_types(self):
+        source = self.root / "static/identity-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"}, "files": [str(ROOT / "typings/reader-globals.d.ts"), str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        source.write_text('VoiceOfMLSearchIdentity.getResultStableId(null);\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text('VoiceOfMLSearchIdentity.getResultStableId(null, () => "");\n')
+        self.assert_check(self.run_check(*check), False, "TS2554")
+        source.write_text('/** @type {number} */ const id = VoiceOfMLSearchIdentity.getResultStableId(null);\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_search_response_validation_coverage_gate_fails_closed(self):
         paths = ["static/search/response-validation.js", "scripts/check_search_response_validation_coverage.mjs",
                  "tests/test_search_response_validation_baseline.mjs", "static/app.js"]
