@@ -30,9 +30,26 @@ function sizeParseSizeStr(str) {
   else if (unit === "KB") val *= 1024;
   return Math.round(val);
 }
-  /** @type {typeof globalThis & {bytesToDisplay: typeof bytesToDisplay, fmtSizeUrl: typeof fmtSizeUrl, parseSizeStr: typeof parseSizeStr}} */
+// Result labels deliberately retain their legacy cache/coercion semantics;
+// unlike URL sizes, they use fixed display precision and omit zero.
+const sizeCache = /** @type {Record<string, string | object>} */ ({});
+/** @param {number | string | null | undefined} bytes @returns {string | object} */
+function sizeFormatLabel(bytes) {
+  if (!bytes && bytes !== 0) return "";
+  if (sizeCache[bytes] !== undefined) return sizeCache[bytes];
+  if (typeof bytes === "string") bytes = parseInt(bytes);
+  if (isNaN(bytes) || bytes === 0) return (sizeCache[bytes] = "");
+  let result;
+  if (bytes < 1024) result = bytes + " B";
+  else if (bytes < 1048576) result = (bytes / 1024).toFixed(1) + " KB";
+  else if (bytes < 1073741824) result = (bytes / 1048576).toFixed(1) + " MB";
+  else result = (bytes / 1073741824).toFixed(2) + " GB";
+  return (sizeCache[bytes] = result);
+}
+  /** @type {typeof globalThis & {bytesToDisplay: typeof bytesToDisplay, fmtSizeUrl: typeof fmtSizeUrl, parseSizeStr: typeof parseSizeStr, formatSize: typeof formatSize}} */
   const globals = globalThis;
   globals.bytesToDisplay = sizeBytesToDisplay;
   globals.fmtSizeUrl = sizeFmtSizeUrl;
   globals.parseSizeStr = sizeParseSizeStr;
+  globals.formatSize = sizeFormatLabel;
 }
