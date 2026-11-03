@@ -148,3 +148,36 @@ class ConvertedReaderResponsivenessTests(unittest.TestCase):
           }
         }''')
         self.assertEqual(value, {'localCalls': 0, 'opened': 0})
+
+    def test_stale_local_failure_does_not_replace_new_reader_status(self):
+        value = self.page.evaluate(r'''async () => {
+          const saved = {assets:readerAssets, converted:convertedReaderRecords,
+            byRepo:convertedReaderRecordsByRepo, pending:convertedReaderRecordsPending,
+            repo:STATE.repoFull, loaded:STATE.dataLoaded, metadata:readerMetadata,
+            getLocal:getRandomLocal, open:openReaderRecord, id:randomReaderRequestId};
+          let oldReject, localCalls=0, opened=0;
+          try {
+            readerAssets={}; convertedReaderRecords=[]; convertedReaderRecordsByRepo={};
+            convertedReaderRecordsPending=null; STATE.repoFull='VoiceOfML/Test'; STATE.dataLoaded=true;
+            readerMetadata={count:0,byRepo:{'VoiceOfML/Test':0}};
+            getRandomLocal=async()=>{localCalls++; if(localCalls===1) return new Promise((_,reject)=>oldReject=reject);
+              return {Repo:'VoiceOfML/Test',File:'new',Extension:'txt',Folder:[],HasTxt:false,
+                Link:'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/new.txt'};};
+            openReaderRecord=()=>{opened++;return true;};
+            const messages=[];const original=showToast;showToast=message=>messages.push(message);
+            const old=randomTxt(); await Promise.resolve();
+            const newer=randomTxt(); await Promise.resolve(); await newer;
+            oldReject(new TypeError('obsolete local source failed')); await old;
+            showToast=original;
+            return {messages,localCalls,opened};
+          } finally {
+            readerAssets=saved.assets;convertedReaderRecords=saved.converted;
+            convertedReaderRecordsByRepo=saved.byRepo;convertedReaderRecordsPending=saved.pending;
+            STATE.repoFull=saved.repo;STATE.dataLoaded=saved.loaded;readerMetadata=saved.metadata;
+            getRandomLocal=saved.getLocal;openReaderRecord=saved.open;randomReaderRequestId=saved.id;
+          }
+        }''')
+        self.assertEqual(value['localCalls'], 2)
+        self.assertEqual(value['opened'], 1)
+        self.assertNotIn('暂无可读书籍', value['messages'])
+        self.assertNotIn('随机打开失败', value['messages'])
