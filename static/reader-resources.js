@@ -191,6 +191,7 @@
       "search/search-session.js",
       "search/download-controller.js",
       "search/size-format.js",
+      "search/record-path.js",
       "style.css",
       ...(project === "github" ? ["search/index-worker.js"] : []),
       "app.js"
