@@ -2,7 +2,7 @@ name: Search bootstrap remote benchmark (temporary)
 
 on:
   push:
-    branches: ["bench/search-bootstrap-remote-20261103"]
+    branches: ["bench/search-bootstrap-projection-20261103"]
 
 permissions:
   contents: read

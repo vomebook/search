@@ -60,10 +60,10 @@ index ec6788b..3d35500 100644
      global initial_payload_global, initial_payload_by_repo
 diff --git a/backend/search_bootstrap.py b/backend/search_bootstrap.py
 new file mode 100644
-index 0000000..6c194e5
+index 0000000..ac5a8be
 --- /dev/null
 +++ b/backend/search_bootstrap.py
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,31 @@
 +"""Typed construction of initial search pages from caller-owned state."""
 +from __future__ import annotations
 +
@@ -73,8 +73,9 @@ index 0000000..6c194e5
 +
 +
 +def trim_initial_results(raw: Iterable[SearchRecord]) -> list[SearchRecord]:
-+    keys = ("Repo", "File", "Extension", "Folder", "Size", "HasTxt")
-+    return [{key: record.get(key, [] if key == "Folder" else "") for key in keys} for record in raw]
++    return [{"Repo": record.get("Repo", ""), "File": record.get("File", ""),
++             "Extension": record.get("Extension", ""), "Folder": record.get("Folder", []),
++             "Size": record.get("Size", ""), "HasTxt": record.get("HasTxt", "")} for record in raw]
 +
 +
 +def build_initial_payload(repo: str | None, get_page_size: Callable[[], int],
