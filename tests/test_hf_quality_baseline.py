@@ -32,6 +32,11 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         gate = 'node --test tests/test_search_extension_inventory_baseline.mjs tests/test_search_extension_filter_baseline.mjs'
         self.assertEqual(workflow.count(gate), 2)
 
+    def test_pages_runs_search_position_and_prefetch_regressions(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        gate = 'python3 -B -m unittest -v tests.test_prefetch_pipeline tests.test_search_positions'
+        self.assertEqual(workflow.count(gate), 1)
+
 
 class HfQualityBaselineTests(unittest.TestCase):
     def setUp(self):
