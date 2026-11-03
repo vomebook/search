@@ -62,6 +62,27 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
                   const invalid = isValidSearchResponse({total:1,page:1,page_size:2,results:[]},1,2);
                   return [desc.writable,desc.enumerable,desc.configurable,changed,restored,deleted,valid,invalid];
                 }'''), [True, True, False, True, True, False, True, False])
+                self.assertEqual(current.evaluate('''() => {
+                  const original = getResultStableId;
+                  const originalPath = globalThis.buildRecordRelativePath;
+                  const desc = Object.getOwnPropertyDescriptor(globalThis, 'getResultStableId');
+                  const replacement = () => 'replacement';
+                  let changed, restored, deleted, fallback, received;
+                  try {
+                    globalThis.getResultStableId = replacement;
+                    changed = getResultStableId === replacement;
+                    globalThis.getResultStableId = original;
+                    restored = getResultStableId === original;
+                    deleted = delete globalThis.getResultStableId;
+                    const record = {Repo:'R'};
+                    globalThis.buildRecordRelativePath = value => { received = value === record; return 'mock/path'; };
+                    fallback = getResultStableId(record);
+                  } finally {
+                    globalThis.getResultStableId = original;
+                    globalThis.buildRecordRelativePath = originalPath;
+                  }
+                  return [desc.writable,desc.enumerable,desc.configurable,changed,restored,deleted,fallback,received];
+                }'''), [True, True, False, True, True, False, 'R\0mock/path', True])
                 self.assertEqual(current.evaluate('''() => [ORDERED_EXTENSIONS.length,
                   ORDERED_EXTENSIONS.indexOf('pdf'), ORDERED_EXTENSIONS.indexOf('PDF'),
                   getFileIconType('AAC'), getFileIconType('unknown')]'''), [67, 0, -1, 'audio', 'file'])
