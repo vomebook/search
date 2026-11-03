@@ -2,7 +2,7 @@ name: Search candidates remote benchmark (temporary)
 
 on:
   push:
-    branches: ["bench/search-candidates-remote-20261103"]
+    branches: ["bench/search-candidates-stable-20261103"]
 
 permissions:
   contents: read

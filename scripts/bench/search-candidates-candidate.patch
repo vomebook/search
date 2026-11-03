@@ -1,5 +1,5 @@
 diff --git a/backend/app.py b/backend/app.py
-index 3beb92c..f90aeee 100644
+index 3beb92c..ec6788b 100644
 --- a/backend/app.py
 +++ b/backend/app.py
 @@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
@@ -10,9 +10,30 @@ index 3beb92c..f90aeee 100644
  from backend.search_projection import public_record as _public_record, trim_results as _trim_results
  from backend.reader_identity import (READER_ESCAPE_NORMALIZATION_RE as READER_ESCAPE_NORMALIZATION_RE,
      canonical_reader_source_url as canonical_reader_source_url, reader_short_id as reader_short_id, _base36 as _base36)
-@@ -262,42 +263,9 @@ def word_posting_count(token: str) -> int:
+@@ -261,43 +262,29 @@ def word_posting_count(token: str) -> int:
+         return value[2]
      return len(value)
  
++def _candidate_postings():
++    return ngram_postings
++
++
++def _candidate_buffers():
++    return ngram_posting_buffers
++
++
++def _candidate_repos():
++    return repo_records_map
++
++
++def _candidate_records():
++    return records
++
++
++def _candidate_resolver():
++    return resolve_postings
++
++
  def literal_candidates(query: str, repos=None) -> set[int] | None:
 -    width = 3 if len(query) >= 3 and ngram_postings.get(3) else 2
 -    postings = ngram_postings.get(width)
@@ -50,9 +71,8 @@ index 3beb92c..f90aeee 100644
 -        if not candidates:
 -            return set()
 -    return candidates or set()
-+    return _literal_candidates(query, repos, lambda: ngram_postings, lambda: ngram_posting_buffers,
-+                               lambda: repo_records_map, lambda: records,
-+                               lambda: resolve_postings)
++    return _literal_candidates(query, repos, _candidate_postings, _candidate_buffers,
++                               _candidate_repos, _candidate_records, _candidate_resolver)
  INITIAL_PAGE_SIZE = 100
  SIDEBAR_DATA_PATH = Path("data/sidebar")
  RECORD_KEY_MAP = {

@@ -16,7 +16,7 @@ BASELINE = "bc9d36d02ed278002d161f01c5512b33ed8b4ea8"
 CANDIDATE = BASELINE
 EXPECTED = {
     "baseline": "b73c5db076ae1dce7c8988fc30049d2c0120ffdf9b6d6b2fd02a4b97e726b3cb",
-    "candidate": "53017bb4702fc8fa8dab5d84dd48cd201e052ef16164d069fefc157b20daec66",
+    "candidate": "bd3de63841020bfc3c16f5015894ae39ff08c38e6a6d3bc03129e1b86ed91a84",
 }
 EXPECTED_MODULE = "81dbe74b8142aed5447478e2a05c36150a5a2abf67f4aa0b55bc3d43b297cec4"
 ORDER = ["baseline", "candidate", "candidate", "baseline", "baseline", "candidate", "candidate", "baseline"]
