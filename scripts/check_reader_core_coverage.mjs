@@ -31,9 +31,15 @@ for (const gate of gates) {
   const text = result.stdout || "";
   const lines = text.split(/\r?\n/);
   const skippedOrTodo = !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text);
+  const expected = {"tests/test_reader_section_virtualizer.js": "reader section virtualizer contracts passed",
+    "tests/test_reader_chapter_repository.js": "reader chapter repository contracts passed",
+    "tests/test_reader_chapter_scheduler.js": "reader chapter scheduler contracts passed",
+    "tests/test_reader_chapter_preload.js": "chapter manifest preload validation, reuse, body deadline and disposal passed",
+    "tests/test_reader_scroll_anchor.js": "reader scroll anchor contracts passed"};
   const missingTests = gate.tests.some(name => {
     const index = lines.indexOf(`# Subtest: ${name}`);
     return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
+      lines[index - 1] !== `# ${expected[name]}` ||
       !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "");
   });
   if (result.status !== 0 || rows.length !== 1 ||
