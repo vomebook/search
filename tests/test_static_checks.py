@@ -182,6 +182,28 @@ class StaticGateTests(unittest.TestCase):
         check = ["node", "scripts/check_adapter_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "reader-format-adapters.js")
         test = self.root / "tests/test_reader_adapter_registry.js"
+        original = test.read_text()
+        name = "reader adapter registry"
+        anchor = 'require("node:test")("' + name + '", runContracts)'
+        self.assertEqual(original.count(anchor), 1)
+        for replacement in ('require("node:test")("renamed contract", runContracts)',
+                            'require("node:test").skip("' + name + '", runContracts)',
+                            'require("node:test").todo("' + name + '", runContracts)'):
+            test.write_text(original.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, "passing named contract")
+        for extra in ('require("node:test")("' + name + '", () => {});',
+                      'require("node:test").skip("extra skip", () => {});',
+                      'require("node:test").todo("extra todo");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named contract")
+        marker = "reader adapter registry contracts passed"
+        self.assertEqual(original.count(marker), 1)
+        test.write_text(original.replace(marker, "missing adapter completion marker"))
+        self.assert_check(self.run_check(*check), False, "passing named contract")
+        anchor = "  checkRegistry();\n  console.log("
+        self.assertEqual(original.count(anchor), 1)
+        test.write_text(original.replace(anchor, "  checkRegistry();\n  throw new Error('adapter assertion failure');\n  console.log("))
+        self.assert_check(self.run_check(*check), False, "adapter assertion failure")
         test.write_text('const test = require("node:test"); test("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "requires exactly one fully covered source row")
         test.write_text('const test = require("node:test"), vm = require("node:vm"), fs = require("node:fs");\n'
