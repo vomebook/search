@@ -862,6 +862,28 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ["node", "scripts/check_pdf_network_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "reader-pdf-network.mjs")
+        contracts = [("tests/test_reader_pdf_backpressure.mjs",
+                      "429 feedback, shared spacing, bounded retry, version consistency and cancellation passed"),
+                     ("tests/test_reader_pdf_network_contract.mjs",
+                      "PDF network contracts: cache identity, safe revalidation and live cancellation passed"),
+                     ("tests/test_reader_pdf_sparse_ranges.mjs",
+                      "Sparse PDF detection, exact demand ranges, bounded concurrency and disposal passed")]
+        for path, marker in contracts:
+            test = self.root / path
+            original = test.read_text()
+            self.assertEqual(original.count(marker), 1)
+            test.write_text(original.replace(marker, "missing PDF network completion marker"))
+            self.assert_check(self.run_check(*check), False, "passing named tests")
+            test.write_text(original)
+        test = self.root / contracts[0][0]
+        original = test.read_text()
+        for extra in ('import {test as extraTest} from "node:test"; extraTest.skip("extra skip", () => {});',
+                      'import {test as extraTest} from "node:test"; extraTest.todo("extra todo");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
+        test.write_text(original + '\nthrow new Error("PDF network assertion failure");\n')
+        self.assert_check(self.run_check(*check), False, "PDF network assertion failure")
+        test.write_text(original)
         empty = 'import { test } from "node:test"; test("empty", () => {});\n'
         for path in paths:
             if path.startswith("tests/"):
@@ -893,7 +915,7 @@ class StaticGateTests(unittest.TestCase):
         above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 85.65, 88.43];"
         gate.write_text(source.replace(needle, above))
         self.assert_check(self.run_check("node", "scripts/check_pdf_network_coverage.mjs"), False,
-                          "PDF network coverage gate requires passing tests")
+                          "PDF network coverage gate requires passing named tests")
 
     def test_pdf_network_coverage_gate_rejects_removed_branch_coverage(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
@@ -910,7 +932,7 @@ class StaticGateTests(unittest.TestCase):
         end = source.index("  // Once a previously validated origin", start)
         test.write_text(source[:start] + source[end:])
         self.assert_check(self.run_check("node", "scripts/check_pdf_network_coverage.mjs"), False,
-                          "PDF network coverage gate requires passing tests")
+                          "PDF network coverage gate requires passing named tests")
 
     def test_pdf_network_coverage_gate_keeps_cancellation_test(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
