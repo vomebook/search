@@ -608,6 +608,29 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ["node", "scripts/check_search_size_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "size-format.js")
+        render = self.root / paths[3]
+        original = render.read_text()
+        names = ["display preserves binary boundaries and historical precision",
+                 "display retains original coercion and empty-value behavior",
+                 "display retains prototype and normalized cache behavior"]
+        for name in names:
+            anchor = 'test("' + name + '"'
+            self.assertEqual(original.count(anchor), 1)
+            for replacement in ('test("renamed contract"', 'test.skip("' + name + '"', 'test.todo("' + name + '"'):
+                render.write_text(original.replace(anchor, replacement))
+                self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('test("' + names[0] + '", () => {});', 'test.skip("extra skip", () => {});',
+                      'test.todo("extra todo");'):
+            render.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
+        render.write_text(original)
+        formatted = self.root / paths[2]
+        formatted_source = formatted.read_text()
+        marker = 'search size formatting, parser compatibility and URL round trips passed'
+        self.assertEqual(formatted_source.count(marker), 1)
+        formatted.write_text(formatted_source.replace(marker, 'missing size completion marker'))
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        formatted.write_text(formatted_source)
         for test in paths[2:]:
             (self.root / test).write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
