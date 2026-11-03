@@ -13,7 +13,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.test_search_projection_contract', workflow)
         self.assertIn('tests.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor 3375b59827594b7511008d3a6ab23c2c116bcb66 HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor c04d691df7bb317605fb064a8de8f455720bd5b3 HEAD', workflow)
 
     def test_full_candidates_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
