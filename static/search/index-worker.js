@@ -158,7 +158,15 @@ function compileWildcardMatcher(pattern) {
   const normalized = String(pattern || "");
   if (normalized.includes("?") && !normalized.includes("*")) {
     // Escaped literals and non-u dots have fixed width and cannot backtrack.
-    return new RegExp(normalized.split("").map(char => char === "?" ? "." : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(""), "i");
+    const tokens = normalized.split("");
+    const fixed = new RegExp(tokens.map(char => char === "?" ? "." : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(""), "i");
+    if (tokens.length < 128 || !tokens.some(char => char !== "?")) return fixed;
+    const required = Array.from(new Set(tokens.filter(char => char !== "?")))
+      .map(char => new RegExp(char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+    return {test(text) {
+      if (text.length > 4096) for (const literal of required) if (!literal.test(text)) return false;
+      return fixed.test(text);
+    }};
   }
   // Boundary stars may match zero characters in substring matching. Escaping
   // every remaining literal keeps regex work bounded and preserves /i rules.

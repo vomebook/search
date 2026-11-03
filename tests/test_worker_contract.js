@@ -234,6 +234,27 @@ test("question-only wildcard preserves non-u UTF-16 and dot semantics", () => {
   vm.runInContext('if (compileWildcardMatcher("a".repeat(254)+"?b").test("a".repeat(20000))) throw Error("bad match")',context,{timeout:1000});
 });
 
+test("question-only long fields skip the full scan if a required literal is absent", () => {
+  const {context} = makeWorker();
+  const check = vm.runInContext(`(() => {
+    const original = RegExp.prototype.test;
+    let full = 0;
+    RegExp.prototype.test = function(text) { if (this.source.length > 100) full++; return original.call(this,text); };
+    try {
+      const matcher = compileWildcardMatcher('a' + '?'.repeat(126) + 'z');
+      const absent = matcher.test('a'.repeat(4097));
+      const afterAbsent = full;
+      const present = matcher.test('a'.repeat(4097)+'z');
+      const afterPresent = full;
+      const short = matcher.test('a'.repeat(4096));
+      return {absent,afterAbsent,present,afterPresent,short,afterShort:full};
+    } finally { RegExp.prototype.test = original; }
+  })()`,context);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(check)), {absent:false,afterAbsent:0,present:true,afterPresent:1,short:false,afterShort:2});
+  assert.strictEqual(context.compileWildcardMatcher('???').test('x'.repeat(4097)), true);
+  assert.strictEqual(context.compileWildcardMatcher('a?b').test('x'.repeat(4097) + 'a\nb'), false);
+});
+
 test("wildcard search returns complete IDs for repeated-star patterns", async () => {
   const {worker} = await loaded([{...records[0], File: "a".repeat(120)}, {...records[1], File: "b"}]);
   assert.deepStrictEqual((await worker.request("local-search", {q:"*a".repeat(10)+"a", exact:true})).records.map(r=>r.File), ["a".repeat(120)]);
