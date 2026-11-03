@@ -7,6 +7,14 @@ import unittest
 from scripts.verify_hf_quality_baseline import REQUIRED, validate_baselines
 
 
+class HfSearchProjectionCiTests(unittest.TestCase):
+    def test_full_projection_contract_and_mutations_are_required(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        self.assertIn('tests.test_search_projection_contract', workflow)
+        self.assertIn('tests.test_search_projection_mutation_contract', workflow)
+        self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
+
+
 class HfQualityBaselineTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -198,7 +198,8 @@ jobs:
             tests.test_search_filters_contract tests.test_search_words_contract tests.test_mixed_folder_performance \
             tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract \
             tests.test_reader_identity_contract tests.test_cache_core_contract tests.test_reader_index_contract \
-            tests.test_record_metadata_contract tests.test_folder_tree_contract tests.test_folder_tree_mutation_contract
+            tests.test_record_metadata_contract tests.test_folder_tree_contract tests.test_folder_tree_mutation_contract \
+            tests.test_search_projection_contract tests.test_search_projection_mutation_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
           python -B scripts/check_strict_inventory.py "$RUNNER_TEMP/hf-quality-baseline/strict-inventory-debt.json"
           python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" "$RUNNER_TEMP/hf-quality-baseline/backend-coverage-debt.json"
@@ -215,6 +216,7 @@ jobs:
           python -B scripts/check_search_words_mutation.py --module search_filters
           python -B scripts/check_search_words_mutation.py --module proxy_streams
           python -B scripts/check_search_words_mutation.py --module folder_tree
+          python -B scripts/check_search_words_mutation.py --module search_projection
       - name: Install browser dependencies
         working-directory: huggingface-search
         run: python -m playwright install --with-deps chromium firefox
