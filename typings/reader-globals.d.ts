@@ -11,6 +11,7 @@ declare function escapeHTML(text: unknown): string;
 declare function getHighlightRegex(query: string): RegExp | null;
 declare function highlightText(text: unknown, query: string | null | undefined): string;
 declare var VoiceOfMLSearchValidation: {isValidSearchResponse(data: unknown, expectedPage: number, expectedPageSize: number): unknown};
+declare var VoiceOfMLSearchIdentity: {getResultStableId(result: unknown): string};
 declare var VoiceOfMLSearchFileTypes: {orderedExtensions: string[]; fileIconMap: Record<string, string | object>};
 declare class BoundedResponseCache<T = unknown> extends Map<string, T> {
   constructor(limit: number, ttl: number, budget?: number);

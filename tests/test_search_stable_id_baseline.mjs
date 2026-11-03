@@ -1,4 +1,4 @@
-// Original host ID function and the existing record-path helper; no production changes.
+// Expectations were pinned against both original inline ID functions before extraction.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,9 +9,11 @@ const root = process.cwd();
 const context = vm.createContext({});
 const dependency = path.join(root, 'static/search/record-path.js');
 vm.runInContext(fs.readFileSync(dependency, 'utf8'), context, {filename: dependency});
+const identity = path.join(root, 'static/search/result-identity.js');
+vm.runInContext(fs.readFileSync(identity, 'utf8'), context, {filename: identity});
 const source = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const match = source.match(/^function getResultStableId\([^]*?^}/m);
-assert.ok(match, 'original getResultStableId must remain inline');
+assert.ok(match, 'host getResultStableId binding must remain inline');
 vm.runInContext(match[0], context);
 const id = context.getResultStableId;
 
@@ -69,4 +71,50 @@ test('dependency lookup and exceptional values propagate unchanged', () => {
   context.buildRecordRelativePath = () => { throw new Error('path helper'); };
   assert.throws(() => id(record), {message: 'path helper'});
   context.buildRecordRelativePath = original;
+});
+
+test('path lookup remains lazy through early returns and Repo conversion', () => {
+  const prior = Object.getOwnPropertyDescriptor(context, 'buildRecordRelativePath');
+  const trace = [];
+  try {
+    delete context.buildRecordRelativePath;
+    assert.equal(id({Id: 'stable'}), 'stable');
+    Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, get() {
+      trace.push('early lookup'); throw new Error('must not lookup');
+    }});
+    assert.equal(id({Id: 'stable'}), 'stable');
+    assert.deepEqual(trace, []);
+    const record = {Repo: {[Symbol.toPrimitive](hint) {
+      trace.push(`repo:${hint}`);
+      Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, value: value => {
+        trace.push('rebound path'); assert.equal(value, record); return 'new/path';
+      }});
+      return 'R';
+    }}};
+    assert.equal(id(record), 'R\0new/path');
+    assert.deepEqual(trace, ['repo:string', 'rebound path']);
+  } finally {
+    Object.defineProperty(context, 'buildRecordRelativePath', prior);
+  }
+});
+
+test('host binding forwards the original result and uncoerced return value', () => {
+  const api = context.VoiceOfMLSearchIdentity;
+  const original = api.getResultStableId;
+  const input = {probe: true};
+  const sentinel = {value: 'sentinel'};
+  try {
+    api.getResultStableId = (...args) => {
+      assert.deepEqual(args, [input]);
+      return sentinel;
+    };
+    assert.equal(context.getResultStableId(input), sentinel);
+  } finally {
+    api.getResultStableId = original;
+  }
+  const host = context.getResultStableId;
+  context.getResultStableId = () => 'replaced';
+  assert.equal(vm.runInContext('getResultStableId()', context), 'replaced');
+  context.getResultStableId = host;
+  assert.equal(vm.runInContext('delete globalThis.getResultStableId', context), false);
 });
