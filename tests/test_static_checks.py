@@ -816,6 +816,22 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ["node", "scripts/check_reader_core_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "reader-chapter-repository.js")
+        gate = self.root / "scripts/check_reader_core_coverage.mjs"
+        original_gate = gate.read_text()
+        first = 'tests/test_reader_chapter_repository.js'
+        second = 'tests/test_reader_chapter_scheduler.js'
+        self.assertEqual(original_gate.count(first), 1)
+        self.assertEqual(original_gate.count(second), 1)
+        gate.write_text(original_gate.replace(second, first))
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        gate.write_text(original_gate)
+        chapter_test = self.root / first
+        original_test = chapter_test.read_text()
+        chapter_test.write_text(original_test + '\nrequire("node:test").skip("unrelated skipped check", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        chapter_test.write_text(original_test + '\nrequire("node:test").todo("unfinished check");\n')
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        chapter_test.write_text(original_test)
         (self.root / "tests/test_reader_scroll_anchor.js").write_text(
             'const test = require("node:test"); test("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "reader-scroll-anchor.js")
