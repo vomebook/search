@@ -48,6 +48,30 @@ try {
     cache.put('x'.repeat(4097),0,new Uint8Array([1]),version);assert.equal(cache.size,0);
   }
 
+  // Expiry follows insertion time, not LRU access order. A stale earliest
+  // deadline after replacement or eviction may cause an extra scan, never a
+  // premature eviction or stale byte reuse. Clocks may also move backwards.
+  {
+    let now=0;
+    const cache=createPdfRangeCache({maxBytes:12,maxEntries:3,maxAgeMs:10,now:()=>now});
+    const data=Uint8Array.from([1,2,3,4]);
+    cache.put(options.url,0,data,version);
+    now=5;cache.put(options.url,4,data,version);
+    assert.deepEqual([...cache.get(options.url,0,4,version)],[1,2,3,4]); // older entry becomes MRU
+    now=10;assert.equal(cache.get(options.url,0,4,version),null);
+    assert.deepEqual([...cache.get(options.url,4,8,version)],[1,2,3,4]);
+    now=8;cache.put(options.url,8,data,version); // backward clock, earliest deadline changes
+    now=15;assert.equal(cache.get(options.url,4,8,version),null);
+    assert.deepEqual([...cache.get(options.url,8,12,version)],[1,2,3,4]);
+    now=18;assert.equal(cache.get(options.url,8,12,version),null);
+    assert.equal(cache.size,0);assert.equal(cache.byteLength,0);
+    now=20;cache.put(options.url,0,data,version);
+    now=25;cache.put(options.url,0,Uint8Array.from([5,6,7,8]),version);
+    now=30;assert.deepEqual([...cache.get(options.url,0,4,version)],[5,6,7,8]);
+    now=35;assert.equal(cache.get(options.url,0,4,version),null);
+    assert.equal(cache.size,0);assert.equal(cache.byteLength,0);
+  }
+
   // Reopening validates a fresh byte before reusing an owned prefix or range;
   // a changed ETag must cause a new full prefix and new demanded bytes.
   {
