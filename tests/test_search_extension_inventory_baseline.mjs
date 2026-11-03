@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(path.join(process.cwd(), 'static/app.js'), 'utf8');
 const context = vm.createContext({});
-for (const pattern of [/^const ORDERED_EXTENSIONS = \[[^]*?^\];/m,
+for (const pattern of [/^(?:const|var) ORDERED_EXTENSIONS = \[[^]*?^\];/m,
   /^const FILE_ICON_MAP = \{[^]*?^\};/m, /^function getFileIconType\([^]*?^}/m]) {
   const match = source.match(pattern);
   assert.ok(match, `original inline declaration missing: ${pattern}`);
@@ -73,4 +73,20 @@ test('fallback, inherited keys, errors and lowercase invocation match the origin
   })()`)), {value: 'pdf', calls: 1});
   assert.throws(() => evaluate(`getFileIconType({toLowerCase(){throw new Error('lowercase');}})`),
     {message: 'lowercase'});
+});
+
+test('original lexical inventories cannot be reassigned or shadowed through global properties', () => {
+  assert.equal(evaluate("Object.hasOwn(globalThis, 'ORDERED_EXTENSIONS')"), false);
+  assert.equal(evaluate("Object.hasOwn(globalThis, 'FILE_ICON_MAP')"), false);
+  assert.throws(() => evaluate('ORDERED_EXTENSIONS = []'), {name: 'TypeError'});
+  assert.throws(() => evaluate('FILE_ICON_MAP = {}'), {name: 'TypeError'});
+  assert.throws(() => evaluate('const ORDERED_EXTENSIONS = []'), {name: 'SyntaxError'});
+  assert.throws(() => evaluate('const FILE_ICON_MAP = {}'), {name: 'SyntaxError'});
+});
+
+test('const bindings retain their original mutable array and map contents', () => {
+  evaluate("ORDERED_EXTENSIONS.push('probe-extension'); FILE_ICON_MAP['probe-extension'] = 'audio'");
+  assert.equal(evaluate("ORDERED_EXTENSIONS.indexOf('probe-extension')"), 67);
+  assert.equal(evaluate("getFileIconType('PROBE-EXTENSION')"), 'audio');
+  evaluate("ORDERED_EXTENSIONS.pop(); delete FILE_ICON_MAP['probe-extension']");
 });
