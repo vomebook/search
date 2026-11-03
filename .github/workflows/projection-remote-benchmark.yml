@@ -2,7 +2,7 @@ name: Search candidates remote benchmark (temporary)
 
 on:
   push:
-    branches: ["bench/search-candidates-stable-20261103"]
+    branches: ["bench/search-candidates-direct-20261103"]
 
 permissions:
   contents: read
@@ -35,11 +35,22 @@ jobs:
           BENCH_OUTPUT: ${{ runner.temp }}/projection-remote-benchmark.json
           BENCH_RUN_ID: ${{ github.run_id }}
         run: python -B scripts/bench/projection_remote_benchmark.py
+      - name: Compare direct search ordering in one process
+        env:
+          BENCH_BASELINE: ${{ runner.temp }}/hf-baseline
+          BENCH_CANDIDATE: ${{ runner.temp }}/hf-candidate
+          BENCH_ORDER_OUTPUT: ${{ runner.temp }}/search-order-paired.json
+          BENCH_RUN_ID: ${{ github.run_id }}
+          PYTHONPATH: ${{ runner.temp }}/hf-candidate:${{ runner.temp }}/native
+          PYTHONHASHSEED: "1"
+        run: python -B scripts/bench/search_order_paired.py
       - name: Preserve detailed results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: search-candidates-remote-benchmark-${{ github.run_id }}
-          path: ${{ runner.temp }}/projection-remote-benchmark.json
+          path: |
+            ${{ runner.temp }}/projection-remote-benchmark.json
+            ${{ runner.temp }}/search-order-paired.json
           if-no-files-found: warn
           retention-days: 14
