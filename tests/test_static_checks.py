@@ -1006,6 +1006,36 @@ class StaticGateTests(unittest.TestCase):
                           '/** @type {Promise<string>} */ const restored=s.restoreSearchSession();\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_search_filter_equality_baseline_gate_fails_closed(self):
+        paths = ["static/app.js", "scripts/check_search_filter_equality_baseline.mjs",
+                 "tests/test_search_filter_equality_baseline.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "# pass 7")
+        test = self.root / paths[2]
+        source = test.read_text()
+        name = 'the current length is re-read after indexed getters mutate it'
+        anchor = "test('" + name + "'"
+        self.assertEqual(source.count(anchor), 1)
+        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
+            test.write_text(source.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source + "\ntest('" + name + "', () => {});\n")
+        self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source + "\ntest.skip('additional skip', () => {});\n")
+        self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source.replace(anchor + ", () => {", anchor + ", () => { throw new Error('filter baseline failed');"))
+        self.assert_check(self.run_check(*check), False, "filter baseline failed")
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source)
+        app = self.root / paths[0]
+        app.write_text(app.read_text().replace("function sameSearchFilterValues(", "function renamedFilterValues("))
+        self.assert_check(self.run_check(*check), False, "original inline filter comparison")
+
     def test_search_exact_gate_rejects_unchecked_indexes_and_undefined_optionals(self):
         original = json.loads((ROOT / "jsconfig.search-exact.json").read_text())
         options = original["compilerOptions"]
