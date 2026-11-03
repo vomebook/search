@@ -194,6 +194,7 @@
       "search/record-path.js",
       "search/highlight.js",
       "search/response-cache.js",
+      "search/file-types.js",
       "style.css",
       ...(project === "github" ? ["search/index-worker.js"] : []),
       "app.js"
