@@ -28,9 +28,17 @@ for (const gate of gates) {
       columns.slice(1,4).every(value => /^\d+(?:\.\d+)?$/.test(value));
   });
   const values = rows.length === 1 ? rows[0].split("|").slice(1,4).map(value=>Number(value.trim())) : [];
+  const text = result.stdout || "";
+  const lines = text.split(/\r?\n/);
+  const skippedOrTodo = !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text);
+  const missingTests = gate.tests.some(name => {
+    const index = lines.indexOf(`# Subtest: ${name}`);
+    return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
+      !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "");
+  });
   if (result.status !== 0 || rows.length !== 1 ||
-      values.some((value,index)=>value < [gate.lines,gate.branches,gate.functions][index])) {
-    console.error(`Reader core coverage gate requires passing tests and exactly one source coverage row: ${gate.source}`);
+      values.some((value,index)=>value < [gate.lines,gate.branches,gate.functions][index]) || skippedOrTodo || missingTests) {
+    console.error(`Reader core coverage gate requires passing named tests and exactly one source coverage row: ${gate.source}`);
     process.exitCode = 1;
   }
 }
