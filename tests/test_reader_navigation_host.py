@@ -49,6 +49,15 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertEqual(page.evaluate('parseSizeStr(fmtSizeUrl(1048577))'), 1048577)
             self.assertEqual(page.evaluate('bytesToDisplay(0).unit'), 'B')
             for current in (self.page, page):
+                self.assertEqual(current.evaluate('''() => [formatSize(0), formatSize(1023), formatSize(1024),
+                  formatSize(1048576), formatSize(1073741824)]'''), ['', '1023 B', '1.0 KB', '1.0 MB', '1.00 GB'])
+                row = current.evaluate('''() => {
+                  const html = buildResultHTML({Repo:'VoiceOfML/Test', File:'size', Extension:'txt', Folder:[], Size:1536}, 0);
+                  const node = document.createElement('div'); node.innerHTML = html;
+                  return node.textContent.includes('1.5 KB');
+                }''')
+                self.assertTrue(row)
+            for current in (self.page, page):
                 highlighted = current.evaluate('''() => {
                   const input = '<img src=x onerror="alert(1)"> Tom & abcab';
                   const host = document.createElement('div');
