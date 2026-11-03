@@ -1,5 +1,5 @@
 diff --git a/backend/app.py b/backend/app.py
-index 967b8e5..2c71231 100644
+index 967b8e5..9361c0e 100644
 --- a/backend/app.py
 +++ b/backend/app.py
 @@ -33,6 +33,9 @@ from pydantic import BaseModel, Field
@@ -12,9 +12,14 @@ index 967b8e5..2c71231 100644
  from backend.search_bootstrap import build_initial_payload as _build_initial_payload, trim_initial_results as _trim_initial_results
  from backend.search_candidates import literal_candidates as _literal_candidates
  from backend.search_projection import public_record as _public_record, trim_results as _trim_results
-@@ -1815,36 +1818,15 @@ async def shutdown_reader_bucket_state(target_app: FastAPI) -> None:
+@@ -1814,37 +1817,24 @@ async def shutdown_reader_bucket_state(target_app: FastAPI) -> None:
+         await asyncio.gather(*ocr_tasks, return_exceptions=True)
  
  
++def _reader_cache_policy_any():
++    return any
++
++
  def is_reader_bucket_cacheable(path: str) -> bool:
 -    return (
 -        path.endswith("/page-manifest.json") or path.endswith("/ocr-manifest.json")
@@ -26,7 +31,11 @@ index 967b8e5..2c71231 100644
 -                "/chapter-manifest.json", "/epub-search-index.json.gz",
 -            )))
 -    )
-+    return _is_reader_bucket_cacheable(path)
++    return _is_reader_bucket_cacheable(path, _reader_cache_policy_any)
++
++
++def _reader_cache_policy_regex():
++    return re
  
  
  def reader_bucket_cache_control(path: str) -> str:
@@ -41,7 +50,7 @@ index 967b8e5..2c71231 100644
 -    if "/ebook-chapters/" in path:
 -        return "public, max-age=31536000, immutable"
 -    return "public, max-age=3600"
-+    return _reader_bucket_cache_control(path)
++    return _reader_bucket_cache_control(path, _reader_cache_policy_regex)
  
  
  def reader_bucket_for_path(path: str) -> str:
@@ -54,31 +63,33 @@ index 967b8e5..2c71231 100644
  def reader_bucket_source_url(path: str) -> str:
 diff --git a/backend/reader_cache_policy.py b/backend/reader_cache_policy.py
 new file mode 100644
-index 0000000..bcbc74e
+index 0000000..c7b8537
 --- /dev/null
 +++ b/backend/reader_cache_policy.py
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,35 @@
 +"""Classify synthetic or validated Reader paths for storage and cache policy."""
 +import re
++from collections.abc import Callable, Iterable
++from types import ModuleType
 +
 +
-+def is_reader_bucket_cacheable(path: str) -> bool:
++def is_reader_bucket_cacheable(path: str, get_any: Callable[[], Callable[[Iterable[bool]], bool]] = lambda: any) -> bool:
 +    return (
 +        path.endswith("/page-manifest.json") or path.endswith("/ocr-manifest.json")
 +        or path.endswith('/reading-manifest.json') or path.endswith('/page-map.json.gz')
 +        or path.endswith("/ocr/book-text.json.gz") or path.endswith("/pages/page-000001.webp")
 +        or (path.startswith("objects/") and path.rsplit("/", 1)[-1].startswith("document."))
-+        or (path.startswith("chapters/ebook/") and any(
++        or (path.startswith("chapters/ebook/") and get_any()(
 +            path.endswith(suffix) for suffix in (
 +                "/chapter-manifest.json", "/epub-search-index.json.gz",
 +            )))
 +    )
 +
 +
-+def reader_bucket_cache_control(path: str) -> str:
-+    if re.search(r"/pages/page-[0-9]{6}\.(?:webp|jxl|png)$", path):
++def reader_bucket_cache_control(path: str, get_regex: Callable[[], ModuleType] = lambda: re) -> str:
++    if get_regex().search(r"/pages/page-[0-9]{6}\.(?:webp|jxl|png)$", path):
 +        return "public, max-age=31536000, immutable"
-+    if re.fullmatch(r"objects/[0-9a-f]{2}/[0-9a-f]{64}/[0-9a-f]{16}/(?:preview|text)/.+", path):
++    if get_regex().fullmatch(r"objects/[0-9a-f]{2}/[0-9a-f]{64}/[0-9a-f]{16}/(?:preview|text)/.+", path):
 +        return "public, max-age=31536000, immutable"
 +    if path.startswith("objects/") and path.rsplit("/", 1)[-1].startswith("document."):
 +        return "public, max-age=31536000, immutable"

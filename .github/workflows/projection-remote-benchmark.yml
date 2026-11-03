@@ -2,7 +2,7 @@ name: Reader cache policy remote benchmark (temporary)
 
 on:
   push:
-    branches: ["bench/reader-cache-policy-20261103"]
+    branches: ["bench/reader-policy-dynamic-20261103"]
 
 permissions:
   contents: read
