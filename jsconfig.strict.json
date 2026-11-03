@@ -17,6 +17,7 @@
     "static/reader/pdf/reader-engine-preload.js",
     "static/reader/formats/reader-chapter-repository.js",
     "static/reader/formats/reader-section-virtualizer.js",
+    "static/reader/ui/reader-scroll-anchor.js",
     "typings/reader-globals.d.ts"
   ]
 }

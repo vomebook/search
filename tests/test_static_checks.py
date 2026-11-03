@@ -139,6 +139,11 @@ class StaticGateTests(unittest.TestCase):
         self.assertIn(str(source.relative_to(self.root)), config["files"])
         source.write_text(source.read_text() + "\nfunction strictVirtualProbe(value) { return value; }\nstrictVirtualProbe(1);\n")
         self.assert_check(self.run_check(*check), False, "TS7006")
+        shutil.copyfile(ROOT / "static/reader/formats/reader-section-virtualizer.js", source)
+        source = self.root / "static/reader/ui/reader-scroll-anchor.js"
+        self.assertIn(str(source.relative_to(self.root)), config["files"])
+        source.write_text(source.read_text() + "\nfunction strictScrollProbe(value) { return value; }\nstrictScrollProbe(1);\n")
+        self.assert_check(self.run_check(*check), False, "TS7006")
 
     def test_reader_type_contract_rejects_wrong_arguments(self):
         source = self.root / "static/reader-usage.js"
@@ -251,6 +256,52 @@ class StaticGateTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 source.write_text(valid + bad + "\n")
                 self.assert_check(self.run_check(*check), False, diagnostic)
+
+    def test_strict_scroll_anchor_type_contract(self):
+        source = self.root / "static/scroll-strict-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), "static/scroll-strict-usage.js"]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        valid = ('const manager = VoiceOfMLReaderScroll.createScrollAnchorManager('
+                 '{viewport: document.body, candidates: () => [document.body]});\n'
+                 'const saved = manager.capture(); manager.restore(saved);\n'
+                 'const resultLength = manager.preserve(() => "text").length;\n'
+                 'manager.whenIdle(() => console.log(resultLength)); manager.observe(document.body);\n'
+                 'VoiceOfMLReaderScroll.createScrollAnchorManager({viewport: document.body, candidates: () => [], '
+                 'requestFrame: callback => 1, cancelFrame: id => {}, '
+                 'setTimer: (callback, delay) => { if (typeof callback === "function") callback(); return 1; }, '
+                 'clearTimer: id => {}});\n')
+        source.write_text(valid)
+        self.assert_check(self.run_check(*check), True, "")
+        for bad, diagnostic in (
+            ('VoiceOfMLReaderScroll.createScrollAnchorManager({viewport: "bad", candidates: () => []});', "TS2322"),
+            ('VoiceOfMLReaderScroll.createScrollAnchorManager({viewport: document.body, candidates: () => [3]});', "TS2322"),
+            ('manager.restore({node: document.body, offset: "bad", generation: 1});', "TS2322"),
+            ('manager.preserve(() => "text").toFixed();', "TS2551"),
+            ('manager.whenIdle("bad");', "TS2345"),
+            ('VoiceOfMLReaderScroll.createScrollAnchorManager({viewport: document.body, candidates: () => [], '
+             'setTimer: () => "wrong"});', "TS2322"),
+        ):
+            with self.subTest(bad=bad):
+                source.write_text(valid + bad + "\n")
+                self.assert_check(self.run_check(*check), False, diagnostic)
+
+    def test_scroll_anchor_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/reader/ui/reader-scroll-anchor.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        valid_return = "restore(snapshot?: ReaderScrollAnchor | null): boolean;"
+        self.assertEqual(original.count(valid_return), 1)
+        declaration.write_text(original.replace(valid_return, "restore(snapshot?: ReaderScrollAnchor | null): string;"))
+        self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_static_globals_match_their_runtime_implementations(self):
         # Compile the actual classic scripts with their public declarations so
