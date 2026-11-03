@@ -777,6 +777,9 @@ function searchLocal(params) {
   const filtered = applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
     ordered = filtered.sort(params.sort === "name" ? compareRecordName : compareRecordSize);
+  } else if (!query) {
+    // Every score would be zero and the old unsorted mapping kept this order.
+    ordered = filtered;
   } else {
     const tokens = tokenize(query);
     const scored = filtered.map((index) => {
