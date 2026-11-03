@@ -275,6 +275,23 @@ class StaticGateTests(unittest.TestCase):
         check = ["node", "scripts/check_search_response_cache_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "response-cache.js")
         test = self.root / paths[2]
+        original = test.read_text()
+        names = ["cache preserves LRU access order and exact expiration boundary",
+                 "has promotes live entries and undefined values throw without insertion",
+                 "byte accounting bounds entries and bypasses oversize without corrupting survivors",
+                 "replacement resets TTL, byte count and LRU position",
+                 "oversize replacement and serialization errors retire the previous key",
+                 "the independent one-MiB entry cap rejects larger entries even with a larger total budget"]
+        for name in names:
+            anchor = 'test("' + name + '"'
+            self.assertEqual(original.count(anchor), 1)
+            for replacement in ('test("renamed contract"', 'test.skip("' + name + '"', 'test.todo("' + name + '"'):
+                test.write_text(original.replace(anchor, replacement))
+                self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('test("' + names[0] + '", () => {});', 'test.skip("extra skip", () => {});',
+                      'test.todo("extra todo");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
         test.write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
         test.write_text('throw new Error("failed response cache test");\n')
