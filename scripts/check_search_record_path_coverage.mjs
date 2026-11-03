@@ -11,9 +11,16 @@ const result = spawnSync(process.execPath, [
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
-const rows = (result.stdout || "").split(/\r?\n/).filter(line =>
+const text = result.stdout || "";
+const lines = text.split(/\r?\n/);
+const rows = lines.filter(line =>
   /^\s*#\s*record-path\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
-if (result.status !== 0 || rows.length !== 1) {
-  console.error("Search record path coverage gate requires passing tests and exactly one fully covered source row");
+const name = "tests/test_search_record_path.js";
+const index = lines.indexOf(`# Subtest: ${name}`);
+if (result.status !== 0 || rows.length !== 1 || !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) ||
+    index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
+    lines[index - 1] !== "# search record paths preserve filenames, separators and URL encoding" ||
+    !/^ok \d+ - tests\/test_search_record_path\.js$/.test(lines[index + 1] || "")) {
+  console.error("Search record path coverage gate requires passing named tests and exactly one fully covered source row");
   process.exitCode = 1;
 }
