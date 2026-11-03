@@ -1168,12 +1168,7 @@ async function doSearchLocal(params) {
 }
 
 function isValidSearchResponse(data, expectedPage, expectedPageSize) {
-  if (!data || !Array.isArray(data.results) || !Number.isSafeInteger(data.total) || data.total < 0
-      || !Number.isInteger(data.page) || data.page !== expectedPage
-      || !Number.isInteger(data.page_size) || data.page_size !== expectedPageSize) return false;
-  const remaining = Math.max(0, data.total - (expectedPage - 1) * expectedPageSize);
-  return data.results.length === Math.min(expectedPageSize, remaining)
-    && data.results.every(record => record && typeof record === "object" && !Array.isArray(record));
+  return VoiceOfMLSearchValidation.isValidSearchResponse(data, expectedPage, expectedPageSize);
 }
 
 // One entry owns its network request, deadline and cancellation subscriptions.

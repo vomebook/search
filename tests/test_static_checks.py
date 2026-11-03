@@ -286,6 +286,76 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(prefix + 'cache.set("a", {value: "wrong"});\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_search_response_validation_coverage_gate_fails_closed(self):
+        paths = ["static/search/response-validation.js", "scripts/check_search_response_validation_coverage.mjs",
+                 "tests/test_search_response_validation_baseline.mjs", "static/app.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "response-validation.js")
+        test = self.root / paths[2]
+        source = test.read_text()
+        name = 'complete, final, empty and past-end pages preserve exact cardinality'
+        self.assertEqual(source.count("test('" + name + "'"), 1)
+        test.write_text(source.replace("test('" + name + "'", "test('renamed contract'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source.replace("test('" + name + "'", "test.skip('" + name + "'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source.replace("test('" + name + "', () => {",
+                                       "test('" + name + "', () => { throw new Error('contract failure');"))
+        self.assert_check(self.run_check(*check), False, "contract failure")
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source)
+        gate = self.root / paths[1]
+        gate_source = gate.read_text()
+        include = "--test-coverage-include=**/static/search/response-validation.js"
+        self.assertEqual(gate_source.count(include), 1)
+        gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-validator.js"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+
+    def test_search_response_validation_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        self.assertIn("static/search/response-validation.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/response-validation.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        for before, after in [("expectedPage: number, expectedPageSize: number): unknown",
+                               "expectedPage: string, expectedPageSize: number): unknown"),
+                              ("expectedPage: number, expectedPageSize: number): unknown",
+                               "expectedPage: number, expectedPageSize: number): boolean")]:
+            self.assertEqual(original.count(before), 1)
+            declaration.write_text(original.replace(before, after))
+            self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_search_response_validation_rejects_wrong_argument_types(self):
+        source = self.root / "static/validation-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        source.write_text('VoiceOfMLSearchValidation.isValidSearchResponse(null, 1, 2);\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text('VoiceOfMLSearchValidation.isValidSearchResponse(null, "1", 2);\n')
+        self.assert_check(self.run_check(*check), False, "TS2345")
+        source.write_text('VoiceOfMLSearchValidation.isValidSearchResponse(null, 1, {});\n')
+        self.assert_check(self.run_check(*check), False, "TS2345")
+        source.write_text('/** @type {number} */ const value = VoiceOfMLSearchValidation.isValidSearchResponse(null, 1, 2);\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        source.write_text('/** @type {boolean} */ const value = VoiceOfMLSearchValidation.isValidSearchResponse(null, 1, 2);\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        source.write_text('const value = VoiceOfMLSearchValidation.isValidSearchResponse(null, 1, 2);\n'
+                          'if (typeof value === "boolean") { /** @type {boolean} */ const checked = value; }\n')
+        self.assert_check(self.run_check(*check), True, "")
+
     def test_search_file_types_coverage_gate_fails_closed(self):
         paths = ["static/search/file-types.js", "scripts/check_search_file_types_coverage.mjs",
                  "tests/test_search_extension_inventory_baseline.mjs", "static/app.js"]

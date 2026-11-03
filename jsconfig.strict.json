@@ -21,6 +21,7 @@
     "static/search/highlight.js",
     "static/search/response-cache.js",
     "static/search/file-types.js",
+    "static/search/response-validation.js",
     "static/reader/pdf/reader-engine-preload.js",
     "static/reader/formats/reader-chapter-repository.js",
     "static/reader/formats/reader-section-virtualizer.js",

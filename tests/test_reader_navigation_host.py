@@ -49,6 +49,19 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertEqual(page.evaluate('parseSizeStr(fmtSizeUrl(1048577))'), 1048577)
             self.assertEqual(page.evaluate('bytesToDisplay(0).unit'), 'B')
             for current in (self.page, page):
+                self.assertEqual(current.evaluate('''() => {
+                  const original = isValidSearchResponse;
+                  const desc = Object.getOwnPropertyDescriptor(globalThis, 'isValidSearchResponse');
+                  const replacement = () => 'replacement';
+                  globalThis.isValidSearchResponse = replacement;
+                  const changed = isValidSearchResponse === replacement;
+                  globalThis.isValidSearchResponse = original;
+                  const restored = isValidSearchResponse === original;
+                  const deleted = delete globalThis.isValidSearchResponse;
+                  const valid = isValidSearchResponse({total:1,page:1,page_size:2,results:[{}]},1,2);
+                  const invalid = isValidSearchResponse({total:1,page:1,page_size:2,results:[]},1,2);
+                  return [desc.writable,desc.enumerable,desc.configurable,changed,restored,deleted,valid,invalid];
+                }'''), [True, True, False, True, True, False, True, False])
                 self.assertEqual(current.evaluate('''() => [ORDERED_EXTENSIONS.length,
                   ORDERED_EXTENSIONS.indexOf('pdf'), ORDERED_EXTENSIONS.indexOf('PDF'),
                   getFileIconType('AAC'), getFileIconType('unknown')]'''), [67, 0, -1, 'audio', 'file'])
