@@ -85,7 +85,31 @@ interface ReaderAdaptersApi {
   readonly METHODS: readonly (keyof ReaderFormatAdapter)[];
   createAdapterRegistry(): ReaderAdapterRegistry;
 }
-interface ReaderScrollApi { createScrollAnchorManager(options: {viewport: Element; candidates: () => unknown}): any }
+interface ReaderScrollAnchor { node: Element; offset: number; generation: number }
+interface ReaderScrollAnchorManager {
+  capture(): ReaderScrollAnchor | null;
+  restore(snapshot?: ReaderScrollAnchor | null): boolean;
+  remember(): void;
+  preserve<T>(change: () => T): T;
+  observe(node: Element): void;
+  unobserve(node: Element): void;
+  invalidate(): void;
+  dispose(): void;
+  whenIdle(task: () => void): void;
+  readonly scrolling: boolean;
+}
+interface ReaderScrollApi {
+  createScrollAnchorManager(options: {
+    viewport: Element;
+    candidates(): Element[];
+    ResizeObserverImpl?: typeof ResizeObserver;
+    requestFrame?: typeof requestAnimationFrame;
+    cancelFrame?: typeof cancelAnimationFrame;
+    setTimer?: typeof setTimeout;
+    clearTimer?: typeof clearTimeout;
+    scrollIdleDelay?: number;
+  }): ReaderScrollAnchorManager;
+}
 interface ChapterScheduler<T> {
   load(index: number, demand?: boolean, exclusive?: boolean): Promise<T>;
   prefetch(indices: number[]): void;
