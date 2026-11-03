@@ -64,6 +64,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate('setResultScrollTop(getVirtualOffset(25)+10);saveSearchPosition()')
         self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index === 25')
         self.saved = self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        # Memory updates precede IndexedDB commit; assert persistence before reload.
         persisted = self.page.evaluate('''key => new Promise((resolve,reject) => {
           const tx=searchPositionDB.transaction('positions'), req=tx.objectStore('positions').get(key);
           let value; req.onsuccess=()=>{value=req.result||null};
