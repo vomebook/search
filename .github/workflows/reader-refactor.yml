@@ -53,6 +53,7 @@ jobs:
           node scripts/check_search_file_types_coverage.mjs
           node tests/test_response_cache.js
           node --test tests/test_search_extension_inventory_baseline.mjs tests/test_search_extension_filter_baseline.mjs
+          node --test tests/test_search_response_validation_baseline.mjs
           node tests/test_search_record_path_build.mjs
           node tests/test_reader_preload.js
           node tests/test_reader_chapter_search.mjs
@@ -170,7 +171,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 1e13737b8a161859059fb595450ddfd6d1f229aa HEAD
+          git -C huggingface-search merge-base --is-ancestor 47f785ac500dabd9fb8e4777288eaa3bdd68ca7a HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -265,6 +266,7 @@ jobs:
           node scripts/check_search_response_cache_coverage.mjs
           node scripts/check_search_file_types_coverage.mjs
           node --test tests/test_search_extension_inventory_baseline.mjs tests/test_search_extension_filter_baseline.mjs
+          node --test tests/test_search_response_validation_baseline.mjs
           node tests/test_search_record_path_build.mjs
           node tests/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
