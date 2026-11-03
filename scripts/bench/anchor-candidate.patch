@@ -1,0 +1,138 @@
+diff --git a/backend/app.py b/backend/app.py
+index 967b8e5..6f23867 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
+ from contextlib import asynccontextmanager
+ from backend.cache_core import cached as _bounded_cache
+ from backend.folder_tree import build_folder_tree as _build_folder_tree
++from backend.search_anchor import find_search_anchor as _find_anchor
+ from backend.search_bootstrap import build_initial_payload as _build_initial_payload, trim_initial_results as _trim_initial_results
+ from backend.search_candidates import literal_candidates as _literal_candidates
+ from backend.search_projection import public_record as _public_record, trim_results as _trim_results
+@@ -913,43 +914,29 @@ def _get_search_order(q, repos, extensions, folders, min_size, max_size, search_
+     return packed
+ 
+ 
++def _anchor_cache():
++    return _search_anchor_cache
++
++
++def _anchor_path():
++    return build_record_relative_path
++
++
++def _anchor_key_limit():
++    return SEARCH_ANCHOR_KEY_MAX
++
++
++def _anchor_per_order_limit():
++    return SEARCH_ANCHOR_PER_ORDER_MAX
++
++
++def _anchor_order_limit():
++    return SEARCH_ANCHOR_ORDER_MAX
++
++
+ def _find_search_anchor(indices, anchor_id):
+-    owner = id(indices)
+-    cached = _search_anchor_cache.get(owner)
+-    if cached is not None and cached[0]() is not indices:
+-        del _search_anchor_cache[owner]
+-        cached = None
+-    if cached is not None and anchor_id in cached[1]:
+-        cached[1].move_to_end(anchor_id)
+-        _search_anchor_cache.move_to_end(owner)
+-        return cached[1][anchor_id]
+-    anchor_repo, separator, anchor_path = anchor_id.partition('\0')
+-    index = -1
+-    if separator:
+-        for offset, idx in enumerate(indices):
+-            rec = records[idx]
+-            repo = str(rec.get('Repo', ''))
+-            if repo == anchor_repo:
+-                matches = build_record_relative_path(rec) == anchor_path
+-            elif '\0' in repo and anchor_id.startswith(f'{repo}\0'):
+-                # Preserve raw-key matching for injected repository names.
+-                matches = f'{repo}\0{build_record_relative_path(rec)}' == anchor_id
+-            else:
+-                continue
+-            if matches:
+-                index = offset
+-                break
+-    if len(anchor_id) <= SEARCH_ANCHOR_KEY_MAX:
+-        lookups = cached[1] if cached is not None else OrderedDict()
+-        lookups[anchor_id] = index
+-        while len(lookups) > SEARCH_ANCHOR_PER_ORDER_MAX:
+-            lookups.popitem(last=False)
+-        # Do not keep a complete order alive after its normal cache eviction.
+-        _search_anchor_cache[owner] = (weakref.ref(indices), lookups)
+-        _search_anchor_cache.move_to_end(owner)
+-        while len(_search_anchor_cache) > SEARCH_ANCHOR_ORDER_MAX:
+-            _search_anchor_cache.popitem(last=False)
+-    return index
++    return _find_anchor(indices, anchor_id, _anchor_cache, _candidate_records, _anchor_path,
++                        _anchor_key_limit, _anchor_per_order_limit, _anchor_order_limit)
+ 
+ 
+ def _search_uncached(q="", repos=None, extensions=None, folders=None, min_size=None, max_size=None, page=1, page_size=100, search_folders=True, sort="relevance", exact=False, folder_match_mode="prefix", folder_selfs=None, folder_subtrees=None, anchor_id=None):
+diff --git a/backend/search_anchor.py b/backend/search_anchor.py
+new file mode 100644
+index 0000000..3614f6a
+--- /dev/null
++++ b/backend/search_anchor.py
+@@ -0,0 +1,54 @@
++"""Find an anchor in caller-owned ordered search indices with bounded memoization."""
++from __future__ import annotations
++
++from collections import OrderedDict
++from collections.abc import Callable, Iterator, Sequence
++from typing import Protocol
++import weakref
++
++
++class SearchOrder(Protocol):
++    def __iter__(self) -> Iterator[int]: ...
++
++
++def find_search_anchor(indices: SearchOrder, anchor_id: str,
++                       get_cache: Callable[[], OrderedDict[int, tuple[weakref.ReferenceType[SearchOrder], OrderedDict[str, int]]]],
++                       get_records: Callable[[], Sequence[dict[str, object]]],
++                       get_path: Callable[[], Callable[[dict[str, object]], str]],
++                       get_key_limit: Callable[[], int], get_per_order_limit: Callable[[], int],
++                       get_order_limit: Callable[[], int]) -> int:
++    """Preserve weak order ownership, bounded LRUs and caller lookup timing."""
++    owner = id(indices)
++    cached = get_cache().get(owner)
++    if cached is not None and cached[0]() is not indices:
++        del get_cache()[owner]
++        cached = None
++    if cached is not None and anchor_id in cached[1]:
++        cached[1].move_to_end(anchor_id)
++        get_cache().move_to_end(owner)
++        return cached[1][anchor_id]
++    anchor_repo, separator, anchor_path = anchor_id.partition('\0')
++    index = -1
++    if separator:
++        for offset, idx in enumerate(indices):
++            rec = get_records()[idx]
++            repo = str(rec.get('Repo', ''))
++            if repo == anchor_repo:
++                matches = get_path()(rec) == anchor_path
++            elif '\0' in repo and anchor_id.startswith(f'{repo}\0'):
++                matches = f'{repo}\0{get_path()(rec)}' == anchor_id
++            else:
++                continue
++            if matches:
++                index = offset
++                break
++    if len(anchor_id) <= get_key_limit():
++        lookups: OrderedDict[str, int] = cached[1] if cached is not None else OrderedDict()
++        lookups[anchor_id] = index
++        while len(lookups) > get_per_order_limit():
++            lookups.popitem(last=False)
++        get_cache()[owner] = (weakref.ref(indices), lookups)
++        get_cache().move_to_end(owner)
++        while len(get_cache()) > get_order_limit():
++            get_cache().popitem(last=False)
++    return index

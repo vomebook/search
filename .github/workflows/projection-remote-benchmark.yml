@@ -1,8 +1,8 @@
-name: Search bootstrap remote benchmark (temporary)
+name: Search anchor remote benchmark (temporary)
 
 on:
   push:
-    branches: ["bench/search-bootstrap-projection-20261103"]
+    branches: ["bench/search-anchor-remote-20261103"]
 
 permissions:
   contents: read
@@ -19,32 +19,28 @@ jobs:
       - name: Fetch exact benchmark sources
         run: |
           git clone --no-checkout https://huggingface.co/spaces/VoiceOfML/Search "$RUNNER_TEMP/hf-search-git"
-          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-baseline" bc9d36d02ed278002d161f01c5512b33ed8b4ea8
-          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-candidate" bc9d36d02ed278002d161f01c5512b33ed8b4ea8
-          git -C "$RUNNER_TEMP/hf-candidate" apply --check "$GITHUB_WORKSPACE/scripts/bench/search-candidates-candidate.patch"
-          git -C "$RUNNER_TEMP/hf-candidate" apply "$GITHUB_WORKSPACE/scripts/bench/search-candidates-candidate.patch"
-          git -C "$RUNNER_TEMP/hf-baseline" apply --check "$GITHUB_WORKSPACE/scripts/bench/search-candidates-candidate.patch"
-          git -C "$RUNNER_TEMP/hf-baseline" apply "$GITHUB_WORKSPACE/scripts/bench/search-candidates-candidate.patch"
-          git -C "$RUNNER_TEMP/hf-candidate" apply --check "$GITHUB_WORKSPACE/scripts/bench/bootstrap-candidate.patch"
-          git -C "$RUNNER_TEMP/hf-candidate" apply "$GITHUB_WORKSPACE/scripts/bench/bootstrap-candidate.patch"
+          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-baseline" d9ca230ae25b21b02bf72a0bd05d12d4bd1ed833
+          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-candidate" d9ca230ae25b21b02bf72a0bd05d12d4bd1ed833
+          git -C "$RUNNER_TEMP/hf-candidate" apply --check "$GITHUB_WORKSPACE/scripts/bench/anchor-candidate.patch"
+          git -C "$RUNNER_TEMP/hf-candidate" apply "$GITHUB_WORKSPACE/scripts/bench/anchor-candidate.patch"
       - name: Install pinned application dependencies
         run: python -m pip install -r "$RUNNER_TEMP/hf-candidate/requirements.txt" httpx==0.28.1
       - name: Build optional native search decoder
         run: python -B "$RUNNER_TEMP/hf-candidate/scripts/build/build_search_index_native.py" --output-dir "$RUNNER_TEMP/native"
-      - name: Compare initial search payload construction
+      - name: Compare cold and warm search anchors
         env:
           BENCH_BASELINE: ${{ runner.temp }}/hf-baseline
           BENCH_CANDIDATE: ${{ runner.temp }}/hf-candidate
-          BENCH_OUTPUT: ${{ runner.temp }}/bootstrap-paired.json
+          BENCH_OUTPUT: ${{ runner.temp }}/anchor-paired.json
           BENCH_RUN_ID: ${{ github.run_id }}
           PYTHONPATH: ${{ runner.temp }}/hf-candidate:${{ runner.temp }}/native
           PYTHONHASHSEED: "1"
-        run: python -B scripts/bench/bootstrap_paired.py
+        run: python -B scripts/bench/anchor_paired.py
       - name: Preserve detailed results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: search-bootstrap-remote-benchmark-${{ github.run_id }}
-          path: ${{ runner.temp }}/bootstrap-paired.json
+          name: search-anchor-remote-benchmark-${{ github.run_id }}
+          path: ${{ runner.temp }}/anchor-paired.json
           if-no-files-found: warn
           retention-days: 14
