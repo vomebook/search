@@ -1083,7 +1083,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 9")
+        self.assert_check(self.run_check(*check), True, "# pass 10")
         test = self.root / paths[2]
         source = test.read_text()
         name = 'membership is captured before subtree filter access mutates the self array'

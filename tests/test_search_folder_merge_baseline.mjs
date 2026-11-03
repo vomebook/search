@@ -119,6 +119,17 @@ test('rebound Set receives the original iterable without an intermediate copy', 
   assert.equal(calls[0], selfs);
 });
 
+test('custom filter can observe the original callback constructability', () => {
+  const {mergeFolderFilters: merge} = fixture();
+  let callback;
+  const subtrees = [];
+  subtrees.filter = function(predicate) { callback = predicate; return []; };
+  assert.deepEqual(Array.from(merge(['a'], subtrees)), ['a']);
+  assert.equal(callback.length, 1);
+  assert.equal(Object.hasOwn(callback, 'prototype'), true);
+  assert.doesNotThrow(() => new callback('a'));
+});
+
 test('the original global function binding remains writable but not deletable', () => {
   const context = fixture();
   context.mergeFolderFilters = () => 'replaced';
