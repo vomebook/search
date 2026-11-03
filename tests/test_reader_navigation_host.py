@@ -49,6 +49,16 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertEqual(page.evaluate('parseSizeStr(fmtSizeUrl(1048577))'), 1048577)
             self.assertEqual(page.evaluate('bytesToDisplay(0).unit'), 'B')
             for current in (self.page, page):
+                cache = current.evaluate('''() => {
+                  const c=new BoundedResponseCache(2,10000,1000);
+                  c.set('a',{n:1});c.set('b',{n:2});c.get('a');c.set('c',{n:3});
+                  return {keys:[...c.keys()], first:c.get('a').n, hasB:c.has('b'), bytes:c.bytes};
+                }''')
+                self.assertEqual(cache['keys'], ['a', 'c'])
+                self.assertEqual(cache['first'], 1)
+                self.assertFalse(cache['hasB'])
+                self.assertGreater(cache['bytes'], 0)
+            for current in (self.page, page):
                 self.assertEqual(current.evaluate('''() => [formatSize(0), formatSize(1023), formatSize(1024),
                   formatSize(1048576), formatSize(1073741824)]'''), ['', '1023 B', '1.0 KB', '1.0 MB', '1.00 GB'])
                 row = current.evaluate('''() => {

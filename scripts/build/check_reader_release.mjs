@@ -205,6 +205,7 @@ function crossCheck(githubRoot, hfRoot) {
     "search/size-format.js",
     "search/record-path.js",
     "search/highlight.js",
+    "search/response-cache.js",
     "search/reader-navigation.js",
     "reader.css",
     "reader/core/reader-request-manager.js",
