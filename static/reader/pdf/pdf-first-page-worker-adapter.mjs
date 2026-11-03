@@ -1,4 +1,4 @@
-// Reader-only adapter for the pinned, uncompressed PDF.js 6.4.299 worker.
+// Reader-only adapter for the pinned, uncompressed PDF.js 6.5.438 worker.
 // The upstream bundle retains its Apache-2.0 license notice. Refuse to patch
 // different bytes or unexpected source instead of weakening validation.
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -20,7 +20,7 @@ function replaceOnce(source, needle, replacement, label) {
 }
 
 export function makeFirstPageWorkerSource(source) {
-  if (typeof source !== "string" || !source.includes('const workerVersion = "6.4.299";'))
+  if (typeof source !== "string" || !source.includes('const workerVersion = "6.5.438";'))
     throw new Error("PDF_PREVIEW_WORKER_VERSION_MISMATCH:version");
   source = replaceOnce(source,
     `for (let last = kids.length - 1; last >= 0; last--) {

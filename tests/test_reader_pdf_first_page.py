@@ -1115,7 +1115,7 @@ class PdfFirstPageTests(unittest.TestCase):
             state["block"].set()
             context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
             page=context.new_page();worker_sources=[]
-            page.on('request',lambda req:worker_sources.append(req.url) if '/pdf.worker.07ceb740d746.mjs' in req.url else None)
+            page.on('request',lambda req:worker_sources.append(req.url) if '/pdf.worker.43710009ea26.mjs' in req.url else None)
             self.open(page,source)
             page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=30000)
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
@@ -1381,7 +1381,7 @@ class PdfFirstPageTests(unittest.TestCase):
                 def fail(route):
                     attempts.append(route.request.url)
                     route.fulfill(status=503 if mode == "unavailable" else 200,body="not the pinned worker")
-                page.route('**/static/vendor/pdf.worker.07ceb740d746.mjs',fail)
+                page.route('**/static/vendor/pdf.worker.43710009ea26.mjs',fail)
                 self.open(page,source)
                 page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=30000)
                 page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
