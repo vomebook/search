@@ -6,6 +6,9 @@ declare function fmtSizeUrl(bytes: number | null | undefined): string | null;
 declare function parseSizeStr(value: string | null | undefined): number | null;
 declare function buildRecordRelativePath(record: {File?: string; Extension?: string; Folder?: string[] | null}): string;
 declare function encodeRecordPath(path: string | null | undefined): string;
+declare function escapeHTML(text: unknown): string;
+declare function getHighlightRegex(query: string): RegExp | null;
+declare function highlightText(text: unknown, query: string | null | undefined): string;
 
 interface ReaderSecurityApi {
   readonly LIMITS: Readonly<{

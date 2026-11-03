@@ -82,6 +82,7 @@
     "static/search/search-session.js",
     "static/search/size-format.js",
     "static/search/record-path.js",
+    "static/search/highlight.js",
     "static/tts-client.js",
     "static/app.js",
     "static/reader.js",

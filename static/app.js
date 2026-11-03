@@ -2038,11 +2038,6 @@ function setSearchInputValue(value) {
   syncSearchInputState();
 }
 
-const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-
-function escapeHTML(str) {
-  return String(str).replace(/[&<>"']/g, (ch) => HTML_ESCAPE_MAP[ch]);
-}
 const sizeCache = {};
 
 function formatSize(bytes) {
@@ -2060,35 +2055,6 @@ function formatSize(bytes) {
 
 function getFileIconType(ext) {
   return FILE_ICON_MAP[(ext || "").toLowerCase()] || "file";
-}
-
-const highlightRegexCache = new Map();
-
-// One alternation over the raw text (longest term first), so a later term can
-// never match inside an earlier <mark> tag or an HTML entity.
-function getHighlightRegex(query) {
-  if (highlightRegexCache.has(query)) return highlightRegexCache.get(query);
-  const terms = [...new Set(query.split(/\s+/).filter((t) => t.length > 0))]
-    .sort((a, b) => b.length - a.length)
-    .map((tok) => tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const regex = terms.length ? new RegExp(terms.join("|"), "gi") : null;
-  if (highlightRegexCache.size >= 20) highlightRegexCache.delete(highlightRegexCache.keys().next().value);
-  highlightRegexCache.set(query, regex);
-  return regex;
-}
-
-function highlightText(text, query) {
-  if (!query || !text) return escapeHTML(text);
-  const regex = getHighlightRegex(query);
-  if (!regex) return escapeHTML(text);
-  const source = String(text);
-  let result = "", last = 0;
-  for (const match of source.matchAll(regex)) {
-    if (!match[0]) continue;
-    result += escapeHTML(source.slice(last, match.index)) + "<mark>" + escapeHTML(match[0]) + "</mark>";
-    last = match.index + match[0].length;
-  }
-  return result + escapeHTML(source.slice(last));
 }
 
 let routeInitialized = false;
