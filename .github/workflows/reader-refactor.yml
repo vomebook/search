@@ -95,6 +95,8 @@ jobs:
             tests.test_reader_toc_navigation.TocNavigationTests.test_merged_chm_missing_toc_anchors_use_unique_in_book_links
       - name: Run search accessibility keyboard gates
         run: python3 -B -m unittest -v tests.test_search_accessibility_browser tests.test_sidebar_keyboard tests.test_search_session_browser
+      - name: Check search position persistence and pagination recovery
+        run: python3 -B -m unittest -v tests.test_prefetch_pipeline tests.test_search_positions
       - name: Check random reader pools and UI responsiveness
         run: |
           node tests/test_worker_contract.js
