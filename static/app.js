@@ -3343,9 +3343,7 @@ function getHeightMeasurementKey() {
   return (DOM.resultsContainer?.clientWidth || 0) + ":" + (STATE.isMobile ? "mobile" : "desktop") + ":" + (STATE.isDark ? "dark" : "light");
 }
 function getResultStableId(result) {
-  if (!result || typeof result !== "object") return "";
-  if (result.Id || result.id) return String(result.Id || result.id);
-  return `${result.Repo || ""}\0${buildRecordRelativePath(result)}`;
+  return VoiceOfMLSearchIdentity.getResultStableId(result);
 }
 function cloneSearchResult(result) {
   const copy = result && typeof result === "object"
