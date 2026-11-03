@@ -1761,7 +1761,7 @@ class ReaderPerformanceTest(unittest.TestCase):
         self.assertAlmostEqual(page.locator("#chapter-10").evaluate("element => element.getBoundingClientRect().top - document.querySelector('#viewport').getBoundingClientRect().top"), 8, delta=3)
         context.close()
 
-    def test_reader_store_resets_old_history_and_keeps_current_bookmarks(self):
+    def test_reader_store_preserves_old_history_and_keeps_current_bookmarks(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844})
         page = context.new_page()
         page.goto(f"{self.origin}/search/static/reader.html", wait_until="domcontentloaded")
@@ -1789,7 +1789,7 @@ class ReaderPerformanceTest(unittest.TestCase):
             history: (await VoiceOfMLReaderStore.list()).length, bookmarks: (await VoiceOfMLReaderStore.listBookmarks(url)).length,
             bookmarkSchema: bookmarkEntries[0].schemaVersion};
         }""", source)
-        self.assertEqual(result, {"legacy": False, "schema": 1, "validHistory": True, "history": 0, "bookmarks": 1, "bookmarkSchema": 1})
+        self.assertEqual(result, {"legacy": True, "schema": 1, "validHistory": True, "history": 0, "bookmarks": 1, "bookmarkSchema": 1})
         context.close()
 
     def test_mobile_pdf_rendering_uses_one_slot_and_seven_canvases(self):

@@ -112,6 +112,12 @@ jobs:
           python3 -B -m unittest -v tests.test_service_worker_integration.ServiceWorkerIntegrationTest.test_first_install_rewarms_shell_after_delayed_controller_claim
       - name: Run Reader flow and cleanup regressions
         run: python3 -B -m unittest -v tests.test_reader_ebook_flow tests.test_reader_toc_latency
+      - name: Preserve Reader local history and bookmarks
+        run: |
+          node tests/test_reader_store_channel.js
+          python3 -B -m unittest -v tests.test_reader_store_preservation \
+            tests.test_reader_performance.ReaderPerformanceTest.test_reader_store_preserves_old_history_and_keeps_current_bookmarks
+          READER_STORE_TEST_BROWSER=firefox python3 -B -m unittest -v tests.test_reader_store_preservation
       - name: Run chapter-bundle browser gate
         run: |
           node scripts/check_reader_core_coverage.mjs
