@@ -1,0 +1,166 @@
+diff --git a/backend/app.py b/backend/app.py
+index 967b8e5..4535145 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -33,6 +33,10 @@ from pydantic import BaseModel, Field
+ from contextlib import asynccontextmanager
+ from backend.cache_core import cached as _bounded_cache
+ from backend.folder_tree import build_folder_tree as _build_folder_tree
++from backend.reader_cache_policy import (is_reader_bucket_cacheable as _is_reader_bucket_cacheable,
++                                         reader_bucket_cache_control as _reader_bucket_cache_control,
++                                         reader_bucket_for_path as _reader_bucket_for_path)
++from backend.reader_compression import reader_body_allows_compression as _reader_body_allows_compression
+ from backend.search_bootstrap import build_initial_payload as _build_initial_payload, trim_initial_results as _trim_initial_results
+ from backend.search_candidates import literal_candidates as _literal_candidates
+ from backend.search_projection import public_record as _public_record, trim_results as _trim_results
+@@ -1598,16 +1602,29 @@ READER_UPSTREAM_RESPONSE_HEADERS = (
+ READER_COMPRESSIBLE_SUFFIXES = {"txt", "md", "markdown", "html", "htm", "xhtml", "json", "css", "xml"}
+ 
+ 
++def _reader_compression_unquote():
++    return unquote
++
++
++def _reader_compression_urlparse():
++    return urlparse
++
++
++def _reader_compression_suffixes():
++    return READER_COMPRESSIBLE_SUFFIXES
++
++
++def _reader_compression_any():
++    return any
++
++
+ def reader_body_allows_compression(target_url: str, request=None, status: int = 200) -> bool:
+     # Only complete text bodies may use the existing negotiated GZip middleware.
+     # Ranges/conditionals, HEAD, PDFs, images, archives and native media retain
+     # their exact-byte/length policy. Expanded client byte limits still apply.
+-    if status != 200 or (request is not None and request.method != "GET"):
+-        return False
+-    headers = request.headers if request is not None else {}
+-    if any(name in headers for name in ("Range", "If-Range", "If-None-Match", "If-Modified-Since")):
+-        return False
+-    return unquote(urlparse(target_url).path).rsplit(".", 1)[-1].lower() in READER_COMPRESSIBLE_SUFFIXES
++    return _reader_body_allows_compression(target_url, request, status, _reader_compression_unquote,
++                                           _reader_compression_urlparse, _reader_compression_suffixes,
++                                           _reader_compression_any)
+ 
+ 
+ READER_ISOLATION_HEADERS = {
+@@ -1815,36 +1832,15 @@ async def shutdown_reader_bucket_state(target_app: FastAPI) -> None:
+ 
+ 
+ def is_reader_bucket_cacheable(path: str) -> bool:
+-    return (
+-        path.endswith("/page-manifest.json") or path.endswith("/ocr-manifest.json")
+-        or path.endswith('/reading-manifest.json') or path.endswith('/page-map.json.gz')
+-        or path.endswith("/ocr/book-text.json.gz") or path.endswith("/pages/page-000001.webp")
+-        or (path.startswith("objects/") and path.rsplit("/", 1)[-1].startswith("document."))
+-        or (path.startswith("chapters/ebook/") and any(
+-            path.endswith(suffix) for suffix in (
+-                "/chapter-manifest.json", "/epub-search-index.json.gz",
+-            )))
+-    )
++    return _is_reader_bucket_cacheable(path)
+ 
+ 
+ def reader_bucket_cache_control(path: str) -> str:
+-    # Page paths contain the source digest and an optional asset version, so a
+-    # generated image can be cached immutably even though the manifest moves.
+-    if re.search(r"/pages/page-[0-9]{6}\.(?:webp|jxl|png)$", path):
+-        return "public, max-age=31536000, immutable"
+-    if re.fullmatch(r"objects/[0-9a-f]{2}/[0-9a-f]{64}/[0-9a-f]{16}/(?:preview|text)/.+", path):
+-        return "public, max-age=31536000, immutable"
+-    if path.startswith("objects/") and path.rsplit("/", 1)[-1].startswith("document."):
+-        return "public, max-age=31536000, immutable"
+-    if "/ebook-chapters/" in path:
+-        return "public, max-age=31536000, immutable"
+-    return "public, max-age=3600"
++    return _reader_bucket_cache_control(path)
+ 
+ 
+ def reader_bucket_for_path(path: str) -> str:
+-    if (path.startswith(("documents/", "chapters/", "media/", "pages/image/", "native/"))):
+-        return "vomebook/reader-assets-v2"
+-    return "vomebook/pdf-pages-v2"
++    return _reader_bucket_for_path(path)
+ 
+ 
+ def reader_bucket_source_url(path: str) -> str:
+diff --git a/backend/reader_cache_policy.py b/backend/reader_cache_policy.py
+new file mode 100644
+index 0000000..bcbc74e
+--- /dev/null
++++ b/backend/reader_cache_policy.py
+@@ -0,0 +1,33 @@
++"""Classify synthetic or validated Reader paths for storage and cache policy."""
++import re
++
++
++def is_reader_bucket_cacheable(path: str) -> bool:
++    return (
++        path.endswith("/page-manifest.json") or path.endswith("/ocr-manifest.json")
++        or path.endswith('/reading-manifest.json') or path.endswith('/page-map.json.gz')
++        or path.endswith("/ocr/book-text.json.gz") or path.endswith("/pages/page-000001.webp")
++        or (path.startswith("objects/") and path.rsplit("/", 1)[-1].startswith("document."))
++        or (path.startswith("chapters/ebook/") and any(
++            path.endswith(suffix) for suffix in (
++                "/chapter-manifest.json", "/epub-search-index.json.gz",
++            )))
++    )
++
++
++def reader_bucket_cache_control(path: str) -> str:
++    if re.search(r"/pages/page-[0-9]{6}\.(?:webp|jxl|png)$", path):
++        return "public, max-age=31536000, immutable"
++    if re.fullmatch(r"objects/[0-9a-f]{2}/[0-9a-f]{64}/[0-9a-f]{16}/(?:preview|text)/.+", path):
++        return "public, max-age=31536000, immutable"
++    if path.startswith("objects/") and path.rsplit("/", 1)[-1].startswith("document."):
++        return "public, max-age=31536000, immutable"
++    if "/ebook-chapters/" in path:
++        return "public, max-age=31536000, immutable"
++    return "public, max-age=3600"
++
++
++def reader_bucket_for_path(path: str) -> str:
++    if path.startswith(("documents/", "chapters/", "media/", "pages/image/", "native/")):
++        return "vomebook/reader-assets-v2"
++    return "vomebook/pdf-pages-v2"
+diff --git a/backend/reader_compression.py b/backend/reader_compression.py
+new file mode 100644
+index 0000000..652e131
+--- /dev/null
++++ b/backend/reader_compression.py
+@@ -0,0 +1,30 @@
++"""Decide whether a complete Reader body may negotiate compression."""
++from __future__ import annotations
++
++from collections.abc import Callable, Container, Iterable
++from typing import Protocol
++from urllib.parse import ParseResult
++
++
++class ReaderRequest(Protocol):
++    @property
++    def method(self) -> str: ...
++
++    @property
++    def headers(self) -> Container[str]: ...
++
++
++def reader_body_allows_compression(
++        target_url: str, request: ReaderRequest | None, status: int,
++        get_unquote: Callable[[], Callable[[str], str]],
++        get_urlparse: Callable[[], Callable[[str], ParseResult]],
++        get_suffixes: Callable[[], Container[str]],
++        get_any: Callable[[], Callable[[Iterable[bool]], bool]]) -> bool:
++    """Keep byte-sensitive requests uncompressed and resolve caller state lazily."""
++    if status != 200 or (request is not None and request.method != "GET"):
++        return False
++    headers: Container[str] = request.headers if request is not None else {}
++    if get_any()(name in headers for name in ("Range", "If-Range", "If-None-Match", "If-Modified-Since")):
++        return False
++    path = get_unquote()(get_urlparse()(target_url).path)
++    return path.rsplit(".", 1)[-1].lower() in get_suffixes()
