@@ -1115,6 +1115,23 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
         self.assert_check(self.run_check(*production_check), False, "TS2322")
 
+    def test_reader_chapter_exact_gate_checks_original_bounds_invariant(self):
+        config = self.root / "jsconfig.reader-exact.json"
+        original = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
+        config.write_text(json.dumps(original))
+        for name in original["files"]:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        module = self.root / "static/reader/formats/reader-chapter-repository.js"
+        source = module.read_text()
+        assertion = '/** @type {ChapterRecord<T>} */ (records[index])'
+        self.assertEqual(source.count(assertion), 2)
+        module.write_text(source.replace(assertion, 'records[index]'))
+        self.assert_check(self.run_check(*check), False, "TS18048")
+
     def test_reader_image_request_signal_shape_is_exact(self):
         config = self.root / "jsconfig.json"
         source = self.root / "static/image-signal-usage.mjs"
@@ -1142,7 +1159,7 @@ const request = options.request;
             self.assertIs(options.get(flag), True, flag)
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
-                    "static/reader/formats/reader-image-loader.mjs",
+                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
