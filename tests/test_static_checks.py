@@ -631,6 +631,15 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(original + '\nrequire("node:test")("reader request manager behavior", () => {});\n')
         self.assert_check(self.run_check(*check), False, "passing named tests")
         source.write_text(original)
+        markers = ["reader request manager contracts passed", "reader initial response recovery contracts passed",
+                   "reader request manager edge contracts passed"]
+        for path, marker in zip(paths[2:], markers):
+            test = self.root / path
+            before = test.read_text()
+            self.assertEqual(before.count(marker), 1)
+            test.write_text(before.replace(marker, "missing completion marker"))
+            self.assert_check(self.run_check(*check), False, "passing named tests")
+            test.write_text(before)
         for path in paths[2:]:
             (self.root / path).write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one source coverage row")
