@@ -52,6 +52,12 @@ export function createReaderProgress(readerContext) {
     };
   }
 
+  function progressNotSaved(error) {
+    if (error?.name === "ReaderHistoryFullError")
+      readerContext.showDownloadFeedback("阅读历史已满，当前进度未保存。请删除不需要的阅读记录后重试。", 0);
+    console.warn("Reader progress was not saved", error);
+  }
+
   async function saveProgress(event) {
     const progress = captureProgressEntry(event);
     if (!progress) return;
@@ -67,7 +73,7 @@ export function createReaderProgress(readerContext) {
       })
       .catch((error) => {
         if (readerContext.lastSavedProgress === signature) readerContext.lastSavedProgress = "";
-        console.warn("Reader progress was not saved", error);
+        progressNotSaved(error);
       });
     return readerContext.progressSaveChain;
   }
@@ -445,6 +451,7 @@ export function createReaderProgress(readerContext) {
   }
 
   return {
+    progressNotSaved,
     scheduleSave,
     saveProgress,
     captureProgressEntry,

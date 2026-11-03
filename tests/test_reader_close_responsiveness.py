@@ -130,6 +130,26 @@ class ReaderCloseResponsivenessTests(unittest.TestCase):
         self.page.locator('iframe.reader-overlay').wait_for(state='detached')
         self.assertIsNone(self.page.evaluate('window.__closeProgress'))
 
+    def test_full_history_warns_before_an_immediate_overlay_close(self):
+        self.page.add_script_tag(url=self.fixture.origin+'/search/static/reader/core/reader-store.js')
+        self.page.evaluate('''async () => {
+          for(let i=0;i<VoiceOfMLReaderStore.MAX_ENTRIES;i++)
+            await VoiceOfMLReaderStore.put({url:'retained-'+i,lastReadAt:i+1});
+        }''')
+        source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/full-history.txt'
+        self.page.route('**/api/reader-content**', lambda route: route.fulfill(
+            content_type='text/plain', body='history capacity'))
+        url = '/search/static/reader.html?' + urlencode(dict(url=source, ext='txt'))
+        self.page.evaluate('url => navigateToReader(url)', url)
+        frame = self.page.frame_locator('iframe.reader-overlay')
+        frame.locator('html[data-reader-phase="ready"]').wait_for()
+        frame.locator('#download-feedback').get_by_text('阅读历史已满', exact=False).wait_for()
+        frame.locator('#back').click()
+        self.page.locator('iframe.reader-overlay').wait_for(state='detached')
+        self.assertEqual(self.page.evaluate('() => VoiceOfMLReaderStore.list(201).then(items => items.length)'), 200)
+        self.assertIsNotNone(self.page.evaluate("() => VoiceOfMLReaderStore.get('retained-0')"))
+        self.assertIsNone(self.page.evaluate('source => VoiceOfMLReaderStore.get(source)', source))
+
     def test_cleared_history_is_not_recreated_by_quick_close(self):
         source = 'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/cleared.txt'
         self.page.route('**/api/reader-content**', lambda route: route.fulfill(

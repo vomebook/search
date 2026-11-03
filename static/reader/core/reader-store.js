@@ -44,18 +44,56 @@
     } catch (_) {}
   }
 
+  function validateLayout(database) {
+    if (!database.objectStoreNames.contains(STORE_NAME) || !database.objectStoreNames.contains(BOOKMARK_STORE_NAME))
+      throw new Error("Unsupported Reader database layout");
+    const tx = database.transaction([STORE_NAME, BOOKMARK_STORE_NAME], "readonly");
+    const store = tx.objectStore(STORE_NAME), bookmarks = tx.objectStore(BOOKMARK_STORE_NAME);
+    if (store.keyPath !== "url" || bookmarks.keyPath !== "id")
+      throw new Error("Unsupported Reader database key layout");
+    const requiredIndexes = /** @type {[IDBObjectStore, string][]} */ (
+      [[store, "lastReadAt"], [bookmarks, "url"], [bookmarks, "createdAt"]]
+    );
+    for (const [objectStore, name] of requiredIndexes) {
+      if (!objectStore.indexNames.contains(name)) throw new Error("Unsupported Reader database indexes");
+      const index = objectStore.index(name);
+      if (index.keyPath !== name || index.unique || index.multiEntry)
+        throw new Error("Unsupported Reader database indexes");
+    }
+  }
+
   function openDatabase() {
     if (databasePromise) return databasePromise;
     const opening = new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = () => {
         const database = request.result;
-        for (const name of Array.from(database.objectStoreNames)) database.deleteObjectStore(name);
-        const store = database.createObjectStore(STORE_NAME, { keyPath: "url" });
-        store.createIndex("lastReadAt", "lastReadAt");
-        const bookmarks = database.createObjectStore(BOOKMARK_STORE_NAME, { keyPath: "id" });
-        bookmarks.createIndex("url", "url");
-        bookmarks.createIndex("createdAt", "createdAt");
+        const upgrade = request.transaction;
+        if (!upgrade) throw new Error("Reader database upgrade has no transaction");
+        const store = database.objectStoreNames.contains(STORE_NAME)
+          ? upgrade.objectStore(STORE_NAME)
+          : database.createObjectStore(STORE_NAME, { keyPath: "url" });
+        const bookmarks = database.objectStoreNames.contains(BOOKMARK_STORE_NAME)
+          ? upgrade.objectStore(BOOKMARK_STORE_NAME)
+          : database.createObjectStore(BOOKMARK_STORE_NAME, { keyPath: "id" });
+        // Unknown historical layouts are not safely migratable here. Abort the
+        // upgrade instead of deleting a store or silently creating new keys.
+        if (store.keyPath !== "url" || bookmarks.keyPath !== "id") {
+          upgrade.abort();
+          return;
+        }
+        const requiredIndexes = /** @type {[IDBObjectStore, string][]} */ (
+          [[store, "lastReadAt"], [bookmarks, "url"], [bookmarks, "createdAt"]]
+        );
+        for (const [objectStore, name] of requiredIndexes) {
+          if (objectStore.indexNames.contains(name)) {
+            const index = objectStore.index(name);
+            if (index.keyPath !== name || index.unique || index.multiEntry) {
+              upgrade.abort();
+              return;
+            }
+          } else objectStore.createIndex(name, name);
+        }
       };
       request.onsuccess = () => {
         const database = request.result;
@@ -65,6 +103,14 @@
         };
         if (databasePromise !== opening) {
           database.close();
+          return;
+        }
+        try {
+          validateLayout(database);
+        } catch (error) {
+          database.close();
+          databasePromise = null;
+          reject(error);
           return;
         }
         resolve(database);
@@ -80,17 +126,6 @@
     });
     databasePromise = opening;
     return databasePromise;
-  }
-
-  async function transaction(mode, callback) {
-    const database = await openDatabase();
-    return new Promise((resolve, reject) => {
-      const tx = database.transaction(STORE_NAME, mode);
-      const result = callback(tx.objectStore(STORE_NAME));
-      tx.oncomplete = () => resolve(result);
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
   }
 
   function normalizeHistoryEntry(entry) {
@@ -123,35 +158,48 @@
   async function get(url) {
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
-      const tx = database.transaction(STORE_NAME, "readwrite"),
+      const tx = database.transaction(STORE_NAME, "readonly"),
         store = tx.objectStore(STORE_NAME);
       const request = store.get(url);
       request.onsuccess = () => {
-        const raw = request.result || null,
-          entry = raw?.schemaVersion === SCHEMA_VERSION ? normalizeHistoryEntry(raw) : null;
-        if (raw && !entry) {
-          store.delete(url);
-          resolve(null);
-        } else {
-          resolve(entry);
-        }
+        const raw = request.result || null;
+        // Pre-schema records are readable without rewriting the original bytes.
+        // Unknown future versions stay untouched and must not be interpreted.
+        resolve(raw && (raw.schemaVersion == null || raw.schemaVersion === SCHEMA_VERSION)
+          ? normalizeHistoryEntry(raw) : null);
       };
       request.onerror = () => reject(request.error);
     });
   }
 
   async function put(entry) {
+    const supplied = entry;
     entry = normalizeHistoryEntry(entry);
     if (!entry) throw new TypeError("Invalid reader history entry");
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
+      let abortReason = null;
       const tx = database.transaction(STORE_NAME, "readwrite");
       const store = tx.objectStore(STORE_NAME);
       const existing = store.get(entry.url);
       existing.onsuccess = () => {
         if (existing.result) {
-          if (Number(existing.result.lastReadAt) > Number(entry.lastReadAt)) return;
-          store.put(entry);
+          if (existing.result.schemaVersion != null && existing.result.schemaVersion !== SCHEMA_VERSION) {
+            tx.abort();
+            return;
+          }
+          const previous = normalizeHistoryEntry(existing.result);
+          if (!previous) {
+            tx.abort();
+            return;
+          }
+          if (Number(previous.lastReadAt) > Number(entry.lastReadAt)) return;
+          const merged = { ...previous, ...entry };
+          // A partial update must not replace retained metadata with empty
+          // defaults introduced only by normalization.
+          if (!Object.prototype.hasOwnProperty.call(supplied, "title")) merged.title = previous.title;
+          if (!Object.prototype.hasOwnProperty.call(supplied, "extension")) merged.extension = previous.extension;
+          store.put(merged);
           return;
         }
         const count = store.count();
@@ -160,11 +208,11 @@
             store.put(entry);
             return;
           }
-          const oldest = store.index("lastReadAt").openCursor();
-          oldest.onsuccess = () => {
-            if (oldest.result) oldest.result.delete();
-            store.put(entry);
-          };
+          // Refuse a new entry at the existing limit rather than evicting
+          // someone else's reading progress to make room.
+          abortReason = new Error("Reader history is full");
+          abortReason.name = "ReaderHistoryFullError";
+          tx.abort();
         };
       };
       tx.oncomplete = () => {
@@ -172,7 +220,7 @@
         resolve();
       };
       tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
+      tx.onabort = () => reject(abortReason || tx.error || new Error("Reader history transaction aborted"));
     }));
   }
 
@@ -185,16 +233,18 @@
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
       const entries = [];
-      const tx = database.transaction(storeName, "readwrite"),
+      const tx = database.transaction(storeName, "readonly"),
         store = tx.objectStore(storeName);
       const request = store.index(indexName).openCursor(query, direction);
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor || entries.length >= limit) return resolve(entries);
-        const entry = cursor.value.schemaVersion === SCHEMA_VERSION ? normalize(cursor.value) : null;
+        const value = cursor.value;
+        const entry = value && (value.schemaVersion == null || value.schemaVersion === SCHEMA_VERSION)
+          ? normalize(value) : null;
         if (entry) {
           entries.push(entry);
-        } else cursor.delete();
+        }
         cursor.continue();
       };
       request.onerror = () => reject(request.error);
@@ -207,22 +257,73 @@
       limit
     });
   }
+  async function isHistoryFull() {
+    const database = await openDatabase();
+    return /** @type {Promise<boolean>} */ (new Promise((resolve, reject) => {
+      const tx = database.transaction(STORE_NAME, "readonly"), request = tx.objectStore(STORE_NAME).count();
+      request.onsuccess = () => resolve(request.result >= MAX_ENTRIES);
+      request.onerror = () => reject(request.error);
+    }));
+  }
 
   async function remove(url) {
-    await transaction("readwrite", (store) => store.delete(url));
-    notify({ type: "history-remove", url });
+    const database = await openDatabase();
+    await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
+      const tx = database.transaction(STORE_NAME, "readwrite"), store = tx.objectStore(STORE_NAME);
+      const request = store.get(url);
+      request.onsuccess = () => {
+        const value = request.result;
+        if (value && ((value.schemaVersion != null && value.schemaVersion !== SCHEMA_VERSION)
+            || !normalizeHistoryEntry(value))) return tx.abort();
+        store.delete(url);
+      };
+      tx.oncomplete = () => { notify({ type: "history-remove", url }); resolve(); };
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error("Reader history cannot be removed safely"));
+    }));
   }
   async function clearHistory() {
-    await transaction("readwrite", (store) => store.clear());
-    notify({ type: "history-clear" });
+    const database = await openDatabase();
+    await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
+      const tx = database.transaction(STORE_NAME, "readwrite"), request = tx.objectStore(STORE_NAME).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const value = cursor.value;
+        if (value && (value.schemaVersion == null || value.schemaVersion === SCHEMA_VERSION)
+            && normalizeHistoryEntry(value) && typeof value.lastReadAt === "number"
+            && Number.isFinite(value.lastReadAt)) cursor.delete();
+        cursor.continue();
+      };
+      tx.oncomplete = () => { notify({ type: "history-clear" }); resolve(); };
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error("Reader history clear aborted"));
+    }));
   }
   async function putBookmark(entry) {
+    const supplied = entry;
     entry = normalizeBookmarkEntry(entry);
     if (!entry) throw new TypeError("Invalid reader bookmark entry");
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       const tx = database.transaction(BOOKMARK_STORE_NAME, "readwrite");
-      tx.objectStore(BOOKMARK_STORE_NAME).put(entry);
+      const store = tx.objectStore(BOOKMARK_STORE_NAME);
+      const existing = store.get(entry.id);
+      existing.onsuccess = () => {
+        if (existing.result?.schemaVersion != null && existing.result.schemaVersion !== SCHEMA_VERSION) {
+          tx.abort();
+          return;
+        }
+        const previous = existing.result ? normalizeBookmarkEntry(existing.result) : null;
+        if (existing.result && (!previous || previous.url !== entry.url)) {
+          tx.abort();
+          return;
+        }
+        const merged = { ...previous, ...entry };
+        if (previous && !Object.prototype.hasOwnProperty.call(supplied, "label")) merged.label = previous.label;
+        if (previous && !Object.prototype.hasOwnProperty.call(supplied, "createdAt")) merged.createdAt = previous.createdAt;
+        store.put(merged);
+      };
       tx.oncomplete = () => {
         notify({ type: "bookmark", url: entry.url, id: entry.id });
         resolve();
@@ -246,13 +347,19 @@
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       const tx = database.transaction(BOOKMARK_STORE_NAME, "readwrite");
-      tx.objectStore(BOOKMARK_STORE_NAME).delete(id);
+      const store = tx.objectStore(BOOKMARK_STORE_NAME), request = store.get(id);
+      request.onsuccess = () => {
+        const value = request.result;
+        if (value && ((value.schemaVersion != null && value.schemaVersion !== SCHEMA_VERSION)
+            || !normalizeBookmarkEntry(value))) return tx.abort();
+        store.delete(id);
+      };
       tx.oncomplete = () => {
         notify({ type: "bookmark-remove", id });
         resolve();
       };
       tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error("Reader bookmark cannot be removed safely"));
     }));
   }
   root.VoiceOfMLReaderStore = Object.freeze({
@@ -264,6 +371,7 @@
     get,
     put,
     list,
+    isHistoryFull,
     remove,
     clearHistory,
     putBookmark,
