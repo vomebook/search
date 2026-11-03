@@ -13,6 +13,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.test_search_projection_contract', workflow)
         self.assertIn('tests.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
+        self.assertIn('merge-base --is-ancestor cdd3e97eb26977777dbad2c1b1437b9b76f20b20 HEAD', workflow)
 
 
 class HfQualityBaselineTests(unittest.TestCase):
