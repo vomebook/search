@@ -1,8 +1,8 @@
-name: Projection remote benchmark (temporary)
+name: Search candidates remote benchmark (temporary)
 
 on:
   push:
-    branches: ["bench/projection-remote-20261103"]
+    branches: ["bench/search-candidates-remote-20261103"]
 
 permissions:
   contents: read
@@ -16,16 +16,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "26.11.1"
       - name: Fetch exact benchmark sources
         run: |
           git clone --no-checkout https://huggingface.co/spaces/VoiceOfML/Search "$RUNNER_TEMP/hf-search-git"
-          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-baseline" a32b0686d63fa03aec065d18eac6672630023ce7
-          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-candidate" cdd3e97eb26977777dbad2c1b1437b9b76f20b20
-          test "$(git -C "$RUNNER_TEMP/hf-baseline" rev-parse HEAD)" = a32b0686d63fa03aec065d18eac6672630023ce7
-          test "$(git -C "$RUNNER_TEMP/hf-candidate" rev-parse HEAD)" = cdd3e97eb26977777dbad2c1b1437b9b76f20b20
+          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-baseline" bc9d36d02ed278002d161f01c5512b33ed8b4ea8
+          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-candidate" bc9d36d02ed278002d161f01c5512b33ed8b4ea8
+          git -C "$RUNNER_TEMP/hf-candidate" apply --check "$GITHUB_WORKSPACE/scripts/bench/search-candidates-candidate.patch"
+          git -C "$RUNNER_TEMP/hf-candidate" apply "$GITHUB_WORKSPACE/scripts/bench/search-candidates-candidate.patch"
       - name: Install pinned application dependencies
         run: python -m pip install -r "$RUNNER_TEMP/hf-candidate/requirements.txt" httpx==0.28.1
       - name: Build optional native search decoder
@@ -38,15 +35,11 @@ jobs:
           BENCH_OUTPUT: ${{ runner.temp }}/projection-remote-benchmark.json
           BENCH_RUN_ID: ${{ github.run_id }}
         run: python -B scripts/bench/projection_remote_benchmark.py
-      - name: Run isolated PDF range-cache benchmark
-        run: node scripts/bench/pdf_range_remote_benchmark.mjs "$RUNNER_TEMP/hf-candidate" "$RUNNER_TEMP/pdf-range-remote-benchmark.json"
       - name: Preserve detailed results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: projection-remote-benchmark-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/projection-remote-benchmark.json
-            ${{ runner.temp }}/pdf-range-remote-benchmark.json
+          name: search-candidates-remote-benchmark-${{ github.run_id }}
+          path: ${{ runner.temp }}/projection-remote-benchmark.json
           if-no-files-found: warn
           retention-days: 14

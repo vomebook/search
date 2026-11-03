@@ -1,0 +1,117 @@
+diff --git a/backend/app.py b/backend/app.py
+index 3beb92c..f90aeee 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
+ from contextlib import asynccontextmanager
+ from backend.cache_core import cached as _bounded_cache
+ from backend.folder_tree import build_folder_tree as _build_folder_tree
++from backend.search_candidates import literal_candidates as _literal_candidates
+ from backend.search_projection import public_record as _public_record, trim_results as _trim_results
+ from backend.reader_identity import (READER_ESCAPE_NORMALIZATION_RE as READER_ESCAPE_NORMALIZATION_RE,
+     canonical_reader_source_url as canonical_reader_source_url, reader_short_id as reader_short_id, _base36 as _base36)
+@@ -262,42 +263,9 @@ def word_posting_count(token: str) -> int:
+     return len(value)
+ 
+ def literal_candidates(query: str, repos=None) -> set[int] | None:
+-    width = 3 if len(query) >= 3 and ngram_postings.get(3) else 2
+-    postings = ngram_postings.get(width)
+-    if not postings or len(query) < width:
+-        return None
+-    entries = []
+-    for gram in dict.fromkeys(query[index:index + width] for index in range(len(query) - width + 1)):
+-        encoded = postings.get(gram)
+-        if encoded is None:
+-            return set()
+-        entries.append(encoded)
+-    # VNG3 entries carry validated counts; materialized test postings have lengths.
+-    entries.sort(key=lambda entry: entry[2] if isinstance(entry, tuple) else len(entry))
+-    candidates = None
+-    repo_scope = set(repos) if repos else None
+-    for encoded in entries:
+-        matches = resolve_postings(encoded, ngram_posting_buffers.get(width, b""))
+-        if candidates is None:
+-            candidates = matches
+-            if repo_scope is not None:
+-                if len(candidates) <= 2048 and sum(
+-                        len(repo_records_map.get(repo, ())) for repo in repo_scope) > len(candidates) * 8:
+-                    # A validated, small posting already identifies its corpus
+-                    # records. Avoid expanding a large repository posting just
+-                    # to reject a handful of IDs.
+-                    candidates = {idx for idx in candidates if 0 <= idx < len(records)
+-                                  and records[idx].get("Repo", "") in repo_scope}
+-                else:
+-                    allowed = set()
+-                    for repo in repo_scope:
+-                        allowed.update(repo_records_map.get(repo, []))
+-                    candidates.intersection_update(allowed)
+-        else:
+-            candidates.intersection_update(matches)
+-        if not candidates:
+-            return set()
+-    return candidates or set()
++    return _literal_candidates(query, repos, lambda: ngram_postings, lambda: ngram_posting_buffers,
++                               lambda: repo_records_map, lambda: records,
++                               lambda: resolve_postings)
+ INITIAL_PAGE_SIZE = 100
+ SIDEBAR_DATA_PATH = Path("data/sidebar")
+ RECORD_KEY_MAP = {
+diff --git a/backend/search_candidates.py b/backend/search_candidates.py
+new file mode 100644
+index 0000000..4ec7f41
+--- /dev/null
++++ b/backend/search_candidates.py
+@@ -0,0 +1,53 @@
++"""Typed literal n-gram candidate selection over caller-owned search state."""
++from __future__ import annotations
++
++from collections.abc import Callable, Iterable, Mapping, Sequence
++from backend.search_indexes import Posting, PostingIndex
++
++PostingResolver = Callable[[Posting, bytes], set[int]]
++
++
++def literal_candidates(query: str, repos: Iterable[str] | None,
++                       get_postings: Callable[[], Mapping[int, PostingIndex]],
++                       get_buffers: Callable[[], Mapping[int, bytes]],
++                       get_repos: Callable[[], Mapping[str, Sequence[int]]],
++                       get_records: Callable[[], Sequence[dict[str, object]]],
++                       get_resolver: Callable[[], PostingResolver]) -> set[int] | None:
++    """Return an exact posting intersection, or None when no index is usable.
++
++    Index records, repository lists and published postings remain caller-owned.
++    The first decoded posting is owned by the resolver and may be narrowed in
++    place exactly as before; no state is cached or published by this helper.
++    """
++    width = 3 if len(query) >= 3 and get_postings().get(3) else 2
++    postings = get_postings().get(width)
++    if not postings or len(query) < width:
++        return None
++    entries: list[Posting] = []
++    for gram in dict.fromkeys(query[index:index + width] for index in range(len(query) - width + 1)):
++        encoded = postings.get(gram)
++        if encoded is None:
++            return set()
++        entries.append(encoded)
++    entries.sort(key=lambda entry: entry[2] if isinstance(entry, tuple) else len(entry))
++    candidates: set[int] | None = None
++    repo_scope = set(repos) if repos else None
++    for encoded in entries:
++        matches = get_resolver()(encoded, get_buffers().get(width, b""))
++        if candidates is None:
++            candidates = matches
++            if repo_scope is not None:
++                if len(candidates) <= 2048 and sum(
++                        len(get_repos().get(repo, ())) for repo in repo_scope) > len(candidates) * 8:
++                    candidates = {idx for idx in candidates if 0 <= idx < len(get_records())
++                                  and get_records()[idx].get("Repo", "") in repo_scope}
++                else:
++                    allowed: set[int] = set()
++                    for repo in repo_scope:
++                        allowed.update(get_repos().get(repo, []))
++                    candidates.intersection_update(allowed)
++        else:
++            candidates.intersection_update(matches)
++        if not candidates:
++            return set()
++    return candidates or set()
