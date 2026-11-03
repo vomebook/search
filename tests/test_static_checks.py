@@ -286,6 +286,55 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(prefix + 'cache.set("a", {value: "wrong"});\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_search_file_types_coverage_gate_fails_closed(self):
+        paths = ["static/search/file-types.js", "scripts/check_search_file_types_coverage.mjs",
+                 "tests/test_search_extension_inventory_baseline.mjs", "static/app.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_search_file_types_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "file-types.js")
+        test = self.root / paths[2]
+        test.write_text('import test from "node:test"; test("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        test.write_text('throw new Error("failed file types test");\n')
+        self.assert_check(self.run_check(*check), False, "failed file types test")
+        test.write_text('import vm from "node:vm"; import fs from "node:fs";\n'
+                        'const filename = process.cwd() + "/static/search/file-types.js";\n'
+                        'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
+        names = ["all 67 ordered filter extensions are pinned, including case-sensitive lookup",
+                 "all 77 icon mappings and their case-insensitive lookup are pinned",
+                 "fallback, inherited keys, errors and lowercase invocation match the original",
+                 "original lexical inventories cannot be reassigned or shadowed through global properties",
+                 "const bindings retain their original mutable array and map contents",
+                 "inventory data is isolated between script evaluations"]
+        test.write_text('import vm from "node:vm"; import fs from "node:fs"; import test from "node:test";\n'
+                        'const filename=process.cwd()+"/static/search/file-types.js";\n'
+                        'vm.runInNewContext(fs.readFileSync(filename,"utf8"),{}, {filename});\n' +
+                        '\n'.join('test.skip(' + json.dumps(name) + ', () => {});' for name in names))
+        self.assert_check(self.run_check(*check), False, "coverage")
+
+    def test_search_file_types_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        self.assertIn("static/search/file-types.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/file-types.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        for before, after in [
+            ("orderedExtensions: string[];", "orderedExtensions: number[];"),
+            ("fileIconMap: Record<string, string | object>", "fileIconMap: Record<string, number>")
+        ]:
+            self.assertEqual(original.count(before), 1)
+            declaration.write_text(original.replace(before, after))
+            self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_search_highlight_coverage_gate_fails_closed(self):
         paths = ["static/search/highlight.js", "scripts/check_search_highlight_coverage.mjs",
                  "tests/test_search_highlight_contract.js"]

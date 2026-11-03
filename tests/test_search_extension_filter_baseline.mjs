@@ -20,7 +20,9 @@ function fixture(data, selected = []) {
     renderExtensionTree(_container, items, rest, selection, callback) {
       c.capture = {items: local(items), rest: local(rest), selected: local(selection), callback};
     }});
-  for (const pattern of [/^const ORDERED_EXTENSIONS = \[[^]*?^\];/m,
+  const filename = path.join(process.cwd(), 'static/search/file-types.js');
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), c, {filename});
+  for (const pattern of [/^const ORDERED_EXTENSIONS = [^\n]+/m,
     /^(?:async )?function renderExtensionFilter\([^]*?^}/m]) {
     const match = source.match(pattern);
     assert.ok(match, `inline declaration missing: ${pattern}`);
