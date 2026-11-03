@@ -189,6 +189,128 @@ class StaticGateTests(unittest.TestCase):
                         '"/static/reader/formats/reader-format-adapters.js" }));\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
+    def test_search_size_coverage_gate_fails_closed(self):
+        paths = ["static/search/size-format.js", "scripts/check_search_size_coverage.mjs",
+                 "tests/test_search_size_format.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_search_size_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "size-format.js")
+        (self.root / paths[2]).write_text('require("node:test")("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        (self.root / paths[2]).write_text('throw new Error("failed size test");\n')
+        self.assert_check(self.run_check(*check), False, "failed size test")
+
+    def test_request_manager_coverage_gate_fails_closed(self):
+        paths = ["static/reader/core/reader-request-manager.js", "scripts/check_request_manager_coverage.mjs",
+                 "tests/test_reader_request_manager.js", "tests/test_reader_initial_recovery.js",
+                 "tests/test_reader_request_manager_edges.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_request_manager_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "reader-request-manager.js")
+        for path in paths[2:]:
+            (self.root / path).write_text('require("node:test")("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "exactly one source coverage row")
+        (self.root / paths[2]).write_text('throw new Error("failed request test");\n')
+        self.assert_check(self.run_check(*check), False, "failed request test")
+        (self.root / paths[2]).write_text('const vm = require("vm"), fs = require("fs");\n'
+            'const filename = process.cwd() + "/static/reader/core/reader-request-manager.js";\n'
+            'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
+
+    def test_request_manager_disposal_mutation_is_detected(self):
+        # Once the late response is released, a missing owner cancellation
+        # must fail an assertion instead of leaving the fake-timer test idle.
+        paths = ["static/reader/core/reader-request-manager.js", "tests/test_reader_request_manager_edges.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        source = self.root / paths[0]
+        original = source.read_text()
+        before = 'for (const record of active) abort(record, new DOMException("Reader disposed", "AbortError"));'
+        self.assertEqual(original.count(before), 1)
+        source.write_text(original.replace(before, 'for (const record of active) void record;'))
+        self.assert_check(self.run_check("node", "--test", "--test-reporter=tap", paths[1]), False,
+                          "Missing expected rejection")
+
+    def test_search_size_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/size-format.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = "declare function fmtSizeUrl(bytes: number | null | undefined): string | null;"
+        self.assertEqual(original.count(before), 1)
+        declaration.write_text(original.replace(before,
+            "declare function fmtSizeUrl(bytes: number | null | undefined): number;"))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_request_manager_coverage_gate_fails_on_fractional_regression(self):
+        paths = ["static/reader/core/reader-request-manager.js", "scripts/check_request_manager_coverage.mjs",
+                 "tests/test_reader_request_manager.js", "tests/test_reader_initial_recovery.js",
+                 "tests/test_reader_request_manager_edges.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        gate = self.root / paths[1]
+        source = gate.read_text()
+        self.assertEqual(source.count("const minimum = [100, 95.24, 95.12];"), 1)
+        gate.write_text(source.replace("const minimum = [100, 95.24, 95.12];",
+                                       "const minimum = [100, 95.99, 95.12];"))
+        self.assert_check(self.run_check("node", "scripts/check_request_manager_coverage.mjs"), False,
+                          "above each minimum")
+
+    def test_request_manager_async_test_runner_rejects_unfinished_test(self):
+        test = self.root / "tests/pending-request.js"
+        test.write_text('require("node:test")("unfinished", {timeout: 25}, async () => new Promise(() => {}));\n')
+        self.assert_check(self.run_check("node", "--test", "--test-reporter=tap", test), False,
+                          "test timed out")
+
+    def test_strict_reader_request_manager_contract(self):
+        source = self.root / "static/request-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), "static/request-usage.js"]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        valid = ('const manager = VoiceOfMLReaderRequests.createReaderRequestManager({initialIdleMs: 10});\n'
+                 'manager.request("/a", 1000, {signal: new AbortController().signal}).then(r => r.text());\n'
+                 'manager.requestBuffered("/b", 1000, 8).then(r => r.json()); manager.dispose();\n')
+        source.write_text(valid)
+        self.assert_check(self.run_check(*check), True, "")
+        for bad in ('manager.request("/a", "slow");', 'manager.requestBuffered("/a", 10, "huge");',
+                    'manager.request("/a", 10).then(r => r.notAResponseMethod());',
+                    'VoiceOfMLReaderRequests.createReaderRequestManager({initialIdleMs: "slow"});'):
+            with self.subTest(bad=bad):
+                source.write_text(valid + bad + "\n")
+                self.assert_check(self.run_check(*check), False, "error TS")
+
+    def test_request_manager_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/reader/core/reader-request-manager.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        valid = "readonly pendingCount: number;\n  readonly activeCount: number;\n  readonly disposed: boolean;"
+        self.assertEqual(original.count(valid), 1)
+        declaration.write_text(original.replace(valid, valid.replace("activeCount: number", "activeCount: string")))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_pdf_network_coverage_gate_fails_closed(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
                  "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",

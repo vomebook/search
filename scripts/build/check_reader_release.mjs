@@ -202,6 +202,7 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/search/reader-pdf-book-search.mjs",
     "search/search-session.js",
     "search/download-controller.js",
+    "search/size-format.js",
     "search/reader-navigation.js",
     "reader.css",
     "reader/core/reader-request-manager.js",

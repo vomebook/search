@@ -900,32 +900,6 @@ function openExternalWindow(url) {
   return popup;
 }
 
-function bytesToDisplay(bytes) {
-  if (bytes === null || bytes === undefined) return { value: "", unit: "MB" };
-  if (bytes >= 1073741824) return { value: (bytes / 1073741824).toFixed(2).replace(/\.?0+$/, ""), unit: "GB" };
-  if (bytes >= 1048576) return { value: (bytes / 1048576).toFixed(1).replace(/\.0$/, ""), unit: "MB" };
-  if (bytes >= 1024) return { value: (bytes / 1024).toFixed(1).replace(/\.0$/, ""), unit: "KB" };
-  return { value: String(bytes), unit: "B" };
-}
-
-function fmtSizeUrl(bytes) {
-  if (bytes === null || bytes === undefined) return null;
-  var d = bytesToDisplay(bytes);
-  const formatted = d.value + d.unit;
-  return parseSizeStr(formatted) === bytes ? formatted : String(bytes) + "B";
-}
-
-function parseSizeStr(str) {
-  if (!str) return null;
-  var m = String(str).match(/^([\d.]+)\s*(GB|MB|KB|B)?$/i);
-  if (!m) return parseInt(str) || null;
-  var val = parseFloat(m[1]);
-  var unit = (m[2] || "B").toUpperCase();
-  if (unit === "GB") val *= 1073741824;
-  else if (unit === "MB") val *= 1048576;
-  else if (unit === "KB") val *= 1024;
-  return Math.round(val);
-}
 var HISTORY_KEY = "voml_search_history";
 var HISTORY_MAX = 20;
 var EXT_FILTER_STORAGE_KEY = "voml_ext_filter:global";

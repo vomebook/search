@@ -1,5 +1,10 @@
 // Runtime classic-script interfaces. Their implementations live in
 // static/reader-resources.js and static/reader/core, loaded by reader.html.
+// Classic search helpers are loaded before app.js, and composed into it in production.
+declare function bytesToDisplay(bytes: number | null | undefined): {value: string; unit: "B" | "KB" | "MB" | "GB"};
+declare function fmtSizeUrl(bytes: number | null | undefined): string | null;
+declare function parseSizeStr(value: string | null | undefined): number | null;
+
 interface ReaderSecurityApi {
   readonly LIMITS: Readonly<{
     documentBytes: number; pdfRangeDocumentBytes: number; archiveCompressedBytes: number;
@@ -65,7 +70,22 @@ interface ReaderStoreApi {
   dispose(): void;
 }
 declare var VoiceOfMLReaderStore: ReaderStoreApi;
-interface ReaderRequestManagerApi { createReaderRequestManager(options?: object): any }
+interface ReaderRequestManagerOptions {
+  fetchImpl?: typeof fetch;
+  AbortControllerImpl?: typeof AbortController;
+  setTimer?: typeof setTimeout;
+  clearTimer?: typeof clearTimeout;
+  initialIdleMs?: number;
+}
+interface ReaderRequestManager {
+  request(url: RequestInfo | URL, timeoutMs: number, requestInit?: RequestInit): Promise<Response>;
+  requestBuffered(url: RequestInfo | URL, timeoutMs: number, limit: number, requestInit?: RequestInit): Promise<Response>;
+  dispose(): void;
+  readonly pendingCount: number;
+  readonly activeCount: number;
+  readonly disposed: boolean;
+}
+interface ReaderRequestManagerApi { createReaderRequestManager(options?: ReaderRequestManagerOptions): Readonly<ReaderRequestManager> }
 interface ReaderRuntimeApi { createReaderRuntime(): any }
 interface ReaderFormatAdapter {
   open(): unknown;
