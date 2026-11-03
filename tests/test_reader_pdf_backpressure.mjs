@@ -447,5 +447,20 @@ try {
     for(const response of await Promise.all([background,old]))await response.arrayBuffer();
     assert.deepEqual(starts.slice(-2),['bytes=4-7','bytes=8-11']);policy.dispose();
   }
+  // Cancellation can race the async admission continuation, even when no
+  // rate limiting was active. Do not invoke native fetch with an aborted owner.
+  for (const [kind,options] of [['reader', {headers:{Range:'bytes=0-3'}}],
+    ['caller', {headers:{Range:'bytes=0-3'}}], ['full', {}]]) {
+    let calls=0;
+    globalThis.fetch=async()=>{calls++;return new Response(bytes,{status:206,headers});};
+    const policy=createPdfFetchPolicy(opts);policy.add(['/a.pdf']);
+    const owner=new AbortController();
+    const pending=fetch('/a.pdf',{...options,signal:owner.signal});
+    if (kind==='caller') owner.abort(new DOMException('caller closed','AbortError'));
+    else policy.dispose();
+    await assert.rejects(pending,error=>error.name==='AbortError');
+    assert.equal(calls,0,`${kind}: no native dispatch after admission cancellation`);
+    policy.dispose();
+  }
   console.log('429 feedback, shared spacing, bounded retry, version consistency and cancellation passed');
 } finally {globalThis.fetch=native;}
