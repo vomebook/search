@@ -1075,6 +1075,36 @@ class StaticGateTests(unittest.TestCase):
                           '/** @type {Promise<string>} */ const restored=s.restoreSearchSession();\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_search_folder_merge_baseline_gate_fails_closed(self):
+        paths = ["static/app.js", "scripts/check_search_folder_merge_baseline.mjs",
+                 "tests/test_search_folder_merge_baseline.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "# pass 9")
+        test = self.root / paths[2]
+        source = test.read_text()
+        name = 'membership is captured before subtree filter access mutates the self array'
+        anchor = "test('" + name + "'"
+        self.assertEqual(source.count(anchor), 1)
+        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
+            test.write_text(source.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
+                      "test.todo('extra todo');"):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source.replace(anchor + ", () => {", anchor + ", () => { throw new Error('folder merge failed');"))
+        self.assert_check(self.run_check(*check), False, "folder merge failed")
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source)
+        app = self.root / paths[0]
+        app.write_text(app.read_text().replace("function mergeFolderFilters(", "function renamedFolderFilters("))
+        self.assert_check(self.run_check(*check), False, "original inline folder merge")
+
     def test_search_filter_equality_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_filter_equality_baseline.mjs",
                  "tests/test_search_filter_equality_baseline.mjs"]
