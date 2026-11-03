@@ -14,7 +14,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.test_search_projection_contract', workflow)
         self.assertIn('tests.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor a63ebe913bb50c0857e862f7d581b635517a189e HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor 0deb808706afcf4bec9fb8c8bd35445061321791 HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -69,6 +69,10 @@ class HfSearchProjectionCiTests(unittest.TestCase):
     def test_both_sites_run_original_filter_equality_contract(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/check_search_filter_equality_baseline.mjs'), 2)
+
+    def test_both_sites_run_original_folder_merge_contract(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        self.assertEqual(workflow.count('node scripts/check_search_folder_merge_baseline.mjs'), 2)
 
 
 class HfQualityBaselineTests(unittest.TestCase):
