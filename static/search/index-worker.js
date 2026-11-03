@@ -514,9 +514,11 @@ function buildFilterSets(params) {
 function matchesFolderFilters(recordFolders, folderPath, params, filters) {
   if (params.folderMatchMode === "mixed") {
     let matched = filters.selfFolders.has(folderPath);
+    // Direct-only selections do not need any ancestor prefixes.
+    if (matched || !filters.subtreeFolders.size) return !(filters.selfFolders.size || filters.subtreeFolders.size) || matched;
     for (let depth = 1; !matched && depth <= recordFolders.length; depth++)
       matched = filters.subtreeFolders.has(recordFolders.slice(0, depth).join("/"));
-    return !(filters.selfFolders.size || filters.subtreeFolders.size) || matched;
+    return matched;
   }
   if (!filters.folders) return true;
   if (params.folderMatchMode === "exact") return filters.folders.has(folderPath);

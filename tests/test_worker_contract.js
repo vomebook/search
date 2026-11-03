@@ -646,6 +646,28 @@ test("prefix exact root and mixed folder filters retain semantics", async () => 
   assert.deepStrictEqual(await names({ q: "", folders: [""], folderMatchMode: "prefix" }), ["手机资料", "手。机"]);
   assert.deepStrictEqual(await names({ q: "", folderMatchMode: "mixed", folderSelfs: ["archive"], folderSubtrees: ["docs"] }), ["alpha guide", "beta alpha", "beta notes", "delta", "same"]);
 });
+test("mixed direct-only search skips ancestor construction but retains component boundaries", async () => {
+  const input = [
+    { Repo: "R", File: "component", Extension: "txt", Folder: ["a/b", "c"], Size: 1, HasTxt: false },
+    { Repo: "R", File: "nested", Extension: "txt", Folder: ["a", "b", "c"], Size: 1, HasTxt: false },
+    { Repo: "R", File: "empty", Extension: "txt", Folder: ["a", "", "c"], Size: 1, HasTxt: false },
+    { Repo: "R", File: "root", Extension: "txt", Folder: [], Size: 1, HasTxt: false },
+  ];
+  assert.deepStrictEqual(await namesWithCorpus(input, { folderMatchMode: "mixed", folderSelfs: ["a/b/c"] }),
+    ["component", "nested"]);
+  assert.deepStrictEqual(await namesWithCorpus(input, { folderMatchMode: "mixed", folderSubtrees: ["a"] }),
+    ["nested", "empty"]);
+  assert.deepStrictEqual(await namesWithCorpus(input, { folderMatchMode: "mixed", folderSelfs: [""], folderSubtrees: ["a//c"] }),
+    ["empty", "root"]);
+  const { worker } = await loaded(input);
+  const filtered = vm.runInContext(`(() => {
+    const folders = ["a", "b"];
+    folders.slice = () => { throw new Error("unneeded subtree prefix"); };
+    const filters = buildFilterSets({ folderSelfs: ["a/c"], folderSubtrees: [] });
+    return matchesFolderFilters(folders, "a/b", { folderMatchMode: "mixed" }, filters);
+  })()`, worker.context);
+  assert.strictEqual(filtered, false);
+});
 test("name size and relevance sorting retain stable order", async () => {
   const expectedName = records.slice().sort((a, b) => a.File.localeCompare(b.File, "zh")).map((r) => r.File);
   assert.deepStrictEqual(await names({ q: "", sort: "name" }), expectedName);
