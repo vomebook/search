@@ -1,6 +1,13 @@
 (function (root) {
   "use strict";
 
+  /** @typedef {{node: Element, offset: number, generation: number}} ScrollAnchor */
+  /**
+   * @param {{viewport: Element, candidates: () => Element[],
+   *   ResizeObserverImpl?: typeof ResizeObserver, requestFrame?: typeof requestAnimationFrame,
+   *   cancelFrame?: typeof cancelAnimationFrame, setTimer?: typeof setTimeout,
+   *   clearTimer?: typeof clearTimeout, scrollIdleDelay?: number}} options
+   */
   function createScrollAnchorManager({
     viewport,
     candidates,
@@ -11,6 +18,7 @@
     clearTimer = root.clearTimeout.bind(root),
     scrollIdleDelay = 140
   }) {
+    /** @type {ScrollAnchor | null} */
     let anchor = null;
     let captureFrame = 0;
     let restoreFrame = 0;
@@ -18,8 +26,10 @@
     let generation = 0;
     let scrolling = false;
     let scrollTimer = 0;
+    /** @type {Set<() => void>} */
     const idleTasks = new Set();
 
+    /** @param {Element | null | undefined} node @returns {ScrollAnchor | null} */
     function measure(node) {
       if (!node?.isConnected) return null;
       const viewportRect = viewport.getBoundingClientRect();
@@ -49,6 +59,7 @@
       return anchor;
     }
 
+    /** @param {ScrollAnchor | null} [snapshot] */
     function restore(snapshot = anchor) {
       if (disposed || snapshot?.generation !== generation || !snapshot.node?.isConnected)
         return false;
@@ -64,6 +75,7 @@
       return true;
     }
 
+    /** @param {ScrollAnchor | null} [snapshot] */
     function scheduleRestore(snapshot = anchor) {
       if (disposed || !snapshot || restoreFrame) return;
       restoreFrame = requestFrame(() => {
@@ -83,6 +95,7 @@
       capture();
     }
 
+    /** @template T @param {() => T} change @returns {T} */
     function preserve(change) {
       const snapshot = capture();
       const result = change();
@@ -122,6 +135,7 @@
       if (scrolling) scheduleScrollEnd();
     }
 
+    /** @param {() => void} task */
     function whenIdle(task) {
       if (disposed || typeof task !== "function") return;
       if (!scrolling) task();
@@ -134,13 +148,16 @@
     const resizeObserver = ResizeObserverImpl
       ? new ResizeObserverImpl(() => (scrolling ? capture() : restore(anchor)))
       : null;
+    /** @param {Element} node */
     function observe(node) {
       resizeObserver?.observe(node);
       if (!anchor) capture();
     }
+    /** @param {Element} node */
     function unobserve(node) {
       resizeObserver?.unobserve(node);
-      if (anchor?.node === node || node?.contains?.(anchor?.node)) anchor = null;
+      // Web IDL converts undefined to null; the assertion keeps runtime behavior unchanged.
+      if (anchor?.node === node || node?.contains?.(/** @type {Node | null} */ (anchor?.node))) anchor = null;
     }
     function invalidate() {
       generation += 1;
