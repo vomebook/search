@@ -158,7 +158,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 7fa5d8736fb5d54222c2ed44b7112b5638e2617c HEAD
+          git -C huggingface-search merge-base --is-ancestor bfa5fe2a4d46c3df8ad1db22ebcfba1a42878aa9 HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -204,7 +204,8 @@ jobs:
             tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract \
             tests.test_reader_identity_contract tests.test_cache_core_contract tests.test_reader_index_contract \
             tests.test_record_metadata_contract tests.test_folder_tree_contract tests.test_folder_tree_mutation_contract \
-            tests.test_search_projection_contract tests.test_search_projection_mutation_contract
+            tests.test_search_projection_contract tests.test_search_projection_mutation_contract \
+            tests.test_search_candidates_contract tests.test_search_candidates_mutation_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
           python -B scripts/check_strict_inventory.py "$RUNNER_TEMP/hf-quality-baseline/strict-inventory-debt.json"
           python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" "$RUNNER_TEMP/hf-quality-baseline/backend-coverage-debt.json"
@@ -222,6 +223,7 @@ jobs:
           python -B scripts/check_search_words_mutation.py --module proxy_streams
           python -B scripts/check_search_words_mutation.py --module folder_tree
           python -B scripts/check_search_words_mutation.py --module search_projection
+          python -B scripts/check_search_words_mutation.py --module search_candidates
       - name: Install browser dependencies
         working-directory: huggingface-search
         run: python -m playwright install --with-deps chromium firefox
