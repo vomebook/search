@@ -618,6 +618,19 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ["node", "scripts/check_request_manager_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "reader-request-manager.js")
+        source = self.root / paths[2]
+        original = source.read_text()
+        before = 'require("node:test")("reader request manager behavior",'
+        self.assertEqual(original.count(before), 1)
+        source.write_text(original.replace(before, 'require("node:test")("renamed request contract",'))
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        source.write_text(original + '\nrequire("node:test").skip("unexpected skipped check", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        source.write_text(original + '\nrequire("node:test").todo("unfinished check");\n')
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        source.write_text(original + '\nrequire("node:test")("reader request manager behavior", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        source.write_text(original)
         for path in paths[2:]:
             (self.root / path).write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one source coverage row")

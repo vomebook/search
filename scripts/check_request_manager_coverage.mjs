@@ -19,7 +19,15 @@ const rows = (result.stdout || "").split(/\r?\n/).flatMap(line => {
   const match = /^\s*#\s*reader-request-manager\.js\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
 });
-if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index])) {
-  console.error("Request manager coverage gate requires passing tests and exactly one source coverage row above each minimum");
+const text = result.stdout || "";
+const lines = text.split(/\r?\n/);
+const required = ["reader request manager behavior", "reader initial response recovery", "reader request manager edge behavior"];
+if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
+    !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) || required.some(name => {
+      const index = lines.indexOf(`# Subtest: ${name}`);
+      return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
+        !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "");
+    })) {
+  console.error("Request manager coverage gate requires passing named tests and exactly one source coverage row above each minimum");
   process.exitCode = 1;
 }
