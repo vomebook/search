@@ -1,0 +1,23 @@
+diff --git a/backend/app.py b/backend/app.py
+index 68dbd84..eeb632f 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -1884,6 +1884,8 @@ async def get_reader_bucket_resource(path: str, max_bytes: int = READER_RESOURCE
+         if cached:
+             cached_at, payload = cached
+             if time.monotonic() - cached_at < READER_BUCKET_CACHE_TTL_SECONDS:
++                if len(payload) > max_bytes:
++                    raise ValueError("阅读资源过大")
+                 state.reader_bucket_cache.move_to_end(cache_key)
+                 return payload
+             state.reader_bucket_cache.pop(cache_key)
+@@ -1913,4 +1915,8 @@ async def get_reader_bucket_resource(path: str, max_bytes: int = READER_RESOURCE
+         task = asyncio.create_task(load())
+         task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+         state.reader_bucket_inflight[cache_key] = task
+-    return await asyncio.shield(task)
++    # Concurrent callers can share a read started with a different size limit.
++    payload = await asyncio.shield(task)
++    if len(payload) > max_bytes:
++        raise ValueError("阅读资源过大")
++    return payload

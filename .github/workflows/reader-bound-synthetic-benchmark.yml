@@ -1,0 +1,44 @@
+name: Reader bounded-cache synthetic benchmark (temporary)
+
+on:
+  push:
+    branches: ["bench/reader-bound-synthetic-20261103"]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.17"
+      - name: Fetch pinned backend source
+        run: |
+          git clone --no-checkout https://huggingface.co/spaces/VoiceOfML/Search "$RUNNER_TEMP/hf-search-git"
+          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-baseline" 41ecbae58b0303169a73f3261d7054cf2db4d8d4
+          git -C "$RUNNER_TEMP/hf-search-git" worktree add --detach "$RUNNER_TEMP/hf-candidate" 41ecbae58b0303169a73f3261d7054cf2db4d8d4
+          git -C "$RUNNER_TEMP/hf-candidate" apply --unidiff-zero --check "$GITHUB_WORKSPACE/scripts/bench/reader-bound-a56.patch"
+          git -C "$RUNNER_TEMP/hf-candidate" apply --unidiff-zero "$GITHUB_WORKSPACE/scripts/bench/reader-bound-a56.patch"
+      - name: Install pinned backend dependencies
+        run: python -m pip install -r "$RUNNER_TEMP/hf-candidate/requirements.txt"
+      - name: Measure isolated synthetic code paths
+        env:
+          BENCH_BASELINE: ${{ runner.temp }}/hf-baseline
+          BENCH_CANDIDATE: ${{ runner.temp }}/hf-candidate
+          BENCH_OUTPUT: ${{ runner.temp }}/reader-bound-paired.json
+          BENCH_RUN_ID: ${{ github.run_id }}
+          PYTHONPATH: ${{ runner.temp }}/hf-candidate
+          PYTHONHASHSEED: "0"
+        run: python -B scripts/bench/reader_bound_paired.py
+      - name: Retain results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reader-bound-synthetic-${{ github.run_id }}
+          path: ${{ runner.temp }}/reader-bound-paired.json
+          if-no-files-found: error
+          retention-days: 14
