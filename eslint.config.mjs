@@ -38,7 +38,7 @@ export default [
   { files: ["static/app.js"], languageOptions: { globals: {
     bytesToDisplay: "readonly", fmtSizeUrl: "readonly", parseSizeStr: "readonly", formatSize: "readonly",
     buildRecordRelativePath: "readonly", encodeRecordPath: "readonly",
-    escapeHTML: "readonly", getHighlightRegex: "readonly", highlightText: "readonly"
+    escapeHTML: "readonly", getHighlightRegex: "readonly", highlightText: "readonly", BoundedResponseCache: "readonly"
   } } },
   { files: ["static/**/*.mjs", "static/**/reader.js", "static/**/reader-pdf-text.js", "static/**/reader-book-text.js"],
     languageOptions: { sourceType: "module" } },
