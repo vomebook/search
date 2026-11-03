@@ -56,6 +56,9 @@ function checkRegistry() {
   assert.equal(registry.dispose(), undefined);
   assert.deepEqual(calls, ["open", ["render", "prepared"], ["restore", "saved", 4], "dispose"]);
 }
-if (process.env.READER_V8_COVERAGE) require("node:test")("reader adapter registry", checkRegistry);
-else checkRegistry();
-console.log("reader adapter registry contracts passed");
+function runContracts() {
+  checkRegistry();
+  console.log("reader adapter registry contracts passed");
+}
+if (process.env.READER_V8_COVERAGE) require("node:test")("reader adapter registry", runContracts);
+else runContracts();
