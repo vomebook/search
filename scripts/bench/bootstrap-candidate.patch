@@ -1,5 +1,5 @@
 diff --git a/backend/app.py b/backend/app.py
-index ec6788b..3d35500 100644
+index ec6788b..9b4bf71 100644
 --- a/backend/app.py
 +++ b/backend/app.py
 @@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
@@ -10,7 +10,7 @@ index ec6788b..3d35500 100644
  from backend.search_candidates import literal_candidates as _literal_candidates
  from backend.search_projection import public_record as _public_record, trim_results as _trim_results
  from backend.reader_identity import (READER_ESCAPE_NORMALIZATION_RE as READER_ESCAPE_NORMALIZATION_RE,
-@@ -749,32 +750,23 @@ def build_response(results: list[dict], total: int, page: int, page_size: int) -
+@@ -749,32 +750,27 @@ def build_response(results: list[dict], total: int, page: int, page_size: int) -
  
  
  def trim_initial_results(raw: list[dict]) -> list[dict]:
@@ -32,6 +32,10 @@ index ec6788b..3d35500 100644
 +
 +def _bootstrap_generation():
 +    return search_generation
++
++
++def _bootstrap_record(index: int):
++    return records[index]
  
  def build_initial_payload(repo: str | None = None) -> dict:
 -    if repo:
@@ -54,16 +58,16 @@ index ec6788b..3d35500 100644
 -        "generation": search_generation(),
 -    }
 +    return _build_initial_payload(repo, _bootstrap_page_size, _candidate_repos, _candidate_records,
-+                                  _bootstrap_trim, _bootstrap_generation)
++                                  _bootstrap_record, _bootstrap_trim, _bootstrap_generation)
  
  def build_initial_payloads():
      global initial_payload_global, initial_payload_by_repo
 diff --git a/backend/search_bootstrap.py b/backend/search_bootstrap.py
 new file mode 100644
-index 0000000..6c194e5
+index 0000000..60303a6
 --- /dev/null
 +++ b/backend/search_bootstrap.py
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,31 @@
 +"""Typed construction of initial search pages from caller-owned state."""
 +from __future__ import annotations
 +
@@ -80,12 +84,13 @@ index 0000000..6c194e5
 +def build_initial_payload(repo: str | None, get_page_size: Callable[[], int],
 +                          get_repos: Callable[[], Mapping[str, Sequence[int]]],
 +                          get_records: Callable[[], Sequence[SearchRecord]],
++                          get_record: Callable[[int], SearchRecord],
 +                          get_trim: Callable[[], Callable[[Sequence[SearchRecord]], list[SearchRecord]]],
 +                          get_generation: Callable[[], Callable[[], str]]) -> dict[str, object]:
 +    """Preserve snapshot lookup, projection and generation evaluation order."""
 +    if repo:
 +        indices = get_repos().get(repo, [])
-+        result_records = [get_records()[index] for index in indices[:get_page_size()]]
++        result_records = [get_record(index) for index in indices[:get_page_size()]]
 +        mode = "repo"
 +        total = len(indices)
 +    else:
