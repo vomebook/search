@@ -949,6 +949,63 @@ class StaticGateTests(unittest.TestCase):
         declaration.write_text(original.replace(valid_return, "restore(snapshot?: ReaderScrollAnchor | null): string;"))
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_search_session_declaration_matches_strict_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        self.assertIn("static/search/search-session.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/search-session.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        for before, after in [
+            ("openSearchSessionDB(): Promise<IDBDatabase>;", "openSearchSessionDB(): Promise<string>;"),
+            ("persistSearchSession(): Promise<void>;", "persistSearchSession(): Promise<number>;"),
+            ("restoreSearchSession(): Promise<boolean>;", "restoreSearchSession(): Promise<string>;")
+        ]:
+            self.assertEqual(original.count(before), 1)
+            declaration.write_text(original.replace(before, after))
+            self.assert_check(self.run_check(*check), False, "TS2322")
+        declaration.write_text(original)
+        implementation = self.root / "static/search-session.js"
+        source = (ROOT / "static/search/search-session.js").read_text()
+        before = "return { openSearchSessionDB, persistSearchSession, restoreSearchSession };"
+        self.assertEqual(source.count(before), 1)
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"}, "files": [str(declaration), str(implementation)]}))
+        for after in [
+            'return { openSearchSessionDB: async () => "bad", persistSearchSession, restoreSearchSession };',
+            'return { openSearchSessionDB, persistSearchSession: async () => 42, restoreSearchSession };',
+            'return { openSearchSessionDB, persistSearchSession, restoreSearchSession: async () => "bad" };'
+        ]:
+            implementation.write_text(source.replace(before, after))
+            self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_search_session_rejects_invalid_policy_and_return_types(self):
+        source = self.root / "static/session-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"}, "files": [str(ROOT / "typings/reader-globals.d.ts"), str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        source.write_text('const s=VoiceOfMLSearchSession.createSearchSession({canPersist:()=>true,canRestore:t=>!t||t.protocol==="https:"});\n'
+                          '/** @type {Promise<boolean>} */ const restored=s.restoreSearchSession();\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text('const s=VoiceOfMLSearchSession.createSearchSession({canPersist:()=>true,canRestore:()=>true});\n'
+                          '/** @type {Promise<string>} */ const db=s.openSearchSessionDB();\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        source.write_text('const s=VoiceOfMLSearchSession.createSearchSession({canPersist:()=>true,canRestore:()=>true});\n'
+                          '/** @type {Promise<number>} */ const saved=s.persistSearchSession();\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        source.write_text('VoiceOfMLSearchSession.createSearchSession({canPersist:()=>"yes",canRestore:()=>true});\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        source.write_text('VoiceOfMLSearchSession.createSearchSession({canPersist:()=>true,canRestore:()=>1});\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        source.write_text('const s=VoiceOfMLSearchSession.createSearchSession({canPersist:()=>true,canRestore:()=>true});\n'
+                          '/** @type {Promise<string>} */ const restored=s.restoreSearchSession();\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_static_globals_match_their_runtime_implementations(self):
         # Compile the actual classic scripts with their public declarations so
         # that an incorrect hand-written interface cannot hide behind any.

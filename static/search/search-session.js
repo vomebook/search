@@ -73,5 +73,5 @@
       return { openSearchSessionDB, persistSearchSession, restoreSearchSession };
     }
 
-    Object.assign(root, { VoiceOfMLSearchSession: { createSearchSession } });
+    Object.assign(root, { VoiceOfMLSearchSession: /** @satisfies {SearchSessionApi} */ ({ createSearchSession }) });
 })(typeof self !== "undefined" ? self : globalThis);
