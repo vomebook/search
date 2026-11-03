@@ -199,6 +199,35 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ["node", "scripts/check_document_loader_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "reader-document-loader.mjs")
+        contract = self.root / paths[2]
+        original = contract.read_text()
+        names = ["retry policy keeps bounded delay and never retries rate-limited or aborted work",
+                 "proxy fallback respects response ownership, cancellation and bucket routing",
+                 "preloads are single-owner and fall back on failure or mismatched identity",
+                 "document preparation preserves failure and byte-limit ownership",
+                 "script load releases timers, handlers and resources on success, error and close",
+                 "image fallback is not used for budget failures or closed readers"]
+        for name in names:
+            anchor = 'test("' + name + '"'
+            self.assertEqual(original.count(anchor), 1)
+            for replacement in ('test("renamed contract"', 'test.skip("' + name + '"', 'test.todo("' + name + '"'):
+                contract.write_text(original.replace(anchor, replacement))
+                self.assert_check(self.run_check(*check), False, "passing named tests")
+        name = names[2]
+        for extra in ('test("' + name + '", () => {});', 'test.skip("extra skip", () => {});',
+                      'test.todo("extra todo");'):
+            contract.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
+        contract.write_text(original)
+        rate_test = self.root / paths[3]
+        rate_source = rate_test.read_text()
+        marker = 'PDF rate-limit retry boundary and generic retry preserved'
+        self.assertEqual(rate_source.count(marker), 1)
+        rate_test.write_text(rate_source.replace(marker, 'missing rate completion marker'))
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        rate_test.write_text('import "../static/reader/core/reader-document-loader.mjs";\n')
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        rate_test.write_text(rate_source)
         for path in paths[2:]:
             (self.root / path).write_text('import {test} from "node:test"; test("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one source row")

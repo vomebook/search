@@ -17,7 +17,25 @@ const rows = (result.stdout || "").split(/\r?\n/).flatMap(line => {
   const match = /^\s*#\s*reader-document-loader\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
 });
-if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index])) {
-  console.error("Document loader coverage requires passing tests and exactly one source row above each minimum");
+const text = result.stdout || "";
+const lines = text.split(/\r?\n/);
+const required = [
+  "retry policy keeps bounded delay and never retries rate-limited or aborted work",
+  "proxy fallback respects response ownership, cancellation and bucket routing",
+  "preloads are single-owner and fall back on failure or mismatched identity",
+  "document preparation preserves failure and byte-limit ownership",
+  "script load releases timers, handlers and resources on success, error and close",
+  "image fallback is not used for budget failures or closed readers",
+  "tests/test_reader_pdf_rate_outer.mjs"
+];
+if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
+    !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) || required.some(name => {
+      const index = lines.indexOf(`# Subtest: ${name}`);
+      return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
+        !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "") ||
+        (name === "tests/test_reader_pdf_rate_outer.mjs" &&
+         lines[index - 1] !== "# PDF rate-limit retry boundary and generic retry preserved");
+    })) {
+  console.error("Document loader coverage requires passing named tests and exactly one source row above each minimum");
   process.exitCode = 1;
 }
