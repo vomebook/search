@@ -1006,6 +1006,45 @@ class StaticGateTests(unittest.TestCase):
                           '/** @type {Promise<string>} */ const restored=s.restoreSearchSession();\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_search_exact_gate_rejects_unchecked_indexes_and_undefined_optionals(self):
+        original = json.loads((ROOT / "jsconfig.search-exact.json").read_text())
+        options = original["compilerOptions"]
+        for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
+            self.assertIs(options.get(flag), True, flag)
+        required = {"static/search/search-session.js", "static/search/result-identity.js", "static/search/record-path.js",
+                    "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js"}
+        self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
+        self.assertIn("tsc --project jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
+        source = self.root / "static/exact-usage.js"
+        config = self.root / "jsconfig.json"
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        def configure(settings):
+            config.write_text(json.dumps({"compilerOptions": settings,
+                "files": [*[str(ROOT / name) for name in original["files"]], str(source)]}))
+        configure(options)
+        source.write_text('/** @param {string[]} values @returns {string} */ function first(values) { return values[0] || ""; }\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text('/** @param {string[]} values @returns {string} */ function first(values) { return values[0]; }\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        configure({**options, "noUncheckedIndexedAccess": False})
+        self.assert_check(self.run_check(*check), True, "")
+        configure(options)
+        source.write_text('/** @type {{name?: string}} */ const item={name:undefined};\n')
+        self.assert_check(self.run_check(*check), False, "TS2375")
+        configure({**options, "exactOptionalPropertyTypes": False})
+        self.assert_check(self.run_check(*check), True, "")
+        local_config = self.root / "jsconfig.search-exact.json"
+        local_config.write_text(json.dumps(original))
+        for name in original["files"]:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        production_check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", local_config]
+        self.assert_check(self.run_check(*production_check), True, "")
+        module = self.root / "static/search/result-identity.js"
+        module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
+        self.assert_check(self.run_check(*production_check), False, "TS2322")
+
     def test_static_globals_match_their_runtime_implementations(self):
         # Compile the actual classic scripts with their public declarations so
         # that an incorrect hand-written interface cannot hide behind any.
