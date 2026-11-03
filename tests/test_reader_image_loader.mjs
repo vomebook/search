@@ -62,6 +62,18 @@ try {
     assert.equal(f.readCount, 0);
   }
   {
+    // The existing fallback passes an own `signal` property even when no
+    // signal was supplied; an options-shape refactor must not silently omit it.
+    const f = fixture(); f.setMode("http-error");
+    await assert.rejects(f.loader.load(f.image, "https://assets.test/image.png", undefined,
+      performance.now() + 1), {status: 503});
+    assert.equal(f.requests.length, 1);
+    assert.equal(Object.hasOwn(f.requests[0].options, "signal"), true);
+    assert.equal(f.requests[0].options.signal, undefined);
+    assert.equal(f.requests[0].options.priority, "high");
+    assert.equal(f.callbacks.size, 0);
+  }
+  {
     const f = fixture();
     const originalCreate = URL.createObjectURL, originalRevoke = URL.revokeObjectURL;
     let revoked = "", fallbackStarted;
