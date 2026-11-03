@@ -2180,7 +2180,7 @@ class ReaderRefactorTest(unittest.TestCase):
         saved = self.page.evaluate("source => VoiceOfMLReaderStore.get(source)", source)
         self.assertEqual(saved["scrollTop"], 900)
 
-    def test_store_lists_preserve_limits_order_and_reject_noncurrent_records(self):
+    def test_store_lists_preserve_legacy_and_leave_unknown_records_untouched(self):
         self.page.goto(self.reader_url().split('?')[0])
         result = self.page.evaluate('''async () => {
           const store=VoiceOfMLReaderStore;
@@ -2212,12 +2212,29 @@ class ReaderRefactorTest(unittest.TestCase):
           });
           db.close();await store.removeBookmark('a');
           return {history,empty,all,one,remaining:(await store.listBookmarks('book-a')).map(entry=>entry.id),
-            current:raw.every(entry=>entry.schemaVersion===1),
+            future:raw.some(entry=>entry.id==='future' && entry.schemaVersion===2),
             legacy:raw.some(entry=>entry.id==='legacy'),
-            corruptRemoved:!raw.some(entry=>entry.id==='bad')};
+            corruptRetained:raw.some(entry=>entry.id==='bad')};
         }''')
-        self.assertEqual(result, dict(history=['book-c', 'book-b'], empty=0, all=['a', 'b', 'z'],
-                                      one=['a', 'z'], remaining=['z'], current=True, legacy=False, corruptRemoved=True))
+        self.assertEqual(result, dict(history=['book-c', 'book-b'], empty=0, all=['legacy', 'a', 'b', 'z'],
+                                      one=['legacy', 'a', 'z'], remaining=['legacy', 'z'], future=True,
+                                      legacy=True, corruptRetained=True))
+
+    def test_full_history_warns_that_new_progress_is_not_saved(self):
+        self.page.goto(self.origin + '/search/static/reader.html?ext=unsupported')
+        self.page.evaluate('''async () => {
+          for(let i=0;i<VoiceOfMLReaderStore.MAX_ENTRIES;i++)
+            await VoiceOfMLReaderStore.put({url:'retained-'+i,lastReadAt:i+1});
+        }''')
+        self.serve('reading\n' * 3000)
+        url = self.reader_url(name='capacity-warning')
+        source = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)['url'][0]
+        self.open(url)
+        self.page.locator('#viewport').evaluate("node => {node.scrollTop=900; node.dispatchEvent(new Event('scroll'));}")
+        self.page.wait_for_function("() => document.querySelector('#download-feedback').textContent.includes('进度未保存')")
+        self.assertEqual(self.page.evaluate("() => VoiceOfMLReaderStore.list(201).then(items => items.length)"), 200)
+        self.assertIsNone(self.page.evaluate('source => VoiceOfMLReaderStore.get(source)', source))
+        self.assertIsNotNone(self.page.evaluate("() => VoiceOfMLReaderStore.get('retained-0')"))
 
     def test_cross_book_bookmark_restores_selected_position_and_rejects_mismatch(self):
         self.serve("start\n" + "ordinary text\n" * 3000)

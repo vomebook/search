@@ -586,6 +586,17 @@ export function createReaderBindings(readerContext) {
       await VoiceOfMLReaderStore.clearHistory();
       readerContext.renderHistory();
     });
+    // A close snapshot can fail after the iframe has been detached, so report
+    // a full history proactively without blocking Reader startup or closing.
+    try {
+      Promise.resolve(VoiceOfMLReaderStore.isHistoryFull?.()).then((full) => {
+        if (!full || readerContext.readerLifecycle.disposed) return;
+        return VoiceOfMLReaderStore.get(readerContext.sourceUrl).then((entry) => {
+          if (!entry && !readerContext.readerLifecycle.disposed)
+            readerContext.progressNotSaved({ name: "ReaderHistoryFullError" });
+        });
+      }).catch(() => {});
+    } catch (_) {}
     readerContext.readerThemeToggle.addEventListener("click", () => {
       const theme = readerContext.readerTheme === "dark" ? "light" : "dark";
       readerContext.applyReaderTheme(theme);
