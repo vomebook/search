@@ -127,6 +127,7 @@ test('custom filter can observe the original callback constructability', () => {
   assert.deepEqual(Array.from(merge(['a'], subtrees)), ['a']);
   assert.equal(callback.length, 1);
   assert.equal(Object.hasOwn(callback, 'prototype'), true);
+  assert.equal(Function.prototype.toString.call(callback), 'function(path) {\n    return !selfSet.has(path);\n  }');
   assert.doesNotThrow(() => new callback('a'));
 });
 
