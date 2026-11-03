@@ -1075,6 +1075,26 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
         self.assert_check(self.run_check(*production_check), False, "TS2322")
 
+    def test_reader_image_request_signal_shape_is_exact(self):
+        config = self.root / "jsconfig.json"
+        source = self.root / "static/image-signal-usage.mjs"
+        module = (ROOT / "static/reader/formats/reader-image-loader.mjs").as_posix()
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
+            "target": "esnext", "module": "esnext", "moduleResolution": "bundler"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), module, str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        setup = f'''import {{createReaderImageLoader}} from "{module}";
+const options = /** @type {{Parameters<typeof createReaderImageLoader>[0]}} */ (/** @type {{unknown}} */ ({{}}));
+const request = options.request;
+'''
+        source.write_text(setup + 'request("https://example.test", 1, {signal:undefined, priority:"auto"});\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text(setup + 'request("https://example.test", 1, {priority:"auto"});\n')
+        self.assert_check(self.run_check(*check), False, "TS2741")
+        source.write_text(setup + 'request("https://example.test", 1, {signal:null, priority:"auto"});\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_reader_exact_gate_rejects_unchecked_indexes_and_undefined_optionals(self):
         original = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
         options = original["compilerOptions"]
@@ -1082,6 +1102,7 @@ class StaticGateTests(unittest.TestCase):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
+                    "static/reader/formats/reader-image-loader.mjs",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)

@@ -15,6 +15,7 @@
     "static/reader/core/reader-diagnostics.mjs",
     "static/reader/core/reader-document-loader.mjs",
     "static/reader/core/reader-request-manager.js",
+    "static/reader/formats/reader-image-loader.mjs",
     "static/reader/formats/reader-format-adapters.js",
     "static/reader/ui/reader-document-styles.mjs",
     "static/reader/pdf/reader-engine-preload.js",
