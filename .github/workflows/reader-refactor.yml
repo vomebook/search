@@ -152,8 +152,9 @@ jobs:
       - uses: actions/checkout@v7
       - name: Checkout Hugging Face Search Space
         run: |
-          git clone --depth=1 https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
+          git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
+          git -C huggingface-search merge-base --is-ancestor cdd3e97eb26977777dbad2c1b1437b9b76f20b20 HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
