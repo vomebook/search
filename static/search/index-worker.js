@@ -153,7 +153,14 @@ function couldBeFuzzy(token, word, maxDist) {
 }
 
 function compileWildcardMatcher(pattern) {
-  const tokens = String(pattern || "").replace(/\*+/g, "*").split("");
+  const normalized = String(pattern || "");
+  // Boundary stars may match zero characters in substring matching. Escaping
+  // every remaining literal keeps regex work bounded and preserves /i rules.
+  const core = normalized.replace(/^\*+|\*+$/g, "");
+  if (core && !core.includes("*") && !core.includes("?")) {
+    return new RegExp(core.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  }
+  const tokens = normalized.replace(/\*+/g, "*").split("");
   const literals = tokens.map(char => char === "*" || char === "?" ? null
     : new RegExp("^" + char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i"));
   const required = Array.from(new Set(tokens.filter(char => char !== "*" && char !== "?")))
