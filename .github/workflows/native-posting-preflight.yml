@@ -1,0 +1,32 @@
+name: Native posting x86 preflight
+
+on:
+  push:
+    branches: ["verify/native-posting-20261103"]
+
+permissions:
+  contents: read
+
+jobs:
+  native-posting:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.17"
+      - name: Verify source hashes and compile release extension
+        run: |
+          python -B native-preflight/verify_hashes.py
+          python -B native-preflight/build.py
+      - name: Test native and Python fallback paths
+        run: python -B native-preflight/test_decode.py
+      - name: Run the candidate's full native index contracts
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-index-tests/backend" "$RUNNER_TEMP/native-index-tests/tests"
+          cp native-preflight/search_indexes.py "$RUNNER_TEMP/native-index-tests/backend/search_indexes.py"
+          cp native-preflight/test_native_search_indexes.py "$RUNNER_TEMP/native-index-tests/tests/test_native_search_indexes.py"
+          touch "$RUNNER_TEMP/native-index-tests/backend/__init__.py" "$RUNNER_TEMP/native-index-tests/tests/__init__.py"
+          PYTHONPATH="$RUNNER_TEMP/native-index-tests:$GITHUB_WORKSPACE/native-preflight" \
+            python -B -m unittest -v tests.test_native_search_indexes
