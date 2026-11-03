@@ -1,0 +1,334 @@
+diff --git Dockerfile Dockerfile
+index ec152e3..577bc78 100644
+--- Dockerfile
++++ Dockerfile
+@@ -97,0 +98,11 @@ RUN python scripts/build/build_search_index_native.py --output-dir /native
++# Verify the exact corpus/index bytes and Unicode matching assumptions with the
++# production Python version. The runtime copies those bytes from this stage.
++FROM source-check-python AS search-index-verified
++WORKDIR /check
++COPY data/search_data.json.gz data/search_ngrams_2.bin.gz data/search_ngrams_3.bin.gz data/
++COPY --from=search-index-build /native/ /check/
++RUN python -B -m unittest -v \
++    tests.test_wildcard_index_oracle.WildcardIndexOracleTests.test_generated_index_is_exact_for_metadata_fields \
++    tests.test_wildcard_index_oracle.WildcardIndexOracleTests.test_semantically_changed_but_well_formed_indexes_fail_the_oracle \
++    tests.test_wildcard_index_oracle.WildcardIndexOracleTests.test_unicode_engine_has_no_equivalents_for_accelerated_ranges
++
+@@ -114,4 +125 @@ COPY data/ data/
+-
+-RUN if [ -f data/search_data.json ]; then \
+-      gzip -k -9 data/search_data.json; \
+-    fi
++COPY --from=search-index-verified /check/data/search_data.json.gz /check/data/search_ngrams_2.bin.gz /check/data/search_ngrams_3.bin.gz /app/data/
+diff --git backend/app.py backend/app.py
+index 967b8e5..68dbd84 100644
+--- backend/app.py
++++ backend/app.py
+@@ -37 +37 @@ from backend.search_bootstrap import build_initial_payload as _build_initial_pay
+-from backend.search_candidates import literal_candidates as _literal_candidates
++from backend.search_candidates import literal_candidates as _literal_candidates, wildcard_literal_candidates as _wildcard_literal_candidates
+@@ -984 +984 @@ def _search_order_uncached(q="", repos=None, extensions=None, folders=None, min_
+-                        scope = sorted(get_initial_indices(repos))
++                        scope = _wildcard_literal_candidates(term, repos, literal_candidates, get_initial_indices)
+diff --git backend/search_candidates.py backend/search_candidates.py
+index 4ec7f41..09ed11b 100644
+--- backend/search_candidates.py
++++ backend/search_candidates.py
+@@ -4,0 +5 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
++import re
+@@ -9,0 +11,14 @@ PostingResolver = Callable[[Posting, bytes], set[int]]
++def wildcard_literal_candidates(query: str, repos: Iterable[str] | None,
++                                get_candidates: Callable[[str, Iterable[str] | None], set[int] | None],
++                                get_scope: Callable[[Iterable[str] | None], Sequence[int]]) -> list[int]:
++    """Bound wildcard search by a safe, mandatory CJK or ASCII-digit run.
++
++    These codepoints have no alternative Python IGNORECASE equivalents, unlike
++    ASCII letters and several other Unicode characters. The n-gram index covers
++    the same lowercased fields; the wildcard matcher still verifies each hit.
++    """
++    chunks = re.findall(r"[\u3400-\u4DBF\u4E00-\u9FFF0-9]{2,}", query)
++    candidates = get_candidates(max(chunks, key=len), repos) if chunks else None
++    return sorted(get_scope(repos) if candidates is None else candidates)
++
++
+diff --git mutation-equivalent-search-candidates.json mutation-equivalent-search-candidates.json
+index 4c3a1fb..5c83002 100644
+--- mutation-equivalent-search-candidates.json
++++ mutation-equivalent-search-candidates.json
+@@ -4 +4 @@
+-  "source_sha256": "81dbe74b8142aed5447478e2a05c36150a5a2abf67f4aa0b55bc3d43b297cec4",
++  "source_sha256": "24f9246879ac2dd68fcaf6494b8f9e3c20a30b65d13e11f794a9624994dbda05",
+@@ -6 +6,6 @@
+-  "equivalent": {}
++  "equivalent": {
++    "backend.search_candidates.x_wildcard_literal_candidates__mutmut_7": {
++      "sha256": "1f0faa46df59e9cd366896b5779778dba6431cd942ddd22e6913ee2c155a7785",
++      "rationale": "Changing only the capitalization of hexadecimal digits in Python regex Unicode escapes leaves every codepoint range and match unchanged."
++    }
++  }
+diff --git tests/test_exact_search_performance.py tests/test_exact_search_performance.py
+index 0f5ff3d..05e09bd 100644
+--- tests/test_exact_search_performance.py
++++ tests/test_exact_search_performance.py
+@@ -68,0 +69,36 @@ class ExactSearchCandidateTests(unittest.TestCase):
++    def test_indexed_wildcards_preserve_results_and_skip_unrelated_records(self):
++        # Build an independent, complete synthetic index over the same three
++        # lowercased fields. Do not rely on the production index generator.
++        grams = {2: {}, 3: {}}
++        for idx, rec in enumerate(app.records):
++            for text in (rec['_file_lower'], rec['_repo_lower'], rec['_folder_path_lower']):
++                for width in grams:
++                    for offset in range(len(text) - width + 1):
++                        grams[width].setdefault(text[offset:offset + width], set()).add(idx)
++        app.ngram_postings, app.ngram_posting_buffers = grams, {}
++        for query in ('马克*', '马克?思', '马克*思 文化', '伊斯?马克', '１２*', 'İ*', '*'):
++            for repos in (None, ['VoiceOfML/A'], ['VoiceOfML/B', 'VoiceOfML/A']):
++                for search_folders in (True, False):
++                    with self.subTest(query=query, repos=repos, folders=search_folders):
++                        expected = self.reference(query, repos, search_folders)
++                        self.assertEqual(app._search_order_uncached(q=query, exact=True, repos=repos,
++                                                                   search_folders=search_folders), expected)
++        first = sorted(app.literal_candidates('马克'))
++        original = app.compile_exact_matcher
++        calls = []
++        def counted(term):
++            matcher = original(term)
++            def invoke(text):
++                calls.append(text)
++                return matcher(text)
++            return invoke
++        with mock.patch.object(app, 'compile_exact_matcher', side_effect=counted):
++            app._search_order_uncached(q='马克*', exact=True)
++        self.assertLessEqual(len(calls), 3 * len(first))
++        self.assertLess(len(first), len(app.records))
++
++    def test_wildcard_optimization_never_replaces_empty_index_with_full_scope(self):
++        app.ngram_postings = {2: {'中文': {0}}}
++        with mock.patch.object(app, 'get_initial_indices', side_effect=AssertionError('unnecessary full scan')):
++            self.assertEqual(app._search_order_uncached(q='缺失*', exact=True), [])
++
+diff --git tests/test_search_candidates_mutation_contract.py tests/test_search_candidates_mutation_contract.py
+index 0c28d2d..17d68ac 100644
+--- tests/test_search_candidates_mutation_contract.py
++++ tests/test_search_candidates_mutation_contract.py
+@@ -4 +4 @@ import unittest
+-from backend.search_candidates import literal_candidates
++from backend.search_candidates import literal_candidates, wildcard_literal_candidates
+@@ -8,0 +9,58 @@ class SearchCandidatesMutationContractTests(unittest.TestCase):
++    def test_wildcard_safe_runs_select_longest_and_sort_owned_postings(self):
++        seen = []
++        scope = ["B", "A"]
++        postings = {7, 1, 3}
++        def candidates(query, repos):
++            seen.append((query, repos))
++            return postings
++        def fallback(_repos):
++            self.fail("usable index must not prepare the full scope")
++        result = wildcard_literal_candidates("中国*20261103?文化", scope, candidates, fallback)
++        self.assertEqual(result, [1, 3, 7])
++        self.assertEqual(seen, [("20261103", scope)])
++        self.assertEqual(postings, {7, 1, 3})
++
++    def test_wildcard_missing_index_and_short_or_unsafe_runs_use_sorted_scope(self):
++        seen = []
++        def candidates(query, repos):
++            seen.append((query, repos))
++            return None
++        def fallback(repos):
++            seen.append(("scope", repos))
++            return [5, 1, 9]
++        scope = ["A"]
++        self.assertEqual(wildcard_literal_candidates("中国*文化", scope, candidates, fallback), [1, 5, 9])
++        self.assertEqual(seen, [("中国", scope), ("scope", scope)])
++        for query in ("a*İ", "马?文", "**", "１２?K"):
++            seen.clear()
++            self.assertEqual(wildcard_literal_candidates(query, scope, candidates, fallback), [1, 5, 9])
++            self.assertEqual(seen, [("scope", scope)])
++
++    def test_wildcard_empty_posting_is_not_a_missing_index(self):
++        def candidates(query, repos):
++            self.assertEqual((query, repos), ("中文", None))
++            return set()
++        def fallback(_repos):
++            self.fail("an empty posting is authoritative")
++        self.assertEqual(wildcard_literal_candidates("中文*", None, candidates, fallback), [])
++
++    def test_wildcard_ideograph_boundaries_and_ascii_digits_are_safe_runs(self):
++        seen = []
++        def candidates(query, _repos):
++            seen.append(query)
++            return {0}
++        for query, expected in (("㐀䶿*", "㐀䶿"), ("一鿿*", "一鿿"),
++                                ("00*", "00"), ("㏿鿿*", None), ("龠가*", None)):
++            seen.clear()
++            self.assertEqual(wildcard_literal_candidates(query, None, candidates, lambda _: [1]),
++                             [0] if expected else [1])
++            self.assertEqual(seen, [expected] if expected else [])
++
++    def test_wildcard_dependency_failures_are_not_silently_hidden(self):
++        def failing(_query, _repos):
++            raise ValueError("index failure")
++        with self.assertRaisesRegex(ValueError, "index failure"):
++            wildcard_literal_candidates("中文*", None, failing, lambda _: [])
++        with self.assertRaisesRegex(ValueError, "scope failure"):
++            wildcard_literal_candidates("a*", None, failing, lambda _: (_ for _ in ()).throw(ValueError("scope failure")))
++
+diff --git tests/test_static_contract.py tests/test_static_contract.py
+index 0a39f1e..270809f 100644
+--- tests/test_static_contract.py
++++ tests/test_static_contract.py
+@@ -461,0 +462,4 @@ class StaticFrontendContractTests(unittest.TestCase):
++        self.assertIn("FROM source-check-python AS search-index-verified", dockerfile)
++        self.assertIn("tests.test_wildcard_index_oracle.WildcardIndexOracleTests.test_generated_index_is_exact_for_metadata_fields", dockerfile)
++        self.assertIn("tests.test_wildcard_index_oracle.WildcardIndexOracleTests.test_semantically_changed_but_well_formed_indexes_fail_the_oracle", dockerfile)
++        self.assertIn("tests.test_wildcard_index_oracle.WildcardIndexOracleTests.test_unicode_engine_has_no_equivalents_for_accelerated_ranges", dockerfile)
+@@ -464,0 +469,2 @@ class StaticFrontendContractTests(unittest.TestCase):
++        self.assertIn("COPY --from=search-index-verified /check/data/search_data.json.gz /check/data/search_ngrams_2.bin.gz /check/data/search_ngrams_3.bin.gz /app/data/", runtime)
++        self.assertNotIn("gzip -k -9 data/search_data.json", runtime)
+diff --git tests/test_wildcard_index_oracle.py tests/test_wildcard_index_oracle.py
+new file mode 100644
+index 0000000..7db6c36
+--- /dev/null
++++ tests/test_wildcard_index_oracle.py
+@@ -0,0 +1,141 @@
++"""Independent no-network oracle for the wildcard n-gram acceleration."""
++import gzip
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import unittest
++
++from backend.data_formats import decode_search_payload
++from backend.search_indexes import load_ngram_index, resolve_postings
++from backend.search_words import records_digest
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++class WildcardIndexOracleTests(unittest.TestCase):
++    def assert_index_matches(self, records, width, path):
++        """Compare the complete loaded index with an independently built mapping."""
++        from array import array
++
++        expected = {}
++        for idx, record in enumerate(records):
++            grams = set()
++            for field in ('_file_lower', '_repo_lower', '_folder_path_lower'):
++                text = record[field]
++                grams.update(text[i:i + width] for i in range(len(text) - width + 1))
++            for gram in grams:
++                expected.setdefault(gram, array('I')).append(idx)
++        entries, buffer = load_ngram_index(path, width, len(records), records_digest(records))
++        self.assertEqual(set(expected), set(entries))
++        for gram, indices in expected.items():
++            self.assertEqual(resolve_postings(entries[gram], buffer), set(indices), (width, gram))
++
++    def test_generated_index_is_exact_for_metadata_fields(self):
++        """Every width-2 and width-3 record posting must equal an independent scan."""
++        with gzip.open(ROOT / 'data/search_data.json.gz', 'rt', encoding='utf-8') as stream:
++            records = decode_search_payload(json.load(stream))
++        for record in records:
++            record['_file_lower'] = record.get('File', '').lower()
++            record['_repo_lower'] = record.get('Repo', '').lower()
++            record['_folder_path_lower'] = '/'.join(part.lower() for part in record.get('Folder', []))
++        for width in (2, 3):
++            with self.subTest(width=width):
++                self.assert_index_matches(records, width, ROOT / f'data/search_ngrams_{width}.bin.gz')
++
++    def test_semantically_changed_but_well_formed_indexes_fail_the_oracle(self):
++        """A valid digest and posting lengths must not hide missing or wrong IDs."""
++        records = [dict(_file_lower='中文', _repo_lower='', _folder_path_lower=''),
++                   dict(_file_lower='其他', _repo_lower='', _folder_path_lower='')]
++
++        def varint(value):
++            encoded = bytearray()
++            while value >= 128:
++                encoded.append((value & 127) | 128)
++                value >>= 7
++            encoded.append(value)
++            return bytes(encoded)
++
++        def write_index(path, entries, digest):
++            body = bytearray(b'VNG3\x02' + digest + varint(len(records)) + varint(len(entries)))
++            for gram, ids in entries.items():
++                key = gram.encode('utf-8')
++                previous = 0
++                deltas = bytearray()
++                for idx in ids:
++                    deltas.extend(varint(idx - previous))
++                    previous = idx
++                body.extend(varint(len(key)) + key + varint(len(ids)) + varint(len(deltas)) + deltas)
++            path.write_bytes(gzip.compress(body))
++
++        digest = records_digest(records)
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'index.gz'
++            correct = {'中文': [0], '其他': [1]}
++            write_index(path, correct, digest)
++            self.assert_index_matches(records, 2, path)
++            for changed in ({'中文': [0]}, {'中文': [1], '其他': [1]},
++                            {'中文': [0], '其他': [1], '额外': [0]}):
++                with self.subTest(entries=changed):
++                    write_index(path, changed, digest)
++                    self.assertTrue(load_ngram_index(path, 2, len(records), digest)[0],
++                                    'fixture must pass structural loading')
++                    with self.assertRaises(AssertionError):
++                        self.assert_index_matches(records, 2, path)
++            write_index(path, correct, b'X' * 32)
++            with self.assertRaises(AssertionError):
++                self.assert_index_matches(records, 2, path)
++            path.write_bytes(b'not a gzip file')
++            with self.assertRaises(AssertionError):
++                self.assert_index_matches(records, 2, path)
++            path.unlink()
++            with self.assertRaises(AssertionError):
++                self.assert_index_matches(records, 2, path)
++
++    def test_unicode_engine_has_no_equivalents_for_accelerated_ranges(self):
++        # Document the security-sensitive assumption behind the narrow ranges.
++        # The project runtime is CPython; non-CPython runtimes must not silently
++        # omit this oracle when evaluating whether to ship an optimization.
++        import _sre
++        from re._casefix import _EXTRA_CASES
++
++        def safe(codepoint):
++            return (0x3400 <= codepoint <= 0x4dbf or 0x4e00 <= codepoint <= 0x9fff
++                    or 0x30 <= codepoint <= 0x39)
++        collisions = [(value, _sre.unicode_tolower(value)) for value in range(0x110000)
++                      if safe(_sre.unicode_tolower(value)) and _sre.unicode_tolower(value) != value]
++        casefix = [(value, others) for value, others in _EXTRA_CASES.items()
++                   if safe(value) or any(safe(other) for other in others)]
++        self.assertEqual(collisions, [])
++        self.assertEqual(casefix, [])
++
++    def test_actual_index_preserves_selected_search_filters_and_page_anchors(self):
++        """Exercise the app's normal response with and without wildcard preselection."""
++        # Child process owns all startup globals and caches, so this expensive
++        # oracle remains safe even when invoked as part of another test suite.
++        script = '''
++from unittest.mock import patch
++from backend import app
++app.load_data()
++for query in ("马克*主义", "中国*文化", "1989*文"):
++    for folders in (True, False):
++        for page in (1, 2):
++            options = dict(q=query, exact=True, search_folders=folders, sort="name", page=page,
++                           extensions=["pdf"], page_size=3, anchor_id="VoiceOfML/Missing\\0not-present.pdf")
++            app._search_cache.clear(); app._search_order_cache.clear(); app._search_anchor_cache.clear()
++            actual = app.search(**options)
++            app._search_cache.clear(); app._search_order_cache.clear(); app._search_anchor_cache.clear()
++            with patch.object(app, "_wildcard_literal_candidates",
++                              side_effect=lambda _query, repos, _index, scope: sorted(scope(repos))):
++                baseline = app.search(**options)
++            assert actual == baseline, (query, folders, page)
++'''
++        result = subprocess.run([sys.executable, '-B', '-c', script], cwd=ROOT,
++                                capture_output=True, text=True, timeout=120, check=False)
++        self.assertEqual(result.returncode, 0, result.stderr)
++
++
++if __name__ == '__main__':
++    unittest.main()

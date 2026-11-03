@@ -1,0 +1,38 @@
+name: Wildcard Docker x86 preflight
+
+on:
+  push:
+    branches: ["verify/wildcard-docker-20261103"]
+
+permissions:
+  contents: read
+
+jobs:
+  docker-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare exact reviewed HF candidate
+        env:
+          HF_HUB_DISABLE_TELEMETRY: "1"
+        run: |
+          printf '%s  %s\n' '7155b9fe29cef1e7874fa17116bab74edfe16e87ca8a33b6247be54b5cdda791' wildcard-preflight.patch | sha256sum -c -
+          GIT_LFS_SKIP_SMUDGE=1 git clone --no-checkout https://huggingface.co/spaces/VoiceOfML/Search "$RUNNER_TEMP/hf-candidate"
+          GIT_LFS_SKIP_SMUDGE=1 git -C "$RUNNER_TEMP/hf-candidate" checkout --detach 0ecb7845456a2fa45909de18fd21dd2bc650f7c4
+          git -C "$RUNNER_TEMP/hf-candidate" lfs pull --include='data/**'
+          git -C "$RUNNER_TEMP/hf-candidate" apply --check --unidiff-zero -p0 "$GITHUB_WORKSPACE/wildcard-preflight.patch"
+          git -C "$RUNNER_TEMP/hf-candidate" apply --unidiff-zero -p0 "$GITHUB_WORKSPACE/wildcard-preflight.patch"
+          cd "$RUNNER_TEMP/hf-candidate"
+          sha256sum -c "$GITHUB_WORKSPACE/wildcard-preflight-hashes.txt"
+          git status --short
+      - name: Build exact production Dockerfile on x86_64
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          test "$(uname -m)" = x86_64
+          docker build --progress=plain --tag wildcard-preflight:local "$RUNNER_TEMP/hf-candidate"
+      - name: Verify image runtime and verified corpus checksums
+        run: |
+          docker run --rm --entrypoint python wildcard-preflight:local -B -c 'import platform,sys,_search_index_native; assert sys.version_info[:3] == (3,11,17); assert platform.machine() == "x86_64"; assert callable(_search_index_native.decode_postings); print("runtime",sys.version,platform.machine(),_search_index_native.__file__)'
+          docker run --rm --entrypoint python wildcard-preflight:local -B -c 'import hashlib,pathlib; expected={"search_data.json.gz":"9ab5243264912e8db077c5b955630e3f6bc0753d2bbbc4e176452e02d8129873","search_ngrams_2.bin.gz":"f572f738f7edd46f6ae9cc3179b75bfb59b7b9b6cd5b9695a45365d0ac919b41","search_ngrams_3.bin.gz":"a6363866caf86b292a0bb0a74aad7184eedc4acd22867adcc00aab9f42b3ac42"}; actual={name:hashlib.sha256((pathlib.Path("/app/data")/name).read_bytes()).hexdigest() for name in expected}; assert actual == expected,actual; print("verified runtime corpus/index hashes",actual)'
