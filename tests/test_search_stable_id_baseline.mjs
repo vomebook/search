@@ -80,7 +80,7 @@ test('path lookup remains lazy through early returns and Repo conversion', () =>
     delete context.buildRecordRelativePath;
     assert.equal(id({Id: 'stable'}), 'stable');
     Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, get() {
-      assert.fail('helper binding must not be read before its original lookup');
+      throw new Error('helper binding must not be read before its original lookup');
     }});
     const seen = [];
     assert.throws(() => id({Repo: {[Symbol.toPrimitive]() {
