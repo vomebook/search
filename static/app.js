@@ -6239,6 +6239,7 @@ async function randomTxt() {
       if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       if (!openReaderRecord(localRec, returnUrl)) throw new Error("NO_READER");
     } catch (e) {
+      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       showToast("暂无可读书籍");
     }
     return;
@@ -6266,9 +6267,11 @@ async function randomTxt() {
       }
     }
     if (STATE.dataLoaded) fallback().catch(function() {
+      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       showToast("暂无可读书籍");
     });
     else ensureLocalDataLoaded(false, true).then(function(ok) { if (ok) return fallback(); throw new Error("LOCAL_UNAVAILABLE"); }).catch(function() {
+      if (requestId !== randomReaderRequestId || location.href !== returnUrl) return;
       showToast("暂无可读书籍");
     });
   });
