@@ -1113,9 +1113,11 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / name, target)
         production_check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", local_config]
         self.assert_check(self.run_check(*production_check), True, "")
-        module = self.root / "static/reader/core/reader-request-manager.js"
-        module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
-        self.assert_check(self.run_check(*production_check), False, "TS2322")
+        for name in required:
+            source = self.root / name
+            source.write_text(source.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
+            self.assert_check(self.run_check(*production_check), False, "TS2322")
+            shutil.copyfile(ROOT / name, source)
 
     def test_static_globals_match_their_runtime_implementations(self):
         # Compile the actual classic scripts with their public declarations so
