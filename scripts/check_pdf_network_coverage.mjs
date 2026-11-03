@@ -21,7 +21,20 @@ const rows = (result.stdout || "").split(/\r?\n/).flatMap(line => {
   const match = /^\s*#\s*reader-pdf-network\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
 });
-if (result.status !== 0 || rows.length !== 1 || rows[0].some((value,index)=>value < minimum[index])) {
-  console.error("PDF network coverage gate requires passing tests and exactly one source coverage row");
+const text = result.stdout || "";
+const lines = text.split(/\r?\n/);
+const required = [
+  ["tests/test_reader_pdf_backpressure.mjs", "429 feedback, shared spacing, bounded retry, version consistency and cancellation passed"],
+  ["tests/test_reader_pdf_network_contract.mjs", "PDF network contracts: cache identity, safe revalidation and live cancellation passed"],
+  ["tests/test_reader_pdf_sparse_ranges.mjs", "Sparse PDF detection, exact demand ranges, bounded concurrency and disposal passed"]
+];
+if (result.status !== 0 || rows.length !== 1 || rows[0].some((value,index)=>value < minimum[index]) ||
+    !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) || required.some(([name, marker]) => {
+      const index = lines.indexOf(`# Subtest: ${name}`);
+      return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
+        lines[index - 1] !== `# ${marker}` ||
+        !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "");
+    })) {
+  console.error("PDF network coverage gate requires passing named tests and exactly one source coverage row");
   process.exitCode = 1;
 }
