@@ -80,6 +80,14 @@ test('path lookup remains lazy through early returns and Repo conversion', () =>
     delete context.buildRecordRelativePath;
     assert.equal(id({Id: 'stable'}), 'stable');
     Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, get() {
+      assert.fail('helper binding must not be read before its original lookup');
+    }});
+    const seen = [];
+    assert.throws(() => id({Repo: {[Symbol.toPrimitive]() {
+      seen.push('repo'); delete context.buildRecordRelativePath; return 'R';
+    }}}), {name: 'ReferenceError'});
+    assert.deepEqual(seen, ['repo']);
+    Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, get() {
       trace.push('early lookup'); throw new Error('must not lookup');
     }});
     assert.equal(id({Id: 'stable'}), 'stable');
