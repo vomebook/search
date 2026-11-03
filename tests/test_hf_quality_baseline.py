@@ -1,6 +1,7 @@
 """The separate immutable baseline must fail closed on malformed or changed input."""
 import hashlib
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -18,11 +19,15 @@ class HfSearchProjectionCiTests(unittest.TestCase):
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('tests.test_reader_archive_hardening'), 1)
-        self.assertIn('tests.test_reader_backend tests.test_reader_archive_hardening tests.test_reader_compression_safety', workflow)
+        self.assertIn('tests.test_reader_backend tests.test_reader_archive_hardening', workflow)
 
     def test_reader_compression_safety_is_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('tests.test_reader_compression_safety'), 1)
+        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
+                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        self.assertIsNotNone(selection)
+        self.assertIn('tests.test_reader_compression_safety', selection.group(1))
 
     def test_full_candidates_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
