@@ -160,6 +160,35 @@ function compileWildcardMatcher(pattern) {
   if (core && !core.includes("*") && !core.includes("?")) {
     return new RegExp(core.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   }
+  if (core.includes("*") && !core.includes("?") && /^[\x00-\x7f]+$/.test(core) && !/[\n\r]/.test(core)) {
+    // Match literal chunks in leftmost order within a single regex-dot line.
+    // Searching each escaped chunk separately avoids wildcard backtracking.
+    const chunks = core.split(/\*+/).map(part => new RegExp(part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig"));
+    return {test(text) {
+      for (const chunk of chunks) {
+        chunk.lastIndex = 0;
+        if (!chunk.test(text)) return false;
+      }
+      let start = 0;
+      while (true) {
+        const term = /[\n\r\u2028\u2029]/g;
+        term.lastIndex = start;
+        const foundTerm = term.exec(text);
+        const end = foundTerm ? foundTerm.index : text.length;
+        const line = text.slice(start, end);
+        let position = 0;
+        let matched = true;
+        for (const chunk of chunks) {
+          chunk.lastIndex = position;
+          if (!chunk.exec(line)) { matched = false; break; }
+          position = chunk.lastIndex;
+        }
+        if (matched) return true;
+        if (!foundTerm) return false;
+        start = end + 1;
+      }
+    }};
+  }
   const tokens = normalized.replace(/\*+/g, "*").split("");
   const literals = tokens.map(char => char === "*" || char === "?" ? null
     : new RegExp("^" + char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i"));
