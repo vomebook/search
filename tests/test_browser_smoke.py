@@ -86,6 +86,13 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.page.locator("#search-input").wait_for(state="visible")
 
+    def wait_for_reader_folder_return(self):
+        # The target hash is visible before the destination's app script runs.
+        self.page.wait_for_url(lambda url: urlsplit(url).path == '/search/' and
+                               'folder_self=' in urlsplit(url).fragment,
+                               wait_until='domcontentloaded', timeout=10000)
+        self.page.locator('#search-input').wait_for(state='visible', timeout=10000)
+
     def wait_for_local_results(self):
         self.page.locator("#results-list .result-item").first.wait_for(timeout=30000)
 
@@ -1164,7 +1171,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertLessEqual(geometry["button"], geometry["text"] + 2, geometry)
         self.assertTrue(self.page.locator("#status").is_hidden())
         path.click()
-        self.page.wait_for_function("location.hash.includes('folder_self=')", timeout=10000)
+        self.wait_for_reader_folder_return()
         target = self.page.evaluate("""() => {
           const query = location.hash.split('?', 2)[1] || '';
           return {hash: location.hash, folders: new URLSearchParams(query).getAll('folder_self')};
@@ -1172,6 +1179,32 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertTrue(target["hash"].startswith("#/VOMEBOOK?"))
         self.assertEqual(target["folders"], ["一级目录/二级目录"])
         self.page.wait_for_function("STATE.browserPath === '一级目录/二级目录' && document.querySelector('.sidebar-breadcrumb .current')?.dataset.path === STATE.browserPath")
+        self.assertEqual(self.page_errors, [])
+
+    def test_reader_folder_return_waits_for_delayed_search_document(self):
+        self.load()
+        reader_url = self.page.evaluate("""() => getReaderLink({
+          Repo: "VoiceOfML/VOMEBOOK", File: "路径测试", Extension: "txt",
+          Folder: ["一级目录", "二级目录"], HasTxt: true,
+          Link: "https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/reader.txt",
+        })""")
+        self.page.goto(self.origin + reader_url, wait_until='domcontentloaded')
+        path = self.page.locator('#reader-path')
+        path.wait_for(state='visible')
+        self.page.evaluate('''async () => {
+          for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
+          for (const key of await caches.keys()) await caches.delete(key);
+        }''')
+        session = self.context.new_cdp_session(self.page)
+        session.send('Network.setCacheDisabled', {'cacheDisabled': True})
+        with self.server_state.lock:
+            self.server_state.delays['/search/static/app.js'] = 1
+            self.server_state.requests['/search/static/app.js'] = 0
+        self.addCleanup(self.clear_server_delay, '/search/static/app.js')
+        path.click()
+        self.wait_for_reader_folder_return()
+        self.page.wait_for_function("STATE.browserPath === '一级目录/二级目录' && document.querySelector('.sidebar-breadcrumb .current')?.dataset.path === STATE.browserPath")
+        self.assertGreaterEqual(self.server_state.count('/search/static/app.js'), 1)
         self.assertEqual(self.page_errors, [])
 
     def test_mobile_reader_overlay_path_opens_matching_sidebar_and_survives_reload(self):
