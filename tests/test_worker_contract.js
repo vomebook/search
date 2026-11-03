@@ -170,6 +170,33 @@ test("bounded wildcards preserve regex case, UTF-16 and line-terminator semantic
   vm.runInContext('if (compileWildcardMatcher("*a".repeat(100)+"b").test("a".repeat(120))) throw new Error("bad match");', context, {timeout: 1000});
 });
 
+test("boundary-only wildcard scans preserve literal matching and bounded work", () => {
+  const { context } = makeWorker();
+  for (const pattern of ["a*", "*a", "*a*", "**a***"]) {
+    assert.strictEqual(context.compileWildcardMatcher(pattern).test("x\nA\ny"), true, pattern);
+    assert.strictEqual(context.compileWildcardMatcher(pattern).test("xyz"), false, pattern);
+  }
+  for (const pattern of ["*", "**", "*****"]) {
+    assert.strictEqual(context.compileWildcardMatcher(pattern).test(""), true);
+    assert.strictEqual(context.compileWildcardMatcher(pattern).test("\n"), true);
+  }
+  for (const pattern of ["*İ*", "*ı*", "*ſ*", "*K*"]) {
+    const expression = new RegExp(pattern.replace(/\*/g, ".*"), "i");
+    for (const text of ["i", "I", "s", "S", "k", "K", "İıſK"]) {
+      assert.strictEqual(context.compileWildcardMatcher(pattern).test(text), expression.test(text), JSON.stringify([pattern, text]));
+    }
+  }
+  assert.strictEqual(context.compileWildcardMatcher("*[.\\]*").test("x[.\\]y"), true);
+  assert.strictEqual(context.compileWildcardMatcher("*[.\\]*").test("xyz"), false);
+  assert.strictEqual(context.compileWildcardMatcher("*ab*").test("a\nb"), false);
+  assert.strictEqual(context.compileWildcardMatcher("a*b").test("a\nb"), false);
+  let conversions = 0;
+  const converted = {toString() { conversions++; return "a*b"; }};
+  assert.strictEqual(context.compileWildcardMatcher(converted).test("axb"), true);
+  assert.strictEqual(conversions, 1);
+  vm.runInContext('if (compileWildcardMatcher("*"+"a".repeat(127)+"b*").test("a".repeat(20000))) throw Error("bad match");', context, {timeout: 1000});
+});
+
 test("wildcard search returns complete IDs for repeated-star patterns", async () => {
   const {worker} = await loaded([{...records[0], File: "a".repeat(120)}, {...records[1], File: "b"}]);
   assert.deepStrictEqual((await worker.request("local-search", {q:"*a".repeat(10)+"a", exact:true})).records.map(r=>r.File), ["a".repeat(120)]);
