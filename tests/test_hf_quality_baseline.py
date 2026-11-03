@@ -13,7 +13,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.test_search_projection_contract', workflow)
         self.assertIn('tests.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor d9ca230ae25b21b02bf72a0bd05d12d4bd1ed833 HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor 32f784c82883a004eff753b590b739e0522db496 HEAD', workflow)
 
     def test_full_candidates_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -26,6 +26,11 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertEqual(workflow.count('tests.test_search_bootstrap_contract'), 1)
         self.assertEqual(workflow.count('tests.test_search_bootstrap_mutation_contract'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_bootstrap'), 1)
+
+    def test_both_sites_run_original_extension_behavior_contracts(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        gate = 'node --test tests/test_search_extension_inventory_baseline.mjs tests/test_search_extension_filter_baseline.mjs'
+        self.assertEqual(workflow.count(gate), 2)
 
 
 class HfQualityBaselineTests(unittest.TestCase):
