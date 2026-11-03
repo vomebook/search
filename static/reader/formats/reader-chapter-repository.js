@@ -28,7 +28,8 @@
         return Promise.reject(new DOMException("Chapter repository disposed", "AbortError"));
       if (!Number.isInteger(index) || index < 0 || index >= records.length)
         return Promise.resolve(null);
-      const record = records[index];
+      // With the standard Array.from, records is dense and never resized.
+      const record = /** @type {ChapterRecord<T>} */ (records[index]);
       const existing = find(index);
       if (existing) {
         record.status = "ready";
@@ -81,7 +82,8 @@
     function release(index) {
       if (disposed || !Number.isInteger(index) || index < 0 || index >= records.length)
         return false;
-      const record = records[index];
+      // The same dense-array and bounds invariant used by load applies here.
+      const record = /** @type {ChapterRecord<T>} */ (records[index]);
       if (record.promise) return false;
       record.status = "idle";
       record.value = null;

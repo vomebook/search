@@ -51,6 +51,28 @@ async function main() {
   assert.strictEqual(retry.state(0).attempts, 2);
   assert.strictEqual(await retry.load(-1), null);
   assert.strictEqual(await retry.load(1), null);
+  for (const invalid of [NaN, Infinity, -Infinity, -1, 0.5, 1, Number.MAX_SAFE_INTEGER]) {
+    assert.strictEqual(await retry.load(invalid), null);
+    assert.strictEqual(retry.release(invalid), false);
+    assert.strictEqual(retry.state(invalid), null);
+  }
+
+  // A replaced Array.from can break density. Preserve the existing failure and
+  // find-before-error order rather than silently inventing an absent record.
+  {
+    const sandbox = {DOMException, AbortController};
+    sandbox.self = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext('Array.from = () => new Array(1)', sandbox);
+    const filename = path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js");
+    vm.runInContext(fs.readFileSync(filename, "utf8"), sandbox, {filename});
+    let finds = 0;
+    const sparse = sandbox.VoiceOfMLReaderChapters.createChapterRepository({count:1,
+      find() { finds++; return null; }, create() { return 'created'; }});
+    assert.throws(() => sparse.load(0), {name:'TypeError'});
+    assert.strictEqual(finds, 1);
+    assert.throws(() => sparse.release(0), {name:'TypeError'});
+  }
 
   let finishLate;
   let commits = 0;
