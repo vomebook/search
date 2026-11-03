@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 export const APP_DEPENDENCIES = Object.freeze([
   "reader-resources.js", "reader/core/reader-contract.js", "search/reader-navigation.js",
   "search/search-session.js", "search/download-controller.js", "search/size-format.js", "search/record-path.js",
-  "search/highlight.js", "search/response-cache.js"
+  "search/highlight.js", "search/response-cache.js", "search/file-types.js"
 ]);
 
 export function stripBundledScripts(html) {

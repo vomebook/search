@@ -50,6 +50,7 @@ jobs:
           node scripts/check_search_record_path_coverage.mjs
           node scripts/check_search_highlight_coverage.mjs
           node scripts/check_search_response_cache_coverage.mjs
+          node scripts/check_search_file_types_coverage.mjs
           node tests/test_response_cache.js
           node --test tests/test_search_extension_inventory_baseline.mjs tests/test_search_extension_filter_baseline.mjs
           node tests/test_search_record_path_build.mjs
@@ -169,7 +170,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 6982e52ce18884aba1c3f068700a26b85d9717f9 HEAD
+          git -C huggingface-search merge-base --is-ancestor 1e13737b8a161859059fb595450ddfd6d1f229aa HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -262,6 +263,7 @@ jobs:
           node scripts/check_search_record_path_coverage.mjs
           node scripts/check_search_highlight_coverage.mjs
           node scripts/check_search_response_cache_coverage.mjs
+          node scripts/check_search_file_types_coverage.mjs
           node --test tests/test_search_extension_inventory_baseline.mjs tests/test_search_extension_filter_baseline.mjs
           node tests/test_search_record_path_build.mjs
           node tests/test_reader_jxl_progressive.mjs

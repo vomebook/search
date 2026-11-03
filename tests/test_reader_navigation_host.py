@@ -49,6 +49,18 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertEqual(page.evaluate('parseSizeStr(fmtSizeUrl(1048577))'), 1048577)
             self.assertEqual(page.evaluate('bytesToDisplay(0).unit'), 'B')
             for current in (self.page, page):
+                self.assertEqual(current.evaluate('''() => [ORDERED_EXTENSIONS.length,
+                  ORDERED_EXTENSIONS.indexOf('pdf'), ORDERED_EXTENSIONS.indexOf('PDF'),
+                  getFileIconType('AAC'), getFileIconType('unknown')]'''), [67, 0, -1, 'audio', 'file'])
+                self.assertEqual(current.evaluate('''() => {
+                  const reassign = value => { try { eval(value); return false; } catch (error) { return error.name === 'TypeError'; } };
+                  const result = [Object.hasOwn(globalThis, 'ORDERED_EXTENSIONS'), Object.hasOwn(globalThis, 'FILE_ICON_MAP'),
+                    reassign('ORDERED_EXTENSIONS = []'), reassign('FILE_ICON_MAP = {}')];
+                  ORDERED_EXTENSIONS.push('probe-extension'); FILE_ICON_MAP['probe-extension'] = 'audio';
+                  result.push(ORDERED_EXTENSIONS.indexOf('probe-extension') === 67 && getFileIconType('PROBE-EXTENSION') === 'audio');
+                  ORDERED_EXTENSIONS.pop(); delete FILE_ICON_MAP['probe-extension']; return result;
+                }'''), [False, False, True, True, True])
+            for current in (self.page, page):
                 cache = current.evaluate('''() => {
                   const c=new BoundedResponseCache(2,10000,1000);
                   c.set('a',{n:1});c.set('b',{n:2});c.get('a');c.set('c',{n:3});
