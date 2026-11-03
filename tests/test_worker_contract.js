@@ -197,6 +197,26 @@ test("boundary-only wildcard scans preserve literal matching and bounded work", 
   vm.runInContext('if (compileWildcardMatcher("*"+"a".repeat(127)+"b*").test("a".repeat(20000))) throw Error("bad match");', context, {timeout: 1000});
 });
 
+test("ordered interior stars preserve overlapping literals and line boundaries", () => {
+  const {context} = makeWorker();
+  const cases = [
+    ["a*b", "BA", false], ["a*b", "bAaB", true],
+    ["ab*bc", "abc", false], ["ab*bc", "abbc", true],
+    ["a**b*c", "axbxxc", true], ["*a*b*", "xaBY", true],
+    ["a*b", "a\nb", false], ["a*b", "a\na--b", true],
+    ["a*b", "a\rb", false], ["a*b", "a\u2028b", false],
+    ["a*b", "a\u2029b", false], ["a*b", "a😀b", true],
+    ["a*\nb", "a--\nb", true], ["a?*b", "a\nb", false],
+    ["中*文", "中\n文", false], ["İ*K", "i--k", false],
+  ];
+  for (const [pattern, text, expected] of cases) {
+    const matcher = context.compileWildcardMatcher(pattern);
+    assert.strictEqual(matcher.test(text), expected, JSON.stringify([pattern, text]));
+    assert.strictEqual(matcher.test(text), expected, "repeated " + JSON.stringify([pattern, text]));
+  }
+  vm.runInContext('if (compileWildcardMatcher("*a".repeat(100)+"*b").test("a".repeat(20000))) throw Error("bad match");', context, {timeout: 1000});
+});
+
 test("wildcard search returns complete IDs for repeated-star patterns", async () => {
   const {worker} = await loaded([{...records[0], File: "a".repeat(120)}, {...records[1], File: "b"}]);
   assert.deepStrictEqual((await worker.request("local-search", {q:"*a".repeat(10)+"a", exact:true})).records.map(r=>r.File), ["a".repeat(120)]);
