@@ -173,7 +173,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor be6d256b74ebdc6570f75845233e19c3246d8341 HEAD
+          git -C huggingface-search merge-base --is-ancestor f788be7d261a9dec1dae6cf041b9723dffb774d0 HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -208,7 +208,7 @@ jobs:
         working-directory: huggingface-search
         run: |
           python -B scripts/build/build_search_index_native.py --output-dir .
-          python -B -m unittest -v tests.test_quality_inventory tests.test_mutation_gate_hardening
+          python -B -m unittest -v tests.test_quality_inventory tests.test_mutation_gate_hardening tests.test_mutation_gate_main
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage run --branch --source=backend,app -m unittest -q \
             tests.test_api_contract tests.test_cache_and_malformed tests.test_async_proxy tests.test_coverage_safety \
             tests.test_data_decoding tests.test_fastapi_endpoints tests.test_native_search_indexes tests.test_proxy_ownership tests.test_proxy_streams_contract \
