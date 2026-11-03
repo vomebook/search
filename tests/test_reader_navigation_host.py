@@ -48,6 +48,12 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertTrue(page.evaluate('typeof VoiceOfMLDownloadController.createDownloadController === "function"'))
             self.assertEqual(page.evaluate('parseSizeStr(fmtSizeUrl(1048577))'), 1048577)
             self.assertEqual(page.evaluate('bytesToDisplay(0).unit'), 'B')
+            record = {'Repo': 'VoiceOfML/Test', 'File': 'a #?%.jpg', 'Extension': 'jpg', 'Folder': ['目录', 'sub dir']}
+            encoded = '%E7%9B%AE%E5%BD%95/sub%20dir/a%20%23%3F%25.jpg.jpg'
+            base = 'https://huggingface.co/datasets/VoiceOfML/Test/'
+            for current in (self.page, page):
+                links = current.evaluate('rec => [buildRecordRelativePath(rec), buildRecordLink(rec), buildRecordPath(rec)]', record)
+                self.assertEqual(links, ['目录/sub dir/a #?%.jpg.jpg', base + 'resolve/main/' + encoded, base + 'blob/main/' + encoded])
             self.assertTrue(page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")'))
             self.assertTrue(page.evaluate('closeReaderOverlay()'))
 
