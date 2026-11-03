@@ -35,6 +35,9 @@ export default [
     }
   },
   { files: ["static/**/*.js"], languageOptions: { sourceType: "script" } },
+  { files: ["static/app.js"], languageOptions: { globals: {
+    bytesToDisplay: "readonly", fmtSizeUrl: "readonly", parseSizeStr: "readonly"
+  } } },
   { files: ["static/**/*.mjs", "static/**/reader.js", "static/**/reader-pdf-text.js", "static/**/reader-book-text.js"],
     languageOptions: { sourceType: "module" } },
   { files: ["static/**/tts-client.js"], languageOptions: { globals: { CCRDSpeechPlan: "readonly", openPreview: "readonly", showToast: "readonly" } } },

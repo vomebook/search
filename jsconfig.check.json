@@ -80,6 +80,7 @@
     "static/search/download-controller.js",
     "static/search/reader-navigation.js",
     "static/search/search-session.js",
+    "static/search/size-format.js",
     "static/tts-client.js",
     "static/app.js",
     "static/reader.js",

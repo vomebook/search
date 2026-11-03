@@ -23,10 +23,8 @@ function loadManager(fetchImpl) {
     }
   };
   sandbox.self = sandbox;
-  vm.runInNewContext(
-    fs.readFileSync(path.join(__dirname, "../static/reader/core/reader-request-manager.js"), "utf8"),
-    sandbox
-  );
+  const filename = path.join(__dirname, "../static/reader/core/reader-request-manager.js");
+  vm.runInNewContext(fs.readFileSync(filename, "utf8"), sandbox, { filename });
   return { manager: sandbox.VoiceOfMLReaderRequests.createReaderRequestManager(), timers };
 }
 
@@ -51,6 +49,7 @@ async function main() {
   assert.strictEqual(await firstResponse.text(), "shared body");
   assert.strictEqual(await secondResponse.text(), "shared body");
   assert.strictEqual(shared.manager.pendingCount, 0);
+  assert.strictEqual(shared.manager.activeCount, 0);
   assert.strictEqual(shared.timers.size, 0);
 
   const optionCalls = [];
@@ -164,6 +163,108 @@ async function main() {
   await assert.rejects(bodyResponse.text(), (error) => error.name === "TimeoutError");
   assert.ok(streamController);
   assert.strictEqual(bodyTimeout.timers.size, 0);
+  assert.strictEqual(bodyTimeout.manager.activeCount, 0);
+
+  // Fetch headers have settled, but both independent bodies still need disposal.
+  let bodyCancels = 0;
+  const signals = [];
+  const streaming = loadManager((_url, { signal }) => {
+    signals.push(signal);
+    return Promise.resolve(
+      new Response(
+        new ReadableStream({
+          cancel(reason) {
+            assert.strictEqual(reason.name, "AbortError");
+            bodyCancels++;
+          }
+        })
+      )
+    );
+  });
+  const firstBody = await streaming.manager.request("stream", 1000);
+  const secondBody = await streaming.manager.request("stream", 1000);
+  assert.strictEqual(streaming.manager.pendingCount, 0);
+  assert.strictEqual(streaming.manager.activeCount, 2);
+  const firstReading = assert.rejects(firstBody.text(), (error) => error.name === "AbortError");
+  streaming.manager.dispose();
+  await firstReading;
+  await assert.rejects(secondBody.text(), (error) => error.name === "AbortError");
+  assert.strictEqual(bodyCancels, 2);
+  assert.ok(signals.every((signal) => signal.aborted));
+  assert.strictEqual(streaming.timers.size, 0);
+  assert.strictEqual(streaming.manager.activeCount, 0);
+  streaming.manager.dispose();
+  assert.strictEqual(bodyCancels, 2);
+
+  let finishClonedFetch,
+    cloneCancels = 0;
+  const cloned = loadManager(
+    () =>
+      new Promise((resolve) => {
+        finishClonedFetch = resolve;
+      })
+  );
+  const cloneOne = cloned.manager.request("clones", 1000),
+    cloneTwo = cloned.manager.request("clones", 1000);
+  await Promise.resolve();
+  finishClonedFetch(
+    new Response(
+      new ReadableStream({
+        cancel() {
+          cloneCancels++;
+        }
+      })
+    )
+  );
+  const cloneResponses = await Promise.all([cloneOne, cloneTwo]);
+  const cloneReads = cloneResponses.map((response) =>
+    assert.rejects(response.text(), (error) => error.name === "AbortError")
+  );
+  cloned.manager.dispose();
+  await Promise.all(cloneReads);
+  assert.strictEqual(cloneCancels, 1);
+  assert.strictEqual(cloned.manager.activeCount, 0);
+
+  const cancelled = loadManager(() => Promise.resolve(new Response(new ReadableStream())));
+  const cancelResponse = await cancelled.manager.request("cancel", 1000);
+  await cancelResponse.body.cancel();
+  assert.strictEqual(cancelled.manager.activeCount, 0);
+  assert.strictEqual(cancelled.timers.size, 0);
+
+  let queuedCalls = 0;
+  const queued = loadManager(() => {
+    queuedCalls++;
+    return Promise.resolve(new Response("unused"));
+  });
+  const queuedRequest = queued.manager.request("queued", 1000);
+  queued.manager.dispose();
+  await assert.rejects(queuedRequest, (error) => error.name === "AbortError");
+  assert.strictEqual(queuedCalls, 0);
+  assert.strictEqual(queued.manager.activeCount, 0);
+
+  let finishLate,
+    lateCancels = 0;
+  const late = loadManager(
+    () =>
+      new Promise((resolve) => {
+        finishLate = resolve;
+      })
+  );
+  const lateRequest = late.manager.request("late-response", 1000);
+  await Promise.resolve();
+  late.manager.dispose();
+  finishLate(
+    new Response(
+      new ReadableStream({
+        cancel() {
+          lateCancels++;
+        }
+      })
+    )
+  );
+  await assert.rejects(lateRequest, (error) => error.name === "AbortError");
+  assert.strictEqual(lateCancels, 1);
+  assert.strictEqual(late.manager.activeCount, 0);
   // Exercise the same cancellation boundaries for deadlines and lifecycle disposal.
   for (const timeout of [true, false]) {
     const name = timeout ? "TimeoutError" : "AbortError";
@@ -279,7 +380,4 @@ async function main() {
   console.log("reader request manager contracts passed");
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+require("node:test")("reader request manager behavior", {timeout: 10000}, main);

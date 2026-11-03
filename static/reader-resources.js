@@ -190,6 +190,7 @@
       ...readerFiles,
       "search/search-session.js",
       "search/download-controller.js",
+      "search/size-format.js",
       "style.css",
       ...(project === "github" ? ["search/index-worker.js"] : []),
       "app.js"

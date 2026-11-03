@@ -46,6 +46,8 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertEqual(page.locator('script[src]').count(), 1)
             self.assertTrue(page.evaluate('typeof VoiceOfMLSearchSession.createSearchSession === "function"'))
             self.assertTrue(page.evaluate('typeof VoiceOfMLDownloadController.createDownloadController === "function"'))
+            self.assertEqual(page.evaluate('parseSizeStr(fmtSizeUrl(1048577))'), 1048577)
+            self.assertEqual(page.evaluate('bytesToDisplay(0).unit'), 'B')
             self.assertTrue(page.evaluate('navigateToReader("/search/static/reader.html?ext=txt")'))
             self.assertTrue(page.evaluate('closeReaderOverlay()'))
 

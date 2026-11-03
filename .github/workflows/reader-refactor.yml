@@ -46,6 +46,7 @@ jobs:
           node tests/test_reader_architecture.js
           node tests/test_reader_regression.js
           node scripts/check_adapter_coverage.mjs
+          node scripts/check_search_size_coverage.mjs
           node tests/test_reader_preload.js
           node tests/test_reader_chapter_search.mjs
           node tests/test_reader_image_loader.mjs
@@ -53,7 +54,7 @@ jobs:
           node tests/test_reader_css_sanitizer.mjs
       - name: Run Reader request and PDF loading regressions
         run: |
-          node tests/test_reader_request_manager.js
+          node scripts/check_request_manager_coverage.mjs
           node scripts/check_pdf_network_coverage.mjs
           node scripts/check_pdf_network_mutations.mjs
           node tests/test_reader_pdf_rate_outer.mjs
@@ -239,12 +240,12 @@ jobs:
           node tests/test_reader_engine_preload.js
           node tests/test_reader_regression.js
           node scripts/check_adapter_coverage.mjs
+          node scripts/check_search_size_coverage.mjs
           node tests/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
         working-directory: huggingface-search
         run: |
-          node tests/test_reader_request_manager.js
-          node tests/test_reader_initial_recovery.js
+          node scripts/check_request_manager_coverage.mjs
           node scripts/check_pdf_network_coverage.mjs
           node scripts/check_pdf_network_mutations.mjs
           node tests/test_reader_pdf_rate_outer.mjs
