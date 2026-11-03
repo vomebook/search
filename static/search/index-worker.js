@@ -742,7 +742,11 @@ function searchLocal(params) {
   if (!query) {
     const order = emptySearchOrder(params);
     if (order !== null) return pageResult(order, params);
-    matched = recordIndices.slice();
+    const repos = params.repos;
+    // Repository indexes preserve source order. Restrict only an ordinary
+    // single nonempty string; other inputs keep the existing global scan.
+    matched = Array.isArray(repos) && repos.length === 1 && typeof repos[0] === "string" && repos[0]
+      ? (repoRecordIndices[repos[0]] || []).slice() : recordIndices.slice();
   } else if (params.exact || literalSearch(query)) {
     // Whitespace separates independent literal terms, matching the HF API.
     // A term may still be a wildcard pattern; every term must match.

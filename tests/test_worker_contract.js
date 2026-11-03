@@ -784,6 +784,22 @@ test("empty searches with record filters retain the general filtering path", asy
   assert.strictEqual(calls, 1);
   assert.deepStrictEqual(result.records.map((record) => record.File), ["beta alpha"]);
 });
+test("filtered empty search scopes one string repository without global scan", async () => {
+  const {worker} = await loaded();
+  vm.runInContext('globalThis.allIndices = recordIndices; recordIndices = new Proxy(allIndices, {get(){throw Error("global scan")}});',worker.context);
+  const params = {q:"",repos:["Repo/C"],extensions:["txt"],pageSize:2,anchorId:"Repo/C\0docs/delta.TXT"};
+  const first = await worker.request("local-search",params);
+  assert.deepStrictEqual(first.records.map(record => record.File), ["手机资料","delta"]);
+  assert.strictEqual(first.total,3);
+  assert.strictEqual(first.anchor_index,1);
+  assert.deepStrictEqual((await worker.request("local-search",{...params,page:2})).records.map(record => record.File), ["手。机"]);
+  assert.strictEqual((await worker.request("local-search",{q:"",repos:["missing"],extensions:["txt"]})).total,0);
+  vm.runInContext('recordIndices = allIndices; searchOrderCache.clear();',worker.context);
+  const multiple = await worker.request("local-search",{q:"",repos:["Repo/A","Repo/C"],extensions:["pdf","txt"]});
+  assert.deepStrictEqual(multiple.records.map(record => record.File), ["alpha guide","beta alpha","手机资料","delta","手。机"]);
+  const empty = await worker.request("local-search",{q:"",repos:[""],extensions:["txt"]});
+  assert.strictEqual(empty.total,0);
+});
 test("filtered empty relevance skips scoring while preserving pages and anchors", async () => {
   const {worker} = await loaded();
   worker.context.tokenize = () => { throw new Error("empty query should not score records"); };
