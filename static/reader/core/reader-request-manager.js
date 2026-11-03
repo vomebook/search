@@ -1,25 +1,36 @@
 (function (root) {
   "use strict";
 
+  /**
+   * @typedef {{ controller: AbortController, timeout: number | null,
+   *   promise: Promise<Response> | null, responseClaimed: boolean, settled: boolean,
+   *   abortBody: ((reason: unknown) => void) | null, clearAttempt?: () => void,
+   *   removeCallerAbort?: () => void }} RequestRecord
+   */
+  /** @param {ReaderRequestManagerOptions} [options] @returns {Readonly<ReaderRequestManager>} */
   function createReaderRequestManager(options = {}) {
     const fetchImpl = options.fetchImpl || root.fetch.bind(root);
     const AbortControllerImpl = options.AbortControllerImpl || root.AbortController;
     const setTimer = options.setTimer || root.setTimeout.bind(root);
     const clearTimer = options.clearTimer || root.clearTimeout.bind(root);
     const initialIdleMs = options.initialIdleMs || 10000;
+    /** @type {Map<string | object, RequestRecord>} */
     const pending = new Map();
+    /** @type {Set<RequestRecord>} */
     const active = new Set();
     let disposed = false;
 
+    /** @param {RequestRecord} record */
     function settle(record) {
       if (record.settled) return;
       record.settled = true;
-      clearTimer(record.timeout);
+      clearTimer(/** @type {number} */ (record.timeout));
       record.clearAttempt?.();
       record.removeCallerAbort?.();
       active.delete(record);
     }
 
+    /** @param {RequestRecord} record @param {unknown} reason */
     function abort(record, reason) {
       if (record.settled) return;
       record.controller.abort(reason);
@@ -27,8 +38,10 @@
       settle(record);
     }
 
+    /** @param {RequestRecord} record */
     function responseForCaller(record) {
-      return record.promise.then((response) => {
+      // Called only after request installs the promise in the pending record.
+      return /** @type {Promise<Response>} */ (record.promise).then((response) => {
         if (!record.responseClaimed) {
           record.responseClaimed = true;
           return response;
@@ -37,6 +50,9 @@
       });
     }
 
+    /** @param {RequestRecord} record @param {Response} response
+     * @param {ReadableStreamDefaultReader<Uint8Array> | null} [sourceReader]
+     * @param {ReadableStreamReadResult<Uint8Array> | null} [firstChunk] */
     function wrapResponse(record, response, sourceReader = null, firstChunk = null) {
       const ResponseImpl = root.Response || (typeof Response === "function" ? Response : null);
       const ReadableStreamImpl =
@@ -45,17 +61,17 @@
         settle(record);
         return response;
       }
-      sourceReader ||= response.body.getReader();
+      const reader = sourceReader || response.body.getReader();
       const stream = new ReadableStreamImpl({
         start(controller) {
           record.abortBody = (reason) => {
             controller.error(reason);
-            sourceReader.cancel(reason).catch(() => {});
+            reader.cancel(reason).catch(() => {});
           };
         },
         async pull(controller) {
           try {
-            const result = firstChunk || await sourceReader.read();
+            const result = firstChunk || await reader.read();
             firstChunk = null;
             if (record.settled) return;
             if (result.done) {
@@ -72,7 +88,7 @@
         },
         cancel(reason) {
           settle(record);
-          return sourceReader.cancel(reason);
+          return reader.cancel(reason);
         }
       });
       return new ResponseImpl(stream, {
@@ -82,6 +98,8 @@
       });
     }
 
+    /** @param {RequestInfo | URL} url @param {number} timeoutMs @param {RequestInit} [requestInit]
+     * @param {number | null} [bufferLimit] @returns {Promise<Response>} */
     function request(url, timeoutMs, requestInit = {}, bufferLimit = null) {
       if (disposed) return Promise.reject(new DOMException("Reader disposed", "AbortError"));
       const callerSignal = requestInit.signal;
@@ -90,10 +108,11 @@
       // range or cancellation owner even when the URL is identical.
       const shareable = typeof url === "string" && Object.keys(requestInit).every((key) => key === "priority");
       const key = shareable ? JSON.stringify([String(url), timeoutMs, bufferLimit]) : {};
-      if (pending.has(key)) return responseForCaller(pending.get(key));
+      if (pending.has(key)) return responseForCaller(/** @type {RequestRecord} */ (pending.get(key)));
       const controller = new AbortControllerImpl();
       const recoverInitial = typeof url === "string" && timeoutMs > initialIdleMs * 2 &&
         Object.keys(requestInit).every(key => key === "priority" || key === "signal");
+      /** @type {RequestRecord} */
       const record = {
         controller,
         timeout: null,
@@ -106,7 +125,10 @@
         for (let attempt = 0; ; attempt++) {
           controller.signal.throwIfAborted();
           const transport = new AbortControllerImpl();
-          let idle, sourceReader = null;
+          /** @type {number | undefined} */
+          let idle;
+          /** @type {ReadableStreamDefaultReader<Uint8Array> | null} */
+          let sourceReader = null;
           const cancel = () => transport.abort(controller.signal.reason);
           controller.signal.addEventListener("abort", cancel, { once: true });
           record.clearAttempt = () => {
@@ -119,6 +141,7 @@
               new DOMException("Reader initial response stalled", "TimeoutError")
             ), initialIdleMs);
           };
+          /** @template T @param {PromiseLike<T>} promise @param {(value: T) => void} [onLate] @returns {Promise<T>} */
           const owned = (promise, onLate) => new Promise((resolve, reject) => {
             const signal = transport.signal;
             const aborted = () => reject(signal.reason);
@@ -177,14 +200,15 @@
             controller.signal.throwIfAborted();
             return wrapResponse(record, response, sourceReader, firstChunk);
           } catch (error) {
-            record.clearAttempt();
+            /** @type {() => void} */ (record.clearAttempt)();
             transport.abort(error);
             if (sourceReader) {
               const reader = sourceReader;
               reader.cancel(error).catch(() => {}).finally(() => reader.releaseLock());
             }
             controller.signal.throwIfAborted();
-            if (!recoverInitial || attempt || !["TimeoutError", "TypeError"].includes(error?.name)) throw error;
+            if (!recoverInitial || attempt || !["TimeoutError", "TypeError"].includes(
+              /** @type {{name: string}} */ (error)?.name)) throw error;
           }
         }
       }
@@ -221,6 +245,8 @@
 
     return Object.freeze({
       request,
+      /** @param {RequestInfo | URL} url @param {number} timeoutMs @param {number} limit
+       * @param {RequestInit} [requestInit] @returns {Promise<Response>} */
       requestBuffered(url, timeoutMs, limit, requestInit = {}) {
         if (!Number.isSafeInteger(limit) || limit < 0) return Promise.reject(new RangeError("Invalid response limit"));
         return request(url, timeoutMs, requestInit, limit);
