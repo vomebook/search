@@ -11,9 +11,24 @@ const result = spawnSync(process.execPath, [
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) throw result.error;
-const rows = (result.stdout || "").split(/\r?\n/).filter(line =>
+const text = result.stdout || "";
+const lines = text.split(/\r?\n/);
+const rows = lines.filter(line =>
   /^\s*#\s*response-cache\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
-if (result.status !== 0 || rows.length !== 1) {
-  console.error("Search response cache coverage requires passing tests and exactly one fully covered source row");
+const required = [
+  "cache preserves LRU access order and exact expiration boundary",
+  "has promotes live entries and undefined values throw without insertion",
+  "byte accounting bounds entries and bypasses oversize without corrupting survivors",
+  "replacement resets TTL, byte count and LRU position",
+  "oversize replacement and serialization errors retire the previous key",
+  "the independent one-MiB entry cap rejects larger entries even with a larger total budget"
+];
+if (result.status !== 0 || rows.length !== 1 || !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) ||
+    required.some(name => {
+      const index = lines.indexOf(`# Subtest: ${name}`);
+      return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
+        !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "");
+    })) {
+  console.error("Search response cache coverage requires passing named tests and exactly one fully covered source row");
   process.exitCode = 1;
 }
