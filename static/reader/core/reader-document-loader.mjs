@@ -1,9 +1,39 @@
+/**
+ * @typedef {{ status?: number, name?: string, message?: string, code?: string }} ReaderLoaderError
+ * @typedef {{manifestUrl?: string, manifest?: Promise<Response> | null}} ReaderManifestPreload
+ * @typedef {{response: Promise<Response>, engines: Promise<unknown[]>}} PreparedReaderDocument
+ * @typedef {object} ReaderDocumentLoaderContext
+ * @property {() => void} assertReaderActive
+ * @property {() => Error} readerAbortError
+ * @property {(cleanup: () => void) => () => void} trackReaderResource
+ * @property {ReaderRequestManager} readerRequestManager
+ * @property {number} READER_PROXY_TIMEOUT_MS
+ * @property {(error: unknown) => boolean} retryableReaderProxyError
+ * @property {(delay: number) => Promise<void>} waitForReader
+ * @property {(rawUrl: string) => string} readerContentUrl
+ * @property {(url: string, timeoutMs?: number, requestInit?: RequestInit) => Promise<Response>} fetchWithReaderTimeout
+ * @property {<T>(open: () => Promise<T>) => Promise<T>} retryReaderProxy
+ * @property {(url: string, requestInit?: RequestInit) => Promise<Response>} fetchReaderUrl
+ * @property {() => Promise<Response>} fetchReaderResponse
+ * @property {(tasks: Promise<unknown>[]) => PreparedReaderDocument} prepareReaderDocument
+ * @property {(url: string) => Promise<void>} loadScript
+ * @property {string} sourceUrl
+ * @property {string | null | undefined} chapterManifestUrl
+ * @property {string} MARKED_URL
+ * @property {string} PURIFY_URL
+ * @property {{title: string}} documentState
+ * @property {AbortController} readerAbortController
+ * @property {{load: (image: HTMLImageElement, url: string, signal: AbortSignal, deadline: number) => Promise<HTMLImageElement>}} imageLoader
+ */
+/** @param {ReaderDocumentLoaderContext} readerContext */
 export function createReaderDocumentLoader(readerContext) {
+  /** @param {string} url */
   function loadScript(url) {
     readerContext.assertReaderActive();
     return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       const script = document.createElement("script");
       let settled = false, timeout = 0, untrack = () => {};
+      /** @param {Error} [error] */
       const finish = (error) => {
         if (settled) return;
         settled = true;
@@ -30,28 +60,33 @@ export function createReaderDocumentLoader(readerContext) {
     }));
   }
 
+  /** @param {string} url @param {number} [timeoutMs] @param {RequestInit} [requestInit] */
   function fetchWithReaderTimeout(url, timeoutMs = readerContext.READER_PROXY_TIMEOUT_MS, requestInit = {}) {
     return readerContext.readerRequestManager.request(url, timeoutMs, requestInit);
   }
 
-  function retryableReaderProxyError(error) {
-    return [408, 429, 500, 502, 503, 504].includes(error?.status) ||
-      ["TypeError", "TimeoutError"].includes(error?.name) ||
+  /** @param {unknown} value */
+  function retryableReaderProxyError(value) {
+    const error = /** @type {ReaderLoaderError | null | undefined} */ (value);
+    return /** @type {(number | undefined)[]} */ ([408, 429, 500, 502, 503, 504]).includes(error?.status) ||
+      /** @type {(string | undefined)[]} */ (["TypeError", "TimeoutError"]).includes(error?.name) ||
       /failed to fetch|network|timeout|HTTP\s*(?:408|429|5\d\d)|server response\s*\((?:408|429|5\d\d)\)/i.test(error?.message || "");
   }
 
+  /** @template T @param {() => Promise<T>} open @returns {Promise<T>} */
   async function retryReaderProxy(open) {
     for (let attempt = 0; ; attempt++) {
       readerContext.assertReaderActive();
       try {
         return await open();
       } catch (error) {
-        if (attempt >= 2 || error?.code === "READER_PDF_RATE_LIMIT" || !readerContext.retryableReaderProxyError(error)) throw error;
+        if (attempt >= 2 || /** @type {ReaderLoaderError | null | undefined} */ (error)?.code === "READER_PDF_RATE_LIMIT" || !readerContext.retryableReaderProxyError(error)) throw error;
         await readerContext.waitForReader(350 * (attempt + 1));
       }
     }
   }
 
+  /** @param {string} rawUrl @param {RequestInit} [requestInit] */
   function fetchReaderUrl(rawUrl, requestInit = {}) {
     if (String(rawUrl).includes("/api/reader-bucket-resource?"))
       return readerContext.fetchWithReaderTimeout(rawUrl, readerContext.READER_PROXY_TIMEOUT_MS, requestInit);
@@ -70,7 +105,7 @@ export function createReaderDocumentLoader(readerContext) {
   }
 
   function fetchReaderResponse() {
-    const early = window.__VOICE_PDF_PRELOAD__;
+    const early = /** @type {ReaderManifestPreload | undefined} */ (window.__VOICE_PDF_PRELOAD__);
     if (early?.manifest && early.manifestUrl === new URL(readerContext.sourceUrl, location.href).href) {
       const pending = early.manifest;
       early.manifest = null;
@@ -82,6 +117,7 @@ export function createReaderDocumentLoader(readerContext) {
     return readerContext.fetchReaderUrl(readerContext.sourceUrl);
   }
 
+  /** @param {Promise<unknown>[]} engineTasks @returns {PreparedReaderDocument} */
   function prepareReaderDocument(engineTasks) {
     const engines = Promise.all(engineTasks);
     const response = Promise.race([readerContext.fetchReaderResponse(), engines.then(() => new Promise(() => {}))]);
@@ -91,6 +127,7 @@ export function createReaderDocumentLoader(readerContext) {
     return {response, engines};
   }
 
+  /** @param {Promise<Response>} response @param {Promise<unknown>} engines @param {number} [limit] */
   function readPreparedBytes(response, engines, limit = VoiceOfMLReaderSecurity.LIMITS.documentBytes) {
     return Promise.all([Promise.resolve(response).then(response => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -115,6 +152,7 @@ export function createReaderDocumentLoader(readerContext) {
     return Promise.resolve(null);
   }
 
+  /** @param {string} [target] */
   async function loadImageDocument(target = readerContext.sourceUrl) {
     const deadline = performance.now() + readerContext.READER_PROXY_TIMEOUT_MS;
     const image = new Image();
@@ -125,13 +163,13 @@ export function createReaderDocumentLoader(readerContext) {
       return await readerContext.imageLoader.load(image, readerContext.readerContentUrl(target), readerContext.readerAbortController.signal, deadline);
     } catch (error) {
       readerContext.assertReaderActive();
-      if (error?.code === "READER_RESOURCE_LIMIT") throw error;
+      if (/** @type {ReaderLoaderError | null | undefined} */ (error)?.code === "READER_RESOURCE_LIMIT") throw error;
       return readerContext.imageLoader.load(image, target, readerContext.readerAbortController.signal, deadline);
     }
   }
 
   function loadChapterManifestDocument() {
-    const target = readerContext.chapterManifestUrl || readerContext.sourceUrl, early = window.__VOICE_READER_CHAPTER_PRELOAD__;
+    const target = readerContext.chapterManifestUrl || readerContext.sourceUrl, early = /** @type {ReaderManifestPreload | undefined} */ (window.__VOICE_READER_CHAPTER_PRELOAD__);
     if (early?.manifest && early.manifestUrl === new URL(target, location.href).href) {
       const pending = early.manifest;
       early.manifest = null;

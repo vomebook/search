@@ -153,14 +153,6 @@ function setExactSearchSectionVisible(visible, animate) {
   }
 }
 
-function buildRecordRelativePath(rec) {
-  const filename = rec.File || "";
-  const extension = rec.Extension || "";
-  const fullName = extension ? filename + "." + extension : filename;
-  const folders = Array.isArray(rec.Folder) ? rec.Folder : [];
-  return folders.length > 0 ? folders.join("/") + "/" + fullName : fullName;
-}
-
 function buildRecordLink(rec) {
   const repo = rec.Repo || "";
   return HF_DATASET_BASE + "/" + repo + "/resolve/main/" + encodeRecordPath(buildRecordRelativePath(rec));
@@ -169,10 +161,6 @@ function buildRecordLink(rec) {
 function buildRecordPath(rec) {
   const repo = rec.Repo || "";
   return HF_DATASET_BASE + "/" + repo + "/blob/main/" + encodeRecordPath(buildRecordRelativePath(rec));
-}
-
-function encodeRecordPath(path) {
-  return String(path || "").split("/").map(encodeURIComponent).join("/");
 }
 
 var readerAssets = null;

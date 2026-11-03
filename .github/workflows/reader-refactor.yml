@@ -47,6 +47,8 @@ jobs:
           node tests/test_reader_regression.js
           node scripts/check_adapter_coverage.mjs
           node scripts/check_search_size_coverage.mjs
+          node scripts/check_search_record_path_coverage.mjs
+          node tests/test_search_record_path_build.mjs
           node tests/test_reader_preload.js
           node tests/test_reader_chapter_search.mjs
           node tests/test_reader_image_loader.mjs
@@ -57,7 +59,7 @@ jobs:
           node scripts/check_request_manager_coverage.mjs
           node scripts/check_pdf_network_coverage.mjs
           node scripts/check_pdf_network_mutations.mjs
-          node tests/test_reader_pdf_rate_outer.mjs
+          node scripts/check_document_loader_coverage.mjs
           node tests/test_reader_pdf_first_page_worker.mjs
           python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_history_race tests.test_reader_engine_preload tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
       - name: Check staged PDF opening in Firefox
@@ -155,7 +157,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor bc9d36d02ed278002d161f01c5512b33ed8b4ea8 HEAD
+          git -C huggingface-search merge-base --is-ancestor 3455a20905af9c1e5389b34592353f022e7b74a3 HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -241,6 +243,8 @@ jobs:
           node tests/test_reader_regression.js
           node scripts/check_adapter_coverage.mjs
           node scripts/check_search_size_coverage.mjs
+          node scripts/check_search_record_path_coverage.mjs
+          node tests/test_search_record_path_build.mjs
           node tests/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
         working-directory: huggingface-search
@@ -248,7 +252,7 @@ jobs:
           node scripts/check_request_manager_coverage.mjs
           node scripts/check_pdf_network_coverage.mjs
           node scripts/check_pdf_network_mutations.mjs
-          node tests/test_reader_pdf_rate_outer.mjs
+          node scripts/check_document_loader_coverage.mjs
           node tests/test_reader_pdf_first_page_worker.mjs
           python3 -B -m unittest -v tests.test_reader_timeout
           python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_history_race tests.test_reader_engine_preload tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host

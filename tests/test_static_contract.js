@@ -98,7 +98,7 @@ test("reader intent prefetches the shell and format engines", () => {
   assert.match(app, /warmedReaderSources\.size >= 8/);
   assert.match(app, /method: readerId \? "GET" : "HEAD", cache: "no-store"/);
   assertCode(reader, 'return await imageLoader.load(image, readerContentUrl(target), readerAbortController.signal, deadline)');
-  assertCode(reader, 'if (error?.code === "READER_RESOURCE_LIMIT") throw error');
+  assertCode(reader, 'if (/** @type {ReaderLoaderError | null | undefined} */ (error)?.code === "READER_RESOURCE_LIMIT") throw error');
   assertCode(reader, 'return imageLoader.load(image, target, readerAbortController.signal, deadline)');
   assert.match(reader, /disableStream: true/);
   assert.match(reader, /capability = readerRuntime\.negotiate\(VoiceOfMLReader\.capability\(extension\)\)/);
