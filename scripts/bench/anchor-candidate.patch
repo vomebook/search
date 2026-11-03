@@ -1,5 +1,5 @@
 diff --git a/backend/app.py b/backend/app.py
-index 967b8e5..6f23867 100644
+index 967b8e5..623ea9e 100644
 --- a/backend/app.py
 +++ b/backend/app.py
 @@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
@@ -10,7 +10,7 @@ index 967b8e5..6f23867 100644
  from backend.search_bootstrap import build_initial_payload as _build_initial_payload, trim_initial_results as _trim_initial_results
  from backend.search_candidates import literal_candidates as _literal_candidates
  from backend.search_projection import public_record as _public_record, trim_results as _trim_results
-@@ -913,43 +914,29 @@ def _get_search_order(q, repos, extensions, folders, min_size, max_size, search_
+@@ -913,43 +914,33 @@ def _get_search_order(q, repos, extensions, folders, min_size, max_size, search_
      return packed
  
  
@@ -32,6 +32,10 @@ index 967b8e5..6f23867 100644
 +
 +def _anchor_order_limit():
 +    return SEARCH_ANCHOR_ORDER_MAX
++
++
++def _anchor_record(index: int):
++    return records[index]
 +
 +
  def _find_search_anchor(indices, anchor_id):
@@ -71,14 +75,14 @@ index 967b8e5..6f23867 100644
 -        while len(_search_anchor_cache) > SEARCH_ANCHOR_ORDER_MAX:
 -            _search_anchor_cache.popitem(last=False)
 -    return index
-+    return _find_anchor(indices, anchor_id, _anchor_cache, _candidate_records, _anchor_path,
++    return _find_anchor(indices, anchor_id, _anchor_cache, _anchor_record, _anchor_path,
 +                        _anchor_key_limit, _anchor_per_order_limit, _anchor_order_limit)
  
  
  def _search_uncached(q="", repos=None, extensions=None, folders=None, min_size=None, max_size=None, page=1, page_size=100, search_folders=True, sort="relevance", exact=False, folder_match_mode="prefix", folder_selfs=None, folder_subtrees=None, anchor_id=None):
 diff --git a/backend/search_anchor.py b/backend/search_anchor.py
 new file mode 100644
-index 0000000..3614f6a
+index 0000000..9a53aad
 --- /dev/null
 +++ b/backend/search_anchor.py
 @@ -0,0 +1,54 @@
@@ -86,7 +90,7 @@ index 0000000..3614f6a
 +from __future__ import annotations
 +
 +from collections import OrderedDict
-+from collections.abc import Callable, Iterator, Sequence
++from collections.abc import Callable, Iterator
 +from typing import Protocol
 +import weakref
 +
@@ -97,7 +101,7 @@ index 0000000..3614f6a
 +
 +def find_search_anchor(indices: SearchOrder, anchor_id: str,
 +                       get_cache: Callable[[], OrderedDict[int, tuple[weakref.ReferenceType[SearchOrder], OrderedDict[str, int]]]],
-+                       get_records: Callable[[], Sequence[dict[str, object]]],
++                       get_record: Callable[[int], dict[str, object]],
 +                       get_path: Callable[[], Callable[[dict[str, object]], str]],
 +                       get_key_limit: Callable[[], int], get_per_order_limit: Callable[[], int],
 +                       get_order_limit: Callable[[], int]) -> int:
@@ -115,7 +119,7 @@ index 0000000..3614f6a
 +    index = -1
 +    if separator:
 +        for offset, idx in enumerate(indices):
-+            rec = get_records()[idx]
++            rec = get_record(idx)
 +            repo = str(rec.get('Repo', ''))
 +            if repo == anchor_repo:
 +                matches = get_path()(rec) == anchor_path

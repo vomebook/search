@@ -2,7 +2,7 @@ name: Search anchor remote benchmark (temporary)
 
 on:
   push:
-    branches: ["bench/search-anchor-remote-20261103"]
+    branches: ["bench/search-anchor-opt-20261103"]
 
 permissions:
   contents: read
