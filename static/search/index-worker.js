@@ -156,6 +156,10 @@ function couldBeFuzzy(token, word, maxDist) {
 
 function compileWildcardMatcher(pattern) {
   const normalized = String(pattern || "");
+  if (normalized.includes("?") && !normalized.includes("*")) {
+    // Escaped literals and non-u dots have fixed width and cannot backtrack.
+    return new RegExp(normalized.split("").map(char => char === "?" ? "." : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(""), "i");
+  }
   // Boundary stars may match zero characters in substring matching. Escaping
   // every remaining literal keeps regex work bounded and preserves /i rules.
   const core = normalized.replace(/^\*+|\*+$/g, "");
