@@ -111,7 +111,7 @@ test("reader intent prefetches the shell and format engines", () => {
     assert.match(imageRule[1], new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*${value}\\s*(?:;|$)`));
   }
   assert.match(readerCss, /prefers-contrast\s*:\s*more/);
-  assertCode(fs.readFileSync("static/reader/core/reader-store.js", "utf8"), 'Number(existing.result.lastReadAt) > Number(entry.lastReadAt)');
+  assertCode(fs.readFileSync("static/reader/core/reader-store.js", "utf8"), 'Number(previous.lastReadAt) > Number(entry.lastReadAt)');
   assert.match(fs.readFileSync("static/reader/core/reader-store.js", "utf8"), /BroadcastChannel/);
   assert.match(reader, /VoiceOfMLReaderStore\.subscribe/);
   assert.match(reader, /VoiceOfMLReaderStore\.dispose/);

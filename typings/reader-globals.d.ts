@@ -74,6 +74,7 @@ interface ReaderStoreApi {
   get(url: string): Promise<any>;
   put(entry: any): Promise<void>;
   list(): Promise<any[]>;
+  isHistoryFull(): Promise<boolean>;
   remove(url: string): Promise<void>;
   clearHistory(): Promise<void>;
   putBookmark(entry: any): Promise<void>;
