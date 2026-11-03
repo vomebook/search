@@ -84,6 +84,7 @@
     "static/search/record-path.js",
     "static/search/highlight.js",
     "static/search/response-cache.js",
+    "static/search/file-types.js",
     "static/tts-client.js",
     "static/app.js",
     "static/reader.js",

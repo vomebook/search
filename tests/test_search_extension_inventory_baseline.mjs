@@ -1,16 +1,18 @@
-// Pin the original, still-inline search extension inventory before extraction.
+// Expectations were pinned against the original inline declarations before extraction.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = fs.readFileSync(path.join(process.cwd(), 'static/app.js'), 'utf8');
 const context = vm.createContext({});
-for (const pattern of [/^(?:const|var) ORDERED_EXTENSIONS = \[[^]*?^\];/m,
-  /^const FILE_ICON_MAP = \{[^]*?^\};/m, /^function getFileIconType\([^]*?^}/m]) {
-  const match = source.match(pattern);
-  assert.ok(match, `original inline declaration missing: ${pattern}`);
+const filename = path.join(process.cwd(), 'static/search/file-types.js');
+vm.runInContext(fs.readFileSync(filename, 'utf8'), context, {filename});
+const host = fs.readFileSync(path.join(process.cwd(), 'static/app.js'), 'utf8');
+for (const pattern of [/^const ORDERED_EXTENSIONS = [^\n]+/m, /^const FILE_ICON_MAP = [^\n]+/m,
+  /^function getFileIconType\([^]*?^}/m]) {
+  const match = host.match(pattern);
+  assert.ok(match, `host declaration missing: ${pattern}`);
   vm.runInContext(match[0], context);
 }
 const evaluate = code => vm.runInContext(code, context);
@@ -89,4 +91,13 @@ test('const bindings retain their original mutable array and map contents', () =
   assert.equal(evaluate("ORDERED_EXTENSIONS.indexOf('probe-extension')"), 67);
   assert.equal(evaluate("getFileIconType('PROBE-EXTENSION')"), 'audio');
   evaluate("ORDERED_EXTENSIONS.pop(); delete FILE_ICON_MAP['probe-extension']");
+});
+
+test('inventory data is isolated between script evaluations', () => {
+  const other = vm.createContext({});
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), other, {filename});
+  evaluate("ORDERED_EXTENSIONS.push('temporary'); FILE_ICON_MAP.temporary = 'audio'");
+  assert.equal(vm.runInContext('VoiceOfMLSearchFileTypes.orderedExtensions.length', other), 67);
+  assert.equal(vm.runInContext("Object.hasOwn(VoiceOfMLSearchFileTypes.fileIconMap, 'temporary')", other), false);
+  evaluate("ORDERED_EXTENSIONS.pop(); delete FILE_ICON_MAP.temporary");
 });
