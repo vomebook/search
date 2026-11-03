@@ -569,6 +569,17 @@ class StaticGateTests(unittest.TestCase):
         check = ["node", "scripts/check_search_record_path_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "record-path.js")
         test = self.root / paths[2]
+        original = test.read_text()
+        marker = 'search record paths preserve filenames, separators and URL encoding'
+        self.assertEqual(original.count(marker), 1)
+        test.write_text(original.replace(marker, 'missing path completion marker'))
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('require("node:test").skip("extra skip", () => {});',
+                      'require("node:test").todo("extra todo");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
+        test.write_text(original + '\nrequire("node:test")("unexpected failure", () => { throw new Error("path assertion failure"); });\n')
+        self.assert_check(self.run_check(*check), False, "path assertion failure")
         test.write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
         test.write_text('throw new Error("failed path test");\n')
