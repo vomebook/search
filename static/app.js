@@ -2038,21 +2038,6 @@ function setSearchInputValue(value) {
   syncSearchInputState();
 }
 
-const sizeCache = {};
-
-function formatSize(bytes) {
-  if (!bytes && bytes !== 0) return "";
-  if (sizeCache[bytes] !== undefined) return sizeCache[bytes];
-  if (typeof bytes === "string") bytes = parseInt(bytes);
-  if (isNaN(bytes) || bytes === 0) return (sizeCache[bytes] = "");
-  let result;
-  if (bytes < 1024) result = bytes + " B";
-  else if (bytes < 1048576) result = (bytes / 1024).toFixed(1) + " KB";
-  else if (bytes < 1073741824) result = (bytes / 1048576).toFixed(1) + " MB";
-  else result = (bytes / 1073741824).toFixed(2) + " GB";
-  return (sizeCache[bytes] = result);
-}
-
 function getFileIconType(ext) {
   return FILE_ICON_MAP[(ext || "").toLowerCase()] || "file";
 }

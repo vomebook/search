@@ -332,17 +332,41 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_size_coverage_gate_fails_closed(self):
         paths = ["static/search/size-format.js", "scripts/check_search_size_coverage.mjs",
-                 "tests/test_search_size_format.js"]
+                 "tests/test_search_size_format.js", "tests/test_search_size_render_contract.js"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", "scripts/check_search_size_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "size-format.js")
-        (self.root / paths[2]).write_text('require("node:test")("empty", () => {});\n')
+        for test in paths[2:]:
+            (self.root / test).write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        shutil.copyfile(ROOT / paths[2], self.root / paths[2])
+        self.assert_check(self.run_check(*check), False, "coverage")
+        (self.root / paths[2]).write_text('require("node:test")("empty", () => {});\n')
+        shutil.copyfile(ROOT / paths[3], self.root / paths[3])
+        self.assert_check(self.run_check(*check), False, "coverage")
+        (self.root / paths[3]).write_text('require("node:test")("empty", () => {});\n')
         (self.root / paths[2]).write_text('throw new Error("failed size test");\n')
         self.assert_check(self.run_check(*check), False, "failed size test")
+
+    def test_search_size_display_declaration_matches_runtime(self):
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/size-format.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = "declare function formatSize(bytes: number | string | null | undefined): string | object;"
+        self.assertEqual(original.count(before), 1)
+        for after in ("declare function formatSize(bytes: number | string | null | undefined): number;",
+                      "declare function formatSize(bytes: number | string | null | undefined): string;"):
+            declaration.write_text(original.replace(before, after))
+            self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_request_manager_coverage_gate_fails_closed(self):
         paths = ["static/reader/core/reader-request-manager.js", "scripts/check_request_manager_coverage.mjs",

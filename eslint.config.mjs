@@ -36,7 +36,7 @@ export default [
   },
   { files: ["static/**/*.js"], languageOptions: { sourceType: "script" } },
   { files: ["static/app.js"], languageOptions: { globals: {
-    bytesToDisplay: "readonly", fmtSizeUrl: "readonly", parseSizeStr: "readonly",
+    bytesToDisplay: "readonly", fmtSizeUrl: "readonly", parseSizeStr: "readonly", formatSize: "readonly",
     buildRecordRelativePath: "readonly", encodeRecordPath: "readonly",
     escapeHTML: "readonly", getHighlightRegex: "readonly", highlightText: "readonly"
   } } },
