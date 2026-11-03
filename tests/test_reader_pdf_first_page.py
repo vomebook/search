@@ -117,7 +117,7 @@ def reordered_linearized_pdf():
 @contextlib.contextmanager
 def range_source(payload):
     identity = '"' + hashlib.sha256(payload).hexdigest() + '"'
-    state = {"block": threading.Event(), "requests": [], "changed": False, "active": 0, "peak": 0, "fail_from": None,
+    state = {"block": threading.Event(), "blocked": threading.Event(), "requests": [], "changed": False, "active": 0, "peak": 0, "fail_from": None,
              "block_from": 262144, "block_timeout": 15, "delay": 0, "delay_from": 0}
     lock = threading.Lock()
 
@@ -153,6 +153,7 @@ def range_source(payload):
             if delay:
                 time.sleep(delay)
             if begin >= state['block_from'] and end < len(payload) - 524288:
+                state['blocked'].set()
                 state["block"].wait(timeout=state['block_timeout'])
             with lock:
                 etag = '"changed"' if state["changed"] and begin >= 262144 and end < len(payload) - 524288 else identity
@@ -822,18 +823,55 @@ class PdfFirstPageTests(unittest.TestCase):
             self.assertEqual(page.locator('.reader-page').count(),0)
 
     def test_close_aborts_queued_validation_reads(self):
-        with range_source(sparse_pdf()) as (source, state, lock):
-            context=self.browser.new_context(service_workers="block");page=context.new_page();self.open(page,source)
+        # Server accept time is not fetch dispatch time: a request handed to the
+        # network before close may arrive at this fixture after context.close().
+        # Observe native dispatch and abort signals in the page instead.
+        with range_source(sparse_pdf()) as (source, state, _lock):
+            context = self.browser.new_context(service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.add_init_script('''(() => {
+              const native = window.fetch;
+              const trace = window.__closeRangeTrace = [];
+              window.fetch = (input, init) => {
+                const url = typeof input === 'string' ? input : input.url;
+                if (!url.includes('/api/reader-content?')) return native(input, init);
+                const signal = init?.signal || input.signal;
+                const item = {range:new Headers(init?.headers || input.headers).get('Range'),
+                  abortedAtDispatch:!!signal?.aborted, aborted:!!signal?.aborted, settled:false};
+                trace.push(item);
+                signal?.addEventListener('abort', () => { item.aborted = true; }, {once:true});
+                return native(input, init).then(response => {
+                  item.settled = true;
+                  return response;
+                }, error => { item.settled = true; throw error; });
+              };
+            })()''')
+            self.open(page, source)
             page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=15000)
-            page.wait_for_timeout(150);context.close()
-            with lock: at_close=len(state["requests"])
-            time.sleep(.3)
-            with lock: self.assertEqual(len(state["requests"]),at_close)
+            page.wait_for_function('''() => window.__closeRangeTrace.some(item =>
+              !item.settled && item.range && !item.range.startsWith('bytes=0-'))''')
+            self.assertTrue(state['blocked'].wait(timeout=10), 'fixture must receive a blocked validation read')
+            before = page.evaluate('''() => {
+              const before = window.__closeRangeTrace.map(item => ({...item}));
+              window.dispatchEvent(new Event('voice-reader-dispose'));
+              return before;
+            }''')
+            self.assertTrue(any(not item['settled'] for item in before), before)
+            page.wait_for_function('''() => window.__closeRangeTrace.every(item => item.settled || item.aborted)''')
+            after = page.evaluate('''() => window.__closeRangeTrace.map(item => ({...item}))''')
+            self.assertEqual(len(after), len(before), 'close must not dispatch new range requests')
+            self.assertFalse(any(item['abortedAtDispatch'] for item in after), after)
+            self.assertTrue(all(old['settled'] or new['aborted'] for old, new in zip(before, after)), after)
+            state['block'].set()
+            page.wait_for_timeout(300)
+            self.assertEqual(len(page.evaluate('window.__closeRangeTrace')), len(before))
+            context.close()
 
     def test_explicit_close_stops_new_validation_fetches(self):
         # Record fetch dispatch in the browser, rather than server accept times:
         # already-dispatched requests can reach the HTTP fixture after close.
-        with range_source(sparse_pdf()) as (source, state, lock):
+        with range_source(sparse_pdf()) as (source, state, _lock):
             context = self.browser.new_context(service_workers="block")
             self.addCleanup(context.close)
             page = context.new_page()
@@ -856,8 +894,7 @@ class PdfFirstPageTests(unittest.TestCase):
             page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=15000)
             page.wait_for_function('''() => window.__validationFetchTrace.filter(item =>
               item.kind === 'fetch' && item.range && !item.range.startsWith('bytes=0-')).length >= 2''')
-            with lock:
-                self.assertGreater(state['active'], 0, 'fixture must have blocked validation reads')
+            self.assertTrue(state['blocked'].wait(timeout=10), 'fixture must receive a blocked validation read')
             page.evaluate("() => window.dispatchEvent(new Event('voice-reader-dispose'))")
             trace = page.evaluate("() => window.__validationFetchTrace.slice()")
             self.assertEqual(trace[-1], {'kind': 'close'})
@@ -869,6 +906,39 @@ class PdfFirstPageTests(unittest.TestCase):
             state['block'].set()
             page.wait_for_timeout(500)
             self.assertEqual(page.evaluate("() => window.__validationFetchTrace.slice()"), trace)
+
+    def test_dispose_after_range_admission_never_calls_native_fetch(self):
+        if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is content-addressed in a built artifact')
+        # Exercise the exact microtask gap between successful admission and
+        # the native fetch; no HTTP server timing is involved in this check.
+        with range_source(sparse_pdf(count=1)) as (source, _state, _lock):
+            context = self.browser.new_context(service_workers='block')
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.goto(source + '/search/static/manifest.json')
+            result = page.evaluate('''async () => {
+              const {createPdfFetchPolicy} = await import('/search/static/reader/pdf/reader-pdf-network.mjs');
+              const native = globalThis.fetch, results = [];
+              try {
+                for (const kind of ['reader', 'caller', 'full']) {
+                  let calls = 0;
+                  globalThis.fetch = async () => { calls++; return new Response('unexpected'); };
+                  const policy = createPdfFetchPolicy(), owner = new AbortController();
+                  policy.add(['/fixture.pdf']);
+                  const options = {signal:owner.signal};
+                  if (kind !== 'full') options.headers = {Range:'bytes=0-3'};
+                  const pending = fetch('/fixture.pdf', options);
+                  if (kind === 'caller') owner.abort(); else policy.dispose();
+                  let name = '';
+                  try { await pending; } catch (error) { name = error.name; }
+                  results.push({kind,calls,name});
+                  policy.dispose();
+                }
+                return results;
+              } finally { globalThis.fetch = native; }
+            }''')
+            self.assertEqual(result, [{'kind':kind, 'calls':0, 'name':'AbortError'}
+                                      for kind in ('reader','caller','full')])
 
     def test_history_page_restores_after_full_validation(self):
         if os.environ.get('READER_BUILT_SITE'): self.skipTest('source store URL is content-addressed in a built artifact')
@@ -1010,11 +1080,16 @@ class PdfFirstPageTests(unittest.TestCase):
         with range_source(sparse_pdf(root_at_end=True)) as (source,state,_lock):
             state['block_from']=1024*1024
             context=self.browser.new_context(viewport={'width':390,'height':844},service_workers='block');self.addCleanup(context.close)
-            page=context.new_page();workers=[]
-            page.route('**/api/reader-content?**',lambda route:route.fulfill(status=503,body='temporary'),times=1)
+            page=context.new_page();workers=[];attempts=[]
+            def fail_once(route):
+                attempts.append(route.request.headers.get('range'))
+                if len(attempts) == 1: route.fulfill(status=503,body='temporary')
+                else: route.continue_()
+            page.route('**/api/reader-content?**',fail_once)
             page.on('request',lambda request:workers.append(request.url) if 'pdf-worker-wrapper' in request.url else None)
             self.open(page,source)
             page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=20000)
+            self.assertGreaterEqual(len(attempts),2,attempts)
             self.assertTrue(any('reader-first-page=1' in url for url in workers),workers)
             self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
             state['block'].set()
@@ -1298,7 +1373,10 @@ class PdfFirstPageTests(unittest.TestCase):
             for number in range(2,135):
                 page.locator('#page-next').click()
                 page.wait_for_function('''n=>!!document.querySelector(`.reader-page[data-page="${n}"]`) || document.documentElement.dataset.readerPhase==='failed' ''',arg=number,timeout=15000)
-                self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'failed')
+                self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'failed',
+                    {'page':number,'status':page.locator('#status').text_content(),
+                     'code':page.locator('#content').get_attribute('data-error-code'),
+                     'error':page.locator('.reader-error').text_content() if page.locator('.reader-error').count() else None})
             self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'),'ready')
             state['block'].set();page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
             page.wait_for_timeout(500)
@@ -1377,17 +1455,27 @@ class PdfFirstPageTests(unittest.TestCase):
             with self.subTest(mode=mode), range_source(sparse_pdf()) as (source,state,_lock):
                 state["block"].set()
                 context=self.browser.new_context(service_workers="block");self.addCleanup(context.close)
-                page=context.new_page();attempts=[]
+                page=context.new_page();attempts=[];workers=[];errors=[]
+                page.on('request',lambda req:workers.append(req.url) if 'pdf-worker-wrapper' in req.url else None)
+                page.on('pageerror',lambda error:errors.append(str(error)))
                 def fail(route):
                     attempts.append(route.request.url)
                     route.fulfill(status=503 if mode == "unavailable" else 200,body="not the pinned worker")
                 page.route('**/static/vendor/pdf.worker.43710009ea26.mjs',fail)
                 self.open(page,source)
-                page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=30000)
+                try:
+                    page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=30000)
+                except Exception as error:
+                    with _lock: server={'requests':list(state['requests']),'active':state['active'],'peak':state['peak']}
+                    self.fail(str({'failure':str(error),'mode':mode,'attempts':attempts,'workers':workers,
+                        'errors':errors,'server':server,'phase':page.locator('html').get_attribute('data-reader-phase'),
+                        'status':page.locator('#status').text_content(),'code':page.locator('#content').get_attribute('data-error-code'),
+                        'message':page.locator('.reader-error').text_content() if page.locator('.reader-error').count() else None}))
                 page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
                 self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
                 self.assertEqual(page.locator('.reader-pdf-opening').count(),0)
                 self.assertEqual(len(attempts),1)
+                self.assertEqual(errors,[])
 
     def test_staged_adapter_failure_stops_source_fetch_and_uses_stock(self):
         if os.environ.get('READER_BUILT_SITE'): self.skipTest('source module is bundled in a built artifact')

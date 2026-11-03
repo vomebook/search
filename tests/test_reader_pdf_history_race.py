@@ -37,6 +37,20 @@ class PdfHistoryRaceTests(unittest.TestCase):
           };
         })();""".replace('INCLUDE_STAGED', 'true' if include_staged else 'false'))
 
+    def fail_first_range_once(self, page):
+        # Keep the route installed while retries begin. Removing a times=1
+        # interceptor concurrently with a fast retry can strand that retry in
+        # the test harness before it reaches the local server.
+        attempts = []
+        def handle(route):
+            attempts.append(route.request.headers.get('range'))
+            if len(attempts) == 1:
+                route.fulfill(status=503, body='temporary')
+            else:
+                route.continue_()
+        page.route('**/api/reader-content?**', handle)
+        return attempts
+
     def test_stalled_ordinary_worker_does_not_block_verified_first_page(self):
         with support.range_source(support.sparse_pdf(root_at_end=True)) as (source, state, _lock):
             state['block_from'] = 1024 * 1024
@@ -50,7 +64,7 @@ class PdfHistoryRaceTests(unittest.TestCase):
                 page.on('response', lambda response: responses.append(response.status)
                         if '/api/reader-content?' in response.url else None)
                 page.on('pageerror', lambda error: errors.append(str(error)))
-                page.route('**/api/reader-content?**', lambda route: route.fulfill(status=503, body='temporary'), times=1)
+                attempts = self.fail_first_range_once(page)
                 self.open(page, source)
                 page.wait_for_function('()=>window.__ordinaryWorkers?.[0]?.messages >= 1', timeout=10000)
                 page.locator('.reader-page[data-preview-ready="1"] canvas.ready').wait_for(timeout=10000)
@@ -60,6 +74,7 @@ class PdfHistoryRaceTests(unittest.TestCase):
                 self.assertEqual(ordinary[0]['terminated'], 1, ordinary)
                 self.assertTrue(any('reader-first-page=1' in url for url in workers), workers)
                 self.assertEqual(responses[:2], [503, 206], responses)
+                self.assertGreaterEqual(len(attempts), 2, attempts)
                 self.assertNotEqual(page.locator('html').get_attribute('data-reader-phase'), 'ready')
                 state['block'].set()
                 page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'", timeout=30000)
@@ -77,8 +92,15 @@ class PdfHistoryRaceTests(unittest.TestCase):
                 page = context.new_page()
                 self.suppress_ordinary_worker_handshake(page)
                 page.add_init_script("""(()=>{const native=window.setTimeout.bind(window);
-                  window.setTimeout=(fn,ms,...args)=>native(fn,
-                    ms===5000?100:ms===20000?350:ms===500?10:ms===1000?20:ms,...args);
+                  window.__releaseWorkerDeadline = null;
+                  window.setTimeout=(fn,ms,...args)=>{
+                    if (ms===20000 && !window.__releaseWorkerDeadline) {
+                      const handle=native(fn,ms,...args);
+                      window.__releaseWorkerDeadline=()=>{clearTimeout(handle);native(fn,0,...args);};
+                      return handle;
+                    }
+                    return native(fn,ms===5000?100:ms===20000?350:ms===500?10:ms===1000?20:ms,...args);
+                  };
                 })();""")
                 page.route('**/static/reader/core/reader-store.js*', lambda route: route.fulfill(
                     content_type='text/javascript', body="""
@@ -89,6 +111,9 @@ class PdfHistoryRaceTests(unittest.TestCase):
                 page.on('request', lambda request: workers.append(request.url)
                         if 'pdf-worker-wrapper' in request.url else None)
                 self.open(page, source)
+                page.wait_for_function('''()=>window.__ordinaryWorkers?.[0]?.messages >= 1 &&
+                  typeof window.__releaseWorkerDeadline === 'function' ''', timeout=15000)
+                page.evaluate('window.__releaseWorkerDeadline()')
                 page.locator('#reader-engine-retry').wait_for(timeout=10000)
                 self.assertEqual(page.locator('#content').get_attribute('data-error-code'), 'READER_ENGINE_NETWORK')
                 self.assertEqual(page.locator('.reader-page[data-preview-ready="1"]').count(), 0)
@@ -225,11 +250,12 @@ class PdfHistoryRaceTests(unittest.TestCase):
 
                     page.route("**/static/reader/pdf/reader-pdf-engine.mjs*", instrument_engine)
                     page.route("**/static/reader/pdf/reader-pdf-network.mjs*", instrument_network)
-                    page.route("**/api/reader-content?**", lambda route: route.fulfill(status=503, body="temporary"), times=1)
+                    attempts = self.fail_first_range_once(page)
                     self.open(page, source)
                     page.wait_for_function("""()=>window.__prefixWaiting && window.__historyTimedOut &&
                         typeof window.__completeHistory==='function'""", timeout=15000)
                     self.assertEqual(failures, [])
+                    self.assertGreaterEqual(len(attempts), 2, attempts)
                     page.evaluate("""async history=>{
                       if (history !== 'pending') window.__completeHistory(history);
                       await Promise.resolve(); await Promise.resolve();
