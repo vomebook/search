@@ -882,6 +882,9 @@ export function createPdfFetchPolicy({idleMs = 15000, attemptMs = 45000,
         if (!remaining) throw new DOMException("PDF recovery deadline elapsed", "TimeoutError");
         const admissionSignal=AbortSignal.any([signal,AbortSignal.timeout(Math.ceil(remaining))]);
         await rateAdmission(admissionSignal,start,end,url);
+        // The Reader or caller may have closed after admission resolved but
+        // before this continuation ran. Do not start even an aborted fetch.
+        signal.throwIfAborted();
       }
       response = null;
       const owner = new AbortController();
