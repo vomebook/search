@@ -513,12 +513,12 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(readerHtml, /connect-src[^\"]*https:\/\/\*\.hf\.co/);
   assert.match(readerHtml, /script-src 'self'/);
   const vendorScript = fs.readFileSync("scripts/build/copy_reader_vendor.mjs", "utf8") + fs.readFileSync("static/reader-resources.js", "utf8");
-  assert.match(vendorScript, /pdfjs-dist@6\.4\.299/);
+  assert.match(vendorScript, /pdfjs-dist@6\.5\.438/);
   assert.match(vendorScript, /standard_fonts\//);
   assert.match(vendorScript, /cmaps\//);
   assert.match(vendorScript, /relative\.startsWith\("wasm\/"\)/);
-  assert.match(vendorScript, /86269b40170eb41740ea05ad2102d71d33de4f122b34eb2f478be0ea7779c415/);
-  assert.match(vendorScript, /57456c8e0c81e46be31174b499ef77f2b9f5ee46d04412ba627320a36755d4c2/);
+  assert.match(vendorScript, /7461aefcd27c4ef0dd76f9ca5760f09466eb6b3f934432670c12132e7b3d6faa/);
+  assert.match(vendorScript, /3a88402882cfa3e7e72c2c9b5149f52f0f88baf1c5b62aa11a41abdbc2072440/);
   assert.match(vendorScript, /marked@18\.1\.2\/lib\/marked\.umd\.js/);
   assert.match(vendorScript, /9eb730d2362ae1a8c6201698f17009e16671be6946d3d06503ddc0575283db7c/);
   assert.match(vendorScript, /dompurify@3\.4\.17/);
