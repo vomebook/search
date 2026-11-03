@@ -71,6 +71,24 @@ try {
     now=35;assert.equal(cache.get(options.url,0,4,version),null);
     assert.equal(cache.size,0);assert.equal(cache.byteLength,0);
   }
+  {
+    // A later overlapping range replaces the prior range and deadline;
+    // a changed strong validator must evict old bytes and retain only new.
+    let now=0;
+    const cache=createPdfRangeCache({maxBytes:16,maxEntries:4,maxAgeMs:10,now:()=>now});
+    const first=Uint8Array.from([1,2,3,4]);
+    cache.put(options.url,0,first,version);
+    now=5;cache.put(options.url,0,Uint8Array.from([5,6,7,8,9,10,11,12]),version);
+    now=10;assert.deepEqual([...cache.get(options.url,0,4,version)],[5,6,7,8]);
+    const changed={etag:'"B"',total:20};
+    now=11;cache.put(options.url,8,first,changed);
+    assert.equal(cache.get(options.url,0,4,version),null);
+    assert.deepEqual([...cache.get(options.url,8,12,changed)],[1,2,3,4]);
+    assert.equal(cache.size,1);assert.equal(cache.byteLength,4);
+    now=20;assert.deepEqual([...cache.get(options.url,8,12,changed)],[1,2,3,4]);
+    now=21;assert.equal(cache.get(options.url,8,12,changed),null);
+    assert.equal(cache.size,0);assert.equal(cache.byteLength,0);
+  }
 
   // Reopening validates a fresh byte before reusing an owned prefix or range;
   // a changed ETag must cause a new full prefix and new demanded bytes.
