@@ -1,8 +1,8 @@
 {
   "repository": "VoiceOfML/Search",
-  "revision": "8ed95a61fa60294500c7f4b4c4c8239546e4e63d",
+  "revision": "9d9536422f260c42846886853e1fffaef9f86570",
   "files": {
-    "backend-coverage-debt.json": "1417d624b79c06c77f4abe326f7bb9e60af34446af9873623a7d3d1efdbfddf9",
+    "backend-coverage-debt.json": "70e9311f50ba1407227de9ba42fd591d93826f92898d07873ce5f58cbebf2a29",
     "strict-inventory-debt.json": "31a30898f8d6aa7024abc2cd94977b733581050d21331ffa783b8f7c6c409a5f"
   }
 }
