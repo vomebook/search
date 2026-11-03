@@ -18,6 +18,7 @@ const required = [
   "iterator, method lookup and membership calls keep their observable order",
   "iterator and getter failures propagate without later property reads",
   "rebound Set receives the original iterable without an intermediate copy",
+  "custom filter can observe the original callback constructability",
   "the original global function binding remains writable but not deletable"
 ];
 if (result.status !== 0 || !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) ||
