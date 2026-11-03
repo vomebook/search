@@ -236,6 +236,60 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(result, False, "TS2322")
 
 
+    def test_search_highlight_coverage_gate_fails_closed(self):
+        paths = ["static/search/highlight.js", "scripts/check_search_highlight_coverage.mjs",
+                 "tests/test_search_highlight_contract.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_search_highlight_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "highlight.js")
+        test = self.root / paths[2]
+        test.write_text('require("node:test")("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "exactly one source row")
+        test.write_text('throw new Error("failed highlight test");\n')
+        self.assert_check(self.run_check(*check), False, "failed highlight test")
+        test.write_text('const vm = require("vm"), fs = require("fs");\n'
+                        'const filename = process.cwd() + "/static/search/highlight.js";\n'
+                        'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
+
+    def test_search_highlight_coverage_checks_fractional_minimum(self):
+        for path in ("static/search/highlight.js", "scripts/check_search_highlight_coverage.mjs",
+                     "tests/test_search_highlight_contract.js"):
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        gate = self.root / "scripts/check_search_highlight_coverage.mjs"
+        source = gate.read_text()
+        before = "const minimum = [100, 95.45, 100];"
+        self.assertEqual(source.count(before), 1)
+        gate.write_text(source.replace(before, "const minimum = [100, 95.99, 100];"))
+        self.assert_check(self.run_check("node", str(gate)), False, "above each minimum")
+
+    def test_search_highlight_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        self.assertIn("static/search/highlight.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/highlight.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        for before, after in [
+            ("declare function escapeHTML(text: unknown): string;", "declare function escapeHTML(text: unknown): number;"),
+            ("declare function getHighlightRegex(query: string): RegExp | null;",
+             "declare function getHighlightRegex(query: string): RegExp;"),
+            ("declare function highlightText(text: unknown, query: string | null | undefined): string;",
+             "declare function highlightText(text: unknown, query: string | number | null | undefined): string;")
+        ]:
+            self.assertEqual(original.count(before), 1)
+            declaration.write_text(original.replace(before, after))
+            self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_search_record_path_coverage_gate_fails_closed(self):
         paths = ["static/search/record-path.js", "scripts/check_search_record_path_coverage.mjs",
                  "tests/test_search_record_path.js", "static/app.js"]

@@ -48,6 +48,18 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
             self.assertTrue(page.evaluate('typeof VoiceOfMLDownloadController.createDownloadController === "function"'))
             self.assertEqual(page.evaluate('parseSizeStr(fmtSizeUrl(1048577))'), 1048577)
             self.assertEqual(page.evaluate('bytesToDisplay(0).unit'), 'B')
+            for current in (self.page, page):
+                highlighted = current.evaluate('''() => {
+                  const input = '<img src=x onerror="alert(1)"> Tom & abcab';
+                  const host = document.createElement('div');
+                  host.innerHTML = highlightText(input, 'img tom amp ab abc');
+                  return {html: host.innerHTML, text: host.textContent, images: host.querySelectorAll('img').length,
+                    marks: [...host.querySelectorAll('mark')].map(node => node.textContent)};
+                }''')
+                self.assertEqual(highlighted['text'], '<img src=x onerror="alert(1)"> Tom & abcab')
+                self.assertEqual(highlighted['images'], 0)
+                self.assertEqual(highlighted['marks'], ['img', 'Tom', 'abc', 'ab'])
+                self.assertIn('&amp;', highlighted['html'])
             record = {'Repo': 'VoiceOfML/Test', 'File': 'a #?%.jpg', 'Extension': 'jpg', 'Folder': ['目录', 'sub dir']}
             encoded = '%E7%9B%AE%E5%BD%95/sub%20dir/a%20%23%3F%25.jpg.jpg'
             base = 'https://huggingface.co/datasets/VoiceOfML/Test/'
