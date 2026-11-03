@@ -13,7 +13,12 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.test_search_projection_contract', workflow)
         self.assertIn('tests.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor 47f785ac500dabd9fb8e4777288eaa3bdd68ca7a HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor 0ac0c5c89dbbd9eecff1dee329a3a32c0c82bc00 HEAD', workflow)
+
+    def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        self.assertEqual(workflow.count('tests.test_reader_archive_hardening'), 1)
+        self.assertIn('tests.test_reader_backend tests.test_reader_archive_hardening tests.test_search_behavior', workflow)
 
     def test_full_candidates_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
