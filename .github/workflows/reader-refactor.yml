@@ -175,7 +175,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 8cbdc685fcd1dcd98ac7c901587f6cf14d782ee0 HEAD
+          git -C huggingface-search merge-base --is-ancestor a63ebe913bb50c0857e862f7d581b635517a189e HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
