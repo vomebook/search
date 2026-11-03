@@ -190,6 +190,92 @@ class StaticGateTests(unittest.TestCase):
                         '"/static/reader/formats/reader-format-adapters.js" }));\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
+    def test_document_loader_coverage_gate_fails_closed(self):
+        paths = ["static/reader/core/reader-document-loader.mjs", "scripts/check_document_loader_coverage.mjs",
+                 "tests/test_reader_document_loader_contract.mjs", "tests/test_reader_pdf_rate_outer.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_document_loader_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "reader-document-loader.mjs")
+        for path in paths[2:]:
+            (self.root / path).write_text('import {test} from "node:test"; test("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "exactly one source row")
+        (self.root / paths[2]).write_text('throw new Error("failed loader test");\n')
+        self.assert_check(self.run_check(*check), False, "failed loader test")
+        (self.root / paths[2]).write_text('import "../static/reader/core/reader-document-loader.mjs";\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
+
+    def test_document_loader_coverage_checks_fractional_minimum(self):
+        paths = ["static/reader/core/reader-document-loader.mjs", "scripts/check_document_loader_coverage.mjs",
+                 "tests/test_reader_document_loader_contract.mjs", "tests/test_reader_pdf_rate_outer.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        gate = self.root / paths[1]
+        source = gate.read_text()
+        self.assertEqual(source.count("const minimum = [100, 94.20, 97.22];"), 1)
+        gate.write_text(source.replace("const minimum = [100, 94.20, 97.22];",
+                                       "const minimum = [100, 94.99, 97.22];"))
+        self.assert_check(self.run_check("node", "scripts/check_document_loader_coverage.mjs"), False,
+                          "above each minimum")
+
+    def test_document_loader_strict_type_contract_rejects_bad_inputs(self):
+        source = self.root / "static/loader-usage.mjs"
+        config = self.root / "jsconfig.json"
+        module = (ROOT / "static/reader/core/reader-document-loader.mjs").as_posix()
+        source.write_text(f'import {{createReaderDocumentLoader}} from "{module}";\n'
+                          'createReaderDocumentLoader({sourceUrl: 42});\n')
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "module": "esnext", "moduleResolution": "bundler"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), str(ROOT / "static/reader/core/reader-document-loader.mjs"),
+                      str(source)]}))
+        result = self.run_check("node", ROOT / "node_modules/typescript/bin/tsc", "--project", config)
+        self.assert_check(result, False, "TS2322")
+
+
+    def test_search_record_path_coverage_gate_fails_closed(self):
+        paths = ["static/search/record-path.js", "scripts/check_search_record_path_coverage.mjs",
+                 "tests/test_search_record_path.js", "static/app.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_search_record_path_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "record-path.js")
+        test = self.root / paths[2]
+        test.write_text('require("node:test")("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        test.write_text('throw new Error("failed path test");\n')
+        self.assert_check(self.run_check(*check), False, "failed path test")
+        test.write_text('const vm = require("vm"), fs = require("fs");\n'
+                        'const filename = process.cwd() + "/static/search/record-path.js";\n'
+                        'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
+
+    def test_search_record_path_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        self.assertIn("static/search/record-path.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/record-path.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        for before, after in [
+            ("declare function encodeRecordPath(path: string | null | undefined): string;",
+             "declare function encodeRecordPath(path: string | null | undefined): number;"),
+            ("declare function buildRecordRelativePath(record: {File?: string; Extension?: string; Folder?: string[] | null}): string;",
+             "declare function buildRecordRelativePath(record: {File?: string | number; Extension?: string; Folder?: string[] | null}): string;")
+        ]:
+            self.assertEqual(original.count(before), 1)
+            declaration.write_text(original.replace(before, after))
+            self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_search_size_coverage_gate_fails_closed(self):
         paths = ["static/search/size-format.js", "scripts/check_search_size_coverage.mjs",
                  "tests/test_search_size_format.js"]

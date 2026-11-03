@@ -1,7 +1,7 @@
 /**
  * @param {{assertActive: () => void, abortError: () => Error,
  *   trackResource: (cleanup: () => void) => () => void,
- *   request: (url: string, timeout: number, options: {signal?: AbortSignal, priority: string}) => Promise<Response>,
+ *   request: (url: string, timeout: number, options: {signal?: AbortSignal, priority: RequestPriority}) => Promise<Response>,
  *   readBytes: (response: Response) => Promise<Uint8Array<ArrayBuffer>>, timeoutMs: number}} options
  */
 export function createReaderImageLoader({assertActive, abortError, trackResource, request, readBytes, timeoutMs}) {
