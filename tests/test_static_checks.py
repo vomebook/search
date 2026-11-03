@@ -820,9 +820,9 @@ class StaticGateTests(unittest.TestCase):
         original_gate = gate.read_text()
         first = 'tests/test_reader_chapter_repository.js'
         second = 'tests/test_reader_chapter_scheduler.js'
-        self.assertEqual(original_gate.count(first), 1)
-        self.assertEqual(original_gate.count(second), 1)
-        gate.write_text(original_gate.replace(second, first))
+        list_anchor = '"' + first + '", "' + second + '",'
+        self.assertEqual(original_gate.count(list_anchor), 1)
+        gate.write_text(original_gate.replace(list_anchor, '"' + first + '", "' + first + '",'))
         self.assert_check(self.run_check(*check), False, "passing named tests")
         gate.write_text(original_gate)
         chapter_test = self.root / first
@@ -830,6 +830,8 @@ class StaticGateTests(unittest.TestCase):
         chapter_test.write_text(original_test + '\nrequire("node:test").skip("unrelated skipped check", () => {});\n')
         self.assert_check(self.run_check(*check), False, "passing named tests")
         chapter_test.write_text(original_test + '\nrequire("node:test").todo("unfinished check");\n')
+        self.assert_check(self.run_check(*check), False, "passing named tests")
+        chapter_test.write_text(original_test.replace('reader chapter repository contracts passed', 'renamed success marker'))
         self.assert_check(self.run_check(*check), False, "passing named tests")
         chapter_test.write_text(original_test)
         (self.root / "tests/test_reader_scroll_anchor.js").write_text(
