@@ -1,4 +1,4 @@
-// Before extraction: run the exact inline validator against a pinned edge matrix.
+// Expectations were pinned against both original inline validators before extraction.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,8 +8,10 @@ import vm from 'node:vm';
 const root = process.cwd();
 const source = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const match = source.match(/^function isValidSearchResponse\([^]*?^}/m);
-assert.ok(match, 'original validator must remain inline');
+assert.ok(match, 'host validator binding must remain inline');
 const context = vm.createContext({});
+const filename = path.join(root, 'static/search/response-validation.js');
+vm.runInContext(fs.readFileSync(filename, 'utf8'), context, {filename});
 vm.runInContext(match[0], context);
 const validate = context.isValidSearchResponse;
 const records = n => Array.from({length: n}, (_, index) => ({id: index}));
@@ -59,4 +61,51 @@ test('legacy boundary values and getter evaluation order remain unchanged', () =
   assert.equal(validate(value, 1, 2), true);
   assert.deepEqual(seen, ['results', 'total', 'total', 'page', 'page', 'page_size', 'page_size', 'total', 'results', 'results']);
   assert.throws(() => validate({get results() { throw new Error('probe'); }}, 1, 2), {message: 'probe'});
+  for (const [field, expectedTrace] of [
+    ['total', ['results', 'total']],
+    ['page', ['results', 'total', 'total', 'page']],
+    ['page_size', ['results', 'total', 'total', 'page', 'page', 'page_size']]
+  ]) {
+    const trace = [];
+    const input = {};
+    for (const [name, item] of [['results', []], ['total', 0], ['page', 1], ['page_size', 2]]) {
+      Object.defineProperty(input, name, {get() {
+        trace.push(name);
+        if (name === field) throw new Error(field);
+        return item;
+      }});
+    }
+    assert.throws(() => validate(input, 1, 2), {message: field});
+    assert.deepEqual(trace, expectedTrace);
+  }
+  const results = [];
+  const sentinel = {value: 'custom every'};
+  results.every = function(callback) {
+    assert.equal(this, results);
+    assert.equal(typeof callback, 'function');
+    return sentinel;
+  };
+  assert.equal(validate(response(0, 1, 2, results), 1, 2), sentinel);
+  results.every = () => { throw new Error('every probe'); };
+  assert.throws(() => validate(response(0, 1, 2, results), 1, 2), {message: 'every probe'});
+  Object.defineProperty(results, 'every', {get() { throw new Error('every getter'); }});
+  assert.throws(() => validate(response(0, 1, 2, results), 1, 2), {message: 'every getter'});
+});
+
+test('host function remains replaceable while forwarding the exact arguments and return value', () => {
+  const calls = [];
+  const responseValue = {value: 'uncoerced'};
+  const prior = context.VoiceOfMLSearchValidation.isValidSearchResponse;
+  context.VoiceOfMLSearchValidation.isValidSearchResponse = (...args) => { calls.push(args); return responseValue; };
+  const input = {probe: true};
+  assert.equal(context.isValidSearchResponse(input, 3, 7), responseValue);
+  assert.deepEqual(calls, [[input, 3, 7]]);
+  context.VoiceOfMLSearchValidation.isValidSearchResponse = prior;
+  const original = context.isValidSearchResponse;
+  const replacement = () => 'replaced';
+  context.isValidSearchResponse = replacement;
+  assert.equal(vm.runInContext('isValidSearchResponse()', context), 'replaced');
+  context.isValidSearchResponse = original;
+  assert.equal(vm.runInContext('delete globalThis.isValidSearchResponse', context), false);
+  assert.equal(vm.runInContext('typeof isValidSearchResponse', context), 'function');
 });
