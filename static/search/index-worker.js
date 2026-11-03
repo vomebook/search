@@ -17,6 +17,8 @@ let vocabSorted = [];
 let vocabSortedFilesOnly = [];
 const searchOrderCache = new Map();
 const SEARCH_ORDER_CACHE_MAX = 8;
+// Bound temporary membership allocation for dense-order reuse.
+const SORT_REUSE_MAX_INDICES = 65536;
 let searchAnchorOwners = new WeakMap();
 const searchAnchorCache = new Map();
 const SEARCH_ANCHOR_ORDER_MAX = 8;
@@ -776,7 +778,17 @@ function searchLocal(params) {
   }
   const filtered = applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
-    ordered = filtered.sort(params.sort === "name" ? compareRecordName : compareRecordSize);
+    const repos = params.repos || [];
+    const ready = params.sort === "name" ? nameOrderReady : sizeOrderReady;
+    const byRepo = params.sort === "name" ? repoSortedByName : repoSortedBySize;
+    const order = repos.length === 1 ? (byRepo[repos[0]] || []) : null;
+    if (!query && ready && order && filtered.length <= SORT_REUSE_MAX_INDICES
+        && filtered.length * 3 > order.length * 2) {
+      const keep = new Set(filtered);
+      ordered = order.filter(index => keep.has(index));
+    } else {
+      ordered = filtered.sort(params.sort === "name" ? compareRecordName : compareRecordSize);
+    }
   } else if (!query) {
     // Every score would be zero and the old unsorted mapping kept this order.
     ordered = filtered;
