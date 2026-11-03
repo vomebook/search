@@ -1,0 +1,96 @@
+diff --git a/backend/app.py b/backend/app.py
+index ec6788b..3d35500 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
+ from contextlib import asynccontextmanager
+ from backend.cache_core import cached as _bounded_cache
+ from backend.folder_tree import build_folder_tree as _build_folder_tree
++from backend.search_bootstrap import build_initial_payload as _build_initial_payload, trim_initial_results as _trim_initial_results
+ from backend.search_candidates import literal_candidates as _literal_candidates
+ from backend.search_projection import public_record as _public_record, trim_results as _trim_results
+ from backend.reader_identity import (READER_ESCAPE_NORMALIZATION_RE as READER_ESCAPE_NORMALIZATION_RE,
+@@ -749,32 +750,23 @@ def build_response(results: list[dict], total: int, page: int, page_size: int) -
+ 
+ 
+ def trim_initial_results(raw: list[dict]) -> list[dict]:
+-    keys = ("Repo", "File", "Extension", "Folder", "Size", "HasTxt")
+-    return [
+-        {key: record.get(key, [] if key == "Folder" else "") for key in keys}
+-        for record in raw
+-    ]
++    return _trim_initial_results(raw)
++
++
++def _bootstrap_page_size():
++    return INITIAL_PAGE_SIZE
++
++
++def _bootstrap_trim():
++    return trim_initial_results
++
++
++def _bootstrap_generation():
++    return search_generation
+ 
+ def build_initial_payload(repo: str | None = None) -> dict:
+-    if repo:
+-        indices = repo_records_map.get(repo, [])
+-        result_records = [records[i] for i in indices[:INITIAL_PAGE_SIZE]]
+-        mode = "repo"
+-        total = len(indices)
+-    else:
+-        result_records = records[:INITIAL_PAGE_SIZE]
+-        mode = "global"
+-        total = len(records)
+-    return {
+-        "mode": mode,
+-        "repo": repo,
+-        "sort": "relevance",
+-        "page": 1,
+-        "page_size": INITIAL_PAGE_SIZE,
+-        "total": total,
+-        "results": trim_initial_results(result_records),
+-        "generation": search_generation(),
+-    }
++    return _build_initial_payload(repo, _bootstrap_page_size, _candidate_repos, _candidate_records,
++                                  _bootstrap_trim, _bootstrap_generation)
+ 
+ def build_initial_payloads():
+     global initial_payload_global, initial_payload_by_repo
+diff --git a/backend/search_bootstrap.py b/backend/search_bootstrap.py
+new file mode 100644
+index 0000000..6c194e5
+--- /dev/null
++++ b/backend/search_bootstrap.py
+@@ -0,0 +1,30 @@
++"""Typed construction of initial search pages from caller-owned state."""
++from __future__ import annotations
++
++from collections.abc import Callable, Iterable, Mapping, Sequence
++
++SearchRecord = dict[str, object]
++
++
++def trim_initial_results(raw: Iterable[SearchRecord]) -> list[SearchRecord]:
++    keys = ("Repo", "File", "Extension", "Folder", "Size", "HasTxt")
++    return [{key: record.get(key, [] if key == "Folder" else "") for key in keys} for record in raw]
++
++
++def build_initial_payload(repo: str | None, get_page_size: Callable[[], int],
++                          get_repos: Callable[[], Mapping[str, Sequence[int]]],
++                          get_records: Callable[[], Sequence[SearchRecord]],
++                          get_trim: Callable[[], Callable[[Sequence[SearchRecord]], list[SearchRecord]]],
++                          get_generation: Callable[[], Callable[[], str]]) -> dict[str, object]:
++    """Preserve snapshot lookup, projection and generation evaluation order."""
++    if repo:
++        indices = get_repos().get(repo, [])
++        result_records = [get_records()[index] for index in indices[:get_page_size()]]
++        mode = "repo"
++        total = len(indices)
++    else:
++        result_records = get_records()[:get_page_size()]
++        mode = "global"
++        total = len(get_records())
++    return {"mode": mode, "repo": repo, "sort": "relevance", "page": 1, "page_size": get_page_size(),
++            "total": total, "results": get_trim()(result_records), "generation": get_generation()()}
