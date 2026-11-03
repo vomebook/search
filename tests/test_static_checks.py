@@ -415,6 +415,19 @@ class StaticGateTests(unittest.TestCase):
         check = ["node", "scripts/check_search_highlight_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "highlight.js")
         test = self.root / paths[2]
+        source = test.read_text()
+        name = 'HTML escaping preserves text and protects attribute and markup delimiters'
+        self.assertEqual(source.count('test("' + name + '"'), 1)
+        test.write_text(source.replace('test("' + name + '"', 'test("renamed contract"'))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source.replace('test("' + name + '"', 'test.skip("' + name + '"'))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source + '\ntest("' + name + '", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source + '\ntest.skip("additional skipped contract", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source + '\ntest.todo("unfinished contract");\n')
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
         test.write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one source row")
         test.write_text('throw new Error("failed highlight test");\n')
