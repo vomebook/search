@@ -8,6 +8,7 @@ const html = readFileSync("static/index.html", "utf8");
 const worker = readFileSync("static/sw.js", "utf8");
 const moduleName = "search/record-path.js";
 const highlightName = "search/highlight.js";
+const cacheName = "search/response-cache.js";
 assert.equal(APP_DEPENDENCIES.filter(name => name === moduleName).length, 1);
 assert.equal((html.match(/<script src="[^"\n]*search\/record-path\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(moduleName) < html.lastIndexOf("app.js"));
@@ -18,11 +19,17 @@ assert.equal(APP_DEPENDENCIES.filter(name => name === highlightName).length, 1);
 assert.equal((html.match(/<script src="[^"\n]*search\/highlight\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(highlightName) < html.lastIndexOf("app.js"));
 assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/highlight\.js"/);
+assert.equal(APP_DEPENDENCIES.filter(name => name === cacheName).length, 1);
+assert.equal((html.match(/<script src="[^"\n]*search\/response-cache\.js"><\/script>/g) || []).length, 1);
+assert.ok(html.indexOf(cacheName) < html.lastIndexOf("app.js"));
+assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/response-cache\.js"/);
 for (const project of ["github", "hf"]) {
   assert.equal(resources.buildFiles(project).filter(name => name === moduleName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === highlightName).length, 1);
+  assert.equal(resources.buildFiles(project).filter(name => name === cacheName).length, 1);
 }
 assert.match(worker, /["']\/(?:search\/)?static\/app\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/record-path\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/highlight\.js["']/);
+assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/response-cache\.js["']/);
 console.log("record path source and bundled shell/SW contracts preserved");

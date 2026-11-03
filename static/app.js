@@ -1,38 +1,3 @@
-class BoundedResponseCache extends Map {
-  constructor(limit, ttl, budget = 8 * 1024 * 1024) {
-    super();
-    this.limit = limit; this.ttl = ttl; this.budget = budget;
-    this.bytes = 0; this.entriesInfo = new Map();
-  }
-  delete(key) {
-    this.bytes -= this.entriesInfo.get(key)?.bytes || 0;
-    this.entriesInfo.delete(key);
-    return super.delete(key);
-  }
-  clear() { super.clear(); this.entriesInfo.clear(); this.bytes = 0; }
-  get(key) {
-    const info = this.entriesInfo.get(key);
-    if (!info) return undefined;
-    if (Date.now() - info.time >= this.ttl) { this.delete(key); return undefined; }
-    const value = super.get(key);
-    super.delete(key); super.set(key, value);
-    return value;
-  }
-  has(key) { return this.get(key) !== undefined; }
-  set(key, value) {
-    this.delete(key);
-    const now = Date.now();
-    for (const [oldKey, info] of this.entriesInfo) if (now - info.time >= this.ttl) this.delete(oldKey);
-    // UTF-16 serialized content budget, not an engine-specific heap estimate.
-    const bytes = 2 * (JSON.stringify(value).length + String(key).length);
-    if (bytes > Math.min(this.budget, 1024 * 1024)) return this;
-    while (this.size && (this.size >= this.limit || this.bytes + bytes > this.budget)) this.delete(this.keys().next().value);
-    super.set(key, value);
-    this.entriesInfo.set(key, {bytes, time: now}); this.bytes += bytes;
-    return this;
-  }
-}
-
 const DATA_URL = "data/search_data.json.gz";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
@@ -2364,6 +2329,7 @@ const API_RECOVERY_DELAY = 30000;
 let localDataPromise = null;
 const SEARCH_CACHE_TTL = 8 * 60 * 1000;
 const SEARCH_CACHE_MAX = 60;
+/** @type {BoundedResponseCache<{time: number, data: ReturnType<typeof cloneSearchData>}>} */
 const searchResponseCache = new BoundedResponseCache(SEARCH_CACHE_MAX, SEARCH_CACHE_TTL);
 const INITIAL_BASE_URL = "data/initial";
 const initialPayloadCache = new Map();

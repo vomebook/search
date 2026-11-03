@@ -236,6 +236,56 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(result, False, "TS2322")
 
 
+    def test_search_response_cache_coverage_gate_fails_closed(self):
+        paths = ["static/search/response-cache.js", "scripts/check_search_response_cache_coverage.mjs",
+                 "tests/test_search_response_cache_contract.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "scripts/check_search_response_cache_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "response-cache.js")
+        test = self.root / paths[2]
+        test.write_text('require("node:test")("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        test.write_text('throw new Error("failed response cache test");\n')
+        self.assert_check(self.run_check(*check), False, "failed response cache test")
+        test.write_text('const vm = require("vm"), fs = require("fs");\n'
+                        'const filename = process.cwd() + "/static/search/response-cache.js";\n'
+                        'vm.runInNewContext(fs.readFileSync(filename, "utf8"), {}, {filename});\n')
+        self.assert_check(self.run_check(*check), False, "coverage")
+
+    def test_search_response_cache_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        self.assertIn("static/search/response-cache.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/response-cache.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = "  constructor(limit: number, ttl: number, budget?: number);"
+        self.assertEqual(original.count(before), 1)
+        declaration.write_text(original.replace(before, "  constructor(limit: string, ttl: number, budget?: number);"))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_search_response_cache_generic_type_rejects_wrong_keys_and_values(self):
+        source = self.root / "static/cache-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"},
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        prefix = '/** @type {BoundedResponseCache<{value: number}>} */ const cache = new BoundedResponseCache(2, 100);\n'
+        source.write_text(prefix + 'cache.set("a", {value: 1}); cache.get("a")?.value;\n')
+        self.assert_check(self.run_check(*check), True, "")
+        source.write_text(prefix + 'cache.set(42, {value: 1});\n')
+        self.assert_check(self.run_check(*check), False, "TS2345")
+        source.write_text(prefix + 'cache.set("a", {value: "wrong"});\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_search_highlight_coverage_gate_fails_closed(self):
         paths = ["static/search/highlight.js", "scripts/check_search_highlight_coverage.mjs",
                  "tests/test_search_highlight_contract.js"]
