@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -343,9 +344,16 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         gate = self.root / "scripts/check_pdf_network_coverage.mjs"
         source = gate.read_text()
-        self.assertIn("const minimum = [98.31, 85.65, 88.43];", source)
-        gate.write_text(source.replace("const minimum = [98.31, 85.65, 88.43];",
-                                       "const minimum = [98.32, 85.65, 88.43];"))
+        measured = self.run_check("node", "scripts/check_pdf_network_coverage.mjs")
+        self.assert_check(measured, True, "reader-pdf-network.mjs")
+        row = re.search(r"(?m)^\s*#\s*reader-pdf-network\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|", measured.stdout)
+        self.assertIsNotNone(row, measured.stdout)
+        hundredths = int(round(float(row.group(1)) * 100))
+        self.assertLess(hundredths, 10000, "fractional negative test needs a non-perfect line baseline")
+        needle = "const minimum = [98.31, 85.65, 88.43];"
+        self.assertEqual(source.count(needle), 1)
+        above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 85.65, 88.43];"
+        gate.write_text(source.replace(needle, above))
         self.assert_check(self.run_check("node", "scripts/check_pdf_network_coverage.mjs"), False,
                           "PDF network coverage gate requires passing tests")
 
