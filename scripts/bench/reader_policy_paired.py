@@ -1,7 +1,6 @@
 """Paired synthetic Reader path classification; no document or network access."""
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -10,6 +9,7 @@ import platform
 import socket
 import statistics
 import time
+from types import CodeType, FunctionType
 
 BASE_APP = '53cd08539a5aeb8f89331fde338d5c4eadd6fd00df94c499686e3edef1ad460e'
 CANDIDATE_APP = 'ff963cff759c7394d04a7828fe374087c8d1a2df347ebaefdbb1be250975cf71'
@@ -34,13 +34,12 @@ def main() -> None:
     from backend import app
 
     names = ('is_reader_bucket_cacheable', 'reader_bucket_cache_control', 'reader_bucket_for_path')
-    nodes = [item for item in ast.parse(original_source).body if isinstance(item, ast.FunctionDef) and item.name in names]
-    if len(nodes) != len(names):
+    # Compile the entire original module so the compiler sees its imports.
+    # Isolated function AST compilation changes Python 3.11 regex bytecode.
+    original_module = compile(original_source, str(baseline / 'backend/app.py'), 'exec')
+    codes = {item.co_name: item for item in original_module.co_consts if isinstance(item, CodeType) and item.co_name in names}
+    if set(codes) != set(names):
         raise RuntimeError('baseline functions missing')
-    for node in nodes:
-        node.name = '_benchmark_original_' + node.name
-    exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), str(baseline / 'backend/app.py'), 'exec'),
-         app.__dict__)
     digest, revision = 'a' * 64, 'b' * 16
     paths = [f'objects/aa/{digest}/{revision}/pages/page-000001.webp',
              f'objects/aa/{digest}/{revision}/preview/cover.webp',
@@ -49,7 +48,7 @@ def main() -> None:
              f'documents/pdf/ps/{digest}.pdf', 'other/unrecognized', '']
     results = {}
     for name in names:
-        old, new = getattr(app, '_benchmark_original_' + name), getattr(app, name)
+        old, new = FunctionType(codes[name], app.__dict__, name), getattr(app, name)
         expected = [old(path) for path in paths]
         if [new(path) for path in paths] != expected:
             raise AssertionError(name)
@@ -83,6 +82,7 @@ def main() -> None:
     payload = {'metadata': {'architecture': platform.machine(), 'python': platform.python_version(),
                             'platform': platform.platform(), 'run_id': os.environ.get('BENCH_RUN_ID')},
                'source_sha256': {'baseline': BASE_APP, 'candidate': CANDIDATE_APP, 'module': CANDIDATE_MODULE},
+               'baseline_method': 'Function code from compilation of whole pinned original module; module top-level not executed.',
                'scope': 'Synthetic strings and pure classification only; no Reader assets, PDF bytes, network, '
                         'HTTP handlers or production traffic.', 'results': results}
     output.write_text(json.dumps(payload, indent=2) + '\n')
