@@ -1,0 +1,40 @@
+diff --git a/static/reader/pdf/reader-pdf-network.mjs b/static/reader/pdf/reader-pdf-network.mjs
+index 97d1567..16ff7dc 100644
+--- a/static/reader/pdf/reader-pdf-network.mjs
++++ b/static/reader/pdf/reader-pdf-network.mjs
+@@ -9,13 +9,22 @@ const PDF_MIN_SPARSE_PAGES = 128;
+ export function createPdfRangeCache({maxBytes = 8 * 1024 * 1024, maxEntries = 64,
+   maxAgeMs = 600000, now = () => Date.now()} = {}) {
+   const entries = new Map();
+-  let bytes = 0;
++  let bytes = 0, nextExpiry = Infinity;
+   const remove = key => { const row = entries.get(key); if (row) { bytes -= row.bytes.byteLength; entries.delete(key); } };
+   const valid = (url, version) => typeof url === "string" && url.length <= 4096 &&
+     /^"[^"\r\n]+"$/.test(version?.etag || "") && version.etag.length <= 256 &&
+     Number.isSafeInteger(version.total) && version.total > 0;
+   const prune = () => {
+-    for (const [key, row] of entries) if (now() - row.at >= maxAgeMs) remove(key);
++    const timestamp = now();
++    // Access-order changes independently of insertion time. This conservative
++    // lower bound only skips the scan when no entry can have expired; removing
++    // an older entry may leave it stale, which merely triggers an extra scan.
++    if (timestamp < nextExpiry) return;
++    nextExpiry = Infinity;
++    for (const [key, row] of entries) {
++      if (timestamp - row.at >= maxAgeMs) remove(key);
++      else nextExpiry = Math.min(nextExpiry, row.at + maxAgeMs);
++    }
+   };
+   return Object.freeze({
+     version(url, begin, end) {
+@@ -52,7 +61,9 @@ export function createPdfRangeCache({maxBytes = 8 * 1024 * 1024, maxEntries = 64
+       const key = JSON.stringify([url, version.etag, version.total, begin, end]);
+       remove(key);
+       const retained = value.slice();
+-      entries.set(key, {url, begin, end, etag:version.etag, total:version.total, bytes:retained, at:now()});
++      const at = now();
++      entries.set(key, {url, begin, end, etag:version.etag, total:version.total, bytes:retained, at});
++      nextExpiry = Math.min(nextExpiry, at + maxAgeMs);
+       bytes += retained.byteLength;
+       while (bytes > maxBytes || entries.size > maxEntries) remove(entries.keys().next().value);
+     },

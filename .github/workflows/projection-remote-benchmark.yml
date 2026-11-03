@@ -2,7 +2,7 @@ name: Projection remote benchmark (temporary)
 
 on:
   push:
-    branches: ["bench/projection-remote-20261103"]
+    branches: ["bench/projection-remote-20261103", "bench/pdf-cache-remote-20261103"]
 
 permissions:
   contents: read
@@ -39,6 +39,8 @@ jobs:
           BENCH_RUN_ID: ${{ github.run_id }}
         run: python -B scripts/bench/projection_remote_benchmark.py
       - name: Run isolated PDF range-cache benchmark
+        env:
+          BENCH_PDF_PATCH: ${{ github.workspace }}/scripts/bench/pdf-cache-candidate.patch
         run: node scripts/bench/pdf_range_remote_benchmark.mjs "$RUNNER_TEMP/hf-candidate" "$RUNNER_TEMP/pdf-range-remote-benchmark.json"
       - name: Preserve detailed results
         if: always()
