@@ -20,7 +20,7 @@ jobs:
           printf '%s  %s\n' '7155b9fe29cef1e7874fa17116bab74edfe16e87ca8a33b6247be54b5cdda791' wildcard-preflight.patch | sha256sum -c -
           GIT_LFS_SKIP_SMUDGE=1 git clone --no-checkout https://huggingface.co/spaces/VoiceOfML/Search "$RUNNER_TEMP/hf-candidate"
           GIT_LFS_SKIP_SMUDGE=1 git -C "$RUNNER_TEMP/hf-candidate" checkout --detach 0ecb7845456a2fa45909de18fd21dd2bc650f7c4
-          git -C "$RUNNER_TEMP/hf-candidate" lfs pull --include='data/**'
+          git -C "$RUNNER_TEMP/hf-candidate" lfs pull --include='data/**,static/vendor/djvu-rs-reader/**'
           git -C "$RUNNER_TEMP/hf-candidate" apply --check --unidiff-zero -p0 "$GITHUB_WORKSPACE/wildcard-preflight.patch"
           git -C "$RUNNER_TEMP/hf-candidate" apply --unidiff-zero -p0 "$GITHUB_WORKSPACE/wildcard-preflight.patch"
           cd "$RUNNER_TEMP/hf-candidate"
