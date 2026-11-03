@@ -64,6 +64,12 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate('setResultScrollTop(getVirtualOffset(25)+10);saveSearchPosition()')
         self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index === 25')
         self.saved = self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        persisted = self.page.evaluate('''key => new Promise((resolve,reject) => {
+          const tx=searchPositionDB.transaction('positions'), req=tx.objectStore('positions').get(key);
+          let value; req.onsuccess=()=>{value=req.result||null};
+          tx.oncomplete=()=>resolve(value);tx.onabort=()=>reject(tx.error);
+        })''', self.saved['key'])
+        self.assertEqual(persisted, self.saved)
         self.page.reload(wait_until='domcontentloaded')
         self.assert_position()
 
