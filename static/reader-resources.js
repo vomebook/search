@@ -196,6 +196,7 @@
       "search/response-cache.js",
       "search/file-types.js",
       "search/response-validation.js",
+      "search/result-identity.js",
       "style.css",
       ...(project === "github" ? ["search/index-worker.js"] : []),
       "app.js"
