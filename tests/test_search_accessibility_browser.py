@@ -3,6 +3,11 @@ import unittest
 from tests import test_paging_recovery as support
 
 
+def assert_status_controls_do_not_overlap(test, boxes):
+    for left, right in zip(boxes, boxes[1:]):
+        test.assertLessEqual(left['x'] + left['width'], right['x'] + 0.5, boxes)
+
+
 class SearchAccessibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -164,18 +169,38 @@ class SearchAccessibilityTests(unittest.TestCase):
         for width in (360, 375, 390):
             with self.subTest(width=width):
                 self.page.set_viewport_size({'width': width, 'height': 844})
+                self.page.wait_for_function("STATE.isMobile && document.body.classList.contains('mobile') && !document.body.classList.contains('force-desktop')")
+                self.page.evaluate('''()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))''')
                 self.assertEqual(self.page.locator('#result-count').inner_text(), '共 120,375 条结果')
                 self.assertEqual(self.page.locator('.sort-label').inner_text(), '排序:')
-                boxes = [self.page.locator(selector).bounding_box() for selector in selectors]
+                # One layout snapshot: separate protocol calls can straddle a
+                # resize/mode change and falsely report an overlap across frames.
+                boxes = self.page.evaluate('''selectors=>selectors.map(selector=>{
+                  const node=document.querySelector(selector);
+                  if (!node || !node.getClientRects().length) return null;
+                  const box=node.getBoundingClientRect();
+                  return {x:box.x,y:box.y,width:box.width,height:box.height};
+                })''', selectors)
                 self.assertTrue(all(boxes), boxes)
                 centers = [box['y'] + box['height'] / 2 for box in boxes]
                 self.assertLess(max(centers) - min(centers), 2, boxes)
-                for left, right in zip(boxes, boxes[1:]):
-                    self.assertLessEqual(left['x'] + left['width'], right['x'] + 0.5, boxes)
+                assert_status_controls_do_not_overlap(self, boxes)
                 self.assertGreaterEqual(boxes[0]['x'], 0)
                 self.assertLessEqual(boxes[-1]['x'] + boxes[-1]['width'], width)
+        # An overlap must still fail even when multiple controls share a line.
+        overlap = self.page.evaluate('''()=>{
+          const label=document.querySelector('#multi-toggle-label');
+          label.style.transition='none';label.style.transform='translateX(-20px)';
+          const a=document.querySelector('#result-count').getBoundingClientRect();
+          const b=document.querySelector('#multi-toggle-label').getBoundingClientRect();
+          return [{x:a.x,width:a.width},{x:b.x,width:b.width}];
+        }''')
+        with self.assertRaises(AssertionError):
+            assert_status_controls_do_not_overlap(self, overlap)
+        self.page.evaluate("document.querySelector('#multi-toggle-label').style.removeProperty('transform');document.querySelector('#multi-toggle-label').style.removeProperty('transition')")
         # Very narrow screens may wrap naturally, but must not clip controls.
         self.page.set_viewport_size({'width': 320, 'height': 844})
+        self.page.evaluate('''()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))''')
         for selector in selectors:
             box = self.page.locator(selector).bounding_box()
             self.assertIsNotNone(box, selector)
