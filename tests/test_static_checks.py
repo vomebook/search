@@ -280,7 +280,7 @@ class StaticGateTests(unittest.TestCase):
         contract = self.root / paths[3]
         original = contract.read_text()
         names = re.findall(r'^test\("([^"\n]+)"', original, re.M)
-        self.assertEqual(len(names), 11)
+        self.assertEqual(len(names), 14)
         self.assertEqual(len(set(names)), len(names))
         for name in names:
             anchor = 'test("' + name + '"'
@@ -300,10 +300,48 @@ class StaticGateTests(unittest.TestCase):
         contract.write_text(original)
         gate = self.root / paths[1]
         source = gate.read_text()
-        anchor = "const minimum = [100, 87.74, 100];"
+        anchor = "const minimum = [100, 88.89, 100];"
         self.assertEqual(source.count(anchor), 1)
-        gate.write_text(source.replace(anchor, "const minimum = [100, 88, 100];"))
+        gate.write_text(source.replace(anchor, "const minimum = [100, 89, 100];"))
         self.assert_check(self.run_check(*check), False, "above each minimum")
+
+    def test_download_controller_declaration_matches_exact_runtime(self):
+        config = self.root / "download-exact.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        for name in ("jsconfig.strict.json", "jsconfig.search-exact.json"):
+            self.assertIn("static/search/download-controller.js", json.loads((ROOT / name).read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
+            "target": "esnext", "module": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/download-controller.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = "checkDownload(link: string, speculative?: boolean, signal?: AbortSignal): Promise<unknown>;"
+        self.assertEqual(original.count(before), 1)
+        declaration.write_text(original.replace(before, "checkDownload(link: string, speculative?: boolean, signal?: AbortSignal): Promise<boolean | string>;"))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_download_controller_type_contract_rejects_invalid_inputs(self):
+        config = self.root / "download-usage.json"
+        source = self.root / "static/download-usage.js"
+        declaration = ROOT / "typings/reader-globals.d.ts"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
+            "target": "esnext"}, "files": [str(declaration), str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        prefix = ('const controller = VoiceOfMLDownloadController.createDownloadController({'
+                  'buildCheckUrl: link => link, buildDownloadUrl: (name, link) => name + link, '
+                  'triggerDownload: url => void url, showToast: value => void value});\n')
+        source.write_text(prefix + 'controller.checkDownload("book"); controller.downloadFile("book", "link", {quiet:true});\n')
+        self.assert_check(self.run_check(*check), True, "")
+        for invalid, expected in [('controller.checkDownload(3);', "TS2345"),
+                                  ('controller.downloadFile("book", "link", {quiet:"yes"});', "TS2322"),
+                                  ('controller.downloadFile("book", "link", {signal:new AbortController().signal});', "TS2353"),
+                                  ('/** @type {Promise<string>} */ const result = controller.checkDownload("book");', "TS2322")]:
+            source.write_text(prefix + invalid + "\n")
+            self.assert_check(self.run_check(*check), False, expected)
 
     def test_shared_tap_validator_tests_are_required(self):
         paths = ["scripts/check_tap_contracts.mjs", "tests/test_tap_contracts.mjs"]
@@ -1362,7 +1400,7 @@ class StaticGateTests(unittest.TestCase):
         options = original["compilerOptions"]
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
-        required = {"static/search/search-session.js", "static/search/result-identity.js", "static/search/record-path.js",
+        required = {"static/search/search-session.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
                     "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
@@ -1402,6 +1440,10 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*production_check), False, "TS2322")
         shutil.copyfile(ROOT / "static/search/highlight.js", module)
         module = self.root / "static/search/size-format.js"
+        module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
+        self.assert_check(self.run_check(*production_check), False, "TS2322")
+        shutil.copyfile(ROOT / "static/search/size-format.js", module)
+        module = self.root / "static/search/download-controller.js"
         module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
         self.assert_check(self.run_check(*production_check), False, "TS2322")
 
