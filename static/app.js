@@ -1504,12 +1504,14 @@ async function fetchRepos() {
 
 async function fetchExtensions(repo) {
   var key = repo || "__global__";
-  if (extensionApiCache.has(key)) return extensionApiCache.get(key);
+  // The renderer augments its result with selected-only types. Keep that
+  // mutable array separate from the reusable API inventory.
+  if (extensionApiCache.has(key)) return extensionApiCache.get(key).slice();
   if (extensionApiPending.has(key)) return extensionApiPending.get(key);
   if (!apiAvailable) return null;
   var url = repo ? API_BASE + "/api/extensions?repo=" + encodeURIComponent(repo) : API_BASE + "/api/extensions";
   var pending = fetchMetadataList(url)
-    .then(function(data) { noteApiSuccess(); extensionApiCache.set(key, data); return data; })
+    .then(function(data) { noteApiSuccess(); extensionApiCache.set(key, data.slice()); return data; })
     .catch(function(error) { if (!error || error.name !== "AbortError") noteApiFailure(); return null; })
     .finally(function() { extensionApiPending.delete(key); });
   extensionApiPending.set(key, pending);
