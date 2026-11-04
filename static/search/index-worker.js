@@ -805,8 +805,8 @@ function searchLocal(params) {
     } else {
       ordered = filtered.sort(params.sort === "name" ? compareRecordName : compareRecordSize);
     }
-  } else if (!query) {
-    // Every score would be zero and the old unsorted mapping kept this order.
+  } else if (!query || /^[*?]+$/.test(query)) {
+    // These queries have no score tokens, so stable relevance keeps this order.
     ordered = filtered;
   } else {
     const tokens = tokenize(query);
