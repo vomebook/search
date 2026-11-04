@@ -107,7 +107,7 @@ jobs:
       - name: Check random reader pools and UI responsiveness
         run: |
           node tests/test_worker_contract.js
-          python3 -B -m unittest -v tests.test_converted_reader_responsiveness tests.test_browser_smoke tests.test_browser_sidebar_reorder
+          python3 -B -m unittest -v tests.test_converted_reader_responsiveness tests.test_browser_smoke tests.test_browser_sidebar_reorder tests.test_browser_sidebar_reorder_discovery
       - name: Check static dependency contracts
         run: node tests/test_static_contract.js
       - name: Check Firefox footer counter geometry
