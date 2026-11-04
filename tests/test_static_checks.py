@@ -1325,6 +1325,61 @@ class StaticGateTests(unittest.TestCase):
                           '/** @type {Promise<string>} */ const restored=s.restoreSearchSession();\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_reader_navigation_baseline_gate_fails_closed(self):
+        paths = ["static/search/reader-navigation.js", "scripts/check_reader_navigation_baseline.mjs",
+                 "tests/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "# pass 10")
+        test = self.root / paths[2]
+        source = test.read_text()
+        name = 'remember stores a private reader URL but exposes a sanitized history URL'
+        anchor = "test('" + name + "'"
+        self.assertEqual(source.count(anchor), 1)
+        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
+            test.write_text(source.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
+                      "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source.replace(anchor + ", () => {", anchor + ", () => { throw new Error('navigation baseline failed');"))
+        self.assert_check(self.run_check(*check), False, "navigation baseline failed")
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source)
+        (self.root / paths[0]).unlink()
+        self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+
+    def test_reader_navigation_coverage_gate_requires_exact_source_row_and_thresholds(self):
+        paths = ["static/search/reader-navigation.js", "scripts/check_reader_navigation_baseline.mjs",
+                 "tests/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        gate = self.root / paths[1]
+        original = gate.read_text()
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "reader-navigation.js |")
+        # Keep the real subprocess and TAP report but reject its parsed row.
+        anchor = 'const rows = text.split(/\\r?\\n/).flatMap(line => {'
+        self.assertEqual(original.count(anchor), 1)
+        altered = original.replace(anchor, 'const observedRows = text.split(/\\r?\\n/).flatMap(line => {')
+        altered = altered.replace('const required = [', 'const rows = [];\nconst required = [')
+        gate.write_text(altered)
+        self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
+        gate.write_text(original.replace('const required = [', 'const duplicateRows = rows.concat(rows);\nconst required = [')
+                        .replace('rows.length !== 1', 'duplicateRows.length !== 1'))
+        self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
+        for thresholds in ('[31.97, 81.82, 27.27]', '[31.96, 81.83, 27.27]', '[31.96, 81.82, 27.28]'):
+            self.assertIn('[31.96, 81.82, 27.27]', original)
+            gate.write_text(original.replace('[31.96, 81.82, 27.27]', thresholds))
+            self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
+
     def test_search_folder_merge_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_folder_merge_baseline.mjs",
                  "tests/test_search_folder_merge_baseline.mjs"]
