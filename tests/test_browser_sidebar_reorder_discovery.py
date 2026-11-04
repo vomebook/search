@@ -8,10 +8,15 @@ from tests import test_browser_sidebar_reorder
 
 
 class SidebarReorderDiscoveryTests(unittest.TestCase):
-    def test_only_two_sidebar_regressions_are_collected(self):
+    def test_only_named_sidebar_regressions_are_collected(self):
         suite = unittest.defaultTestLoader.loadTestsFromModule(test_browser_sidebar_reorder)
-        self.assertEqual(suite.countTestCases(), 2)
-        self.assertEqual(sum(group.countTestCases() for group in suite), 2)
+        self.assertEqual(suite.countTestCases(), 3)
+        self.assertEqual(sum(group.countTestCases() for group in suite), 3)
+        self.assertEqual({test.id() for group in suite for test in group}, {
+            'tests.test_browser_sidebar_reorder.SidebarReorderRegressionTest.test_directory_back_targets_captured_repository_after_reorder',
+            'tests.test_browser_sidebar_reorder.SidebarReorderRegressionTest.test_history_targets_captured_repository_after_reorder',
+            'tests.test_browser_sidebar_reorder.SidebarApiRefreshRegressionTest.test_mobile_history_repository_identity_survives_api_refresh',
+        })
 
     def test_timeout_context_requests_route_trace(self):
         source = test_browser_sidebar_reorder.directory_timeout_context.__code__.co_consts
