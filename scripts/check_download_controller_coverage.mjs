@@ -3,7 +3,7 @@ import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
 
 // Node 26/V8 scope: the download controller and its synthetic contract tests.
 // A missing row, missing named test, skipped case, or fractional regression fails.
-const minimum = [100, 87.74, 100];
+const minimum = [100, 88.89, 100];
 const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/search/download-controller.js",
@@ -23,6 +23,9 @@ const required = [
   "two active checks bound the queue and abandoned work never starts",
   "occupied queue starts the next live check only after a slot is released",
   "check failures report legacy messages and permit a retry",
+  "truthy rejection messages retain their original non-string values",
+  "mutated native lookups retain their existing unchecked failure behavior",
+  "generic signal option is ignored but batch abort owns cancellation",
   "a stalled response body times out, releases its slot and retries without caching failure",
   "an abandoned active check cannot evict a successful retry when its body resolves late",
   "successful check cache retains at most 64 entries in insertion order",

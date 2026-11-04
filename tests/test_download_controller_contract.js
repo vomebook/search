@@ -31,7 +31,7 @@ function fixture() {
     showToast: (...args) => toasts.push(args),
   });
   return {
-    controller, requests, launches, toasts, timers,
+    controller, requests, launches, toasts, timers, context: sandbox,
     advance(ms) { now += ms; },
     fireDelay(delay) {
       const entry = [...timers].find(([, timer]) => timer.delay === delay);
@@ -130,6 +130,67 @@ test("check failures report legacy messages and permit a retry", async () => {
   const applicationFailure = c.checkDownload("not-ok");
   requests[4].resolve(response({ok: false}, true));
   assert.equal(await applicationFailure, "下载检查失败，请重试");
+});
+
+test("truthy rejection messages retain their original non-string values", async () => {
+  const {controller: c, requests, toasts, launches} = fixture();
+  const marker = {reason: "synthetic"};
+  const checked = c.checkDownload("rejected");
+  requests[0].reject({name: "Other", message: marker});
+  assert.equal(await checked, marker);
+  const started = c.downloadFile("rejected.txt", "rejected");
+  await flush();
+  requests[1].reject({name: "Other", message: marker});
+  assert.equal(await started, false);
+  assert.equal(toasts[1][0], marker);
+  assert.deepEqual(launches, []);
+  assert.equal(c.activeDownloadChecks, 0);
+});
+
+test("mutated native lookups retain their existing unchecked failure behavior", async () => {
+  const {controller: c, requests, timers, context} = fixture();
+  for (let index = 0; index < 64; index++) {
+    const result = c.checkDownload("cached" + index);
+    requests[index].resolve(response({ok: true}));
+    assert.equal(await result, true);
+  }
+  const nativeDelete = c.downloadChecks.delete;
+  const trapped = [];
+  const last = c.checkDownload("last");
+  vm.runInNewContext("globalThis.originalShift = Array.prototype.shift; Array.prototype.shift = () => undefined", context);
+  c.downloadChecks.delete = function(key) { trapped.push(key); return nativeDelete.call(this, key); };
+  try {
+    requests[64].resolve(response({ok: true}));
+    assert.equal(typeof await last, "string");
+  } finally {
+    vm.runInNewContext("Array.prototype.shift = globalThis.originalShift", context);
+    c.downloadChecks.delete = nativeDelete;
+  }
+  assert.deepEqual(trapped, ["last"]);
+  assert.equal(c.activeDownloadChecks, 0);
+  assert.equal(timers.size, 0);
+  assert.equal(c.downloadChecks.size, 64);
+});
+
+test("generic signal option is ignored but batch abort owns cancellation", async () => {
+  const {controller: c, requests, launches} = fixture();
+  const unrelated = new AbortController();
+  unrelated.abort();
+  const result = c.downloadFile("book.txt", "book", {quiet: true, signal: unrelated.signal});
+  await flush();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].signal.aborted, false);
+  requests[0].resolve(response({ok: true}));
+  assert.equal(await result, true);
+  const owner = new AbortController();
+  const batchResult = c.downloadFile("other.txt", "other", {quiet: true, batch: {abortController: owner}});
+  await flush();
+  owner.abort();
+  assert.equal(await batchResult, false);
+  assert.equal(requests[1].signal.aborted, true);
+  requests[1].resolve(response({ok: true}));
+  await flush();
+  assert.deepEqual(launches, ["book.txt|book"]);
 });
 
 test("a stalled response body times out, releases its slot and retries without caching failure", async () => {

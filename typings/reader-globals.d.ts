@@ -212,7 +212,7 @@ interface DownloadControllerApi {
     buildCheckUrl(link: string): string;
     buildDownloadUrl(filename: string, link: string): string;
     triggerDownload(url: string): void;
-    showToast(message: string, duration?: number): void;
+    showToast(message: unknown, duration?: number): void;
     isSpeculativeAllowed?(): boolean;
     isBatchActive?(): boolean;
     timeout?: number;
@@ -220,11 +220,11 @@ interface DownloadControllerApi {
     downloadChecks: Map<string, unknown>;
     downloadCheckQueue: unknown[];
     pendingDownloads: Map<string, unknown>;
-    checkDownload(link: string, speculative?: boolean, signal?: AbortSignal): Promise<boolean | string>;
-    runDownloadCheck(item: unknown): Promise<void>;
+    checkDownload(link: string, speculative?: boolean, signal?: AbortSignal): Promise<unknown>;
+    runDownloadCheck(item: {link: string; entry: {users: number; controller: AbortController; promise: Promise<unknown>; expires: number}; resolve(value: unknown): void}): Promise<void>;
     pumpDownloadChecks(): void;
     scheduleDownloadLaunch(filename: string, link: string, cancelled: () => boolean): Promise<boolean>;
-    downloadFile(filename: string, link: string, options?: {button?: HTMLElement; quiet?: boolean; skipCheck?: boolean; signal?: AbortSignal; batch?: object}): Promise<boolean>;
+    downloadFile(filename: string, link: string, options?: {button?: HTMLElement; quiet?: boolean; skipCheck?: boolean; batch?: {cancelled?: boolean; abortController?: AbortController}}): Promise<boolean>;
     readonly activeDownloadChecks: number;
   };
 }
