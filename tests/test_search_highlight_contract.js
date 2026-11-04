@@ -14,7 +14,7 @@ function extractedFunctions() {
 }
 
 test("HTML escaping preserves text and protects attribute and markup delimiters", () => {
-  const {escapeHTML} = extractedFunctions();
+  const {context, escapeHTML, highlightText} = extractedFunctions();
   for (const [input, expected] of [
     ["A&B <tag> \" ' 中文", "A&amp;B &lt;tag&gt; &quot; &#39; 中文"],
     ["&amp;", "&amp;amp;"],
@@ -24,6 +24,12 @@ test("HTML escaping preserves text and protects attribute and markup delimiters"
     [0, "0"],
     [false, "false"]
   ]) assert.equal(escapeHTML(input), expected);
+  // The original lookup remains dynamic even if the replace intrinsic is rebound.
+  vm.runInContext(`String.prototype.replace = function(_pattern, replacement) {
+    return replacement("not-a-map-key");
+  };`, context);
+  assert.equal(escapeHTML("&"), undefined);
+  assert.equal(highlightText("&", ""), undefined);
 });
 
 test("highlighting matches raw text without marking tags or encoded entities", () => {

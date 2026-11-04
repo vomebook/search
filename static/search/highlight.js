@@ -1,9 +1,10 @@
 // Escape before insertion and match raw text so terms never match markup or entities.
 {
   const HTML_ESCAPE_MAP = /** @type {Record<string, string>} */ ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"});
-  /** @param {unknown} str @returns {string} */
+  /** @param {unknown} str @returns {string | undefined} */
   function escapeSearchHTML(str) {
-    return String(str).replace(/[&<>"']/g, (ch) => HTML_ESCAPE_MAP[ch]);
+    // The native matcher supplies one of the five keys; preserve dynamic lookup.
+    return String(str).replace(/[&<>"']/g, (ch) => /** @type {string} */ (HTML_ESCAPE_MAP[ch]));
   }
 
   /** @type {Map<string, RegExp | null>} */
@@ -23,7 +24,7 @@
     return regex;
   }
 
-  /** @param {unknown} text @param {string | null | undefined} query @returns {string} */
+  /** @param {unknown} text @param {string | null | undefined} query @returns {string | undefined} */
   function highlightSearchText(text, query) {
     if (!query || !text) return escapeSearchHTML(text);
     const regex = searchHighlightRegex(query);
