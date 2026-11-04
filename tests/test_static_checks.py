@@ -292,6 +292,11 @@ class StaticGateTests(unittest.TestCase):
                       'test.todo("extra todo");'):
             test.write_text(original + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
         test.write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
         test.write_text('throw new Error("failed response cache test");\n')
