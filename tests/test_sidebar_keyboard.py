@@ -458,6 +458,75 @@ class SidebarKeyboardTests(unittest.TestCase):
         }''')
         self.assertEqual(result, [[], [], []])
 
+    def test_missing_extension_renders_without_poisoning_api_cache(self):
+        self.page.evaluate('''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
+          STATE.mode='global';STATE.repo=null;STATE.repoFull=null;STATE.useLocalMode=false;
+          apiAvailable=true;extensionList=[];extensionCounts={};
+          window.testExtensionInventory=[{name:'txt',count:2}];
+          extensionApiCache.clear();extensionApiCache.set('__global__',testExtensionInventory);
+          STATE.filterExtensions=['ghost'];await renderExtensionFilter(routeRenderId);
+        }''')
+        self.assertEqual(self.page.evaluate('testExtensionInventory.map(x=>x.name)'),['txt'])
+        self.assertEqual(self.page.locator('#filter-ext-list input[value="ghost"]').count(),1)
+        self.assertTrue(self.page.locator('#filter-ext-list input[value="ghost"]').is_checked())
+        self.page.evaluate('DOM.extFilterCancel.click()')
+        self.page.wait_for_function("STATE.filterExtensions.length===0 && !DOM.filterExtList.querySelector('input[value=ghost]')")
+        self.assertEqual(self.page.evaluate('testExtensionInventory.map(x=>x.name)'),['txt'])
+        self.page.evaluate('DOM.extSelectAll.click()')
+        self.assertEqual(self.page.evaluate('STATE.filterExtensions'),['txt'])
+
+    def test_real_type_remains_available_when_extension_metadata_is_refreshed(self):
+        self.page.evaluate('''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
+          STATE.mode='global';STATE.repo=null;STATE.repoFull=null;STATE.useLocalMode=false;
+          apiAvailable=true;extensionList=[];extensionCounts={};
+          window.oldExtensionInventory=[{name:'txt',count:2}];
+          window.newExtensionInventory=[{name:'txt',count:4},{name:'ghost',count:3}];
+          extensionApiCache.clear();extensionApiCache.set('__global__',oldExtensionInventory);
+          STATE.filterExtensions=['ghost'];await renderExtensionFilter(routeRenderId);
+        }''')
+        row=self.page.locator('#filter-ext-list input[value="ghost"]')
+        self.assertTrue(row.is_checked())
+        self.assertEqual(row.locator('..').locator('.folder-count').text_content(),'0')
+        self.page.evaluate('''async () => {
+          extensionApiCache.set('__global__',newExtensionInventory);
+          await renderExtensionFilter(routeRenderId);
+        }''')
+        row=self.page.locator('#filter-ext-list input[value="ghost"]')
+        self.assertTrue(row.is_checked())
+        self.assertEqual(row.locator('..').locator('.folder-count').text_content(),'3')
+        self.assertEqual(self.page.evaluate('oldExtensionInventory.map(x=>x.name)'),['txt'])
+        self.assertEqual(self.page.evaluate('newExtensionInventory.map(x=>x.name)'),['txt','ghost'])
+        self.page.evaluate('DOM.extFilterCancel.click()')
+        self.page.wait_for_function("STATE.filterExtensions.length===0 && DOM.filterExtList.querySelector('input[value=ghost]')")
+        self.assertFalse(self.page.locator('#filter-ext-list input[value="ghost"]').is_checked())
+        self.page.evaluate('DOM.extSelectAll.click()')
+        self.assertEqual(self.page.evaluate('STATE.filterExtensions'),['txt','ghost'])
+
+    def test_extension_cache_retains_clean_data_with_shared_inflight_request(self):
+        outcome=self.page.evaluate('''async () => {
+          extensionApiCache.clear();extensionApiPending.clear();noteApiSuccess();
+          const original=window.fetch;let calls=0,finish;
+          try {
+            window.fetch=(input,options)=>String(input).includes('repo=fresh-test')
+              ? (calls++,new Promise(resolve=>{
+                  finish=()=>resolve(new Response('[{"name":"txt","count":2}]'));
+                })) : original(input,options);
+            const a=fetchExtensions('fresh-test'),b=fetchExtensions('fresh-test');finish();
+            const [first,concurrent]=await Promise.all([a,b]);
+            const sameInflightResult=first===concurrent;
+            first.push({name:'ghost',count:0});
+            const cached=await fetchExtensions('fresh-test');
+            cached.push({name:'stale',count:0});
+            const later=await fetchExtensions('fresh-test');
+            return {calls,sameInflightResult,concurrent:concurrent.map(x=>x.name),
+              later:later.map(x=>x.name),source:extensionApiCache.get('fresh-test').map(x=>x.name)};
+          } finally {window.fetch=original;}
+        }''')
+        self.assertEqual(outcome,dict(calls=1,sameInflightResult=True,concurrent=['txt','ghost'],
+                                      later=['txt'],source=['txt']))
+
     def test_reader_assets_body_deadline_releases_shared_load_and_retries(self):
         self.page.clock.install()
         self.page.evaluate('''() => {
