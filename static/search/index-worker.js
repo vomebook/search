@@ -787,7 +787,9 @@ function searchLocal(params) {
       if (!matched.length) break;
       // Every indexed Repo is a complete field in every candidate. If the
       // matcher accepts all of them, this AND term cannot remove a record.
-      if (repoWildcardProofSafe && pattern && term.includes("*") && term.includes("?")
+      // For a small scope, the existing scan is cheaper than proving all repos.
+      if (repoWildcardProofSafe && matched.length >= metadata.repos.length
+          && pattern && term.includes("*") && term.includes("?")
           && /^[*?]+$/.test(term)
           && Object.keys(repoRecordIndices).every(repo => pattern.test(repo.toLowerCase()))) continue;
       matched = matched.filter(index => {
