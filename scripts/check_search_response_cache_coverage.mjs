@@ -23,7 +23,10 @@ const required = [
   "oversize replacement and serialization errors retire the previous key",
   "the independent one-MiB entry cap rejects larger entries even with a larger total budget"
 ];
-if (result.status !== 0 || rows.length !== 1 || !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) ||
+const skipped = lines.filter(line => /^# skipped(?:\s|$)/.test(line));
+const todo = lines.filter(line => /^# todo(?:\s|$)/.test(line));
+if (result.status !== 0 || rows.length !== 1 || skipped.length !== 1 || skipped[0] !== "# skipped 0" ||
+    todo.length !== 1 || todo[0] !== "# todo 0" ||
     required.some(name => {
       const index = lines.indexOf(`# Subtest: ${name}`);
       return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
