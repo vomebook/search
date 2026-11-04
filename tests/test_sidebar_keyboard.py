@@ -112,6 +112,7 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_size_debounce_and_exact_saved_bytes_are_preserved(self):
         self.page.clock.install()
         self.page.locator('#settings-btn').click()
+        self.page.clock.pause_at(self.page.evaluate('Date.now() + 100'))
         self.page.evaluate('''() => {
           pagingMode='normal';cancelSearchPrefetch();window.sizeFilterBodies=[];
           const previous=window.fetch;
