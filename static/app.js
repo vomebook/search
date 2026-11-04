@@ -3915,6 +3915,8 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
 }
 
 function submitSearchQuery(query, { restore = false, record = false, refreshHistory = false, clearResults = false, blur = false, updateInput = restore } = {}) {
+  // Another search can preempt the size debounce: include its visible input.
+  applyPendingSizeFilters();
   cancelPendingSearchControls();
   saveSearchViewSnapshot();
   if (updateInput) setSearchInputValue(query);
@@ -4886,6 +4888,8 @@ function setSearchVisualLoading(loading) {
 }
 
 function prepareFilterChange(clearResults) {
+  // Merge only a pending edit; otherwise preserve exact URL-restored byte values.
+  applyPendingSizeFilters();
   cancelPendingSearchControls();
   saveSearchViewSnapshot();
   STATE.page = 1;
@@ -4904,13 +4908,19 @@ function sizeInputToBytes(input, unitSelect) {
   return Math.round(value * factor);
 }
 
+function applyPendingSizeFilters() {
+  if (sizeFilterTimer === null) return;
+  clearTimeout(sizeFilterTimer);
+  sizeFilterTimer = null;
+  STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
+  STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
+}
+
 function setupSizeFilterControls() {
   const schedule = () => {
     clearTimeout(sizeFilterTimer);
     sizeFilterTimer = setTimeout(() => {
-      sizeFilterTimer = null;
-      STATE.filterMinSize = sizeInputToBytes(DOM.filterMinSize, DOM.filterMinUnit);
-      STATE.filterMaxSize = sizeInputToBytes(DOM.filterMaxSize, DOM.filterMaxUnit);
+      applyPendingSizeFilters();
       doFilterSearch(true);
     }, 500);
   };

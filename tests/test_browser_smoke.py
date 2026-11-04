@@ -856,6 +856,49 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertTrue(self.page.evaluate("window.directoryFileRow.isConnected"))
         self.assertEqual(self.page_errors, [])
 
+    def test_late_reader_assets_keep_mixed_directory_and_file_action_in_sync(self):
+        self.load("#/VOMEBOOK")
+        self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
+        state = self.page.evaluate("""async () => {
+          readerAssets=null;
+          const pendingAssets=new Promise(resolve=>{
+            window.releaseMixedAssets=()=>{
+              const digest='a'.repeat(64);
+              readerAssets={[STATE.repoFull+'\\0mixed-assets/book.chm']:
+                {s:2,m:'h',p:`objects/aa/${digest}/0123456789abcdef/document.html`}};
+              resolve(readerAssets);
+            };
+          });
+          loadReaderAssets=()=>pendingAssets;
+          getFolderContents=async()=>({folders:[{name:'目录',path:'mixed-assets/目录',count:1}],
+            files:[{name:'book',ext:'chm',size:1}]});
+          routeRenderId++;STATE.browserPath='mixed-assets';
+          await renderBrowser('mixed-assets',routeRenderId);
+          const folder=DOM.sidebarContent.querySelector('[data-type="folder"]');
+          const row=DOM.sidebarContent.querySelector('[data-type="file"]');
+          window.mixedFolder=folder;window.mixedRow=row;
+          folder.focus();
+          const before={reader:row.dataset.readerUrl||'',label:row.querySelector('.browser-name').getAttribute('aria-label'),
+            link:row.dataset.link,filename:row.dataset.filename,focused:document.activeElement===folder};
+          releaseMixedAssets();await new Promise(resolve=>setTimeout(resolve,0));
+          const expected=getBrowserReaderUrl({name:'book',ext:'chm',size:1},STATE.repoFull,'mixed-assets');
+          const after={reader:row.dataset.readerUrl||'',label:row.querySelector('.browser-name').getAttribute('aria-label'),
+            link:row.dataset.link,filename:row.dataset.filename,focused:document.activeElement===folder,
+            same:row.isConnected&&folder.isConnected,expected};
+          return {before,after};
+        }""")
+        self.assertEqual(state['before']['reader'], '')
+        self.assertEqual(state['before']['label'], '下载文件：book.chm')
+        self.assertTrue(state['before']['focused'])
+        self.assertTrue(state['after']['reader'], state)
+        self.assertEqual(state['after']['reader'], state['after']['expected'])
+        self.assertEqual(state['after']['label'], '打开阅读器：book.chm')
+        self.assertEqual(state['after']['link'], state['before']['link'])
+        self.assertEqual(state['after']['filename'], state['before']['filename'])
+        self.assertTrue(state['after']['same'])
+        self.assertTrue(state['after']['focused'])
+        self.assertEqual(self.page_errors, [])
+
     def test_directory_falls_back_to_api_when_local_worker_fails(self):
         self.load("#/VOMEBOOK")
         self.page.wait_for_function("() => STATE.dataLoaded && STATE.mode === 'repo'", timeout=30000)
