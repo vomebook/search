@@ -833,7 +833,12 @@ function searchLocal(params) {
     const ready = params.sort === "name" ? nameOrderReady : sizeOrderReady;
     const byRepo = params.sort === "name" ? repoSortedByName : repoSortedBySize;
     const order = repos.length === 1 ? (byRepo[repos[0]] || []) : null;
-    if (!query && ready && order && filtered.length <= SORT_REUSE_MAX_INDICES
+    // Exact single-repo matches retain source order, so stable name ties match
+    // the prepared repository order. Fuzzy, unusual and cold paths still sort.
+    const exactSingleRepoName = query && params.sort === "name" && (params.exact || literalSearch(query))
+      && repoWildcardProofSafe && Array.isArray(repos) && repos.length === 1
+      && typeof repos[0] === "string" && repos[0];
+    if ((!query || exactSingleRepoName) && ready && order && filtered.length <= SORT_REUSE_MAX_INDICES
         && filtered.length * 3 > order.length * 2) {
       const keep = new Set(filtered);
       ordered = order.filter(index => keep.has(index));
