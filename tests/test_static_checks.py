@@ -1456,6 +1456,13 @@ class StaticGateTests(unittest.TestCase):
         test.unlink()
         self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
         test.write_text(source)
+        legacy = self.root / paths[3]
+        legacy_source = legacy.read_text()
+        marker = 'Reader image loader: direct load, cleanup, cancellation, HTTP errors and bounded fallback passed'
+        self.assertEqual(legacy_source.count(marker), 1)
+        legacy.write_text(legacy_source.replace(marker, 'missing completion marker'))
+        self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
+        legacy.write_text(legacy_source)
         gate = self.root / paths[1]
         original = gate.read_text()
         anchor = 'const rows = text.split(/\\r?\\n/).flatMap(line => {'
