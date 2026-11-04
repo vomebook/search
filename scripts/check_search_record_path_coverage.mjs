@@ -1,4 +1,5 @@
 import {spawnSync} from "node:child_process";
+import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
 
 // Node 26/V8: only the extracted path module and its compatibility vectors.
 // Require a real source row as well as passing tests and full coverage.
@@ -15,12 +16,9 @@ const text = result.stdout || "";
 const lines = text.split(/\r?\n/);
 const rows = lines.filter(line =>
   /^\s*#\s*record-path\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
-const name = "tests/test_search_record_path.js";
-const index = lines.indexOf(`# Subtest: ${name}`);
-if (result.status !== 0 || rows.length !== 1 || !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) ||
-    index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
-    lines[index - 1] !== "# search record paths preserve filenames, separators and URL encoding" ||
-    !/^ok \d+ - tests\/test_search_record_path\.js$/.test(lines[index + 1] || "")) {
+const required = [{name: "tests/test_search_record_path.js",
+  marker: "search record paths preserve filenames, separators and URL encoding"}];
+if (result.status !== 0 || rows.length !== 1 || !hasPassingTapContracts(text, required)) {
   console.error("Search record path coverage gate requires passing named tests and exactly one fully covered source row");
   process.exitCode = 1;
 }

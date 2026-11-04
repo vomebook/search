@@ -1,4 +1,5 @@
 import {spawnSync} from "node:child_process";
+import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
 
 // Node 26 V8 report, one source only. Measured with the three named tests:
 // 100.00% lines, 95.24% branches, 95.12% functions after strict annotations.
@@ -20,20 +21,14 @@ const rows = (result.stdout || "").split(/\r?\n/).flatMap(line => {
   return match ? [match.slice(1).map(Number)] : [];
 });
 const text = result.stdout || "";
-const lines = text.split(/\r?\n/);
 // Each test logs its completion marker only after its async contract finishes.
 const required = [
   ["reader request manager behavior", "reader request manager contracts passed"],
   ["reader initial response recovery", "reader initial response recovery contracts passed"],
   ["reader request manager edge behavior", "reader request manager edge contracts passed"]
-];
+].map(([name, marker]) => ({name, marker}));
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
-    !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) || required.some(([name, marker]) => {
-      const index = lines.indexOf(`# Subtest: ${name}`);
-      return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
-        lines[index - 1] !== `# ${marker}` ||
-        !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "");
-    })) {
+    !hasPassingTapContracts(text, required)) {
   console.error("Request manager coverage gate requires passing named tests and exactly one source coverage row above each minimum");
   process.exitCode = 1;
 }

@@ -1,4 +1,5 @@
 import {spawnSync} from "node:child_process";
+import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
 
 // Node 26/V8 scope: the extracted response cache and its contract vectors.
 // A missing source row or a failed test must never pass as empty coverage.
@@ -22,16 +23,8 @@ const required = [
   "replacement resets TTL, byte count and LRU position",
   "oversize replacement and serialization errors retire the previous key",
   "the independent one-MiB entry cap rejects larger entries even with a larger total budget"
-];
-const skipped = lines.filter(line => /^# skipped(?:\s|$)/.test(line));
-const todo = lines.filter(line => /^# todo(?:\s|$)/.test(line));
-if (result.status !== 0 || rows.length !== 1 || skipped.length !== 1 || skipped[0] !== "# skipped 0" ||
-    todo.length !== 1 || todo[0] !== "# todo 0" ||
-    required.some(name => {
-      const index = lines.indexOf(`# Subtest: ${name}`);
-      return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
-        !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "");
-    })) {
+].map(name => ({name}));
+if (result.status !== 0 || rows.length !== 1 || !hasPassingTapContracts(text, required)) {
   console.error("Search response cache coverage requires passing named tests and exactly one fully covered source row");
   process.exitCode = 1;
 }
