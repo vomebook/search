@@ -782,6 +782,9 @@ function searchLocal(params) {
       const lower = term.toLowerCase();
       if (wildcard && term.replace(/\*/g, "") === "") continue;
       const pattern = wildcard ? compileWildcardMatcher(term) : null;
+      // The previous scan breaks here for an empty scope; avoid proving
+      // universal terms against all repos repeatedly when nothing can match.
+      if (!matched.length) break;
       // Every indexed Repo is a complete field in every candidate. If the
       // matcher accepts all of them, this AND term cannot remove a record.
       if (repoWildcardProofSafe && pattern && term.includes("*") && term.includes("?")

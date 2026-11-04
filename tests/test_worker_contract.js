@@ -934,6 +934,16 @@ test("a failed corpus replacement never publishes a partial repo proof", async (
   await worker.request("replace-corpus",{data:compact([{...records[0], Repo:"DD"}])});
   assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
 });
+test("empty exact scope does not repeatedly prove universal wildcard terms", async () => {
+  const {worker} = await loaded([{...records[0], Repo:"AA"}]);
+  vm.runInContext(`globalThis.matcherCalls = 0;
+    globalThis.originalMatcher = compileWildcardMatcher;
+    compileWildcardMatcher = term => { matcherCalls++; return originalMatcher(term); };
+    repoRecordIndices = new Proxy(repoRecordIndices, {ownKeys() { throw Error("unneeded repo proof"); }});`, worker.context);
+  const result = await worker.request("local-search",{q:"?*? ?*? ?*?",exact:true,repos:["missing"]});
+  assert.strictEqual(result.total,0);
+  assert.strictEqual(vm.runInContext('matcherCalls',worker.context),1);
+});
 test("dense repository sorting can reuse prepared stable orders", async () => {
   const input = Array.from({length:36}, (_, index) => ({...records[0],
     Repo:"Repo/A", File:["a", "A", "中", "b"][index % 4], Extension:index % 7 ? "pdf" : "txt",
