@@ -881,6 +881,11 @@ class StaticGateTests(unittest.TestCase):
                       'import {test as extraTest} from "node:test"; extraTest.todo("extra todo");'):
             test.write_text(original + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('import {test as extraTest} from "node:test"; console.log("skipped 0"); extraTest.skip("extra skip", () => {});',
+                      'import {test as extraTest} from "node:test"; console.log("todo 0"); extraTest.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
         test.write_text(original + '\nthrow new Error("PDF network assertion failure");\n')
         self.assert_check(self.run_check(*check), False, "PDF network assertion failure")
         test.write_text(original)
