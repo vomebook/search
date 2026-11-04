@@ -944,6 +944,17 @@ test("empty exact scope does not repeatedly prove universal wildcard terms", asy
   assert.strictEqual(result.total,0);
   assert.strictEqual(vm.runInContext('matcherCalls',worker.context),1);
 });
+test("small scopes scan records instead of proving every repository", async () => {
+  const input = Array.from({length:100}, (_, i) => ({...records[0], Repo:`Repo/${i}`, File:`file${i}`}));
+  const {worker} = await loaded(input);
+  vm.runInContext(`globalThis.scans = 0; globalThis.originalFields = getRecordSearchFields;
+    getRecordSearchFields = record => { scans++; return originalFields(record); };
+    repoRecordIndices = new Proxy(repoRecordIndices, {ownKeys() { throw Error("unneeded repo proof"); }});`, worker.context);
+  const result = await worker.request("local-search",{q:"?*?",exact:true,repos:["Repo/0"]});
+  assert.strictEqual(result.total,1);
+  assert.strictEqual(result.records[0].File,"file0");
+  assert.strictEqual(vm.runInContext('scans',worker.context),1);
+});
 test("dense repository sorting can reuse prepared stable orders", async () => {
   const input = Array.from({length:36}, (_, index) => ({...records[0],
     Repo:"Repo/A", File:["a", "A", "中", "b"][index % 4], Extension:index % 7 ? "pdf" : "txt",
