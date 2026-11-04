@@ -29,4 +29,7 @@ assert.equal(fmtSizeUrl(0), "0B"); assert.equal(fmtSizeUrl(1024), "1KB");
 assert.equal(fmtSizeUrl(1025), "1025B"); assert.equal(fmtSizeUrl(1048577), "1048577B");
 for (const bytes of [0, 1, 1023, 1024, 1025, 1048576, 1048577, 1073741824, 1073741825, Number.MAX_SAFE_INTEGER])
   assert.equal(parseSizeStr(fmtSizeUrl(bytes)), bytes, `URL size round trip: ${bytes}`);
+// Preserve the original capture lookup if String.prototype.match is rebound.
+vm.runInContext('String.prototype.match = function() { return []; };', sandbox);
+assert.ok(Number.isNaN(parseSizeStr("1")));
 console.log("search size formatting, parser compatibility and URL round trips passed");

@@ -716,10 +716,11 @@ class StaticGateTests(unittest.TestCase):
             "files": [str(declaration), str(ROOT / "static/search/size-format.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
-        before = "declare function formatSize(bytes: number | string | null | undefined): string | object;"
+        before = "declare function formatSize(bytes: number | string | null | undefined): string | object | undefined;"
         self.assertEqual(original.count(before), 1)
         for after in ("declare function formatSize(bytes: number | string | null | undefined): number;",
-                      "declare function formatSize(bytes: number | string | null | undefined): string;"):
+                      "declare function formatSize(bytes: number | string | null | undefined): string;",
+                      "declare function formatSize(bytes: number | string | null | undefined): string | object;"):
             declaration.write_text(original.replace(before, after))
             self.assert_check(self.run_check(*check), False, "TS2322")
 
@@ -1255,7 +1256,7 @@ class StaticGateTests(unittest.TestCase):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/search/search-session.js", "static/search/result-identity.js", "static/search/record-path.js",
                     "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
-                    "static/search/highlight.js"}
+                    "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertIn("tsc --project jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
         source = self.root / "static/exact-usage.js"
@@ -1291,6 +1292,29 @@ class StaticGateTests(unittest.TestCase):
         module = self.root / "static/search/highlight.js"
         module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
         self.assert_check(self.run_check(*production_check), False, "TS2322")
+        shutil.copyfile(ROOT / "static/search/highlight.js", module)
+        module = self.root / "static/search/size-format.js"
+        module.write_text(module.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
+        self.assert_check(self.run_check(*production_check), False, "TS2322")
+
+    def test_size_exact_gate_preserves_original_lookups(self):
+        config = self.root / "jsconfig.search-exact.json"
+        original = json.loads((ROOT / "jsconfig.search-exact.json").read_text())
+        config.write_text(json.dumps(original))
+        for name in original["files"]:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        module = self.root / "static/search/size-format.js"
+        source = module.read_text()
+        assertions = [('/** @type {string} */ (m[1])', 'm[1]', "TS2345"),
+                      ('@returns {string | object | undefined}', '@returns {string | object}', "TS2322")]
+        for assertion, original_lookup, diagnostic in assertions:
+            self.assertEqual(source.count(assertion), 1)
+            module.write_text(source.replace(assertion, original_lookup))
+            self.assert_check(self.run_check(*check), False, diagnostic)
 
     def test_highlight_exact_gate_preserves_dynamic_escape_lookup(self):
         config = self.root / "jsconfig.search-exact.json"

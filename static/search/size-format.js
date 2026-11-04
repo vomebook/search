@@ -23,7 +23,8 @@ function sizeParseSizeStr(str) {
   if (!str) return null;
   var m = String(str).match(/^([\d.]+)\s*(GB|MB|KB|B)?$/i);
   if (!m) return parseInt(str) || null;
-  var val = parseFloat(m[1]);
+  // A native successful match contains capture 1; do not change lookup order.
+  var val = parseFloat(/** @type {string} */ (m[1]));
   var unit = (m[2] || "B").toUpperCase();
   if (unit === "GB") val *= 1073741824;
   else if (unit === "MB") val *= 1048576;
@@ -33,7 +34,7 @@ function sizeParseSizeStr(str) {
 // Result labels deliberately retain their legacy cache/coercion semantics;
 // unlike URL sizes, they use fixed display precision and omit zero.
 const sizeCache = /** @type {Record<string, string | object>} */ ({});
-/** @param {number | string | null | undefined} bytes @returns {string | object} */
+/** @param {number | string | null | undefined} bytes @returns {string | object | undefined} */
 function sizeFormatLabel(bytes) {
   if (!bytes && bytes !== 0) return "";
   if (sizeCache[bytes] !== undefined) return sizeCache[bytes];

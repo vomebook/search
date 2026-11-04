@@ -4,7 +4,7 @@
 declare function bytesToDisplay(bytes: number | null | undefined): {value: string; unit: "B" | "KB" | "MB" | "GB"};
 declare function fmtSizeUrl(bytes: number | null | undefined): string | null;
 declare function parseSizeStr(value: string | null | undefined): number | null;
-declare function formatSize(bytes: number | string | null | undefined): string | object;
+declare function formatSize(bytes: number | string | null | undefined): string | object | undefined;
 declare function buildRecordRelativePath(record: {File?: string; Extension?: string; Folder?: string[] | null}): string;
 declare function encodeRecordPath(path: string | null | undefined): string;
 declare function escapeHTML(text: unknown): string | undefined;
