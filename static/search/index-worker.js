@@ -26,6 +26,9 @@ const SEARCH_ANCHOR_PER_ORDER_MAX = 8;
 const SEARCH_ANCHOR_KEY_MAX = 4096;
 let recordIndices = [];
 let repoRecordIndices = Object.create(null);
+// Unusual compact metadata retains its legacy field-coercion and error path;
+// only ordinary string fields can use the repository-only wildcard proof.
+let repoWildcardProofSafe = false;
 let readerRecordIndices = [];
 let repoReaderRecordIndices = Object.create(null);
 let sortedByName = [];
@@ -365,6 +368,9 @@ function scheduleSortOrders(expectedGeneration) {
 }
 
 function replaceCorpus(nextRecords) {
+  // A failed replacement can leave partially rebuilt indexes visible. Only
+  // publish the proof flag after the entire new corpus has been installed.
+  repoWildcardProofSafe = false;
   snapshotGeneration = null;
   if (sortBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(sortBuildTimer);
   if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
@@ -384,10 +390,15 @@ function replaceCorpus(nextRecords) {
   recordIds = new Array(records.length);
   recordIndices = new Array(records.length);
   repoRecordIndices = Object.create(null);
+  let nextRepoWildcardProofSafe = true;
   readerRecordIndices = [];
   repoReaderRecordIndices = Object.create(null);
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
+    if (typeof record.Repo !== "string" || typeof record.File !== "string"
+        || !Array.isArray(record.Folder) || Array.prototype.some.call(record.Folder, part => typeof part !== "string")) {
+      nextRepoWildcardProofSafe = false;
+    }
     const repo = record.Repo || "";
     recordIndices[i] = i;
     if (!repoRecordIndices[repo]) repoRecordIndices[repo] = [];
@@ -434,6 +445,7 @@ function replaceCorpus(nextRecords) {
   generation++;
   scheduleSortOrders(generation);
   scheduleFulltext(generation, 1500);
+  repoWildcardProofSafe = nextRepoWildcardProofSafe;
   return Object.assign({ state: "corpus-ready", generation }, metadata);
 }
 
@@ -770,6 +782,11 @@ function searchLocal(params) {
       const lower = term.toLowerCase();
       if (wildcard && term.replace(/\*/g, "") === "") continue;
       const pattern = wildcard ? compileWildcardMatcher(term) : null;
+      // Every indexed Repo is a complete field in every candidate. If the
+      // matcher accepts all of them, this AND term cannot remove a record.
+      if (repoWildcardProofSafe && pattern && term.includes("*") && term.includes("?")
+          && /^[*?]+$/.test(term)
+          && Object.keys(repoRecordIndices).every(repo => pattern.test(repo.toLowerCase()))) continue;
       matched = matched.filter(index => {
         const record = records[index] || {};
         const fields = getRecordSearchFields(record);
