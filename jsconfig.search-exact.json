@@ -13,6 +13,7 @@
   "files": [
     "typings/reader-globals.d.ts",
     "static/search/search-session.js",
+    "static/search/reader-navigation.js",
     "static/search/download-controller.js",
     "static/search/result-identity.js",
     "static/search/record-path.js",
