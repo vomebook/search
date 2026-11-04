@@ -238,16 +238,26 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         self.assertEqual(result['restored'], result['before'])
 
     def test_older_embedded_reader_still_refreshes_host_title_on_load(self):
-        self.page.unroute('**/static/reader.html?**')
-        self.page.evaluate("()=>caches.keys().then(keys=>Promise.all(keys.map(key=>caches.delete(key))))")
-        self.fixture.context.route('**/static/reader.html?**', lambda route: route.fulfill(content_type='text/html',
-            body='<title>旧阅读器文档.txt</title><body>reader</body>'))
-        before=self.page.title()
-        self.page.evaluate('navigateToReader("/search/static/reader.html?id=older&ext=txt")')
-        self.page.frame_locator('iframe.reader-overlay').locator('body').wait_for()
-        self.page.wait_for_function("()=>document.title==='旧阅读器文档.txt'")
-        self.page.evaluate('closeReaderOverlay()')
-        self.assertEqual(self.page.title(),before)
+        # This is a title compatibility test, not a service-worker cache test.
+        # A fresh context prevents the Reader shell warmup from racing the route.
+        with self.fixture.browser.new_context(service_workers='block') as context:
+            page = context.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.add_init_script(paging.FETCH_SCRIPT)
+            page.route('**/api/**', lambda route: route.fulfill(content_type='application/json', body='[]'))
+            page.route('https://vomebook-hitokoto.hf.space/**', lambda route: route.fulfill(body='{}'))
+            page.route('**/static/reader.html?**', lambda route: route.fulfill(content_type='text/html',
+                body='<title>旧阅读器文档.txt</title><body>reader</body>'))
+            page.goto(self.fixture.origin + '/search/#/?q=paging&local=0', wait_until='domcontentloaded')
+            page.wait_for_function('STATE._loadedPage === 1 && !STATE.isLoading && window.pagingRequests.includes(2)')
+            before = page.title()
+            page.evaluate('navigateToReader("/search/static/reader.html?id=older&ext=txt")')
+            page.frame_locator('iframe.reader-overlay').locator('body').wait_for()
+            page.wait_for_function("()=>document.title==='旧阅读器文档.txt'")
+            page.evaluate('closeReaderOverlay()')
+            self.assertEqual(page.title(), before)
+            self.assertEqual(errors, [])
 
     def test_parked_reader_title_is_restored_only_when_reopened(self):
         self.page.evaluate('navigateToReader("/search/static/reader.html?id=speech-title&ext=txt")')
