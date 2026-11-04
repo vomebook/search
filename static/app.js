@@ -554,7 +554,9 @@ function navigateToReader(rawUrl, returnUrl) {
 function restoreReaderFromSession() {
   if (readerOverlay) return;
   try {
-    var saved = readerNavigation.saved();
+    // The persisted JSON is untrusted; the surrounding try/catch preserves the
+    // existing restore behavior for malformed and non-object values.
+    var saved = /** @type {{shareUrl?: string; readerUrl?: string; returnScroll?: unknown} | null} */ (readerNavigation.saved());
     if (!saved || saved.shareUrl !== location.href || !saved.readerUrl) return;
     var readerUrl = readerNavigation.parse(saved.readerUrl);
     readerReturnScrollState = saved.returnScroll || null;

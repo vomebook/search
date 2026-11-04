@@ -1325,6 +1325,57 @@ class StaticGateTests(unittest.TestCase):
                           '/** @type {Promise<string>} */ const restored=s.restoreSearchSession();\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_reader_navigation_exact_contract_rejects_wrong_usage_and_untrusted_json(self):
+        original = json.loads((ROOT / "jsconfig.search-exact.json").read_text())
+        files = [str(ROOT / file) for file in original["files"]]
+        source = self.root / "static/navigation-type-usage.js"
+        config = self.root / "jsconfig-navigation.json"
+        config.write_text(json.dumps({"compilerOptions": original["compilerOptions"], "files": files + [str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        source.write_text('const nav=VoiceOfMLReaderNavigation.createNavigation("/reader.html");\n'
+                          'const saved=nav.saved(); if(typeof saved === "object" && saved !== null && "readerUrl" in saved) '
+                          'console.log(saved.readerUrl);\n'
+                          '/** @type {HTMLIFrameElement|null} */ const frame=nav.backgroundReader;\n'
+                          'nav.clear(new URL("https://example.test")); nav.disposeBackground();\n')
+        self.assert_check(self.run_check(*check), True, "")
+        cases = [
+            ('const n=VoiceOfMLReaderNavigation.createNavigation(42);', 'TS2345'),
+            ('const n=VoiceOfMLReaderNavigation.createNavigation("/reader.html"); n.parse(42);', 'TS2345'),
+            ('const n=VoiceOfMLReaderNavigation.createNavigation("/reader.html"); n.mergeSearchParams("/", "", {keys:[3]});', 'TS2322'),
+            ('const n=VoiceOfMLReaderNavigation.createNavigation("/reader.html"); n.saved().readerUrl;', 'TS2571'),
+            ('const n=VoiceOfMLReaderNavigation.createNavigation("/reader.html");\n/** @type {string} */ const frame=n.backgroundReader;', 'TS2322'),
+            ('const n=VoiceOfMLReaderNavigation.createNavigation("/reader.html");\n/** @type {HTMLIFrameElement} */ const frame=n.replace("/reader.html", {});', 'TS2322'),
+            ('VoiceOfMLReaderNavigation.createNavigation("/reader.html", {resume:42});', 'TS2322'),
+        ]
+        for program, error in cases:
+            with self.subTest(program=program):
+                source.write_text(program + '\n')
+                self.assert_check(self.run_check(*check), False, error)
+
+        # Compile an isolated physical copy of the implementation with the
+        # production exact options; a permissive declaration alone cannot pass.
+        implementation = self.root / "static/search/reader-navigation.js"
+        implementation.parent.mkdir(parents=True, exist_ok=True)
+        body = (ROOT / "static/search/reader-navigation.js").read_text()
+        implementation.write_text(body)
+        declarations = ROOT / "typings/reader-globals.d.ts"
+        config.write_text(json.dumps({"compilerOptions": original["compilerOptions"],
+                                      "files": [str(declarations), str(implementation)]}))
+        self.assert_check(self.run_check(*check), True, "")
+        anchors = [
+            ('/** @param {string | URL} raw */\n    function parse(raw)',
+             '/** @param {number} raw */\n    function parse(raw)'),
+            ('/** @returns {unknown} */\n    function saved()',
+             '/** @returns {number} */\n    function saved()'),
+            ('return Object.freeze({\n      parse,',
+             'return Object.freeze({\n      parse: () => 123,'),
+        ]
+        for before, after in anchors:
+            with self.subTest(implementation=before):
+                self.assertEqual(body.count(before), 1)
+                implementation.write_text(body.replace(before, after))
+                self.assert_check(self.run_check(*check), False, "TS2322")
+
     def test_reader_navigation_baseline_gate_fails_closed(self):
         paths = ["static/search/reader-navigation.js", "scripts/check_reader_navigation_baseline.mjs",
                  "tests/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
@@ -1333,7 +1384,7 @@ class StaticGateTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[1]]
-        self.assert_check(self.run_check(*check), True, "# pass 10")
+        self.assert_check(self.run_check(*check), True, "# pass 11")
         test = self.root / paths[2]
         source = test.read_text()
         name = 'remember stores a private reader URL but exposes a sanitized history URL'
@@ -1375,7 +1426,7 @@ class StaticGateTests(unittest.TestCase):
         gate.write_text(original.replace('const required = [', 'const duplicateRows = rows.concat(rows);\nconst required = [')
                         .replace('rows.length !== 1', 'duplicateRows.length !== 1'))
         self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
-        for thresholds in ('[31.97, 81.82, 27.27]', '[31.96, 81.83, 27.27]', '[31.96, 81.82, 27.28]'):
+        for thresholds in ('[35.86, 81.82, 27.27]', '[31.96, 84.10, 27.27]', '[31.96, 81.82, 27.28]'):
             self.assertIn('[31.96, 81.82, 27.27]', original)
             gate.write_text(original.replace('[31.96, 81.82, 27.27]', thresholds))
             self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
@@ -1455,7 +1506,7 @@ class StaticGateTests(unittest.TestCase):
         options = original["compilerOptions"]
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
-        required = {"static/search/search-session.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
+        required = {"static/search/search-session.js", "static/search/reader-navigation.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
                     "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
