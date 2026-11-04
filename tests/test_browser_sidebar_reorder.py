@@ -18,6 +18,7 @@ def directory_timeout_context(page):
       dataLoaded: STATE.dataLoaded, backend: STATE._resultBackend,
       pendingPage: STATE._pendingPage, routeRenderId, searchId, searchRequestId,
       localDataPending: Boolean(localDataPromise), hash: location.hash,
+      events: window.__sidebarRouteTrace || null,
       sidebarLoading: Array.from(document.querySelectorAll('#sidebar-content .sidebar-loading'),
         node => node.textContent), reorder: window.__sidebarReorder || null
     })""")
@@ -68,6 +69,34 @@ class SidebarReorderRegressionTest(unittest.TestCase):
         smoke.BrowserBehaviorTest.load(self, suffix)
         self.page.wait_for_function("STATE.dataLoaded === true", timeout=30000)
         self.page.evaluate("""() => {
+          const events = window.__sidebarRouteTrace = [];
+          const snapshot = () => ({hash: location.hash, mode: STATE.mode, repo: STATE.repo,
+            path: STATE.browserPath, loading: STATE.isLoading, loadedPage: STATE._loadedPage,
+            routeRenderId, searchId});
+          const record = entry => { if (events.length < 200) events.push(entry); };
+          const replaceState = history.replaceState;
+          history.replaceState = function(...args) {
+            const before = snapshot();
+            const result = replaceState.apply(this, args);
+            if (before.hash !== location.hash) record({type: 'replace', args, before, after: snapshot(),
+              stack: String(new Error().stack).split('\\n').slice(1, 5)});
+            return result;
+          };
+          const navigate = ROUTER.navigate;
+          ROUTER.navigate = function(...args) {
+            const before = snapshot(), result = navigate.apply(this, args);
+            record({type: 'navigate', args, before, after: snapshot()});
+            return result;
+          };
+          const browser = renderBrowser;
+          renderBrowser = function(...args) {
+            const before = snapshot(), result = browser.apply(this, args);
+            record({type: 'render', args, before, after: snapshot(),
+              stack: String(new Error().stack).split('\\n').slice(1, 5)});
+            return result;
+          };
+          window.addEventListener('hashchange', event => record({type: 'hashchange',
+            old: event.oldURL, next: event.newURL, now: snapshot()}));
           const original = renderRepoListItems;
           const synthetic = [{name:'VoiceOfML/VOMEBOOK',count:1},
                              {name:'VoiceOfML/SyntheticB',count:2}];
