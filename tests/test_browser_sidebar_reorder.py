@@ -1,12 +1,38 @@
 """Offline regression for repository identity while a sidebar list reorders."""
 
+import json
 import unittest
 from unittest.mock import patch
 
 from tests import test_browser_smoke as smoke
 
 if smoke.sync_playwright is not None:
-    from playwright.sync_api import Locator
+    from playwright.sync_api import Locator, TimeoutError as PlaywrightTimeout
+
+
+def directory_timeout_context(page):
+    """Describe state only; the caller still raises the original timeout."""
+    return page.evaluate("""() => ({
+      mode: STATE.mode, repo: STATE.repo, path: STATE.browserPath,
+      loading: STATE.isLoading, loadedPage: STATE._loadedPage,
+      dataLoaded: STATE.dataLoaded, backend: STATE._resultBackend,
+      pendingPage: STATE._pendingPage, routeRenderId, searchId, searchRequestId,
+      localDataPending: Boolean(localDataPromise), hash: location.hash,
+      sidebarLoading: Array.from(document.querySelectorAll('#sidebar-content .sidebar-loading'),
+        node => node.textContent), reorder: window.__sidebarReorder || null
+    })""")
+
+
+def call_with_timeout_context(callback, page_supplier):
+    try:
+        return callback()
+    except PlaywrightTimeout as error:
+        try:
+            diagnostic = json.dumps(directory_timeout_context(page_supplier()), ensure_ascii=False, sort_keys=True)
+        except Exception as diagnostic_error:
+            diagnostic = f"diagnostic unavailable: {type(diagnostic_error).__name__}: {diagnostic_error}"
+        error.add_note("sidebar reorder timeout state: " + diagnostic)
+        raise
 
 
 @unittest.skipIf(smoke.sync_playwright is None, "install requirements-test.txt to run browser tests")
@@ -97,9 +123,15 @@ class SidebarReorderRegressionTest(unittest.TestCase):
         self.assertEqual(state["clicked"], state["before"])
 
     def test_history_targets_captured_repository_after_reorder(self):
-        smoke.BrowserBehaviorTest.test_mobile_history_restores_routes_without_drawer_guards(self)
+        call_with_timeout_context(
+            lambda: smoke.BrowserBehaviorTest.test_mobile_history_restores_routes_without_drawer_guards(self),
+            lambda: self.page,
+        )
         self.assert_reorder_preserved_identity()
 
     def test_directory_back_targets_captured_repository_after_reorder(self):
-        smoke.BrowserBehaviorTest.test_mobile_sidebar_back_returns_by_directory_level(self)
+        call_with_timeout_context(
+            lambda: smoke.BrowserBehaviorTest.test_mobile_sidebar_back_returns_by_directory_level(self),
+            lambda: self.page,
+        )
         self.assert_reorder_preserved_identity()
