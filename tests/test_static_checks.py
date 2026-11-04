@@ -268,6 +268,43 @@ class StaticGateTests(unittest.TestCase):
         (self.root / paths[2]).write_text('import "../static/reader/core/reader-document-loader.mjs";\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
+    def test_download_controller_coverage_gate_fails_closed(self):
+        paths = ["static/search/download-controller.js", "scripts/check_download_controller_coverage.mjs",
+                 "scripts/check_tap_contracts.mjs", "tests/test_download_controller_contract.js"]
+        for relative in paths:
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, target)
+        check = ["node", "scripts/check_download_controller_coverage.mjs"]
+        self.assert_check(self.run_check(*check), True, "download-controller.js")
+        contract = self.root / paths[3]
+        original = contract.read_text()
+        names = re.findall(r'^test\("([^"\n]+)"', original, re.M)
+        self.assertEqual(len(names), 11)
+        self.assertEqual(len(set(names)), len(names))
+        for name in names:
+            anchor = 'test("' + name + '"'
+            self.assertEqual(original.count(anchor), 1)
+            for replacement in ('test("renamed contract"', 'test.skip("' + name + '"', 'test.todo("' + name + '"'):
+                contract.write_text(original.replace(anchor, replacement))
+                self.assert_check(self.run_check(*check), False, "passing named contracts")
+        for extra in ('test("' + names[0] + '", () => {});',
+                      'test.skip("extra skip", () => {});', 'test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            contract.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named contracts")
+        contract.write_text('throw new Error("failed download contract");\n')
+        self.assert_check(self.run_check(*check), False, "failed download contract")
+        contract.write_text('const test = require("node:test"); test("empty", () => {});\n')
+        self.assert_check(self.run_check(*check), False, "exactly one source row")
+        contract.write_text(original)
+        gate = self.root / paths[1]
+        source = gate.read_text()
+        anchor = "const minimum = [100, 87.74, 100];"
+        self.assertEqual(source.count(anchor), 1)
+        gate.write_text(source.replace(anchor, "const minimum = [100, 88, 100];"))
+        self.assert_check(self.run_check(*check), False, "above each minimum")
+
     def test_shared_tap_validator_tests_are_required(self):
         paths = ["scripts/check_tap_contracts.mjs", "tests/test_tap_contracts.mjs"]
         for path in paths:
