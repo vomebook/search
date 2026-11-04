@@ -51,4 +51,17 @@ test("display retains prototype and normalized cache behavior", () => {
   const numericInfinityFirst = extractedFormatter();
   assert.equal(numericInfinityFirst(Infinity), "Infinity GB");
   assert.equal(numericInfinityFirst("Infinity"), "Infinity GB");
+  // The legacy cache deliberately reads a value twice after the undefined check.
+  const context = vm.createContext({});
+  const filename = path.join(__dirname, "../static/search/size-format.js");
+  vm.runInContext(fs.readFileSync(filename, "utf8"), context, {filename});
+  const observed = vm.runInContext(`(() => {
+    let reads = 0;
+    Object.defineProperty(Object.prototype, "probe-key", {configurable:true,
+      get() { reads++; return reads === 1 ? "first" : undefined; }});
+    try { return {value: formatSize("probe-key"), reads}; }
+    finally { delete Object.prototype["probe-key"]; }
+  })()`, context);
+  assert.equal(observed.value, undefined);
+  assert.equal(observed.reads, 2);
 });
