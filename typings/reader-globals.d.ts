@@ -232,15 +232,19 @@ interface SearchReaderNavigationApi {
   createNavigation(readerPath: string, options?: {resume?(url: string): void; close?(): void}): {
     parse(raw: string): URL;
     mergeSearchParams(target: string | URL, source: URLSearchParams | string, options?: {hashRoute?: boolean; keys?: readonly string[]}): URL;
-    saved(): {readerUrl?: string; shareUrl?: string; returnScroll?: unknown} | null;
+    // JSON storage may contain any valid JSON value, not only our own record.
+    saved(): unknown;
+    clear(url: URL): void;
     prepare(raw: string, returnUrl: string): URL;
     remember(url: URL, returnScroll: object, replace?: boolean): void;
     mount(url: URL): HTMLIFrameElement;
     unmount(keepSpeech?: boolean): HTMLElement | null;
     dismiss(): void;
-    replace(raw: string, returnScroll: object): HTMLIFrameElement;
+    replace(raw: string, returnScroll: object): HTMLIFrameElement | null;
     accepts(event: MessageEvent): boolean;
-    persistProgress(progress: object): void;
+    persistProgress(progress: {url?: unknown; closeTime?: unknown} | null | undefined): void;
+    disposeBackground(): void;
+    readonly backgroundReader: HTMLIFrameElement | null;
     readonly returnFocus: HTMLElement | null;
   };
 }

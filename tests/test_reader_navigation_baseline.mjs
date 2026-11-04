@@ -32,7 +32,7 @@ function fixture() {
     localStorage: storage, location: new URL(origin + '/search/#/'), URL, URLSearchParams,
     crypto, history, console});
   vm.runInContext(source, context, {filename});
-  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerPath), data, storage, crypto, calls};
+  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerPath), data, storage, crypto, calls, context};
 }
 
 const json = value => JSON.parse(JSON.stringify(value));
@@ -121,6 +121,11 @@ test('remember still updates history when storage fails and saved rejects malfor
   const {nav, data, storage, calls} = fixture();
   data.set('reader-navigation-current', '{not-json');
   assert.equal(nav.saved(), null);
+  // Valid JSON is returned verbatim; it is not guaranteed to be our record.
+  for (const value of [true, 17, 'text', ['item'], {readerUrl: 23}]) {
+    data.set('reader-navigation-current', JSON.stringify(value));
+    assert.deepEqual(json(nav.saved()), value);
+  }
   storage.setItem = () => { throw new Error('quota'); };
   const url = new URL(origin + readerPath + '?nav=secret');
   nav.remember(url, {top: 2});
@@ -148,4 +153,24 @@ test('messages are rejected when no reader iframe is active', () => {
   const {nav} = fixture();
   assert.equal(nav.accepts({origin, source: {}}), false);
   assert.equal(nav.accepts({origin: 'https://other.example', source: null}), false);
+});
+
+test('pathname and search parameter prototype overrides retain their original effects', () => {
+  const {nav, context} = fixture();
+  const path = Object.getOwnPropertyDescriptor(URL.prototype, 'pathname');
+  const get = URLSearchParams.prototype.get;
+  try {
+    Object.defineProperty(URL.prototype, 'pathname', {...path, get() { return undefined; }});
+    assert.throws(() => nav.parse(readerPath), {message: 'Invalid reader destination'});
+    Object.defineProperty(URL.prototype, 'pathname', path);
+    const result = nav.mergeSearchParams('/search/#/Repo?path=first', 'q=ok', {hashRoute:true, keys:['q']});
+    assert.equal(result.hash, '#/Repo?path=first&q=ok');
+    URLSearchParams.prototype.get = function() { return undefined; };
+    assert.equal(nav.prepare(readerPath, '/search/').searchParams.get('nav'), undefined);
+    vm.runInContext('String.prototype.split = function() { return []; }', context);
+    assert.match(nav.mergeSearchParams('/search/#/Repo', '', {hashRoute:true}).hash, /^#undefined/);
+  } finally {
+    Object.defineProperty(URL.prototype, 'pathname', path);
+    URLSearchParams.prototype.get = get;
+  }
 });

@@ -2,26 +2,31 @@
   "use strict";
   // The search document outlives an overlay. Its store can finish a progress
   // transaction after the Reader iframe has already been detached.
+  /** @type {Promise<ReaderStoreApi> | null} */
   let progressStorePromise = null;
+  /** @type {Map<string, ReaderStoreApi>} */
   const progressStores = new Map();
+  /** @param {string} url @param {string | undefined} version @returns {Promise<ReaderStoreApi | undefined>} */
   function progressStore(url, version) {
     const key = (version || "unversioned") + "|" + url;
     if (progressStores.has(key)) return Promise.resolve(progressStores.get(key));
     if (root.VoiceOfMLReaderStore && (root.VoiceOfMLReaderStore.STORE_VERSION || "") === (version || ""))
       return Promise.resolve(root.VoiceOfMLReaderStore);
     if (progressStorePromise) return progressStorePromise.catch(() => null).then(() => progressStore(url, version));
-    progressStorePromise = new Promise((resolve, reject) => {
+    progressStorePromise = /** @type {Promise<ReaderStoreApi>} */ (new Promise((resolve, reject) => {
       const script = document.createElement("script");
       script.src = url;
       if (version) script.dataset.readerStoreVersion = version;
       script.onload = () => root.VoiceOfMLReaderStore ? resolve(root.VoiceOfMLReaderStore) : reject(new Error("Reader store unavailable"));
       script.onerror = () => reject(new Error("Reader store unavailable"));
       document.head.append(script);
-    }).then(store => { progressStores.set(key, store); progressStorePromise = null; return store; },
+    })).then(store => { progressStores.set(key, store); progressStorePromise = null; return store; },
       error => { progressStorePromise = null; throw error; });
     return progressStorePromise;
   }
+  /** @param {string} readerPath @param {{resume?: (url: string) => void; close?: () => void}} [options] */
   function createNavigation(readerPath, options = {}) {
+    /** @param {{url?: unknown; closeTime?: unknown} | null | undefined} progress */
     function persistProgress(progress) {
       if (!progress || typeof progress.url !== "string" || !progress.url) return;
       let readerStoreUrl;
@@ -34,36 +39,46 @@
       } catch (_) { return; }
       const { closeTime, ...snapshot } = progress;
       const entry = { ...snapshot, lastReadAt: Number.isFinite(closeTime) ? closeTime : Date.now() };
-      const version = /^reader-store\.([0-9a-f]{12})\.js$/.exec(readerStoreUrl.pathname.split("/").pop())?.[1];
-      progressStore(readerStoreUrl.href, version).then(store => store.put(entry)).catch(error => console.warn("Reader progress was not saved", error));
+      const version = /^reader-store\.([0-9a-f]{12})\.js$/.exec(/** @type {string} */ (readerStoreUrl.pathname.split("/").pop()))?.[1];
+      progressStore(readerStoreUrl.href, version).then(store => /** @type {ReaderStoreApi} */ (store).put(entry)).catch(error => console.warn("Reader progress was not saved", error));
     }
+    /** @type {HTMLIFrameElement | null} */
     let frame = null;
+    /** @type {HTMLElement | null} */
     let returnFocus = null;
+    /** @type {{element: Element; inert: boolean; ariaHidden: string | null}[]} */
     let background = [];
+    /** @type {HTMLDivElement | null} */
     let opening = null;
+    /** @type {(() => void) | null} */
     let releaseOpening = null;
     // The outer search document owns the browser tab. Only the active Reader
     // may change its title; restore it on dismiss, including parked speech.
+    /** @type {string | null} */
     let searchTitle = null;
     let titleDismissed = false;
     function restoreTitle() {
       if (searchTitle !== null) document.title = searchTitle;
       searchTitle = null;
     }
+    /** @param {HTMLIFrameElement} target @param {unknown} title */
     function showTitle(target, title) {
       if (frame !== target || titleDismissed || typeof title !== "string" || !title.trim()) return;
       target.title = title;
       if (document.title === title) return;
       document.title = title;
     }
+    /** @param {URL} url */
     function initialTitle(url) {
       const title = url.searchParams.get("title");
       return title && title.trim() ? title : "";
     }
     // A Reader closed while reading aloud stays alive, hidden, with a small
     // player on the search page; reopening the same book reuses it.
+    /** @type {{frame: HTMLIFrameElement; bar: HTMLDivElement; focus: HTMLElement | null | undefined; key: string; timer: number} | null} */
     let parked = null;
     const sessionKey = "reader-navigation-current";
+    /** @param {string} raw */
     function bookKey(raw) {
       try {
         const params = new URL(raw, location.origin).searchParams;
@@ -72,6 +87,7 @@
         return "";
       }
     }
+    /** @param {HTMLIFrameElement} target */
     function speech(target) {
       try {
         return target?.contentWindow?.CCRDSpeech?.state?.() || null;
@@ -79,6 +95,7 @@
         return null;
       }
     }
+    /** @param {HTMLIFrameElement} target */
     function dispose(target) {
       try {
         // Run lifecycle cleanup before detaching the browsing context.
@@ -100,6 +117,7 @@
       const current = releaseParked();
       if (current) dispose(current.frame);
     }
+    /** @param {HTMLIFrameElement} target @param {string} selector */
     function inFrame(target, selector) {
       try {
         return target.contentDocument?.querySelector(selector) || null;
@@ -109,6 +127,7 @@
     }
     // `restartBy`: a Reader resumed after a page navigation is not reading yet;
     // keep it until then (bounded) instead of disposing it on the first check.
+    /** @param {HTMLIFrameElement} target @param {HTMLElement | null | undefined} [focus] @param {number} [restartBy] */
     function park(target, focus, restartBy = 0) {
       disposeParked();
       target.classList.add("reader-overlay-parked");
@@ -120,6 +139,7 @@
       bar.setAttribute("aria-label", "后台朗读");
       const label = document.createElement("span");
       label.className = "reader-speech-mini-title";
+      /** @param {string} text @param {() => void} action */
       const button = (text, action) => {
         const element = document.createElement("button");
         element.type = "button";
@@ -133,9 +153,9 @@
         else root.dispatchEvent(new CustomEvent("voice-reader-resume", { detail: url }));
       });
       back.className = "reader-speech-mini-back";
-      const play = button("暂停", () => inFrame(target, "#speech-play")?.click());
+      const play = button("暂停", () => /** @type {HTMLElement | null} */ (inFrame(target, "#speech-play"))?.click());
       const stop = button("停止", () => {
-        inFrame(target, "#speech-stop")?.click();
+        /** @type {HTMLElement | null} */ (inFrame(target, "#speech-stop"))?.click();
         disposeParked();
       });
       stop.setAttribute("aria-label", "停止朗读并关闭阅读器");
@@ -161,25 +181,28 @@
       parked = { frame: target, bar, focus, key: bookKey(target.src), timer: setInterval(sync, 1000) };
       sync();
     }
+    /** @param {string | URL} raw */
     function parse(raw) {
       const url = new URL(raw, location.origin);
       if (url.origin !== location.origin || url.pathname !== readerPath)
         throw new Error("Invalid reader destination");
       return url;
     }
+    /** @param {string | URL} rawTarget @param {URLSearchParams | string} source @param {{hashRoute?: boolean; keys?: readonly string[]}} [options] */
     function mergeSearchParams(rawTarget, source, { hashRoute = false, keys = [] } = {}) {
       const target = new URL(rawTarget, location.origin);
       const sourceParams = source instanceof URLSearchParams ? source : new URLSearchParams(source || "");
       const hashParts = hashRoute ? target.hash.split("?", 2) : null;
-      const params = hashRoute ? new URLSearchParams(hashParts[1] || "") : target.searchParams;
+      const params = hashRoute ? new URLSearchParams(/** @type {string[]} */ (hashParts)[1] || "") : target.searchParams;
       for (const key of keys) {
         params.delete(key);
         for (const value of sourceParams.getAll(key)) params.append(key, value);
       }
       if (hashRoute)
-        target.hash = hashParts[0] + (params.toString() ? `?${params.toString()}` : "");
+        target.hash = /** @type {string[]} */ (hashParts)[0] + (params.toString() ? `?${params.toString()}` : "");
       return target;
     }
+    /** @returns {unknown} */
     function saved() {
       try {
         return JSON.parse(sessionStorage.getItem(sessionKey) || "null");
@@ -187,18 +210,20 @@
         return null;
       }
     }
+    /** @param {URL} url */
     function clear(url) {
       try {
         const token = url.searchParams.get("nav");
         if (token) sessionStorage.removeItem("reader-return:" + token);
-        if (saved()?.readerUrl === url.href) sessionStorage.removeItem(sessionKey);
+        if (/** @type {{readerUrl?: unknown} | null} */ (saved())?.readerUrl === url.href) sessionStorage.removeItem(sessionKey);
       } catch (_) {}
     }
+    /** @param {string} raw @param {string} returnUrl */
     function prepare(raw, returnUrl) {
       const url = parse(raw);
       url.searchParams.set("return", returnUrl);
       try {
-        const previous = saved();
+        const previous = /** @type {{readerUrl?: string} | null} */ (saved());
         if (previous?.readerUrl) clear(new URL(previous.readerUrl, location.origin));
         const token =
           typeof crypto.randomUUID === "function"
@@ -211,6 +236,7 @@
       } catch (_) {}
       return url;
     }
+    /** @param {URL} url @param {object} returnScroll @param {boolean} [replace] */
     function remember(url, returnScroll, replace = false) {
       const share = new URL(url.href);
       share.searchParams.delete("return");
@@ -231,6 +257,7 @@
         share.href
       );
     }
+    /** @param {HTMLIFrameElement} current */
     function shade(current) {
       document.body.classList.add("reader-overlay-open");
       background = Array.from(document.body.children)
@@ -247,12 +274,13 @@
           return state;
         });
     }
+    /** @param {URL} url */
     function mount(url) {
       const key = bookKey(url.href);
       if (parked && key && parked.key === key) {
         // The same book: show the Reader that kept reading, at its reading position.
         if (frame && frame !== parked.frame) unmount(false);
-        const { frame: kept } = releaseParked();
+        const { frame: kept } = /** @type {NonNullable<ReturnType<typeof releaseParked>>} */ (releaseParked());
         returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         frame = kept;
         searchTitle = document.title;
@@ -266,7 +294,7 @@
         shade(kept);
         kept.focus();
         // Show the sentence being read (not the "回到原位置" toggle of the panel button).
-        try { kept.contentWindow.CCRDSpeech?.reveal?.(); } catch (_) {}
+        try { /** @type {Window} */ (kept.contentWindow).CCRDSpeech?.reveal?.(); } catch (_) {}
         return kept;
       }
       // A foreground Reader that is reading aloud becomes the background
@@ -309,6 +337,7 @@
         releaseOpening?.();
         next.focus();
       };
+      /** @param {MessageEvent} event */
       const onShell = event => {
         if (event.origin === location.origin && event.source === next.contentWindow && event.data?.type === "voice-reader-shell") reveal();
       };
@@ -362,12 +391,13 @@
       returnFocus = null;
       return focus;
     }
+    /** @param {string} raw @param {object} returnScroll @returns {HTMLIFrameElement | null} */
     function replace(raw, returnScroll) {
       const next = parse(raw);
-      const current = new URL(frame.src);
+      const current = new URL(/** @type {HTMLIFrameElement} */ (frame).src);
       for (const key of ["return", "nav"])
         if (!next.searchParams.get(key) && current.searchParams.get(key))
-          next.searchParams.set(key, current.searchParams.get(key));
+          next.searchParams.set(key, /** @type {string} */ (current.searchParams.get(key)));
       remember(next, returnScroll, true);
       const focus = unmount(bookKey(next.href) !== bookKey(current.href));
       mount(next);
@@ -416,11 +446,12 @@
     else setTimeout(resumeSpeech);
     // A search page restored from the back/forward cache runs no startup code.
     root.addEventListener?.("pageshow", (event) => { if (event.persisted) resumeSpeech(); });
+    /** @param {MessageEvent} event */
     function accepts(event) {
       if (!frame || event.origin !== location.origin) return false;
       if (event.source === frame.contentWindow) return true;
       try {
-        return !!event.source && event.source.frameElement === frame;
+        return !!event.source && /** @type {Window} */ (event.source).frameElement === frame;
       } catch (_) {
         return false;
       }
@@ -432,7 +463,7 @@
       if (background && event.source !== background.contentWindow) disposeParked();
     });
     root.addEventListener?.("message", (event) => {
-      if (accepts(event) && event.data?.type === "voice-reader-title") showTitle(frame, event.data.title);
+      if (accepts(event) && event.data?.type === "voice-reader-title") showTitle(/** @type {HTMLIFrameElement} */ (frame), event.data.title);
     });
     return Object.freeze({
       parse,
