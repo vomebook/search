@@ -28,7 +28,8 @@ const required = [
   'remember stores a private reader URL but exposes a sanitized history URL',
   'remember still updates history when storage fails and saved rejects malformed JSON',
   'clear removes only the matching session and selected return token',
-  'messages are rejected when no reader iframe is active'
+  'messages are rejected when no reader iframe is active',
+  'pathname and search parameter prototype overrides retain their original effects'
 ].map(name => ({name}));
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
     !hasPassingTapContracts(text, required)) {
