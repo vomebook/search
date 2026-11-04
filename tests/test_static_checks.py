@@ -220,7 +220,7 @@ class StaticGateTests(unittest.TestCase):
     def test_document_loader_coverage_gate_fails_closed(self):
         paths = ["static/reader/core/reader-document-loader.mjs", "scripts/check_document_loader_coverage.mjs",
                  "tests/test_reader_document_loader_contract.mjs", "tests/test_reader_pdf_rate_outer.mjs"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -245,6 +245,11 @@ class StaticGateTests(unittest.TestCase):
                       'test.todo("extra todo");'):
             contract.write_text(original + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            contract.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
         contract.write_text(original)
         rate_test = self.root / paths[3]
         rate_source = rate_test.read_text()
@@ -263,10 +268,25 @@ class StaticGateTests(unittest.TestCase):
         (self.root / paths[2]).write_text('import "../static/reader/core/reader-document-loader.mjs";\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
+    def test_shared_tap_validator_tests_are_required(self):
+        paths = ["scripts/check_tap_contracts.mjs", "tests/test_tap_contracts.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", "--test", "--test-reporter=tap", paths[1]]
+        self.assert_check(self.run_check(*check), True, "# pass 3")
+        helper = self.root / paths[0]
+        original = helper.read_text()
+        anchor = 'todo[0] === "# todo 0"'
+        self.assertEqual(original.count(anchor), 1)
+        helper.write_text(original.replace(anchor, 'true'))
+        self.assert_check(self.run_check(*check), False, "not ok")
+
     def test_document_loader_coverage_checks_fractional_minimum(self):
         paths = ["static/reader/core/reader-document-loader.mjs", "scripts/check_document_loader_coverage.mjs",
                  "tests/test_reader_document_loader_contract.mjs", "tests/test_reader_pdf_rate_outer.mjs"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -295,7 +315,7 @@ class StaticGateTests(unittest.TestCase):
     def test_search_response_cache_coverage_gate_fails_closed(self):
         paths = ["static/search/response-cache.js", "scripts/check_search_response_cache_coverage.mjs",
                  "tests/test_search_response_cache_contract.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -367,7 +387,7 @@ class StaticGateTests(unittest.TestCase):
     def test_search_result_identity_coverage_gate_fails_closed(self):
         paths = ["static/search/result-identity.js", "static/search/record-path.js",
                  "scripts/check_search_result_identity_coverage.mjs", "tests/test_search_stable_id_baseline.mjs", "static/app.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -381,6 +401,11 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "passing named contracts")
         test.write_text(source.replace("test('" + name + "'", "test.skip('" + name + "'"))
         self.assert_check(self.run_check(*check), False, "passing named contracts")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named contracts")
         test.write_text(source.replace("test('" + name + "', () => {", "test('" + name + "', () => { throw new Error('identity failure');"))
         self.assert_check(self.run_check(*check), False, "identity failure")
         test.unlink()
@@ -425,7 +450,7 @@ class StaticGateTests(unittest.TestCase):
     def test_search_response_validation_coverage_gate_fails_closed(self):
         paths = ["static/search/response-validation.js", "scripts/check_search_response_validation_coverage.mjs",
                  "tests/test_search_response_validation_baseline.mjs", "static/app.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -439,6 +464,11 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "passing named contracts")
         test.write_text(source.replace("test('" + name + "'", "test.skip('" + name + "'"))
         self.assert_check(self.run_check(*check), False, "passing named contracts")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named contracts")
         test.write_text(source.replace("test('" + name + "', () => {",
                                        "test('" + name + "', () => { throw new Error('contract failure');"))
         self.assert_check(self.run_check(*check), False, "contract failure")
@@ -495,13 +525,19 @@ class StaticGateTests(unittest.TestCase):
     def test_search_file_types_coverage_gate_fails_closed(self):
         paths = ["static/search/file-types.js", "scripts/check_search_file_types_coverage.mjs",
                  "tests/test_search_extension_inventory_baseline.mjs", "static/app.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", "scripts/check_search_file_types_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "file-types.js")
         test = self.root / paths[2]
+        original = test.read_text()
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named contracts")
         test.write_text('import test from "node:test"; test("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
         test.write_text('throw new Error("failed file types test");\n')
@@ -544,7 +580,7 @@ class StaticGateTests(unittest.TestCase):
     def test_search_highlight_coverage_gate_fails_closed(self):
         paths = ["static/search/highlight.js", "scripts/check_search_highlight_coverage.mjs",
                  "tests/test_search_highlight_contract.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -564,6 +600,11 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "passing named contracts")
         test.write_text(source + '\ntest.todo("unfinished contract");\n')
         self.assert_check(self.run_check(*check), False, "passing named contracts")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named contracts")
         test.write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one source row")
         test.write_text('throw new Error("failed highlight test");\n')
@@ -575,7 +616,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_highlight_coverage_checks_fractional_minimum(self):
         for path in ("static/search/highlight.js", "scripts/check_search_highlight_coverage.mjs",
-                     "tests/test_search_highlight_contract.js"):
+                     "tests/test_search_highlight_contract.js", "scripts/check_tap_contracts.mjs"):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -614,7 +655,7 @@ class StaticGateTests(unittest.TestCase):
     def test_search_record_path_coverage_gate_fails_closed(self):
         paths = ["static/search/record-path.js", "scripts/check_search_record_path_coverage.mjs",
                  "tests/test_search_record_path.js", "static/app.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -628,6 +669,11 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "passing named tests")
         for extra in ('require("node:test").skip("extra skip", () => {});',
                       'require("node:test").todo("extra todo");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('console.log("skipped 0"); require("node:test").skip("extra skip", () => {});',
+                      'console.log("todo 0"); require("node:test").todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
             test.write_text(original + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "passing named tests")
         test.write_text(original + '\nrequire("node:test")("unexpected failure", () => { throw new Error("path assertion failure"); });\n')
@@ -665,7 +711,7 @@ class StaticGateTests(unittest.TestCase):
     def test_search_size_coverage_gate_fails_closed(self):
         paths = ["static/search/size-format.js", "scripts/check_search_size_coverage.mjs",
                  "tests/test_search_size_format.js", "tests/test_search_size_render_contract.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -684,6 +730,11 @@ class StaticGateTests(unittest.TestCase):
                 self.assert_check(self.run_check(*check), False, "passing named tests")
         for extra in ('test("' + names[0] + '", () => {});', 'test.skip("extra skip", () => {});',
                       'test.todo("extra todo");'):
+            render.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
             render.write_text(original + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "passing named tests")
         render.write_text(original)
@@ -728,7 +779,7 @@ class StaticGateTests(unittest.TestCase):
         paths = ["static/reader/core/reader-request-manager.js", "scripts/check_request_manager_coverage.mjs",
                  "tests/test_reader_request_manager.js", "tests/test_reader_initial_recovery.js",
                  "tests/test_reader_request_manager_edges.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -744,6 +795,11 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "passing named tests")
         source.write_text(original + '\nrequire("node:test").todo("unfinished check");\n')
         self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('console.log("skipped 0"); require("node:test").skip("extra skip", () => {});',
+                      'console.log("todo 0"); require("node:test").todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            source.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
         source.write_text(original + '\nrequire("node:test")("reader request manager behavior", () => {});\n')
         self.assert_check(self.run_check(*check), False, "passing named tests")
         source.write_text(original)
@@ -802,7 +858,7 @@ class StaticGateTests(unittest.TestCase):
         paths = ["static/reader/core/reader-request-manager.js", "scripts/check_request_manager_coverage.mjs",
                  "tests/test_reader_request_manager.js", "tests/test_reader_initial_recovery.js",
                  "tests/test_reader_request_manager_edges.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -975,7 +1031,7 @@ class StaticGateTests(unittest.TestCase):
                  "tests/test_reader_section_virtualizer.js", "tests/test_reader_chapter_repository.js",
                  "tests/test_reader_chapter_scheduler.js", "tests/test_reader_chapter_preload.js",
                  "tests/test_reader_scroll_anchor.js"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -996,6 +1052,11 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "passing named tests")
         chapter_test.write_text(original_test + '\nrequire("node:test").todo("unfinished check");\n')
         self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('console.log("skipped 0"); require("node:test").skip("extra skip", () => {});',
+                      'console.log("todo 0"); require("node:test").todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            chapter_test.write_text(original_test + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named tests")
         chapter_test.write_text(original_test.replace('reader chapter repository contracts passed', 'renamed success marker'))
         self.assert_check(self.run_check(*check), False, "passing named tests")
         chapter_test.write_text(original_test)
@@ -1192,7 +1253,7 @@ class StaticGateTests(unittest.TestCase):
     def test_search_folder_merge_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_folder_merge_baseline.mjs",
                  "tests/test_search_folder_merge_baseline.mjs"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -1210,6 +1271,11 @@ class StaticGateTests(unittest.TestCase):
                       "test.todo('extra todo');"):
             test.write_text(source + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
         test.write_text(source.replace(anchor + ", () => {", anchor + ", () => { throw new Error('folder merge failed');"))
         self.assert_check(self.run_check(*check), False, "folder merge failed")
         test.unlink()
@@ -1222,7 +1288,7 @@ class StaticGateTests(unittest.TestCase):
     def test_search_filter_equality_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_filter_equality_baseline.mjs",
                  "tests/test_search_filter_equality_baseline.mjs"]
-        for path in paths:
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -1240,6 +1306,11 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "all named baseline contracts")
         test.write_text(source + "\ntest.skip('additional skip', () => {});\n")
         self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
         test.write_text(source.replace(anchor + ", () => {", anchor + ", () => { throw new Error('filter baseline failed');"))
         self.assert_check(self.run_check(*check), False, "filter baseline failed")
         test.unlink()
