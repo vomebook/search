@@ -1037,7 +1037,9 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.assertEqual(self.page.evaluate("history.length"), initial_history_length)
         self.page.locator("#sidebar-content .repo-list-item").first.wait_for(state="visible")
         repo = self.page.locator("#sidebar-content .repo-list-item").first.get_attribute("data-repo")
-        self.page.locator("#sidebar-content .repo-list-item").first.click()
+        # Initial sidebar and later metadata can reorder the list between reads.
+        # Click the same named repository even if it is no longer first.
+        self.page.locator("#sidebar-content").get_by_role("button", name=f"打开仓库：{repo}", exact=True).click()
         self.page.wait_for_function("repo => STATE.mode === 'repo' && STATE.repo === repo", arg=repo)
         self.assertEqual(self.page.evaluate("history.length"), initial_history_length + 1)
         self.assertTrue(self.page.evaluate("STATE.leftSidebarOpen"))
@@ -1117,7 +1119,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         self.page.locator("#hamburger-btn").click()
         self.page.locator("#sidebar-content .repo-list-item").first.wait_for(state="visible")
         repo = self.page.locator("#sidebar-content .repo-list-item").first.get_attribute("data-repo")
-        self.page.locator("#sidebar-content .repo-list-item").first.click()
+        self.page.locator("#sidebar-content").get_by_role("button", name=f"打开仓库：{repo}", exact=True).click()
         self.page.wait_for_function("repo => STATE.mode === 'repo' && STATE.repo === repo && STATE.browserPath === '' && STATE.dataLoaded && !STATE.isLoading && STATE._loadedPage >= 1", arg=repo)
         self.page.evaluate("repo => ROUTER.navigate('repo', repo, 'docs')", repo)
         self.page.wait_for_function("STATE.browserPath === 'docs' && !STATE.isLoading")
