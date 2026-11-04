@@ -156,6 +156,19 @@ function couldBeFuzzy(token, word, maxDist) {
 
 function compileWildcardMatcher(pattern) {
   const normalized = String(pattern || "");
+  if (normalized.includes("*") && normalized.includes("?") && /^[*?]+$/.test(normalized)) {
+    // Stars may match nothing; questions require adjacent regex-dot code units.
+    const requiredLength = normalized.replace(/\*/g, "").length;
+    return {test(text) {
+      let run = 0;
+      for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i);
+        if (code === 10 || code === 13 || code === 0x2028 || code === 0x2029) run = 0;
+        else if (++run >= requiredLength) return true;
+      }
+      return false;
+    }};
+  }
   if (normalized.includes("?") && !normalized.includes("*")) {
     // Escaped literals and non-u dots have fixed width and cannot backtrack.
     const tokens = normalized.split("");

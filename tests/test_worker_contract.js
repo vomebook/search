@@ -217,6 +217,23 @@ test("ordered interior stars preserve overlapping literals and line boundaries",
   vm.runInContext('if (compileWildcardMatcher("*a".repeat(100)+"*b").test("a".repeat(20000))) throw Error("bad match");', context, {timeout: 1000});
 });
 
+test("mixed wildcard runs preserve dot semantics with linear bounded scans", () => {
+  const {context} = makeWorker();
+  for (const pattern of ["*?", "?*", "*?*", "?*?", "**??***?*"]) {
+    const matcher = context.compileWildcardMatcher(pattern);
+    const regex = new RegExp(pattern.replace(/\*/g, ".*").replace(/\?/g, "."), "i");
+    for (const text of ["", "a", "abc", "😀", "\ud800", "\udc00", "a\nb", "a\rb", "a\u2028b", "a\u2029b", "ab\ncd"]) {
+      assert.strictEqual(matcher.test(text), regex.test(text), JSON.stringify([pattern, text]));
+      assert.strictEqual(matcher.test(text), regex.test(text), "repeat " + JSON.stringify([pattern, text]));
+    }
+  }
+  vm.runInContext(`(() => {
+    const matcher = compileWildcardMatcher('?*'.repeat(512));
+    if (matcher.test(('a'.repeat(511)+'\\n').repeat(1000))) throw Error('crossed a line terminator');
+    if (!matcher.test('😀'.repeat(256))) throw Error('wrong UTF-16 width');
+  })()`, context, {timeout: 1000});
+});
+
 test("question-only wildcard preserves non-u UTF-16 and dot semantics", () => {
   const {context} = makeWorker();
   for (const [pattern, text, expected] of [
