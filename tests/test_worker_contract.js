@@ -1042,6 +1042,32 @@ test("searched name order reuse preserves malformed and failed replacement fallb
   assert.strictEqual((await worker.request("local-search",params)).total,30);
   assert(vm.runInContext('compares > 0',worker.context));
 });
+test("implicit literal searches reuse only a ready dense repository name order", async () => {
+  const input = Array.from({length:30}, (_, index) => ({...records[0],
+    Repo:"Repo/A", File:index % 2 ? "alpha" : "ALPHA", Folder:[]}));
+  const {worker} = await loaded(input);
+  const params = {q:"a*",exact:false,repos:["Repo/A"],sort:"name",pageSize:10};
+  const cold = await worker.request("local-search",params);
+  await worker.request("local-search",{q:"",repos:["Repo/A"],sort:"name"});
+  vm.runInContext('searchOrderCache.clear(); compareRecordName = () => { throw Error("re-sorted"); };',worker.context);
+  const warm = await worker.request("local-search",params);
+  assert.strictEqual(warm.total,cold.total);
+  assert.deepStrictEqual(warm.ids,cold.ids);
+});
+test("searched name order reuse respects the exact temporary set cap", async () => {
+  for (const count of [65536,65537]) {
+    const input = Array.from({length:count}, (_, index) => ({...records[0],
+      Repo:"Repo/A", File:"file-" + String(count - index).padStart(6,"0"), Folder:[]}));
+    const {worker} = await loaded(input);
+    const browse = await worker.request("local-search",{q:"",repos:["Repo/A"],sort:"name",pageSize:20});
+    vm.runInContext('globalThis.originalCompare = compareRecordName; globalThis.compares = 0; compareRecordName = (a,b) => { compares++; return originalCompare(a,b); };',worker.context);
+    const result = await worker.request("local-search",{q:"?*?",exact:true,repos:["Repo/A"],sort:"name",pageSize:20});
+    assert.strictEqual(result.total,count);
+    assert.deepStrictEqual(result.ids,browse.ids);
+    if (count === 65536) assert.strictEqual(vm.runInContext('compares',worker.context),0);
+    else assert(vm.runInContext('compares > 0',worker.context));
+  }
+});
 test("prepared sort reuse falls back for sparse, multi-repository and searched results", async () => {
   const input = Array.from({length:30}, (_, index) => ({...records[0],
     Repo:index < 25 ? "Repo/A" : "Repo/B", File:"same " + (index % 4),
