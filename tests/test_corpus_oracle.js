@@ -28,7 +28,7 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-async function realWorkerSearch(params) {
+async function realWorkerSearch(params, warmParams) {
   const messages = [];
   let listener;
   const context = {
@@ -41,6 +41,7 @@ async function realWorkerSearch(params) {
   vm.createContext(context);
   vm.runInContext(workerSource, context, { filename: "static/search/index-worker.js" });
   await listener({ data: { protocol: 1, type: "replace-corpus", id: "load", payload: { data: clone(compact) } } });
+  if (warmParams) await listener({ data: { protocol: 1, type: "local-search", id: "warm", payload: warmParams } });
   await listener({ data: { protocol: 1, type: "local-search", id: "oracle", payload: params } });
   return messages[messages.length - 1].result;
 }
@@ -134,8 +135,8 @@ function cleanPath(value) {
   return String(value || "").replace(/^\/+|\/+$/g, "");
 }
 
-async function compare(params) {
-  const actual = await realWorkerSearch(params);
+async function compare(params, warmParams) {
+  const actual = await realWorkerSearch(params, warmParams);
   // This VM has no Web Crypto: identity is per Worker, not corpus-oracle data.
   assert.match(actual.snapshot_generation, /^worker:[^:]+:1$/);
   const { snapshot_generation, ...page } = actual;
@@ -164,6 +165,11 @@ test("mixed star-question repo proof and fallback match independent full corpus 
   await compare({ q: "?*?", exact: true, repos: ["VoiceOfML/Omnibus"], extensions: ["pdf"], sort: "size", page: 3, pageSize: 29 });
   // One star avoids exponential regex backtracking in the independent oracle.
   await compare({ q: "?".repeat(40) + "*", exact: true, page: 1, pageSize: 19 });
+});
+test("warmed dense exact repository name ordering matches independent corpus scan", async () => {
+  const repos = ["VoiceOfML/VOMEBOOK"];
+  const params = {q:"?*?",exact:true,repos,sort:"name",page:3,pageSize:37};
+  await compare(params,{q:"",repos,sort:"name"});
 });
 test("repository and extension filters match brute-force scan", () => compare({
   q: "", exact: true, repos: ["VoiceOfML/Omnibus"], extensions: ["pdf"], page: 1, pageSize: 17,

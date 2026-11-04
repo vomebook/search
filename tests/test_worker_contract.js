@@ -971,6 +971,77 @@ test("dense repository sorting can reuse prepared stable orders", async () => {
     assert.strictEqual(warm.total, cold.total);
   }
 });
+test("dense exact single-repo name searches reuse prepared stable order", async () => {
+  const input = Array.from({length:60}, (_, index) => ({...records[0],
+    Repo:index < 50 ? "Repo/A" : "Repo/B", File:["a", "A", "中", "a"][index % 4],
+    Extension:index % 9 ? "pdf" : "txt", Size:[1, 0, -1, "unknown"][index % 4], Folder:["same"]}));
+  const {worker} = await loaded(input);
+  const params = {q:"?*?",exact:true,repos:["Repo/A"],extensions:["pdf"],sort:"name",pageSize:7};
+  const cold = await worker.request("local-search",{...params,pageSize:100});
+  const anchor = "Repo/A\0same/" + cold.records[10].File + "." + cold.records[10].Extension;
+  const expected = await worker.request("local-search",{...params,page:2,anchorId:anchor});
+  await worker.request("local-search",{q:"",repos:["Repo/A"],sort:"name"});
+  vm.runInContext('searchOrderCache.clear();', worker.context);
+  worker.context.compareRecordName = () => { throw Error("re-sorted"); };
+  const warm = await worker.request("local-search",{...params,page:2,anchorId:anchor});
+  assert.deepStrictEqual(warm.ids,expected.ids);
+  assert.strictEqual(warm.total,expected.total);
+  assert.strictEqual(warm.anchor_index,expected.anchor_index);
+});
+test("searched name sort reuse preserves fallback for unusual or sparse scopes", async () => {
+  const input = Array.from({length:30}, (_, index) => ({...records[0],
+    Repo:index < 25 ? "Repo/A" : "Repo/B", File:index < 22 ? "same" : "other",
+    Extension:index % 6 ? "pdf" : "txt", Folder:["f" + index]}));
+  const {worker} = await loaded(input);
+  await worker.request("local-search",{q:"",repos:["Repo/A"],sort:"name"});
+  vm.runInContext('globalThis.originalCompare = compareRecordName; globalThis.compares = 0; compareRecordName = (a,b) => { compares++; return originalCompare(a,b); };',worker.context);
+  const controls = [
+    {q:"same",exact:true,repos:["Repo/A"],extensions:["txt"]},
+    {q:"same",exact:true,repos:["Repo/A","Repo/B"]},
+    {q:"same",exact:true,repos:["Repo/A","Repo/A"]},
+    {q:"same",exact:true,repos:[""]},
+    {q:"same",exact:false,repos:["Repo/A"]},
+  ];
+  for (const params of controls) {
+    vm.runInContext('compares = 0;',worker.context);
+    await worker.request("local-search",{...params,sort:"name"});
+    if (params.repos[0] !== "") assert(vm.runInContext('compares > 0',worker.context));
+  }
+  await worker.request("replace-corpus",{data:compact(input.slice().reverse())});
+  assert.strictEqual(vm.runInContext('nameOrderReady',worker.context),false);
+  vm.runInContext('compares = 0;',worker.context);
+  await worker.request("local-search",{q:"same",exact:true,repos:["Repo/A"],sort:"name"});
+  assert(vm.runInContext('compares > 0',worker.context));
+});
+test("searched name order reuse preserves malformed and failed replacement fallback", async () => {
+  const input = Array.from({length:30}, (_, index) => ({...records[0],
+    Repo:"Repo/A", File:["a", "A", "中"][index % 3], Extension:"txt", Folder:[]}));
+  const {worker} = await loaded(input);
+  const params = {q:"?*?",exact:true,repos:["Repo/A"],sort:"name",pageSize:100};
+  const before = await worker.request("local-search",params);
+  await worker.request("local-search",{q:"",repos:["Repo/A"],sort:"name"});
+  const invalid = {v:2,rp:["Repo/A"],fd:[[], [{toString:null, valueOf:null}]],rc:[
+    [0,"a","txt",0,1,0],[0,"b","txt",1,1,0],
+  ]};
+  assert.strictEqual((await worker.send("replace-corpus",{data:invalid})).ok,false);
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),false);
+  const failed = await worker.send("local-search",params);
+  assert.strictEqual(failed.ok,false);
+  assert.strictEqual(failed.error.code,"WORKER_ERROR");
+  await worker.request("replace-corpus",{data:compact(input)});
+  assert.strictEqual(vm.runInContext('nameOrderReady',worker.context),false);
+  const restored = await worker.request("local-search",params);
+  assert.deepStrictEqual(restored.ids,before.ids);
+
+  const malformed = {v:2,rp:["Repo/A"],fd:[[]],rc:Array.from({length:30},(_,index)=>
+    [0,index === 0 ? 42 : "file" + index,"txt",0,1,0])};
+  await worker.request("replace-corpus",{data:malformed});
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),false);
+  await worker.request("local-search",{q:"",repos:["Repo/A"],sort:"name"});
+  vm.runInContext('globalThis.originalCompare = compareRecordName; globalThis.compares = 0; compareRecordName = (a,b) => {compares++; return originalCompare(a,b);};',worker.context);
+  assert.strictEqual((await worker.request("local-search",params)).total,30);
+  assert(vm.runInContext('compares > 0',worker.context));
+});
 test("prepared sort reuse falls back for sparse, multi-repository and searched results", async () => {
   const input = Array.from({length:30}, (_, index) => ({...records[0],
     Repo:index < 25 ? "Repo/A" : "Repo/B", File:"same " + (index % 4),
@@ -988,7 +1059,7 @@ test("prepared sort reuse falls back for sparse, multi-repository and searched r
   vm.runInContext('sortComparisons = 0;',worker.context);
   const searched = await worker.request("local-search", {q:"same",exact:true,repos:["Repo/A"],extensions:["pdf"],sort:"name"});
   assert.strictEqual(searched.total, 20);
-  assert(vm.runInContext('sortComparisons > 0',worker.context));
+  assert.strictEqual(vm.runInContext('sortComparisons',worker.context),0);
 });
 test("dense sort reuse caps its temporary index set", async () => {
   const input = Array.from({length:65537}, (_, index) => ({...records[0],
