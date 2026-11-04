@@ -161,6 +161,37 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }''')
         self.assertTrue(all(result.values()), result)
 
+    def test_replace_can_return_null_during_reentrant_dom_callbacks(self):
+        result = self.page.evaluate('''() => {
+          const nav = VoiceOfMLReaderNavigation.createNavigation('/search/static/reader.html');
+          const first = nav.mount(new URL('/search/static/reader.html?ext=txt&id=first', location.origin));
+          const setAttribute = HTMLElement.prototype.setAttribute;
+          const focus = HTMLIFrameElement.prototype.focus;
+          let disposed = false, reentered = false;
+          first.contentWindow.addEventListener('voice-reader-dispose', () => {
+            disposed = true;
+            HTMLIFrameElement.prototype.focus = function() {};
+            HTMLElement.prototype.setAttribute = function(name, value) {
+              const result = setAttribute.call(this, name, value);
+              if (!reentered && name === 'inert' && document.querySelector('.reader-overlay-pending')) {
+                reentered = true;
+                nav.unmount(false);
+              }
+              return result;
+            };
+          });
+          try {
+            const replaced = nav.replace('/search/static/reader.html?ext=txt&id=second', {});
+            return {disposed, reentered, isNull:replaced === null,
+                    frames:document.querySelectorAll('iframe.reader-overlay').length};
+          } finally {
+            HTMLIFrameElement.prototype.focus = focus;
+            HTMLElement.prototype.setAttribute = setAttribute;
+            nav.unmount(false);
+          }
+        }''')
+        self.assertEqual(result, dict(disposed=True, reentered=True, isNull=True, frames=0))
+
     def test_reader_title_tracks_foreground_and_restores_search(self):
         result = self.page.evaluate('''async () => {
           document.title='搜索原始标题';
