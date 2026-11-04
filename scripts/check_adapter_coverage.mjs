@@ -17,7 +17,10 @@ const rows = lines.filter(line =>
   /^\s*#?\s*reader-format-adapters\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
 const name = "reader adapter registry";
 const index = lines.indexOf(`# Subtest: ${name}`);
-if (result.status !== 0 || rows.length !== 1 || !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) ||
+const skipped = lines.filter(line => /^# skipped(?:\s|$)/.test(line));
+const todo = lines.filter(line => /^# todo(?:\s|$)/.test(line));
+if (result.status !== 0 || rows.length !== 1 || skipped.length !== 1 || skipped[0] !== "# skipped 0" ||
+    todo.length !== 1 || todo[0] !== "# todo 0" ||
     index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
     lines[index - 1] !== "# reader adapter registry contracts passed" ||
     !/^ok \d+ - reader adapter registry$/.test(lines[index + 1] || "")) {

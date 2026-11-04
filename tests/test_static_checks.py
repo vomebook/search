@@ -196,6 +196,11 @@ class StaticGateTests(unittest.TestCase):
                       'require("node:test").todo("extra todo");'):
             test.write_text(original + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "passing named contract")
+        for extra in ('console.log("skipped 0"); require("node:test").skip("extra skip", () => {});',
+                      'console.log("todo 0"); require("node:test").todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(original + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named contract")
         marker = "reader adapter registry contracts passed"
         self.assertEqual(original.count(marker), 1)
         test.write_text(original.replace(marker, "missing adapter completion marker"))
