@@ -1,4 +1,5 @@
 import {spawnSync} from "node:child_process";
+import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
 
 // Only the extracted size-format module, as exercised by the compatibility
 // vectors; an unloaded file must not be accepted as an empty 100% report.
@@ -15,16 +16,12 @@ const text = result.stdout || "";
 const lines = text.split(/\r?\n/);
 const rows = lines.filter(line =>
   /^\s*#\s*size-format\.js\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|\s*100(?:\.0+)?\s*\|/.test(line));
-const required = ["tests/test_search_size_format.js", "display preserves binary boundaries and historical precision",
-  "display retains original coercion and empty-value behavior", "display retains prototype and normalized cache behavior"];
-if (result.status !== 0 || rows.length !== 1 || !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text) ||
-    required.some(name => {
-      const index = lines.indexOf(`# Subtest: ${name}`);
-      return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
-        !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "") ||
-        (name === "tests/test_search_size_format.js" &&
-         lines[index - 1] !== "# search size formatting, parser compatibility and URL round trips passed");
-    })) {
+const required = [
+  {name: "tests/test_search_size_format.js", marker: "search size formatting, parser compatibility and URL round trips passed"},
+  ...["display preserves binary boundaries and historical precision", "display retains original coercion and empty-value behavior",
+    "display retains prototype and normalized cache behavior"].map(name => ({name}))
+];
+if (result.status !== 0 || rows.length !== 1 || !hasPassingTapContracts(text, required)) {
   console.error("Search size coverage gate requires passing named tests and exactly one fully covered source row");
   process.exitCode = 1;
 }

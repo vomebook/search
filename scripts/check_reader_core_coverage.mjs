@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
 
 // Each run includes exactly one own-source file, so Node's aggregate
 // thresholds cannot hide a regression in another file or in an empty report.
@@ -29,21 +30,15 @@ for (const gate of gates) {
   });
   const values = rows.length === 1 ? rows[0].split("|").slice(1,4).map(value=>Number(value.trim())) : [];
   const text = result.stdout || "";
-  const lines = text.split(/\r?\n/);
-  const skippedOrTodo = !/^# skipped 0$/m.test(text) || !/^# todo 0$/m.test(text);
   const expected = {"tests/test_reader_section_virtualizer.js": "reader section virtualizer contracts passed",
     "tests/test_reader_chapter_repository.js": "reader chapter repository contracts passed",
     "tests/test_reader_chapter_scheduler.js": "reader chapter scheduler contracts passed",
     "tests/test_reader_chapter_preload.js": "chapter manifest preload validation, reuse, body deadline and disposal passed",
     "tests/test_reader_scroll_anchor.js": "reader scroll anchor contracts passed"};
-  const missingTests = gate.tests.some(name => {
-    const index = lines.indexOf(`# Subtest: ${name}`);
-    return index < 0 || lines.lastIndexOf(`# Subtest: ${name}`) !== index ||
-      lines[index - 1] !== `# ${expected[name]}` ||
-      !new RegExp(`^ok \\d+ - ${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).test(lines[index + 1] || "");
-  });
+  const missingTests = gate.tests.some(name => typeof expected[name] !== "string") ||
+    !hasPassingTapContracts(text, gate.tests.map(name => ({name, marker: expected[name]})));
   if (result.status !== 0 || rows.length !== 1 ||
-      values.some((value,index)=>value < [gate.lines,gate.branches,gate.functions][index]) || skippedOrTodo || missingTests) {
+      values.some((value,index)=>value < [gate.lines,gate.branches,gate.functions][index]) || missingTests) {
     console.error(`Reader core coverage gate requires passing named tests and exactly one source coverage row: ${gate.source}`);
     process.exitCode = 1;
   }
