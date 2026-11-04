@@ -4,7 +4,9 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
+from unittest.mock import Mock
 
+from scripts.check_sidebar_payload_regressions import TEST_NAMES, passed
 from scripts.verify_hf_quality_baseline import REQUIRED, validate_baselines
 
 
@@ -55,6 +57,31 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         gate = 'python3 -B -m unittest -v tests.test_prefetch_pipeline tests.test_search_positions'
         self.assertEqual(workflow.count(gate), 1)
+
+    def test_pages_runs_initial_payload_route_regressions_in_both_browsers(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        for browser in ('chromium', 'firefox'):
+            self.assertEqual(workflow.count(f'SIDEBAR_PAYLOAD_TEST_BROWSER={browser} '
+                                            'python3 -B scripts/check_sidebar_payload_regressions.py'), 1)
+
+    def test_initial_payload_gate_rejects_failures_skips_and_incomplete_runs(self):
+        result = Mock(testsRun=len(TEST_NAMES), skipped=[], expectedFailures=[], unexpectedSuccesses=[])
+        result.wasSuccessful.return_value = True
+        self.assertTrue(passed(result))
+        result.testsRun -= 1
+        self.assertFalse(passed(result))
+        result.testsRun += 1
+        result.skipped = [(None, 'browser unavailable')]
+        self.assertFalse(passed(result))
+        result.skipped = []
+        result.expectedFailures = [(None, 'expected failure')]
+        self.assertFalse(passed(result))
+        result.expectedFailures = []
+        result.unexpectedSuccesses = [None]
+        self.assertFalse(passed(result))
+        result.unexpectedSuccesses = []
+        result.wasSuccessful.return_value = False
+        self.assertFalse(passed(result))
 
     def test_both_sites_run_search_response_validation_contract(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()

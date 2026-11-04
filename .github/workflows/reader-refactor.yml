@@ -110,6 +110,10 @@ jobs:
         run: |
           node tests/test_worker_contract.js
           python3 -B -m unittest -v tests.test_converted_reader_responsiveness tests.test_browser_smoke tests.test_browser_sidebar_reorder tests.test_browser_sidebar_reorder_discovery
+      - name: Check initial payload routing in both browsers
+        run: |
+          SIDEBAR_PAYLOAD_TEST_BROWSER=chromium python3 -B scripts/check_sidebar_payload_regressions.py
+          SIDEBAR_PAYLOAD_TEST_BROWSER=firefox python3 -B scripts/check_sidebar_payload_regressions.py
       - name: Check static dependency contracts
         run: node tests/test_static_contract.js
       - name: Check Firefox footer counter geometry
