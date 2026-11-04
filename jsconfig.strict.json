@@ -16,6 +16,7 @@
     "static/reader/formats/reader-format-adapters.js",
     "static/reader/ui/reader-document-styles.mjs",
     "static/search/search-session.js",
+    "static/search/download-controller.js",
     "static/search/size-format.js",
     "static/search/record-path.js",
     "static/search/highlight.js",

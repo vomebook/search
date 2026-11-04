@@ -1,5 +1,17 @@
 // Shared download admission and paced browser handoff controller.
+/** @param {typeof globalThis} root */
 (function (root) {
+    // A transport can reject with an arbitrary non-Error value whose truthy
+    // `message` is forwarded unchanged, so check results must remain unknown.
+    /** @typedef {unknown} DownloadCheckResult */
+    /** @typedef {{users: number, controller: AbortController, promise: Promise<DownloadCheckResult>, expires: number}} DownloadCheckEntry */
+    // The pending entry is initialized with null before its promise is attached;
+    // it is published to subscribers only after assignment in the same turn.
+    /** @typedef {{users: number, controller: AbortController, promise: Promise<boolean> | null}} PendingDownloadEntry */
+    /** @typedef {{link: string, entry: DownloadCheckEntry, resolve: (value: DownloadCheckResult) => void}} DownloadQueueItem */
+    /** @typedef {{button?: HTMLElement, quiet?: boolean, skipCheck?: boolean, batch?: {cancelled?: boolean, abortController?: AbortController}}} DownloadOptions */
+    /** @param {Parameters<DownloadControllerApi["createDownloadController"]>[0]} options
+     * @returns {ReturnType<DownloadControllerApi["createDownloadController"]>} */
     function createDownloadController({
       buildCheckUrl,
       buildDownloadUrl,
@@ -9,17 +21,24 @@
       isBatchActive = () => false,
       timeout = 8000,
     }) {
+      /** @type {Map<string, DownloadCheckEntry>} */
       const downloadChecks = new Map();
+      /** @type {DownloadQueueItem[]} */
       const downloadCheckQueue = [];
+      /** @type {Map<string, PendingDownloadEntry>} */
       const pendingDownloads = new Map();
       let activeDownloadChecks = 0;
       let downloadLaunchTail = Promise.resolve();
       let lastDownloadLaunch = 0;
 
+      /** @template T
+       * @param {{users: number, promise: Promise<T> | null}} entry
+       * @param {AbortSignal | null | undefined} signal @param {() => void} abandon @returns {Promise<T | false>} */
       function subscribe(entry, signal, abandon) {
         entry.users++;
         return new Promise(resolve => {
           let settled = false;
+          /** @param {T | false} value */
           const finish = value => {
             if (settled) return;
             settled = true;
@@ -32,11 +51,12 @@
             if (!entry.users) abandon();
           };
           signal?.addEventListener("abort", abort, { once: true });
-          entry.promise.then(finish);
+          (/** @type {Promise<T>} */ (entry.promise)).then(finish);
           if (signal?.aborted) abort();
         });
       }
 
+      /** @param {string} link @param {DownloadCheckEntry} entry @param {AbortSignal | null | undefined} signal */
       function joinDownloadCheck(link, entry, signal) {
         return subscribe(entry, signal, () => {
           if (entry.expires) return;
@@ -45,6 +65,7 @@
         });
       }
 
+      /** @param {string} link @param {boolean} [speculative] @param {AbortSignal | null} [signal] */
       function checkDownload(link, speculative = false, signal = null) {
         if (speculative && !isSpeculativeAllowed()) return Promise.resolve(false);
         if (signal?.aborted) return Promise.resolve(false);
@@ -57,18 +78,21 @@
         if (speculative && (activeDownloadChecks || downloadCheckQueue.length || isBatchActive())) {
           return Promise.resolve(false);
         }
+        /** @type {((value: DownloadCheckResult) => void) | undefined} */
         let resolve;
+        /** @type {DownloadCheckEntry} */
         const entry = {
           promise: new Promise(done => { resolve = done; }), expires: 0,
           users: 0, controller: new AbortController(),
         };
         downloadChecks.set(link, entry);
-        downloadCheckQueue.push({ link, entry, resolve });
+        downloadCheckQueue.push({ link, entry, resolve: /** @type {(value: DownloadCheckResult) => void} */ (resolve) });
         const subscription = joinDownloadCheck(link, entry, signal);
         pumpDownloadChecks();
         return subscription;
       }
 
+      /** @param {DownloadQueueItem} item */
       async function runDownloadCheck({ link, entry, resolve }) {
         const controller = entry.controller;
         const timer = setTimeout(() => controller.abort(), timeout);
@@ -85,11 +109,11 @@
               (response.ok ? "下载检查失败，请重试" : `下载检查失败（HTTP ${response.status}），请重试`));
           entry.expires = Date.now() + 30000;
           const cached = Array.from(downloadChecks).filter(([, value]) => value.expires);
-          while (cached.length > 64) downloadChecks.delete(cached.shift()[0]);
+          while (cached.length > 64) downloadChecks.delete(/** @type {[string, DownloadCheckEntry]} */ (cached.shift())[0]);
           resolve(true);
         } catch (error) {
           if (downloadChecks.get(link) === entry) downloadChecks.delete(link);
-          resolve(error.name === "AbortError" ? "下载检查超时，请重试" : error.message || "下载失败，请稍后重试");
+          resolve(/** @type {{name?: unknown, message?: unknown}} */ (error).name === "AbortError" ? "下载检查超时，请重试" : /** @type {{message?: unknown}} */ (error).message || "下载失败，请稍后重试");
         } finally {
           clearTimeout(timer);
           activeDownloadChecks--;
@@ -99,7 +123,7 @@
 
       function pumpDownloadChecks() {
         while (activeDownloadChecks < 2 && downloadCheckQueue.length) {
-          const item = downloadCheckQueue.shift();
+          const item = /** @type {DownloadQueueItem} */ (downloadCheckQueue.shift());
           if (item.entry.controller.signal.aborted) {
             if (downloadChecks.get(item.link) === item.entry) downloadChecks.delete(item.link);
             item.resolve(false);
@@ -110,6 +134,7 @@
         }
       }
 
+      /** @param {string} filename @param {string} link @param {() => boolean} cancelled */
       function scheduleDownloadLaunch(filename, link, cancelled) {
         const launch = downloadLaunchTail.then(async () => {
           if (cancelled()) return false;
@@ -124,18 +149,21 @@
         return launch;
       }
 
+      /** @param {string} filename @param {string} link @param {DownloadOptions} [options] */
       function downloadFile(filename, link, options = {}) {
         if (options.batch && options.batch.cancelled) return Promise.resolve(false);
         const signal = options.batch?.abortController?.signal;
+        /** @param {PendingDownloadEntry} entry */
         const join = entry => subscribe(entry, signal, () => {
           if (pendingDownloads.get(link) === entry) pendingDownloads.delete(link);
           entry.controller.abort();
         });
-        if (pendingDownloads.has(link)) return join(pendingDownloads.get(link));
+        if (pendingDownloads.has(link)) return join(/** @type {PendingDownloadEntry} */ (pendingDownloads.get(link)));
         const button = options.button;
         const label = button && button.textContent;
         if (button) { button.textContent = "准备中…"; button.setAttribute("aria-busy", "true"); }
         if (!options.quiet) showToast("正在准备下载…");
+        /** @type {PendingDownloadEntry} */
         const entry = { users: 0, controller: new AbortController(), promise: null };
         const cancelled = () => entry.controller.signal.aborted;
         entry.promise = Promise.resolve().then(async () => {
@@ -158,7 +186,7 @@
           } finally {
             if (pendingDownloads.get(link) === entry) pendingDownloads.delete(link);
             if (button && button.textContent === "准备中…") {
-              button.textContent = label;
+              button.textContent = /** @type {string | null} */ (label);
               button.removeAttribute("aria-busy");
             }
           }
@@ -180,5 +208,5 @@
       };
     }
 
-    root.VoiceOfMLDownloadController = { createDownloadController };
+    /** @type {typeof globalThis & {VoiceOfMLDownloadController: DownloadControllerApi}} */ (root).VoiceOfMLDownloadController = { createDownloadController };
 })(typeof self !== "undefined" ? self : globalThis);
