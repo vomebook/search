@@ -109,6 +109,39 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(actual['min'], 7 * 1048576, actual)
         self.assertEqual(actual['body']['min_size'], 7 * 1048576, actual)
 
+    def test_size_debounce_and_exact_saved_bytes_are_preserved(self):
+        self.page.clock.install()
+        self.page.locator('#settings-btn').click()
+        self.page.evaluate('''() => {
+          pagingMode='normal';cancelSearchPrefetch();window.sizeFilterBodies=[];
+          const previous=window.fetch;
+          window.fetch=(input,options)=>{
+            if (String(input).includes('/api/search')) {
+              try { sizeFilterBodies.push(JSON.parse(options.body)); } catch (_) {}
+            }
+            return previous(input,options);
+          };
+        }''')
+        self.page.evaluate('''() => {
+          DOM.filterMinUnit.value='KB';DOM.filterMinSize.value='1.5';
+          DOM.filterMinSize.dispatchEvent(new Event('input',{bubbles:true}));
+        }''')
+        self.page.clock.fast_forward(400)
+        self.assertIsNone(self.page.evaluate('STATE.filterMinSize'))
+        self.page.clock.fast_forward(101)
+        self.page.wait_for_function('sizeFilterBodies.some(b=>b.page===1 && b.min_size===1536) && !STATE.isLoading')
+        self.assertEqual(self.page.evaluate('STATE.filterMinSize'),1536)
+        # A restored byte limit can be more precise than its displayed value.
+        self.page.evaluate('''() => {
+          STATE.filterMinSize=1025;const display=bytesToDisplay(1025);
+          DOM.filterMinSize.value=display.value;DOM.filterMinUnit.value=display.unit;
+        }''')
+        self.page.locator('#sort-select').select_option('name')
+        self.page.clock.fast_forward(1000)
+        self.page.wait_for_function("sizeFilterBodies.some(b=>b.page===1 && b.sort==='name') && !STATE.isLoading")
+        self.assertEqual(self.page.evaluate('STATE.filterMinSize'),1025)
+        self.assertEqual(self.page.evaluate("sizeFilterBodies.find(b=>b.page===1 && b.sort==='name').min_size"),1025)
+
     def test_pending_size_filter_composes_with_extension_and_query(self):
         self.page.clock.install()
         self.page.locator('#settings-btn').click()
