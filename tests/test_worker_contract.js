@@ -856,6 +856,84 @@ test("wildcard-only queries preserve stable zero-score order without field reads
   assert.deepStrictEqual(replaced.records.map(record => record.File),["same","same"]);
   assert.notStrictEqual(replaced.snapshot_generation,first.snapshot_generation);
 });
+test("mixed wildcard repo proof skips only demonstrably matching string corpora", async () => {
+  const input = [
+    {...records[0], Repo:"AA", File:"first", Folder:["docs"], Size:1},
+    {...records[0], Repo:"BB", File:"second", Folder:["docs"], Size:2},
+    {...records[0], Repo:"AA", File:"third", Folder:["other"], Size:3},
+  ];
+  const {worker} = await loaded(input);
+  vm.runInContext('globalThis.originalFields = getRecordSearchFields; getRecordSearchFields = () => { throw Error("unexpected field scan"); };', worker.context);
+  const result = await worker.request("local-search",{q:"?*?",exact:true,pageSize:2,anchorId:"BB\0docs/second.txt"});
+  assert.strictEqual(result.total,3);
+  assert.deepStrictEqual(result.records.map(record => record.File),["first","second"]);
+  assert.strictEqual(result.anchor_index,1);
+  assert.deepStrictEqual((await worker.request("local-search",{q:"?*?",exact:true,pageSize:2,page:2})).records.map(record=>record.File),["third"]);
+  assert.deepStrictEqual((await worker.request("local-search",{q:"?*?",exact:true,repos:["AA"],extensions:["txt"],sort:"size"})).records.map(record=>record.File),["third","first"]);
+  vm.runInContext('getRecordSearchFields = originalFields; searchOrderCache.clear();', worker.context);
+  assert.deepStrictEqual((await worker.request("local-search",{q:"?*? first",exact:true})).records.map(record=>record.File),["first"]);
+  assert.deepStrictEqual((await worker.request("local-search",{q:"first ?*?",exact:true})).records.map(record=>record.File),["first"]);
+
+  // An empty or line-broken repo cannot prove a match; filenames may still match.
+  const fallback = [
+    {...records[0], Repo:"", File:"abc", Folder:[]},
+    {...records[0], Repo:"A\nB", File:"z", Folder:[]},
+    {...records[0], Repo:"\u2028", File:"", Folder:[]},
+    {...records[0], Repo:"😀", File:"", Folder:[]},
+  ];
+  await worker.request("replace-corpus",{data:compact(fallback)});
+  vm.runInContext('globalThis.scans = 0; getRecordSearchFields = record => {scans++; return originalFields(record);};',worker.context);
+  assert.deepStrictEqual((await worker.request("local-search",{q:"?*?",exact:true})).records.map(record=>record.File),["abc",""]);
+  assert.strictEqual(vm.runInContext('scans',worker.context),fallback.length);
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
+  vm.runInContext('getRecordSearchFields = originalFields;',worker.context);
+
+  // JSON-compatible non-string repo values must retain the old scan path,
+  // because object-key coercion and search-field coercion are not identical.
+  const malformed = {v:2,rp:[0,false,null,42,{x:1}],fd:[[]],rc:[
+    [0,"abc","txt",0,1,0], [1,"","txt",0,1,0], [2,"","txt",0,1,0],
+    [3,"","txt",0,1,0], [4,"","txt",0,1,0],
+  ]};
+  await worker.request("replace-corpus",{data:malformed});
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),false);
+  vm.runInContext('globalThis.scans = 0; getRecordSearchFields = record => {scans++; return originalFields(record);};',worker.context);
+  const malformedResult = await worker.request("local-search",{q:"?*?",exact:true,pageSize:10});
+  assert.strictEqual(malformedResult.total,3);
+  assert.ok(vm.runInContext('scans > 0',worker.context));
+  vm.runInContext('getRecordSearchFields = originalFields;',worker.context);
+  // Preserve field coercion for unusual filenames and folder components too;
+  // skipping a match term must not suppress its legacy field access/errors.
+  for (const unusual of [
+    {v:2,rp:["AA"],fd:[[]],rc:[[0,42,"txt",0,1,0]]},
+    {v:2,rp:["AA"],fd:[[42]],rc:[[0,"file","txt",0,1,0]]},
+  ]) {
+    await worker.request("replace-corpus",{data:unusual});
+    assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),false);
+    vm.runInContext('scans = 0; getRecordSearchFields = record => {scans++; return originalFields(record);};',worker.context);
+    assert.strictEqual((await worker.request("local-search",{q:"?*?",exact:true})).total,1);
+    assert.strictEqual(vm.runInContext('scans',worker.context),1);
+    vm.runInContext('getRecordSearchFields = originalFields;',worker.context);
+  }
+  const folder = ["docs"];
+  folder.some = null; // A structured-cloned array can shadow its inherited method.
+  await worker.request("replace-corpus",{data:{v:2,rp:["AA"],fd:[folder],rc:[[0,"file","txt",0,1,0]]}});
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
+  assert.strictEqual((await worker.request("local-search",{q:"?*?",exact:true})).total,1);
+  await worker.request("replace-corpus",{data:compact(input)});
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
+});
+test("a failed corpus replacement never publishes a partial repo proof", async () => {
+  const {worker} = await loaded([{...records[0], Repo:"AA"}]);
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
+  const invalid = {v:2, rp:["BB", "CC"], fd:[[], [{toString:null, valueOf:null}]], rc:[
+    [0,"first","txt",0,1,0], [1,"second","txt",1,1,0],
+  ]};
+  const response = await worker.send("replace-corpus", {data:invalid});
+  assert.strictEqual(response.ok,false);
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),false);
+  await worker.request("replace-corpus",{data:compact([{...records[0], Repo:"DD"}])});
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
+});
 test("dense repository sorting can reuse prepared stable orders", async () => {
   const input = Array.from({length:36}, (_, index) => ({...records[0],
     Repo:"Repo/A", File:["a", "A", "中", "b"][index % 4], Extension:index % 7 ? "pdf" : "txt",
