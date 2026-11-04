@@ -84,6 +84,113 @@ class SidebarKeyboardTests(unittest.TestCase):
         }''')
         self.assertEqual(result, dict(neutral=0, filter=True))
 
+    def test_pending_size_filter_is_applied_when_sort_changes(self):
+        self.page.clock.install()
+        self.page.locator('#settings-btn').click()
+        self.page.evaluate("pagingMode='normal';cancelSearchPrefetch()")
+        self.page.evaluate('''() => {
+          const previous=window.fetch;window.sizeFilterBodies=[];
+          window.fetch=(input,options)=>{
+            if (String(input).includes('/api/search')) {
+              try { sizeFilterBodies.push(JSON.parse(options.body)); } catch (_) {}
+            }
+            return previous(input,options);
+          };
+        }''')
+        self.page.locator('#filter-min-size').fill('7')
+        self.page.locator('#sort-select').select_option('name')
+        self.page.clock.fast_forward(1000)
+        self.page.wait_for_function("sizeFilterBodies.some(body=>body.page===1 && body.sort==='name') && !STATE.isLoading")
+        actual=self.page.evaluate('''() => ({value:DOM.filterMinSize.value,unit:DOM.filterMinUnit.value,
+          min:STATE.filterMinSize,sort:STATE.sort,hash:location.hash,
+          body:sizeFilterBodies.find(body=>body.page===1 && body.sort==='name')})''')
+        self.assertEqual(actual['value'], '7')
+        self.assertEqual(actual['unit'], 'MB')
+        self.assertEqual(actual['min'], 7 * 1048576, actual)
+        self.assertEqual(actual['body']['min_size'], 7 * 1048576, actual)
+
+    def test_pending_size_filter_composes_with_extension_and_query(self):
+        self.page.clock.install()
+        self.page.locator('#settings-btn').click()
+        self.page.evaluate('''() => {
+          pagingMode='normal';cancelSearchPrefetch();window.sizeFilterBodies=[];
+          const previous=window.fetch;
+          window.fetch=(input,options)=>{
+            if (String(input).includes('/api/search')) {
+              try { sizeFilterBodies.push(JSON.parse(options.body)); } catch (_) {}
+            }
+            return previous(input,options);
+          };
+          extensionList=['txt','pdf'];extensionCounts={txt:2,pdf:3};
+          STATE.filterExtensions=[];renderExtensionFilter(routeRenderId);
+        }''')
+        self.page.locator('#filter-min-size').fill('0')
+        self.page.locator('#filter-max-size').fill('1.5')
+        self.page.locator('#filter-max-unit').select_option('KB')
+        self.page.locator('#filter-ext-list input[value="txt"]').check()
+        self.page.clock.fast_forward(1000)
+        self.page.wait_for_function("sizeFilterBodies.some(b=>b.page===1 && b.min_size===0 && b.max_size===1536 && b.extensions?.includes('txt')) && !STATE.isLoading")
+        self.assertEqual(self.page.evaluate('[STATE.filterMinSize,STATE.filterMaxSize]'), [0,1536])
+        self.page.locator('#filter-min-size').fill('2')
+        self.page.locator('#search-input').fill('paging-combined')
+        self.page.locator('#search-input').press('Enter')
+        self.page.clock.fast_forward(1000)
+        self.page.wait_for_function("sizeFilterBodies.some(b=>b.q==='paging-combined' && b.page===1) && !STATE.isLoading")
+        result=self.page.evaluate('''() => ({body:sizeFilterBodies.find(b=>b.q==='paging-combined' && b.page===1),
+          min:STATE.filterMinSize,max:STATE.filterMaxSize,hash:location.hash})''')
+        self.assertEqual(result['min'],2*1048576,result)
+        self.assertEqual(result['max'],1536,result)
+        self.assertEqual(result['body']['min_size'],2*1048576,result)
+        self.assertEqual(result['body']['max_size'],1536,result)
+        self.assertEqual(result['body']['extensions'],['txt'],result)
+
+    def test_clear_all_discards_pending_size_and_cancels_its_timer(self):
+        self.page.clock.install()
+        self.page.locator('#settings-btn').click()
+        self.page.evaluate('''() => {
+          pagingMode='normal';cancelSearchPrefetch();
+          STATE.filterExtensions=['txt'];updateStatusBar();
+        }''')
+        self.page.locator('#filter-min-size').fill('5')
+        self.page.locator('#clear-filters-btn').click()
+        self.page.clock.fast_forward(1000)
+        self.page.wait_for_function('!STATE.isLoading')
+        result=self.page.evaluate('''() => ({min:STATE.filterMinSize,max:STATE.filterMaxSize,
+          value:DOM.filterMinSize.value,timer:sizeFilterTimer,extensions:STATE.filterExtensions,
+          hash:location.hash})''')
+        self.assertIsNone(result['min'],result)
+        self.assertIsNone(result['max'],result)
+        self.assertIsNone(result['timer'],result)
+        self.assertEqual(result['value'],'',result)
+        self.assertEqual(result['extensions'],[],result)
+        self.assertNotIn('min_size=',result['hash'],result)
+
+    def test_pending_size_filter_composes_with_folder_and_sidebar(self):
+        self.page.clock.install()
+        self.page.locator('#settings-btn').click()
+        self.page.evaluate('''() => {
+          pagingMode='normal';cancelSearchPrefetch();window.sizeFilterBodies=[];
+          STATE.useLocalMode=true;STATE.dataLoaded=true;
+          doSearchLocal=async params=>{
+            sizeFilterBodies.push({min:params.minSize,folder:params.folderSubtrees.slice()});
+            return {results:[],total:0,page:params.page,page_size:params.pageSize};
+          };
+          STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';
+          STATE.folderTree=[{path:'docs',name:'docs',count:1,children:[],hasDirectFiles:true}];
+          STATE.filterFolderSelfs=[];STATE.filterFolderSubtrees=[];STATE.filterFolders=[];
+          DOM.filterFolderSection.style.display='';renderFilterFolderTree();
+        }''')
+        self.page.locator('#filter-min-size').fill('3')
+        self.page.locator('#filter-folder-tree input').check()
+        self.page.clock.fast_forward(1000)
+        self.page.wait_for_function("sizeFilterBodies.some(b=>b.min===3*1048576 && b.folder.includes('docs')) && !STATE.isLoading")
+        self.assertEqual(self.page.evaluate('STATE.filterMinSize'),3*1048576)
+        self.page.locator('#filter-min-size').fill('4')
+        self.page.locator('#hamburger-btn').click()
+        self.page.clock.fast_forward(1000)
+        self.page.wait_for_function("sizeFilterBodies.some(b=>b.min===4*1048576 && b.folder.includes('docs')) && !STATE.isLoading")
+        self.assertEqual(self.page.evaluate('STATE.filterMinSize'),4*1048576)
+
     def test_navigation_preserves_zero_and_exact_byte_size_limits(self):
         result = self.page.evaluate('''() => {
           ROUTER.apply=()=>{};
