@@ -3,32 +3,32 @@
 import unittest
 from unittest.mock import patch
 
-from tests.test_browser_smoke import BrowserBehaviorTest, sync_playwright
+from tests import test_browser_smoke as smoke
 
-if sync_playwright is not None:
+if smoke.sync_playwright is not None:
     from playwright.sync_api import Locator
 
 
-@unittest.skipIf(sync_playwright is None, "install requirements-test.txt to run browser tests")
+@unittest.skipIf(smoke.sync_playwright is None, "install requirements-test.txt to run browser tests")
 class SidebarReorderRegressionTest(unittest.TestCase):
     """Run the existing history contract with a deterministic list reorder."""
 
     @classmethod
     def setUpClass(cls):
-        BrowserBehaviorTest.setUpClass.__func__(cls)
+        smoke.BrowserBehaviorTest.setUpClass.__func__(cls)
 
     @classmethod
     def tearDownClass(cls):
-        BrowserBehaviorTest.tearDownClass.__func__(cls)
+        smoke.BrowserBehaviorTest.tearDownClass.__func__(cls)
 
     def setUp(self):
-        BrowserBehaviorTest.setUp(self)
+        smoke.BrowserBehaviorTest.setUp(self)
 
     def tearDown(self):
-        BrowserBehaviorTest.tearDown(self)
+        smoke.BrowserBehaviorTest.tearDown(self)
 
     def install_routes(self, page):
-        BrowserBehaviorTest.install_routes(self, page)
+        smoke.BrowserBehaviorTest.install_routes(self, page)
 
         def block_external(route):
             if route.request.url.startswith(self.origin + "/"):
@@ -39,7 +39,7 @@ class SidebarReorderRegressionTest(unittest.TestCase):
         self.context.route("**/*", block_external)
 
     def load(self, suffix=""):
-        BrowserBehaviorTest.load(self, suffix)
+        smoke.BrowserBehaviorTest.load(self, suffix)
         self.page.wait_for_function("STATE.dataLoaded === true", timeout=30000)
         self.page.evaluate("""() => {
           const original = renderRepoListItems;
@@ -97,9 +97,9 @@ class SidebarReorderRegressionTest(unittest.TestCase):
         self.assertEqual(state["clicked"], state["before"])
 
     def test_history_targets_captured_repository_after_reorder(self):
-        BrowserBehaviorTest.test_mobile_history_restores_routes_without_drawer_guards(self)
+        smoke.BrowserBehaviorTest.test_mobile_history_restores_routes_without_drawer_guards(self)
         self.assert_reorder_preserved_identity()
 
     def test_directory_back_targets_captured_repository_after_reorder(self):
-        BrowserBehaviorTest.test_mobile_sidebar_back_returns_by_directory_level(self)
+        smoke.BrowserBehaviorTest.test_mobile_sidebar_back_returns_by_directory_level(self)
         self.assert_reorder_preserved_identity()
