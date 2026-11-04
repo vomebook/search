@@ -159,6 +159,12 @@ test("star and question wildcard scans match independent regular expressions", a
   await compare({ q: "*目录*", exact: true, page: 2, pageSize: 19 });
   await compare({ q: "第?批", exact: true, page: 1, pageSize: 31 });
 });
+test("mixed star-question repo proof and fallback match independent full corpus scans", async () => {
+  await compare({ q: "?*?", exact: true, page: 2, pageSize: 31 });
+  await compare({ q: "?*?", exact: true, repos: ["VoiceOfML/Omnibus"], extensions: ["pdf"], sort: "size", page: 3, pageSize: 29 });
+  // One star avoids exponential regex backtracking in the independent oracle.
+  await compare({ q: "?".repeat(40) + "*", exact: true, page: 1, pageSize: 19 });
+});
 test("repository and extension filters match brute-force scan", () => compare({
   q: "", exact: true, repos: ["VoiceOfML/Omnibus"], extensions: ["pdf"], page: 1, pageSize: 17,
 }));
