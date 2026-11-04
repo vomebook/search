@@ -17,6 +17,7 @@
     "static/search/record-path.js",
     "static/search/response-validation.js",
     "static/search/response-cache.js",
-    "static/search/file-types.js"
+    "static/search/file-types.js",
+    "static/search/highlight.js"
   ]
 }
