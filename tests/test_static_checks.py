@@ -1431,6 +1431,49 @@ class StaticGateTests(unittest.TestCase):
             gate.write_text(original.replace('[31.96, 81.82, 27.27]', thresholds))
             self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
 
+    def test_reader_image_loader_coverage_gate_fails_closed(self):
+        paths = ["static/reader/formats/reader-image-loader.mjs", "scripts/check_reader_image_loader_coverage.mjs",
+                 "scripts/check_tap_contracts.mjs", "tests/test_reader_image_loader.mjs",
+                 "tests/test_reader_image_loader_contract.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "reader-image-loader.mjs |")
+        test = self.root / paths[4]
+        source = test.read_text()
+        name = 'image cancellation settles immediately even when the reader stays active'
+        anchor = "test('" + name + "'"
+        self.assertEqual(source.count(anchor), 1)
+        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
+            test.write_text(source.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
+        for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
+                      "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
+        test.write_text(source)
+        gate = self.root / paths[1]
+        original = gate.read_text()
+        anchor = 'const rows = text.split(/\\r?\\n/).flatMap(line => {'
+        self.assertEqual(original.count(anchor), 1)
+        altered = original.replace(anchor, 'const observedRows = text.split(/\\r?\\n/).flatMap(line => {')
+        gate.write_text(altered.replace('const required = [', 'const rows = [];\nconst required = ['))
+        self.assert_check(self.run_check(*check), False, 'exactly one source row')
+        gate.write_text(original.replace('const required = [', 'const duplicateRows = rows.concat(rows);\nconst required = [')
+                        .replace('rows.length !== 1', 'duplicateRows.length !== 1'))
+        self.assert_check(self.run_check(*check), False, 'exactly one source row')
+        self.assertEqual(original.count('reader-image-loader\\.mjs'), 1)
+        gate.write_text(original.replace('reader-image-loader\\.mjs', 'missing-image-loader\\.mjs'))
+        self.assert_check(self.run_check(*check), False, 'exactly one source row')
+        for thresholds in ('[100.01, 87.18, 91.67]', '[100, 87.19, 91.67]', '[100, 87.18, 91.68]'):
+            self.assertIn('[100, 87.18, 91.67]', original)
+            gate.write_text(original.replace('[100, 87.18, 91.67]', thresholds))
+            self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
+
     def test_search_readability_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_readability_baseline.mjs",
                  "tests/test_search_readability_baseline.mjs", "scripts/check_tap_contracts.mjs",
