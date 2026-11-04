@@ -61,6 +61,7 @@ jobs:
           node --test tests/test_search_stable_id_baseline.mjs
           node scripts/check_search_filter_equality_baseline.mjs
           node scripts/check_search_folder_merge_baseline.mjs
+          node scripts/check_search_readability_baseline.mjs
           node scripts/check_reader_navigation_baseline.mjs
           node tests/test_search_record_path_build.mjs
           node tests/test_reader_preload.js
@@ -183,7 +184,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 5f581c10ed60c87067c3866286ca076ebfe6e569 HEAD
+          git -C huggingface-search merge-base --is-ancestor 9ff73e821a08028e711ee0baf7e25bfa01cf744f HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -286,6 +287,7 @@ jobs:
           node --test tests/test_search_stable_id_baseline.mjs
           node scripts/check_search_filter_equality_baseline.mjs
           node scripts/check_search_folder_merge_baseline.mjs
+          node scripts/check_search_readability_baseline.mjs
           node scripts/check_reader_navigation_baseline.mjs
           node tests/test_search_record_path_build.mjs
           node tests/test_reader_jxl_progressive.mjs

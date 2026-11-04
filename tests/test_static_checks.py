@@ -1431,6 +1431,43 @@ class StaticGateTests(unittest.TestCase):
             gate.write_text(original.replace('[31.96, 81.82, 27.27]', thresholds))
             self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
 
+    def test_search_readability_baseline_gate_fails_closed(self):
+        paths = ["static/app.js", "scripts/check_search_readability_baseline.mjs",
+                 "tests/test_search_readability_baseline.mjs", "scripts/check_tap_contracts.mjs",
+                 "static/reader/core/reader-contract.js"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "# pass 9")
+        test = self.root / paths[2]
+        source = test.read_text()
+        name = 'docx without a converted link is rejected before capability lookup'
+        anchor = "test('" + name + "'"
+        self.assertEqual(source.count(anchor), 1)
+        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
+            test.write_text(source.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
+                      "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source.replace(anchor + ", () => {", anchor + ", () => { throw new Error('readability failed');"))
+        self.assert_check(self.run_check(*check), False, "readability failed")
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, "all named baseline contracts")
+        test.write_text(source)
+        app = self.root / paths[0]
+        app.write_text(app.read_text().replace('function isReadableRecord(', 'function renamedReadableRecord('))
+        self.assert_check(self.run_check(*check), False, 'expected one original isReadableRecord definition')
+        shutil.copyfile(ROOT / paths[0], app)
+        fragment = self.root / 'readability-fragment.js'
+        fragment.write_text('function isReadableRecord() { return true; }')
+        result = subprocess.run(check, cwd=self.root, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                env={**os.environ, 'READABILITY_BASELINE_FRAGMENT': str(fragment)})
+        self.assert_check(result, False, 'all named baseline contracts')
+
     def test_search_folder_merge_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_folder_merge_baseline.mjs",
                  "tests/test_search_folder_merge_baseline.mjs"]
