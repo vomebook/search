@@ -164,3 +164,96 @@ class SidebarReorderRegressionTest(unittest.TestCase):
             lambda: self.page,
         )
         self.assert_reorder_preserved_identity()
+
+
+@unittest.skipIf(smoke.sync_playwright is None, "install requirements-test.txt to run browser tests")
+class SidebarApiRefreshRegressionTest(unittest.TestCase):
+    """Keep repository identity when the real snapshot is replaced by API metadata."""
+
+    @classmethod
+    def setUpClass(cls):
+        smoke.BrowserBehaviorTest.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        smoke.BrowserBehaviorTest.tearDownClass.__func__(cls)
+
+    def setUp(self):
+        smoke.BrowserBehaviorTest.setUp(self)
+
+    def tearDown(self):
+        smoke.BrowserBehaviorTest.tearDown(self)
+
+    def install_routes(self, page):
+        smoke.BrowserBehaviorTest.install_routes(self, page)
+
+    def load(self, suffix=""):
+        self.context.add_init_script('''
+          const original = window.fetch;
+          const gate = new Promise(resolve => { window.__releaseRepoApi = resolve; });
+          window.fetch = function(input, init) {
+            const url = typeof input === "string" ? input : input.url;
+            return url.includes("/api/repos") ? gate.then(() => original.call(this, input, init)) : original.call(this, input, init);
+          };
+          document.addEventListener('click', event => {
+            const item = event.target.closest('#sidebar-content .repo-list-item');
+            if (item) window.__refreshClicked = item.dataset.repo;
+          }, true);
+        ''')
+
+        def block_external(route):
+            if route.request.url.startswith(self.origin + "/"):
+                route.continue_()
+            else:
+                route.abort()
+
+        self.context.route("**/*", block_external)
+        requests = []
+        refreshed = [{"name": "VoiceOfML/VOMEBOOK", "count": 1},
+                     {"name": "VoiceOfML/SNAPSHOT", "count": 2}]
+        snapshot = [{"name": "VoiceOfML/SNAPSHOT", "count": 1},
+                    {"name": "VoiceOfML/VOMEBOOK", "count": 2}]
+
+        def fulfill(route, kind, body):
+            requests.append(kind)
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+        self.page.route("**/api/repos*", lambda route: fulfill(route, "api", refreshed))
+        self.page.route("**/search/data/sidebar/global.json*", lambda route: fulfill(route, "snapshot", {"repos": snapshot}))
+        smoke.BrowserBehaviorTest.load(self, suffix)
+        page = self.page
+        self.refreshed_identity = None
+        original_get_attribute = Locator.get_attribute
+
+        def get_attribute_then_refresh(locator, name, **kwargs):
+            value = original_get_attribute(locator, name, **kwargs)
+            if name == "data-repo" and self.refreshed_identity is None:
+                self.assertEqual(value, "SNAPSHOT")
+                self.assertIn("snapshot", requests)
+                self.assertNotIn("api", requests)
+                page.evaluate("window.__releaseRepoApi()")
+                page.wait_for_function('document.querySelector("#sidebar-content .repo-list-item")?.dataset.repo === "VOMEBOOK"')
+                self.assertIn("api", requests)
+                self.refreshed_identity = value
+            return value
+
+        get_patcher = patch.object(Locator, "get_attribute", get_attribute_then_refresh)
+        get_patcher.start()
+        self.addCleanup(get_patcher.stop)
+        original_click = Locator.click
+
+        def click_and_check_identity(locator, **kwargs):
+            result = original_click(locator, **kwargs)
+            clicked = page.evaluate("window.__refreshClicked")
+            if self.refreshed_identity is not None and clicked is not None:
+                self.assertEqual(clicked, self.refreshed_identity, "API refresh changed the clicked repository")
+            return result
+
+        click_patcher = patch.object(Locator, "click", click_and_check_identity)
+        click_patcher.start()
+        self.addCleanup(click_patcher.stop)
+
+    def test_mobile_history_repository_identity_survives_api_refresh(self):
+        smoke.BrowserBehaviorTest.test_mobile_history_restores_routes_without_drawer_guards(self)
+        self.assertEqual(self.refreshed_identity, "SNAPSHOT")
+        self.assertEqual(self.page.evaluate("window.__refreshClicked"), self.refreshed_identity)
