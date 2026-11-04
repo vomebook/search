@@ -1975,6 +1975,9 @@ function getFileIconType(ext) {
 }
 
 let routeInitialized = false;
+// Keep track of the last hash reflected in STATE, including normal state-driven
+// replaceState updates, so a pending hashchange is not mistaken for that state.
+let appliedRouteHash = window.location.hash;
 
 function updateSidebarExpandButton() {
   if (!DOM.sidebarExpandBtn || !DOM.leftSidebar) return;
@@ -2059,6 +2062,7 @@ const ROUTER = {
     window.location.hash = hash;
   },
   apply: function() {
+    appliedRouteHash = window.location.hash;
     const route = this.parse();
     const prevMode = STATE.mode;
     const prevRepo = STATE.repo;
@@ -2262,6 +2266,7 @@ function syncStateToURL() {
   if (window.location.hash !== hash) {
     history.replaceState(null, "", hash);
   }
+  appliedRouteHash = window.location.hash;
   persistSearchSession();
 }
 
@@ -3768,7 +3773,10 @@ function applyInitialSearchPayload(data) {
   }
   updateStatusBar();
   updateLoadInfo();
-  syncStateToURL();
+  // A hash navigation can be pending while this asynchronous payload arrives.
+  // Keep the usual URL/session sync unless it would overwrite a newer route.
+  if (window.location.hash === appliedRouteHash) syncStateToURL();
+  else if (!readerOverlay) persistSearchSession();
   prefetchNextPage();
   scheduleBackgroundLocalDataLoad();
   return true;
