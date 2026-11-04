@@ -821,6 +821,24 @@ test("filtered empty relevance skips scoring while preserving pages and anchors"
   assert.strictEqual(replaced.anchor_index, 3);
   assert.notStrictEqual(replaced.snapshot_generation, first.snapshot_generation);
 });
+test("wildcard-only queries preserve stable zero-score order without field reads", async () => {
+  const {worker} = await loaded();
+  const params = {q:"*",exact:true,extensions:["txt"],pageSize:2,anchorId:"Repo/C\0docs/delta.TXT"};
+  worker.context.getRecordSearchFields = () => { throw new Error("unexpected score field access"); };
+  const first = await worker.request("local-search",params);
+  assert.strictEqual(first.total,7);
+  assert.deepStrictEqual(first.records.map(record => record.File),["alpha guide","gamma"]);
+  assert.strictEqual(first.anchor_index,3);
+  const next = await worker.request("local-search",{...params,page:2});
+  assert.deepStrictEqual(next.records.map(record => record.File),["手机资料","delta"]);
+  assert.strictEqual(next.anchor_index,3);
+  const sorted = await worker.request("local-search",{...params,sort:"size",pageSize:10});
+  assert.deepStrictEqual(sorted.records.map(record => record.File),["delta","gamma","alpha guide","same","same","手机资料","手。机"]);
+  await worker.request("replace-corpus",{data:compact(records.slice().reverse())});
+  const replaced = await worker.request("local-search",params);
+  assert.deepStrictEqual(replaced.records.map(record => record.File),["same","same"]);
+  assert.notStrictEqual(replaced.snapshot_generation,first.snapshot_generation);
+});
 test("dense repository sorting can reuse prepared stable orders", async () => {
   const input = Array.from({length:36}, (_, index) => ({...records[0],
     Repo:"Repo/A", File:["a", "A", "中", "b"][index % 4], Extension:index % 7 ? "pdf" : "txt",
