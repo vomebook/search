@@ -73,6 +73,21 @@ class SidebarReorderRegressionTest(unittest.TestCase):
         patcher = patch.object(Locator, "get_attribute", get_attribute_then_reorder)
         patcher.start()
         self.addCleanup(patcher.stop)
+        original_click = Locator.click
+
+        def click_and_check_identity(locator, **kwargs):
+            result = original_click(locator, **kwargs)
+            state = page.evaluate("window.__sidebarReorder")
+            if state["changed"] and state["clicked"] is not None:
+                self.assertEqual(state["before"], "VOMEBOOK")
+                self.assertEqual(state["after"], "SyntheticB")
+                self.assertEqual(state["clicked"], state["before"],
+                                 "reordering must not change the clicked repository")
+            return result
+
+        click_patcher = patch.object(Locator, "click", click_and_check_identity)
+        click_patcher.start()
+        self.addCleanup(click_patcher.stop)
 
     def assert_reorder_preserved_identity(self):
         state = self.page.evaluate("window.__sidebarReorder")
