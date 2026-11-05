@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
-const root = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
+const root = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..'));
 const load = file => import(pathToFileURL(path.join(root, 'static/reader', file)).href);
 const sandbox = {self: {}, URL, URLSearchParams, TextEncoder, TextDecoder, Uint8Array, DataView};
 sandbox.self = sandbox;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import {createDjvuWorkerAdapter} from '../static/reader/pdf/reader-djvu-worker.mjs';
-import {openDjvuDocument} from '../static/reader/pdf/reader-djvu-adapter.mjs';
+import {createDjvuWorkerAdapter} from '../../../static/reader/pdf/reader-djvu-worker.mjs';
+import {openDjvuDocument} from '../../../static/reader/pdf/reader-djvu-adapter.mjs';
 
 globalThis.ImageData = class ImageData {
   constructor(data,width,height) { this.data=data; this.width=width; this.height=height; }

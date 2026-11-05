@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {openDjvuRange} from '../static/reader/pdf/reader-djvu-range.mjs';
+import {openDjvuRange} from '../../../static/reader/pdf/reader-djvu-range.mjs';
 
 const data=Uint8Array.from({length:300000},(_,i)=>i%251), calls=[];
 function transport({status=206,etag='"immutable"',mutate=null}={}) {

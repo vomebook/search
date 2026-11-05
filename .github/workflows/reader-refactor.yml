@@ -85,14 +85,15 @@ jobs:
         run: python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_history_race
       - name: Check DjVu-only streams and image memory eviction
         run: |
-          node tests/test_reader_djvu_only.mjs
-          node tests/test_reader_djvu_png.mjs
+          node tests/reader/djvu/test_reader_djvu_only.mjs
+          node tests/reader/djvu/test_reader_djvu_png.mjs
           node tests/test_reader_v3_ocr_retained.mjs
-          node tests/test_reader_djvu_range.mjs
-          node tests/test_reader_djvu_range_fallback.mjs
-          node tests/test_reader_djvu_worker.mjs
-          node tests/test_reader_djvu_source_integrity.mjs
-          node tests/test_reader_djvu_scheduler.mjs
+          node tests/reader/djvu/test_reader_djvu_range.mjs
+          node tests/reader/djvu/test_reader_djvu_range_fallback.mjs
+          node tests/reader/djvu/test_reader_djvu_worker.mjs
+          node tests/reader/djvu/test_reader_djvu_source_integrity.mjs
+          node tests/reader/djvu/test_reader_djvu_scheduler.mjs
+          node scripts/check_reader_djvu_contracts.mjs
           python3 -B -m unittest -v tests.test_reader_djvu_benchmark tests.test_reader_djvu_range_browser
           node tests/test_reader_image_memory.mjs
       - name: Run multi-format preparation and navigation gates
@@ -186,7 +187,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 80bfcb3e9b4238d5de644ec4dbe386cfc0545c38 HEAD
+          git -C huggingface-search merge-base --is-ancestor 11548bbe15bb77fff6112ba58f867f51af9fa0ef HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -308,14 +309,15 @@ jobs:
       - name: Check DjVu-only streams and image memory eviction
         working-directory: huggingface-search
         run: |
-          node tests/test_reader_djvu_only.mjs
-          node tests/test_reader_djvu_png.mjs
+          node tests/reader/djvu/test_reader_djvu_only.mjs
+          node tests/reader/djvu/test_reader_djvu_png.mjs
           node tests/test_reader_v3_ocr_retained.mjs
-          node tests/test_reader_djvu_range.mjs
-          node tests/test_reader_djvu_range_fallback.mjs
-          node tests/test_reader_djvu_worker.mjs
-          node tests/test_reader_djvu_source_integrity.mjs
-          node tests/test_reader_djvu_scheduler.mjs
+          node tests/reader/djvu/test_reader_djvu_range.mjs
+          node tests/reader/djvu/test_reader_djvu_range_fallback.mjs
+          node tests/reader/djvu/test_reader_djvu_worker.mjs
+          node tests/reader/djvu/test_reader_djvu_source_integrity.mjs
+          node tests/reader/djvu/test_reader_djvu_scheduler.mjs
+          node scripts/check_reader_djvu_contracts.mjs
           python3 -B -m unittest -v tests.test_reader_djvu_benchmark tests.test_reader_djvu_range_browser
           node tests/test_reader_image_memory.mjs
           python3 -B -m unittest -v tests.test_reader_pdf_hybrid

@@ -4,7 +4,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
-const root = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
+const root = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..'));
 const load = file => import(pathToFileURL(path.join(root, 'static/reader', file)).href);
 const {createReaderPdfPageWindow} = await load('pdf/reader-pdf-page-window.mjs');
 const {createReaderPdfRenderer} = await load('pdf/reader-pdf-renderer.mjs');
