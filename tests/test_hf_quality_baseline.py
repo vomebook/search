@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.search.backend.test_search_projection_contract', workflow)
         self.assertIn('tests.search.backend.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor c4b636c72f0971126f23d685fbd94aa2cae9e44f HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor 5d154917214662c08e0db615e57134ddfdec4241 HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -80,6 +80,19 @@ class HfSearchProjectionCiTests(unittest.TestCase):
             self.assertEqual(modules.count(module), 1)
         for old in ('tests.test_search_behavior', 'tests.test_search'):
             self.assertNotIn(old, modules)
+
+    def test_grouped_search_execution_runs_in_coverage_and_responsiveness(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
+                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        self.assertIsNotNone(selection)
+        module = 'tests.search.backend.test_search_execution'
+        self.assertEqual(selection.group(1).split().count(module), 1)
+        responsiveness = [line for line in workflow.splitlines() if line.strip().startswith('run: timeout 120s ')]
+        self.assertEqual(len(responsiveness), 1)
+        self.assertEqual(responsiveness[0].split().count(module), 1)
+        self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_execution'), 1)
+        self.assertNotIn('tests.test_search_execution', workflow)
 
     def test_both_sites_run_original_extension_behavior_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
