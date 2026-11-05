@@ -1,3 +1,38 @@
+/**
+ * @typedef {object} ReaderLifecycleContext
+ * @property {AbortController} readerAbortController
+ * @property {Set<() => unknown>} readerResources
+ * @property {{state: {lifecycle: {disposed: boolean}}, setPhase(phase: string): boolean,
+ *   setStage(stage: string): boolean, nextGeneration(name: string): number,
+ *   isCurrent(name: string, value: number): boolean, dispose(): unknown, fail(code: string): unknown}} readerRuntime
+ * @property {{disposed: boolean, stage: string}} readerLifecycle
+ * @property {() => Error} readerAbortError
+ * @property {() => void} assertReaderActive
+ * @property {() => void} drainPdfTextWaiters
+ * @property {(name: string, value: number) => boolean} isReaderGenerationCurrent
+ * @property {(update: {restorationReady: boolean}) => unknown} updateDocumentState
+ * @property {MutationObserver | null} contentSanitizerObserver
+ * @property {number} saveTimer
+ * @property {number} themeAnimationTimer
+ * @property {number} panelAnimationTimer
+ * @property {number} markerFrame
+ * @property {number} foliateScrollFrame
+ * @property {number} foliateWindowFrame
+ * @property {number} epubSeekFrame
+ * @property {{mode: string} | null | undefined} capability
+ * @property {HTMLElement} loadingIndicator
+ * @property {HTMLElement} loadingStatus
+ * @property {{preserve<T>(change: () => T): T}} foliateScrollAnchors
+ * @property {(open: boolean) => unknown} setReaderPanelOpen
+ * @property {() => unknown} stopReaderWork
+ * @property {{dispose(): unknown}} readerRequestManager
+ * @property {{dispose(): unknown}} formatAdapters
+ * @property {HTMLElement} content
+ * @property {HTMLElement} status
+ * @property {() => unknown} markReaderContentReady
+ * @property {Promise<unknown>} progressSaveChain
+ */
+/** @param {ReaderLifecycleContext} readerContext */
 export function createReaderLifecycle(readerContext) {
   function readerAbortError() {
     return new DOMException("Reader work cancelled", "AbortError");
@@ -8,6 +43,7 @@ export function createReaderLifecycle(readerContext) {
       throw readerContext.readerAbortError();
   }
 
+  /** @param {() => unknown} cleanup */
   function trackReaderResource(cleanup) {
     if (readerContext.readerAbortController.signal.aborted) cleanup();
     else readerContext.readerResources.add(cleanup);
@@ -24,10 +60,12 @@ export function createReaderLifecycle(readerContext) {
     readerContext.readerResources.clear();
   }
 
+  /** @template T @param {T | PromiseLike<T>} promise @param {AbortSignal | null} [extraSignal] @returns {Promise<Awaited<T>>} */
   function awaitReader(promise, extraSignal = null) {
     return new Promise((resolve, reject) => {
       let settled = false;
       const signals = extraSignal ? [readerContext.readerAbortController.signal, extraSignal] : [readerContext.readerAbortController.signal];
+      /** @template U @param {(value: U) => void} callback @param {U} value */
       const finish = (callback, value) => {
         if (settled) return;
         settled = true;
@@ -60,18 +98,22 @@ export function createReaderLifecycle(readerContext) {
     }));
   }
 
+  /** @param {string} phase */
   function setReaderPhase(phase) {
     return readerContext.readerRuntime.setPhase(phase);
   }
 
+  /** @param {string} stage */
   function setReaderStage(stage) {
     return readerContext.readerRuntime.setStage(stage);
   }
 
+  /** @param {unknown} error @param {string} [fallback] */
   function classifyReaderError(error, fallback = "READER_PARSE") {
-    if (error?.code === "READER_PDF_RATE_LIMIT") return "READER_PDF_TRANSPORT";
-    if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT"].includes(error?.code)) return error.code;
-    const value = `${error?.name || ""} ${error?.message || error || ""}`;
+    if ((/** @type {{code?: unknown} | null | undefined} */ (error))?.code === "READER_PDF_RATE_LIMIT") return "READER_PDF_TRANSPORT";
+    if ((/** @type {unknown[]} */ (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT"]))
+      .includes((/** @type {{code?: unknown} | null | undefined} */ (error))?.code)) return (/** @type {{code?: unknown}} */ (error)).code;
+    const value = `${(/** @type {{name?: unknown} | null | undefined} */ (error))?.name || ""} ${(/** @type {{message?: unknown} | null | undefined} */ (error))?.message || error || ""}`;
     if (/AbortError|timeout|network|fetch|HTTP\s*\d+/i.test(value)) return "READER_NETWORK";
     if (
       /EPUB_INVALID|corrupt|damage|truncated|central directory|end of data|invalid zip/i.test(value)
@@ -81,24 +123,27 @@ export function createReaderLifecycle(readerContext) {
   }
 
   function markReaderContentReady() {
-    if (["foliate", "epub-chapters"].includes(readerContext.capability?.mode) && readerContext.loadingIndicator.isConnected)
+    if ((/** @type {(string | undefined)[]} */ (["foliate", "epub-chapters"])).includes(readerContext.capability?.mode) && readerContext.loadingIndicator.isConnected)
       readerContext.foliateScrollAnchors.preserve(() => readerContext.loadingIndicator.remove());
     else readerContext.loadingIndicator.remove();
     readerContext.loadingStatus.hidden = true;
   }
 
+  /** @param {string} name */
   function nextReaderGeneration(name) {
     const generation = readerContext.readerRuntime.nextGeneration(name);
     if (name === "search") readerContext.drainPdfTextWaiters();
     return generation;
   }
 
+  /** @param {string} name @param {number} value */
   function isReaderGenerationCurrent(name, value) {
     return !readerContext.readerAbortController.signal.aborted && readerContext.readerRuntime.isCurrent(name, value);
   }
 
+  /** @param {unknown} error @param {number} generation */
   function reportNavigationError(error, generation) {
-    if (readerContext.isReaderGenerationCurrent("navigation", generation) && error?.name !== "AbortError")
+    if (readerContext.isReaderGenerationCurrent("navigation", generation) && (/** @type {{name?: unknown} | null | undefined} */ (error))?.name !== "AbortError")
       console.warn("Reader navigation failed", error);
   }
 
@@ -124,6 +169,7 @@ export function createReaderLifecycle(readerContext) {
     VoiceOfMLReaderStore.dispose?.();
   }
 
+  /** @param {string} message @param {string} [code] */
   function fail(message, code = "READER_PARSE") {
     if (readerContext.readerLifecycle.disposed || readerContext.readerAbortController.signal.aborted) return;
     readerContext.updateDocumentState({ restorationReady: false });
@@ -138,7 +184,7 @@ export function createReaderLifecycle(readerContext) {
     readerContext.markReaderContentReady();
     const visibleMessage = `${message} [${readerContext.readerLifecycle.stage}]`;
     readerContext.content.innerHTML = `<div class="reader-error" role="alert"></div>`;
-    readerContext.content.querySelector(".reader-error").textContent = visibleMessage;
+    (/** @type {Element} */ (readerContext.content.querySelector(".reader-error"))).textContent = visibleMessage;
     if (["READER_ENGINE_NETWORK", "READER_RESTORE", "READER_PDF_TRANSPORT", "READER_MEDIA"].includes(code)) {
       const retry = document.createElement("button");
       retry.type = "button";
@@ -157,7 +203,7 @@ export function createReaderLifecycle(readerContext) {
         }
         location.reload();
       });
-      readerContext.content.querySelector(".reader-error").append(document.createElement("br"), retry);
+      (/** @type {Element} */ (readerContext.content.querySelector(".reader-error"))).append(document.createElement("br"), retry);
     }
     readerContext.status.textContent = "无法打开";
   }
