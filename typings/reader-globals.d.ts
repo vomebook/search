@@ -24,7 +24,7 @@ declare class BoundedResponseCache<T = unknown> extends Map<string, T> {
 
 interface ReaderSecurityApi {
   readonly LIMITS: Readonly<{
-    documentBytes: number; pdfRangeDocumentBytes: number; archiveCompressedBytes: number;
+    documentBytes: number; pdfDocumentBytes: number; archiveCompressedBytes: number;
     archiveExpandedBytes: number; archiveEntries: number; archiveRatio: number;
     manifestBytes: number; pdfPages: number; chapters: number; chapterBytes: number;
     chapterTotalBytes: number;

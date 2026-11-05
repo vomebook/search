@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {choosePdfRangeChunkSize, isFirstPageCandidate, openPdfRangeTask, preparePdfInitialRange, PDF_METADATA_RANGE_CONCURRENCY}
   from '../static/reader/pdf/reader-pdf-network.mjs';
+import '../static/reader/core/reader-security.js';
 
 globalThis.location = {href: 'https://reader.test/'};
 const large = 64 * 1024 * 1024;
@@ -73,6 +74,29 @@ let active = 0, peak = 0, calls = 0, releases = [];
 const nativeFetch = globalThis.fetch;
 
 try {
+  // Large totals stay range-based and must not affect the non-PDF limit.
+  {
+    const security=globalThis.VoiceOfMLReaderSecurity, limit=2*1024*1024*1024;
+    assert.equal(security.LIMITS.documentBytes,512*1024*1024);
+    assert.equal(security.LIMITS.pdfDocumentBytes,limit);
+    const fixture={PDFDataRangeTransport:Transport,getDocument:parameters=>({
+      promise:Promise.resolve(parameters),destroy:async()=>{}})};
+    const options={url:'https://reader.test/large.pdf',rangeChunkSize:4};
+    for (const total of [1_610_000_000,limit,limit+1]) {
+      globalThis.fetch=async()=>new Response(new Uint8Array([1,2,3,4]),{status:206,headers:{
+        'Content-Range':`bytes 0-3/${total}`,'Content-Length':'4',ETag:'"fixed"'}});
+      const task=()=>openPdfRangeTask(fixture,options,{signal:new AbortController().signal,
+        readBytes:security.readBytes,limit,rangeLimit:limit,rangeCache:null});
+      if (total>limit) await assert.rejects(task(),/READER_RESOURCE_LIMIT/);
+      else {const opened=await task();assert.equal((await opened.promise).range.length,total);await opened.destroy();}
+    }
+    let cancelled=false;
+    globalThis.fetch=async()=>({ok:true,status:200,headers:new Headers({'Content-Length':String(limit+1)}),
+      body:{cancel:async()=>{cancelled=true;}}});
+    await assert.rejects(openPdfRangeTask(fixture,options,{signal:new AbortController().signal,
+      readBytes:security.readBytes,limit,rangeLimit:limit,rangeCache:null}),/READER_RESOURCE_LIMIT/);
+    assert.ok(cancelled,'oversized complete response must release its body');
+  }
   // Qualified hints are bounded, source-versioned and suppressed for deep
   // restoration. This first page descriptor is not itself a page identity.
   {
