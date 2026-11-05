@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.search.backend.test_search_projection_contract', workflow)
         self.assertIn('tests.search.backend.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor aa8df28d1483b881063df28d58133da26bb9251b HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor 9ed8cc0b03fed61ea24ca47c8879d22ab08c39aa HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -130,6 +130,18 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertEqual(selection.group(1).split().count('tests.search.backend.test_native_search_indexes'), 1)
         self.assertEqual(selection.group(1).split().count('tests.test_exact_search_performance'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_indexes'), 1)
+
+    def test_grouped_reader_index_contracts_retain_all_gates(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
+                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        self.assertIsNotNone(selection)
+        for module in ('tests.reader.backend.test_reader_index_contract', 'tests.reader.backend.test_reader_index_warming'):
+            self.assertEqual(selection.group(1).split().count(module), 1)
+        responsiveness = [line for line in workflow.splitlines() if line.strip().startswith('run: timeout 120s ')]
+        self.assertEqual(len(responsiveness), 1)
+        self.assertEqual(responsiveness[0].split().count('tests.reader.backend.test_reader_index_warming'), 1)
+        self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module reader_index'), 1)
 
     def test_both_sites_run_original_extension_behavior_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
