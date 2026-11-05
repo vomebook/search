@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash, webcrypto} from 'node:crypto';
-import {openDirectDjvu, openNativeDjvu} from '../static/reader/pdf/reader-djvu-loader.mjs';
+import {openDirectDjvu, openNativeDjvu} from '../../../static/reader/pdf/reader-djvu-loader.mjs';
 
 Object.defineProperty(globalThis, 'crypto', {configurable: true, value: webcrypto});
 globalThis.matchMedia = () => ({matches: false});
