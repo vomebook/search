@@ -1481,6 +1481,69 @@ class StaticGateTests(unittest.TestCase):
             gate.write_text(original.replace('[100, 87.18, 91.67]', thresholds))
             self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
 
+    def test_reader_djvu_contract_gate_fails_closed(self):
+        for name in ('check_reader_djvu_contracts.mjs', 'check_tap_contracts.mjs'):
+            shutil.copyfile(ROOT / 'scripts' / name, self.root / 'scripts' / name)
+        # V8 resolves symlinks before applying coverage includes. Copy the
+        # source into the fixture so the exact source row is really measured.
+        shutil.copytree(ROOT / 'static/reader', self.root / 'static/reader')
+        names = ('only', 'png', 'range', 'range_fallback', 'scheduler', 'source_integrity', 'worker')
+        directory = self.root / 'tests/reader/djvu'
+        directory.mkdir(parents=True)
+        for name in names:
+            shutil.copyfile(ROOT / 'tests/reader/djvu' / f'test_reader_djvu_{name}.mjs',
+                            directory / f'test_reader_djvu_{name}.mjs')
+        boundary = directory / 'test_reader_djvu_range_boundaries.mjs'
+        shutil.copyfile(ROOT / 'tests/reader/djvu/test_reader_djvu_range_boundaries.mjs', boundary)
+        check = ['node', 'scripts/check_reader_djvu_contracts.mjs']
+        message = 'DjVu contracts require seven named scripts'
+        self.assert_check(self.run_check(*check), True, '# pass 7')
+        worker = directory / 'test_reader_djvu_worker.mjs'
+        source = worker.read_text()
+        marker = 'DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed'
+        self.assertEqual(source.count(marker), 1)
+        for replacement in ('renamed completion marker', ''):
+            worker.write_text(source.replace(marker, replacement))
+            self.assert_check(self.run_check(*check), False, message)
+        worker.write_text(source + "\nthrow new Error('injected DjVu failure');\n")
+        self.assert_check(self.run_check(*check), False, 'injected DjVu failure')
+        worker.unlink()
+        self.assert_check(self.run_check(*check), False, message)
+        for summary in ('skipped 0', 'skipped 1', 'todo 0', 'todo 1', 'pass 7'):
+            worker.write_text(source.replace("console.log('" + marker + "'", "console.log('" + summary + "');\nconsole.log('" + marker + "'"))
+            self.assert_check(self.run_check(*check), False, message)
+        worker.write_text(source)
+        gate = self.root / 'scripts/check_reader_djvu_contracts.mjs'
+        original = gate.read_text()
+        anchor = '...required.map(({name}) => name)'
+        self.assertEqual(original.count(anchor), 1)
+        gate.write_text(original.replace(anchor, '...required.slice(1).map(({name}) => name)'))
+        self.assert_check(self.run_check(*check), False, message)
+        gate.write_text(original.replace(anchor, '...required.slice(0, 6).map(({name}) => name)'))
+        self.assert_check(self.run_check(*check), False, message)
+        gate.write_text(original)
+        boundary_source = boundary.read_text()
+        boundary_name = 'reads reject invalid lengths and offsets without dispatching new windows'
+        self.assertEqual(boundary_source.count(boundary_name), 1)
+        boundary.write_text(boundary_source.replace(boundary_name, 'renamed boundary contract'))
+        self.assert_check(self.run_check(*check), False, message)
+        boundary.write_text(boundary_source.replace("test('" + boundary_name + "'", "test.skip('" + boundary_name + "'"))
+        self.assert_check(self.run_check(*check), False, message)
+        boundary.unlink()
+        self.assert_check(self.run_check(*check), False, message)
+        boundary.write_text(boundary_source)
+        for summary in ('skipped 0', 'todo 0', 'pass 2', 'end of coverage report'):
+            boundary.write_text(boundary_source + '\nconsole.log(' + json.dumps(summary) + ');\n')
+            self.assert_check(self.run_check(*check), False, message)
+        boundary.write_text(boundary_source)
+        for minimum in ('[100.01, 86.81, 78.95]', '[100, 86.82, 78.95]', '[100, 86.81, 78.96]'):
+            self.assertEqual(original.count('[100, 86.81, 78.95]'), 1)
+            gate.write_text(original.replace('[100, 86.81, 78.95]', minimum))
+            self.assert_check(self.run_check(*check), False, message)
+        self.assertEqual(original.count('reader-djvu-range\\.mjs'), 1)
+        gate.write_text(original.replace('reader-djvu-range\\.mjs', 'missing-djvu-range\\.mjs'))
+        self.assert_check(self.run_check(*check), False, message)
+
     def test_reader_lifecycle_coverage_gate_fails_closed(self):
         paths = ["static/reader/core/reader-lifecycle.mjs", "scripts/check_reader_lifecycle_coverage.mjs",
                  "scripts/check_tap_contracts.mjs", "tests/reader/lifecycle/test_reader_lifecycle.mjs"]

@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.test_search_projection_contract', workflow)
         self.assertIn('tests.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor 80bfcb3e9b4238d5de644ec4dbe386cfc0545c38 HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor 11548bbe15bb77fff6112ba58f867f51af9fa0ef HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -112,6 +112,12 @@ class HfSearchProjectionCiTests(unittest.TestCase):
     def test_both_sites_run_reader_lifecycle_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/check_reader_lifecycle_coverage.mjs'), 2)
+
+    def test_both_sites_run_all_djvu_scripts_and_named_contract_gate(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        for name in ('only', 'png', 'range', 'range_fallback', 'scheduler', 'source_integrity', 'worker'):
+            self.assertEqual(workflow.count(f'node tests/reader/djvu/test_reader_djvu_{name}.mjs'), 2, name)
+        self.assertEqual(workflow.count('node scripts/check_reader_djvu_contracts.mjs'), 2)
 
     def test_both_sites_run_reader_navigation_baseline_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()

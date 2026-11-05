@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {openNativeDjvu} from '../static/reader/pdf/reader-djvu-loader.mjs';
+import {openNativeDjvu} from '../../../static/reader/pdf/reader-djvu-loader.mjs';
 
 globalThis.matchMedia=()=>({matches:false});
 globalThis.VoiceOfMLReaderSecurity={LIMITS:{documentBytes:512*1024*1024},
