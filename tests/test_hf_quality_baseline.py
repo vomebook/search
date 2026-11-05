@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.search.backend.test_search_projection_contract', workflow)
         self.assertIn('tests.search.backend.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor d0082a6911b877b1e86b0979c1bfbe2310721330 HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor 30357c7e6888c251ba43f66f46f1b0f996a0ec3e HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -103,6 +103,16 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertNotIn('tests.test_search_words_contract', selection.group(1).split())
         self.assertEqual(workflow.splitlines().count('          python -B scripts/check_search_words_mutation.py'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_matching'), 1)
+
+    def test_grouped_backend_cache_contracts_and_mutation_gate_are_required(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
+                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        self.assertIsNotNone(selection)
+        for module in ('tests.search.backend.test_cache_and_malformed',
+                       'tests.search.backend.test_cache_core_contract'):
+            self.assertEqual(selection.group(1).split().count(module), 1)
+        self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module cache_core'), 1)
 
     def test_both_sites_run_original_extension_behavior_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
