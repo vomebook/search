@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.search.backend.test_search_projection_contract', workflow)
         self.assertIn('tests.search.backend.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor 9ed8cc0b03fed61ea24ca47c8879d22ab08c39aa HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor 3300c0b49b8bf29ec66143895589bec0572cae68 HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -142,6 +142,14 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertEqual(len(responsiveness), 1)
         self.assertEqual(responsiveness[0].split().count('tests.reader.backend.test_reader_index_warming'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module reader_index'), 1)
+
+    def test_grouped_reader_identity_contract_and_mutation_gate_are_required(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
+                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        self.assertIsNotNone(selection)
+        self.assertEqual(selection.group(1).split().count('tests.reader.backend.test_reader_identity_contract'), 1)
+        self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module reader_identity'), 1)
 
     def test_both_sites_run_original_extension_behavior_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
