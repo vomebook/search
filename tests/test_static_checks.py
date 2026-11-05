@@ -1992,6 +1992,60 @@ const request = options.request;
                 self.assert_check(self.run_check(*production_check), False, "TS7006")
         adapter.write_text(original)
 
+    def test_pdf_book_client_strict_signatures_and_annotations(self):
+        module = (ROOT / 'static/reader/search/reader-pdf-book-search.mjs').as_posix()
+        source = self.root / 'static/pdf-book-client-usage.mjs'
+        config = self.root / 'jsconfig.json'
+        options = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())['compilerOptions']
+        config.write_text(json.dumps({'compilerOptions': options, 'files': [module, str(source)]}))
+        check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', config]
+        prefix = (f'import {{createPdfBookSearch}} from "{module}";\n'
+                  'const client = createPdfBookSearch({url:"https://example.test",bytes:1,sha256:"a",pageCount:1});\n')
+        source.write_text(prefix + '''
+const result = await client.search('needle', progress => {
+  progress.scanned.toFixed(); progress.pages.toFixed(); progress.results.forEach(hit => hit.boxes.forEach(box => box.box));
+});
+result.session.toFixed(); (await client.page(50)).total.toFixed();
+const prefetched = await client.prefetch();
+/** @type {true} */ const ready = prefetched.ready;
+/** @type {undefined | null} */ const session = prefetched.session;
+''')
+        self.assert_check(self.run_check(*check), True, '')
+        for expression, diagnostic in [
+            ('createPdfBookSearch({});', 'TS2739'),
+            ('createPdfBookSearch({url:"x",bytes:"1",sha256:"a",pageCount:1});', 'TS2322'),
+            ('client.search(7);', 'TS2345'),
+            ('client.page("1");', 'TS2345'),
+            ('(await client.prefetch()).results;', 'TS2339'),
+            ('(await client.search("x")).ready;', 'TS2339'),
+            ('(await client.prefetch()).session.id;', 'TS2533'),
+            ('client.search("x", progress => { progress.scanned.toUpperCase(); });', 'TS2339'),
+        ]:
+            with self.subTest(expression=expression):
+                source.write_text(prefix + expression + '\n')
+                self.assert_check(self.run_check(*check), False, diagnostic)
+        project = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())
+        for name in project['files']:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        local_config = self.root / 'jsconfig.reader-exact.json'
+        local_config.write_text(json.dumps(project))
+        production_check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', local_config]
+        self.assert_check(self.run_check(*production_check), True, '')
+        local = self.root / 'static/reader/search/reader-pdf-book-search.mjs'
+        original = local.read_text()
+        for annotation in ('/** @param {PdfBookSearchConfiguration} configuration */',
+                           '/** @param {string} type @param {Record<string, unknown>} values\n'
+                           '   * @param {(value: PdfBookSearchProgress) => void} [progress] @returns {Promise<PdfBookSearchResult | PdfBookPrefetchResult>} */',
+                           '/** @param {string} query @param {(value: PdfBookSearchProgress) => void} [progress] */',
+                           '/** @param {number} offset */'):
+            with self.subTest(missing=annotation):
+                self.assertEqual(original.count(annotation), 1)
+                local.write_text(original.replace(annotation, ''))
+                self.assert_check(self.run_check(*production_check), False, 'TS7006')
+        local.write_text(original)
+
     def test_reader_text_strict_signatures_and_annotations(self):
         module = (ROOT / 'static/reader/formats/reader-text-format.mjs').as_posix()
         source = self.root / 'static/text-usage.mjs'
@@ -2164,7 +2218,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
                     "static/reader/core/reader-lifecycle.mjs",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
-                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/formats/reader-chapter-repository.js",
+                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
