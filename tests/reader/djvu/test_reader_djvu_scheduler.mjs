@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createDjvuScheduler } from "../static/reader/pdf/reader-djvu-scheduler.mjs";
+import { createDjvuScheduler } from "../../../static/reader/pdf/reader-djvu-scheduler.mjs";
 
 const gates = new Map(), started = [], closed = [];
 const decoder = {
