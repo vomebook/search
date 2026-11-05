@@ -1481,6 +1481,48 @@ class StaticGateTests(unittest.TestCase):
             gate.write_text(original.replace('[100, 87.18, 91.67]', thresholds))
             self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
 
+    def test_reader_text_coverage_gate_fails_closed(self):
+        paths = ['static/reader/formats/reader-text-format.mjs',
+                 'scripts/check_reader_text_coverage.mjs', 'scripts/check_tap_contracts.mjs',
+                 'tests/reader/text/test_reader_text_baseline.mjs',
+                 'tests/reader/text/test_reader_text_faults.mjs']
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ['node', paths[1]]
+        message = 'Reader text requires named contracts and exactly one source row'
+        self.assert_check(self.run_check(*check), True, '# pass 14')
+        source = self.root / paths[3]
+        original = source.read_text()
+        name = 'stream rejects an oversized body and cancels its reader'
+        anchor = "test('" + name + "'"
+        self.assertEqual(original.count(anchor), 1)
+        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
+            source.write_text(original.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, message)
+        for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
+                      "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");',
+                      'console.log("pass 14");', 'console.log("end of coverage report");'):
+            source.write_text(original + '\n' + extra + '\n')
+            self.assert_check(self.run_check(*check), False, message)
+        self.assertIn(anchor + ',async()=>{', original)
+        source.write_text(original.replace(anchor + ',async()=>{',
+                                           anchor + ",async()=>{throw new Error('injected text failure');"))
+        self.assert_check(self.run_check(*check), False, 'injected text failure')
+        source.unlink()
+        self.assert_check(self.run_check(*check), False, message)
+        source.write_text(original)
+        gate = self.root / paths[1]
+        gate_original = gate.read_text()
+        self.assertEqual(gate_original.count('[100, 91.51, 90.91]'), 1)
+        for minimum in ('[100.01, 91.51, 90.91]', '[100, 91.52, 90.91]', '[100, 91.51, 90.92]'):
+            gate.write_text(gate_original.replace('[100, 91.51, 90.91]', minimum))
+            self.assert_check(self.run_check(*check), False, message)
+        self.assertEqual(gate_original.count('reader-text-format\\.mjs'), 1)
+        gate.write_text(gate_original.replace('reader-text-format\\.mjs', 'missing-text-format\\.mjs'))
+        self.assert_check(self.run_check(*check), False, message)
+
     def test_reader_media_coverage_gate_fails_closed(self):
         paths = ['static/reader/formats/reader-media-format.mjs',
                  'scripts/check_reader_media_coverage.mjs', 'scripts/check_tap_contracts.mjs',
