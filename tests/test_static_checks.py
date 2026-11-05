@@ -461,7 +461,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_result_identity_coverage_gate_fails_closed(self):
         paths = ["static/search/result-identity.js", "static/search/record-path.js",
-                 "scripts/check_search_result_identity_coverage.mjs", "tests/test_search_stable_id_baseline.mjs", "static/app.js"]
+                 "scripts/check_search_result_identity_coverage.mjs", "tests/search/baselines/test_search_stable_id_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -524,7 +524,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_response_validation_coverage_gate_fails_closed(self):
         paths = ["static/search/response-validation.js", "scripts/check_search_response_validation_coverage.mjs",
-                 "tests/test_search_response_validation_baseline.mjs", "static/app.js"]
+                 "tests/search/baselines/test_search_response_validation_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -599,7 +599,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_file_types_coverage_gate_fails_closed(self):
         paths = ["static/search/file-types.js", "scripts/check_search_file_types_coverage.mjs",
-                 "tests/test_search_extension_inventory_baseline.mjs", "static/app.js"]
+                 "tests/search/baselines/test_search_extension_inventory_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1483,7 +1483,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_readability_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_readability_baseline.mjs",
-                 "tests/test_search_readability_baseline.mjs", "scripts/check_tap_contracts.mjs",
+                 "tests/search/baselines/test_search_readability_baseline.mjs", "scripts/check_tap_contracts.mjs",
                  "static/reader/core/reader-contract.js"]
         for path in paths:
             target = self.root / path
@@ -1520,7 +1520,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_folder_merge_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_folder_merge_baseline.mjs",
-                 "tests/test_search_folder_merge_baseline.mjs"]
+                 "tests/search/baselines/test_search_folder_merge_baseline.mjs"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1555,7 +1555,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_filter_equality_baseline_gate_fails_closed(self):
         paths = ["static/app.js", "scripts/check_search_filter_equality_baseline.mjs",
-                 "tests/test_search_filter_equality_baseline.mjs"]
+                 "tests/search/baselines/test_search_filter_equality_baseline.mjs"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1713,6 +1713,56 @@ const request = options.request;
         source.write_text(setup + 'request("https://example.test", 1, {signal:null, priority:"auto"});\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_pdf_first_page_worker_adapter_strict_signatures(self):
+        module = (ROOT / "static/reader/pdf/pdf-first-page-worker-adapter.mjs").as_posix()
+        source = self.root / "static/pdf-first-page-worker-usage.mjs"
+        config = self.root / "jsconfig.json"
+        options = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())["compilerOptions"]
+        config.write_text(json.dumps({"compilerOptions": options,
+            "files": [str(ROOT / "typings/reader-globals.d.ts"), module, str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        prefix = f'import {{makeFirstPageWorkerSource, installFirstPageWorker}} from "{module}";\n'
+        valid = ('makeFirstPageWorkerSource("worker");\n'
+                 'installFirstPageWorker(new URL("https://example.test/worker.mjs"), "digest", '
+                 '{signal:undefined, response:undefined});\n')
+        source.write_text(prefix + valid)
+        self.assert_check(self.run_check(*check), True, "")
+        for expression, diagnostic in [
+            ('makeFirstPageWorkerSource(123);', "TS2345"),
+            ('installFirstPageWorker(123, "digest");', "TS2345"),
+            ('installFirstPageWorker("worker", 123);', "TS2345"),
+            ('installFirstPageWorker("worker", "digest", {signal:null});', "TS2322"),
+            ('installFirstPageWorker("worker", "digest", {response:Promise.resolve("not a response")});', "TS2322"),
+        ]:
+            with self.subTest(expression=expression):
+                source.write_text(prefix + expression + "\n")
+                self.assert_check(self.run_check(*check), False, diagnostic)
+
+        # Removing any implementation parameter annotation must break strict
+        # checking; otherwise a permissive signature could hide regressions.
+        adapter = self.root / "static/reader/pdf/pdf-first-page-worker-adapter.mjs"
+        adapter.parent.mkdir(parents=True, exist_ok=True)
+        original = (ROOT / "static/reader/pdf/pdf-first-page-worker-adapter.mjs").read_text()
+        local_config = self.root / "jsconfig.reader-exact.json"
+        project = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
+        for name in project["files"]:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        local_config.write_text(json.dumps(project))
+        production_check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", local_config]
+        self.assert_check(self.run_check(*production_check), True, "")
+        for annotation in [
+            '/** @template T @param {PromiseLike<T> | T} promise @param {AbortSignal} signal @returns {Promise<T>} */',
+            '/** @param {string} source @param {string} needle @param {string} replacement @param {string} label @returns {string} */',
+            '/** @param {string} source */',
+        ]:
+            with self.subTest(missing=annotation):
+                self.assertEqual(original.count(annotation), 1)
+                adapter.write_text(original.replace(annotation, ""))
+                self.assert_check(self.run_check(*production_check), False, "TS7006")
+        adapter.write_text(original)
+
     def test_reader_exact_gate_rejects_unchecked_indexes_and_undefined_optionals(self):
         original = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
         options = original["compilerOptions"]
@@ -1722,6 +1772,7 @@ const request = options.request;
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
+                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertTrue(required <= set(json.loads((ROOT / "jsconfig.strict.json").read_text())["files"]))

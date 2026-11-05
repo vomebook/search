@@ -3,6 +3,7 @@
 // different bytes or unexpected source instead of weakening validation.
 const MAX_BYTES = 3 * 1024 * 1024;
 
+/** @template T @param {PromiseLike<T> | T} promise @param {AbortSignal} signal @returns {Promise<T>} */
 function abortable(promise, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);
@@ -12,6 +13,7 @@ function abortable(promise, signal) {
   });
 }
 
+/** @param {string} source @param {string} needle @param {string} replacement @param {string} label @returns {string} */
 function replaceOnce(source, needle, replacement, label) {
   const first = source.indexOf(needle);
   if (first < 0 || source.indexOf(needle, first + needle.length) >= 0)
@@ -19,6 +21,7 @@ function replaceOnce(source, needle, replacement, label) {
   return source.slice(0, first) + replacement + source.slice(first + needle.length);
 }
 
+/** @param {string} source */
 export function makeFirstPageWorkerSource(source) {
   if (typeof source !== "string" || !source.includes('const workerVersion = "6.5.438";'))
     throw new Error("PDF_PREVIEW_WORKER_VERSION_MISMATCH:version");
@@ -405,7 +408,7 @@ export function makeFirstPageWorkerSource(source) {
   return source;
 }
 
-/** @param {{signal?: AbortSignal, response?: Promise<Response>}} [options] */
+/** @param {RequestInfo | URL} url @param {string} expectedDigest @param {{signal?: AbortSignal | undefined, response?: Promise<Response> | undefined}} [options] */
 export async function installFirstPageWorker(url, expectedDigest, options = {}) {
   const {signal, response:pendingResponse} = options;
   const owner = new AbortController(), active = signal ? AbortSignal.any([signal, owner.signal]) : owner.signal;
