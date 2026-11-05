@@ -137,6 +137,26 @@ function readBoundedReaderStream(stream, limit, signal) {
   })();
 }
 
+function yieldReaderAssetLoad(signal) {
+  return new Promise(function(resolve, reject) {
+    var settled = false;
+    var finish = function(callback, value) {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      callback(value);
+    };
+    var abort = function() { finish(reject, new DOMException("Reader assets timed out", "AbortError")); };
+    if (signal.aborted) return abort();
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      yieldConvertedReaderBuild().then(function() { finish(resolve); }, function(error) { finish(reject, error); });
+    } catch (error) {
+      finish(reject, error);
+    }
+  });
+}
+
 async function fetchReaderAssetMap() {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, 10000);
@@ -151,7 +171,12 @@ async function fetchReaderAssetMap() {
     var compressed = await readBoundedReaderStream(response.body, READER_ASSETS_COMPRESSED_LIMIT, controller.signal);
     var expandedStream = new Response(compressed).body.pipeThrough(new DecompressionStream("gzip"));
     var expanded = await readBoundedReaderStream(expandedStream, READER_ASSETS_EXPANDED_LIMIT, controller.signal);
-    var data = JSON.parse(new TextDecoder().decode(expanded));
+    // Keep decoding and parsing separate from decompression so a pending
+    // interaction can run between these individually expensive operations.
+    await yieldReaderAssetLoad(controller.signal);
+    var text = new TextDecoder().decode(expanded);
+    await yieldReaderAssetLoad(controller.signal);
+    var data = JSON.parse(text);
     if (!data || data.v !== 1 || !data.f || typeof data.f !== "object") throw new Error("READER_ASSETS_UNAVAILABLE");
     return data.f;
   } finally {

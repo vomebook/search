@@ -570,6 +570,158 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(recovered, dict(value={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}},
                                          cached={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}}, calls=2, pending=None))
 
+    def test_reader_assets_yields_and_timeout_discards_unpublished_map(self):
+        self.page.clock.install()
+        self.page.evaluate('''() => {
+          readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;
+          window.assetCalls=0;window.assetResults=[];window.releaseAssetYield=null;
+          window.realAssetYield=yieldConvertedReaderBuild;
+          yieldConvertedReaderBuild=()=>new Promise(resolve=>window.releaseAssetYield=resolve);
+          const native=window.fetch;
+          window.fetch=(url,options)=>String(url).endsWith('/reader_assets.json.gz')
+            ? (assetCalls++,Promise.resolve(new Response(
+              new Blob([JSON.stringify({v:1,f:{sample:{s:2,m:'p',p:assetCalls===1?'stale.pdf':'sample.pdf'}}})])
+                .stream().pipeThrough(new CompressionStream('gzip')))))
+            : native(url,options);
+          const first=loadReaderAssets(),second=loadReaderAssets();
+          window.sharedAssetPromise=first===second;
+          first.then(value=>assetResults.push(value));second.then(value=>assetResults.push(value));
+        }''')
+        self.page.wait_for_function('!!window.releaseAssetYield')
+        self.assertTrue(self.page.evaluate('sharedAssetPromise && readerAssets===null && !!readerAssetsPending'))
+        self.page.clock.fast_forward(10001)
+        self.page.wait_for_function('assetResults.length===2')
+        self.assertEqual(self.page.evaluate('[assetResults,readerAssets,readerAssetsPending,assetCalls]'),
+                         [[{}, {}], None, None, 1])
+        self.assertEqual(self.page.evaluate('loadReaderAssets()'), {})
+        self.assertEqual(self.page.evaluate('assetCalls'), 1)
+        self.page.clock.fast_forward(5001)
+        recovered = self.page.evaluate('''async()=>{
+          yieldConvertedReaderBuild=realAssetYield;
+          const value=await loadReaderAssets();return {value,assetCalls,published:readerAssets===value};
+        }''')
+        self.assertEqual(recovered, dict(value={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}},
+                                         assetCalls=2, published=True))
+        self.page.evaluate('releaseAssetYield()')
+        self.page.wait_for_timeout(100)
+        self.assertEqual(self.page.evaluate('[readerAssets,readerAssetsPending,assetCalls,assetResults]'),
+                         [{'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}}, None, 2, [{}, {}]])
+
+    def test_reader_assets_never_publish_partial_map_between_yields(self):
+        self.page.evaluate('''()=>{
+          readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;
+          window.assetYields=[];window.completedAssets=null;window.realAssetYield=yieldConvertedReaderBuild;
+          yieldConvertedReaderBuild=()=>new Promise(resolve=>assetYields.push(resolve));
+          const payload={v:1,f:{first:{s:2},second:{s:3}}};
+          const native=window.fetch;
+          window.fetch=(url,options)=>String(url).endsWith('/reader_assets.json.gz')
+            ? Promise.resolve(new Response(new Blob([JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('gzip'))))
+            : native(url,options);
+          loadReaderAssets().then(value=>window.completedAssets=value);
+        }''')
+        self.page.wait_for_function('assetYields.length===1')
+        self.assertTrue(self.page.evaluate('readerAssets===null && completedAssets===null'))
+        self.page.evaluate('assetYields.shift()()')
+        self.page.wait_for_function('assetYields.length===1')
+        self.assertTrue(self.page.evaluate('readerAssets===null && completedAssets===null'))
+        self.page.evaluate('assetYields.shift()()')
+        self.page.wait_for_function('completedAssets!==null')
+        self.assertEqual(self.page.evaluate('completedAssets'), {'first': {'s': 2}, 'second': {'s': 3}})
+        self.assertTrue(self.page.evaluate('readerAssets===completedAssets && readerAssetsPending===null'))
+        self.page.evaluate('yieldConvertedReaderBuild=realAssetYield')
+
+    def test_reader_assets_timeout_at_second_yield_discards_map(self):
+        self.page.clock.install()
+        self.page.evaluate('''()=>{
+          readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;
+          window.assetYields=[];window.assetResults=[];window.assetCalls=0;
+          window.realAssetYield=yieldConvertedReaderBuild;
+          yieldConvertedReaderBuild=()=>new Promise(resolve=>assetYields.push(resolve));
+          const native=window.fetch;
+          window.fetch=(url,options)=>String(url).endsWith('/reader_assets.json.gz')
+            ? (assetCalls++,Promise.resolve(new Response(new Blob([JSON.stringify(
+                {v:1,f:{sample:{s:assetCalls===1?1:2}}})])
+                .stream().pipeThrough(new CompressionStream('gzip'))))) : native(url,options);
+          const first=loadReaderAssets(),second=loadReaderAssets();
+          window.sharedAssetPromise=first===second;
+          first.then(value=>assetResults.push(value));second.then(value=>assetResults.push(value));
+        }''')
+        self.page.wait_for_function('assetYields.length===1')
+        self.page.evaluate('assetYields.shift()()')
+        self.page.wait_for_function('assetYields.length===1')
+        self.page.clock.fast_forward(10001)
+        self.page.wait_for_function('assetResults.length===2')
+        self.assertTrue(self.page.evaluate('sharedAssetPromise'))
+        self.assertEqual(self.page.evaluate('[assetResults,readerAssets,readerAssetsPending,assetCalls]'),
+                         [[{}, {}], None, None, 1])
+        self.page.clock.fast_forward(5001)
+        recovered = self.page.evaluate('''async()=>{
+          yieldConvertedReaderBuild=realAssetYield;
+          const value=await loadReaderAssets();return {value,assetCalls,published:readerAssets===value};
+        }''')
+        self.assertEqual(recovered, dict(value={'sample': {'s': 2}}, assetCalls=2, published=True))
+        self.page.evaluate('assetYields.shift()()')
+        self.page.wait_for_timeout(100)
+        self.assertEqual(self.page.evaluate('[readerAssets,readerAssetsPending,assetCalls,assetResults]'),
+                         [{'sample': {'s': 2}}, None, 2, [{}, {}]])
+
+    def test_reader_assets_respects_size_limits_and_retains_json_semantics(self):
+        outcome = self.page.evaluate('''async()=>{
+          const originalFetch=window.fetch,compressedLimit=READER_ASSETS_COMPRESSED_LIMIT,
+            expandedLimit=READER_ASSETS_EXPANDED_LIMIT;
+          const gzip=text=>new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip')));
+          const attempt=async make=>{
+            window.fetch=make;
+            try{return {ok:true,value:await fetchReaderAssetMap()}}catch(error){return {ok:false,name:error.name,message:error.message}}
+          };
+          try{
+            READER_ASSETS_COMPRESSED_LIMIT=256;READER_ASSETS_EXPANDED_LIMIT=256;
+            let cancelled=false;
+            const header=await attempt(()=>new Response(new ReadableStream({
+              start(controller){controller.enqueue(new Uint8Array([1]));},cancel(){cancelled=true}
+            }),{headers:{'content-length':'257'}}));
+            const compressed=await attempt(()=>new Response(new Uint8Array(257)));
+            const expanded=await attempt(()=>gzip(JSON.stringify({v:1,f:{a:'x'.repeat(1024)}})));
+            const malformed=await attempt(()=>gzip('{"v":1,"f":'));
+            READER_ASSETS_COMPRESSED_LIMIT=compressedLimit;READER_ASSETS_EXPANDED_LIMIT=expandedLimit;
+            const array=await attempt(()=>gzip('{"v":1,"f":[-0,1e400]}'));
+            return {header:header.message,cancelled,compressed:compressed.message,expanded:expanded.message,
+              malformed:malformed.name,array:array.ok&&Array.isArray(array.value),
+              negativeZero:array.ok&&Object.is(array.value[0],-0),infinity:array.ok&&array.value[1]===Infinity};
+          }finally{
+            window.fetch=originalFetch;READER_ASSETS_COMPRESSED_LIMIT=compressedLimit;READER_ASSETS_EXPANDED_LIMIT=expandedLimit;
+          }
+        }''')
+        self.assertEqual(outcome, dict(header='READER_ASSETS_LIMIT', cancelled=True,
+            compressed='READER_ASSETS_LIMIT', expanded='READER_ASSETS_LIMIT', malformed='SyntaxError',
+            array=True, negativeZero=True, infinity=True))
+
+    def test_reader_assets_yield_fallback_and_hidden_document_complete(self):
+        outcome = self.page.evaluate('''async()=>{
+          const originalFetch=window.fetch,originalMessageChannel=window.MessageChannel;
+          const hiddenDescriptor=Object.getOwnPropertyDescriptor(document,'hidden');
+          const channel=convertedReaderYieldChannel;
+          const payload={v:1,f:{sample:{s:2,m:'p',p:'sample.pdf'}}};
+          try{
+            window.fetch=()=>Promise.resolve(new Response(
+              new Blob([JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('gzip'))));
+            Object.defineProperty(document,'hidden',{configurable:true,value:true});
+            window.MessageChannel=undefined;
+            const timerFallback=await fetchReaderAssetMap();
+            window.MessageChannel=originalMessageChannel;
+            const normal=await fetchReaderAssetMap();
+            return {timerFallback,normal,hidden:document.hidden};
+          }finally{
+            window.fetch=originalFetch;window.MessageChannel=originalMessageChannel;
+            if(hiddenDescriptor)Object.defineProperty(document,'hidden',hiddenDescriptor);else delete document.hidden;
+            if(convertedReaderYieldChannel!==channel){
+              convertedReaderYieldChannel?.port1.close();convertedReaderYieldChannel?.port2.close();convertedReaderYieldChannel=channel;
+            }
+          }
+        }''')
+        self.assertEqual(outcome, dict(timerFallback={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}},
+                                      normal={'sample': {'s': 2, 'm': 'p', 'p': 'sample.pdf'}}, hidden=True))
+
     def test_metadata_errors_are_not_cached_and_retain_circuit_breaker(self):
         result = self.page.evaluate('''async () => {
           repoApiCache=null;repoApiPending=null;extensionApiCache.clear();folderTreeCache.clear();
