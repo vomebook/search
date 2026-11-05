@@ -4,9 +4,9 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 // Expectations were captured from each site's original app.js functions.
-const app = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
+const app = fs.readFileSync(path.join(__dirname, "../../../static/app.js"), "utf8");
 const sandbox = vm.createContext({HF_DATASET_BASE: "https://huggingface.co/datasets"});
-const filename = path.join(__dirname, "../static/search/record-path.js");
+const filename = path.join(__dirname, "../../../static/search/record-path.js");
 vm.runInContext(fs.readFileSync(filename, "utf8"), sandbox, {filename});
 for (const name of ["buildRecordLink", "buildRecordPath", "getBrowserFileName", "getBrowserFileLink"]) {
   const match = app.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"));
