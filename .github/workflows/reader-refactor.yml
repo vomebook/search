@@ -194,7 +194,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 7ba606cc4e878d698576277079d63df103a37e95 HEAD
+          git -C huggingface-search merge-base --is-ancestor dd1d675958c3fdb93301f66f2af526c34faf560e HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -239,7 +239,7 @@ jobs:
             tests.search.backend.test_search_filters_contract tests.test_search_words_contract tests.test_mixed_folder_performance \
             tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract \
             tests.test_reader_identity_contract tests.test_cache_core_contract tests.test_reader_index_contract \
-            tests.test_record_metadata_contract tests.test_folder_tree_contract tests.test_folder_tree_mutation_contract \
+            tests.test_record_metadata_contract tests.search.backend.test_folder_tree_contract tests.search.backend.test_folder_tree_mutation_contract \
             tests.search.backend.test_search_projection_contract tests.search.backend.test_search_projection_mutation_contract \
             tests.search.backend.test_search_candidates_contract tests.search.backend.test_search_candidates_mutation_contract \
             tests.search.backend.test_search_bootstrap_contract tests.search.backend.test_search_bootstrap_mutation_contract
