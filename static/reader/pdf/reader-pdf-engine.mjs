@@ -27,8 +27,8 @@ export function createReaderPdfEngine(readerContext) {
       const documentOptions = options(url);
       readerContext.openPdfRangeTask(pdfjs, documentOptions, {
         signal:owner.signal, readBytes:VoiceOfMLReaderSecurity.readBytes, initial,
-        limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
-        rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfRangeDocumentBytes,
+        limit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
+        rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
         boundedMetadata: !!documentOptions.worker?.readerFirstPageWorker,
         ratePriority: (begin,end) => readerContext.pdfFetchPolicy?.prioritizeRange?.(begin,end,url),
         canPrefetchOpening: () => !!readerContext.pdfV3Manifest && readerContext.readerRestorationLoaded &&
@@ -235,8 +235,8 @@ export function createReaderPdfEngine(readerContext) {
     // Keep it owned while engine preparation is pending and consume it only once.
     let initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
       signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
-      readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
-      rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfRangeDocumentBytes,
+      readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
+      rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
       canPrefetchFirstPage: () => pageOneKnown && !owner.signal.aborted &&
         navigation === readerContext.readerRuntime?.currentGeneration("navigation")
     });
@@ -288,8 +288,8 @@ export function createReaderPdfEngine(readerContext) {
               if (initial !== pending) return null;
               initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
                 signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
-                readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.documentBytes,
-                rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfRangeDocumentBytes,
+                readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
+                rangeLimit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
                 canPrefetchFirstPage: () => pageOneKnown && !owner.signal.aborted &&
                   navigation === readerContext.readerRuntime?.currentGeneration("navigation")
               });

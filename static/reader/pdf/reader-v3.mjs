@@ -26,7 +26,8 @@ export function validateDatasetPrimary(ref, sourceKey, sourceSha, expectedKind) 
       ref.path.split("/").some(part => !part || part === "." || part === "..") ||
       /[\\%?#\x00-\x1f\x7f\p{Cs}]/u.test(ref.path) || !/\.(?:pdf|djvu)$/i.test(ref.path) ||
       typeof ref.revision !== "string" || !/^[0-9a-f]{40}$/.test(ref.revision) ||
-      !sha(ref.sha256) || !integer(ref.bytes) || ref.bytes > 512 * 1024 * 1024 ||
+      !sha(ref.sha256) || !integer(ref.bytes) ||
+      ref.bytes > (/\.pdf$/i.test(ref.path) ? 2 * 1024 * 1024 * 1024 : 512 * 1024 * 1024) ||
       (sourceKey !== undefined && sourceKey !== ref.repo + "\0" + ref.path) ||
       (sourceSha !== undefined && sourceSha !== ref.sha256) ||
       (expectedKind !== undefined && !ref.path.toLowerCase().endsWith("." + expectedKind))) invalid();
