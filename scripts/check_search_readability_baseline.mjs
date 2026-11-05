@@ -3,7 +3,7 @@ import {hasPassingTapContracts} from './check_tap_contracts.mjs';
 
 // These contracts exercise the original inline fragments, not app.js coverage.
 const result = spawnSync(process.execPath, [
-  '--test', '--test-reporter=tap', 'tests/test_search_readability_baseline.mjs'
+  '--test', '--test-reporter=tap', 'tests/search/baselines/test_search_readability_baseline.mjs'
 ], {encoding: 'utf8'});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
