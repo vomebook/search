@@ -194,7 +194,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 906bf17f9939a0d4a3a21f57b196d18e6cf53963 HEAD
+          git -C huggingface-search merge-base --is-ancestor ed7758a0b7ca68c7438a5de5f4eb09ab4e45bccd HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -241,8 +241,8 @@ jobs:
             tests.test_reader_identity_contract tests.test_cache_core_contract tests.test_reader_index_contract \
             tests.test_record_metadata_contract tests.test_folder_tree_contract tests.test_folder_tree_mutation_contract \
             tests.search.backend.test_search_projection_contract tests.search.backend.test_search_projection_mutation_contract \
-            tests.test_search_candidates_contract tests.test_search_candidates_mutation_contract \
-            tests.test_search_bootstrap_contract tests.test_search_bootstrap_mutation_contract
+            tests.search.backend.test_search_candidates_contract tests.search.backend.test_search_candidates_mutation_contract \
+            tests.search.backend.test_search_bootstrap_contract tests.search.backend.test_search_bootstrap_mutation_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
           python -B scripts/check_strict_inventory.py "$RUNNER_TEMP/hf-quality-baseline/strict-inventory-debt.json"
           python -B scripts/check_backend_coverage.py "$RUNNER_TEMP/backend-coverage.json" "$RUNNER_TEMP/hf-quality-baseline/backend-coverage-debt.json"
