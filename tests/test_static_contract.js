@@ -579,7 +579,9 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(workflow, /source-checks:[\s\S]*npm run check:static[\s\S]*scripts\/check_python_static\.py/);
   assert.match(workflow, /python -B -m unittest -v tests\.test_static_checks/);
   assert.match(workflow, /deploy:\s*\n\s*needs: source-checks/);
-  assert.doesNotMatch(workflow, /node tests\//);
+  const deployJob = workflow.slice(workflow.indexOf("\n  deploy:\n"));
+  assert.doesNotMatch(deployJob, /node tests\//);
+  assert.match(workflow, /source-checks:[\s\S]*node tests\/test_dataset_primary_policy\.mjs/);
   assert.match(workflow, /node-version: '26\.11\.1'/);
   assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader\/pdf\/reader-pdf-text\.js/);
   assert.match(workflow, /node scripts\/build\/compose_app\.mjs/);
