@@ -7,7 +7,7 @@ const vm = require("node:vm");
 // Expectations were pinned against the original app.js before extraction.
 function extractedFunctions() {
   const context = vm.createContext({});
-  const filename = path.join(__dirname, "../static/search/highlight.js");
+  const filename = path.join(__dirname, "../../../static/search/highlight.js");
   vm.runInContext(fs.readFileSync(filename, "utf8"), context, {filename});
   return {context, escapeHTML: context.escapeHTML, highlightText: context.highlightText,
     getHighlightRegex: context.getHighlightRegex};

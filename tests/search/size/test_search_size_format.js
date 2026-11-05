@@ -5,7 +5,7 @@ const vm = require("node:vm");
 
 // The expectations were captured from the original functions in app.js.
 const sandbox = vm.createContext({});
-const filename = path.join(__dirname, "../static/search/size-format.js");
+const filename = path.join(__dirname, "../../../static/search/size-format.js");
 vm.runInContext(fs.readFileSync(filename, "utf8"), sandbox, {filename});
 const {bytesToDisplay, fmtSizeUrl, parseSizeStr} = sandbox;
 for (const [input, value, unit] of [
