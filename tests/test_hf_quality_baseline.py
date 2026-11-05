@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.search.backend.test_search_projection_contract', workflow)
         self.assertIn('tests.search.backend.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor 906bf17f9939a0d4a3a21f57b196d18e6cf53963 HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor ed7758a0b7ca68c7438a5de5f4eb09ab4e45bccd HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -37,14 +37,14 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_full_candidates_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('tests.test_search_candidates_contract'), 1)
-        self.assertEqual(workflow.count('tests.test_search_candidates_mutation_contract'), 1)
+        self.assertEqual(workflow.count('tests.search.backend.test_search_candidates_contract'), 1)
+        self.assertEqual(workflow.count('tests.search.backend.test_search_candidates_mutation_contract'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_candidates'), 1)
 
     def test_full_bootstrap_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('tests.test_search_bootstrap_contract'), 1)
-        self.assertEqual(workflow.count('tests.test_search_bootstrap_mutation_contract'), 1)
+        self.assertEqual(workflow.count('tests.search.backend.test_search_bootstrap_contract'), 1)
+        self.assertEqual(workflow.count('tests.search.backend.test_search_bootstrap_mutation_contract'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_bootstrap'), 1)
 
     def test_both_sites_run_original_extension_behavior_contracts(self):
