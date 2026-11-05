@@ -194,7 +194,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor aa8df28d1483b881063df28d58133da26bb9251b HEAD
+          git -C huggingface-search merge-base --is-ancestor 9ed8cc0b03fed61ea24ca47c8879d22ab08c39aa HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -233,12 +233,12 @@ jobs:
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage run --branch --source=backend,app -m unittest -q \
             tests.test_api_contract tests.search.backend.test_cache_and_malformed tests.test_async_proxy tests.test_coverage_safety \
             tests.test_data_decoding tests.test_fastapi_endpoints tests.search.backend.test_native_search_indexes tests.test_proxy_ownership tests.test_proxy_streams_contract \
-            tests.test_reader_backend tests.test_reader_archive_hardening tests.test_reader_compression_safety tests.search.backend.test_search_behavior tests.search.backend.test_search tests.test_reader_index_warming \
+            tests.test_reader_backend tests.test_reader_archive_hardening tests.test_reader_compression_safety tests.search.backend.test_search_behavior tests.search.backend.test_search tests.reader.backend.test_reader_index_warming \
             tests.test_reader_range_flights tests.test_reader_v3_catalog tests.search.backend.test_search_order_cache tests.search.backend.test_search_execution \
             tests.test_security tests.test_upstream_http tests.test_seo_routes tests.test_seo_catalog tests.test_reader_ocr_validation \
             tests.search.backend.test_search_filters_contract tests.search.backend.test_search_words_contract tests.test_mixed_folder_performance \
             tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract \
-            tests.test_reader_identity_contract tests.search.backend.test_cache_core_contract tests.test_reader_index_contract \
+            tests.test_reader_identity_contract tests.search.backend.test_cache_core_contract tests.reader.backend.test_reader_index_contract \
             tests.search.backend.test_record_metadata_contract tests.search.backend.test_folder_tree_contract tests.search.backend.test_folder_tree_mutation_contract \
             tests.search.backend.test_search_projection_contract tests.search.backend.test_search_projection_mutation_contract \
             tests.search.backend.test_search_candidates_contract tests.search.backend.test_search_candidates_mutation_contract \
@@ -413,7 +413,7 @@ jobs:
           PY
       - name: Run Reader upstream ownership gate
         working-directory: huggingface-search
-        run: timeout 120s python3 -B -m unittest -v tests.test_async_proxy tests.test_reader_range_flights tests.test_proxy_ownership tests.test_proxy_streams_contract tests.test_coverage_safety tests.test_reader_index_warming tests.search.backend.test_search_execution tests.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
+        run: timeout 120s python3 -B -m unittest -v tests.test_async_proxy tests.test_reader_range_flights tests.test_proxy_ownership tests.test_proxy_streams_contract tests.test_coverage_safety tests.reader.backend.test_reader_index_warming tests.search.backend.test_search_execution tests.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
       - name: Run full Reader refactor suite
         working-directory: huggingface-search
         run: python3 -B -m unittest -v tests.test_reader_refactor
