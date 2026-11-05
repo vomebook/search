@@ -2,10 +2,10 @@ const vm = require("vm");
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const {test, run} = require("./test_harness");
+const {test, run} = require("../../test_harness");
 
 test("response caches bound bytes, expire, preserve live oversized data and retain LRU hits", () => {
-  const filename = path.join(__dirname, "../static/search/response-cache.js");
+  const filename = path.join(__dirname, "../../../static/search/response-cache.js");
   const context = {clock: 0};
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(filename, "utf8"), context, {filename});
