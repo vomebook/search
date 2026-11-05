@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.search.backend.test_search_projection_contract', workflow)
         self.assertIn('tests.search.backend.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor 9eedf4acc921056467a6479448810c860c4d7e9e HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor aa8df28d1483b881063df28d58133da26bb9251b HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -121,6 +121,15 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIsNotNone(selection)
         self.assertEqual(selection.group(1).split().count('tests.search.backend.test_record_metadata_contract'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module record_metadata'), 1)
+
+    def test_grouped_native_index_contract_and_mutation_gate_are_required(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
+                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        self.assertIsNotNone(selection)
+        self.assertEqual(selection.group(1).split().count('tests.search.backend.test_native_search_indexes'), 1)
+        self.assertEqual(selection.group(1).split().count('tests.test_exact_search_performance'), 1)
+        self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_indexes'), 1)
 
     def test_both_sites_run_original_extension_behavior_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
