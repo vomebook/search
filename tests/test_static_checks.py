@@ -1481,6 +1481,47 @@ class StaticGateTests(unittest.TestCase):
             gate.write_text(original.replace('[100, 87.18, 91.67]', thresholds))
             self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
 
+    def test_reader_media_coverage_gate_fails_closed(self):
+        paths = ['static/reader/formats/reader-media-format.mjs',
+                 'scripts/check_reader_media_coverage.mjs', 'scripts/check_tap_contracts.mjs',
+                 'tests/reader/media/test_reader_media_baseline.mjs',
+                 'tests/reader/media/test_reader_media_metadata.mjs']
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ['node', paths[1]]
+        message = 'Reader media requires named contracts and exactly one source row'
+        self.assert_check(self.run_check(*check), True, '# pass 15')
+        source = self.root / paths[4]
+        original = source.read_text()
+        name = 'resource cleanup rejects pending metadata and removes listeners'
+        anchor = "test('" + name + "'"
+        self.assertEqual(original.count(anchor), 1)
+        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
+            source.write_text(original.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, message)
+        for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
+                      "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");',
+                      'console.log("pass 15");', 'console.log("end of coverage report");'):
+            source.write_text(original + '\n' + extra + '\n')
+            self.assert_check(self.run_check(*check), False, message)
+        source.write_text(original.replace(anchor + ', async () => {',
+                                           anchor + ", async () => { throw new Error('injected media failure');"))
+        self.assert_check(self.run_check(*check), False, 'injected media failure')
+        source.unlink()
+        self.assert_check(self.run_check(*check), False, message)
+        source.write_text(original)
+        gate = self.root / paths[1]
+        gate_original = gate.read_text()
+        self.assertEqual(gate_original.count('[100, 90.77, 100]'), 1)
+        for minimum in ('[100.01, 90.77, 100]', '[100, 90.78, 100]', '[100, 90.77, 100.01]'):
+            gate.write_text(gate_original.replace('[100, 90.77, 100]', minimum))
+            self.assert_check(self.run_check(*check), False, message)
+        self.assertEqual(gate_original.count('reader-media-format\\.mjs'), 1)
+        gate.write_text(gate_original.replace('reader-media-format\\.mjs', 'missing-media-format\\.mjs'))
+        self.assert_check(self.run_check(*check), False, message)
+
     def test_reader_djvu_contract_gate_fails_closed(self):
         for name in ('check_reader_djvu_contracts.mjs', 'check_tap_contracts.mjs'):
             shutil.copyfile(ROOT / 'scripts' / name, self.root / 'scripts' / name)
@@ -1868,6 +1909,59 @@ const request = options.request;
                 self.assert_check(self.run_check(*production_check), False, "TS7006")
         adapter.write_text(original)
 
+    def test_reader_media_strict_signatures_and_annotations(self):
+        module = (ROOT / 'static/reader/formats/reader-media-format.mjs').as_posix()
+        source = self.root / 'static/media-usage.mjs'
+        config = self.root / 'jsconfig.json'
+        options = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())['compilerOptions']
+        config.write_text(json.dumps({'compilerOptions': options,
+            'files': [str(ROOT / 'typings/reader-globals.d.ts'), module, str(source)]}))
+        check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', config]
+        prefix = (f'import {{createReaderMediaFormat}} from "{module}";\n'
+                  'const ctx = /** @type {Parameters<typeof createReaderMediaFormat>[0]} */ (/** @type {unknown} */ ({}));\n'
+                  'const media = createReaderMediaFormat(ctx);\n')
+        source.write_text(prefix + '''
+/** @type {string} */ const time = media.formatMediaTime(Symbol('dynamic'));
+/** @type {Promise<void>} */ const audio = media.renderMedia('audio');
+/** @type {Promise<void>} */ const video = media.renderMedia('video');
+/** @type {Promise<Uint8Array>} */ const flash = media.loadSwfDocument();
+media.renderImageDocument(document.createElement('div')); media.renderSwf({custom:true});
+ctx.resolvedReaderData = {original_extension: null}; ctx.resolvedReaderData = {original_extension: undefined};
+''')
+        self.assert_check(self.run_check(*check), True, '')
+        for expression, diagnostic in [
+            ('media.renderImageDocument("not a Node");', 'TS2345'),
+            ('media.renderMedia(42);', 'TS2345'),
+            ('/** @type {number} */ const value = media.formatMediaTime(1);', 'TS2322'),
+            ('/** @type {Promise<string>} */ const value = media.renderMedia("audio");', 'TS2322'),
+            ('/** @type {Promise<string>} */ const value = media.loadSwfDocument();', 'TS2322'),
+            ('createReaderMediaFormat({});', 'TS2740'),
+            ('ctx.readerAbortController = 7;', 'TS2322'),
+            ('ctx.READER_PROXY_TIMEOUT_MS = "slow";', 'TS2322'),
+        ]:
+            with self.subTest(expression=expression):
+                source.write_text(prefix + expression + '\n')
+                self.assert_check(self.run_check(*check), False, diagnostic)
+        project = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())
+        for name in project['files']:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        local_config = self.root / 'jsconfig.reader-exact.json'
+        local_config.write_text(json.dumps(project))
+        production_check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', local_config]
+        self.assert_check(self.run_check(*production_check), True, '')
+        local = self.root / 'static/reader/formats/reader-media-format.mjs'
+        original = local.read_text()
+        for annotation in ('/** @param {ReaderMediaContext} readerContext */', '/** @param {unknown} seconds */',
+                           '/** @param {Node} image */', '/** @param {string} mode */',
+                           '/** @param {unknown} data */', '/** @param {string} message */'):
+            with self.subTest(missing=annotation):
+                self.assertEqual(original.count(annotation), 1)
+                local.write_text(original.replace(annotation, ''))
+                self.assert_check(self.run_check(*production_check), False, 'TS7006')
+        local.write_text(original)
+
     def test_reader_lifecycle_strict_signatures_and_annotations(self):
         module = (ROOT / "static/reader/core/reader-lifecycle.mjs").as_posix()
         source = self.root / "static/lifecycle-usage.mjs"
@@ -1924,7 +2018,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
                     "static/reader/core/reader-lifecycle.mjs",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
-                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-chapter-repository.js",
+                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
