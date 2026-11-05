@@ -3,7 +3,7 @@ import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
 
 // Require the original inline helper contracts to run, rather than merely load.
 const result = spawnSync(process.execPath, [
-  "--test", "--test-reporter=tap", "tests/test_search_filter_equality_baseline.mjs"
+  "--test", "--test-reporter=tap", "tests/search/baselines/test_search_filter_equality_baseline.mjs"
 ], {encoding: "utf8"});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
