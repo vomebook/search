@@ -46,6 +46,8 @@ jobs:
           npx --no-install pyright --project pyrightconfig.strict.json
       - name: Verify static gates catch injected errors
         run: python -B -m unittest -v tests.test_static_checks
+      - name: Verify PDF and DjVu primary document limits
+        run: node tests/test_dataset_primary_policy.mjs
   # Single deploy job since we're just deploying
   deploy:
     needs: source-checks
