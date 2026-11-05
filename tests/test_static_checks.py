@@ -665,13 +665,13 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_highlight_coverage_gate_fails_closed(self):
-        paths = ["static/search/highlight.js", "scripts/check_search_highlight_coverage.mjs",
-                 "tests/test_search_highlight_contract.js"]
+        paths = ["static/search/highlight.js", "scripts/search/check_search_highlight_coverage.mjs",
+                 "tests/search/highlight/test_search_highlight_contract.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        check = ["node", "scripts/check_search_highlight_coverage.mjs"]
+        check = ["node", "scripts/search/check_search_highlight_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "highlight.js")
         test = self.root / paths[2]
         source = test.read_text()
@@ -702,12 +702,12 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_search_highlight_coverage_checks_fractional_minimum(self):
-        for path in ("static/search/highlight.js", "scripts/check_search_highlight_coverage.mjs",
-                     "tests/test_search_highlight_contract.js", "scripts/check_tap_contracts.mjs"):
+        for path in ("static/search/highlight.js", "scripts/search/check_search_highlight_coverage.mjs",
+                     "tests/search/highlight/test_search_highlight_contract.js", "scripts/check_tap_contracts.mjs"):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        gate = self.root / "scripts/check_search_highlight_coverage.mjs"
+        gate = self.root / "scripts/search/check_search_highlight_coverage.mjs"
         source = gate.read_text()
         before = "const minimum = [100, 95.45, 100];"
         self.assertEqual(source.count(before), 1)
@@ -796,13 +796,13 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_size_coverage_gate_fails_closed(self):
-        paths = ["static/search/size-format.js", "scripts/check_search_size_coverage.mjs",
-                 "tests/test_search_size_format.js", "tests/test_search_size_render_contract.js"]
+        paths = ["static/search/size-format.js", "scripts/search/check_search_size_coverage.mjs",
+                 "tests/search/size/test_search_size_format.js", "tests/search/size/test_search_size_render_contract.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        check = ["node", "scripts/check_search_size_coverage.mjs"]
+        check = ["node", "scripts/search/check_search_size_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "size-format.js")
         render = self.root / paths[3]
         original = render.read_text()
