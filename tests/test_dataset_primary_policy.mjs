@@ -22,7 +22,8 @@ for (const ext of ['pdf','djvu']) {
     {repo:'Other/books'}, {repo:'VoiceOfML/../evil'}, {repo:'VoiceOfML/..'}, {revision:'main'}, {revision:'f'.repeat(39)},
     {path:'../book.'+ext}, {path:'中文/%2e%2e/book.'+ext}, {path:'/book.'+ext},
     {path:'中文/book.'+ext+'?x'}, {path:'中文/book.html'}, {role:'provenance'},
-    {bytes:0}, {bytes:512*1024*1024+1}, {sha256:'f'.repeat(64)}, {bucket:'vomebook/pdf-pages-v2'},
+    {bytes:0}, {bytes:(ext==='pdf'?2*1024*1024*1024:512*1024*1024)+1},
+    {sha256:'f'.repeat(64)}, {bucket:'vomebook/pdf-pages-v2'},
     {path:'中文/\ud800.'+ext}
   ]) {
     const bad=reading(ext);Object.assign(bad.primary.resource,mutation);
@@ -32,6 +33,8 @@ for (const ext of ['pdf','djvu']) {
   assert.throws(()=>validateReadingManifest(wrongKey,100),/PDF_V3_INVALID/);
   const mismatch=reading(ext);mismatch.primary.kind=ext==='pdf'?'djvu':'pdf';
   assert.throws(()=>validateReadingManifest(mismatch,100),/PDF_V3_INVALID/);
+  const atLimit=reading(ext);atLimit.primary.resource.bytes=(ext==='pdf'?2:0.5)*1024*1024*1024;
+  assert.equal(validateReadingManifest(atLimit,100),atLimit);
 }
 const tooMany=reading('djvu');tooMany.page_count=tooMany.preview.page_count=10001;
 assert.throws(()=>validateReadingManifest(tooMany,20000),/PDF_V3_INVALID/);
