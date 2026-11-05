@@ -21,6 +21,12 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(self.fixture.errors, [])
         self.fixture.tearDown()
 
+    def await_initial_extension_metadata(self):
+        # The fixture's first result page can finish before startup metadata.
+        # A still-pending fetchExtensions() writes to the shared cache when it
+        # resolves, so settle it before installing a synthetic inventory.
+        self.page.wait_for_function('filterRenderDone === filterRenderToken && extensionApiPending.size === 0')
+
     def test_deep_sidebar_toggles_skip_full_result_snapshots(self):
         result = self.page.evaluate('''async () => {
           cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
@@ -459,6 +465,7 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(result, [[], [], []])
 
     def test_missing_extension_renders_without_poisoning_api_cache(self):
+        self.await_initial_extension_metadata()
         self.page.evaluate('''async () => {
           cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
           STATE.mode='global';STATE.repo=null;STATE.repoFull=null;STATE.useLocalMode=false;
@@ -477,6 +484,7 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('STATE.filterExtensions'),['txt'])
 
     def test_real_type_remains_available_when_extension_metadata_is_refreshed(self):
+        self.await_initial_extension_metadata()
         self.page.evaluate('''async () => {
           cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
           STATE.mode='global';STATE.repo=null;STATE.repoFull=null;STATE.useLocalMode=false;
@@ -505,6 +513,7 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('STATE.filterExtensions'),['txt','ghost'])
 
     def test_extension_cache_retains_clean_data_with_shared_inflight_request(self):
+        self.await_initial_extension_metadata()
         outcome=self.page.evaluate('''async () => {
           extensionApiCache.clear();extensionApiPending.clear();noteApiSuccess();
           const original=window.fetch;let calls=0,finish;
