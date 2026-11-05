@@ -3,7 +3,7 @@ import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
 
 // Require every original inline merge contract to finish without skips.
 const result = spawnSync(process.execPath, [
-  "--test", "--test-reporter=tap", "tests/test_search_folder_merge_baseline.mjs"
+  "--test", "--test-reporter=tap", "tests/search/baselines/test_search_folder_merge_baseline.mjs"
 ], {encoding: "utf8"});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);

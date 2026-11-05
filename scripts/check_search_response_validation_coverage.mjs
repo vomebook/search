@@ -6,7 +6,7 @@ const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/search/response-validation.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
-  "tests/test_search_response_validation_baseline.mjs"
+  "tests/search/baselines/test_search_response_validation_baseline.mjs"
 ], {encoding: "utf8"});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
