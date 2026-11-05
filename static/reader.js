@@ -748,12 +748,12 @@ let releasePdfWorker = null;
 readerBindings.applySourceSessionAndCachedMetadata();
 const readerLifecycle = readerRuntime.state.lifecycle;
 readerBindings.publishSourceAndSubscribeToStore();
-const content = document.querySelector("#content");
+const content = /** @type {HTMLDivElement} */ (document.querySelector("#content"));
 readerBindings.initializePanelAccessibility();
 const loadingIndicator = document.createElement("div");
 readerBindings.mountInitialLoadingFeedback();
-const status = document.querySelector("#status");
-const loadingStatus = document.querySelector("#loading-status");
+const status = /** @type {HTMLSpanElement} */ (document.querySelector("#status"));
+const loadingStatus = /** @type {HTMLDivElement} */ (document.querySelector("#loading-status"));
 
 const downloadButton = document.querySelector("#download");
 const downloadFeedback = document.querySelector("#download-feedback");
