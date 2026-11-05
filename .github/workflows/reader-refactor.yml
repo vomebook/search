@@ -46,9 +46,9 @@ jobs:
           node tests/test_reader_architecture.js
           node tests/test_reader_regression.js
           node scripts/check_adapter_coverage.mjs
-          node scripts/check_search_size_coverage.mjs
+          node scripts/search/check_search_size_coverage.mjs
           node scripts/check_search_record_path_coverage.mjs
-          node scripts/check_search_highlight_coverage.mjs
+          node scripts/search/check_search_highlight_coverage.mjs
           node scripts/check_search_response_cache_coverage.mjs
           node --test tests/test_tap_contracts.mjs
           node scripts/check_download_controller_coverage.mjs
@@ -194,7 +194,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor ea121d11ea5522200cb19d98e8811b1bcc6e1842 HEAD
+          git -C huggingface-search merge-base --is-ancestor 72249a249c81b9910379dc2e40c748ad086d0068 HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -288,9 +288,9 @@ jobs:
           node tests/test_reader_engine_preload.js
           node tests/test_reader_regression.js
           node scripts/check_adapter_coverage.mjs
-          node scripts/check_search_size_coverage.mjs
+          node scripts/search/check_search_size_coverage.mjs
           node scripts/check_search_record_path_coverage.mjs
-          node scripts/check_search_highlight_coverage.mjs
+          node scripts/search/check_search_highlight_coverage.mjs
           node scripts/check_search_response_cache_coverage.mjs
           node --test tests/test_tap_contracts.mjs
           node scripts/check_download_controller_coverage.mjs

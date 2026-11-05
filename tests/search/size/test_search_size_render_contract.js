@@ -7,7 +7,7 @@ const vm = require("node:vm");
 // Expected behavior was pinned before extraction, separately from URL sizes.
 function extractedFormatter() {
   const context = vm.createContext({});
-  const filename = path.join(__dirname, "../static/search/size-format.js");
+  const filename = path.join(__dirname, "../../../static/search/size-format.js");
   vm.runInContext(fs.readFileSync(filename, "utf8"), context, {filename});
   return context.formatSize;
 }
@@ -53,7 +53,7 @@ test("display retains prototype and normalized cache behavior", () => {
   assert.equal(numericInfinityFirst("Infinity"), "Infinity GB");
   // The legacy cache deliberately reads a value twice after the undefined check.
   const context = vm.createContext({});
-  const filename = path.join(__dirname, "../static/search/size-format.js");
+  const filename = path.join(__dirname, "../../../static/search/size-format.js");
   vm.runInContext(fs.readFileSync(filename, "utf8"), context, {filename});
   const observed = vm.runInContext(`(() => {
     let reads = 0;
