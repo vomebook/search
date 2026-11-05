@@ -71,6 +71,14 @@ test('stream handles split UTF-8 BOM and codepoints and releases its resource',a
     await f.context.renderPlainText(responseChunks(chunks));
     assert.equal(f.context.content.textContent,'split 😀 literal � 汉字');
     assert.deepEqual(f.events.filter(event=>event==='track'||event==='untrack'),['track','untrack']);
+    // Even an empty stream reaches EOF with no decoder selected. The host's
+    // detection callback must still be called once before the decoder is flushed.
+    f.context.content.children.length=0;f.events.length=0;
+    const detect=f.context.detectTextEncoding, samples=[];
+    f.context.detectTextEncoding=(sample,...args)=>{samples.push([...sample]);return detect(sample,...args);};
+    await f.context.renderPlainText(responseChunks([]));
+    assert.deepEqual(samples,[[]]);assert.equal(f.context.content.textContent,'');
+    assert.deepEqual(f.events.filter(event=>event==='track'||event==='untrack'),['track','untrack']);
   } finally {f.restore();}
 });
 

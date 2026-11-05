@@ -1515,9 +1515,9 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(original)
         gate = self.root / paths[1]
         gate_original = gate.read_text()
-        self.assertEqual(gate_original.count('[100, 91.51, 90.91]'), 1)
-        for minimum in ('[100.01, 91.51, 90.91]', '[100, 91.52, 90.91]', '[100, 91.51, 90.92]'):
-            gate.write_text(gate_original.replace('[100, 91.51, 90.91]', minimum))
+        self.assertEqual(gate_original.count('[100, 91.89, 90.91]'), 1)
+        for minimum in ('[100.01, 91.89, 90.91]', '[100, 91.90, 90.91]', '[100, 91.89, 90.92]'):
+            gate.write_text(gate_original.replace('[100, 91.89, 90.91]', minimum))
             self.assert_check(self.run_check(*check), False, message)
         self.assertEqual(gate_original.count('reader-text-format\\.mjs'), 1)
         gate.write_text(gate_original.replace('reader-text-format\\.mjs', 'missing-text-format\\.mjs'))
@@ -1951,6 +1951,69 @@ const request = options.request;
                 self.assert_check(self.run_check(*production_check), False, "TS7006")
         adapter.write_text(original)
 
+    def test_reader_text_strict_signatures_and_annotations(self):
+        module = (ROOT / 'static/reader/formats/reader-text-format.mjs').as_posix()
+        source = self.root / 'static/text-usage.mjs'
+        config = self.root / 'jsconfig.json'
+        options = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())['compilerOptions']
+        config.write_text(json.dumps({'compilerOptions': options,
+            'files': [str(ROOT / 'typings/reader-globals.d.ts'), module, str(source)]}))
+        check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', config]
+        prefix = (f'import {{createReaderTextFormat}} from "{module}";\n'
+                  f'import {{createReaderDocumentLoader}} from "{(ROOT / "static/reader/core/reader-document-loader.mjs").as_posix()}";\n'
+                  'const ctx = /** @type {Parameters<typeof createReaderTextFormat>[0]} */ (/** @type {unknown} */ ({}));\n'
+                  'const loaderCtx = /** @type {Parameters<typeof createReaderDocumentLoader>[0]} */ (/** @type {unknown} */ ({}));\n'
+                  'const loader = createReaderDocumentLoader(loaderCtx);\n'
+                  'const text = createReaderTextFormat(ctx);\n')
+        source.write_text(prefix + '''
+/** @type {string} */ const encoding = text.detectTextEncoding(new Uint8Array([65]), 'book');
+/** @type {Promise<void>} */ const rendering = text.renderPlainText(new Response('synthetic'));
+text.renderTextDocument({response: Promise.resolve(new Response('hello'))});
+text.renderMarkdownDocument({response: new Response('hello'), engines: Promise.resolve([])});
+text.renderTextDocument(await loader.loadTextDocument());
+text.renderMarkdownDocument(loader.loadMarkdownDocument());
+ctx.renderText(false, {response: new Response()});
+ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
+''')
+        self.assert_check(self.run_check(*check), True, '')
+        for expression, diagnostic in [
+            ('text.detectTextEncoding("bytes");', 'TS2345'),
+            ('text.detectTextEncoding(new Uint8Array(), 123);', 'TS2345'),
+            ('text.renderPlainText("not a response");', 'TS2345'),
+            ('text.renderTextDocument({});', 'TS2741'),
+            ('text.renderMarkdownDocument({response: new Response()});', 'TS2345'),
+            ('ctx.renderText(true, {response: new Response()});', 'TS2769'),
+            ('ctx.renderText(false, {});', 'TS2769'),
+            ('ctx.renderText(true, {response: new Response(), engines: undefined});', 'TS2769'),
+            ('/** @type {number} */ const value = text.detectTextEncoding(new Uint8Array());', 'TS2322'),
+            ('/** @type {Promise<string>} */ const value = text.renderPlainText(new Response());', 'TS2322'),
+            ('createReaderTextFormat({});', 'TS2740'),
+        ]:
+            with self.subTest(expression=expression):
+                source.write_text(prefix + expression + '\n')
+                self.assert_check(self.run_check(*check), False, diagnostic)
+        project = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())
+        for name in project['files']:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        local_config = self.root / 'jsconfig.reader-exact.json'
+        local_config.write_text(json.dumps(project))
+        production_check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', local_config]
+        self.assert_check(self.run_check(*production_check), True, '')
+        local = self.root / 'static/reader/formats/reader-text-format.mjs'
+        original = local.read_text()
+        for annotation in ('/** @param {ReaderTextContext} readerContext */', '/** @param {Response} response */',
+                           '/** @param {string} value @param {string} [encoding] */',
+                           '/** @param {Uint8Array} bytes @param {string} [hint] */',
+                           '/** @param {ReaderTextPrepared} prepared */',
+                           '/** @param {ReaderMarkdownPrepared} prepared */'):
+            with self.subTest(missing=annotation):
+                self.assertEqual(original.count(annotation), 1)
+                local.write_text(original.replace(annotation, ''))
+                self.assert_check(self.run_check(*production_check), False, 'TS7006')
+        local.write_text(original)
+
     def test_reader_media_strict_signatures_and_annotations(self):
         module = (ROOT / 'static/reader/formats/reader-media-format.mjs').as_posix()
         source = self.root / 'static/media-usage.mjs'
@@ -2060,7 +2123,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
                     "static/reader/core/reader-lifecycle.mjs",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
-                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-chapter-repository.js",
+                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}

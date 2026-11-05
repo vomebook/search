@@ -18,6 +18,7 @@
     "static/reader/core/reader-request-manager.js",
     "static/reader/formats/reader-image-loader.mjs",
     "static/reader/formats/reader-media-format.mjs",
+    "static/reader/formats/reader-text-format.mjs",
     "static/reader/formats/reader-chapter-repository.js",
     "static/reader/formats/reader-format-adapters.js",
     "static/reader/ui/reader-document-styles.mjs",

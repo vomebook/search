@@ -1,10 +1,30 @@
+/**
+ * @typedef {{response: Promise<Response> | Response, engines?: Promise<unknown>}} ReaderTextPrepared
+ * @typedef {ReaderTextPrepared & {engines: Promise<unknown>}} ReaderMarkdownPrepared
+ * @typedef {((markdown: false, prepared: ReaderTextPrepared) => Promise<void>) &
+ *   ((markdown: true, prepared: ReaderMarkdownPrepared) => Promise<void>)} ReaderTextRenderer
+ * @typedef {object} ReaderTextContext
+ * @property {() => void} assertReaderActive
+ * @property {HTMLElement} content
+ * @property {() => void} markReaderContentReady
+ * @property {() => Promise<void>} waitForReader
+ * @property {(cleanup: () => void) => () => void} trackReaderResource
+ * @property {() => Error} readerAbortError
+ * @property {<T>(promise: T | PromiseLike<T>) => Promise<Awaited<T>>} awaitReader
+ * @property {(bytes: Uint8Array, hint?: string) => string} detectTextEncoding
+ * @property {{title: string}} documentState
+ * @property {ReaderTextRenderer} renderText
+ */
+/** @param {ReaderTextContext} readerContext */
 export function createReaderTextFormat(readerContext) {
+  /** @param {Response} response */
   async function renderPlainText(response) {
     readerContext.assertReaderActive();
     const pre = document.createElement("div");
     pre.className = "reader-text";
     readerContext.content.appendChild(pre);
-    let block = null, blockLength = 0;
+    let /** @type {HTMLPreElement | null} */ block = null, blockLength = 0;
+    /** @param {string} value @param {string} [encoding] */
     const appendDecoded = async (value, encoding = "utf-8") => {
       // Unicode can contain a literal replacement character. Keep legacy
       // damaged-codepage cleanup scoped to non-Unicode decoding.
@@ -26,7 +46,7 @@ export function createReaderTextFormat(readerContext) {
         }
         if (end === offset) { block = null; blockLength = 0; continue; }
         const tail = block.lastChild;
-        if (tail?.nodeType === Node.TEXT_NODE) tail.appendData(text.slice(offset, end));
+        if (tail?.nodeType === Node.TEXT_NODE) (/** @type {Text} */ (tail)).appendData(text.slice(offset, end));
         else block.appendChild(document.createTextNode(text.slice(offset, end)));
         if (text.length) readerContext.markReaderContentReady();
         blockLength += end - offset;
@@ -52,8 +72,8 @@ export function createReaderTextFormat(readerContext) {
       return;
     }
     const reader = response.body.getReader(),
-      sampleChunks = [],
-      signature = [],
+      /** @type {Uint8Array[]} */ sampleChunks = [],
+      /** @type {number[]} */ signature = [],
       previewDecoder = new TextDecoder("utf-8");
     const untrack = readerContext.trackReaderResource(() => {
       reader.cancel(readerContext.readerAbortError()).catch(() => {});
@@ -63,7 +83,7 @@ export function createReaderTextFormat(readerContext) {
       displayedSampleSize = 0,
       previewChunkIndex = 0,
       previewChunkOffset = 0,
-      decoder = null,
+      /** @type {TextDecoder | null} */ decoder = null,
       asciiPreviewPossible = true,
       asciiPrefixLength = 0;
     const startDecoder = async () => {
@@ -90,7 +110,7 @@ export function createReaderTextFormat(readerContext) {
         if (!decoder) {
           sampleChunks.push(value);
           sampleLength += value.byteLength;
-          for (let i = 0; i < value.byteLength && signature.length < 3; i++) signature.push(value[i]);
+          for (let i = 0; i < value.byteLength && signature.length < 3; i++) signature.push(/** @type {number} */ (value[i]));
           // A BOM determines the decoder without waiting for the heuristic
           // sample. Retain streaming decoder state across split code units.
           if ((signature[0] === 0xef && signature[1] === 0xbb && signature[2] === 0xbf) ||
@@ -101,7 +121,7 @@ export function createReaderTextFormat(readerContext) {
           }
           if (asciiPreviewPossible) {
             let asciiLength = 0;
-            while (asciiLength < value.length && value[asciiLength] > 0 && value[asciiLength] < 128)
+            while (asciiLength < value.length && (/** @type {number} */ (value[asciiLength])) > 0 && (/** @type {number} */ (value[asciiLength])) < 128)
               asciiLength++;
             asciiPrefixLength += asciiLength;
             if (value[asciiLength] === 0) {
@@ -118,7 +138,9 @@ export function createReaderTextFormat(readerContext) {
             // The full sample remains for encoding detection; preview only its
             // unseen ASCII prefix instead of revisiting all previous chunks.
             while (displayedSampleSize < asciiPrefixLength) {
-              const chunk = sampleChunks[previewChunkIndex];
+              // The preview cursor advances through the retained sample until
+              // it has consumed precisely the accumulated ASCII prefix.
+              const chunk = /** @type {Uint8Array} */ (sampleChunks[previewChunkIndex]);
               const end = Math.min(chunk.length, previewChunkOffset + asciiPrefixLength - displayedSampleSize);
               await appendDecoded(previewDecoder.decode(chunk.subarray(previewChunkOffset, end)));
               displayedSampleSize += end - previewChunkOffset;
@@ -132,11 +154,15 @@ export function createReaderTextFormat(readerContext) {
           if (sampleLength < 65540) continue;
           await startDecoder();
         } else {
-          await appendDecoded(decoder.decode(value, { stream: true }), decoder.encoding);
+          // This branch is reached only after the closure assigned a decoder;
+          // TypeScript does not track assignments made inside that closure.
+          await appendDecoded((/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).decode(value, { stream: true }), (/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).encoding);
         }
       }
+      // If no decoder was selected during streaming, successful completion of
+      // startDecoder assigns one even for an empty sample. A failure is caught.
       if (!decoder) await startDecoder();
-      await appendDecoded(decoder.decode(), decoder.encoding);
+      await appendDecoded((/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).decode(), (/** @type {TextDecoder} */ (/** @type {unknown} */ (decoder))).encoding);
     } catch (reason) {
       try {
         await reader.cancel(reason);
@@ -148,6 +174,7 @@ export function createReaderTextFormat(readerContext) {
     }
   }
 
+  /** @param {Uint8Array} bytes @param {string} [hint] */
   function detectTextEncoding(bytes, hint = "") {
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
     if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
@@ -188,10 +215,12 @@ export function createReaderTextFormat(readerContext) {
     return best;
   }
 
+  /** @param {ReaderTextPrepared} prepared */
   function renderTextDocument(prepared) {
     return readerContext.renderText(false, prepared);
   }
 
+  /** @param {ReaderMarkdownPrepared} prepared */
   function renderMarkdownDocument(prepared) {
     return readerContext.renderText(true, prepared);
   }

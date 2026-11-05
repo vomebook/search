@@ -2,7 +2,7 @@
 import {spawnSync} from 'node:child_process';
 import {hasPassingTapContracts} from './check_tap_contracts.mjs';
 
-const minimum = [100, 91.51, 90.91];
+const minimum = [100, 91.89, 90.91];
 const required = [
   'encoding detection handles BOMs, valid UTF-8, UTF-16 heuristics and legacy hints',
   'plain fallback preserves Unicode replacement characters and enforces actual byte limit',

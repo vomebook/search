@@ -15,6 +15,18 @@ test('reader errors preserve the original reason and release the reader lock', a
   try {
     await assert.rejects(createReaderTextFormat(context).renderPlainText({body:{getReader:()=>reader}}), error=>error===failure);
     assert.deepEqual(events,['track',['cancel',failure],'untrack','release']);
+    // startDecoder can reject both during BOM detection and after EOF; neither
+    // path may flush an unassigned decoder, mask the error, or leak the lock.
+    for (const chunks of [[Uint8Array.of(0xef,0xbb,0xbf)], [Uint8Array.of(0x61)], []]) {
+      events.length=0;
+      const reason=new Error('encoding detection failed');let index=0, detections=0;
+      const failingReader={read:async()=>index<chunks.length ? {value:chunks[index++],done:false} : {done:true},
+        cancel:async error=>events.push(['cancel',error]),releaseLock:()=>events.push('release')};
+      context.detectTextEncoding=()=>{detections++;throw reason;};
+      await assert.rejects(createReaderTextFormat(context).renderPlainText({body:{getReader:()=>failingReader}}),
+        error=>error===reason);
+      assert.equal(detections,1);assert.deepEqual(events,['track',['cancel',reason],'untrack','release']);
+    }
   } finally {globalThis.document=old.document;globalThis.VoiceOfMLReaderSecurity=old.security;}
 });
 
