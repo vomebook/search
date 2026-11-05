@@ -7,7 +7,7 @@ const vm = require("node:vm");
 // Expectations were pinned against each site's original cache before extraction.
 function fixture(limit = 3, ttl = 100, budget = 100) {
   const context = vm.createContext({clock: 0, limit, ttl, budget});
-  const filename = path.join(__dirname, "../static/search/response-cache.js");
+  const filename = path.join(__dirname, "../../../static/search/response-cache.js");
   vm.runInContext(fs.readFileSync(filename, "utf8"), context, {filename});
   vm.runInContext(`Date.now = () => clock;
     globalThis.cache = new BoundedResponseCache(limit, ttl, budget);`, context);

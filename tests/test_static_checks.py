@@ -389,7 +389,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_response_cache_coverage_gate_fails_closed(self):
         paths = ["static/search/response-cache.js", "scripts/check_search_response_cache_coverage.mjs",
-                 "tests/test_search_response_cache_contract.js"]
+                 "tests/search/response-cache/test_search_response_cache_contract.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -416,9 +416,21 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, "passing named tests")
         for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
                       'console.log("todo 0"); test.todo("extra todo");',
-                      'console.log("skipped 0");', 'console.log("todo 0");'):
+                      'console.log("skipped 0");', 'console.log("todo 0");',
+                      'console.log("tests 6");', 'console.log("pass 6");', 'console.log("fail 0");',
+                      'console.log("cancelled 0");', 'console.log("duration_ms 1");',
+                      'console.log("start of coverage report");', 'console.log("end of coverage report");',
+                      'console.log("1..6");'):
             test.write_text(original + "\n" + extra + "\n")
             self.assert_check(self.run_check(*check), False, "passing named tests")
+        for extra in ('console.log("response-cache.js | 99.00 | 99.00 | 99.00 |");',
+                      'console.log("response-cache.js | 100.00 | 100.00 | 100.00 |");'):
+            with self.subTest(forged_row=extra):
+                test.write_text(original + "\n" + extra + "\n")
+                result = self.run_check(*check)
+                self.assert_check(result, False, "exactly one fully covered source row")
+                self.assertIn("#   response-cache.js | 100.00", result.stdout)
+                self.assertEqual(result.stdout.count("response-cache.js |"), 2)
         test.write_text('require("node:test")("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
         test.write_text('throw new Error("failed response cache test");\n')
