@@ -47,7 +47,7 @@ jobs:
           node tests/test_reader_regression.js
           node scripts/check_adapter_coverage.mjs
           node scripts/search/check_search_size_coverage.mjs
-          node scripts/check_search_record_path_coverage.mjs
+          node scripts/search/check_search_record_path_coverage.mjs
           node scripts/search/check_search_highlight_coverage.mjs
           node scripts/check_search_response_cache_coverage.mjs
           node --test tests/test_tap_contracts.mjs
@@ -63,7 +63,7 @@ jobs:
           node scripts/check_search_folder_merge_baseline.mjs
           node scripts/check_search_readability_baseline.mjs
           node scripts/check_reader_navigation_baseline.mjs
-          node tests/test_search_record_path_build.mjs
+          node tests/search/build/test_search_record_path_build.mjs
           node tests/test_reader_preload.js
           node tests/test_reader_chapter_search.mjs
           node tests/test_reader_image_loader.mjs
@@ -194,7 +194,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 72249a249c81b9910379dc2e40c748ad086d0068 HEAD
+          git -C huggingface-search merge-base --is-ancestor cea8c6b1e5c942e485f62b726681bcf91d9bd7ce HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -289,7 +289,7 @@ jobs:
           node tests/test_reader_regression.js
           node scripts/check_adapter_coverage.mjs
           node scripts/search/check_search_size_coverage.mjs
-          node scripts/check_search_record_path_coverage.mjs
+          node scripts/search/check_search_record_path_coverage.mjs
           node scripts/search/check_search_highlight_coverage.mjs
           node scripts/check_search_response_cache_coverage.mjs
           node --test tests/test_tap_contracts.mjs
@@ -304,7 +304,7 @@ jobs:
           node scripts/check_search_folder_merge_baseline.mjs
           node scripts/check_search_readability_baseline.mjs
           node scripts/check_reader_navigation_baseline.mjs
-          node tests/test_search_record_path_build.mjs
+          node tests/search/build/test_search_record_path_build.mjs
           node tests/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
         working-directory: huggingface-search

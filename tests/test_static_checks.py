@@ -740,13 +740,13 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_record_path_coverage_gate_fails_closed(self):
-        paths = ["static/search/record-path.js", "scripts/check_search_record_path_coverage.mjs",
-                 "tests/test_search_record_path.js", "static/app.js"]
+        paths = ["static/search/record-path.js", "scripts/search/check_search_record_path_coverage.mjs",
+                 "tests/search/record-path/test_search_record_path.js", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        check = ["node", "scripts/check_search_record_path_coverage.mjs"]
+        check = ["node", "scripts/search/check_search_record_path_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "record-path.js")
         test = self.root / paths[2]
         original = test.read_text()

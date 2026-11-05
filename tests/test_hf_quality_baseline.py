@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.test_search_projection_contract', workflow)
         self.assertIn('tests.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor 72249a249c81b9910379dc2e40c748ad086d0068 HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor cea8c6b1e5c942e485f62b726681bcf91d9bd7ce HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -137,6 +137,13 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         for gate in ('check_search_highlight_coverage.mjs', 'check_search_size_coverage.mjs'):
             self.assertEqual(workflow.count(f'node scripts/search/{gate}'), 2)
             self.assertNotIn(f'node scripts/{gate}', workflow)
+
+    def test_both_sites_run_grouped_record_path_and_search_build_tests(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        self.assertEqual(workflow.count('node scripts/search/check_search_record_path_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node tests/search/build/test_search_record_path_build.mjs'), 2)
+        self.assertNotIn('node scripts/check_search_record_path_coverage.mjs', workflow)
+        self.assertNotIn('node tests/test_search_record_path_build.mjs', workflow)
 
     def test_both_sites_run_dom_search_browser_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
