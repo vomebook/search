@@ -194,7 +194,7 @@ jobs:
         run: |
           git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
           git -C huggingface-search rev-parse HEAD
-          git -C huggingface-search merge-base --is-ancestor 6fee69647cffc689bbe879760214ca2f28128259 HEAD
+          git -C huggingface-search merge-base --is-ancestor 906bf17f9939a0d4a3a21f57b196d18e6cf53963 HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
@@ -240,7 +240,7 @@ jobs:
             tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.test_data_formats_contract \
             tests.test_reader_identity_contract tests.test_cache_core_contract tests.test_reader_index_contract \
             tests.test_record_metadata_contract tests.test_folder_tree_contract tests.test_folder_tree_mutation_contract \
-            tests.test_search_projection_contract tests.test_search_projection_mutation_contract \
+            tests.search.backend.test_search_projection_contract tests.search.backend.test_search_projection_mutation_contract \
             tests.test_search_candidates_contract tests.test_search_candidates_mutation_contract \
             tests.test_search_bootstrap_contract tests.test_search_bootstrap_mutation_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
