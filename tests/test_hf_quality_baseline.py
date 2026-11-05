@@ -16,7 +16,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.search.backend.test_search_projection_contract', workflow)
         self.assertIn('tests.search.backend.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor 5d154917214662c08e0db615e57134ddfdec4241 HEAD', workflow)
+        self.assertIn('merge-base --is-ancestor d0082a6911b877b1e86b0979c1bfbe2310721330 HEAD', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -93,6 +93,16 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertEqual(responsiveness[0].split().count(module), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_execution'), 1)
         self.assertNotIn('tests.test_search_execution', workflow)
+
+    def test_grouped_search_words_and_matching_gates_are_required(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        selection = re.search(r'python -B -m coverage run --branch --source=backend,app -m unittest -q \\\n'
+                              r'(.*?)\n\s+COVERAGE_FILE=', workflow, re.S)
+        self.assertIsNotNone(selection)
+        self.assertEqual(selection.group(1).split().count('tests.search.backend.test_search_words_contract'), 1)
+        self.assertNotIn('tests.test_search_words_contract', selection.group(1).split())
+        self.assertEqual(workflow.splitlines().count('          python -B scripts/check_search_words_mutation.py'), 1)
+        self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_matching'), 1)
 
     def test_both_sites_run_original_extension_behavior_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
