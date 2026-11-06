@@ -1005,13 +1005,17 @@ class StaticGateTests(unittest.TestCase):
                  "scripts/reader/check_pdf_network_mutations.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
-        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs"]:
+        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs", "static/reader/pdf/reader-pdf-range-hints.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", "scripts/reader/check_pdf_network_coverage.mjs"]
+        shutil.copyfile(ROOT / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
+                        self.root / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs")
         self.assert_check(self.run_check(*check), True, "reader-pdf-network.mjs")
-        contracts = [("tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
+        contracts = [("tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
+                      "PDF range hints: bounded scheduling, malformed inputs and compatibility exports passed"),
+                     ("tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
                       "429 feedback, shared spacing, bounded retry, version consistency and cancellation passed"),
                      ("tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
                       "PDF network contracts: cache identity, safe revalidation and live cancellation passed"),
@@ -1024,7 +1028,7 @@ class StaticGateTests(unittest.TestCase):
             test.write_text(original.replace(marker, "missing PDF network completion marker"))
             self.assert_check(self.run_check(*check), False, "passing named tests")
             test.write_text(original)
-        test = self.root / contracts[0][0]
+        test = self.root / contracts[1][0]
         original = test.read_text()
         for extra in ('import {test as extraTest} from "node:test"; extraTest.skip("extra skip", () => {});',
                       'import {test as extraTest} from "node:test"; extraTest.todo("extra todo");'):
@@ -1039,7 +1043,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "PDF network assertion failure")
         test.write_text(original)
         empty = 'import { test } from "node:test"; test("empty", () => {});\n'
-        for path in paths:
+        for path in [*paths, contracts[0][0]]:
             if path.startswith("tests/"):
                 (self.root / path).write_text(empty)
         self.assert_check(self.run_check(*check), False, "exactly one source coverage row")
@@ -1052,10 +1056,12 @@ class StaticGateTests(unittest.TestCase):
                  "static/reader/pdf/reader-pdf-engine.mjs", "scripts/reader/check_pdf_network_coverage.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
-        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs"]:
+        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs", "static/reader/pdf/reader-pdf-range-hints.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
+        shutil.copyfile(ROOT / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
+                        self.root / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs")
         gate = self.root / paths[3]
         source = gate.read_text()
         measured = self.run_check("node", paths[3])
@@ -1064,9 +1070,9 @@ class StaticGateTests(unittest.TestCase):
         self.assertIsNotNone(row, measured.stdout)
         hundredths = int(round(float(row.group(1)) * 100))
         self.assertLess(hundredths, 10000, "fractional negative test needs a non-perfect line baseline")
-        needle = "const minimum = [98.29, 85.25, 87.16];"
+        needle = "const minimum = [97.86, 84.23, 86.27];"
         self.assertEqual(source.count(needle), 1)
-        above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 85.25, 87.16];"
+        above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 84.23, 86.27];"
         gate.write_text(source.replace(needle, above))
         self.assert_check(self.run_check("node", paths[3]), False,
                           "PDF network coverage gate requires passing named tests")
@@ -1075,9 +1081,15 @@ class StaticGateTests(unittest.TestCase):
         gate.write_text(source.replace(cache_needle, "const cacheMinimum = [100.01, 97.01, 100];"))
         self.assert_check(self.run_check("node", paths[3]), False,
                           "PDF network coverage gate requires passing named tests")
-        gate.write_text(source.replace("reader-pdf-range-cache\\.mjs", "missing-pdf-range-cache\\.mjs"))
-        self.assert_check(self.run_check("node", paths[3]), False,
-                          "exactly one source coverage row")
+        for minimum in ("aggregateMinimum", "hintsMinimum"):
+            match = re.search(rf"const {minimum} = \[([^\]]+)\];", source)
+            self.assertIsNotNone(match)
+            gate.write_text(source.replace(match.group(0), f"const {minimum} = [100.01, 0, 0];"))
+            self.assert_check(self.run_check("node", paths[3]), False, "coverage")
+        for module in ("cache", "hints"):
+            gate.write_text(source.replace(f"reader-pdf-range-{module}\\.mjs", f"missing-pdf-range-{module}\\.mjs"))
+            self.assert_check(self.run_check("node", paths[3]), False,
+                              "exactly one source coverage row")
 
     def test_pdf_network_coverage_gate_rejects_removed_branch_coverage(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
@@ -1088,8 +1100,12 @@ class StaticGateTests(unittest.TestCase):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
+        shutil.copyfile(ROOT / "static/reader/pdf/reader-pdf-range-hints.mjs",
+                        self.root / "static/reader/pdf/reader-pdf-range-hints.mjs")
         test = self.root / paths[5]
         source = test.read_text()
+        shutil.copyfile(ROOT / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
+                        self.root / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs")
         start = source.index("  // The optional shared cache belongs")
         end = source.index("  // Once a previously validated origin", start)
         test.write_text(source[:start] + source[end:])
@@ -1106,6 +1122,10 @@ class StaticGateTests(unittest.TestCase):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
+        shutil.copyfile(ROOT / "static/reader/pdf/reader-pdf-range-hints.mjs",
+                        self.root / "static/reader/pdf/reader-pdf-range-hints.mjs")
+        shutil.copyfile(ROOT / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
+                        self.root / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs")
         test = self.root / paths[5]
         original = test.read_text()
         begin = "  // BEGIN_PDF_ADMISSION_CANCELLATION\n"
@@ -1167,14 +1187,33 @@ class StaticGateTests(unittest.TestCase):
     def test_pdf_network_safety_mutation_gate_rejects_unexpected_failure(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs", "scripts/reader/check_pdf_network_mutations.mjs"]
-        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs"]:
+        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs", "static/reader/pdf/reader-pdf-range-hints.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
+        shutil.copyfile(ROOT / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs",
+                        self.root / "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs")
         check = ["node", paths[3]]
-        self.assert_check(self.run_check(*check), True, '"total":6,"killed":6,"survived":0,"errors":0')
+        self.assert_check(self.run_check(*check), True, '"total":8,"killed":8,"survived":0,"errors":0')
         (self.root / paths[1]).write_text('import "../../../static/reader/pdf/reader-pdf-network.mjs";\nthrow Error("unrelated");\n')
         self.assert_check(self.run_check(*check), False, "unexpected failure, not a killed mutant")
+
+    def test_pdf_hints_mutation_gate_requires_stream_boundary_regression(self):
+        paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
+                 "static/reader/pdf/reader-pdf-range-hints.mjs", "scripts/reader/check_pdf_network_mutations.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
+                 "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        hints = self.root / paths[-1]
+        source = hints.read_text()
+        line = "assert.equal(choosePdfRangeChunkSize(fakeStream,large),chunk,\n  'fake sparse tree in stream must not change range chunk size');\n"
+        self.assertEqual(source.count(line), 1)
+        hints.write_text(source.replace(line, ""))
+        self.assert_check(self.run_check("node", paths[3]), False, "sparse tree in stream mutant survived")
 
     def test_chapter_scheduler_type_contract_rejects_invalid_index(self):
         source = self.root / "static/chapter-usage.js"
@@ -2245,6 +2284,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
+                    "static/reader/pdf/reader-pdf-range-hints.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertTrue(required <= set(json.loads((ROOT / "jsconfig.strict.json").read_text())["files"]))
