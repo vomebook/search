@@ -1,6 +1,6 @@
 // Offline contract for Reader CSS reference sanitization (EPUB/chapter styles).
 import assert from "node:assert/strict";
-import { createReaderHtmlFormat } from "../static/reader/formats/reader-html-format.mjs";
+import { createReaderHtmlFormat } from "../../../static/reader/formats/reader-html-format.mjs";
 
 const { sanitizeCssReferences: clean } = createReaderHtmlFormat({});
 const cases = [
