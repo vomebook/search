@@ -19,6 +19,8 @@ const required = [
   "truthy Id precedes id and both retain original String conversion",
   "ID and path getter reads retain their original order and short-circuiting",
   "dependency lookup and exceptional values propagate unchanged",
+  "deleted path binding preserves lazy lookup and ReferenceError",
+  "missing path binding and lookup-time ReferenceError retain lazy ordering",
   "path lookup remains lazy through early returns and Repo conversion",
   "host binding forwards the original result and uncoerced return value"
 ].map(name => ({name}));
