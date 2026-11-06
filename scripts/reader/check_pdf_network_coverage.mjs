@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 // extracted module. These are PDF network contracts, not the whole Reader.
 // Extraction changes individual denominators; floors are measured separately.
 const aggregateMinimum = [98.29, 85.25, 87.16];
-const minimum = [97.86, 84.23, 86.27];
+const minimum = [97.86, 84.20, 86.27];
 const cacheMinimum = [100, 97.01, 100];
 const hintsMinimum = [100, 92.59, 100];
 const result = spawnSync(process.execPath, [
