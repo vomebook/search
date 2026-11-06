@@ -6,7 +6,7 @@ const vm = require("vm");
 function createRepository(options) {
   const sandbox = { self: {}, DOMException };
   sandbox.self = sandbox;
-  const filename = path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js");
+  const filename = path.join(__dirname, "../../../static/reader/formats/reader-chapter-repository.js");
   vm.runInNewContext(fs.readFileSync(filename, "utf8"), sandbox, { filename });
   return sandbox.VoiceOfMLReaderChapters.createChapterRepository(options);
 }
@@ -64,7 +64,7 @@ async function main() {
     sandbox.self = sandbox;
     vm.createContext(sandbox);
     vm.runInContext('Array.from = () => new Array(1)', sandbox);
-    const filename = path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js");
+    const filename = path.join(__dirname, "../../../static/reader/formats/reader-chapter-repository.js");
     vm.runInContext(fs.readFileSync(filename, "utf8"), sandbox, {filename});
     let finds = 0;
     const sparse = sandbox.VoiceOfMLReaderChapters.createChapterRepository({count:1,
@@ -98,7 +98,7 @@ async function main() {
   assert.strictEqual(cancelled.pending.length, 0);
 
   const fallback = { DOMException, AbortController };
-  const filename = path.join(__dirname, "../static/reader/formats/reader-chapter-repository.js");
+  const filename = path.join(__dirname, "../../../static/reader/formats/reader-chapter-repository.js");
   vm.runInNewContext(fs.readFileSync(filename, "utf8"), fallback, { filename });
   assert.strictEqual(typeof fallback.VoiceOfMLReaderChapters.createChapterRepository, "function");
   console.log("reader chapter repository contracts passed");

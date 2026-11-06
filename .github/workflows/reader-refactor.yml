@@ -66,8 +66,8 @@ jobs:
           node tests/search/build/test_search_record_path_build.mjs
           node tests/test_reader_preload.js
           node tests/test_reader_chapter_search.mjs
-          node tests/test_reader_image_loader.mjs
-          node scripts/check_reader_image_loader_coverage.mjs
+          node tests/reader/images/test_reader_image_loader.mjs
+          node scripts/reader/check_reader_image_loader_coverage.mjs
           node scripts/check_reader_lifecycle_coverage.mjs
           node scripts/check_reader_media_coverage.mjs
           node scripts/check_reader_text_coverage.mjs
@@ -103,7 +103,7 @@ jobs:
           node tests/reader/djvu/test_reader_djvu_scheduler.mjs
           node scripts/check_reader_djvu_contracts.mjs
           python3 -B -m unittest -v tests.test_reader_djvu_benchmark tests.test_reader_djvu_range_browser
-          node tests/test_reader_image_memory.mjs
+          node tests/reader/images/test_reader_image_memory.mjs
       - name: Run multi-format preparation and navigation gates
         run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_close_responsiveness tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
       - name: Check TOC landing ownership and cancellation
@@ -148,7 +148,7 @@ jobs:
           READER_STORE_TEST_BROWSER=firefox python3 -B -m unittest -v tests.test_reader_store_preservation
       - name: Run chapter-bundle browser gate
         run: |
-          node scripts/check_reader_core_coverage.mjs
+          node scripts/reader/check_reader_core_coverage.mjs
           python3 -B -m unittest -v tests.test_reader_scroll_anchor_browser
           python3 -B -m unittest -v tests.test_reader_optimizations
       - name: Run chapter-search browser gate
@@ -281,8 +281,8 @@ jobs:
         run: |
           node tests/test_reader_architecture.js
           node tests/test_reader_chapter_search.mjs
-          node tests/test_reader_image_loader.mjs
-          node scripts/check_reader_image_loader_coverage.mjs
+          node tests/reader/images/test_reader_image_loader.mjs
+          node scripts/reader/check_reader_image_loader_coverage.mjs
           node scripts/check_reader_lifecycle_coverage.mjs
           node scripts/check_reader_media_coverage.mjs
           node scripts/check_reader_text_coverage.mjs
@@ -339,7 +339,7 @@ jobs:
           node tests/reader/djvu/test_reader_djvu_scheduler.mjs
           node scripts/check_reader_djvu_contracts.mjs
           python3 -B -m unittest -v tests.test_reader_djvu_benchmark tests.test_reader_djvu_range_browser
-          node tests/test_reader_image_memory.mjs
+          node tests/reader/images/test_reader_image_memory.mjs
           python3 -B -m unittest -v tests.test_reader_pdf_hybrid
       - name: Run multi-format preparation and navigation gates
         working-directory: huggingface-search
@@ -367,7 +367,7 @@ jobs:
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
-          node scripts/check_reader_core_coverage.mjs
+          node scripts/reader/check_reader_core_coverage.mjs
           python3 -B -m unittest -v tests.test_reader_scroll_anchor_browser
           python3 -B -m unittest -v tests.test_reader_optimizations
       - name: Run chapter-search browser gate

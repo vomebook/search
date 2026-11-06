@@ -1122,20 +1122,20 @@ class StaticGateTests(unittest.TestCase):
         paths = ["static/reader/formats/reader-section-virtualizer.js",
                  "static/reader/formats/reader-chapter-repository.js",
                  "static/reader/ui/reader-scroll-anchor.js", "static/reader/core/reader-contract.js",
-                 "static/reader/core/reader-security.js", "scripts/check_reader_core_coverage.mjs",
-                 "tests/test_reader_section_virtualizer.js", "tests/test_reader_chapter_repository.js",
-                 "tests/test_reader_chapter_scheduler.js", "tests/test_reader_chapter_preload.js",
-                 "tests/test_reader_scroll_anchor.js"]
+                 "static/reader/core/reader-security.js", "scripts/reader/check_reader_core_coverage.mjs",
+                 "tests/reader/layout/test_reader_section_virtualizer.js", "tests/reader/chapters/test_reader_chapter_repository.js",
+                 "tests/reader/chapters/test_reader_chapter_scheduler.js", "tests/reader/chapters/test_reader_chapter_preload.js",
+                 "tests/reader/layout/test_reader_scroll_anchor.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        check = ["node", "scripts/check_reader_core_coverage.mjs"]
+        check = ["node", paths[5]]
         self.assert_check(self.run_check(*check), True, "reader-chapter-repository.js")
-        gate = self.root / "scripts/check_reader_core_coverage.mjs"
+        gate = self.root / paths[5]
         original_gate = gate.read_text()
-        first = 'tests/test_reader_chapter_repository.js'
-        second = 'tests/test_reader_chapter_scheduler.js'
+        first = 'tests/reader/chapters/test_reader_chapter_repository.js'
+        second = 'tests/reader/chapters/test_reader_chapter_scheduler.js'
         list_anchor = '"' + first + '", "' + second + '",'
         self.assertEqual(original_gate.count(list_anchor), 1)
         gate.write_text(original_gate.replace(list_anchor, '"' + first + '", "' + first + '",'))
@@ -1155,11 +1155,11 @@ class StaticGateTests(unittest.TestCase):
         chapter_test.write_text(original_test.replace('reader chapter repository contracts passed', 'renamed success marker'))
         self.assert_check(self.run_check(*check), False, "passing named tests")
         chapter_test.write_text(original_test)
-        (self.root / "tests/test_reader_scroll_anchor.js").write_text(
+        (self.root / paths[10]).write_text(
             'const test = require("node:test"); test("empty", () => {});\n')
         self.assert_check(self.run_check(*check), False, "reader-scroll-anchor.js")
-        (self.root / "tests/test_reader_scroll_anchor.js").write_text(
-            'require("../static/reader/ui/reader-scroll-anchor.js");\n')
+        (self.root / paths[10]).write_text(
+            'require("../../../static/reader/ui/reader-scroll-anchor.js");\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_pdf_network_safety_mutation_gate_rejects_unexpected_failure(self):
@@ -1452,9 +1452,9 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, 'one source row above each minimum')
 
     def test_reader_image_loader_coverage_gate_fails_closed(self):
-        paths = ["static/reader/formats/reader-image-loader.mjs", "scripts/check_reader_image_loader_coverage.mjs",
-                 "scripts/check_tap_contracts.mjs", "tests/test_reader_image_loader.mjs",
-                 "tests/test_reader_image_loader_contract.mjs"]
+        paths = ["static/reader/formats/reader-image-loader.mjs", "scripts/reader/check_reader_image_loader_coverage.mjs",
+                 "scripts/check_tap_contracts.mjs", "tests/reader/images/test_reader_image_loader.mjs",
+                 "tests/reader/images/test_reader_image_loader_contract.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
