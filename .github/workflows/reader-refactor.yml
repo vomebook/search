@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   github-search:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       READER_TEST_TIMEOUT_MS: "15000"
@@ -45,6 +45,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.63.0-chromium-firefox
+      - name: Configure official Ubuntu mirrors
+        run: |
+          set -euo pipefail
+          if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
+            tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)
+            trap 'sudo rm -rf -- "$tmp"' EXIT
+            sudo install -o root -g root -m 0644 /dev/null "$tmp/mirrors"
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/ priority:1' 'https://security.ubuntu.com/ubuntu/ priority:2' | sudo tee "$tmp/mirrors" >/dev/null
+            sudo mv -f -- "$tmp/mirrors" /etc/apt/apt-mirrors.txt
+          else
+            echo "::warning::Unrecognized runner mirror configuration; keeping default mirrors"
+          fi
       - name: Install Python dependencies
         timeout-minutes: 10
         run: python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.21.4 -r requirements-static-check.txt
@@ -55,7 +67,7 @@ jobs:
         timeout-minutes: 10
         run: sudo apt-get update && sudo apt-get install -y qpdf
       - name: Install Playwright system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: python -m playwright install-deps chromium firefox
       - name: Install Playwright browsers
         timeout-minutes: 10
@@ -220,7 +232,7 @@ jobs:
           node --check static/reader/search/workers/reader-chapter-search-worker.mjs
 
   firefox-staged-pdf:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       READER_TEST_TIMEOUT_MS: "15000"
@@ -250,6 +262,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.63.0-firefox
+      - name: Configure official Ubuntu mirrors
+        run: |
+          set -euo pipefail
+          if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
+            tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)
+            trap 'sudo rm -rf -- "$tmp"' EXIT
+            sudo install -o root -g root -m 0644 /dev/null "$tmp/mirrors"
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/ priority:1' 'https://security.ubuntu.com/ubuntu/ priority:2' | sudo tee "$tmp/mirrors" >/dev/null
+            sudo mv -f -- "$tmp/mirrors" /etc/apt/apt-mirrors.txt
+          else
+            echo "::warning::Unrecognized runner mirror configuration; keeping default mirrors"
+          fi
       - name: Install Python dependencies
         timeout-minutes: 10
         run: python -m pip install playwright==1.63.0 Pillow==12.3.0 pypdf==6.21.4 -r requirements-static-check.txt
@@ -260,7 +284,7 @@ jobs:
         timeout-minutes: 10
         run: sudo apt-get update && sudo apt-get install -y qpdf
       - name: Install Playwright system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: python -m playwright install-deps firefox
       - name: Install Playwright browsers
         timeout-minutes: 10
@@ -277,7 +301,7 @@ jobs:
         run: python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_history_race
 
   huggingface-search:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       READER_TEST_TIMEOUT_MS: "60000"
@@ -312,6 +336,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: hf-playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.distro.outputs.version }}-1.63.0-chromium-firefox
+      - name: Configure official Ubuntu mirrors
+        run: |
+          set -euo pipefail
+          if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
+            tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)
+            trap 'sudo rm -rf -- "$tmp"' EXIT
+            sudo install -o root -g root -m 0644 /dev/null "$tmp/mirrors"
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/ priority:1' 'https://security.ubuntu.com/ubuntu/ priority:2' | sudo tee "$tmp/mirrors" >/dev/null
+            sudo mv -f -- "$tmp/mirrors" /etc/apt/apt-mirrors.txt
+          else
+            echo "::warning::Unrecognized runner mirror configuration; keeping default mirrors"
+          fi
       - name: Install Python dependencies
         timeout-minutes: 10
         working-directory: huggingface-search
@@ -377,7 +413,7 @@ jobs:
           python -B scripts/check_search_words_mutation.py --module search_candidates
           python -B scripts/check_search_words_mutation.py --module search_bootstrap
       - name: Install Playwright system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 15
         working-directory: huggingface-search
         run: python -m playwright install-deps chromium firefox
       - name: Install Playwright browsers

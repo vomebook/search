@@ -29,3 +29,5 @@ node scripts/reader/check_reader_image_loader_coverage.mjs
 ```
 
 浏览器测试还需要 Playwright、浏览器和 Reader vendor；完整安装与执行命令见 `.github/workflows/reader-refactor.yml`。Android 共享存储常以 `noexec` 挂载，应在支持执行和符号链接的目录中安装依赖及运行检查。修改不自动发布：涉及双仓库的变更应先发布 Space，再发布本仓库并检查双站 CI（GitHub 工作流会拉取 Space 的 main）。
+
+CI 在识别到特定 Ubuntu 24.04 APT 布局时，仅替换镜像列表，不改动源配置或其签名验证；未知布局告警并保留默认配置。固定官方镜像不保证实际加速，需在 Actions 日志中确认布局与更新结果。此措施限制低信任输出进入 root 配置的数据流，并非恶意 checkout 的沙箱：runner 用户仍可使用 sudo。
