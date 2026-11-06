@@ -293,6 +293,11 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_book_client_coverage.mjs'), 2)
         self.assertNotIn('node scripts/check_pdf_book_client_coverage.mjs', workflow)
+        for gate in ('check_pdf_text_store_coverage.mjs', 'check_pdf_text_store_mutations.mjs'):
+            self.assertEqual(workflow.count(f'node scripts/reader/{gate}'), 2)
+        store_browser = 'python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py'
+        self.assertEqual(workflow.count('\n          ' + store_browser), 2)
+        self.assertEqual(workflow.count('PDF_TEXT_STORE_TEST_BROWSER=firefox ' + store_browser), 2)
         for test in ('test_reader_ocr_transport.mjs', 'test_reader_book_text.mjs'):
             self.assertEqual(workflow.count(f'node tests/reader/pdf-search/{test}'), 2)
         self.assertEqual(workflow.count('node --test tests/reader/pdf-search/test_pdf_book_worker.mjs'), 2)
