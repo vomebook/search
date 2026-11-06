@@ -1,5 +1,5 @@
 import {spawnSync} from "node:child_process";
-import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
+import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Node 26/V8 scope: the download controller and its synthetic contract tests.
 // A missing row, missing named test, skipped case, or fractional regression fails.
@@ -8,7 +8,7 @@ const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/search/download-controller.js",
   ...minimum.map((value, index) => `--test-coverage-${["lines", "branches", "functions"][index]}=${value}`),
-  "tests/test_download_controller_contract.js"
+  "tests/search/download/test_download_controller_contract.js"
 ], {encoding: "utf8"});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
