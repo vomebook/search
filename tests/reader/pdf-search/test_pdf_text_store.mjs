@@ -115,6 +115,25 @@ test('corrupt replacement and eviction reset accounting before committing new da
   }
 });
 
+test('full replacement rolls back when damaged rows are absent from the index',async()=>{
+  useFactory();let store,db;
+  try {
+    store=createPdfTextStore(key,{limits:{bytes:520,entries:2,entryBytes:500,ttl:1000},now:()=>10000});
+    assert.equal(await store.put(1,'x'.repeat(30)),true);
+    assert.equal(await store.put(2,'y'.repeat(30)),true);
+    db=await openDatabase();
+    const beforeTx=db.transaction(['pages','budget'],'readonly');
+    const [rows,budget]=await Promise.all([requestValue(beforeTx.objectStore('pages').getAll()),requestValue(beforeTx.objectStore('budget').get('total'))]);
+    await seed('pages',{...rows[0],savedAt:null});
+    assert.equal(await store.put(2,'z'.repeat(100)),false);
+    assert.equal(await store.get(2),'y'.repeat(30),'failed replacement must preserve original page');
+    const tx=db.transaction(['pages','budget'],'readonly');
+    const [after,afterBudget]=await Promise.all([requestValue(tx.objectStore('pages').getAll()),requestValue(tx.objectStore('budget').get('total'))]);
+    assert.deepEqual(after,[{...rows[0],savedAt:null},rows[1]]);
+    assert.deepEqual(afterBudget,budget);
+  } finally {db?.close();store?.dispose();restoreFactory();}
+});
+
 test('understated and overdrawn ledgers reset instead of drifting',async()=>{
   for (const count of [0,1]) {
     useFactory();let store;

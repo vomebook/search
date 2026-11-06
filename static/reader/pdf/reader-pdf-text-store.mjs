@@ -138,7 +138,10 @@ export function createPdfTextStore(key, options = {}) {
                 row.delete(); row.continue(); return;
               }
               ledger.prunedAt = timestamp;
-              if (!full()) commit();
+              // A corrupt, unindexed row can leave the budget full after the
+              // cursor is exhausted. Roll back any previous deletions rather
+              // than committing a partial replacement with a stale ledger.
+              if (!full()) commit(); else tx.abort();
             };
           };
         };

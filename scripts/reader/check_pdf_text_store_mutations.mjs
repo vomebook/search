@@ -23,6 +23,8 @@ const probes=[
     after:'true &&',diagnostic:'null'},
   {name:'corrupt replacement accounting',before:'if (!validStoredCost(previous.result) || previous.result.bytes > ledger.bytes || ledger.count < 1) return reset();',
     after:'if (false) return reset();',diagnostic:'replacement must purge untrusted accounting'},
+  {name:'full replacement commits deletion',before:'if (!full()) commit(); else tx.abort();',
+    after:'if (!full()) commit();',diagnostic:'failed replacement must preserve original page'},
   {name:'corrupt eviction accounting',before:'if (!validStoredCost(row.value) || row.value.bytes > ledger.bytes || ledger.count < 1) return reset();',
     after:'if (false) return reset();',diagnostic:'eviction must purge untrusted accounting'}
 ];

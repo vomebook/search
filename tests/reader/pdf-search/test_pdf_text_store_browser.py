@@ -110,6 +110,41 @@ class PdfTextStoreBrowserTests(unittest.TestCase):
         self.assertIsNone(expired)
         self.assertEqual(errors, [])
 
+    def test_full_replacement_rolls_back_with_unindexed_corrupt_row(self):
+        page = self.browser.new_page()
+        self.addCleanup(page.close)
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(self.origin + '/static/reader.html?ext=txt', wait_until='domcontentloaded')
+        result = page.evaluate('''async () => {
+          const {createPdfTextStore}=await import('/static/reader/pdf/reader-pdf-text-store.mjs');
+          const key='a'.repeat(64);
+          const store=createPdfTextStore(key,{limits:{bytes:520,entries:2,entryBytes:500,ttl:1000},now:()=>10000});
+          const request=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+          let db;
+          try {
+            const first=await store.put(1,'x'.repeat(30)),second=await store.put(2,'y'.repeat(30));
+            db=await request(indexedDB.open('voiceofml-pdf-search-text',1));
+            const snapshot=async()=>{const tx=db.transaction(['pages','budget'],'readonly');
+              const [pages,budget]=await Promise.all([request(tx.objectStore('pages').getAll()),request(tx.objectStore('budget').get('total'))]);
+              return {pages,budget};};
+            const initial=await snapshot();
+            await new Promise((resolve,reject)=>{const tx=db.transaction('pages','readwrite');
+              tx.objectStore('pages').put({...initial.pages[0],savedAt:null});
+              tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error);});
+            const before=await snapshot(),saved=await store.put(2,'z'.repeat(100));
+            return {first,second,before,saved,value:await store.get(2),after:await snapshot()};
+          } finally {db?.close();store.dispose();}
+        }''')
+        self.assertTrue(result['first'])
+        self.assertTrue(result['second'])
+        self.assertFalse(result['saved'])
+        self.assertEqual(result['value'], 'y' * 30)
+        self.assertEqual(result['after'], result['before'])
+        self.assertEqual(result['after']['budget']['count'], 2)
+        self.assertEqual(result['after']['budget']['bytes'], 512)
+        self.assertEqual(errors, [])
+
     def test_corrupt_replacement_and_eviction_recover_native_ledger(self):
         page = self.browser.new_page()
         self.addCleanup(page.close)
