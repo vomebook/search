@@ -1,5 +1,5 @@
 import {spawnSync} from "node:child_process";
-import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
+import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Node 26/V8 scope: only reader-document-loader.mjs and the named tests.
 // Baseline after adding failure-path contracts: 100% lines, 94.20% branches,
@@ -9,7 +9,7 @@ const result = spawnSync(process.execPath, [
   "--test", "--test-concurrency=1", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/reader/core/reader-document-loader.mjs",
   ...minimum.map((value, index) => `--test-coverage-${["lines", "branches", "functions"][index]}=${value}`),
-  "tests/test_reader_document_loader_contract.mjs", "tests/test_reader_pdf_rate_outer.mjs"
+  "tests/reader/transport/test_reader_document_loader_contract.mjs", "tests/reader/transport/test_reader_pdf_rate_outer.mjs"
 ], {encoding: "utf8"});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
@@ -27,7 +27,7 @@ const required = [
   "script load releases timers, handlers and resources on success, error and close",
   "image fallback is not used for budget failures or closed readers"
 ].map(name => ({name}));
-required.push({name: "tests/test_reader_pdf_rate_outer.mjs",
+required.push({name: "tests/reader/transport/test_reader_pdf_rate_outer.mjs",
   marker: "PDF rate-limit retry boundary and generic retry preserved"});
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
     !hasPassingTapContracts(text, required)) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {createReaderDocumentLoader} from "../static/reader/core/reader-document-loader.mjs";
+import {createReaderDocumentLoader} from "../../../static/reader/core/reader-document-loader.mjs";
 
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
