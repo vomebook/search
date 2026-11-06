@@ -131,6 +131,7 @@
     "reader/search/reader-book-text.js",
     "reader/search/workers/reader-pdf-book-search-worker.mjs",
     "reader/search/reader-pdf-book-search.mjs",
+    "reader/pdf/reader-pdf-range-cache.mjs",
     "reader/pdf/reader-pdf-network.mjs",
     "reader/pdf/reader-pdf-text-store.mjs",
     "tts-client.js",

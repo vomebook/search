@@ -1003,7 +1003,7 @@ class StaticGateTests(unittest.TestCase):
                  "scripts/reader/check_pdf_network_mutations.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
-        for path in paths:
+        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -1050,7 +1050,7 @@ class StaticGateTests(unittest.TestCase):
                  "static/reader/pdf/reader-pdf-engine.mjs", "scripts/reader/check_pdf_network_coverage.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
-        for path in paths:
+        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -1062,19 +1062,27 @@ class StaticGateTests(unittest.TestCase):
         self.assertIsNotNone(row, measured.stdout)
         hundredths = int(round(float(row.group(1)) * 100))
         self.assertLess(hundredths, 10000, "fractional negative test needs a non-perfect line baseline")
-        needle = "const minimum = [98.31, 85.65, 88.43];"
+        needle = "const minimum = [98.29, 85.25, 87.16];"
         self.assertEqual(source.count(needle), 1)
-        above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 85.65, 88.43];"
+        above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 85.25, 87.16];"
         gate.write_text(source.replace(needle, above))
         self.assert_check(self.run_check("node", paths[3]), False,
                           "PDF network coverage gate requires passing named tests")
+        cache_needle = "const cacheMinimum = [100, 97.01, 100];"
+        self.assertEqual(source.count(cache_needle), 1)
+        gate.write_text(source.replace(cache_needle, "const cacheMinimum = [100.01, 97.01, 100];"))
+        self.assert_check(self.run_check("node", paths[3]), False,
+                          "PDF network coverage gate requires passing named tests")
+        gate.write_text(source.replace("reader-pdf-range-cache\\.mjs", "missing-pdf-range-cache\\.mjs"))
+        self.assert_check(self.run_check("node", paths[3]), False,
+                          "exactly one source coverage row")
 
     def test_pdf_network_coverage_gate_rejects_removed_branch_coverage(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
                  "static/reader/pdf/reader-pdf-engine.mjs", "scripts/reader/check_pdf_network_coverage.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
-        for path in paths:
+        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -1092,7 +1100,7 @@ class StaticGateTests(unittest.TestCase):
                  "scripts/reader/check_pdf_network_mutations.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
-        for path in paths:
+        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -1157,7 +1165,7 @@ class StaticGateTests(unittest.TestCase):
     def test_pdf_network_safety_mutation_gate_rejects_unexpected_failure(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
                  "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs", "scripts/reader/check_pdf_network_mutations.mjs"]
-        for path in paths:
+        for path in [*paths, "static/reader/pdf/reader-pdf-range-cache.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -2232,7 +2240,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
-                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs",
+                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertTrue(required <= set(json.loads((ROOT / "jsconfig.strict.json").read_text())["files"]))
