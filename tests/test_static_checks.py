@@ -961,9 +961,23 @@ class StaticGateTests(unittest.TestCase):
 
     def test_request_manager_async_test_runner_rejects_unfinished_test(self):
         test = self.root / "tests/pending-request.js"
+        # Depending on timer scheduling, Node may cancel the pending promise
+        # on event-loop drain or report the test's own timeout.
         test.write_text('require("node:test")("unfinished", {timeout: 25}, async () => new Promise(() => {}));\n')
-        self.assert_check(self.run_check("node", "--test", "--test-reporter=tap", test), False,
-                          "test timed out")
+        result = self.run_check("node", "--test", "--test-reporter=tap", test)
+        self.assert_check(result, False, "not ok 1 - unfinished")
+        self.assertRegex(result.stdout, r"Promise resolution is still pending|test timed out")
+
+        # A live timer resolves well after the deadline, exercising the runner's
+        # timeout rather than idle-loop cancellation or a permanently idle task.
+        test.write_text('require("node:test")("unfinished", {timeout: 25}, async () => {\n'
+                        '  await new Promise(resolve => setTimeout(resolve, 200));\n'
+                        '  console.log("late completion");\n'
+                        '});\n')
+        result = self.run_check("node", "--test", "--test-reporter=tap", test)
+        self.assert_check(result, False, "test timed out")
+        self.assertIn("not ok 1 - unfinished", result.stdout)
+        self.assertNotRegex(result.stdout, r"(?m)^ok \d+ - unfinished$")
 
     def test_strict_reader_request_manager_contract(self):
         source = self.root / "static/request-usage.js"
@@ -1634,6 +1648,48 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(source_original)
             mutant_gate.write_text(mutant_original)
 
+    def test_pdf_text_store_targeted_mutants_fail_closed(self):
+        paths = ['static/reader/pdf/reader-pdf-text-store.mjs',
+                 'scripts/reader/check_pdf_text_store_mutations.mjs',
+                 'tests/reader/pdf-search/test_pdf_text_store.mjs']
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        gate = self.root / paths[1]
+        script = gate.read_text()
+        # Exercise one targeted mutant per run without changing its logic.
+        script = script.replace('for(const probe of probes){', 'for(const probe of probes.slice(0,1)){')
+        test = self.root / paths[2]
+        original = test.read_text()
+        name = 'synchronous work throw aborts queued write before promise settles'
+        anchor = "test('" + name + "'"
+        self.assertEqual(original.count(anchor), 1)
+        cases = {
+            'syntax': original + '\nthis is invalid javascript !\n',
+            'missing': original.replace(anchor, "test('renamed contract'"),
+            'skip': original.replace(anchor, "test.skip('" + name + "'"),
+            'unexpected assertion': original.replace(anchor + ',async()=>{',
+                anchor + ",async()=>{throw new (await import('node:assert')).AssertionError({message:'wrong'});"),
+            'forged output': original + '\nconsole.log("pass 1");\n',
+        }
+        for label, content in cases.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(content, original)
+                test.write_text(content)
+                gate.write_text(script)
+                result = self.run_check('node', paths[1])
+                self.assert_check(result, False, '"killed":0,"survived":0,"errors":1')
+        # Timeout only the mutant: the unmodified source completes normally.
+        test.write_text(original)
+        before = "after:'catch (_) {}\\n        }).catch(reject);'"
+        self.assertEqual(script.count(before), 1)
+        gate.write_text(script.replace(before, "after:'catch (_) { while (true) {} }\\n        }).catch(reject);'")
+                        .replace('timeout:15000', 'timeout:500'))
+        result = self.run_check('node', paths[1])
+        self.assert_check(result, False, '"killed":0,"survived":0,"errors":1')
+        self.assertIn('timed out or failed to execute', result.stdout)
+
     def test_pdf_text_store_gates_fail_closed(self):
         paths = ['static/reader/pdf/reader-pdf-text-store.mjs',
                  'scripts/reader/check_pdf_text_store_coverage.mjs', 'scripts/reader/check_pdf_text_store_mutations.mjs',
@@ -1645,8 +1701,8 @@ class StaticGateTests(unittest.TestCase):
         coverage = ['node', paths[1]]
         mutation = ['node', paths[2]]
         message = 'PDF text-store coverage requires named contracts'
-        self.assert_check(self.run_check(*coverage), True, '# pass 11')
-        self.assert_check(self.run_check(*mutation), True, '"total":10,"killed":10,"survived":0,"errors":0')
+        self.assert_check(self.run_check(*coverage), True, '# pass 15')
+        self.assert_check(self.run_check(*mutation), True, '"total":14,"killed":14,"survived":0,"errors":0')
         source = self.root / paths[4]
         original = source.read_text()
         name = 'entry, age, time reversal and invalid arguments fail closed'
@@ -1656,7 +1712,7 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(original.replace(anchor, replacement))
             self.assert_check(self.run_check(*coverage), False, message)
         for extra in ("test.skip('extra skip', () => {});", "test.todo('extra todo');",
-                      'console.log("skipped 0");', 'console.log("pass 11");'):
+                      'console.log("skipped 0");', 'console.log("pass 15");'):
             source.write_text(original + '\n' + extra + '\n')
             self.assert_check(self.run_check(*coverage), False, message)
         source.write_text(original.replace(anchor + ',async()=>{',
@@ -1671,6 +1727,16 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*coverage), False, message)
         gate.write_text(gate_original.replace('reader-pdf-text-store\\.mjs', 'missing-pdf-text-store\\.mjs'))
         self.assert_check(self.run_check(*coverage), False, message)
+        # A targeted mutant must not be killed by a different assertion or a
+        # syntax error, even if the expected diagnostic is printed elsewhere.
+        marker = "    const result=store.put(1,'x').then(value=>{events.push('settled');return value;});\n    assert.equal(await result,false,'synthetic transaction error must fail');"
+        self.assertEqual(original.count(marker), 1)
+        for injected in ("    assert.fail('unrelated');\n",
+                         "    console.log('prevented error must abort before settlement');\n    assert.fail('unrelated');\n"):
+            source.write_text(original.replace(marker, injected + marker))
+            self.assert_check(self.run_check(*mutation), False, 'baseline failed')
+        source.write_text(original + '\nthis is not valid javascript !\n')
+        self.assert_check(self.run_check(*mutation), False, 'baseline failed')
         source.write_text(original.replace("assert.equal(await pdfTextStoreKey(data),a);",
                                            "assert.equal(await pdfTextStoreKey(data),a);\n  throw new Error('unrelated');"))
         self.assert_check(self.run_check(*mutation), False, 'unexpected failure')
@@ -2527,7 +2593,8 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         self.assertIn('"no-undef"', config)
         self.assertIn('"tests/**/*.py" = ["F401", "F841"', (ROOT / "ruff.toml").read_text())
         paths = (self.root / "scripts/check_python_static.py").read_text()
-        for expected in ('root / "app.py"', 'root / "backend"', 'root / "scripts"', 'root / "tests"'):
+        for expected in ('root / "app.py"', 'root / "backend"', 'root / "scripts"', 'root / "tests"',
+                         'root / "run_static_gate_shards.py"'):
             self.assertIn(expected, paths)
         if (ROOT / "pyrightconfig.json").exists():
             self.assertTrue((ROOT / "backend/app.py").is_file())

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {IDBFactory} from 'fake-indexeddb';
+import {IDBFactory, IDBDatabase, IDBTransaction} from 'fake-indexeddb';
 import {createPdfTextStore, pdfTextStoreKey} from '../../../static/reader/pdf/reader-pdf-text-store.mjs';
 
 const key='a'.repeat(64), keyB='b'.repeat(64);
@@ -24,6 +24,93 @@ const seed=async (storeName,value)=>{
   try {const tx=db.transaction([storeName],'readwrite');const done=transactionDone(tx);tx.objectStore(storeName).put(value);await done;}
   finally {db.close();}
 };
+
+test('synchronous work throw aborts queued write before promise settles',async()=>{
+  useFactory();let store;
+  const original=IDBTransaction.prototype.objectStore, events=[];
+  try {
+    store=createPdfTextStore(key,{limits});
+    IDBTransaction.prototype.objectStore=function(name){
+      if (this.mode==='readwrite' && name==='budget') {
+        const pages=original.call(this,'pages');
+        pages.put({id:'queued'});
+        this.addEventListener('abort',()=>events.push('abort'));
+        throw new Error('synchronous work failure');
+      }
+      return original.call(this,name);
+    };
+    const result=store.put(1,'x').then(value=>{events.push('settled');return value;});
+    assert.equal(await result,false);
+    assert.deepEqual(events,['abort','settled'],'sync abort must precede settlement');
+    IDBTransaction.prototype.objectStore=original;
+    const db=await openDatabase();
+    try {assert.equal(await requestValue(db.transaction('pages').objectStore('pages').get('queued')),undefined,'queued write must roll back');}
+    finally {db.close();}
+  } finally {IDBTransaction.prototype.objectStore=original;store?.dispose();restoreFactory();}
+});
+
+test('duplicate add defaults to abort before promise settles',async()=>{
+  useFactory();let store;
+  const original=IDBDatabase.prototype.transaction, events=[];
+  try {
+    store=createPdfTextStore(key,{limits});
+    assert.equal(await store.put(1,'original'),true);
+    IDBDatabase.prototype.transaction=function(names,mode,...rest){
+      const tx=original.call(this,names,mode,...rest);
+      if (mode==='readwrite') {
+        const pages=tx.objectStore('pages');
+        const duplicate=pages.add({id:key+':1'});
+        duplicate.addEventListener('error',event=>{
+          events.push('request error');
+          assert.equal(event.defaultPrevented,false); // fake-indexeddb 6.2.7 does not reflect preventDefault here.
+        });
+        tx.addEventListener('error',event=>{if (event.target===duplicate) events.push('transaction error');});
+        tx.addEventListener('abort',()=>events.push('abort'));
+      }
+      return tx;
+    };
+    const result=store.put(2,'new').then(value=>{events.push('settled');return value;});
+    assert.equal(await result,false);
+    assert.deepEqual(events,['request error','transaction error','abort','settled'],'default abort must precede settlement');
+    IDBDatabase.prototype.transaction=original;
+    assert.equal(await store.get(1),'original');assert.equal(await store.get(2),null);
+  } finally {IDBDatabase.prototype.transaction=original;store?.dispose();restoreFactory();}
+});
+
+for (const prevented of [false,true]) test(`synthetic transaction error ${prevented ? 'aborts' : 'completes'} before settlement`,async()=>{
+  useFactory();let store, hits=0;
+  const original=IDBDatabase.prototype.transaction, events=[];
+  try {
+    store=createPdfTextStore(key,{limits});
+    IDBDatabase.prototype.transaction=function(names,mode,...rest){
+      const tx=original.call(this,names,mode,...rest);
+      if (mode==='readwrite') {
+        hits++;
+        const pages=tx.objectStore('pages');
+        pages.put({id:'queued'});
+        const trigger=pages.get('queued');
+        trigger.addEventListener('success',()=>{
+          events.push('error');
+          tx.onerror({defaultPrevented:prevented}); // Synthetic branch probe, not native event propagation.
+        });
+        tx.addEventListener('abort',()=>events.push('abort'));
+        tx.addEventListener('complete',()=>events.push('complete'));
+      }
+      return tx;
+    };
+    const result=store.put(1,'x').then(value=>{events.push('settled');return value;});
+    assert.equal(await result,false,'synthetic transaction error must fail');
+    assert.equal(hits,1,'transaction hook must run once');
+    assert.deepEqual(events,prevented ? ['error','abort','settled'] : ['error','complete','settled'],
+      prevented ? 'prevented error must abort before settlement' : 'unprevented error must complete before settlement');
+    IDBDatabase.prototype.transaction=original;
+    if (prevented) {
+      const db=await openDatabase();
+      try {assert.equal(await requestValue(db.transaction('pages').objectStore('pages').get('queued')),undefined,'prevented abort must roll back');}
+      finally {db.close();}
+    }
+  } finally {IDBDatabase.prototype.transaction=original;store?.dispose();restoreFactory();}
+});
 
 test('keys are stable, identity-bound and reject invalid inputs',async()=>{
   const data={source:'https://example.test/book.pdf',version:'"A"',pageCount:12,engine:'engine1'};
