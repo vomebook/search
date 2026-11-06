@@ -65,7 +65,7 @@ jobs:
           node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
           node tests/test_reader_preload.js
-          node tests/test_reader_chapter_search.mjs
+          node tests/reader/chapter-search/test_reader_chapter_search.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
           node scripts/reader/check_reader_lifecycle_coverage.mjs
@@ -77,7 +77,7 @@ jobs:
           node --test tests/reader/pdf-search/test_pdf_book_worker.mjs
           python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
           PDF_WORKER_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
-          node tests/test_reader_css_sanitizer.mjs
+          node tests/reader/security/test_reader_css_sanitizer.mjs
       - name: Run Reader request and PDF loading regressions
         run: |
           node scripts/reader/check_request_manager_coverage.mjs
@@ -280,7 +280,7 @@ jobs:
         working-directory: huggingface-search
         run: |
           node tests/test_reader_architecture.js
-          node tests/test_reader_chapter_search.mjs
+          node tests/reader/chapter-search/test_reader_chapter_search.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
           node scripts/reader/check_reader_lifecycle_coverage.mjs
@@ -292,7 +292,7 @@ jobs:
           node --test tests/reader/pdf-search/test_pdf_book_worker.mjs
           python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
           PDF_WORKER_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
-          node tests/test_reader_css_sanitizer.mjs
+          node tests/reader/security/test_reader_css_sanitizer.mjs
           node tests/test_reader_heading_cache.js
           node tests/test_reader_engine_preload.js
           node tests/test_reader_regression.js
