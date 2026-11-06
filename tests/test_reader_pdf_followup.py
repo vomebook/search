@@ -382,8 +382,16 @@ class PdfFollowupTests(unittest.TestCase):
         suffix=re.sub(rb'startxref\n\d+',b'startxref\n'+str(xref+len(extra)).encode(),suffix)
         packed=small[:xref]+extra+suffix
         self.page.unroute('**/static/vendor/pdf.min.*.mjs')
-        self.page.route('**/reader/pdf/reader-pdf-network.mjs',lambda route:route.fulfill(content_type='text/javascript',body=
-            (ROOT/'static/reader/pdf/reader-pdf-network.mjs').read_text().replace('idleMs = 15000','idleMs = 80')))
+        network=(ROOT/'static/reader/pdf/reader-pdf-network.mjs').read_text()
+        needle='idleMs = 15000'
+        self.assertEqual(network.count(needle),1,'range recovery timeout hook must exist exactly once')
+        accelerated=network.replace(needle,'idleMs = 80')
+        self.assertNotEqual(accelerated,network)
+        routed=[]
+        def accelerate_network(route):
+            routed.append(route.request.url)
+            route.fulfill(content_type='text/javascript',body=accelerated)
+        self.page.route('**/reader/pdf/reader-pdf-network.mjs',accelerate_network)
         prefix=small[:xref]+extra[:extra.index(b'stream\n')+7]
         tail=b'\nendstream\nendobj\n'+suffix
         setup=f'const source=new Uint8Array({len(packed)});source.set({json.dumps(list(prefix))});source.set({json.dumps(list(tail))},{len(packed)-len(tail)});'
@@ -405,6 +413,7 @@ class PdfFollowupTests(unittest.TestCase):
         })();''')
         self.open()
         self.page.locator('.reader-page canvas.ready').wait_for(state='attached')
+        self.assertEqual(len(routed),1,'accelerated recovery module must be served')
         self.assertTrue(self.page.evaluate('!!window.__partialCancelled'))
         self.assertEqual(self.page.evaluate('__pdfRequests.filter(r=>r===null).length'),0)
         self.assertEqual(self.page.evaluate('__pdfRequests.filter(r=>r==="bytes=0-262143").length'),1)
