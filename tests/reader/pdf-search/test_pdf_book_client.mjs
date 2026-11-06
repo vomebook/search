@@ -100,7 +100,7 @@ test('worker error rejects current and future requests until cancellation resets
     await assert.rejects(f.client.prefetch(),/PDF 全文搜索组件加载失败/);
     f.client.cancel();assert.equal(w.terminated,1);assert.equal(f.client.failed,false);
     const retry=f.client.prefetch(),fresh=f.workers[1],request=fresh.messages.at(-1);
-    const existing={id:9,index:{fixture:true}};
+    const existing=9;
     fresh.send({id:request.id,ready:true,session:existing});
     const result=await retry;assert.equal(result.ready,true);assert.strictEqual(result.session,existing);
     const next=f.client.page(0);assert.strictEqual(fresh.messages.at(-1).session,existing);

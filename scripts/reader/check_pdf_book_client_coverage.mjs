@@ -1,6 +1,6 @@
 // Node 26/V8: the PDF book-search client under synthetic Worker contracts only.
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from './check_tap_contracts.mjs';
+import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 const minimum=[100,100,100];
 const required=[

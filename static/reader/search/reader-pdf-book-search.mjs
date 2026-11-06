@@ -9,7 +9,7 @@
  * @typedef {{id: number, session: number, total: number, offset: number, pageSize: number,
  *   results: PdfBookSearchHit[], complete?: boolean}} PdfBookSearchResult
  * @typedef {PdfBookSearchResult & {progress: true, scanned: number, pages: number}} PdfBookSearchProgress
- * @typedef {{id: number, ready: true, session: undefined | null}} PdfBookPrefetchResult
+ * @typedef {{id: number, ready: true, session: number | null}} PdfBookPrefetchResult
  * @typedef {{id?: number, bookReady?: boolean, progress?: boolean, session?: unknown, error?: string} &
  *   Partial<Omit<PdfBookSearchResult, "session">> & {scanned?: number, pages?: number}} PdfBookSearchMessage
  * @typedef {{id: number, resolve: (value: PdfBookSearchResult | PdfBookPrefetchResult) => void, reject: (reason?: unknown) => void,

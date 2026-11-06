@@ -249,8 +249,16 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_both_sites_run_pdf_book_client_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_pdf_book_client_coverage.mjs'), 2)
-        self.assertEqual(workflow.count('node tests/test_reader_ocr_transport.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_pdf_book_client_coverage.mjs'), 2)
+        self.assertNotIn('node scripts/check_pdf_book_client_coverage.mjs', workflow)
+        for test in ('test_reader_ocr_transport.mjs', 'test_reader_book_text.mjs'):
+            self.assertEqual(workflow.count(f'node tests/reader/pdf-search/{test}'), 2)
+        self.assertEqual(workflow.count('node --test tests/reader/pdf-search/test_pdf_book_worker.mjs'), 2)
+        browser_gate = 'python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py'
+        self.assertEqual(workflow.count('\n          ' + browser_gate), 2)
+        self.assertEqual(workflow.count('PDF_WORKER_TEST_BROWSER=firefox ' + browser_gate), 2)
+        self.assertNotIn('node tests/test_reader_ocr_transport.mjs', workflow)
+        self.assertNotIn('node tests/test_reader_book_text.mjs', workflow)
 
     def test_both_sites_run_response_cache_gate_and_pages_legacy_test(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
