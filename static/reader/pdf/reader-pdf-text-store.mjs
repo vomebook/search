@@ -1,14 +1,17 @@
 export const PDF_TEXT_STORE_LIMITS = Object.freeze({bytes:64*1024*1024, entries:4096, entryBytes:512*1024, ttl:30*86400000});
+/** @param {{source: string, version: string, pageCount: number, engine: string}} identity */
 export async function pdfTextStoreKey({source, version, pageCount, engine}) {
   if (!version || !source || !Number.isSafeInteger(pageCount) || pageCount < 1 || !globalThis.crypto?.subtle) return null;
   const bytes = new TextEncoder().encode(JSON.stringify(["pdf-search-han-space-v1",source,version,pageCount,engine]));
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(n=>n.toString(16).padStart(2,"0")).join("");
 }
 
-/** @param {{signal?: AbortSignal, limits?: typeof PDF_TEXT_STORE_LIMITS, now?: () => number}} [options] */
+/** @param {string} key @param {{signal?: AbortSignal, limits?: typeof PDF_TEXT_STORE_LIMITS, now?: () => number}} [options] */
 export function createPdfTextStore(key, options = {}) {
   const {signal, limits = PDF_TEXT_STORE_LIMITS, now = Date.now} = options;
-  let database, opening, disposed = false, writes = 0, pendingBytes = 0;
+  /** @type {IDBDatabase | null | undefined} */ let database;
+  /** @type {Promise<IDBDatabase> | null | undefined} */ let opening;
+  let disposed = false, writes = 0, pendingBytes = 0;
   const owners = new Set();
   const stats = {hits:0, misses:0, writes:0, skipped:0};
   const active = () => !disposed && !signal?.aborted && /^[0-9a-f]{64}$/.test(key || "");
@@ -17,6 +20,7 @@ export function createPdfTextStore(key, options = {}) {
     opening = new Promise((resolve, reject) => {
       let settled = false;
       const request = indexedDB.open("voiceofml-pdf-search-text", 1);
+      /** @param {Error | DOMException | null} [error] */
       const finish = (error) => {
         if (settled) return;
         settled = true; clearTimeout(timer);
@@ -33,17 +37,19 @@ export function createPdfTextStore(key, options = {}) {
       request.onsuccess = () => {
         if (settled || !active()) { request.result.close(); finish(new Error("PDF text cache closed")); return; }
         database = request.result;
-        database.onversionchange = () => { database.close(); database = null; opening = null; };
+        database.onversionchange = () => { /** @type {IDBDatabase} */ (database).close(); database = null; opening = null; };
         finish();
       };
     }).catch(error => { opening = null; throw error; });
     return opening;
   }
+  /** @template T @param {IDBTransactionMode} mode @param {number} budgetMs
+   * @param {(tx: IDBTransaction, finish: (value: T) => void) => void} work @returns {Promise<T | null>} */
   async function operation(mode, budgetMs, work) {
     if (!active() || !globalThis.indexedDB) return null;
     const owner = new AbortController();
     owners.add(owner);
-    let tx;
+    /** @type {IDBTransaction | undefined} */ let tx;
     const timer = setTimeout(()=>owner.abort(),budgetMs);
     try {
       return await new Promise((resolve, reject) => {
@@ -52,7 +58,7 @@ export function createPdfTextStore(key, options = {}) {
         open().then(db => {
           if (!active() || owner.signal.aborted) return resolve(null);
           tx = db.transaction(["pages","budget"],mode);
-          let result = null;
+          /** @type {T | null} */ let result = null;
           tx.oncomplete = () => resolve(result);
           tx.onabort = tx.onerror = () => resolve(null);
           work(tx, value => { result = value; });
@@ -61,13 +67,15 @@ export function createPdfTextStore(key, options = {}) {
     } catch (_) { return null; }
     finally { clearTimeout(timer); owners.delete(owner); }
   }
-  const idFor = page => key+":"+page;
-  const cost = (id,text) => (id.length+text.length)*2+64;
+  /** @param {number} page */ const idFor = page => key+":"+page;
+  /** @param {string} id @param {string} text */ const cost = (id,text) => (id.length+text.length)*2+64;
+  /** @param {{schema: number, id: string, key: string, page: number, text: string, bytes: number, savedAt: number} | null} entry @param {number} page */
   function valid(entry, page) {
     return entry?.schema === 1 && entry.id === idFor(page) && entry.key === key && entry.page === page &&
       typeof entry.text === "string" && entry.bytes === cost(entry.id,entry.text) && entry.bytes <= limits.entryBytes &&
       Number.isFinite(entry.savedAt) && entry.savedAt <= now() && now()-entry.savedAt < limits.ttl;
   }
+  /** @param {number} page */
   async function get(page) {
     if (!Number.isSafeInteger(page) || page < 1) return null;
     const text = await operation("readonly",150,(tx,finish) => {
@@ -77,6 +85,7 @@ export function createPdfTextStore(key, options = {}) {
     if (text === null) stats.misses++; else stats.hits++;
     return text;
   }
+  /** @param {number} page @param {string} text */
   async function put(page, text) {
     const id = idFor(page), bytes = typeof text === "string" ? cost(id,text) : Infinity;
     if (!active() || !Number.isSafeInteger(page) || page < 1 || bytes > limits.entryBytes || bytes > limits.bytes ||

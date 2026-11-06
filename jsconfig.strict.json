@@ -22,6 +22,7 @@
     "static/reader/pdf/pdf-first-page-worker-adapter.mjs",
     "static/reader/pdf/reader-pdf-range-cache.mjs",
     "static/reader/pdf/reader-pdf-range-hints.mjs",
+    "static/reader/pdf/reader-pdf-text-store.mjs",
     "static/search/search-session.js",
     "static/search/reader-navigation.js",
     "static/search/download-controller.js",
