@@ -249,7 +249,9 @@ self.onmessage = async ({ data }) => {
     } else if (data.type === "prefetch") {
       if (configuration.partitions) validateSearchConfiguration();
       else await loadBook();
-      if (current()) self.postMessage({ id: data.id, session, ready: true });
+      // Keep the search index (and its methods) inside the Worker. Only its
+      // cloneable identity is needed to preserve pagination after prefetch.
+      if (current()) self.postMessage({ id: data.id, session: session?.id ?? null, ready: true });
     } else {
       if (!session || data.session !== session.id) throw aborted();
       const owner = session, page = await owner.index.page(data.offset);

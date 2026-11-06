@@ -1495,7 +1495,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_pdf_book_client_coverage_gate_fails_closed(self):
         paths = ['static/reader/search/reader-pdf-book-search.mjs',
-                 'scripts/check_pdf_book_client_coverage.mjs', 'scripts/check_tap_contracts.mjs',
+                 'scripts/reader/check_pdf_book_client_coverage.mjs', 'scripts/check_tap_contracts.mjs',
                  'tests/reader/pdf-search/test_pdf_book_client.mjs']
         for path in paths:
             target = self.root / path
@@ -2020,7 +2020,7 @@ const result = await client.search('needle', progress => {
 result.session.toFixed(); (await client.page(50)).total.toFixed();
 const prefetched = await client.prefetch();
 /** @type {true} */ const ready = prefetched.ready;
-/** @type {undefined | null} */ const session = prefetched.session;
+/** @type {number | null} */ const session = prefetched.session;
 ''')
         self.assert_check(self.run_check(*check), True, '')
         for expression, diagnostic in [
@@ -2030,7 +2030,7 @@ const prefetched = await client.prefetch();
             ('client.page("1");', 'TS2345'),
             ('(await client.prefetch()).results;', 'TS2339'),
             ('(await client.search("x")).ready;', 'TS2339'),
-            ('(await client.prefetch()).session.id;', 'TS2533'),
+            ('(await client.prefetch()).session.id;', 'TS2339'),
             ('client.search("x", progress => { progress.scanned.toUpperCase(); });', 'TS2339'),
         ]:
             with self.subTest(expression=expression):
