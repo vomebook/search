@@ -1,5 +1,5 @@
 import {spawnSync} from "node:child_process";
-import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
+import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Node 26/V8 scope: extracted identity module only, excluding host and path helper.
 const result = spawnSync(process.execPath, [

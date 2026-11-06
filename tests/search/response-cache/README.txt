@@ -3,7 +3,7 @@ Search response-cache contracts
 
 Run from the repository root with Node 26:
 
-  node scripts/check_search_response_cache_coverage.mjs
+  node scripts/search/check_search_response_cache_coverage.mjs
   node tests/search/response-cache/test_response_cache.js
 
 Six original named Node contracts cover the extracted response cache's LRU,

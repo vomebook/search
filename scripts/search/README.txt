@@ -1,15 +1,22 @@
-Search presentation quality gates
-=================================
+Frontend search quality gates
+=============================
 
-Run these from the repository root with Node 26:
+Run from the repository root with Node 26:
 
   node scripts/search/check_search_highlight_coverage.mjs
   node scripts/search/check_search_size_coverage.mjs
   node scripts/search/check_search_record_path_coverage.mjs
+  node scripts/search/check_search_file_types_coverage.mjs
+  node scripts/search/check_search_response_cache_coverage.mjs
+  node scripts/search/check_search_response_validation_coverage.mjs
+  node scripts/search/check_search_result_identity_coverage.mjs
+  node scripts/search/check_search_filter_equality_baseline.mjs
+  node scripts/search/check_search_folder_merge_baseline.mjs
+  node scripts/search/check_search_readability_baseline.mjs
   node scripts/search/check_reader_navigation_baseline.mjs
 
-These gates execute contracts under tests/search/highlight/, tests/search/size/
-and tests/search/record-path/, respectively. Their V8 thresholds cover only the
-specified extracted search module; Reader navigation has its own partial baseline
-in tests/search/reader-navigation/. The shared TAP helper remains in scripts/.
-Other search gates remain at their existing paths pending separate migration.
+The presentation and extracted-module gates measure only the named module;
+behavior baselines under tests/search/baselines/ preserve host-side semantics.
+Reader navigation has its own partial baseline under tests/search/reader-navigation/.
+The shared TAP validator remains in scripts/. Backend mutation and coverage
+gates are independent and are not part of these frontend measurements.
