@@ -570,6 +570,8 @@ test("deployment workflow uses official checkout configure upload and deploy act
     "actions/setup-python@v7",
     "actions/checkout@v7",
     "actions/setup-node@v7",
+    "actions/cache@v5",
+    "actions/cache@v5",
     "actions/configure-pages@v6",
     "actions/upload-pages-artifact@v5",
     "actions/deploy-pages@v5",
@@ -597,6 +599,36 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.ok(workflow.includes('.buildFiles("github")'));
   assert.match(workflow, /esbuild@0\.28\.2 static\/sw\.js --minify/);
   assert.match(workflow, /uses: actions\/upload-pages-artifact@v5\s*\n\s*with:\s*[\s\S]*?path: '_site'/);
+});
+test("PDF release gate separates and bounds dependency installation and always runs nine tests", () => {
+  const deploy = workflow.slice(workflow.indexOf("\n  deploy:\n"));
+  for (const [name, timeout] of [
+    ["Install PDF Python dependencies", 10], ["Install qpdf system dependency", 10],
+    ["Install Playwright Chromium system libraries", 15], ["Install Playwright Chromium browser", 15],
+    ["Check content-addressed PDF opening", 30],
+  ]) assert.ok(deploy.includes(`- name: ${name}\n        timeout-minutes: ${timeout}`), name);
+  assert.match(deploy, /key: \$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.pdf-distro\.outputs\.version \}\}-playwright-1\.63\.0-chromium/);
+  assert.match(deploy, /python3 -m pip install playwright==1\.63\.0 pypdf==6\.21\.4/);
+  assert.match(deploy, /python3 -m playwright install-deps chromium/);
+  assert.match(deploy, /python3 -m playwright install chromium/);
+  const pdfChecks = [
+    'test_first_page_reused_and_wrong_count_corrected',
+    'test_nested_tree_first_page_does_not_wait_for_other_pages',
+    'test_incremental_linearized_preview_uses_current_first_page',
+    'test_understated_page_count_is_rebuilt_before_navigation',
+    'test_sequential_second_page_before_full_validation',
+    'test_scroll_to_second_page_before_full_validation',
+    'test_unknown_or_missing_child_never_commits_count',
+    'test_full_text_search_waits_for_verified_count',
+    'test_progress_panel_cannot_add_bookmark_during_validation',
+  ].map(name => `tests.test_reader_pdf_first_page.PdfFirstPageTests.${name}`);
+  assert.deepStrictEqual(deploy.match(/tests\.test_reader_pdf_first_page\.PdfFirstPageTests\.test_\w+/g), pdfChecks);
+  assert.ok(deploy.indexOf('name: Check content-addressed PDF opening') < deploy.indexOf('uses: actions/upload-pages-artifact@v5'));
+  assert.doesNotMatch(workflow, /continue-on-error:|\bif:/);
+  assert.match(workflow, /cache: npm/);
+  assert.match(workflow, /cache-dependency-path: requirements-static-check\.txt/);
+  assert.match(workflow, /npm ci --ignore-scripts --no-audit --no-fund/);
+  assert.doesNotMatch(workflow, /path:.*node_modules/);
 });
 test("deployment workflow exposes deployment URL through github-pages environment", () => {
   assert.match(workflow, /environment:\s*\n\s*name: github-pages\s*\n\s*url: \$\{\{ steps\.deployment\.outputs\.page_url \}\}/);

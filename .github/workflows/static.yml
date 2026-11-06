@@ -31,9 +31,12 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '26.11.1'
+          cache: npm
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11.17'
+          cache: pip
+          cache-dependency-path: requirements-static-check.txt
       - name: Install pinned static checkers
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
@@ -93,11 +96,34 @@ jobs:
           node scripts/build/build_static_assets.mjs
           python3 scripts/build/seo.py --project pages --output _site
           node scripts/build/check_reader_release.mjs --project github --root "$GITHUB_WORKSPACE" --artifact-root "$GITHUB_WORKSPACE/_site"
+      - name: Cache PDF Python package downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-${{ runner.arch }}-pdf-pip-playwright-1.63.0-pypdf-6.21.4
+      - name: Install PDF Python dependencies
+        timeout-minutes: 10
+        run: python3 -m pip install playwright==1.63.0 pypdf==6.21.4
+      - name: Install qpdf system dependency
+        timeout-minutes: 10
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - name: Install Playwright Chromium system libraries
+        timeout-minutes: 15
+        run: python3 -m playwright install-deps chromium
+      - name: Identify runner distribution
+        id: pdf-distro
+        run: echo "version=$(. /etc/os-release; echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright Chromium binaries
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.pdf-distro.outputs.version }}-playwright-1.63.0-chromium
+      - name: Install Playwright Chromium browser
+        timeout-minutes: 15
+        run: python3 -m playwright install chromium
       - name: Check content-addressed PDF opening
+        timeout-minutes: 30
         run: |
-          python3 -m pip install playwright==1.63.0 pypdf==6.21.4
-          sudo apt-get update && sudo apt-get install -y qpdf
-          python3 -m playwright install --with-deps chromium
           READER_BUILT_SITE="$GITHUB_WORKSPACE/_site" READER_BUILT_PROJECT=github python3 -B -m unittest -v \
             tests.test_reader_pdf_first_page.PdfFirstPageTests.test_first_page_reused_and_wrong_count_corrected \
             tests.test_reader_pdf_first_page.PdfFirstPageTests.test_nested_tree_first_page_does_not_wait_for_other_pages \
