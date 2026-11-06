@@ -8,6 +8,8 @@ Run from the repository root with Node 26:
   node tests/reader/pdf-search/test_reader_book_text.mjs
   node --test tests/reader/pdf-search/test_pdf_book_worker.mjs
   python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
+  python3 -B -m unittest tests.test_reader_pdf_followup.PdfFollowupTests.test_disk_store_preserves_unicode_bounds_expiry_and_failure_fallback
+  python3 -B -m unittest tests.test_static_checks.StaticGateTests.test_pdf_text_store_type_contract_rejects_invalid_usage
 
 The client coverage gate uses nine synthetic Worker lifecycle contracts and
 measures only static/reader/search/reader-pdf-book-search.mjs. The OCR test
@@ -18,5 +20,8 @@ compressed fixtures, for both book-text and partitioned indexes. They cover
 prefetch before and after search, pagination, cancellation and retry. The
 browser test serves local fixtures to the real browser Worker; set
 PDF_WORKER_TEST_BROWSER=firefox to select Firefox. These focused tests do not
-replace real network or full Reader integration tests. Both sites run them
+replace real network or full Reader integration tests. The focused IndexedDB
+browser contract tests Unicode, eviction, expiry, identity and denied storage;
+the separate strict type contract rejects invalid keys, pages and text values.
+Neither is a whole-cache coverage claim. Both sites run these tests
 from the GitHub Reader Refactor workflow.
