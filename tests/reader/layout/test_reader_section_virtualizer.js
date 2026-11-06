@@ -6,7 +6,7 @@ const vm = require("vm");
 function loadVirtualizer(options) {
   const sandbox = { self: {} };
   sandbox.self = sandbox;
-  const filename = path.join(__dirname, "../static/reader/formats/reader-section-virtualizer.js");
+  const filename = path.join(__dirname, "../../../static/reader/formats/reader-section-virtualizer.js");
   vm.runInNewContext(fs.readFileSync(filename, "utf8"), sandbox, { filename });
   return sandbox.VoiceOfMLReaderVirtual.createSectionVirtualizer(options);
 }
@@ -37,7 +37,7 @@ function main() {
   virtualizer.dispose();
   assert.strictEqual(virtualizer.trim(0).removed, 0);
   const fallback = {};
-  const filename = path.join(__dirname, "../static/reader/formats/reader-section-virtualizer.js");
+  const filename = path.join(__dirname, "../../../static/reader/formats/reader-section-virtualizer.js");
   vm.runInNewContext(fs.readFileSync(filename, "utf8"), fallback, { filename });
   assert.strictEqual(typeof fallback.VoiceOfMLReaderVirtual.createSectionVirtualizer, "function");
   console.log("reader section virtualizer contracts passed");

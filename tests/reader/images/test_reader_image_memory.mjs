@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
-const root = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
+const root = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..'));
 const load = name => import(pathToFileURL(path.join(root, 'static/reader', name)).href);
 const {createReaderPdfScheduler} = await load('pdf/reader-pdf-scheduler.mjs');
 const {createReaderPdfRenderer, pdfOutputScale} = await load('pdf/reader-pdf-renderer.mjs');

@@ -1,16 +1,16 @@
 import { spawnSync } from "node:child_process";
-import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
+import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Each run includes exactly one own-source file, so Node's aggregate
 // thresholds cannot hide a regression in another file or in an empty report.
 // Baseline measured 2026-11-03 on Node v26.11.1, using the named tests only.
 const gates = [
   { source:"reader-section-virtualizer.js", directory:"formats", lines:100, branches:100, functions:100,
-    tests:["tests/test_reader_section_virtualizer.js"] },
+    tests:["tests/reader/layout/test_reader_section_virtualizer.js"] },
   { source:"reader-chapter-repository.js", directory:"formats", lines:100, branches:98.86, functions:100,
-    tests:["tests/test_reader_chapter_repository.js", "tests/test_reader_chapter_scheduler.js", "tests/test_reader_chapter_preload.js"] },
+    tests:["tests/reader/chapters/test_reader_chapter_repository.js", "tests/reader/chapters/test_reader_chapter_scheduler.js", "tests/reader/chapters/test_reader_chapter_preload.js"] },
   { source:"reader-scroll-anchor.js", directory:"ui", lines:100, branches:89.61, functions:100,
-    tests:["tests/test_reader_scroll_anchor.js"] }
+    tests:["tests/reader/layout/test_reader_scroll_anchor.js"] }
 ];
 
 for (const gate of gates) {
@@ -30,11 +30,11 @@ for (const gate of gates) {
   });
   const values = rows.length === 1 ? rows[0].split("|").slice(1,4).map(value=>Number(value.trim())) : [];
   const text = result.stdout || "";
-  const expected = {"tests/test_reader_section_virtualizer.js": "reader section virtualizer contracts passed",
-    "tests/test_reader_chapter_repository.js": "reader chapter repository contracts passed",
-    "tests/test_reader_chapter_scheduler.js": "reader chapter scheduler contracts passed",
-    "tests/test_reader_chapter_preload.js": "chapter manifest preload validation, reuse, body deadline and disposal passed",
-    "tests/test_reader_scroll_anchor.js": "reader scroll anchor contracts passed"};
+  const expected = {"tests/reader/layout/test_reader_section_virtualizer.js": "reader section virtualizer contracts passed",
+    "tests/reader/chapters/test_reader_chapter_repository.js": "reader chapter repository contracts passed",
+    "tests/reader/chapters/test_reader_chapter_scheduler.js": "reader chapter scheduler contracts passed",
+    "tests/reader/chapters/test_reader_chapter_preload.js": "chapter manifest preload validation, reuse, body deadline and disposal passed",
+    "tests/reader/layout/test_reader_scroll_anchor.js": "reader scroll anchor contracts passed"};
   const missingTests = gate.tests.some(name => typeof expected[name] !== "string") ||
     !hasPassingTapContracts(text, gate.tests.map(name => ({name, marker: expected[name]})));
   if (result.status !== 0 || rows.length !== 1 ||
