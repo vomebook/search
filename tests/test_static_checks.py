@@ -2273,6 +2273,28 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                 self.assert_check(self.run_check(*production_check), False, "TS7006")
         lifecycle.write_text(original)
 
+    def test_pdf_text_store_type_contract_rejects_invalid_usage(self):
+        source = self.root / "static/pdf-text-store-usage.mjs"
+        config = self.root / "jsconfig.json"
+        options = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())["compilerOptions"]
+        module = ROOT / "static/reader/pdf/reader-pdf-text-store.mjs"
+        config.write_text(json.dumps({"compilerOptions": options, "files": [str(module), str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        valid = (f'import {{createPdfTextStore, pdfTextStoreKey}} from "{module.as_posix()}";\n'
+                 'const identity = {source:"book", version:"v1", pageCount:12, engine:"pdfjs"};\n'
+                 'pdfTextStoreKey(identity).then(key => { if (key) { const store=createPdfTextStore(key); '
+                 'store.put(1,"text"); store.get(1); store.dispose(); } });\n')
+        source.write_text(valid)
+        self.assert_check(self.run_check(*check), True, "")
+        for bad in ('pdfTextStoreKey({...identity, pageCount:"12"});',
+                    'createPdfTextStore(42);',
+                    'createPdfTextStore("a").put("1","text");',
+                    'createPdfTextStore("a").put(1,123);',
+                    'createPdfTextStore("a", {signal:undefined});'):
+            with self.subTest(invalid=bad):
+                source.write_text(valid + bad + "\n")
+                self.assert_check(self.run_check(*check), False, "error TS")
+
     def test_reader_exact_gate_rejects_unchecked_indexes_and_undefined_optionals(self):
         original = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
         options = original["compilerOptions"]
@@ -2284,7 +2306,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
-                    "static/reader/pdf/reader-pdf-range-hints.mjs",
+                    "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertTrue(required <= set(json.loads((ROOT / "jsconfig.strict.json").read_text())["files"]))
