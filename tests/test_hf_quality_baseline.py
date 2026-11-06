@@ -337,7 +337,8 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_both_sites_run_download_controller_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_download_controller_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_download_controller_coverage.mjs'), 2)
+        self.assertNotIn('node scripts/check_download_controller_coverage.mjs', workflow)
 
 
 class HfQualityBaselineTests(unittest.TestCase):

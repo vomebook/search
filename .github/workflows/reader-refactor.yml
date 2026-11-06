@@ -51,7 +51,7 @@ jobs:
           node scripts/search/check_search_highlight_coverage.mjs
           node scripts/search/check_search_response_cache_coverage.mjs
           node --test tests/test_tap_contracts.mjs
-          node scripts/check_download_controller_coverage.mjs
+          node scripts/search/check_download_controller_coverage.mjs
           node scripts/search/check_search_file_types_coverage.mjs
           node scripts/search/check_search_response_validation_coverage.mjs
           node scripts/search/check_search_result_identity_coverage.mjs
@@ -302,7 +302,7 @@ jobs:
           node scripts/search/check_search_highlight_coverage.mjs
           node scripts/search/check_search_response_cache_coverage.mjs
           node --test tests/test_tap_contracts.mjs
-          node scripts/check_download_controller_coverage.mjs
+          node scripts/search/check_download_controller_coverage.mjs
           node scripts/search/check_search_file_types_coverage.mjs
           node scripts/search/check_search_response_validation_coverage.mjs
           node scripts/search/check_search_result_identity_coverage.mjs
