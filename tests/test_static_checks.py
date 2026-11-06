@@ -1070,9 +1070,9 @@ class StaticGateTests(unittest.TestCase):
         self.assertIsNotNone(row, measured.stdout)
         hundredths = int(round(float(row.group(1)) * 100))
         self.assertLess(hundredths, 10000, "fractional negative test needs a non-perfect line baseline")
-        needle = "const minimum = [97.86, 84.23, 86.27];"
+        needle = "const minimum = [97.86, 84.20, 86.27];"
         self.assertEqual(source.count(needle), 1)
-        above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 84.23, 86.27];"
+        above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 84.20, 86.27];"
         gate.write_text(source.replace(needle, above))
         self.assert_check(self.run_check("node", paths[3]), False,
                           "PDF network coverage gate requires passing named tests")
