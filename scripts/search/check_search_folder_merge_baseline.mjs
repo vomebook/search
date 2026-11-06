@@ -1,5 +1,5 @@
 import {spawnSync} from "node:child_process";
-import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
+import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Require every original inline merge contract to finish without skips.
 const result = spawnSync(process.execPath, [

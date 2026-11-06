@@ -1,5 +1,5 @@
 import {spawnSync} from "node:child_process";
-import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
+import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Node 26/V8 scope: only the extracted inventory, not the host app.js.
 // This data-only source executes on load, so full coverage alone is vacuous:
