@@ -6,8 +6,8 @@ import { join } from "node:path";
 // A deliberately small safety-mutation gate, not exhaustive mutation
 // coverage. Mutate isolated modules only; never write the production source.
 const source = readFileSync("static/reader/pdf/reader-pdf-network.mjs", "utf8");
-const backpressure = readFileSync("tests/test_reader_pdf_backpressure.mjs", "utf8");
-const contracts = readFileSync("tests/test_reader_pdf_network_contract.mjs", "utf8");
+const backpressure = readFileSync("tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "utf8");
+const contracts = readFileSync("tests/reader/pdf-network/test_reader_pdf_network_contract.mjs", "utf8");
 const probes = [{name:"post-admission cancellation", test:backpressure, before:
   "        signal.throwIfAborted();\n      }\n      response = null;", after:
   "      }\n      response = null;", diagnostic:"no native dispatch after admission cancellation"},
@@ -31,7 +31,7 @@ for (const probe of probes) {
   try {
     const module = join(directory, "reader-pdf-network.mjs"), runner = join(directory, "test.mjs");
     writeFileSync(module, pieces.join(probe.after));
-    const imported = "../static/reader/pdf/reader-pdf-network.mjs";
+    const imported = "../../../static/reader/pdf/reader-pdf-network.mjs";
     if (probe.test.split(imported).length !== 2) throw new Error("expected exactly one PDF network import");
     writeFileSync(runner, probe.test.replace(imported, "./reader-pdf-network.mjs"));
     const result = spawnSync(process.execPath, [runner], {encoding:"utf8", timeout:15000});

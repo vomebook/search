@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createPdfFetchPolicy, createPdfRangeCache, openPdfRangeTask, preparePdfInitialRange}
-  from '../static/reader/pdf/reader-pdf-network.mjs';
+  from '../../../static/reader/pdf/reader-pdf-network.mjs';
 
 globalThis.location = {href:'https://reader.test/'};
 const originalFetch = globalThis.fetch;

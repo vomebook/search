@@ -6,7 +6,10 @@ Run these commands from the repository root with Node 26:
   node scripts/reader/check_pdf_book_client_coverage.mjs
   node scripts/reader/check_request_manager_coverage.mjs
   node scripts/reader/check_document_loader_coverage.mjs
+  node scripts/reader/check_pdf_network_coverage.mjs
+  node scripts/reader/check_pdf_network_mutations.mjs
 
+The PDF network gates are documented in `tests/reader/pdf-network/README.txt`.
 The request and document loading gates are documented in
 `tests/reader/transport/README.txt`.
 

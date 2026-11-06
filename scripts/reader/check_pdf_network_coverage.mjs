@@ -11,8 +11,8 @@ const result = spawnSync(process.execPath, [
   "--test", "--test-concurrency=1", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/reader/pdf/reader-pdf-network.mjs",
   ...minimum.map((value,index)=>`--test-coverage-${["lines","branches","functions"][index]}=${value}`),
-  "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_sparse_ranges.mjs",
-  "tests/test_reader_pdf_network_contract.mjs"
+  "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs",
+  "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs"
 ], { encoding: "utf8" });
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
@@ -26,9 +26,9 @@ const lines = text.split(/\r?\n/);
 const skipped = lines.filter(line => /^# skipped(?:\s|$)/.test(line));
 const todo = lines.filter(line => /^# todo(?:\s|$)/.test(line));
 const required = [
-  ["tests/test_reader_pdf_backpressure.mjs", "429 feedback, shared spacing, bounded retry, version consistency and cancellation passed"],
-  ["tests/test_reader_pdf_network_contract.mjs", "PDF network contracts: cache identity, safe revalidation and live cancellation passed"],
-  ["tests/test_reader_pdf_sparse_ranges.mjs", "Sparse PDF detection, exact demand ranges, bounded concurrency and disposal passed"]
+  ["tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "429 feedback, shared spacing, bounded retry, version consistency and cancellation passed"],
+  ["tests/reader/pdf-network/test_reader_pdf_network_contract.mjs", "PDF network contracts: cache identity, safe revalidation and live cancellation passed"],
+  ["tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs", "Sparse PDF detection, exact demand ranges, bounded concurrency and disposal passed"]
 ];
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value,index)=>value < minimum[index]) ||
     skipped.length !== 1 || skipped[0] !== "# skipped 0" || todo.length !== 1 || todo[0] !== "# todo 0" ||
