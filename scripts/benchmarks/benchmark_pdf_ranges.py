@@ -8,7 +8,8 @@ Examples:
 
 The local-server mode uses a supplied immutable PDF and exact 206 responses.
 The opt-in live mode opens the real HF Reader/source and modifies only the
-Reader's in-memory network module through Playwright routing, never the source.
+Reader's in-memory network and range-hints modules through Playwright routing,
+never the source.
 """
 from __future__ import annotations
 
@@ -122,12 +123,16 @@ def measure(browser, target, mode, *, local=False, variant='baseline', target_pa
         route_local_vendor_fallback(page)
     if candidate_network:
         code = candidate_network.read_text(encoding='utf-8')
-        if variant == 'baseline':
-            code = re.sub(r'^(const PDF_MIN_SPARSE_PAGES = )\d+;', r'\g<1>1000000;', code, count=1, flags=re.M)
-            if 'const PDF_MIN_SPARSE_PAGES = 1000000;' not in code:
-                raise ValueError('adaptive range threshold cannot be isolated')
         context.route(re.compile(r'.*/static/reader/pdf/reader-pdf-network(?:\.[0-9a-f]{12})?\.mjs(?:\?.*)?$'),
                       lambda route: route.fulfill(body=code, content_type='text/javascript'))
+        hints = candidate_network.with_name('reader-pdf-range-hints.mjs').read_text(encoding='utf-8')
+        if variant == 'baseline':
+            hints, substitutions = re.subn(r'^(const PDF_MIN_SPARSE_PAGES = )\d+;', r'\g<1>1000000;',
+                                           hints, count=1, flags=re.M)
+            if substitutions != 1:
+                raise ValueError('adaptive range threshold cannot be isolated')
+        context.route(re.compile(r'.*/static/reader/pdf/reader-pdf-range-hints(?:\.[0-9a-f]{12})?\.mjs(?:\?.*)?$'),
+                      lambda route: route.fulfill(body=hints, content_type='text/javascript'))
     before = time.monotonic()
     if local:
         # Route inside the page's fetch call so the browser performs the actual
@@ -207,7 +212,7 @@ def main():
     parser.add_argument('--expected-etag', help='require this exact strong source validator')
     parser.add_argument('--target-page', type=int, default=50)
     parser.add_argument('--candidate-network', type=Path, required=True,
-                        help='inject this local network module into the live site, without deployment')
+                        help='inject this network module and its sibling range-hints module without deployment')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if args.pairs < 1 or args.pairs > 5 or args.delay_ms < 0:
@@ -221,6 +226,8 @@ def main():
         report['source_bytes'] = args.file.stat().st_size
     if args.candidate_network:
         report['candidate_sha256'] = hashlib.sha256(args.candidate_network.read_bytes()).hexdigest()
+        report['candidate_hints_sha256'] = hashlib.sha256(
+            args.candidate_network.with_name('reader-pdf-range-hints.mjs').read_bytes()).hexdigest()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as playwright, contextlib.ExitStack() as stack:
         browser = playwright.chromium.launch(headless=True, args=['--no-sandbox'])
@@ -234,7 +241,7 @@ def main():
                         with pdf_server(args.file, delay_ms=args.delay_ms) as (origin, stats, lock):
                             # Fixed chunk sizes are injected only for the
                             # comparison. An adaptive candidate replaces only
-                            # the isolated browser's network module.
+                            # the isolated browser's network and hints modules.
                             def run_local():
                                 return measure(browser, local_origin, 'local', local=True, pdf_origin=origin,
                                                variant=variant, target_page=args.target_page,

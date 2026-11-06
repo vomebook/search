@@ -7,8 +7,10 @@ import { join } from "node:path";
 // coverage. Mutate isolated modules only; never write the production source.
 const source = readFileSync("static/reader/pdf/reader-pdf-network.mjs", "utf8");
 const cacheSource = readFileSync("static/reader/pdf/reader-pdf-range-cache.mjs", "utf8");
+const hintsSource = readFileSync("static/reader/pdf/reader-pdf-range-hints.mjs", "utf8");
 const backpressure = readFileSync("tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "utf8");
 const contracts = readFileSync("tests/reader/pdf-network/test_reader_pdf_network_contract.mjs", "utf8");
+const hintContracts = readFileSync("tests/reader/pdf-network/test_pdf_range_hints_contract.mjs", "utf8");
 const probes = [{name:"post-admission cancellation", test:backpressure, before:
   "        signal.throwIfAborted();\n      }\n      response = null;", after:
   "      }\n      response = null;", diagnostic:"no native dispatch after admission cancellation"},
@@ -21,21 +23,32 @@ const probes = [{name:"post-admission cancellation", test:backpressure, before:
 {name:"cache input ownership", test:contracts, cache:true, before:"    const retained = value.slice();",
   after:"    const retained = value;", diagnostic:"AssertionError"},
 {name:"cache output ownership", test:contracts, cache:true, before:"return row.bytes.slice(begin - row.begin, end - row.begin);",
-  after:"return row.bytes.subarray(begin - row.begin, end - row.begin);", diagnostic:"detached ArrayBuffer"}];
+  after:"return row.bytes.subarray(begin - row.begin, end - row.begin);", diagnostic:"detached ArrayBuffer"},
+{name:"sparse tree in stream", test:hintContracts, hints:true, before:"  const stop = stream ? stream.index : head.length;\n  let object;",
+  after:"  const stop = head.length;\n  let object;", diagnostic:"fake sparse tree in stream"},
+{name:"small-file fallback", test:hintContracts, hints:true, before:"!Number.isSafeInteger(total) || total < 8 * 1024 * 1024 ||",
+  after:"!Number.isSafeInteger(total) || total < 0 ||", diagnostic:"small files must retain fallback"}];
 let killed = 0, survived = 0, errors = 0;
 for (const probe of probes) {
-  const pieces = (probe.cache ? cacheSource : source).split(probe.before);
+  const pieces = (probe.hints ? hintsSource : probe.cache ? cacheSource : source).split(probe.before);
   if (pieces.length !== 2) {
     console.error(`${probe.name}: expected exactly one mutation target`);errors++;continue;
   }
   const directory = mkdtempSync(join(tmpdir(), "reader-pdf-mutation-"));
   try {
     const module = join(directory, "reader-pdf-network.mjs"), runner = join(directory, "test.mjs");
-    writeFileSync(module, probe.cache ? source : pieces.join(probe.after));
+    writeFileSync(module, probe.cache || probe.hints ? source : pieces.join(probe.after));
     writeFileSync(join(directory, "reader-pdf-range-cache.mjs"), probe.cache ? pieces.join(probe.after) : cacheSource);
+    writeFileSync(join(directory, "reader-pdf-range-hints.mjs"), probe.hints ? pieces.join(probe.after) : hintsSource);
     const imported = "../../../static/reader/pdf/reader-pdf-network.mjs";
     if (probe.test.split(imported).length !== 2) throw new Error("expected exactly one PDF network import");
-    writeFileSync(runner, probe.test.replace(imported, "./reader-pdf-network.mjs"));
+    let test = probe.test.replace(imported, "./reader-pdf-network.mjs");
+    if (probe.hints) {
+      const dependency = "../../../static/reader/pdf/reader-pdf-range-hints.mjs";
+      if (test.split(dependency).length !== 2) throw new Error("expected exactly one PDF hints import");
+      test = test.replace(dependency, "./reader-pdf-range-hints.mjs");
+    }
+    writeFileSync(runner, test);
     const result = spawnSync(process.execPath, [runner], {encoding:"utf8", timeout:15000});
     if (result.error || result.signal || result.status === null) {
       errors++;console.error(`${probe.name}: execution failed or timed out`);continue;
