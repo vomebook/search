@@ -20,6 +20,7 @@
     "static/reader/formats/reader-format-adapters.js",
     "static/reader/ui/reader-document-styles.mjs",
     "static/reader/pdf/pdf-first-page-worker-adapter.mjs",
+    "static/reader/pdf/reader-pdf-range-cache.mjs",
     "static/search/search-session.js",
     "static/search/reader-navigation.js",
     "static/search/download-controller.js",
