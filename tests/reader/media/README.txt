@@ -3,7 +3,7 @@ Reader media format contracts
 
 Run from the repository root with Node 26:
 
-  node scripts/check_reader_media_coverage.mjs
+  node scripts/reader/check_reader_media_coverage.mjs
 
 These 15 named contracts use synthetic media elements, fake timers and fixture
 responses; they cover formatting, dynamic argument forwarding, metadata, retry,

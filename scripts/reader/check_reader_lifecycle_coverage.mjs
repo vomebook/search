@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from './check_tap_contracts.mjs';
+import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // Node 26/V8, the lifecycle module only under synthetic contracts; excludes host.
 const minimum = [100, 97.47, 100];

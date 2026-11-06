@@ -3,7 +3,7 @@ Reader DOM-search source-module contracts
 
 Run from the repository root after installing Playwright Chromium and Firefox:
 
-  python3 -B scripts/check_reader_dom_search_contracts.py
+  python3 -B scripts/reader/check_reader_dom_search_contracts.py
 
 Seven named contracts each run once in each browser against the actual
 reader-dom-search.mjs source, using only synthetic local DOM. They cover literal

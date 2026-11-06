@@ -45,7 +45,7 @@ jobs:
         run: |
           node tests/test_reader_architecture.js
           node tests/test_reader_regression.js
-          node scripts/check_adapter_coverage.mjs
+          node scripts/reader/check_adapter_coverage.mjs
           node scripts/search/check_search_size_coverage.mjs
           node scripts/search/check_search_record_path_coverage.mjs
           node scripts/search/check_search_highlight_coverage.mjs
@@ -62,15 +62,15 @@ jobs:
           node scripts/check_search_filter_equality_baseline.mjs
           node scripts/check_search_folder_merge_baseline.mjs
           node scripts/check_search_readability_baseline.mjs
-          node scripts/check_reader_navigation_baseline.mjs
+          node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
           node tests/test_reader_preload.js
           node tests/test_reader_chapter_search.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
-          node scripts/check_reader_lifecycle_coverage.mjs
-          node scripts/check_reader_media_coverage.mjs
-          node scripts/check_reader_text_coverage.mjs
+          node scripts/reader/check_reader_lifecycle_coverage.mjs
+          node scripts/reader/check_reader_media_coverage.mjs
+          node scripts/reader/check_reader_text_coverage.mjs
           node scripts/reader/check_pdf_book_client_coverage.mjs
           node tests/reader/pdf-search/test_reader_ocr_transport.mjs
           node tests/reader/pdf-search/test_reader_book_text.mjs
@@ -101,7 +101,7 @@ jobs:
           node tests/reader/djvu/test_reader_djvu_worker.mjs
           node tests/reader/djvu/test_reader_djvu_source_integrity.mjs
           node tests/reader/djvu/test_reader_djvu_scheduler.mjs
-          node scripts/check_reader_djvu_contracts.mjs
+          node scripts/reader/check_reader_djvu_contracts.mjs
           python3 -B -m unittest -v tests.test_reader_djvu_benchmark tests.test_reader_djvu_range_browser
           node tests/reader/images/test_reader_image_memory.mjs
       - name: Run multi-format preparation and navigation gates
@@ -156,7 +156,7 @@ jobs:
       - name: Check DOM-search source contracts in Chromium and Firefox
         run: |
           python3 -B -m unittest -v tests.test_reader_dom_search_gate
-          python3 -B scripts/check_reader_dom_search_contracts.py
+          python3 -B scripts/reader/check_reader_dom_search_contracts.py
       - name: Run PDF theme browser gate
         run: |
           python3 -B -m unittest -v -k test_pdf_page tests.test_reader_style
@@ -283,9 +283,9 @@ jobs:
           node tests/test_reader_chapter_search.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
-          node scripts/check_reader_lifecycle_coverage.mjs
-          node scripts/check_reader_media_coverage.mjs
-          node scripts/check_reader_text_coverage.mjs
+          node scripts/reader/check_reader_lifecycle_coverage.mjs
+          node scripts/reader/check_reader_media_coverage.mjs
+          node scripts/reader/check_reader_text_coverage.mjs
           node scripts/reader/check_pdf_book_client_coverage.mjs
           node tests/reader/pdf-search/test_reader_ocr_transport.mjs
           node tests/reader/pdf-search/test_reader_book_text.mjs
@@ -296,7 +296,7 @@ jobs:
           node tests/test_reader_heading_cache.js
           node tests/test_reader_engine_preload.js
           node tests/test_reader_regression.js
-          node scripts/check_adapter_coverage.mjs
+          node scripts/reader/check_adapter_coverage.mjs
           node scripts/search/check_search_size_coverage.mjs
           node scripts/search/check_search_record_path_coverage.mjs
           node scripts/search/check_search_highlight_coverage.mjs
@@ -312,7 +312,7 @@ jobs:
           node scripts/check_search_filter_equality_baseline.mjs
           node scripts/check_search_folder_merge_baseline.mjs
           node scripts/check_search_readability_baseline.mjs
-          node scripts/check_reader_navigation_baseline.mjs
+          node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
           node tests/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
@@ -337,7 +337,7 @@ jobs:
           node tests/reader/djvu/test_reader_djvu_worker.mjs
           node tests/reader/djvu/test_reader_djvu_source_integrity.mjs
           node tests/reader/djvu/test_reader_djvu_scheduler.mjs
-          node scripts/check_reader_djvu_contracts.mjs
+          node scripts/reader/check_reader_djvu_contracts.mjs
           python3 -B -m unittest -v tests.test_reader_djvu_benchmark tests.test_reader_djvu_range_browser
           node tests/reader/images/test_reader_image_memory.mjs
           python3 -B -m unittest -v tests.test_reader_pdf_hybrid
@@ -377,7 +377,7 @@ jobs:
         working-directory: huggingface-search
         run: |
           python3 -B -m unittest -v tests.test_reader_dom_search_gate
-          python3 -B scripts/check_reader_dom_search_contracts.py
+          python3 -B scripts/reader/check_reader_dom_search_contracts.py
       - name: Run PDF theme browser gate
         working-directory: huggingface-search
         run: |
