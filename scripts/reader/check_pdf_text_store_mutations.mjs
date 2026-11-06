@@ -20,7 +20,11 @@ const probes=[
   {name:'in-flight limit removed',before:'writes >= 2 || pendingBytes+bytes > 1024*1024',
     after:'false',diagnostic:'Expected values to be strictly deep-equal'},
   {name:'stored byte count not validated',before:'entry.bytes === cost(entry.id,entry.text) &&',
-    after:'true &&',diagnostic:'null'}
+    after:'true &&',diagnostic:'null'},
+  {name:'corrupt replacement accounting',before:'if (!validStoredCost(previous.result) || previous.result.bytes > ledger.bytes || ledger.count < 1) return reset();',
+    after:'if (false) return reset();',diagnostic:'replacement must purge untrusted accounting'},
+  {name:'corrupt eviction accounting',before:'if (!validStoredCost(row.value) || row.value.bytes > ledger.bytes || ledger.count < 1) return reset();',
+    after:'if (false) return reset();',diagnostic:'eviction must purge untrusted accounting'}
 ];
 const originalImport='../../../static/reader/pdf/reader-pdf-text-store.mjs';
 let killed=0,survived=0,errors=0;

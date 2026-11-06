@@ -75,6 +75,12 @@ export function createPdfTextStore(key, options = {}) {
       typeof entry.text === "string" && entry.bytes === cost(entry.id,entry.text) && entry.bytes <= limits.entryBytes &&
       Number.isFinite(entry.savedAt) && entry.savedAt <= now() && now()-entry.savedAt < limits.ttl;
   }
+  /** @param {{schema: number, id: string, key: string, page: number, text: string, bytes: number, savedAt: number} | null} entry */
+  function validStoredCost(entry) {
+    return entry?.schema === 1 && typeof entry.id === "string" && typeof entry.key === "string" &&
+      Number.isSafeInteger(entry.page) && entry.page > 0 && entry.id === entry.key+":"+entry.page &&
+      typeof entry.text === "string" && Number.isSafeInteger(entry.bytes) && entry.bytes === cost(entry.id,entry.text);
+  }
   /** @param {number} page */
   async function get(page) {
     if (!Number.isSafeInteger(page) || page < 1) return null;
@@ -101,17 +107,24 @@ export function createPdfTextStore(key, options = {}) {
           if (!ledger || !Number.isSafeInteger(ledger.bytes) || !Number.isSafeInteger(ledger.count) || ledger.bytes < 0 || ledger.count < 0) {
             pages.clear(); ledger = {id:"total",bytes:0,count:0,prunedAt:timestamp};
           }
+          const commit = () => {
+            pages.put({schema:1,id,key,page,text,bytes,savedAt:timestamp});
+            ledger.bytes += bytes; ledger.count++;
+            budgets.put(ledger); finish(true);
+          };
+          const reset = () => {
+            // A corrupt row makes the aggregate budget untrustworthy. Clear
+            // both its records and counters in this transaction before reuse.
+            pages.clear(); ledger = {id:"total",bytes:0,count:0,prunedAt:timestamp};
+            commit();
+          };
           const previous = pages.get(id);
           previous.onsuccess = () => {
             if (previous.result) {
-              ledger.bytes = Math.max(0,ledger.bytes-(previous.result.bytes || 0));
-              ledger.count = Math.max(0,ledger.count-1); pages.delete(id);
+              if (!validStoredCost(previous.result) || previous.result.bytes > ledger.bytes || ledger.count < 1) return reset();
+              ledger.bytes -= previous.result.bytes;
+              ledger.count--; pages.delete(id);
             }
-            const commit = () => {
-              pages.put({schema:1,id,key,page,text,bytes,savedAt:timestamp});
-              ledger.bytes += bytes; ledger.count++;
-              budgets.put(ledger); finish(true);
-            };
             const full = () => ledger.bytes+bytes > limits.bytes || ledger.count >= limits.entries;
             const prune = timestamp-ledger.prunedAt >= 3600000;
             if (!full() && !prune) return commit();
@@ -119,8 +132,9 @@ export function createPdfTextStore(key, options = {}) {
             cursor.onsuccess = () => {
               const row = cursor.result;
               if (row && (full() || (prune && timestamp-row.value.savedAt >= limits.ttl))) {
-                ledger.bytes = Math.max(0,ledger.bytes-(row.value.bytes || 0));
-                ledger.count = Math.max(0,ledger.count-1);
+                if (!validStoredCost(row.value) || row.value.bytes > ledger.bytes || ledger.count < 1) return reset();
+                ledger.bytes -= row.value.bytes;
+                ledger.count--;
                 row.delete(); row.continue(); return;
               }
               ledger.prunedAt = timestamp;
