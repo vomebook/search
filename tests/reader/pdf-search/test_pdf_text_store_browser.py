@@ -33,6 +33,126 @@ class PdfTextStoreBrowserTests(unittest.TestCase):
         cls.browser = browser.launch(headless=True)
         cls.addClassCleanup(cls.browser.close)
 
+    def test_failed_write_waits_for_abort_and_rolls_back(self):
+        for kind, cancel in [('async', False), ('async', True), ('sync', False)]:
+            with self.subTest(kind=kind, cancel=cancel):
+                context = self.browser.new_context()
+                try:
+                    page = context.new_page()
+                    errors = []
+                    page.on('pageerror', lambda error: errors.append(str(error)))
+                    page.goto(self.origin + '/static/reader.html?ext=txt', wait_until='domcontentloaded')
+                    result = page.evaluate('''async ({kind,cancel}) => {
+                      const {createPdfTextStore}=await import('/static/reader/pdf/reader-pdf-text-store.mjs');
+                      const name='voiceofml-pdf-search-text', log=[];
+                      let target, injected=0, resolveDone, timer, wrapped=0;
+                      const done=new Promise(resolve=>resolveDone=resolve);
+                      const transaction=IDBDatabase.prototype.transaction;
+                      const put=IDBObjectStore.prototype.put, get=IDBObjectStore.prototype.get;
+                      const store=createPdfTextStore('a'.repeat(64),{now:()=>10000});
+                      const timeout=p=>Promise.race([p,new Promise((_,reject)=>
+                        timer=setTimeout(()=>reject(Error('transaction timeout')),4000))])
+                        .finally(()=>clearTimeout(timer));
+                      const snapshot=async()=>{
+                        const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(name,1);
+                          r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+                        try {return await new Promise((resolve,reject)=>{
+                          const tx=db.transaction(['pages','budget']);
+                          const pages=tx.objectStore('pages').getAll(),budget=tx.objectStore('budget').getAll();
+                          tx.oncomplete=()=>resolve({pages:pages.result,budget:budget.result});
+                          tx.onabort=()=>reject(tx.error);
+                        });} finally {db.close();}
+                      };
+                      const wrapHandler=()=>{
+                        const handler=target.onerror;
+                        if(typeof handler!=='function') throw Error('production onerror not bound');
+                        const wrapper=function(e) {
+                          if(e.target===badRequest) log.push('handler '+e.defaultPrevented);
+                          return handler.call(this,e);
+                        };
+                        target.onerror=wrapper;
+                        if(target.onerror!==wrapper) throw Error('wrapper not bound');
+                        wrapped++;
+                      };
+                      let badRequest;
+                      try {
+                        if(!await store.put(1,'seed text')) throw Error('seed failed');
+                        const before=await snapshot();
+                        IDBDatabase.prototype.transaction=function(...args) {
+                          const tx=transaction.apply(this,args);
+                          if(this.name===name && args[1]==='readwrite' && !target) {
+                            target=tx;
+                            for(const type of ['error','abort','complete']) tx.addEventListener(type,e=>{
+                              log.push('tx '+type+(type==='error'?' '+e.target.error?.name:''));
+                              if(type==='abort'||type==='complete') resolveDone(type);
+                            });
+                          }
+                          return tx;
+                        };
+                        IDBObjectStore.prototype.put=function(...args) {
+                          const r=put.apply(this,args);
+                          if(kind==='async' && this.transaction===target && this.name==='pages' && !injected) {
+                            injected++;
+                            wrapHandler();
+                            const row={id:'fixture-duplicate'};
+                            this.add(row);
+                            const bad=badRequest=this.add(row);
+                            bad.addEventListener('error',e=>{
+                              log.push('request error '+bad.error.name);
+                              if(cancel) e.preventDefault();
+                            });
+                          }
+                          return r;
+                        };
+                        IDBObjectStore.prototype.get=function(...args) {
+                          if(kind==='sync' && this.transaction===target && this.name==='budget' && !injected) {
+                            injected++;
+                            wrapHandler();
+                            target.objectStore('pages').put({id:'fixture-sync'});
+                            log.push('sync throw');
+                            throw Error('fixture synchronous get');
+                          }
+                          return get.apply(this,args);
+                        };
+                        const pending=store.put(2,'hello').then(value=>{
+                          log.push('promise '+value);return value;
+                        },error=>{log.push('promise reject '+error.name);return 'reject';});
+                        const result=await timeout(pending), terminal=await timeout(done);
+                        const after=await snapshot();
+                        return {result,terminal,log,injected,wrapped,before,after};
+                      } finally {
+                        clearTimeout(timer);
+                        try { target?.abort(); } catch (_) {}
+                        store.dispose();
+                        IDBDatabase.prototype.transaction=transaction;
+                        IDBObjectStore.prototype.put=put;
+                        IDBObjectStore.prototype.get=get;
+                      }
+                    }''', {'kind': kind, 'cancel': cancel})
+                    self.assertEqual(result['injected'], 1, result)
+                    self.assertEqual(result['result'], False, result)
+                    self.assertEqual(result['terminal'], 'abort', result)
+                    self.assertEqual(result['wrapped'], 1, result)
+                    log = result['log']
+                    self.assertNotIn('tx complete', log, result)
+                    self.assertLess(log.index('tx abort'), log.index('promise false'), result)
+                    if kind == 'sync':
+                        self.assertLess(log.index('sync throw'), log.index('tx abort'), result)
+                    else:
+                        request = log.index('request error ConstraintError')
+                        tx_error = log.index('tx error ConstraintError')
+                        handler = log.index('handler ' + str(cancel).lower())
+                        self.assertLess(request, tx_error, result)
+                        self.assertLess(tx_error, handler, result)
+                        self.assertLess(handler, log.index('tx abort'), result)
+                    self.assertEqual(len(result['before']['pages']), 1, result)
+                    self.assertEqual(len(result['before']['budget']), 1, result)
+                    self.assertEqual(result['after'], result['before'])
+                    self.assertFalse(any(row['id'] == 'a' * 64 + ':2' for row in result['after']['pages']))
+                    self.assertEqual(errors, [])
+                finally:
+                    context.close()
+
     def test_native_indexeddb_isolation_expiry_and_concurrent_budget(self):
         context = self.browser.new_context()
         self.addCleanup(context.close)

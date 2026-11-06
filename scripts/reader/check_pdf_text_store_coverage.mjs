@@ -6,6 +6,10 @@ import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 // this floor leaves a small margin from the measured local 95.16%.
 const minimum=[100,94.50,89.19];
 const required=[
+  'synchronous work throw aborts queued write before promise settles',
+  'duplicate add defaults to abort before promise settles',
+  'synthetic transaction error completes before settlement',
+  'synthetic transaction error aborts before settlement',
   'keys are stable, identity-bound and reject invalid inputs',
   'writes, replacements and isolated keys survive reopen without leaking stats',
   'entry, age, time reversal and invalid arguments fail closed',
@@ -36,7 +40,7 @@ if(result.status!==0||rows.length!==1||rows[0].some((value,index)=>value<minimum
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
     lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||
-    !['1..11','# tests 11','# pass 11','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
+    !['1..15','# tests 15','# pass 15','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
     ['# tests ','# pass ','# fail ','# cancelled '].some(prefix=>lines.filter(line=>line.startsWith(prefix)).length!==1)){
   console.error('PDF text-store coverage requires named contracts and exactly one source row above each minimum');
   process.exitCode=1;

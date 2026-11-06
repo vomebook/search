@@ -47,6 +47,14 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
             mirror = 'python3 -B scripts/ci/ci_ubuntu_mirror.py'
             self.assertLess(job.index(mirror), job.index('playwright install-deps'))
             self.assertIn('name: Install Playwright system dependencies\n        timeout-minutes: 15', job)
+        for job, project, following in ((github, 'github', 'python -B -m unittest -v tests.test_seo_catalog'),
+                                        (hf, 'hf', None)):
+            runner = f'python -B run_static_gate_shards.py --project {project}'
+            self.assertIn('python -B -m unittest -v tests.test_static_shards_runner', job)
+            self.assertEqual(job.count(runner), 1)
+            self.assertNotIn('python -B -m unittest -v tests.test_static_checks', job)
+            if following:
+                self.assertLess(job.index(runner), job.index(following))
         self.assertNotIn('path: node_modules', hf)
         self.assertNotIn('continue-on-error:', hf)
         self.assertNotIn('if:', hf)
