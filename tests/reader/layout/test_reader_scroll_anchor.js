@@ -6,7 +6,7 @@ const vm = require("vm");
 function loadManager(options) {
   const sandbox = { self: {} };
   sandbox.self = sandbox;
-  const filename = path.join(__dirname, "../static/reader/ui/reader-scroll-anchor.js");
+  const filename = path.join(__dirname, "../../../static/reader/ui/reader-scroll-anchor.js");
   vm.runInNewContext(fs.readFileSync(filename, "utf8"), sandbox, { filename });
   return sandbox.VoiceOfMLReaderScroll.createScrollAnchorManager(options);
 }
@@ -147,7 +147,7 @@ function main() {
   assert.strictEqual(noObserver.capture(), null);
   noObserver.dispose();
 
-  const filename = path.join(__dirname, "../static/reader/ui/reader-scroll-anchor.js");
+  const filename = path.join(__dirname, "../../../static/reader/ui/reader-scroll-anchor.js");
   const fallback = {};
   vm.runInNewContext(fs.readFileSync(filename, "utf8"), fallback, { filename });
   assert.strictEqual(typeof fallback.VoiceOfMLReaderScroll.createScrollAnchorManager, "function");

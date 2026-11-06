@@ -233,7 +233,10 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_both_sites_run_reader_image_loader_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_reader_image_loader_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_reader_image_loader_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node tests/reader/images/test_reader_image_loader.mjs'), 2)
+        self.assertEqual(workflow.count('node tests/reader/images/test_reader_image_memory.mjs'), 2)
+        self.assertNotIn('node scripts/check_reader_image_loader_coverage.mjs', workflow)
 
     def test_both_sites_run_reader_lifecycle_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -259,6 +262,11 @@ class HfSearchProjectionCiTests(unittest.TestCase):
             self.assertEqual(workflow.count(f'node scripts/reader/{gate}'), 2)
             self.assertNotIn(f'node scripts/{gate}', workflow)
         self.assertEqual(workflow.count('node --test tests/reader/pdf-network/test_pdf_range_cache_release.mjs'), 2)
+
+    def test_both_sites_run_grouped_reader_core_gate(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        self.assertEqual(workflow.count('node scripts/reader/check_reader_core_coverage.mjs'), 2)
+        self.assertNotIn('node scripts/check_reader_core_coverage.mjs', workflow)
 
     def test_both_sites_run_pdf_book_client_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()

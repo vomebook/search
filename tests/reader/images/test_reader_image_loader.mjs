@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createReaderImageLoader } from "../static/reader/formats/reader-image-loader.mjs";
+import { createReaderImageLoader } from "../../../static/reader/formats/reader-image-loader.mjs";
 
 const oldLocation = globalThis.location;
 const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");

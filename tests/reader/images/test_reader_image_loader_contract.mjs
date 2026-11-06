@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {createReaderImageLoader} from '../static/reader/formats/reader-image-loader.mjs';
+import {createReaderImageLoader} from '../../../static/reader/formats/reader-image-loader.mjs';
 
 function fixture() {
   const controller = new AbortController(), tracked = new Set(), requests = [];
