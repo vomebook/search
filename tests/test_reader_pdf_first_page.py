@@ -1146,11 +1146,20 @@ class PdfFirstPageTests(unittest.TestCase):
             page.add_script_tag(url=source+'/search/static/reader/core/reader-store.js')
             page.evaluate('''async source=>{await VoiceOfMLReaderStore.clearHistory();
               await VoiceOfMLReaderStore.put({url:source,page:50,pageCount:130,zoom:100});}''',SOURCE)
-            page.route('**/static/reader/pdf/reader-pdf-network.mjs*',lambda route:route.fulfill(
-                content_type='text/javascript',body=(ROOT/'static/reader/pdf/reader-pdf-network.mjs').read_text().replace(
-                  'if (!(bytes instanceof Uint8Array) || !Number.isSafeInteger(total) || total < 8 * 1024 * 1024) return false;',
-                  'if (!(bytes instanceof Uint8Array) || !Number.isSafeInteger(total) || total < 8 * 1024 * 1024) return false; return true;')))
+            # Force the candidate only after validating the bytes and size;
+            # fail closed if an extraction or future edit moves the hook again.
+            hint=(ROOT/'static/reader/pdf/reader-pdf-range-hints.mjs').read_text()
+            needle='if (!(bytes instanceof Uint8Array) || !Number.isSafeInteger(total) || total < 8 * 1024 * 1024) return false;'
+            self.assertEqual(hint.count(needle),1,'staged candidate test hook must exist exactly once')
+            forced=hint.replace(needle,needle+' return true;')
+            self.assertNotEqual(forced,hint)
+            routed=[]
+            def force_candidate(route):
+                routed.append(route.request.url)
+                route.fulfill(content_type='text/javascript',body=forced)
+            page.route('**/static/reader/pdf/reader-pdf-range-hints.mjs*',force_candidate)
             self.open(page,source)
+            self.assertEqual(len(routed),1,'forced candidate module must be served')
             page.locator('.reader-page[data-page="50"] canvas.ready').wait_for(timeout=30000)
             page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'",timeout=30000)
             self.assertEqual(page.locator('#page-number').get_attribute('max'),'130')
