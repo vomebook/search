@@ -6,7 +6,7 @@ const result = spawnSync(process.execPath, [
   "--test", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/reader/formats/reader-format-adapters.js",
   "--test-coverage-lines=100", "--test-coverage-branches=100", "--test-coverage-functions=100",
-  "tests/test_reader_adapter_registry.js"
+  "tests/reader/adapters/test_reader_adapter_registry.js"
 ], { encoding: "utf8", env: { ...process.env, READER_V8_COVERAGE: "1" } });
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);

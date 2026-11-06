@@ -9,7 +9,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('reader_dom_gate', ROOT / 'scripts/check_reader_dom_search_contracts.py')
+SPEC = importlib.util.spec_from_file_location('reader_dom_gate', ROOT / 'scripts/reader/check_reader_dom_search_contracts.py')
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
 
@@ -59,7 +59,7 @@ class ReaderDomSearchGateTests(unittest.TestCase):
         # deliberately incomplete suite so the real subprocess path is tested.
         with tempfile.TemporaryDirectory(prefix='dom-gate-negative-') as directory:
             root = Path(directory)
-            for name in ('scripts/check_reader_dom_search_contracts.py',
+            for name in ('scripts/reader/check_reader_dom_search_contracts.py',
                          'static/reader/search/reader-dom-search.mjs'):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,7 +73,7 @@ class ReaderDomSearchContracts(unittest.TestCase):
     @unittest.skip("synthetic unavailable browser")
     def test_literal_escape_snippets_and_pagination(self): pass
 ''')
-            result = subprocess.run([sys.executable, '-B', str(root / 'scripts/check_reader_dom_search_contracts.py')],
+            result = subprocess.run([sys.executable, '-B', str(root / 'scripts/reader/check_reader_dom_search_contracts.py')],
                                     cwd=root, capture_output=True, text=True, timeout=30)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('DOM-search browser contracts incomplete: chromium', result.stdout + result.stderr)

@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function checkRegistry() {
-  const filename = path.resolve(__dirname, "../static/reader/formats/reader-format-adapters.js");
+  const filename = path.resolve(__dirname, "../../../static/reader/formats/reader-format-adapters.js");
   const sandbox = {};
   sandbox.self = sandbox;
   const source = fs.readFileSync(filename, "utf8");

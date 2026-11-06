@@ -177,11 +177,13 @@ class StaticGateTests(unittest.TestCase):
         source = self.root / "static/reader/formats/reader-format-adapters.js"
         source.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "static/reader/formats/reader-format-adapters.js", source)
-        shutil.copyfile(ROOT / "tests/test_reader_adapter_registry.js", self.root / "tests/test_reader_adapter_registry.js")
-        shutil.copyfile(ROOT / "scripts/check_adapter_coverage.mjs", self.root / "scripts/check_adapter_coverage.mjs")
-        check = ["node", "scripts/check_adapter_coverage.mjs"]
+        test = self.root / "tests/reader/adapters/test_reader_adapter_registry.js"
+        gate = self.root / "scripts/reader/check_adapter_coverage.mjs"
+        for path in (test, gate):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path.relative_to(self.root), path)
+        check = ["node", "scripts/reader/check_adapter_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "reader-format-adapters.js")
-        test = self.root / "tests/test_reader_adapter_registry.js"
         original = test.read_text()
         name = "reader adapter registry"
         anchor = 'require("node:test")("' + name + '", runContracts)'
@@ -1397,8 +1399,8 @@ class StaticGateTests(unittest.TestCase):
                 self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_reader_navigation_baseline_gate_fails_closed(self):
-        paths = ["static/search/reader-navigation.js", "scripts/check_reader_navigation_baseline.mjs",
-                 "tests/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
+        paths = ["static/search/reader-navigation.js", "scripts/search/check_reader_navigation_baseline.mjs",
+                 "tests/search/reader-navigation/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1426,8 +1428,8 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "all named baseline contracts")
 
     def test_reader_navigation_coverage_gate_requires_exact_source_row_and_thresholds(self):
-        paths = ["static/search/reader-navigation.js", "scripts/check_reader_navigation_baseline.mjs",
-                 "tests/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
+        paths = ["static/search/reader-navigation.js", "scripts/search/check_reader_navigation_baseline.mjs",
+                 "tests/search/reader-navigation/test_reader_navigation_baseline.mjs", "scripts/check_tap_contracts.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1544,7 +1546,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_reader_text_coverage_gate_fails_closed(self):
         paths = ['static/reader/formats/reader-text-format.mjs',
-                 'scripts/check_reader_text_coverage.mjs', 'scripts/check_tap_contracts.mjs',
+                 'scripts/reader/check_reader_text_coverage.mjs', 'scripts/check_tap_contracts.mjs',
                  'tests/reader/text/test_reader_text_baseline.mjs',
                  'tests/reader/text/test_reader_text_faults.mjs']
         for path in paths:
@@ -1586,7 +1588,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_reader_media_coverage_gate_fails_closed(self):
         paths = ['static/reader/formats/reader-media-format.mjs',
-                 'scripts/check_reader_media_coverage.mjs', 'scripts/check_tap_contracts.mjs',
+                 'scripts/reader/check_reader_media_coverage.mjs', 'scripts/check_tap_contracts.mjs',
                  'tests/reader/media/test_reader_media_baseline.mjs',
                  'tests/reader/media/test_reader_media_metadata.mjs']
         for path in paths:
@@ -1626,8 +1628,10 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, message)
 
     def test_reader_djvu_contract_gate_fails_closed(self):
-        for name in ('check_reader_djvu_contracts.mjs', 'check_tap_contracts.mjs'):
-            shutil.copyfile(ROOT / 'scripts' / name, self.root / 'scripts' / name)
+        for name in ('scripts/reader/check_reader_djvu_contracts.mjs', 'scripts/check_tap_contracts.mjs'):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
         # V8 resolves symlinks before applying coverage includes. Copy the
         # source into the fixture so the exact source row is really measured.
         shutil.copytree(ROOT / 'static/reader', self.root / 'static/reader')
@@ -1639,7 +1643,7 @@ class StaticGateTests(unittest.TestCase):
                             directory / f'test_reader_djvu_{name}.mjs')
         boundary = directory / 'test_reader_djvu_range_boundaries.mjs'
         shutil.copyfile(ROOT / 'tests/reader/djvu/test_reader_djvu_range_boundaries.mjs', boundary)
-        check = ['node', 'scripts/check_reader_djvu_contracts.mjs']
+        check = ['node', 'scripts/reader/check_reader_djvu_contracts.mjs']
         message = 'DjVu contracts require seven named scripts'
         self.assert_check(self.run_check(*check), True, '# pass 7')
         worker = directory / 'test_reader_djvu_worker.mjs'
@@ -1657,7 +1661,7 @@ class StaticGateTests(unittest.TestCase):
             worker.write_text(source.replace("console.log('" + marker + "'", "console.log('" + summary + "');\nconsole.log('" + marker + "'"))
             self.assert_check(self.run_check(*check), False, message)
         worker.write_text(source)
-        gate = self.root / 'scripts/check_reader_djvu_contracts.mjs'
+        gate = self.root / 'scripts/reader/check_reader_djvu_contracts.mjs'
         original = gate.read_text()
         anchor = '...required.map(({name}) => name)'
         self.assertEqual(original.count(anchor), 1)
@@ -1689,7 +1693,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, message)
 
     def test_reader_lifecycle_coverage_gate_fails_closed(self):
-        paths = ["static/reader/core/reader-lifecycle.mjs", "scripts/check_reader_lifecycle_coverage.mjs",
+        paths = ["static/reader/core/reader-lifecycle.mjs", "scripts/reader/check_reader_lifecycle_coverage.mjs",
                  "scripts/check_tap_contracts.mjs", "tests/reader/lifecycle/test_reader_lifecycle.mjs"]
         for path in paths:
             target = self.root / path

@@ -1,6 +1,6 @@
 // Node 26/V8: only this text-format source under synthetic host/DOM contracts.
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from './check_tap_contracts.mjs';
+import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 const minimum = [100, 91.89, 90.91];
 const required = [

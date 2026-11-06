@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from './check_tap_contracts.mjs';
+import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // Node 26/V8: only this media-format source under synthetic host/DOM contracts.
 const minimum = [100, 90.77, 100];
