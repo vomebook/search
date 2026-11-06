@@ -6,7 +6,7 @@
 
 - `static/`：Pages 资源和入口；`search/` 是搜索组件，`reader/` 按核心、格式、PDF、搜索、界面划分，`sw.js` 是 Service Worker。
 - `data/`：站点使用的搜索和目录数据。
-- `tests/`：Node、Python 和浏览器测试；已整理的领域测试放在 `tests/search/` 和 `tests/reader/`。PDF 全文搜索见 `tests/reader/pdf-search/README.txt`，PDF 网络见 `tests/reader/pdf-network/README.txt`，请求和文档加载见 `tests/reader/transport/README.txt`。
+- `tests/`：Node、Python 和浏览器测试；已整理的领域测试放在 `tests/search/` 和 `tests/reader/`。PDF 全文搜索见 `tests/reader/pdf-search/README.txt`，PDF 网络见 `tests/reader/pdf-network/README.txt`，请求和文档加载见 `tests/reader/transport/README.txt`，章节和布局见 `tests/reader/chapters/` 与 `tests/reader/layout/`，图片加载见 `tests/reader/images/`。
 - `scripts/build/`、`scripts/data/`：构建与数据获取；`scripts/reader/`、`scripts/search/` 是按领域归组的检查，其他检查暂留在 `scripts/`。
 - `.github/workflows/`：Pages 构建发布及双站 Reader 回归；`typings/` 和 `jsconfig*.json` 定义前端类型检查边界。
 
@@ -24,6 +24,8 @@ node scripts/reader/check_request_manager_coverage.mjs
 node scripts/reader/check_document_loader_coverage.mjs
 node scripts/reader/check_pdf_network_coverage.mjs
 node scripts/reader/check_pdf_network_mutations.mjs
+node scripts/reader/check_reader_core_coverage.mjs
+node scripts/reader/check_reader_image_loader_coverage.mjs
 ```
 
 浏览器测试还需要 Playwright、浏览器和 Reader vendor；完整安装与执行命令见 `.github/workflows/reader-refactor.yml`。Android 共享存储常以 `noexec` 挂载，应在支持执行和符号链接的目录中安装依赖及运行检查。修改不自动发布：涉及双仓库的变更应先发布 Space，再发布本仓库并检查双站 CI（GitHub 工作流会拉取 Space 的 main）。
