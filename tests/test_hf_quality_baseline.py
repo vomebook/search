@@ -42,6 +42,11 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
                         "hashFiles('huggingface-search/requirements.txt', 'huggingface-search/requirements-static-check.txt')",
                         "hashFiles('huggingface-search/package-lock.json')", '${{ steps.distro.outputs.version }}-1.63.0'):
             self.assertIn(command, hf)
+        for job in (github, firefox, hf):
+            self.assertIn('runs-on: ubuntu-24.04', job)
+            mirror = 'python3 -B scripts/ci/ci_ubuntu_mirror.py'
+            self.assertLess(job.index(mirror), job.index('playwright install-deps'))
+            self.assertIn('name: Install Playwright system dependencies\n        timeout-minutes: 15', job)
         self.assertNotIn('path: node_modules', hf)
         self.assertNotIn('continue-on-error:', hf)
         self.assertNotIn('if:', hf)
