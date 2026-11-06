@@ -331,6 +331,45 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertEqual(workflow.count('node scripts/reader/check_reader_core_coverage.mjs'), 2)
         self.assertNotIn('node scripts/check_reader_core_coverage.mjs', workflow)
 
+    def test_both_sites_run_reader_v3_gates(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        gates = ('          node scripts/reader/check_reader_v3_coverage.mjs\n'
+                 '          node scripts/reader/check_reader_v3_mutations.mjs\n')
+        step = '      - name: Reader v3 gates\n{}        run: |\n' + gates
+
+        def registered(text):
+            self.assertNotIn('\n  defaults:', text)
+            github = text.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
+            hf = text.split('  huggingface-search:\n', 1)[1]
+            self.assertEqual(text.count('      - name: Reader v3 gates\n'), 2)
+            for job, directory in ((github, ''), (hf, '        working-directory: huggingface-search\n')):
+                self.assertNotIn('\n    defaults:', job)
+                self.assertNotIn('\n    if:', job)
+                self.assertNotIn('\n    continue-on-error:', job)
+                expected = step.format(directory)
+                self.assertEqual(job.count(expected), 1)
+                after = job.split(expected, 1)[1]
+                self.assertTrue(after.startswith('      - name: '))
+                for command in gates.strip().splitlines():
+                    self.assertEqual(job.count(command.strip()), 1)
+
+        registered(workflow)
+        mutations = [
+            workflow.replace('          node scripts/reader/check_reader_v3_coverage.mjs\n',
+                             '          # node scripts/reader/check_reader_v3_coverage.mjs\n', 1),
+            workflow.replace('      - name: Reader v3 gates\n',
+                             '      - name: Reader v3 gates\n        if: false\n', 1),
+            workflow.replace('      - name: Reader v3 gates\n',
+                             '      - name: Reader v3 gates\n        continue-on-error: true\n', 1),
+            workflow.replace('      - name: Reader v3 gates\n        working-directory: huggingface-search\n',
+                             '      - name: Reader v3 gates\n        working-directory: .\n', 1),
+        ]
+        for changed in mutations:
+            with self.subTest(changed=changed[:100]):
+                self.assertNotEqual(changed, workflow)
+                with self.assertRaises((AssertionError, IndexError)):
+                    registered(changed)
+
     def test_both_sites_run_pdf_book_client_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_book_client_coverage.mjs'), 2)

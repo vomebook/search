@@ -1583,6 +1583,57 @@ class StaticGateTests(unittest.TestCase):
         gate.write_text(gate_original.replace('reader-pdf-book-search\\.mjs', 'missing-pdf-book-search\\.mjs'))
         self.assert_check(self.run_check(*check), False, message)
 
+    def test_reader_v3_gates_fail_closed(self):
+        paths = ['static/reader/pdf/reader-v3.mjs', 'static/reader/core/reader-contract.js',
+                 'static/reader/core/reader-security.js', 'static/reader/pdf/reader-pdf-text-runtime.mjs',
+                 'static/reader/pdf/reader-pdf-page-window.mjs', 'static/reader/pdf/reader-pdf-renderer.mjs',
+                 'scripts/reader/check_reader_v3_coverage.mjs', 'scripts/reader/check_reader_v3_mutations.mjs',
+                 'scripts/check_tap_contracts.mjs', 'tests/reader/pdf-v3/test_reader_v3_untrusted.mjs',
+                 'tests/test_dataset_primary_policy.mjs', 'tests/test_reader_v3_ocr_retained.mjs',
+                 'tests/reader/djvu/test_reader_djvu_only.mjs']
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        coverage, mutation = ['node', paths[6]], ['node', paths[7]]
+        self.assert_check(self.run_check(*coverage), True, '# pass 14')
+        self.assert_check(self.run_check(*mutation), True, '"total":7,"killed":7,"survived":0,"errors":0')
+        gate, test, source, mutant_gate = (self.root / paths[i] for i in (6, 9, 0, 7))
+        gate_original, test_original, source_original, mutant_original = (
+            p.read_text() for p in (gate, test, source, mutant_gate))
+        try:
+            anchor = '[98.13, 87.50, 100]'
+            self.assertEqual(gate_original.count(anchor), 1)
+            gate.write_text(gate_original.replace(anchor, '[100, 100, 100]'))
+            self.assert_check(self.run_check(*coverage), False, 'reader-v3 coverage requires')
+            row = r'reader-v3\.mjs\s*\|'
+            self.assertEqual(gate_original.count(row), 1)
+            gate.write_text(gate_original.replace(row, r'missing-v3\.mjs\s*\|'))
+            self.assert_check(self.run_check(*coverage), False, 'reader-v3 coverage requires')
+            gate.write_text(gate_original)
+            anchor = "test('page map null entry'"
+            self.assertEqual(test_original.count(anchor), 1)
+            test.write_text(test_original.replace(anchor, "test.skip('page map null entry'"))
+            self.assert_check(self.run_check(*coverage), False, 'reader-v3 coverage requires')
+            test.write_text(test_original)
+            anchor = '!p || p.page !== i + 1'
+            self.assertEqual(source_original.count(anchor), 1)
+            source.write_text(source_original.replace(anchor, 'p.page !== i + 1'))
+            self.assert_check(self.run_check(*mutation), False, 'expected exactly one target')
+            source.write_text(source_original)
+            test.write_text(test_original + '\nthis is invalid syntax !!!\n')
+            self.assert_check(self.run_check(*mutation), False, 'baseline failed')
+            test.write_text(test_original)
+            diagnostic = 'Missing expected exception (invalid).'
+            self.assertEqual(mutant_original.count(diagnostic), 1)
+            mutant_gate.write_text(mutant_original.replace(diagnostic, 'unrelated diagnostic'))
+            self.assert_check(self.run_check(*mutation), False, 'unexpected failure')
+        finally:
+            gate.write_text(gate_original)
+            test.write_text(test_original)
+            source.write_text(source_original)
+            mutant_gate.write_text(mutant_original)
+
     def test_pdf_text_store_gates_fail_closed(self):
         paths = ['static/reader/pdf/reader-pdf-text-store.mjs',
                  'scripts/reader/check_pdf_text_store_coverage.mjs', 'scripts/reader/check_pdf_text_store_mutations.mjs',

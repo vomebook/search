@@ -3,6 +3,8 @@ Reader quality gates
 
 Run these commands from the repository root with Node 26:
 
+  node scripts/reader/check_reader_v3_coverage.mjs
+  node scripts/reader/check_reader_v3_mutations.mjs
   node scripts/reader/check_pdf_book_client_coverage.mjs
   node scripts/reader/check_pdf_text_store_coverage.mjs
   node scripts/reader/check_pdf_text_store_mutations.mjs
@@ -24,6 +26,9 @@ and `tests/reader/images/README.txt`.
 The chapter and layout gate is documented in `tests/reader/chapters/README.txt`
 and `tests/reader/layout/README.txt`.
 The PDF network gates are documented in `tests/reader/pdf-network/README.txt`.
+The reader-v3 gate combines synthetic and existing contracts for
+`reader-v3.mjs` only; its seven targeted mutations are not exhaustive.
+See `tests/reader/pdf-v3/README.txt`.
 The request and document loading gates are documented in
 `tests/reader/transport/README.txt`.
 
