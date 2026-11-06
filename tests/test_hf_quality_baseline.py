@@ -258,6 +258,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         for gate in ('check_pdf_network_coverage.mjs', 'check_pdf_network_mutations.mjs'):
             self.assertEqual(workflow.count(f'node scripts/reader/{gate}'), 2)
             self.assertNotIn(f'node scripts/{gate}', workflow)
+        self.assertEqual(workflow.count('node --test tests/reader/pdf-network/test_pdf_range_cache_release.mjs'), 2)
 
     def test_both_sites_run_pdf_book_client_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
