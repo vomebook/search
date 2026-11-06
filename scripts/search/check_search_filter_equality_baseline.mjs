@@ -1,5 +1,5 @@
 import {spawnSync} from "node:child_process";
-import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
+import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Require the original inline helper contracts to run, rather than merely load.
 const result = spawnSync(process.execPath, [

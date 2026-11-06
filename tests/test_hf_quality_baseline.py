@@ -173,11 +173,20 @@ class HfSearchProjectionCiTests(unittest.TestCase):
             self.assertEqual(selection.group(1).split().count(module), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module data_formats'), 1)
 
+    def test_both_sites_run_grouped_frontend_search_gates(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        for gate in ('check_search_file_types_coverage.mjs', 'check_search_response_cache_coverage.mjs',
+                     'check_search_response_validation_coverage.mjs', 'check_search_result_identity_coverage.mjs',
+                     'check_search_filter_equality_baseline.mjs', 'check_search_folder_merge_baseline.mjs',
+                     'check_search_readability_baseline.mjs'):
+            self.assertEqual(workflow.count(f'node scripts/search/{gate}'), 2)
+            self.assertNotIn(f'node scripts/{gate}', workflow)
+
     def test_both_sites_run_original_extension_behavior_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         gate = 'node --test tests/search/baselines/test_search_extension_inventory_baseline.mjs tests/search/baselines/test_search_extension_filter_baseline.mjs'
         self.assertEqual(workflow.count(gate), 2)
-        self.assertEqual(workflow.count('node scripts/check_search_file_types_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_search_file_types_coverage.mjs'), 2)
 
     def test_pages_runs_search_position_and_prefetch_regressions(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -212,24 +221,24 @@ class HfSearchProjectionCiTests(unittest.TestCase):
     def test_both_sites_run_search_response_validation_contract(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node --test tests/search/baselines/test_search_response_validation_baseline.mjs'), 2)
-        self.assertEqual(workflow.count('node scripts/check_search_response_validation_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_search_response_validation_coverage.mjs'), 2)
 
     def test_both_sites_run_original_search_stable_id_contract(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node --test tests/search/baselines/test_search_stable_id_baseline.mjs'), 2)
-        self.assertEqual(workflow.count('node scripts/check_search_result_identity_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_search_result_identity_coverage.mjs'), 2)
 
     def test_both_sites_run_original_filter_equality_contract(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_search_filter_equality_baseline.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_search_filter_equality_baseline.mjs'), 2)
 
     def test_both_sites_run_original_folder_merge_contract(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_search_folder_merge_baseline.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_search_folder_merge_baseline.mjs'), 2)
 
     def test_both_sites_run_original_readability_contract(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_search_readability_baseline.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_search_readability_baseline.mjs'), 2)
 
     def test_both_sites_run_grouped_adapter_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -288,7 +297,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_both_sites_run_response_cache_gate_and_pages_legacy_test(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_search_response_cache_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_search_response_cache_coverage.mjs'), 2)
         self.assertEqual(workflow.count('node tests/search/response-cache/test_response_cache.js'), 1)
         self.assertNotIn('node tests/test_response_cache.js', workflow)
 
