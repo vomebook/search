@@ -1462,6 +1462,22 @@ class ReaderRefactorTest(unittest.TestCase):
         self.assertTrue(self.page.evaluate("() => document.querySelector('.full-search-result') === window.__firstOcrRow && document.activeElement === window.__firstOcrRow"))
 
     def test_pdf_ocr_worker_pages_deep_results_and_reuses_book(self):
+        def control_prefetch(route):
+            response = route.fetch()
+            script = response.text()
+            schedule = '  function schedulePdfBookSearchPrefetch() {'
+            call = '      await client.prefetch();'
+            self.assertEqual(script.count(schedule), 1)
+            self.assertEqual(script.count(call), 1)
+            script = script.replace(schedule, schedule + '''
+              window.__triggerPdfPrefetch = async () => {
+                await readerContext.prefetchPdfBookSearch();
+                return readerContext.pdfBookSearchPrefetchPromise;
+              };
+              return;''')
+            script = script.replace(call, '      window.__pdfPrefetchResult = await client.prefetch();')
+            route.fulfill(response=response, body=script)
+        self.page.route('**/static/reader/pdf/reader-pdf-search.mjs*', control_prefetch)
         self.page.route("**/static/vendor/pdf.min.*.mjs", lambda route: route.fulfill(
             content_type="text/javascript", body=support.PDF_MODULE.replace("numPages: 30", "numPages: 2")))
         root = "objects/aa/" + "a" * 64 + "/" + "b" * 16
@@ -1490,6 +1506,12 @@ class ReaderRefactorTest(unittest.TestCase):
         self.open(self.reader_url("pdf", ocr_manifest="https://voiceofml-search.hf.space/api/reader-bucket-resource?path=" + manifest_path))
         self.search("needle")
         self.assertEqual(self.page.locator("#full-search-status").text_content(), "620 个结果")
+        prefetch = self.page.evaluate('''async () => {
+          await window.__triggerPdfPrefetch();
+          return window.__pdfPrefetchResult || null;
+        }''')
+        self.assertTrue(prefetch['ready'])
+        self.assertIsInstance(prefetch['session'], int)
         self.page.locator("#full-search-page").fill("11")
         self.page.locator("#full-search-page").dispatch_event("change")
         self.page.wait_for_function("() => document.querySelector('.full-search-rank')?.textContent === '501.'")
