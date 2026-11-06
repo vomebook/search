@@ -8,7 +8,7 @@ const pathPattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/(?:readi
 const sharedPagePattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/pages\/page-[0-9]{6}\.(?:jxl|png)$/;
 export const isV3Path = path => typeof path === "string" && (pathPattern.test(path) || sharedPagePattern.test(path));
 export function validateResource(ref, source = "") {
-  if (!ref || !["vomebook/pdf-pages-v2", "vomebook/reader-assets-v2"].includes(ref.bucket) ||
+  if (!ref || typeof ref.path !== "string" || !["vomebook/pdf-pages-v2", "vomebook/reader-assets-v2"].includes(ref.bucket) ||
       ref.role !== "runtime" || !sha(ref.sha256) || !integer(ref.bytes) ||
       !globalThis.VoiceOfMLReader.isBucketPath(ref.path, true, ref.bucket)) invalid();
   if (isV3Path(ref.path) && (ref.bucket !== "vomebook/pdf-pages-v2" ||
@@ -50,7 +50,7 @@ function validQuad(quad) {
   return Math.abs(area) > 2e-9;
 }
 export function validateTextLayer(layer, entry, source) {
-  if (!layer || layer.version !== 1 || layer.kind !== "pdf-text-layer" || layer.source_sha256 !== source ||
+  if (!entry || !layer || layer.version !== 1 || layer.kind !== "pdf-text-layer" || layer.source_sha256 !== source ||
       layer.page !== entry.page || !sha(layer.generation) || layer.generation !== entry.generation ||
       !sha(layer.raw_sha256) || !sha(layer.page_identity) || layer.page_identity !== entry.page_identity ||
       layer.offset_unit !== "unicode-codepoint" || typeof layer.text !== "string" ||
@@ -91,7 +91,7 @@ function partitions(values, count, complete, source) {
   if (!Array.isArray(values)) invalid();
   let end = 0;
   for (const part of values) {
-    if (!integer(part.start) || !integer(part.end) || part.start <= end || part.end < part.start ||
+    if (!part || !integer(part.start) || !integer(part.end) || part.start <= end || part.end < part.start ||
         part.end > count || (complete && part.start !== end + 1)) invalid();
     validateResource(part.resource, source);
     end = part.end;
@@ -132,7 +132,7 @@ export function createV3Repository({ readJson, resourceUrl, signal, pageCount, s
     indexKey = key;
     if (index) return index;
     if (!textPending) textPending = read(ref).then(value => {
-      if (value.version !== 1 || value.kind !== "pdf-text-layer-index" || value.complete !== true ||
+      if (!value || value.version !== 1 || value.kind !== "pdf-text-layer-index" || value.complete !== true ||
           value.source_sha256 !== sourceSha || value.page_count !== pageCount || !sha(value.generation) ||
           !["raw", "effective"].includes(value.revision) || value.offset_unit !== "unicode-codepoint") invalid();
       partitions(value.partitions, pageCount, true, sourceSha);
@@ -156,10 +156,10 @@ export function createV3Repository({ readJson, resourceUrl, signal, pageCount, s
       if (!integer(page) || page > pageCount) invalid();
       const root = await textIndex(ref), part = partitionFor(root.partitions, page);
       const value = await read(part.resource);
-      if (value.version !== 1 || value.kind !== "pdf-text-partition" || value.source_sha256 !== sourceSha ||
+      if (!value || value.version !== 1 || value.kind !== "pdf-text-partition" || value.source_sha256 !== sourceSha ||
           value.generation !== root.generation || value.start !== part.start || value.end !== part.end ||
           !Array.isArray(value.pages) || value.pages.length !== part.end - part.start + 1 ||
-          value.pages.some((p, i) => p.page !== part.start + i)) invalid();
+          value.pages.some((p, i) => !p || p.page !== part.start + i)) invalid();
       const entry = value.pages[page - part.start];
       validateResource(entry.resource, sourceSha);
       if (!entry.resource.path.endsWith(`/text/page-${String(page).padStart(6, "0")}.json.gz`)) invalid();
@@ -206,7 +206,7 @@ export function validateReadingManifest(manifest, maxPages) {
 export function validatePageMap(map, manifest) {
   if (!map || map.version !== 1 || map.kind !== "pdf-page-map" || map.source_sha256 !== manifest.source_sha256 ||
       !Array.isArray(map.pages) || map.pages.length !== manifest.page_count || map.pages.some((p, i) =>
-        p.page !== i + 1 || !sha(p.identity) || !positive(p.width) || !positive(p.height) ||
+        !p || p.page !== i + 1 || !sha(p.identity) || !positive(p.width) || !positive(p.height) ||
         ![0, 90, 180, 270].includes(p.rotation) || !Array.isArray(p.crop_box) || p.crop_box.length !== 4 ||
         !Array.isArray(p.media_box) || p.media_box.length !== 4 ||
         [...p.crop_box, ...p.media_box].some(v => !Number.isFinite(v)))) invalid();
