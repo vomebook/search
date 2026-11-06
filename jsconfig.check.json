@@ -55,6 +55,7 @@
     "static/reader/pdf/reader-pdf-engine.mjs",
     "static/reader/pdf/reader-pdf-network.mjs",
     "static/reader/pdf/reader-pdf-range-cache.mjs",
+    "static/reader/pdf/reader-pdf-range-hints.mjs",
     "static/reader/pdf/reader-pdf-renderer.mjs",
     "static/reader/pdf/reader-pdf-scheduler.mjs",
     "static/reader/pdf/reader-pdf-search.mjs",

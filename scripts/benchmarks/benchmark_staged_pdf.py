@@ -106,7 +106,8 @@ def main():
     parser.add_argument('--pairs',type=int,default=2);args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     rows=json.loads(args.sources.read_text());tracked=['static/reader-resources.js','static/reader.js',
-      'static/reader/pdf/reader-pdf-network.mjs','static/reader/pdf/reader-pdf-engine.mjs',
+      'static/reader/pdf/reader-pdf-network.mjs','static/reader/pdf/reader-pdf-range-hints.mjs',
+      'static/reader/pdf/reader-pdf-range-cache.mjs','static/reader/pdf/reader-pdf-engine.mjs',
       'static/reader/pdf/reader-pdf-page-window.mjs','static/reader/pdf/pdf-first-page-worker-adapter.mjs',
       'static/reader/pdf/pdf-worker-wrapper.mjs','static/reader/pdf/reader-pdf-search.mjs',
       'static/reader/ui/reader-bookmarks.mjs','static/reader/formats/reader-foliate-format.mjs']
