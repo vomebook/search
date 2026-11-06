@@ -72,11 +72,15 @@ jobs:
           node scripts/reader/check_reader_media_coverage.mjs
           node scripts/reader/check_reader_text_coverage.mjs
           node scripts/reader/check_pdf_book_client_coverage.mjs
+          node scripts/reader/check_pdf_text_store_coverage.mjs
+          node scripts/reader/check_pdf_text_store_mutations.mjs
           node tests/reader/pdf-search/test_reader_ocr_transport.mjs
           node tests/reader/pdf-search/test_reader_book_text.mjs
           node --test tests/reader/pdf-search/test_pdf_book_worker.mjs
           python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
           PDF_WORKER_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
+          python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
+          PDF_TEXT_STORE_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
           node tests/reader/security/test_reader_css_sanitizer.mjs
       - name: Run Reader request and PDF loading regressions
         run: |
@@ -287,11 +291,15 @@ jobs:
           node scripts/reader/check_reader_media_coverage.mjs
           node scripts/reader/check_reader_text_coverage.mjs
           node scripts/reader/check_pdf_book_client_coverage.mjs
+          node scripts/reader/check_pdf_text_store_coverage.mjs
+          node scripts/reader/check_pdf_text_store_mutations.mjs
           node tests/reader/pdf-search/test_reader_ocr_transport.mjs
           node tests/reader/pdf-search/test_reader_book_text.mjs
           node --test tests/reader/pdf-search/test_pdf_book_worker.mjs
           python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
           PDF_WORKER_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
+          python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
+          PDF_TEXT_STORE_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
           node tests/reader/security/test_reader_css_sanitizer.mjs
           node tests/test_reader_heading_cache.js
           node tests/test_reader_engine_preload.js

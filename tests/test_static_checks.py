@@ -1583,6 +1583,54 @@ class StaticGateTests(unittest.TestCase):
         gate.write_text(gate_original.replace('reader-pdf-book-search\\.mjs', 'missing-pdf-book-search\\.mjs'))
         self.assert_check(self.run_check(*check), False, message)
 
+    def test_pdf_text_store_gates_fail_closed(self):
+        paths = ['static/reader/pdf/reader-pdf-text-store.mjs',
+                 'scripts/reader/check_pdf_text_store_coverage.mjs', 'scripts/reader/check_pdf_text_store_mutations.mjs',
+                 'scripts/check_tap_contracts.mjs', 'tests/reader/pdf-search/test_pdf_text_store.mjs']
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        coverage = ['node', paths[1]]
+        mutation = ['node', paths[2]]
+        message = 'PDF text-store coverage requires named contracts'
+        self.assert_check(self.run_check(*coverage), True, '# pass 8')
+        self.assert_check(self.run_check(*mutation), True, '"total":7,"killed":7,"survived":0,"errors":0')
+        source = self.root / paths[4]
+        original = source.read_text()
+        name = 'entry, age, time reversal and invalid arguments fail closed'
+        anchor = "test('" + name + "'"
+        self.assertEqual(original.count(anchor), 1)
+        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
+            source.write_text(original.replace(anchor, replacement))
+            self.assert_check(self.run_check(*coverage), False, message)
+        for extra in ("test.skip('extra skip', () => {});", "test.todo('extra todo');",
+                      'console.log("skipped 0");', 'console.log("pass 8");'):
+            source.write_text(original + '\n' + extra + '\n')
+            self.assert_check(self.run_check(*coverage), False, message)
+        source.write_text(original.replace(anchor + ',async()=>{',
+                                           anchor + ",async()=>{throw new Error('injected store failure');"))
+        self.assert_check(self.run_check(*coverage), False, 'injected store failure')
+        source.write_text(original)
+        gate = self.root / paths[1]
+        gate_original = gate.read_text()
+        self.assertEqual(gate_original.count('[100,92.50,89.19]'), 1)
+        for minimum in ('[100.01,92.50,89.19]', '[100,100.01,89.19]', '[100,92.50,100.01]'):
+            gate.write_text(gate_original.replace('[100,92.50,89.19]', minimum))
+            self.assert_check(self.run_check(*coverage), False, message)
+        gate.write_text(gate_original.replace('reader-pdf-text-store\\.mjs', 'missing-pdf-text-store\\.mjs'))
+        self.assert_check(self.run_check(*coverage), False, message)
+        source.write_text(original.replace("assert.equal(await pdfTextStoreKey(data),a);",
+                                           "assert.equal(await pdfTextStoreKey(data),a);\n  throw new Error('unrelated');"))
+        self.assert_check(self.run_check(*mutation), False, 'unexpected failure')
+        for line, diagnostic in (("assert.equal(await store.get(2),null,'TTL is exclusive at the boundary');",
+                                  'expired page accepted mutant survived'),
+                                 ("assert.equal(await store.get(1),null);assert.equal(await store.get(2),'new');",
+                                  'corrupt ledger retained mutant survived')):
+            self.assertEqual(original.count(line), 1)
+            source.write_text(original.replace(line, ''))
+            self.assert_check(self.run_check(*mutation), False, diagnostic)
+
     def test_reader_text_coverage_gate_fails_closed(self):
         paths = ['static/reader/formats/reader-text-format.mjs',
                  'scripts/reader/check_reader_text_coverage.mjs', 'scripts/check_tap_contracts.mjs',

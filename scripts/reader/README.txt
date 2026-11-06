@@ -4,6 +4,8 @@ Reader quality gates
 Run these commands from the repository root with Node 26:
 
   node scripts/reader/check_pdf_book_client_coverage.mjs
+  node scripts/reader/check_pdf_text_store_coverage.mjs
+  node scripts/reader/check_pdf_text_store_mutations.mjs
   node scripts/reader/check_request_manager_coverage.mjs
   node scripts/reader/check_document_loader_coverage.mjs
   node scripts/reader/check_pdf_network_coverage.mjs
