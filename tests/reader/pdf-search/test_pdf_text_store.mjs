@@ -83,6 +83,59 @@ test('corrupt records fail closed and a bad ledger resets the shared budget',asy
   } finally {store?.dispose();restoreFactory();}
 });
 
+test('corrupt replacement and eviction reset accounting before committing new data',async()=>{
+  for (const scenario of ['replacement','eviction']) {
+    for (const invalid of ['not-a-number',-1000000,1.5,0,198]) {
+      useFactory();let store;
+      try {
+        const bounded={bytes:650,entries:2,entryBytes:500,ttl:1000};
+        store=createPdfTextStore(key,{limits:bounded,now:()=>10000});
+        assert.equal(await store.put(1,'first'),true);
+        assert.equal(await store.put(2,'second'),true);
+        await seed('pages',{schema:1,id:key+':1',key,page:1,text:'first',bytes:invalid,savedAt:10000});
+        assert.equal(await store.get(1),null);
+        const target=scenario==='replacement'?1:3;
+        assert.equal(await store.put(target,'fresh'),true,`${scenario} must recover from corrupt bytes`);
+        assert.equal(await store.get(target),'fresh');
+        assert.equal(await store.get(2),null,`${scenario} must purge untrusted accounting`);
+        const db=await openDatabase();
+        try {
+          const tx=db.transaction(['pages','budget'],'readonly');
+          const [pages,budget]=await Promise.all([requestValue(tx.objectStore('pages').getAll()),
+            requestValue(tx.objectStore('budget').get('total'))]);
+          assert.equal(pages.length,1);
+          assert.equal(budget.count,pages.length,`${scenario} count must match retained records`);
+          assert.equal(budget.bytes,pages[0].bytes,`${scenario} bytes must match retained records`);
+          assert.ok(Number.isSafeInteger(budget.bytes));
+        } finally {db.close();}
+        assert.equal(await store.put(4,'later'),true);
+        assert.equal(await store.get(target),'fresh','later writes must not clear the recovered ledger');
+      } finally {store?.dispose();restoreFactory();}
+    }
+  }
+});
+
+test('understated and overdrawn ledgers reset instead of drifting',async()=>{
+  for (const count of [0,1]) {
+    useFactory();let store;
+    try {
+      const bounded={bytes:900,entries:3,entryBytes:500,ttl:1000};
+      store=createPdfTextStore(key,{limits:bounded,now:()=>10000});
+      await store.put(1,'first');await store.put(2,'second');
+      await seed('budget',{id:'total',bytes:count===0?500:1,count,prunedAt:10000});
+      assert.equal(await store.put(1,'fresh'),true);
+      assert.equal(await store.get(2),null);assert.equal(await store.get(1),'fresh');
+      const db=await openDatabase();
+      try {
+        const tx=db.transaction(['pages','budget'],'readonly');
+        const [pages,budget]=await Promise.all([requestValue(tx.objectStore('pages').getAll()),
+          requestValue(tx.objectStore('budget').get('total'))]);
+        assert.equal(pages.length,1);assert.equal(budget.count,1);assert.equal(budget.bytes,pages[0].bytes);
+      } finally {db.close();}
+    } finally {store?.dispose();restoreFactory();}
+  }
+});
+
 test('expired entries are pruned and old records free budget for new pages',async()=>{
   useFactory();let now=1_000_000,store;
   try {

@@ -1594,8 +1594,8 @@ class StaticGateTests(unittest.TestCase):
         coverage = ['node', paths[1]]
         mutation = ['node', paths[2]]
         message = 'PDF text-store coverage requires named contracts'
-        self.assert_check(self.run_check(*coverage), True, '# pass 8')
-        self.assert_check(self.run_check(*mutation), True, '"total":7,"killed":7,"survived":0,"errors":0')
+        self.assert_check(self.run_check(*coverage), True, '# pass 10')
+        self.assert_check(self.run_check(*mutation), True, '"total":9,"killed":9,"survived":0,"errors":0')
         source = self.root / paths[4]
         original = source.read_text()
         name = 'entry, age, time reversal and invalid arguments fail closed'
@@ -1605,7 +1605,7 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(original.replace(anchor, replacement))
             self.assert_check(self.run_check(*coverage), False, message)
         for extra in ("test.skip('extra skip', () => {});", "test.todo('extra todo');",
-                      'console.log("skipped 0");', 'console.log("pass 8");'):
+                      'console.log("skipped 0");', 'console.log("pass 10");'):
             source.write_text(original + '\n' + extra + '\n')
             self.assert_check(self.run_check(*coverage), False, message)
         source.write_text(original.replace(anchor + ',async()=>{',
@@ -1614,9 +1614,9 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(original)
         gate = self.root / paths[1]
         gate_original = gate.read_text()
-        self.assertEqual(gate_original.count('[100,92.50,89.19]'), 1)
-        for minimum in ('[100.01,92.50,89.19]', '[100,100.01,89.19]', '[100,92.50,100.01]'):
-            gate.write_text(gate_original.replace('[100,92.50,89.19]', minimum))
+        self.assertEqual(gate_original.count('[100,94.50,89.19]'), 1)
+        for minimum in ('[100.01,94.50,89.19]', '[100,100.01,89.19]', '[100,94.50,100.01]'):
+            gate.write_text(gate_original.replace('[100,94.50,89.19]', minimum))
             self.assert_check(self.run_check(*coverage), False, message)
         gate.write_text(gate_original.replace('reader-pdf-text-store\\.mjs', 'missing-pdf-text-store\\.mjs'))
         self.assert_check(self.run_check(*coverage), False, message)

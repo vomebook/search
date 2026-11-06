@@ -110,6 +110,48 @@ class PdfTextStoreBrowserTests(unittest.TestCase):
         self.assertIsNone(expired)
         self.assertEqual(errors, [])
 
+    def test_corrupt_replacement_and_eviction_recover_native_ledger(self):
+        page = self.browser.new_page()
+        self.addCleanup(page.close)
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(self.origin + '/static/reader.html?ext=txt', wait_until='domcontentloaded')
+        result = page.evaluate('''async () => {
+          const {createPdfTextStore}=await import('/static/reader/pdf/reader-pdf-text-store.mjs');
+          const key='a'.repeat(64),options={limits:{bytes:650,entries:2,entryBytes:500,ttl:1000},now:()=>10000};
+          const open=()=>new Promise((resolve,reject)=>{const r=indexedDB.open('voiceofml-pdf-search-text',1);
+            r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+          const write=(db,name,value)=>new Promise((resolve,reject)=>{const tx=db.transaction(name,'readwrite');
+            tx.objectStore(name).put(value);tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error);});
+          const request=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+          const store=createPdfTextStore(key,options);let db;
+          try {
+            const rows=[];
+            for (const mode of ['replacement','eviction']) {
+              if(db){db.close();db=null;}
+              await store.put(1,'first');await store.put(2,'second');db=await open();
+              await write(db,'pages',{schema:1,id:key+':1',key,page:1,text:'first',bytes:'bad',savedAt:10000});
+              const invalid=await store.get(1),target=mode==='replacement'?1:3;
+              const saved=await store.put(target,'fresh'),value=await store.get(target),old=await store.get(2);
+              const tx=db.transaction(['pages','budget'],'readonly');
+              const [pages,budget]=await Promise.all([request(tx.objectStore('pages').getAll()),request(tx.objectStore('budget').get('total'))]);
+              rows.push({mode,invalid,saved,value,old,count:budget.count,bytes:budget.bytes,
+                actualCount:pages.length,actualBytes:pages.reduce((sum,row)=>sum+row.bytes,0)});
+            }
+            return rows;
+          } finally {db?.close();store.dispose();}
+        }''')
+        for row in result:
+            with self.subTest(mode=row['mode']):
+                self.assertIsNone(row['invalid'])
+                self.assertTrue(row['saved'])
+                self.assertEqual(row['value'], 'fresh')
+                self.assertIsNone(row['old'])
+                self.assertEqual(row['count'], row['actualCount'])
+                self.assertEqual(row['bytes'], row['actualBytes'])
+                self.assertEqual(row['count'], 1)
+        self.assertEqual(errors, [])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
