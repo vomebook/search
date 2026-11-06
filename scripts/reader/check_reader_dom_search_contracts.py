@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / 'static/reader/search/reader-dom-search.mjs'
 TEST_MODULE = 'tests.test_reader_dom_search_contracts'
 CONTRACTS = {

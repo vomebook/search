@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from './check_tap_contracts.mjs';
+import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // Node 26/V8 scope: this single file under the synthetic URL/session contracts.
 // This is a baseline, not a claim that iframe/speech behavior is covered.
@@ -8,7 +8,7 @@ const result = spawnSync(process.execPath, [
   '--test', '--test-reporter=tap', '--experimental-test-coverage',
   '--test-coverage-include=**/static/search/reader-navigation.js',
   ...minimum.map((value, index) => `--test-coverage-${['lines', 'branches', 'functions'][index]}=${value}`),
-  'tests/test_reader_navigation_baseline.mjs'
+  'tests/search/reader-navigation/test_reader_navigation_baseline.mjs'
 ], {encoding: 'utf8'});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);

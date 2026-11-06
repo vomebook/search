@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from './check_tap_contracts.mjs';
+import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // These are seven pre-existing file-level Node scripts, not seven unit cases
 // or a claim of coverage over the complete DjVu implementation.
