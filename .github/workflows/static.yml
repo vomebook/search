@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   source-checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -48,7 +48,7 @@ jobs:
           python -B scripts/check_python_static.py
           npx --no-install pyright --project pyrightconfig.strict.json
       - name: Verify static gates catch injected errors
-        run: python -B -m unittest -v tests.test_static_checks
+        run: python -B -m unittest -v tests.test_static_checks tests.test_ci_ubuntu_mirror
       - name: Verify PDF and DjVu primary document limits
         run: node tests/test_dataset_primary_policy.mjs
   # Single deploy job since we're just deploying
@@ -57,7 +57,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -104,6 +104,18 @@ jobs:
       - name: Install PDF Python dependencies
         timeout-minutes: 10
         run: python3 -m pip install playwright==1.63.0 pypdf==6.21.4
+      - name: Configure official Ubuntu mirrors
+        run: |
+          set -euo pipefail
+          if python3 -B scripts/ci/ci_ubuntu_mirror.py; then
+            tmp=$(sudo mktemp -d /etc/apt/.ci-mirrors.XXXXXX)
+            trap 'sudo rm -rf -- "$tmp"' EXIT
+            sudo install -o root -g root -m 0644 /dev/null "$tmp/mirrors"
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/ priority:1' 'https://security.ubuntu.com/ubuntu/ priority:2' | sudo tee "$tmp/mirrors" >/dev/null
+            sudo mv -f -- "$tmp/mirrors" /etc/apt/apt-mirrors.txt
+          else
+            echo "::warning::Unrecognized runner mirror configuration; keeping default mirrors"
+          fi
       - name: Install qpdf system dependency
         timeout-minutes: 10
         run: sudo apt-get update && sudo apt-get install -y qpdf

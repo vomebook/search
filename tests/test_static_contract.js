@@ -577,6 +577,14 @@ test("deployment workflow uses official checkout configure upload and deploy act
     "actions/deploy-pages@v5",
   ]);
 });
+test("Pages jobs pin the Ubuntu release and configure mirrors before apt", () => {
+  const source = workflow.slice(workflow.indexOf("\n  source-checks:"), workflow.indexOf("\n  deploy:"));
+  const deploy = workflow.slice(workflow.indexOf("\n  deploy:"));
+  assert.match(source, /runs-on: ubuntu-24\.04/);
+  assert.match(source, /tests\.test_ci_ubuntu_mirror/);
+  assert.match(deploy, /runs-on: ubuntu-24\.04/);
+  assert.match(deploy, /python3 -B scripts\/ci\/ci_ubuntu_mirror\.py[\s\S]*sudo apt-get update[\s\S]*playwright install-deps chromium/);
+});
 test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(workflow, /source-checks:[\s\S]*npm run check:static[\s\S]*scripts\/check_python_static\.py/);
   assert.match(workflow, /python -B -m unittest -v tests\.test_static_checks/);
