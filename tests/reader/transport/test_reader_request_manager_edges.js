@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const filename = path.join(__dirname, "../static/reader/core/reader-request-manager.js");
+const filename = path.join(__dirname, "../../../static/reader/core/reader-request-manager.js");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture(fetchImpl) {
   const timers = new Map();

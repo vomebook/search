@@ -1,5 +1,5 @@
 import {spawnSync} from "node:child_process";
-import {hasPassingTapContracts} from "./check_tap_contracts.mjs";
+import {hasPassingTapContracts} from "../check_tap_contracts.mjs";
 
 // Node 26 V8 report, one source only. Measured with the three named tests:
 // 100.00% lines, 95.24% branches, 95.12% functions after strict annotations.
@@ -10,8 +10,8 @@ const result = spawnSync(process.execPath, [
   "--test", "--test-concurrency=1", "--test-reporter=tap", "--experimental-test-coverage",
   "--test-coverage-include=**/static/reader/core/reader-request-manager.js",
   ...minimum.map((value, index) => `--test-coverage-${["lines", "branches", "functions"][index]}=${value}`),
-  "tests/test_reader_request_manager.js", "tests/test_reader_initial_recovery.js",
-  "tests/test_reader_request_manager_edges.js"
+  "tests/reader/transport/test_reader_request_manager.js", "tests/reader/transport/test_reader_initial_recovery.js",
+  "tests/reader/transport/test_reader_request_manager_edges.js"
 ], {encoding: "utf8"});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);

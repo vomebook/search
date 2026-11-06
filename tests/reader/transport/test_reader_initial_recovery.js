@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const filename = path.resolve(process.env.READER_ROOT || path.join(__dirname, '..'),
+const filename = path.resolve(process.env.READER_ROOT || path.join(__dirname, '../../..'),
   'static/reader/core/reader-request-manager.js');
 const source = fs.readFileSync(filename, 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
