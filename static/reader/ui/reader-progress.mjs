@@ -36,7 +36,7 @@ export function createReaderProgress(readerContext) {
     const readerUrl = readerContext.currentReaderUrl();
     const foliatePosition = readerContext.captureFoliateBookmarkPosition() || readerContext.captureChapterPosition();
     return {
-      url: readerContext.sourceUrl,
+      url: VoiceOfMLReaderStore.localBookRecordKey?.(readerContext.readerId, readerContext.sourceUrl) || readerContext.sourceUrl,
       title: readerContext.documentState.title,
       extension: readerContext.extension,
       readerUrl: readerUrl.href,
@@ -100,7 +100,11 @@ export function createReaderProgress(readerContext) {
   }
 
   async function loadReaderRestoration() {
+    const recordKey = VoiceOfMLReaderStore.localBookRecordKey?.(readerContext.readerId, readerContext.sourceUrl) || readerContext.sourceUrl;
     const currentEntry = (entry) => {
+      if (entry && VoiceOfMLReaderStore.localLegacyChapterUrl?.(readerContext.chapterManifestUrl || readerContext.sourceUrl) &&
+          readerContext.normalizeSourceUrl(entry.chapterManifest || "") !==
+            readerContext.normalizeSourceUrl(readerContext.chapterManifestUrl || readerContext.sourceUrl)) return null;
       if (
         readerContext.capability.mode === "epub-chapters" &&
         /-epub-chapters-v5\//.test(readerContext.chapterManifestUrl || readerContext.sourceUrl) &&
@@ -111,6 +115,88 @@ export function createReaderProgress(readerContext) {
     try {
       const bookmarkId = readerContext.params.get("bookmark"),
         bookmarkSource = readerContext.params.get("bookmark_source");
+      // Loopback-only warning prototype. Existing pixel offsets are never
+      // interpreted against split chapters, and old records remain untouched.
+      const legacySource = VoiceOfMLReaderStore.localLegacyChapterUrl?.(
+        readerContext.chapterManifestUrl || readerContext.sourceUrl) || "";
+      if (legacySource) {
+        if (recordKey !== readerContext.sourceUrl) {
+          // New-client local experiment: do not guess ownership of the shared
+          // manifest key. New per-book records are stored separately.
+          const entries = await VoiceOfMLReaderStore.listBookmarks(recordKey);
+          const bookmark = entries.find(entry => entry.id === bookmarkId && entry.url === bookmarkSource);
+          if (bookmark) {
+            const compatible = currentEntry(bookmark);
+            if (compatible) return compatible;
+            readerContext.consumeBookmarkHandoff(bookmark);
+            readerContext.showDownloadFeedback("旧书签位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0);
+            return null;
+          }
+          if (bookmarkId && bookmarkSource && bookmarkSource !== recordKey) {
+            const legacyEntries = VoiceOfMLReaderStore.isLocalLegacyChapterUrl?.(bookmarkSource)
+              ? (await VoiceOfMLReaderStore.localLegacyRecords(bookmarkSource)).bookmarks
+              : bookmarkSource === readerContext.sourceUrl ||
+                VoiceOfMLReaderStore.isLocalSharedSplitRecord?.({url: bookmarkSource})
+                ? await VoiceOfMLReaderStore.listBookmarks(bookmarkSource) : [];
+            const legacyBookmark = legacyEntries.find(entry => entry.id === bookmarkId && entry.url === bookmarkSource);
+            if (legacyBookmark) readerContext.consumeBookmarkHandoff(legacyBookmark);
+            readerContext.showDownloadFeedback("旧书签来源或位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0);
+            return null;
+          }
+          const legacy = await VoiceOfMLReaderStore.localLegacyRecords(legacySource);
+          if (legacy.history.length || VoiceOfMLReaderStore.isLocalLegacyChapterUrl?.(readerContext.sourceUrl) &&
+              await VoiceOfMLReaderStore.get(readerContext.sourceUrl))
+            readerContext.showDownloadFeedback("旧阅读位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0);
+          const saved = await VoiceOfMLReaderStore.get(recordKey);
+          const compatible = currentEntry(saved);
+          if (saved && !compatible) {
+            readerContext.historySuppressed = true;
+            readerContext.showDownloadFeedback("旧阅读位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0);
+          }
+          return compatible;
+        }
+        // Same source + a different or unknown chapter/foliate locator has no
+        // proven conversion. Preserve the record instead of guessing whether
+        // it belongs to this book or saving new pixels into that key.
+        const sameSourceHistory = await VoiceOfMLReaderStore.get(readerContext.sourceUrl);
+        const sameSourceBookmarks = await VoiceOfMLReaderStore.listBookmarks(readerContext.sourceUrl);
+        const currentManifest = readerContext.normalizeSourceUrl(readerContext.chapterManifestUrl || readerContext.sourceUrl);
+        const incompatible = entry => entry && readerContext.normalizeSourceUrl(entry.chapterManifest || "") !== currentManifest;
+        if (incompatible(sameSourceHistory)) readerContext.historySuppressed = true;
+        const selectedIncompatible = sameSourceBookmarks.find(entry => entry.id === bookmarkId && incompatible(entry));
+        if (selectedIncompatible && bookmarkSource === readerContext.sourceUrl) {
+          readerContext.consumeBookmarkHandoff(selectedIncompatible);
+          readerContext.showDownloadFeedback("旧书签位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0);
+          return null;
+        }
+        const legacy = await VoiceOfMLReaderStore.localLegacyRecords(legacySource);
+        if (legacy.history.some(entry => entry.url === readerContext.sourceUrl)) readerContext.historySuppressed = true;
+        const bookmark = legacy.bookmarks.find(entry => entry.id === bookmarkId && entry.url === bookmarkSource);
+        if (bookmarkId && (bookmark || VoiceOfMLReaderStore.localSameLegacyChapter?.(bookmarkSource, legacySource))) {
+          if (bookmark) readerContext.consumeBookmarkHandoff(bookmark);
+          readerContext.showDownloadFeedback("旧书签位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0);
+          return null;
+        }
+        // An old history row must not hide a separately selected bookmark
+        // whose exact chapter identity is current. Keep history suppressed;
+        // normal restoration consumes only the selected bookmark handoff.
+        const selectedCurrent = sameSourceBookmarks.find(entry => entry.id === bookmarkId &&
+          entry.url === bookmarkSource && !incompatible(entry));
+        if (selectedCurrent) return currentEntry(selectedCurrent);
+        if (incompatible(sameSourceHistory) || legacy.history.length)
+          readerContext.showDownloadFeedback("旧阅读位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0);
+        if (incompatible(sameSourceHistory)) return null;
+      }
+      if (VoiceOfMLReaderStore.isLocalLegacyChapterUrl?.(readerContext.sourceUrl) &&
+          VoiceOfMLReaderStore.localSameLegacyChapter?.(
+            readerContext.sourceUrl,
+            VoiceOfMLReaderStore.localLegacyChapterUrl?.(readerContext.chapterManifestUrl) || "")) {
+        // Do not restore or save under an old key when a different split
+        // manifest is explicitly supplied. A mismatch must not rewrite it.
+        readerContext.historySuppressed = true;
+        readerContext.showDownloadFeedback("旧阅读位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0);
+        return null;
+      }
       if (bookmarkId && bookmarkSource === readerContext.sourceUrl) {
         const entries = await VoiceOfMLReaderStore.listBookmarks(readerContext.sourceUrl);
         const bookmark = entries.find((entry) => entry.id === bookmarkId && entry.url === readerContext.sourceUrl);
@@ -233,9 +319,24 @@ export function createReaderProgress(readerContext) {
   async function restoreFormat(mode, entry, generation = readerContext.beginReaderNavigation()) {
     try {
       if (!entry || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
+      let consumeHandoff = true;
       if (mode === "epub-chapters") {
+        const localLegacy = VoiceOfMLReaderStore.localLegacyChapterUrl?.(
+          readerContext.chapterManifestUrl || readerContext.sourceUrl);
+        if (localLegacy && (!Number.isInteger(entry.chapterIndex) || entry.chapterIndex < 1 ||
+            entry.chapterIndex > readerContext.chapterManifestLoader?.count)) {
+          // An incomplete chapter locator is not a trustworthy global scrollTop.
+          readerContext.historySuppressed = true;
+          readerContext.showDownloadFeedback(
+            "阅读位置无法在当前版式准确定位；原记录仍保留。本页暂不自动保存进度，可调整缩放或使用目录、搜索定位。", 0);
+          return true;
+        }
         if (Number.isInteger(entry.chapterIndex)) {
-          if (!(await readerContext.restoreChapterPosition(entry, generation))) return false;
+          const result = await readerContext.restoreChapterPosition(entry, generation);
+          // Keep a selected bookmark URL intact if this local experiment could
+          // not locate its pixels. The book remains open with saving disabled.
+          if (result === "local-chm-position-unavailable") consumeHandoff = false;
+          if (!result) return false;
         } else if (!(await readerContext.restoreProgressState(entry, generation))) return false;
       } else if (mode === "foliate" && Number.isInteger(entry.foliateSection)) {
         if (!(await readerContext.restoreFoliateBookmarkPosition(entry, generation))) return false;
@@ -254,7 +355,7 @@ export function createReaderProgress(readerContext) {
         readerContext.scheduleSave();
       } else if (!(await readerContext.restoreProgressState(entry, generation))) return false;
       if (!readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
-      readerContext.consumeBookmarkHandoff(entry);
+      if (consumeHandoff) readerContext.consumeBookmarkHandoff(entry);
       return true;
     } catch (error) {
       readerContext.reportNavigationError(error, generation);

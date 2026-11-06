@@ -309,7 +309,9 @@ class ReaderStorePreservationTests(unittest.TestCase):
                                   'oldest': True, 'newCount': 1})
 
     def test_newer_database_version_is_never_downgraded_or_cleared(self):
-        self.seed(4)
+        # The local new-client experiment uses v4; v5 is newer than both
+        # that experiment and the deployed v3 implementation.
+        self.seed(5)
         self.load_store()
         result = self.page.evaluate('''async () => {
           let errorName='';try { await VoiceOfMLReaderStore.get('legacy-book'); }
@@ -322,7 +324,7 @@ class ReaderStorePreservationTests(unittest.TestCase):
           const raw=await new Promise((resolve,reject)=>{tx.oncomplete=()=>resolve({history:history.result,marks:marks.result,foreign:foreign.result});
             tx.onerror=()=>reject(tx.error);});const version=db.version;db.close();return {version,errorName,raw};
         }''')
-        self.assertEqual(result['version'], 4)
+        self.assertEqual(result['version'], 5)
         self.assertEqual(result['errorName'], 'VersionError')
         self.assertEqual({x['url'] for x in result['raw']['history']}, {'legacy-book', 'future-book', 'unindexed-book'})
         self.assertEqual({x['id'] for x in result['raw']['marks']}, {'legacy-mark', 'future-mark'})

@@ -251,11 +251,36 @@ export function createReaderBookmarks(readerContext) {
 
   async function renderBookmarks() {
     const list = document.querySelector("#bookmarks-list"),
-      generation = readerContext.nextReaderGeneration("bookmarks");
+      generation = readerContext.nextReaderGeneration("bookmarks"),
+      recordKey = VoiceOfMLReaderStore.localBookRecordKey?.(readerContext.readerId, readerContext.sourceUrl) || readerContext.sourceUrl;
     try {
       const entries = readerContext.panelState.showingAllBookmarks
         ? await VoiceOfMLReaderStore.listAllBookmarks()
-        : await VoiceOfMLReaderStore.listBookmarks(readerContext.sourceUrl);
+        : await VoiceOfMLReaderStore.listBookmarks(recordKey);
+      const legacySource = VoiceOfMLReaderStore.localLegacyChapterUrl?.(
+        readerContext.chapterManifestUrl || readerContext.sourceUrl) || "";
+      if (legacySource && !readerContext.panelState.showingAllBookmarks) {
+        const legacy = await VoiceOfMLReaderStore.localLegacyRecords(legacySource);
+        entries.push(...legacy.bookmarks.filter(entry => !entries.some(current => current.id === entry.id)));
+        if (recordKey !== readerContext.sourceUrl) {
+          const shared = await VoiceOfMLReaderStore.listBookmarks(readerContext.sourceUrl);
+          entries.push(...shared.filter(entry => !entries.some(current => current.id === entry.id)));
+        }
+        entries.sort((a, b) => b.createdAt - a.createdAt);
+      }
+      // LOCAL DIAGNOSTIC ONLY: a shared chapter manifest is not a unique
+      // source. Classify exact source addresses without claiming ownership or
+      // hiding entries whose only identity is the shared manifest.
+      const localOriginal = raw => {
+        try {
+          const url = new URL(raw);
+          if (url.protocol !== "https:" || url.host !== "huggingface.co" || url.username || url.password ||
+              url.search || url.hash || !/^\/datasets\/VoiceOfML\/[^/]+\/resolve\/main\/.+\.chm$/i.test(url.pathname))
+            return "";
+          return VoiceOfMLReader.canonicalSourceUrl(url.href);
+        } catch (_) { return ""; }
+      };
+      const currentOriginal = legacySource ? localOriginal(readerContext.downloadUrl) : "";
       if (!readerContext.isReaderGenerationCurrent("bookmarks", generation)) return;
       list.textContent = "";
       for (const entry of entries) {
@@ -263,13 +288,24 @@ export function createReaderBookmarks(readerContext) {
         row.className = "panel-item";
         row.dataset.bookmarkId = entry.id;
         const open = document.createElement("button");
+        const sharedUnknown = Boolean(VoiceOfMLReaderStore.isLocalSharedSplitRecord?.(entry));
+        const legacy = Boolean(sharedUnknown || VoiceOfMLReaderStore.isLocalLegacyChapterRecord?.(entry) ||
+          (legacySource && (entry.url === readerContext.sourceUrl || entry.url === recordKey) &&
+           readerContext.normalizeSourceUrl(entry.chapterManifest || "") !==
+             readerContext.normalizeSourceUrl(readerContext.chapterManifestUrl || readerContext.sourceUrl)));
         open.type = "button";
         open.className = "panel-item-main";
-        open.textContent = readerContext.panelState.showingAllBookmarks
+        const label = readerContext.panelState.showingAllBookmarks
           ? `${entry.title || "未命名书籍"} · ${entry.label}`
           : entry.label;
-        open.addEventListener("click", () =>
-          entry.url !== readerContext.sourceUrl
+        const entryOriginal = legacySource && legacy ? localOriginal(entry.url) : "";
+        const localOriginLabel = sharedUnknown ? "来源未确认" : legacySource && legacy ?
+          (!currentOriginal || !entryOriginal ? "来源未确认" :
+            currentOriginal === entryOriginal ? "同原件地址" : "其他原件地址") : "";
+        open.textContent = legacy ? `${label}（旧版位置${localOriginLabel ? ` · ${localOriginLabel}` : ""}）` : label;
+        open.addEventListener("click", () => legacy
+          ? readerContext.showDownloadFeedback("旧书签位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0)
+          : entry.url !== recordKey
             ? readerContext.navigateReader(entry.readerUrl, entry)
             : readerContext.restoreFormat(readerContext.capability.mode, entry)
         );
@@ -299,7 +335,12 @@ export function createReaderBookmarks(readerContext) {
         edit.textContent = "编辑";
         edit.setAttribute("aria-label", `编辑书签：${open.textContent}`);
         edit.addEventListener("click", () => readerContext.openBookmarkPopover(edit, entry));
-        row.append(open, edit, remove, excerpt, meta);
+        if (legacy) {
+          const note = document.createElement("p");
+          note.className = "bookmark-excerpt";
+          note.textContent = "旧书签位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。";
+          row.append(open, note, excerpt, meta);
+        } else row.append(open, edit, remove, excerpt, meta);
         list.appendChild(row);
       }
       if (!list.childElementCount) readerContext.emptyPanel(list, "暂无书签");

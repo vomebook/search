@@ -5,7 +5,74 @@
   const BOOKMARK_STORE_NAME = "bookmarks";
   const MAX_ENTRIES = 200;
   const SCHEMA_VERSION = 1;
-  const DB_VERSION = 3;
+  // LOCAL NEW-CLIENT EXPERIMENT: an additive upgrade blocks fixed-v3 clients
+  // rather than keeping them compatible. No records or stores are copied or
+  // deleted. Do not deploy until upgrade, blocked tabs and rollback are tested.
+  const DB_VERSION = ["127.0.0.1", "localhost"].includes(root.location?.hostname) ? 4 : 3;
+  // Read-only, loopback-only diagnostics for three exact historical CHM
+  // paths. Not a storage fence: old tabs can still mutate these records.
+  const LOCAL_CHM_OLD = new Set([
+    "chapters/ebook/chm/8b1e4e4a539a58757be5d1012861f3cacda416e39ee461e1ea521d95921009ce/bc50c5be8c985411/chapter-manifest.json",
+    "chapters/ebook/chm/a30c4f7dc0d7ee59778e252ec4e49757d8ab4cf142d2798257030c483c09f4e0/1d4db6aed8930887/chapter-manifest.json",
+    "chapters/ebook/chm/a72ce4c104a891febdfdb90f1a40171b0edb7435b8e6251801a43989c67a88f1/551923a5166cf5b8/chapter-manifest.json"
+  ]);
+  const LOCAL_CHM_ALIASES = new Map([
+    ["chapters/ebook/chm/8b1e4e4a539a58757be5d1012861f3cacda416e39ee461e1ea521d95921009ce/18ba3952389e349e/chapter-manifest.json",
+     "chapters/ebook/chm/8b1e4e4a539a58757be5d1012861f3cacda416e39ee461e1ea521d95921009ce/bc50c5be8c985411/chapter-manifest.json"],
+    ["chapters/ebook/chm/a30c4f7dc0d7ee59778e252ec4e49757d8ab4cf142d2798257030c483c09f4e0/ec25ac797cc0bee4/chapter-manifest.json",
+     "chapters/ebook/chm/a30c4f7dc0d7ee59778e252ec4e49757d8ab4cf142d2798257030c483c09f4e0/1d4db6aed8930887/chapter-manifest.json"],
+    ["chapters/ebook/chm/a72ce4c104a891febdfdb90f1a40171b0edb7435b8e6251801a43989c67a88f1/f71b585b61ea8b3b/chapter-manifest.json",
+     "chapters/ebook/chm/a72ce4c104a891febdfdb90f1a40171b0edb7435b8e6251801a43989c67a88f1/551923a5166cf5b8/chapter-manifest.json"]
+  ]);
+  function localChmPath(raw) {
+    if (!["127.0.0.1", "localhost"].includes(root.location?.hostname) || typeof raw !== "string") return null;
+    try {
+      const url = new URL(raw), keys = [...url.searchParams.keys()];
+      return url.protocol === "https:" && url.host === "voiceofml-search.hf.space" &&
+        !url.username && !url.password && !url.hash && url.pathname === "/api/reader-bucket-resource" &&
+        keys.length === 1 && keys[0] === "path" ? url.searchParams.get("path") : null;
+    } catch (_) { return null; }
+  }
+  function localLegacyChapterUrl(newUrl) {
+    const old = LOCAL_CHM_ALIASES.get(localChmPath(newUrl));
+    return old ? `https://voiceofml-search.hf.space/api/reader-bucket-resource?path=${old}` : "";
+  }
+  function localSplitChapterUrl(oldUrl) {
+    const oldPath = localChmPath(oldUrl);
+    for (const [split, old] of LOCAL_CHM_ALIASES)
+      if (oldPath && oldPath === old)
+        return `https://voiceofml-search.hf.space/api/reader-bucket-resource?path=${encodeURIComponent(split)}`;
+    return "";
+  }
+  function isLocalLegacyChapterUrl(raw) { return LOCAL_CHM_OLD.has(localChmPath(raw)); }
+  function isLocalLegacyChapterRecord(record) {
+    return Boolean(record && (isLocalLegacyChapterUrl(record.url) || isLocalLegacyChapterUrl(record.chapterManifest)));
+  }
+  function localSameLegacyChapter(left, right) {
+    const path = localChmPath(left);
+    return LOCAL_CHM_OLD.has(path) && path === localChmPath(right);
+  }
+  function localSameSplitChapter(left, right) {
+    const leftPath = localChmPath(left), rightPath = localChmPath(right);
+    return Boolean(leftPath && LOCAL_CHM_ALIASES.has(leftPath) && leftPath === rightPath);
+  }
+  // New-client-only test namespace for the two records sharing the same
+  // derived manifest. Resource URLs remain untouched; the key is never used
+  // for fetching or downloading. Unrecognized IDs keep the existing key.
+  function localBookRecordKey(id, resource) {
+    const path = localChmPath(resource);
+    // A direct old manifest has no proven bibliographic owner. Give it a
+    // distinct key instead of replacing either the old or shared records.
+    const directOldPath = LOCAL_CHM_OLD.has(path) ? path : LOCAL_CHM_ALIASES.get(path);
+    if (!id && directOldPath) return `urn:voiceofml:reader-direct-chm:${directOldPath}`;
+    if (path !== "chapters/ebook/chm/8b1e4e4a539a58757be5d1012861f3cacda416e39ee461e1ea521d95921009ce/18ba3952389e349e/chapter-manifest.json" ||
+        !["29b1i0i45mj7g", "0bkdmor8l52rg"].includes(id)) return resource;
+    return `urn:voiceofml:reader-book:${id}`;
+  }
+  function isLocalSharedSplitRecord(entry) {
+    return localChmPath(entry?.url) ===
+      "chapters/ebook/chm/8b1e4e4a539a58757be5d1012861f3cacda416e39ee461e1ea521d95921009ce/18ba3952389e349e/chapter-manifest.json";
+  }
   const script = /** @type {HTMLScriptElement | null | undefined} */ (root.document?.currentScript);
   const STORE_VERSION = script?.dataset.readerStoreVersion ||
     /reader-store\.([0-9a-f]{12})\.js(?:\?|$)/.exec(script?.src || "")?.[1] || "";
@@ -70,6 +137,12 @@
         const database = request.result;
         const upgrade = request.transaction;
         if (!upgrade) throw new Error("Reader database upgrade has no transaction");
+        // A blocked request may become unblocked after its promise was already
+        // rejected. Abort that now-stale upgrade before changing the schema.
+        if (databasePromise !== opening) {
+          upgrade.abort();
+          return;
+        }
         const store = database.objectStoreNames.contains(STORE_NAME)
           ? upgrade.objectStore(STORE_NAME)
           : database.createObjectStore(STORE_NAME, { keyPath: "url" });
@@ -184,6 +257,15 @@
       const existing = store.get(entry.url);
       existing.onsuccess = () => {
         if (existing.result) {
+          // LOCAL DIAGNOSTIC: perform the old/new guard inside the write
+          // transaction, not in the earlier asynchronous UI lookup.
+          const oldAfter = localLegacyChapterUrl(entry.chapterManifest || "");
+          if (oldAfter && !localSameSplitChapter(existing.result.chapterManifest, entry.chapterManifest)) {
+            abortReason = new Error("Local CHM legacy history is read-only");
+            abortReason.name = "LocalLegacyHistoryError";
+            tx.abort();
+            return;
+          }
           if (existing.result.schemaVersion != null && existing.result.schemaVersion !== SCHEMA_VERSION) {
             tx.abort();
             return;
@@ -300,16 +382,68 @@
       tx.onabort = () => reject(tx.error || new Error("Reader history clear aborted"));
     }));
   }
+  async function localLegacyHistoryCount() {
+    if (!["127.0.0.1", "localhost"].includes(root.location?.hostname)) return 0;
+    const database = await openDatabase();
+    return new Promise((resolve, reject) => {
+      let count = 0;
+      const tx = database.transaction(STORE_NAME, "readonly"), request = tx.objectStore(STORE_NAME).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        if (isLocalLegacyChapterUrl(cursor.primaryKey) || isLocalLegacyChapterRecord(cursor.value)) count++;
+        cursor.continue();
+      };
+      tx.oncomplete = () => resolve(count);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error("Local CHM history count failed"));
+    });
+  }
+  async function localClearHistoryIfNoLegacy() {
+    if (!["127.0.0.1", "localhost"].includes(root.location?.hostname))
+      throw new Error("Local CHM experiment only");
+    const database = await openDatabase();
+    await new Promise((resolve, reject) => {
+      let abortReason = null;
+      const tx = database.transaction(STORE_NAME, "readwrite"), request = tx.objectStore(STORE_NAME).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const value = cursor.value;
+        if (isLocalLegacyChapterUrl(cursor.primaryKey) || isLocalLegacyChapterRecord(value)) {
+          abortReason = new Error("Local CHM legacy history is present");
+          abortReason.name = "LocalLegacyHistoryError";
+          tx.abort();
+          return;
+        }
+        if (value && (value.schemaVersion == null || value.schemaVersion === SCHEMA_VERSION) &&
+            normalizeHistoryEntry(value) && typeof value.lastReadAt === "number" && Number.isFinite(value.lastReadAt))
+          cursor.delete();
+        cursor.continue();
+      };
+      tx.oncomplete = () => { notify({ type: "history-clear" }); resolve(); };
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(abortReason || tx.error || new Error("Local CHM history clear aborted"));
+    });
+  }
   async function putBookmark(entry) {
     const supplied = entry;
     entry = normalizeBookmarkEntry(entry);
     if (!entry) throw new TypeError("Invalid reader bookmark entry");
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
+      let abortReason = null;
       const tx = database.transaction(BOOKMARK_STORE_NAME, "readwrite");
       const store = tx.objectStore(BOOKMARK_STORE_NAME);
       const existing = store.get(entry.id);
       existing.onsuccess = () => {
+        const oldAfter = localLegacyChapterUrl(entry.chapterManifest || "");
+        if (existing.result && oldAfter && !localSameSplitChapter(existing.result.chapterManifest, entry.chapterManifest)) {
+          abortReason = new Error("Local CHM legacy bookmark is read-only");
+          abortReason.name = "LocalLegacyBookmarkError";
+          tx.abort();
+          return;
+        }
         if (existing.result?.schemaVersion != null && existing.result.schemaVersion !== SCHEMA_VERSION) {
           tx.abort();
           return;
@@ -329,7 +463,7 @@
         resolve();
       };
       tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
+      tx.onabort = () => reject(abortReason || tx.error || new Error("Reader bookmark transaction aborted"));
     }));
   }
   async function listBookmarks(url) {
@@ -337,6 +471,34 @@
       query: IDBKeyRange.only(url)
     });
     return entries.sort((a, b) => b.createdAt - a.createdAt);
+  }
+  async function localLegacyRecords(url) {
+    if (!isLocalLegacyChapterUrl(url)) throw new TypeError("Unreviewed local CHM history");
+    const database = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const records = {history: [], bookmarks: []};
+      const tx = database.transaction([STORE_NAME, BOOKMARK_STORE_NAME], "readonly");
+      for (const [storeName, field, normalize] of [
+        [STORE_NAME, "history", normalizeHistoryEntry],
+        [BOOKMARK_STORE_NAME, "bookmarks", normalizeBookmarkEntry]
+      ]) {
+        const request = tx.objectStore(storeName).openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          const raw = cursor.value;
+          if (raw && (raw.schemaVersion == null || raw.schemaVersion === SCHEMA_VERSION) &&
+              (localSameLegacyChapter(raw.url, url) || localSameLegacyChapter(raw.chapterManifest, url))) {
+            const value = normalize(raw);
+            if (value) records[field].push(value);
+          }
+          cursor.continue();
+        };
+      }
+      tx.oncomplete = () => resolve(records);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error("Local CHM records could not be read"));
+    });
   }
   function listAllBookmarks() {
     return listEntries(BOOKMARK_STORE_NAME, "createdAt", normalizeBookmarkEntry, {
@@ -376,6 +538,16 @@
     clearHistory,
     putBookmark,
     listBookmarks,
+    localLegacyChapterUrl,
+    localSplitChapterUrl,
+    isLocalLegacyChapterUrl,
+    isLocalLegacyChapterRecord,
+    isLocalSharedSplitRecord,
+    localBookRecordKey,
+    localSameLegacyChapter,
+    localLegacyRecords,
+    localLegacyHistoryCount,
+    localClearHistoryIfNoLegacy,
     listAllBookmarks,
     removeBookmark,
     subscribe,

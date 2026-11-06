@@ -95,9 +95,10 @@ export function createReaderBindings(readerContext) {
     readerContext.readerRuntime.track(
       VoiceOfMLReaderStore.subscribe?.((change) => {
         if (!change?.remote || readerContext.readerLifecycle.disposed) return;
+        const recordKey = VoiceOfMLReaderStore.localBookRecordKey?.(readerContext.readerId, readerContext.sourceUrl) || readerContext.sourceUrl;
         if (
           change.type === "history-clear" ||
-          (change.type === "history-remove" && change.url === readerContext.sourceUrl)
+          (change.type === "history-remove" && change.url === recordKey)
         ) {
           readerContext.historySuppressed = true;
           readerContext.readerRuntime.cancel(readerContext.saveTimer);
@@ -110,7 +111,7 @@ export function createReaderBindings(readerContext) {
           readerContext.renderHistory();
         if (
           ["bookmark", "bookmark-remove"].includes(change.type) &&
-          (readerContext.panelState.showingAllBookmarks || !change.url || change.url === readerContext.sourceUrl) &&
+          (readerContext.panelState.showingAllBookmarks || !change.url || change.url === recordKey) &&
           !/** @type {HTMLElement} */ (document.querySelector("#bookmarks-panel")).hidden
         )
           readerContext.renderBookmarks();
@@ -478,13 +479,18 @@ export function createReaderBindings(readerContext) {
         excerpt = readerContext.bookmarkExcerptInput.value.trim();
       button.disabled = true;
       try {
+        const recordKey = VoiceOfMLReaderStore.localBookRecordKey?.(readerContext.readerId, readerContext.sourceUrl) || readerContext.sourceUrl;
+        const localLegacy = VoiceOfMLReaderStore.localLegacyChapterUrl?.(readerContext.chapterManifestUrl) || "";
+        if (!editing && localLegacy && recordKey === readerContext.sourceUrl &&
+            VoiceOfMLReaderStore.localSameLegacyChapter?.(readerContext.sourceUrl, localLegacy))
+          throw new Error("本地测试：旧章节键下不能保存新书签");
         await VoiceOfMLReaderStore.putBookmark(
           editing
             ? { ...editing, label, excerpt }
             : {
                 ...snapshot,
-                id: `${readerContext.sourceUrl}\0${snapshot.locator}`,
-                url: readerContext.sourceUrl,
+                id: `${recordKey}\0${snapshot.locator}`,
+                url: recordKey,
                 title: readerContext.documentState.title,
                 extension: readerContext.extension,
                 readerUrl: readerContext.currentReaderUrl().href,
@@ -583,7 +589,12 @@ export function createReaderBindings(readerContext) {
       if (!confirm("清空全部阅读历史？")) return;
       readerContext.historySuppressed = true;
       await readerContext.progressSaveChain;
-      await VoiceOfMLReaderStore.clearHistory();
+      try {
+        await VoiceOfMLReaderStore.clearHistory();
+      } catch (_) {
+        readerContext.showDownloadFeedback("清空阅读历史失败；本页暂不自动保存，请刷新后重试。", 0);
+        return;
+      }
       readerContext.renderHistory();
     });
     // A close snapshot can fail after the iframe has been detached, so report
@@ -591,7 +602,8 @@ export function createReaderBindings(readerContext) {
     try {
       Promise.resolve(VoiceOfMLReaderStore.isHistoryFull?.()).then((full) => {
         if (!full || readerContext.readerLifecycle.disposed) return;
-        return VoiceOfMLReaderStore.get(readerContext.sourceUrl).then((entry) => {
+        const recordKey = VoiceOfMLReaderStore.localBookRecordKey?.(readerContext.readerId, readerContext.sourceUrl) || readerContext.sourceUrl;
+        return VoiceOfMLReaderStore.get(recordKey).then((entry) => {
           if (!entry && !readerContext.readerLifecycle.disposed)
             readerContext.progressNotSaved({ name: "ReaderHistoryFullError" });
         });

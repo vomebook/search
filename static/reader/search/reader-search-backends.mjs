@@ -27,12 +27,15 @@ export function createReaderSearchBackends(readerContext) {
     if (!readerContext.chapterSearchConfiguration) throw new Error("本书暂无完整全文搜索索引");
     const module = await readerContext.chapterSearchModule();
     if (!readerContext.isReaderGenerationCurrent("search", generation)) return;
+    const local = readerContext.chapterSearchConfiguration.localChm;
+    const configuration = local ? (await local.acquire()).configuration : readerContext.chapterSearchConfiguration;
+    if (!readerContext.isReaderGenerationCurrent("search", generation)) return;
     if (readerContext.chapterSearchClient?.failed) {
       readerContext.chapterSearchClient.dispose();
       readerContext.chapterSearchClient = null;
     }
     if (!readerContext.chapterSearchClient)
-      readerContext.chapterSearchClient = module.createChapterSearch(readerContext.chapterSearchConfiguration);
+      readerContext.chapterSearchClient = module.createChapterSearch(configuration);
     const page = await readerContext.chapterSearchClient.search(query, partial => {
       if (!readerContext.isReaderGenerationCurrent("search", generation)) return;
       readerContext.applyChapterSearchPage(partial);
@@ -45,6 +48,35 @@ export function createReaderSearchBackends(readerContext) {
   }
 
   async function navigateChapterSearchResult(result, generation) {
+    const local = readerContext.chapterSearchConfiguration?.localChm;
+    if (local) {
+      const {bridge} = await local.acquire();
+      const current = () => readerContext.isReaderGenerationCurrent("navigation", generation);
+      if (!current()) return false;
+      if (!result || !Number.isInteger(result.chapterIndex) || ![1, 2].includes(result.chapterIndex) ||
+          !Number.isSafeInteger(result.start) || !Number.isSafeInteger(result.length) || result.start < 0 ||
+          result.length < 1 || result.length > 2048)
+        throw new Error("本地 CHM 搜索测试：结果格式无效");
+      const indices = result.chapterIndex === 1 ? [1] : bridge.spans
+        .filter(span => span.start < result.start + result.length && span.end > result.start)
+        .map(span => span.chapter);
+      if (!indices.length) throw new Error("本地 CHM 搜索测试：无法定位结果");
+      const release = local.pin(indices);
+      try {
+        readerContext.clearFullSearchMarks();
+        const parts = await bridge.locate(result, local.load, {current, signal: readerContext.readerAbortController.signal});
+        if (!current()) return false;
+        const marks = readerContext.highlightTextParts(parts.flatMap(row => row.parts));
+        if (!marks.length) throw new Error("本地 CHM 搜索测试：没有可高亮的文字");
+        if (!current()) { readerContext.clearFullSearchMarks(); return false; }
+        readerContext.foliateScrollAnchors.invalidate();
+        marks[0].scrollIntoView({block: "center"});
+        readerContext.foliateScrollAnchors.remember();
+        readerContext.updateProgressTools();
+        readerContext.scheduleSave();
+        return true;
+      } finally { release(); }
+    }
     const article = await readerContext.chapterManifestLoader?.(result.chapterIndex);
     if (!article || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     const module = await readerContext.chapterSearchModule();

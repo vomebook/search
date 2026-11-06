@@ -263,8 +263,19 @@ export function createReaderUi(readerContext) {
         const link = document.createElement("button");
         link.type = "button";
         link.className = "panel-item-main";
-        link.textContent = entry.title || entry.url;
-        link.addEventListener("click", () => readerContext.navigateReader(entry.readerUrl));
+        const localOld = VoiceOfMLReaderStore.localLegacyChapterUrl?.(
+          readerContext.chapterManifestUrl || readerContext.sourceUrl) || "";
+        const recordKey = VoiceOfMLReaderStore.localBookRecordKey?.(readerContext.readerId, readerContext.sourceUrl) || readerContext.sourceUrl;
+        const sharedUnknown = Boolean(VoiceOfMLReaderStore.isLocalSharedSplitRecord?.(entry));
+        const localLegacy = Boolean(sharedUnknown || VoiceOfMLReaderStore.isLocalLegacyChapterRecord?.(entry) ||
+          (localOld && (entry.url === readerContext.sourceUrl || entry.url === recordKey) &&
+           readerContext.normalizeSourceUrl(entry.chapterManifest || "") !==
+             readerContext.normalizeSourceUrl(readerContext.chapterManifestUrl || readerContext.sourceUrl)));
+        const label = entry.title || entry.url;
+        link.textContent = localLegacy ? `${label}（旧版位置${sharedUnknown ? " · 来源未确认" : ""}）` : label;
+        link.addEventListener("click", () => localLegacy
+          ? readerContext.showDownloadFeedback("旧阅读位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。", 0)
+          : readerContext.navigateReader(entry.readerUrl));
         const meta = document.createElement("small");
         meta.textContent = `${entry.pageCount ? `第 ${entry.page || 1} / ${entry.pageCount} 页 · ` : ""}${new Date(entry.lastReadAt).toLocaleString()}`;
         const remove = document.createElement("button");
@@ -273,14 +284,19 @@ export function createReaderUi(readerContext) {
         remove.textContent = "删除";
         remove.setAttribute("aria-label", `删除阅读记录：${entry.title || entry.url}`);
         remove.addEventListener("click", async () => {
-          if (entry.url === readerContext.sourceUrl) {
+          const recordKey = VoiceOfMLReaderStore.localBookRecordKey?.(readerContext.readerId, readerContext.sourceUrl) || readerContext.sourceUrl;
+          if (entry.url === recordKey) {
             readerContext.historySuppressed = true;
             await readerContext.progressSaveChain;
           }
           await VoiceOfMLReaderStore.remove(entry.url);
           readerContext.renderHistory();
         });
-        row.append(link, remove, meta);
+        if (localLegacy) {
+          const note = document.createElement("p");
+          note.textContent = "旧阅读位置无法准确转换；旧记录仍保留，请使用目录或搜索定位。";
+          row.append(link, note, meta);
+        } else row.append(link, remove, meta);
         list.appendChild(row);
       }
       if (!list.childElementCount) readerContext.emptyPanel(list, "暂无阅读记录");

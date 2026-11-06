@@ -1,3 +1,5 @@
+import { localCandidateSearch } from "../search/chm-local-integration.mjs";
+
 // The current MOBI chapter manifest for this five-volume edition contains
 // cross-volume sidebar targets that point back into volume 1. Its own verified
 // "总目录" links and each volume's adjacent "书名页" independently identify
@@ -64,6 +66,18 @@ export function createReaderChapterFormat(readerContext) {
     let chapterPreviousObserver = null;
     const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
     if (!manifestBase) throw new Error("EPUB_INVALID_MANIFEST_PATH");
+    const localSearch = await localCandidateSearch(readerContext, manifestBase, manifestBytes);
+    const localChapterBytes = new WeakMap();
+    const pinnedSearchChapters = new Map();
+    // INERT LOCAL DIAGNOSTIC unless the isolated test injects an ephemeral
+    // mapping after independently comparing complete source/target bytes.
+    // Original chapter bytes remain unchanged for search verification.
+    const localImageAliases = localSearch?.source === "a72ce4c104a891febdfdb90f1a40171b0edb7435b8e6251801a43989c67a88f1" &&
+      ["127.0.0.1", "localhost"].includes(location.hostname) &&
+      window.__CHM_LOCAL_VERIFIED_ALIASES__ instanceof Map ? window.__CHM_LOCAL_VERIFIED_ALIASES__ : null;
+    const unsubscribeLocalSearch = localSearch ? readerContext.readerRuntime.events.on("generation", ({name}) => {
+      if (name === "search") localSearch.cancel();
+    }) : () => {};
     const searchIndex = manifest.search_index;
     readerContext.chapterSearchConfiguration =
       searchIndex?.path === "epub-search-index.json.gz" &&
@@ -98,6 +112,38 @@ export function createReaderChapterFormat(readerContext) {
       if (!value || value.startsWith("#")) return null;
       return readerContext.trustedChapterResourceUrl(value, base, attribute, manifestBase);
     };
+    const localImageRepresentative = localImageAliases ? resourceUrl(
+      "../resources/chapter-0002/data-url-image17.gif", chapterUrl(chapterAt(2)), "resource") : null;
+    let localImageBlobUrl = "", localImageVerification = null, localImageCleaned = false;
+    const releaseLocalImage = () => {
+      if (localImageCleaned) return;
+      localImageCleaned = true;
+      if (localImageBlobUrl) URL.revokeObjectURL(localImageBlobUrl);
+      localImageBlobUrl = "";
+    };
+    if (localImageAliases) readerContext.trackReaderResource(releaseLocalImage);
+    const acquireLocalImage = () => {
+      if (localImageVerification) return localImageVerification;
+      localImageVerification = (async () => {
+        if (!localImageRepresentative) throw new Error("本地 CHM 测试：代表图不可用");
+        const response = await readerContext.fetchReaderUrl(localImageRepresentative, {
+          signal: readerContext.readerAbortController.signal
+        });
+        if (!response.ok) throw new Error("本地 CHM 测试：代表图读取失败");
+        const bytes = await VoiceOfMLReaderSecurity.readBytes(response, 342);
+        if (bytes.byteLength !== 342) throw new Error("本地 CHM 测试：代表图长度不匹配");
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        const hex = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+        if (hex !== "26d32a822a28d0316fef4d3a04b20d9c9e9e8415bd8cce1cd261394792eaebe2")
+          throw new Error("本地 CHM 测试：代表图身份不匹配");
+        readerContext.assertReaderActive();
+        if (localImageCleaned) throw new DOMException("Reader closed", "AbortError");
+        localImageBlobUrl = URL.createObjectURL(new Blob([bytes], {type: "image/gif"}));
+        return localImageBlobUrl;
+      })();
+      return localImageVerification;
+    };
+    if (localImageAliases?.size) await acquireLocalImage();
     const insertChapter = (article) => {
       const existing = frame.querySelector(
         `.reader-epub-chapter[data-chapter="${article.dataset.chapter}"]`
@@ -211,6 +257,14 @@ export function createReaderChapterFormat(readerContext) {
         try {
           readerContext.assertReaderActive();
           signal.throwIfAborted();
+          if (localImageAliases) {
+            if (!Number.isSafeInteger(chapter.bytes) || chapter.bytes !== bytes.byteLength ||
+                !/^[0-9a-f]{64}$/.test(chapter.sha256 || "")) throw new Error("本地 CHM 测试：章节身份校验失败");
+            const digest = await crypto.subtle.digest("SHA-256", bytes);
+            const hex = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+            if (hex !== chapter.sha256) throw new Error("本地 CHM 测试：章节身份校验失败");
+          }
+          signal.throwIfAborted();
           const doc = readerContext.parseChapterDocument(new TextDecoder().decode(bytes));
           for (const element of doc.querySelectorAll("*")) {
             for (const name of ["src", "href", "poster", "xlink:href"])
@@ -218,7 +272,16 @@ export function createReaderChapterFormat(readerContext) {
                 const value = element.getAttribute(name) || "";
                 if (name === "href" && element.localName === "a" &&
                     readerContext.trustedChapterReferenceUrl(value, url, manifestBase)) continue;
-                const resolved = resourceUrl(value, url, name === "href" ? "href" : "resource");
+                let resolved = resourceUrl(value, url, name === "href" ? "href" : "resource");
+                if (localImageAliases && name === "src" && element.localName === "img" && resolved &&
+                    localImageAliases.has(resolved)) {
+                  const alias = localImageAliases.get(resolved);
+                  if (typeof alias !== "string" || !localImageRepresentative || alias !== localImageRepresentative)
+                    throw new Error("本地 CHM 测试：图片别名不可信");
+                  resolved = await acquireLocalImage();
+                  readerContext.assertReaderActive();
+                  signal.throwIfAborted();
+                }
                 if (resolved) element.setAttribute(name, resolved);
                 else if (!(name === "href" && value.startsWith("#"))) element.removeAttribute(name);
               }
@@ -239,6 +302,7 @@ export function createReaderChapterFormat(readerContext) {
           insertChapter(article);
           loaded.add(chapter.index);
           retainedBytes.set(chapter.index, bytes.byteLength);
+          if (localSearch) localChapterBytes.set(article, bytes);
           inserted = true;
           if (mergedChmToc) repairMergedChmToc(article, chapter);
           for (const entry of readerContext.navigationState.tocEntries)
@@ -367,6 +431,7 @@ export function createReaderChapterFormat(readerContext) {
       getIndex: article => Number(article.dataset.chapter),
       getHeight: article => article.getBoundingClientRect().height,
       canVirtualize: article => {
+        if (pinnedSearchChapters.has(Number(article.dataset.chapter))) return false;
         if (Number(article.dataset.chapter) === navigationTargetChapter) return false;
         const rect = article.getBoundingClientRect(), view = readerContext.viewport.getBoundingClientRect();
         const selection = window.getSelection();
@@ -459,6 +524,11 @@ export function createReaderChapterFormat(readerContext) {
     readerContext.chapterManifestCleanup = () => {
       if (chapterCleaned) return;
       chapterCleaned = true;
+      unsubscribeLocalSearch();
+      localSearch?.dispose();
+      releaseLocalImage();
+      if (localSearch && readerContext.chapterSearchConfiguration?.localChm)
+        readerContext.chapterSearchConfiguration.localChm = null;
       navigationProtectionCleanup?.();
       chapterWindowReady = false;
       cancelAnimationFrame(chapterWindowFrame);
@@ -474,6 +544,7 @@ export function createReaderChapterFormat(readerContext) {
       for (const bytes of retainedBytes.values()) chapterBudget.release(bytes);
       retainedBytes.clear();
       loaded.clear();
+      pinnedSearchChapters.clear();
     };
     readerContext.trackReaderResource(readerContext.chapterManifestCleanup);
     readerContext.chapterManifestLoader = async (index) => {
@@ -486,6 +557,31 @@ export function createReaderChapterFormat(readerContext) {
       return frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`);
     };
     readerContext.chapterManifestLoader.count = manifest.chapters.length;
+    if (localSearch) {
+      readerContext.chapterSearchConfiguration.localChm = {
+        ...localSearch,
+        load: async index => {
+          const article = await readerContext.chapterManifestLoader(index);
+          const bytes = article && localChapterBytes.get(article);
+          if (!article || !bytes) throw new Error("本地 CHM 搜索测试：章节身份不可用");
+          return { article, bytes };
+        },
+        pin: indices => {
+          for (const index of indices) pinnedSearchChapters.set(index, (pinnedSearchChapters.get(index) || 0) + 1);
+          let released = false;
+          return () => {
+            if (released) return;
+            released = true;
+            for (const index of indices) {
+              const count = pinnedSearchChapters.get(index) || 0;
+              if (count <= 1) pinnedSearchChapters.delete(index);
+              else pinnedSearchChapters.set(index, count - 1);
+            }
+            scheduleChapterWindow();
+          };
+        }
+      };
+    }
     setChapterToc();
     await readerContext.getInitialReaderRestoration();
     const savedChapter = Number(readerContext.readerRestorationEntry?.chapterIndex) - 1;
@@ -538,6 +634,25 @@ export function createReaderChapterFormat(readerContext) {
     if (!readerContext.chapterManifestLoader || !Number.isInteger(entry.chapterIndex)) return false;
     const chapter = await readerContext.chapterManifestLoader(entry.chapterIndex);
     if (!chapter?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
+    // LOCAL EXPERIMENT ONLY: a pixel offset outside the chapter's current
+    // layout is not proof of corrupt data (zoom, fonts and images can change
+    // it). Do not claim an exact landing or autosave over the prior history.
+    // Negative offsets can be legitimately captured at a chapter boundary.
+    const localLegacy = VoiceOfMLReaderStore.localLegacyChapterUrl?.(
+      readerContext.chapterManifestUrl || readerContext.sourceUrl);
+    if (localLegacy) {
+      const offset = entry.chapterOffset;
+      const top = chapter.getBoundingClientRect().top - readerContext.viewport.getBoundingClientRect().top;
+      const desired = typeof offset === "number" ? readerContext.viewport.scrollTop + top - 8 + offset : NaN;
+      const maxScroll = readerContext.viewport.scrollHeight - readerContext.viewport.clientHeight;
+      if (!Number.isFinite(offset) || offset > chapter.getBoundingClientRect().height + 0.5 ||
+          desired < -0.5 || desired > maxScroll + 0.5) {
+        readerContext.historySuppressed = true;
+        readerContext.showDownloadFeedback(
+          "阅读位置无法在当前版式准确定位；原记录仍保留。本页暂不自动保存进度，可调整缩放或使用目录、搜索定位。", 0);
+        return "local-chm-position-unavailable";
+      }
+    }
     readerContext.viewport.scrollTop +=
       chapter.getBoundingClientRect().top -
       readerContext.viewport.getBoundingClientRect().top -

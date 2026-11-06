@@ -1,4 +1,70 @@
 export function createReaderFormatController(readerContext) {
+  // Fixed identities are test fixtures only, not a production trust source.
+  const localReviewedBooks = new Map([
+    ["29b1i0i45mj7g", ["chapters/ebook/chm/8b1e4e4a539a58757be5d1012861f3cacda416e39ee461e1ea521d95921009ce/bc50c5be8c985411/chapter-manifest.json", "6b68299f415c8bd629b03c80961d3a55b8260f960dbd662891f28266e5112d5f"]],
+    ["0bkdmor8l52rg", ["chapters/ebook/chm/8b1e4e4a539a58757be5d1012861f3cacda416e39ee461e1ea521d95921009ce/bc50c5be8c985411/chapter-manifest.json", "23f33136458f715f5425fd35dff3975a5eb03a062668cb7b3d155fc56ea4deee"]],
+    ["1nd5z6md7qzl6", ["chapters/ebook/chm/a30c4f7dc0d7ee59778e252ec4e49757d8ab4cf142d2798257030c483c09f4e0/1d4db6aed8930887/chapter-manifest.json", "a55a438fb5b401ee82ea5fc109c07ff8ada364456ffc1b521b38ee22453626bf"]],
+    ["13i6hffuvzujn", ["chapters/ebook/chm/a72ce4c104a891febdfdb90f1a40171b0edb7435b8e6251801a43989c67a88f1/551923a5166cf5b8/chapter-manifest.json", "755fc096ef0aa82cd9c450c6e2783375b4e4a37fd11e2abb306bde1d70363ae4"]]
+  ]);
+
+  async function verifyLocalReviewedBook(id, source, manifest, download) {
+    if (!["127.0.0.1", "localhost"].includes(location.hostname)) return;
+    if (!localReviewedBooks.has(id)) {
+      if ([source, manifest].some(url => VoiceOfMLReaderStore.isLocalLegacyChapterUrl?.(url) ||
+          VoiceOfMLReaderStore.localLegacyChapterUrl?.(url)))
+        throw new Error("本地 CHM 测试：未确认书目身份");
+      return;
+    }
+    const [reviewedPath, expected] = localReviewedBooks.get(id);
+    const old = `https://voiceofml-search.hf.space/api/reader-bucket-resource?path=${encodeURIComponent(reviewedPath)}`;
+    const matches = raw => {
+      const legacy = VoiceOfMLReaderStore.localLegacyChapterUrl?.(raw) || raw;
+      return VoiceOfMLReaderStore.localSameLegacyChapter?.(legacy, old);
+    };
+    if (!matches(source) || (manifest && !matches(manifest)))
+      throw new Error("本地 CHM 测试：书目章节身份不匹配");
+    try {
+      const url = new URL(download);
+      if (url.protocol !== "https:" || url.host !== "huggingface.co" || url.username || url.password ||
+          url.search || url.hash || !/^\/datasets\/VoiceOfML\/[^/]+\/resolve\/main\/.+\.chm$/i.test(url.pathname) ||
+          typeof VoiceOfMLReader.shortSourceId !== "function" || typeof VoiceOfMLReader.canonicalSourceUrl !== "function" ||
+          VoiceOfMLReader.shortSourceId(url.href) !== id || !crypto?.subtle) throw new Error("source identity differs");
+      const canonical = VoiceOfMLReader.canonicalSourceUrl(url.href);
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+      readerContext.assertReaderActive();
+      const hex = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+      if (hex !== expected) throw new Error("source URL fingerprint differs");
+    } catch (_) {
+      readerContext.assertReaderActive();
+      throw new Error("本地 CHM 测试：原始文件身份不匹配");
+    }
+  }
+
+  async function prepareLocalDirectSource() {
+    const {readerId, sourceUrl, chapterManifestUrl, downloadUrl} = readerContext;
+    if (readerId) {
+      await verifyLocalReviewedBook(readerId, sourceUrl, chapterManifestUrl, downloadUrl);
+      // Explicit ID+old URL would otherwise write to an obsolete shared key.
+      if (VoiceOfMLReaderStore.isLocalLegacyChapterUrl?.(sourceUrl))
+        throw new Error("本地 CHM 测试：请使用书目入口打开");
+    }
+    const oldManifest = chapterManifestUrl || sourceUrl;
+    // Never give two different books the same synthetic direct-history key.
+    // An explicitly supplied manifest must belong to the old source bundle.
+    if (!readerId && VoiceOfMLReaderStore.isLocalLegacyChapterUrl?.(sourceUrl) && chapterManifestUrl) {
+      const manifestOld = VoiceOfMLReaderStore.localLegacyChapterUrl?.(chapterManifestUrl) || chapterManifestUrl;
+      if (!VoiceOfMLReaderStore.localSameLegacyChapter?.(sourceUrl, manifestOld))
+        throw new Error("本地 CHM 测试：旧章节身份不一致");
+    }
+    const split = VoiceOfMLReaderStore.localSplitChapterUrl?.(oldManifest);
+    if (!readerId && split) {
+      if (VoiceOfMLReaderStore.isLocalLegacyChapterUrl?.(sourceUrl) &&
+          !VoiceOfMLReaderStore.localSameLegacyChapter?.(sourceUrl, oldManifest))
+        throw new Error("本地 CHM 测试：旧章节身份不一致");
+      readerContext.chapterManifestUrl = split;
+    }
+  }
+
   function disposeFormatResources(mode) {
     if (mode === "epub-chapters") {
       readerContext.chapterManifestCleanup?.();
@@ -100,10 +166,58 @@ export function createReaderFormatController(readerContext) {
   }
 
   async function resolveReaderSource() {
-    if (!readerContext.readerId || readerContext.sourceUrl) return;
+    if (!readerContext.readerId || readerContext.sourceUrl) {
+      await prepareLocalDirectSource();
+      return;
+    }
     readerContext.setReaderStage("resolve");
     let resolved = readerContext.cachedReaderData;
-    if (!resolved?.url) {
+    // LOCAL EXPERIMENT ONLY. Session handoffs can retain one of the three
+    // oversized manifests even after a route switches. Do not guess a new URL
+    // from the old record or fall back to stale metadata on lookup failure.
+    const localOldSources = [readerContext.cachedReaderData, readerContext.localReaderData]
+      .flatMap(data => [data?.url, data?.chapter_manifest])
+      .map(url => typeof url === "string" ? readerContext.normalizeSourceUrl(url) : "")
+      .filter(url => VoiceOfMLReaderStore.isLocalLegacyChapterUrl?.(url));
+    if (localOldSources.length) {
+      // The early inline resolver is not marked no-store. Do not consume a
+      // potentially cached response, and abort it if this Reader owns it.
+      const early = window.__VOICE_READER_RESOLVE__;
+      if (early?.id === readerContext.readerId) {
+        window.__VOICE_READER_RESOLVE__ = null;
+        early.dispose();
+      }
+      if (!localOldSources.every(url => VoiceOfMLReaderStore.localSameLegacyChapter?.(url, localOldSources[0])))
+        throw new Error("本地 CHM 测试：旧缓存来源冲突");
+      const endpoint = `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(readerContext.readerId)}`;
+      const response = await readerContext.readerRequestManager.requestBuffered(
+        endpoint, readerContext.READER_PROXY_TIMEOUT_MS, VoiceOfMLReaderSecurity.LIMITS.manifestBytes,
+        {cache: "no-store", credentials: "omit"});
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`本地 CHM 测试：解析失败 HTTP ${response.status}`);
+      }
+      const fresh = await response.json();
+      readerContext.assertReaderActive();
+      const source = readerContext.normalizeSourceUrl(typeof fresh?.url === "string" ? fresh.url : "");
+      const manifest = readerContext.normalizeSourceUrl(typeof fresh?.chapter_manifest === "string" ? fresh.chapter_manifest : "");
+      const candidateOld = VoiceOfMLReaderStore.localLegacyChapterUrl?.(source) || "";
+      const manifestOld = manifest ? VoiceOfMLReaderStore.localLegacyChapterUrl?.(manifest) || "" : candidateOld;
+      if (String(fresh?.extension || "").toLowerCase() !== "epub-chapters" ||
+          String(fresh?.original_extension || "").toLowerCase().replace(/^\./, "") !== "chm" ||
+          !VoiceOfMLReaderStore.localSameLegacyChapter?.(localOldSources[0], candidateOld) ||
+          !VoiceOfMLReaderStore.localSameLegacyChapter?.(localOldSources[0], manifestOld))
+        throw new Error("本地 CHM 测试：解析结果与旧缓存不匹配");
+      // A shared manifest is not a unique book identity. This registry is an
+      // intentionally local test fixture, not an authority for production.
+      const reviewed = localReviewedBooks.get(readerContext.readerId);
+      const reviewedPath = reviewed?.[0];
+      if (!reviewedPath || !VoiceOfMLReaderStore.localSameLegacyChapter?.(localOldSources[0],
+          `https://voiceofml-search.hf.space/api/reader-bucket-resource?path=${encodeURIComponent(reviewedPath)}`))
+        throw new Error("本地 CHM 测试：书目身份不匹配");
+      await verifyLocalReviewedBook(readerContext.readerId, source, manifest, fresh?.download);
+      resolved = fresh;
+    } else if (!resolved?.url) {
       try {
         resolved = await readerContext.resolveReaderId(readerContext.readerId);
       } catch (error) {
@@ -112,6 +226,8 @@ export function createReaderFormatController(readerContext) {
         resolved = readerContext.localReaderData;
       }
     }
+    readerContext.assertReaderActive();
+    await verifyLocalReviewedBook(readerContext.readerId, resolved.url, resolved.chapter_manifest, resolved.download);
     readerContext.assertReaderActive();
     if (String(resolved.original_extension || '').toLowerCase().replace(/^\./,'') === 'djvu' &&
         String(resolved.extension || '').toLowerCase() === 'pdf-pages') {

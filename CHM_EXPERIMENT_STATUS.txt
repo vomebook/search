@@ -1,0 +1,26 @@
+CHM READER LOCAL EXPERIMENT -- WIP ONLY, DO NOT MERGE OR DEPLOY
+
+This branch preserves an incomplete, loopback-only Reader experiment and
+its diagnostic tests. It is based on Pages commit
+b48884448c06d122fd754484e18bdb15a83be02e, not the current main branch.
+The branch is not a production fix or a safe replacement for current main.
+
+Known unresolved issues include inconsistent saved-bookmark landings in
+local Chromium/WebKit, possible false rejection of valid positions, lack of a
+user-controlled recovery path, and third-candidate image reliability. The
+in-memory image-alias diagnostic does not authenticate all original image
+paths. The fixed book/URL identity table and search adapter are local test
+fixtures, not production authorities.
+
+The diagnostic search bridge is provided separately at
+/tmp/opencode/reader-jxl-gc-20261025/chm-legacy-search-experiment.mjs and
+is loaded by local tests only; it is not included in this branch. Several
+tests also depend on other absolute local scratch paths and existing local
+chapter candidates. They are not self-contained and are not CI gates.
+
+Do not deploy, upload candidates, change production routes, release pins,
+delete resources, or run GC based on this branch. Old clients are not a
+compatibility requirement, but existing user data and originals must remain
+safe. Production work still requires writer isolation, handling unknown or
+late requests, recoverable handoff, integration with current site versions,
+and acceptance on both sites.
