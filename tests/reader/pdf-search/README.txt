@@ -27,10 +27,11 @@ PDF_WORKER_TEST_BROWSER=firefox to select Firefox. These focused tests do not
 replace real network or full Reader integration tests. The focused IndexedDB
 browser contract tests Unicode, eviction, expiry, identity and denied storage;
 the separate strict type contract rejects invalid keys, pages and text values.
-The text-store V8 gate exercises ten synthetic IndexedDB contracts using
+The text-store V8 gate exercises eleven synthetic IndexedDB contracts using
 fake-indexeddb (floors: 100% lines, 94.50% branches, 89.19% functions). Its
-nine targeted safety mutants are not exhaustive. Separate Chromium/Firefox
+ten targeted safety mutants are not exhaustive. Separate Chromium/Firefox
 contracts use native IndexedDB and two tabs with a held transaction to verify
-shared budget accounting and recovery from corrupt byte counts. These measurements apply only to this text-store
+shared budget accounting, recovery from corrupt byte counts and atomic rollback
+when unindexed corrupt records prevent a replacement from fitting. These measurements apply only to this text-store
 module, not the Reader or all browser behaviors. The Node gates also run in
 the Space Docker static stage; browser contracts run in the Reader workflow.

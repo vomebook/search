@@ -10,6 +10,43 @@ from scripts.check_sidebar_payload_regressions import TEST_NAMES, passed
 from scripts.verify_hf_quality_baseline import REQUIRED, validate_baselines
 
 
+class ReaderWorkflowParallelTests(unittest.TestCase):
+    def test_firefox_job_is_independent_and_keeps_the_exact_gate(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
+        firefox = workflow.split('  firefox-staged-pdf:\n', 1)[1].split('  huggingface-search:\n', 1)[0]
+        gate = ('      - name: Check staged PDF opening in Firefox\n'
+                '        env:\n          READER_TEST_BROWSER: firefox\n'
+                '        run: python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_history_race\n')
+        self.assertEqual(workflow.count(gate), 1)
+        self.assertIn(gate, firefox)
+        self.assertNotIn('needs:', firefox)
+        self.assertNotIn('continue-on-error:', firefox)
+        self.assertNotIn('if:', firefox)
+        for job, browsers in ((github, 'chromium firefox'), (firefox, 'firefox')):
+            for command in ('python-version: "3.11.17"', 'playwright==1.63.0', 'pypdf==6.21.4',
+                            'npm ci --ignore-scripts --no-audit --no-fund', 'install -y qpdf',
+                            f'playwright install-deps {browsers}', f'playwright install {browsers}',
+                            'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs'):
+                self.assertIn(command, job)
+            for cache in ('~/.cache/pip', '~/.npm', '~/.cache/ms-playwright',
+                          '${{ runner.os }}', '${{ runner.arch }}', '${{ steps.distro.outputs.version }}-1.63.0'):
+                self.assertIn(cache, job)
+            self.assertNotIn('path: node_modules', job)
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        for command in ('python -m pip install -r requirements.txt -r requirements-static-check.txt '
+                        'playwright==1.63.0 Pillow==12.3.0 httpx==0.28.1',
+                        'npm ci --ignore-scripts --no-audit --no-fund',
+                        'playwright install-deps chromium firefox', 'playwright install chromium firefox',
+                        'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs',
+                        "hashFiles('huggingface-search/requirements.txt', 'huggingface-search/requirements-static-check.txt')",
+                        "hashFiles('huggingface-search/package-lock.json')", '${{ steps.distro.outputs.version }}-1.63.0'):
+            self.assertIn(command, hf)
+        self.assertNotIn('path: node_modules', hf)
+        self.assertNotIn('continue-on-error:', hf)
+        self.assertNotIn('if:', hf)
+
+
 class HfSearchProjectionCiTests(unittest.TestCase):
     def test_full_projection_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()

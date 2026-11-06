@@ -1594,8 +1594,8 @@ class StaticGateTests(unittest.TestCase):
         coverage = ['node', paths[1]]
         mutation = ['node', paths[2]]
         message = 'PDF text-store coverage requires named contracts'
-        self.assert_check(self.run_check(*coverage), True, '# pass 10')
-        self.assert_check(self.run_check(*mutation), True, '"total":9,"killed":9,"survived":0,"errors":0')
+        self.assert_check(self.run_check(*coverage), True, '# pass 11')
+        self.assert_check(self.run_check(*mutation), True, '"total":10,"killed":10,"survived":0,"errors":0')
         source = self.root / paths[4]
         original = source.read_text()
         name = 'entry, age, time reversal and invalid arguments fail closed'
@@ -1605,7 +1605,7 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(original.replace(anchor, replacement))
             self.assert_check(self.run_check(*coverage), False, message)
         for extra in ("test.skip('extra skip', () => {});", "test.todo('extra todo');",
-                      'console.log("skipped 0");', 'console.log("pass 10");'):
+                      'console.log("skipped 0");', 'console.log("pass 11");'):
             source.write_text(original + '\n' + extra + '\n')
             self.assert_check(self.run_check(*coverage), False, message)
         source.write_text(original.replace(anchor + ',async()=>{',
@@ -1626,7 +1626,9 @@ class StaticGateTests(unittest.TestCase):
         for line, diagnostic in (("assert.equal(await store.get(2),null,'TTL is exclusive at the boundary');",
                                   'expired page accepted mutant survived'),
                                  ("assert.equal(await store.get(1),null);assert.equal(await store.get(2),'new');",
-                                  'corrupt ledger retained mutant survived')):
+                                  'corrupt ledger retained mutant survived'),
+                                 ("assert.equal(await store.get(2),'y'.repeat(30),'failed replacement must preserve original page');",
+                                  'full replacement commits deletion: unexpected failure')):
             self.assertEqual(original.count(line), 1)
             source.write_text(original.replace(line, ''))
             self.assert_check(self.run_check(*mutation), False, diagnostic)
