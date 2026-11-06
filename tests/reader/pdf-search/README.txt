@@ -4,10 +4,14 @@ PDF full-book search contracts
 Run from the repository root with Node 26:
 
   node scripts/reader/check_pdf_book_client_coverage.mjs
+  node scripts/reader/check_pdf_text_store_coverage.mjs
+  node scripts/reader/check_pdf_text_store_mutations.mjs
   node tests/reader/pdf-search/test_reader_ocr_transport.mjs
   node tests/reader/pdf-search/test_reader_book_text.mjs
   node --test tests/reader/pdf-search/test_pdf_book_worker.mjs
   python3 -B tests/reader/pdf-search/test_pdf_book_worker_browser.py
+  python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
+  PDF_TEXT_STORE_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
   python3 -B -m unittest tests.test_reader_pdf_followup.PdfFollowupTests.test_disk_store_preserves_unicode_bounds_expiry_and_failure_fallback
   python3 -B -m unittest tests.test_static_checks.StaticGateTests.test_pdf_text_store_type_contract_rejects_invalid_usage
 
@@ -23,5 +27,10 @@ PDF_WORKER_TEST_BROWSER=firefox to select Firefox. These focused tests do not
 replace real network or full Reader integration tests. The focused IndexedDB
 browser contract tests Unicode, eviction, expiry, identity and denied storage;
 the separate strict type contract rejects invalid keys, pages and text values.
-Neither is a whole-cache coverage claim. Both sites run these tests
-from the GitHub Reader Refactor workflow.
+The text-store V8 gate exercises eight synthetic IndexedDB contracts using
+fake-indexeddb (floors: 100% lines, 92.50% branches, 89.19% functions). Its
+seven targeted safety mutants are not exhaustive. A separate Chromium/Firefox
+contract uses native IndexedDB and two tabs with a held transaction to verify
+shared budget accounting. These measurements apply only to this text-store
+module, not the Reader or all browser behaviors. The Node gates also run in
+the Space Docker static stage; browser contracts run in the Reader workflow.
