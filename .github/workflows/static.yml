@@ -48,7 +48,10 @@ jobs:
           python -B scripts/check_python_static.py
           npx --no-install pyright --project pyrightconfig.strict.json
       - name: Verify static gates catch injected errors
-        run: python -B -m unittest -v tests.test_static_checks tests.test_ci_ubuntu_mirror
+        run: |
+          python -B -m unittest -v tests.test_static_shards_runner
+          python -B run_static_gate_shards.py --project github
+          python -B -m unittest -v tests.test_ci_ubuntu_mirror
       - name: Verify PDF and DjVu primary document limits
         run: node tests/test_dataset_primary_policy.mjs
   # Single deploy job since we're just deploying

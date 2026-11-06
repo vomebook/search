@@ -59,9 +59,14 @@ export function createPdfTextStore(key, options = {}) {
           if (!active() || owner.signal.aborted) return resolve(null);
           tx = db.transaction(["pages","budget"],mode);
           /** @type {T | null} */ let result = null;
-          tx.oncomplete = () => resolve(result);
-          tx.onabort = tx.onerror = () => resolve(null);
-          work(tx, value => { result = value; });
+          let failed = false;
+          const fail = () => { failed = true; try { tx?.abort(); } catch (_) {} };
+          tx.oncomplete = () => resolve(failed ? null : result);
+          tx.onabort = () => resolve(null);
+          // Uncancelled request errors abort by default. If already cancelled,
+          // explicitly abort; await a terminal event to avoid early settlement.
+          tx.onerror = event => { failed = true; if (event.defaultPrevented) fail(); };
+          try { work(tx, value => { result = value; }); } catch (_) { fail(); }
         }).catch(reject);
       });
     } catch (_) { return null; }

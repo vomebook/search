@@ -73,20 +73,74 @@ test('dependency lookup and exceptional values propagate unchanged', () => {
   context.buildRecordRelativePath = original;
 });
 
+test('deleted path binding preserves lazy lookup and ReferenceError', () => {
+  const context = vm.createContext({});
+  vm.runInContext(fs.readFileSync(dependency, 'utf8'), context, {filename: dependency});
+  vm.runInContext(fs.readFileSync(identity, 'utf8'), context, {filename: identity});
+  vm.runInContext(match[0], context);
+  const id = context.getResultStableId;
+  const seen = [];
+  delete context.buildRecordRelativePath;
+  assert.equal(id({get Id() { seen.push('Id'); return 'stable'; }}), 'stable');
+  assert.deepEqual(seen, ['Id', 'Id']);
+  Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, get() {
+    throw new Error('helper binding must not be read before Repo conversion');
+  }});
+  assert.throws(() => id({Repo: {[Symbol.toPrimitive](hint) {
+    seen.push(`repo:${hint}`); delete context.buildRecordRelativePath; return 'R';
+  }}}), {name: 'ReferenceError'});
+  assert.deepEqual(seen, ['Id', 'Id', 'repo:string']);
+});
+
+test('missing path binding and lookup-time ReferenceError retain lazy ordering', () => {
+  // A fresh realm loads the real module and host wrapper, without the path helper.
+  const isolated = vm.createContext({});
+  vm.runInContext(fs.readFileSync(identity, 'utf8'), isolated, {filename: identity});
+  vm.runInContext(match[0], isolated);
+  const isolatedId = isolated.getResultStableId;
+  assert.equal(isolatedId({Id: 'stable'}), 'stable');
+  assert.throws(() => isolatedId({Repo: 'R'}), {name: 'ReferenceError'});
+
+  // A context extension avoids unstable VM global-property invalidation. Install
+  // the failing binding during conversion: its exact ReferenceError must escape.
+  const ordered = vm.createContext({});
+  const trace = [];
+  const bindings = {};
+  const missing = new ReferenceError('missing path binding');
+  Object.defineProperty(bindings, 'buildRecordRelativePath', {configurable: true, get() {
+    trace.push('old lookup'); throw new Error('lookup before Repo conversion');
+  }});
+  vm.compileFunction(fs.readFileSync(identity, 'utf8'), [], {
+    parsingContext: ordered, contextExtensions: [bindings], filename: identity
+  })();
+  vm.runInContext(match[0], ordered);
+  const orderedId = ordered.getResultStableId;
+  assert.equal(orderedId({Id: 'stable'}), 'stable');
+  assert.throws(() => orderedId({Repo: {[Symbol.toPrimitive](hint) {
+    trace.push(`repo:${hint}`);
+    Object.defineProperty(bindings, 'buildRecordRelativePath', {configurable: true, get() {
+      trace.push('new lookup'); throw missing;
+    }});
+    return 'R';
+  }}}), error => error === missing && error instanceof ReferenceError);
+  assert.deepEqual(trace, ['repo:string', 'new lookup']);
+});
+
 test('path lookup remains lazy through early returns and Repo conversion', () => {
   const prior = Object.getOwnPropertyDescriptor(context, 'buildRecordRelativePath');
   const trace = [];
   try {
-    delete context.buildRecordRelativePath;
-    assert.equal(id({Id: 'stable'}), 'stable');
-    Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, get() {
-      throw new Error('helper binding must not be read before its original lookup');
-    }});
+    const sentinel = new Error('path binding lookup');
     const seen = [];
-    assert.throws(() => id({Repo: {[Symbol.toPrimitive]() {
-      seen.push('repo'); delete context.buildRecordRelativePath; return 'R';
-    }}}), {name: 'ReferenceError'});
-    assert.deepEqual(seen, ['repo']);
+    Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, get() {
+      seen.push('lookup'); return () => { throw sentinel; };
+    }});
+    assert.equal(id({Id: 'stable'}), 'stable');
+    assert.deepEqual(seen, []);
+    assert.throws(() => id({Repo: {[Symbol.toPrimitive](hint) {
+      seen.push(`repo:${hint}`); return 'R';
+    }}}), error => error === sentinel);
+    assert.deepEqual(seen, ['repo:string', 'lookup']);
     Object.defineProperty(context, 'buildRecordRelativePath', {configurable: true, get() {
       trace.push('early lookup'); throw new Error('must not lookup');
     }});
