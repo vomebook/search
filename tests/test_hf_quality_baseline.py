@@ -231,6 +231,11 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/check_search_readability_baseline.mjs'), 2)
 
+    def test_both_sites_run_grouped_adapter_coverage(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        self.assertEqual(workflow.count('node scripts/reader/check_adapter_coverage.mjs'), 2)
+        self.assertNotIn('node scripts/check_adapter_coverage.mjs', workflow)
+
     def test_both_sites_run_reader_image_loader_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/reader/check_reader_image_loader_coverage.mjs'), 2)
@@ -240,15 +245,15 @@ class HfSearchProjectionCiTests(unittest.TestCase):
 
     def test_both_sites_run_reader_lifecycle_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_reader_lifecycle_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_reader_lifecycle_coverage.mjs'), 2)
 
     def test_both_sites_run_reader_media_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_reader_media_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_reader_media_coverage.mjs'), 2)
 
     def test_both_sites_run_reader_text_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_reader_text_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_reader_text_coverage.mjs'), 2)
 
     def test_both_sites_run_grouped_reader_transport_gates(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
@@ -303,18 +308,19 @@ class HfSearchProjectionCiTests(unittest.TestCase):
     def test_both_sites_run_dom_search_browser_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('python3 -B -m unittest -v tests.test_reader_dom_search_gate'), 2)
-        self.assertEqual(workflow.count('python3 -B scripts/check_reader_dom_search_contracts.py'), 2)
+        self.assertEqual(workflow.count('python3 -B scripts/reader/check_reader_dom_search_contracts.py'), 2)
         self.assertEqual(workflow.count('python3 -B -m unittest -v tests.test_reader_refactor'), 2)
 
     def test_both_sites_run_all_djvu_scripts_and_named_contract_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         for name in ('only', 'png', 'range', 'range_fallback', 'scheduler', 'source_integrity', 'worker'):
             self.assertEqual(workflow.count(f'node tests/reader/djvu/test_reader_djvu_{name}.mjs'), 2, name)
-        self.assertEqual(workflow.count('node scripts/check_reader_djvu_contracts.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_reader_djvu_contracts.mjs'), 2)
 
     def test_both_sites_run_reader_navigation_baseline_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
-        self.assertEqual(workflow.count('node scripts/check_reader_navigation_baseline.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_reader_navigation_baseline.mjs'), 2)
+        self.assertNotIn('node scripts/check_reader_navigation_baseline.mjs', workflow)
 
     def test_both_sites_test_shared_tap_contract_validator(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()

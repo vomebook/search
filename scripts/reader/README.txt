@@ -10,8 +10,15 @@ Run these commands from the repository root with Node 26:
   node scripts/reader/check_pdf_network_mutations.mjs
   node scripts/reader/check_reader_core_coverage.mjs
   node scripts/reader/check_reader_image_loader_coverage.mjs
+  node scripts/reader/check_adapter_coverage.mjs
+  node scripts/reader/check_reader_lifecycle_coverage.mjs
+  node scripts/reader/check_reader_media_coverage.mjs
+  node scripts/reader/check_reader_text_coverage.mjs
+  node scripts/reader/check_reader_djvu_contracts.mjs
+  python3 -B scripts/reader/check_reader_dom_search_contracts.py
 
-The image contracts are documented in `tests/reader/images/README.txt`.
+The adapter and image contracts are documented in `tests/reader/adapters/README.txt`
+and `tests/reader/images/README.txt`.
 The chapter and layout gate is documented in `tests/reader/chapters/README.txt`
 and `tests/reader/layout/README.txt`.
 The PDF network gates are documented in `tests/reader/pdf-network/README.txt`.

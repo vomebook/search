@@ -5,7 +5,7 @@ These seven existing scripts cover DjVu and image-manifest contracts, range
 transport and fallback, worker behavior, source integrity and scheduling.
 Run them from the repository root with:
 
-  node scripts/check_reader_djvu_contracts.mjs
+  node scripts/reader/check_reader_djvu_contracts.mjs
 
 The gate requires each existing script's completion marker, one passing TAP
 entry per file, a complete summary and zero skipped/TODO results. It also

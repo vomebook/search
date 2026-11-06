@@ -3,7 +3,7 @@ Reader text format contracts
 
 Run from the repository root with Node 26:
 
-  node scripts/check_reader_text_coverage.mjs
+  node scripts/reader/check_reader_text_coverage.mjs
 
 The 14 named contracts use synthetic streams, byte sequences, DOM and timers;
 they cover encoding, incremental preview, byte limits, block boundaries,
