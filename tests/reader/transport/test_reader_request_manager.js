@@ -23,7 +23,7 @@ function loadManager(fetchImpl) {
     }
   };
   sandbox.self = sandbox;
-  const filename = path.join(__dirname, "../static/reader/core/reader-request-manager.js");
+  const filename = path.join(__dirname, "../../../static/reader/core/reader-request-manager.js");
   vm.runInNewContext(fs.readFileSync(filename, "utf8"), sandbox, { filename });
   return { manager: sandbox.VoiceOfMLReaderRequests.createReaderRequestManager(), timers };
 }

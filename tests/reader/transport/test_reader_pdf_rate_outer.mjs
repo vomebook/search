@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {createReaderDocumentLoader} from '../static/reader/core/reader-document-loader.mjs';
+import {createReaderDocumentLoader} from '../../../static/reader/core/reader-document-loader.mjs';
 
 // Integration of the PDF-specific rate policy with the existing outer retry
 // owner: it must not retry early when Retry-After exceeds the local cap.

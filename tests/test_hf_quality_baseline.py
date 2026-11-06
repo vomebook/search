@@ -247,6 +247,12 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/check_reader_text_coverage.mjs'), 2)
 
+    def test_both_sites_run_grouped_reader_transport_gates(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        for gate in ('check_request_manager_coverage.mjs', 'check_document_loader_coverage.mjs'):
+            self.assertEqual(workflow.count(f'node scripts/reader/{gate}'), 2)
+            self.assertNotIn(f'node scripts/{gate}', workflow)
+
     def test_both_sites_run_pdf_book_client_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_book_client_coverage.mjs'), 2)
