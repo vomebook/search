@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {createPdfFetchPolicy} from '../static/reader/pdf/reader-pdf-network.mjs';
+import {createPdfFetchPolicy} from '../../../static/reader/pdf/reader-pdf-network.mjs';
 
 // Local transport fixture only: no upstream connection is made.
 globalThis.location = {href:'https://reader.test/'};
