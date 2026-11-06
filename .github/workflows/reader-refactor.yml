@@ -84,6 +84,10 @@ jobs:
           npx --no-install pyright --project pyrightconfig.strict.json
           python -B scripts/check_python_static.py
           python -B -m unittest -v tests.test_static_checks tests.test_seo_catalog
+      - name: Reader v3 gates
+        run: |
+          node scripts/reader/check_reader_v3_coverage.mjs
+          node scripts/reader/check_reader_v3_mutations.mjs
       - name: Run chapter-search unit tests
         run: |
           node tests/test_reader_architecture.js
@@ -428,6 +432,11 @@ jobs:
         timeout-minutes: 5
         working-directory: huggingface-search
         run: node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
+      - name: Reader v3 gates
+        working-directory: huggingface-search
+        run: |
+          node scripts/reader/check_reader_v3_coverage.mjs
+          node scripts/reader/check_reader_v3_mutations.mjs
       - name: Run chapter-search unit tests
         working-directory: huggingface-search
         run: |
