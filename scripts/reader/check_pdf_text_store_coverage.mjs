@@ -3,13 +3,15 @@ import {spawnSync} from 'node:child_process';
 import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // Branch coverage can vary slightly with Node/V8 and platform scheduling;
-// this floor leaves a small margin from the measured local 92.98%.
-const minimum=[100,92.50,89.19];
+// this floor leaves a small margin from the measured local 95.16%.
+const minimum=[100,94.50,89.19];
 const required=[
   'keys are stable, identity-bound and reject invalid inputs',
   'writes, replacements and isolated keys survive reopen without leaking stats',
   'entry, age, time reversal and invalid arguments fail closed',
   'corrupt records fail closed and a bad ledger resets the shared budget',
+  'corrupt replacement and eviction reset accounting before committing new data',
+  'understated and overdrawn ledgers reset instead of drifting',
   'expired entries are pruned and old records free budget for new pages',
   'concurrent writes share the ledger and bound in-flight writes',
   'open failure and a late successful connection do not publish data',
@@ -33,7 +35,7 @@ if(result.status!==0||rows.length!==1||rows[0].some((value,index)=>value<minimum
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
     lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||
-    !['1..8','# tests 8','# pass 8','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
+    !['1..10','# tests 10','# pass 10','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
     ['# tests ','# pass ','# fail ','# cancelled '].some(prefix=>lines.filter(line=>line.startsWith(prefix)).length!==1)){
   console.error('PDF text-store coverage requires named contracts and exactly one source row above each minimum');
   process.exitCode=1;
