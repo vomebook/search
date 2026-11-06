@@ -49,19 +49,19 @@ jobs:
           node scripts/search/check_search_size_coverage.mjs
           node scripts/search/check_search_record_path_coverage.mjs
           node scripts/search/check_search_highlight_coverage.mjs
-          node scripts/check_search_response_cache_coverage.mjs
+          node scripts/search/check_search_response_cache_coverage.mjs
           node --test tests/test_tap_contracts.mjs
           node scripts/check_download_controller_coverage.mjs
-          node scripts/check_search_file_types_coverage.mjs
-          node scripts/check_search_response_validation_coverage.mjs
-          node scripts/check_search_result_identity_coverage.mjs
+          node scripts/search/check_search_file_types_coverage.mjs
+          node scripts/search/check_search_response_validation_coverage.mjs
+          node scripts/search/check_search_result_identity_coverage.mjs
           node tests/search/response-cache/test_response_cache.js
           node --test tests/search/baselines/test_search_extension_inventory_baseline.mjs tests/search/baselines/test_search_extension_filter_baseline.mjs
           node --test tests/search/baselines/test_search_response_validation_baseline.mjs
           node --test tests/search/baselines/test_search_stable_id_baseline.mjs
-          node scripts/check_search_filter_equality_baseline.mjs
-          node scripts/check_search_folder_merge_baseline.mjs
-          node scripts/check_search_readability_baseline.mjs
+          node scripts/search/check_search_filter_equality_baseline.mjs
+          node scripts/search/check_search_folder_merge_baseline.mjs
+          node scripts/search/check_search_readability_baseline.mjs
           node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
           node tests/test_reader_preload.js
@@ -300,18 +300,18 @@ jobs:
           node scripts/search/check_search_size_coverage.mjs
           node scripts/search/check_search_record_path_coverage.mjs
           node scripts/search/check_search_highlight_coverage.mjs
-          node scripts/check_search_response_cache_coverage.mjs
+          node scripts/search/check_search_response_cache_coverage.mjs
           node --test tests/test_tap_contracts.mjs
           node scripts/check_download_controller_coverage.mjs
-          node scripts/check_search_file_types_coverage.mjs
-          node scripts/check_search_response_validation_coverage.mjs
-          node scripts/check_search_result_identity_coverage.mjs
+          node scripts/search/check_search_file_types_coverage.mjs
+          node scripts/search/check_search_response_validation_coverage.mjs
+          node scripts/search/check_search_result_identity_coverage.mjs
           node --test tests/search/baselines/test_search_extension_inventory_baseline.mjs tests/search/baselines/test_search_extension_filter_baseline.mjs
           node --test tests/search/baselines/test_search_response_validation_baseline.mjs
           node --test tests/search/baselines/test_search_stable_id_baseline.mjs
-          node scripts/check_search_filter_equality_baseline.mjs
-          node scripts/check_search_folder_merge_baseline.mjs
-          node scripts/check_search_readability_baseline.mjs
+          node scripts/search/check_search_filter_equality_baseline.mjs
+          node scripts/search/check_search_folder_merge_baseline.mjs
+          node scripts/search/check_search_readability_baseline.mjs
           node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
           node tests/test_reader_jxl_progressive.mjs

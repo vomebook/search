@@ -390,13 +390,13 @@ class StaticGateTests(unittest.TestCase):
 
 
     def test_search_response_cache_coverage_gate_fails_closed(self):
-        paths = ["static/search/response-cache.js", "scripts/check_search_response_cache_coverage.mjs",
+        paths = ["static/search/response-cache.js", "scripts/search/check_search_response_cache_coverage.mjs",
                  "tests/search/response-cache/test_search_response_cache_contract.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        check = ["node", "scripts/check_search_response_cache_coverage.mjs"]
+        check = ["node", paths[1]]
         self.assert_check(self.run_check(*check), True, "response-cache.js")
         test = self.root / paths[2]
         original = test.read_text()
@@ -475,7 +475,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_search_result_identity_coverage_gate_fails_closed(self):
         paths = ["static/search/result-identity.js", "static/search/record-path.js",
-                 "scripts/check_search_result_identity_coverage.mjs", "tests/search/baselines/test_search_stable_id_baseline.mjs", "static/app.js"]
+                 "scripts/search/check_search_result_identity_coverage.mjs", "tests/search/baselines/test_search_stable_id_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -537,7 +537,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_search_response_validation_coverage_gate_fails_closed(self):
-        paths = ["static/search/response-validation.js", "scripts/check_search_response_validation_coverage.mjs",
+        paths = ["static/search/response-validation.js", "scripts/search/check_search_response_validation_coverage.mjs",
                  "tests/search/baselines/test_search_response_validation_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -612,13 +612,13 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "")
 
     def test_search_file_types_coverage_gate_fails_closed(self):
-        paths = ["static/search/file-types.js", "scripts/check_search_file_types_coverage.mjs",
+        paths = ["static/search/file-types.js", "scripts/search/check_search_file_types_coverage.mjs",
                  "tests/search/baselines/test_search_extension_inventory_baseline.mjs", "static/app.js"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        check = ["node", "scripts/check_search_file_types_coverage.mjs"]
+        check = ["node", paths[1]]
         self.assert_check(self.run_check(*check), True, "file-types.js")
         test = self.root / paths[2]
         original = test.read_text()
@@ -1735,7 +1735,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, 'Reader lifecycle requires named contracts')
 
     def test_search_readability_baseline_gate_fails_closed(self):
-        paths = ["static/app.js", "scripts/check_search_readability_baseline.mjs",
+        paths = ["static/app.js", "scripts/search/check_search_readability_baseline.mjs",
                  "tests/search/baselines/test_search_readability_baseline.mjs", "scripts/check_tap_contracts.mjs",
                  "static/reader/core/reader-contract.js"]
         for path in paths:
@@ -1772,7 +1772,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(result, False, 'all named baseline contracts')
 
     def test_search_folder_merge_baseline_gate_fails_closed(self):
-        paths = ["static/app.js", "scripts/check_search_folder_merge_baseline.mjs",
+        paths = ["static/app.js", "scripts/search/check_search_folder_merge_baseline.mjs",
                  "tests/search/baselines/test_search_folder_merge_baseline.mjs"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -1807,7 +1807,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "original inline folder merge")
 
     def test_search_filter_equality_baseline_gate_fails_closed(self):
-        paths = ["static/app.js", "scripts/check_search_filter_equality_baseline.mjs",
+        paths = ["static/app.js", "scripts/search/check_search_filter_equality_baseline.mjs",
                  "tests/search/baselines/test_search_filter_equality_baseline.mjs"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path

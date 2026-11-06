@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {hasPassingTapContracts} from './check_tap_contracts.mjs';
+import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
 // These contracts exercise the original inline fragments, not app.js coverage.
 const result = spawnSync(process.execPath, [
