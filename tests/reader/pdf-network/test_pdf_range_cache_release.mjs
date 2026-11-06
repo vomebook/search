@@ -11,19 +11,24 @@ import test from 'node:test';
 const root = process.cwd();
 const resources = createRequire(import.meta.url)('../../../static/reader-resources.js');
 const cache = 'reader/pdf/reader-pdf-range-cache.mjs';
+const hints = 'reader/pdf/reader-pdf-range-hints.mjs';
 const network = 'reader/pdf/reader-pdf-network.mjs';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex').slice(0,12);
 
-test('PDF range cache is built before its network consumer and pinned for release', () => {
+test('PDF range dependencies are built before the network consumer and pinned for release', () => {
   const readerFiles = resources.readerFiles;
-  assert.equal(readerFiles.filter(name=>name===cache).length,1);
+  for (const dependency of [cache,hints]) {
+    assert.equal(readerFiles.filter(name=>name===dependency).length,1);
+    assert.ok(readerFiles.indexOf(dependency)<readerFiles.indexOf(network));
+  }
   assert.equal(readerFiles.filter(name=>name===network).length,1);
-  assert.ok(readerFiles.indexOf(cache)<readerFiles.indexOf(network));
   for (const project of ['github','hf']) {
     const base = project==='github' ? '/search/static/' : '/static/';
-    assert.ok(resources.buildFiles(project).includes(cache));
-    assert.ok(resources.runtimePaths(base).includes(base+cache));
-    assert.ok(resources.shellAssets(base).includes(base+cache));
+    for (const dependency of [cache,hints]) {
+      assert.ok(resources.buildFiles(project).includes(dependency));
+      assert.ok(resources.runtimePaths(base).includes(base+dependency));
+      assert.ok(resources.shellAssets(base).includes(base+dependency));
+    }
   }
 
   const temp = mkdtempSync(join(tmpdir(),'pdf-cache-release-'));
@@ -37,7 +42,7 @@ test('PDF range cache is built before its network consumer and pinned for releas
       const files = resources.buildFiles(project);
       for (const file of files) {
         const target=join(assets,file); mkdirSync(dirname(target),{recursive:true});
-        const fixture=file===cache||file===network ? readFileSync(join(root,'static',file)) : Buffer.from('');
+        const fixture=[cache,hints,network].includes(file) ? readFileSync(join(root,'static',file)) : Buffer.from('');
         writeFileSync(target,fixture);
       }
       writeFileSync(join(output,'index.html'),'<html></html>');
@@ -48,17 +53,20 @@ test('PDF range cache is built before its network consumer and pinned for releas
         cwd:work,env:{...process.env,STATIC_OUTPUT_DIR:output},encoding:'utf8',timeout:15000
       });
       assert.ifError(run.error); assert.equal(run.status,0,run.stderr);
-      const cacheBytes=readFileSync(join(root,'static',cache));
-      const cacheName=`reader-pdf-range-cache.${digest(cacheBytes)}.mjs`;
-      const cachePath=join(assets,'reader/pdf',cacheName);
-      assert.deepEqual(readFileSync(cachePath),cacheBytes);
       const original=readFileSync(join(root,'static',network),'utf8');
-      const rewritten=original.replaceAll('./reader-pdf-range-cache.mjs','./'+cacheName);
-      assert.notEqual(rewritten,original);
+      let rewritten=original;
+      for (const dependency of [cache,hints]) {
+        const name=dependency.split('/').at(-1), bytes=readFileSync(join(root,'static',dependency));
+        const hashed=name.replace(/\.mjs$/,`.${digest(bytes)}.mjs`);
+        assert.deepEqual(readFileSync(join(assets,'reader/pdf',hashed)),bytes);
+        const updated=rewritten.replaceAll('./'+name,'./'+hashed);
+        assert.notEqual(updated,rewritten);
+        rewritten=updated;
+        assert.match(readFileSync(join(output,'sw.js'),'utf8'),new RegExp(hashed.replaceAll('.','\\.')));
+        assert.equal(files.filter(file=>file===dependency).length,1);
+      }
       const networkName=`reader-pdf-network.${digest(rewritten)}.mjs`;
       assert.equal(readFileSync(join(assets,'reader/pdf',networkName),'utf8'),rewritten);
-      assert.match(readFileSync(join(output,'sw.js'),'utf8'),new RegExp(cacheName.replaceAll('.','\\.')));
-      assert.equal(files.filter(name=>name===cache).length,1);
     }
   } finally { rmSync(temp,{recursive:true,force:true}); }
 });
