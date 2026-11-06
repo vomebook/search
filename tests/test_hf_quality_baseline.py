@@ -277,6 +277,13 @@ class HfSearchProjectionCiTests(unittest.TestCase):
             self.assertNotIn(f'node scripts/{gate}', workflow)
         self.assertEqual(workflow.count('node --test tests/reader/pdf-network/test_pdf_range_cache_release.mjs'), 2)
 
+    def test_both_sites_run_grouped_chapter_search_and_css_contracts(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        for contract in ('chapter-search/test_reader_chapter_search.mjs', 'security/test_reader_css_sanitizer.mjs'):
+            self.assertEqual(workflow.count(f'node tests/reader/{contract}'), 2)
+        self.assertNotIn('node tests/test_reader_chapter_search.mjs', workflow)
+        self.assertNotIn('node tests/test_reader_css_sanitizer.mjs', workflow)
+
     def test_both_sites_run_grouped_reader_core_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/reader/check_reader_core_coverage.mjs'), 2)
