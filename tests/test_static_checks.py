@@ -1556,6 +1556,60 @@ class StaticGateTests(unittest.TestCase):
             gate.write_text(original.replace('[100, 87.18, 91.67]', thresholds))
             self.assert_check(self.run_check(*check), False, 'Reader image loader requires named contracts')
 
+    def test_pdf_prefetch_contract_gate_fails_closed(self):
+        dependencies = ['static/reader/pdf/reader-pdf-search.mjs',
+                        'static/reader/pdf/reader-pdf-text-runtime.mjs',
+                        'static/reader/search/reader-pdf-book-search.mjs',
+                        'static/reader/search/workers/reader-pdf-book-search-worker.mjs',
+                        'static/reader/search/reader-book-text.js',
+                        'static/reader/core/reader-security.js']
+        for path in dependencies:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        paths = ['scripts/reader/check_pdf_prefetch_contracts.mjs', 'scripts/check_tap_contracts.mjs',
+                 'tests/reader/pdf-search/test_pdf_prefetch_schedule.mjs',
+                 'tests/reader/pdf-search/test_prefetch_priority.mjs',
+                 'tests/reader/pdf-search/handshake-bootstrap.mjs']
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ['node', paths[0]]
+        message = 'PDF prefetch requires six passing named contracts'
+        self.assert_check(self.run_check(*check), True, '# pass 6')
+        for path in paths[2:4]:
+            source = self.root / path
+            original = source.read_text()
+            source.unlink()
+            self.assert_check(self.run_check(*check), False, message)
+            source.write_text('invalid syntax ! !\n')
+            self.assert_check(self.run_check(*check), False, message)
+            source.write_text(original)
+        source = self.root / paths[2]
+        original = source.read_text()
+        anchor = "test('scheduled idle prefetch must not cancel a pending foreground PDF search'"
+        self.assertEqual(original.count(anchor), 1)
+        for replacement in (anchor.replace('test(', 'test.skip('), anchor.replace('scheduled idle', 'renamed idle')):
+            source.write_text(original.replace(anchor, replacement))
+            self.assert_check(self.run_check(*check), False, message)
+        source.write_text(original)
+        worker = self.root / paths[4]
+        worker_original = worker.read_text()
+        worker.write_text("throw new Error('worker did not start');\n")
+        self.assert_check(self.run_check(*check), False, message)
+        worker.write_text(worker_original)
+        self.assert_check(self.run_check(*check), True, '# pass 6')
+        gate = self.root / paths[0]
+        gate_original = gate.read_text()
+        self.assertEqual(gate_original.count('timeout: 45000'), 1)
+        gate.write_text(gate_original.replace('timeout: 45000', 'timeout: 1000'))
+        source.write_text("import test from 'node:test';\ntest('hang', () => new Promise(() => setInterval(() => {}, 1000)));\n")
+        result = subprocess.run(check, cwd=self.root, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=10)
+        self.assert_check(result, False, message)
+        self.assertIn('ETIMEDOUT', result.stdout)
+
     def test_pdf_book_client_coverage_gate_fails_closed(self):
         paths = ['static/reader/search/reader-pdf-book-search.mjs',
                  'scripts/reader/check_pdf_book_client_coverage.mjs', 'scripts/check_tap_contracts.mjs',
@@ -1566,9 +1620,24 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
         message = 'PDF book-search client requires named contracts'
-        self.assert_check(self.run_check(*check), True, '# pass 9')
+        self.assert_check(self.run_check(*check), True, '# pass 13')
         source = self.root / paths[3]
         original = source.read_text()
+        for name in ('prefetch reentered from progress cannot interrupt search', 'repeated prefetch replaces prefetch'):
+            anchor = "test('" + name + "'"
+            self.assertEqual(original.count(anchor), 1)
+            for replacement in ("test('removed contract'", "test.skip('" + name + "'"):
+                source.write_text(original.replace(anchor, replacement))
+                self.assert_check(self.run_check(*check), False, message)
+        source.write_text(original)
+        self.assert_check(self.run_check(*check), True, '# pass 13')
+        client = self.root / paths[0]
+        client_original = client.read_text()
+        guard = '    if (type === "prefetch" && pending && pending.type !== "prefetch")\n      return Promise.reject(new DOMException("Search in progress", "AbortError"));\n'
+        self.assertEqual(client_original.count(guard), 1)
+        client.write_text(client_original.replace(guard, ''))
+        self.assert_check(self.run_check(*check), False, message)
+        client.write_text(client_original)
         name = 'a page requested during progress uses the current partial session'
         anchor = "test('" + name + "'"
         self.assertEqual(original.count(anchor), 1)
@@ -2266,7 +2335,7 @@ const prefetched = await client.prefetch();
         local = self.root / 'static/reader/search/reader-pdf-book-search.mjs'
         original = local.read_text()
         for annotation in ('/** @param {PdfBookSearchConfiguration} configuration */',
-                           '/** @param {string} type @param {Record<string, unknown>} values\n'
+                           '/** @param {"search" | "page" | "prefetch"} type @param {Record<string, unknown>} values\n'
                            '   * @param {(value: PdfBookSearchProgress) => void} [progress] @returns {Promise<PdfBookSearchResult | PdfBookPrefetchResult>} */',
                            '/** @param {string} query @param {(value: PdfBookSearchProgress) => void} [progress] */',
                            '/** @param {number} offset */'):

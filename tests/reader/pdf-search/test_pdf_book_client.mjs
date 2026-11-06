@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createPdfBookSearch} from '../../../static/reader/search/reader-pdf-book-search.mjs';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+function observe(p) {
+  const state={status:'pending'};
+  state.done=p.then(value=>{state.status='resolved';state.value=value;},error=>{state.status='rejected';state.error=error;});
+  return state;
+}
 function fixture() {
   const previous=globalThis.Worker, workers=[];
   globalThis.Worker=class {
@@ -128,5 +133,49 @@ test('dispose cancels the pending request, terminates the owner and rejects new 
     let outcome;f.client.search('closed').then(()=>{outcome='resolved';},error=>{outcome=error;});
     await tick();assert.equal(outcome?.name,'AbortError');
     assert.equal(f.workers.length,1);
+  } finally {f.restore();}
+});
+
+for (const kind of ['search', 'page']) test(`prefetch cannot interrupt pending ${kind} or consume sequence`, async()=>{
+  const f=fixture(); try {
+    const w=f.workers[0], first=f.client.search('initial'), initial=w.messages.at(-1);
+    w.send({id:initial.id,session:initial.id,total:0}); await first;
+    const pending=observe(kind==='search'?f.client.search('next'):f.client.page(0)), request=w.messages.at(-1);
+    const count=w.messages.length, prefetch=observe(f.client.prefetch());
+    await tick();
+    assert.equal(w.messages.length,count,'prefetch must not send a message');
+    assert.equal(pending.status,'pending','foreground must not be rejected');
+    assert.equal(prefetch.status,'rejected'); assert.equal(prefetch.error.name,'AbortError');
+    w.send({id:request.id,session:initial.id,total:0}); await pending.done;
+    assert.equal(pending.status,'resolved');
+    const page=f.client.page(0), next=w.messages.at(-1);
+    assert.equal(next.id,request.id+1); assert.equal(next.session,initial.id);
+    w.send({id:next.id,session:initial.id,total:0}); await page;
+  } finally {f.restore();}
+});
+
+test('prefetch reentered from progress cannot interrupt search', async()=>{
+  const f=fixture(); try {
+    const w=f.workers[0]; let prefetch;
+    const search=observe(f.client.search('query',()=>{prefetch=observe(f.client.prefetch());}));
+    const request=w.messages.at(-1), count=w.messages.length;
+    w.send({id:request.id,progress:true,session:request.id,total:0}); await tick();
+    assert.equal(w.messages.length,count,'prefetch must not send a message');
+    assert.equal(search.status,'pending','foreground must not be rejected');
+    assert.equal(prefetch.status,'rejected'); assert.equal(prefetch.error.name,'AbortError');
+    w.send({id:request.id,session:request.id,total:0}); await search.done;
+    assert.equal(search.status,'resolved');
+    const page=f.client.page(0), next=w.messages.at(-1);
+    assert.equal(next.id,request.id+1); assert.equal(next.session,request.id);
+    w.send({id:next.id,session:request.id,total:0}); await page;
+  } finally {f.restore();}
+});
+
+test('repeated prefetch replaces prefetch', async()=>{
+  const f=fixture(); try {
+    const w=f.workers[0], first=f.client.prefetch(), rejected=assert.rejects(first,{name:'AbortError'}), id=w.messages.at(-1).id;
+    const second=f.client.prefetch(), request=w.messages.at(-1); await rejected;
+    assert.equal(request.id,id+1); assert.equal(request.type,'prefetch');
+    w.send({id:request.id,ready:true,session:null}); await second;
   } finally {f.restore();}
 });

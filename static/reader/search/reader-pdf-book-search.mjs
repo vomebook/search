@@ -12,7 +12,7 @@
  * @typedef {{id: number, ready: true, session: number | null}} PdfBookPrefetchResult
  * @typedef {{id?: number, bookReady?: boolean, progress?: boolean, session?: unknown, error?: string} &
  *   Partial<Omit<PdfBookSearchResult, "session">> & {scanned?: number, pages?: number}} PdfBookSearchMessage
- * @typedef {{id: number, resolve: (value: PdfBookSearchResult | PdfBookPrefetchResult) => void, reject: (reason?: unknown) => void,
+ * @typedef {{id: number, type: "search" | "page" | "prefetch", resolve: (value: PdfBookSearchResult | PdfBookPrefetchResult) => void, reject: (reason?: unknown) => void,
  *   progress: ((value: PdfBookSearchProgress) => void) | undefined}} PdfBookSearchPending
  */
 /** @param {PdfBookSearchConfiguration} configuration */
@@ -53,16 +53,18 @@ export function createPdfBookSearch(configuration) {
     owner.postMessage({ type: "init", configuration });
   }
   startWorker();
-  /** @param {string} type @param {Record<string, unknown>} values
+  /** @param {"search" | "page" | "prefetch"} type @param {Record<string, unknown>} values
    * @param {(value: PdfBookSearchProgress) => void} [progress] @returns {Promise<PdfBookSearchResult | PdfBookPrefetchResult>} */
   function request(type, values, progress) {
     if (disposed) return Promise.reject(new DOMException("Reader closed", "AbortError"));
     if (failure) return Promise.reject(failure);
+    if (type === "prefetch" && pending && pending.type !== "prefetch")
+      return Promise.reject(new DOMException("Search in progress", "AbortError"));
     if (!worker) startWorker();
     cancelPending();
     return new Promise((resolve, reject) => {
       const id = ++sequence;
-      pending = { id, resolve, reject, progress };
+      pending = { id, type, resolve, reject, progress };
       // startWorker runs above when needed; Promise executors run synchronously.
       (/** @type {Worker} */ (worker)).postMessage({ type, id, ...values });
     });

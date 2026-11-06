@@ -121,6 +121,7 @@ jobs:
           node scripts/reader/check_reader_media_coverage.mjs
           node scripts/reader/check_reader_text_coverage.mjs
           node scripts/reader/check_pdf_book_client_coverage.mjs
+          node scripts/reader/check_pdf_prefetch_contracts.mjs
           node scripts/reader/check_pdf_text_store_coverage.mjs
           node scripts/reader/check_pdf_text_store_mutations.mjs
           node tests/reader/pdf-search/test_reader_ocr_transport.mjs
@@ -451,6 +452,7 @@ jobs:
           node scripts/reader/check_reader_media_coverage.mjs
           node scripts/reader/check_reader_text_coverage.mjs
           node scripts/reader/check_pdf_book_client_coverage.mjs
+          node scripts/reader/check_pdf_prefetch_contracts.mjs
           node scripts/reader/check_pdf_text_store_coverage.mjs
           node scripts/reader/check_pdf_text_store_mutations.mjs
           node tests/reader/pdf-search/test_reader_ocr_transport.mjs
