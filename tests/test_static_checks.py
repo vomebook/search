@@ -271,13 +271,13 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_download_controller_coverage_gate_fails_closed(self):
-        paths = ["static/search/download-controller.js", "scripts/check_download_controller_coverage.mjs",
-                 "scripts/check_tap_contracts.mjs", "tests/test_download_controller_contract.js"]
+        paths = ["static/search/download-controller.js", "scripts/search/check_download_controller_coverage.mjs",
+                 "scripts/check_tap_contracts.mjs", "tests/search/download/test_download_controller_contract.js"]
         for relative in paths:
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
-        check = ["node", "scripts/check_download_controller_coverage.mjs"]
+        check = ["node", paths[1]]
         self.assert_check(self.run_check(*check), True, "download-controller.js")
         contract = self.root / paths[3]
         original = contract.read_text()
