@@ -90,6 +90,20 @@ try {
     assert.equal(cache.size,0);assert.equal(cache.byteLength,0);
   }
 
+  // Invalid runtime validators cannot populate the cache, and accepted
+  // bytes remain isolated from later changes to their caller-owned input.
+  {
+    const cache=createPdfRangeCache(), data=Uint8Array.from([1,2,3,4]);
+    for (const invalid of [null,undefined,{}, {etag:'W/"A"',total:20}, {etag:'"A"',total:0}]) {
+      assert.equal(cache.get(options.url,0,4,invalid),null);
+      cache.put(options.url,0,data,invalid);
+    }
+    assert.equal(cache.size,0);
+    cache.put(options.url,0,data,version);
+    data.fill(9);
+    assert.deepEqual([...cache.get(options.url,0,4,version)],[1,2,3,4]);
+  }
+
   // Reopening validates a fresh byte before reusing an owned prefix or range;
   // a changed ETag must cause a new full prefix and new demanded bytes.
   {

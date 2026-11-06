@@ -6,6 +6,7 @@ import { join } from "node:path";
 // A deliberately small safety-mutation gate, not exhaustive mutation
 // coverage. Mutate isolated modules only; never write the production source.
 const source = readFileSync("static/reader/pdf/reader-pdf-network.mjs", "utf8");
+const cacheSource = readFileSync("static/reader/pdf/reader-pdf-range-cache.mjs", "utf8");
 const backpressure = readFileSync("tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "utf8");
 const contracts = readFileSync("tests/reader/pdf-network/test_reader_pdf_network_contract.mjs", "utf8");
 const probes = [{name:"post-admission cancellation", test:backpressure, before:
@@ -17,20 +18,21 @@ const probes = [{name:"post-admission cancellation", test:backpressure, before:
   after:"checked.total === previous.total", diagnostic:"AssertionError"},
 {name:"weak ETag", test:contracts, before:'!/^"[^"\\r\\n]+"$/.test(etag || "") && last+1 < total',
   after:"false && last+1 < total", diagnostic:"AssertionError"},
-{name:"cache input ownership", test:contracts, before:"    const retained = value.slice();",
+{name:"cache input ownership", test:contracts, cache:true, before:"    const retained = value.slice();",
   after:"    const retained = value;", diagnostic:"AssertionError"},
-{name:"cache output ownership", test:contracts, before:"return row.bytes.slice(begin - row.begin, end - row.begin);",
+{name:"cache output ownership", test:contracts, cache:true, before:"return row.bytes.slice(begin - row.begin, end - row.begin);",
   after:"return row.bytes.subarray(begin - row.begin, end - row.begin);", diagnostic:"detached ArrayBuffer"}];
 let killed = 0, survived = 0, errors = 0;
 for (const probe of probes) {
-  const pieces = source.split(probe.before);
+  const pieces = (probe.cache ? cacheSource : source).split(probe.before);
   if (pieces.length !== 2) {
     console.error(`${probe.name}: expected exactly one mutation target`);errors++;continue;
   }
   const directory = mkdtempSync(join(tmpdir(), "reader-pdf-mutation-"));
   try {
     const module = join(directory, "reader-pdf-network.mjs"), runner = join(directory, "test.mjs");
-    writeFileSync(module, pieces.join(probe.after));
+    writeFileSync(module, probe.cache ? source : pieces.join(probe.after));
+    writeFileSync(join(directory, "reader-pdf-range-cache.mjs"), probe.cache ? pieces.join(probe.after) : cacheSource);
     const imported = "../../../static/reader/pdf/reader-pdf-network.mjs";
     if (probe.test.split(imported).length !== 2) throw new Error("expected exactly one PDF network import");
     writeFileSync(runner, probe.test.replace(imported, "./reader-pdf-network.mjs"));
