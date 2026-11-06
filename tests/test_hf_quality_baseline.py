@@ -381,6 +381,14 @@ class HfSearchProjectionCiTests(unittest.TestCase):
     def test_both_sites_run_pdf_book_client_coverage(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_book_client_coverage.mjs'), 2)
+        github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        gate = '          node scripts/reader/check_pdf_prefetch_contracts.mjs'
+        for job in (github, hf):
+            self.assertEqual(job.splitlines().count(gate), 1)
+            step = job[:job.index(gate)].rsplit('      - name:', 1)[1]
+            self.assertNotIn('if:', step)
+            self.assertNotIn('continue-on-error:', step)
         self.assertNotIn('node scripts/check_pdf_book_client_coverage.mjs', workflow)
         for gate in ('check_pdf_text_store_coverage.mjs', 'check_pdf_text_store_mutations.mjs'):
             self.assertEqual(workflow.count(f'node scripts/reader/{gate}'), 2)

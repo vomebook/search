@@ -10,6 +10,7 @@
       "tests.test_static_checks.StaticGateTests.test_entry_points_reject_type_errors_with_production_config",
       "tests.test_static_checks.StaticGateTests.test_javascript_reports_undefined_names_and_ignores_vendor",
       "tests.test_static_checks.StaticGateTests.test_pdf_book_client_strict_signatures_and_annotations",
+      "tests.test_static_checks.StaticGateTests.test_pdf_prefetch_contract_gate_fails_closed",
       "tests.test_static_checks.StaticGateTests.test_pdf_network_coverage_gate_enforces_fractional_minimum",
       "tests.test_static_checks.StaticGateTests.test_pdf_network_coverage_gate_rejects_removed_branch_coverage",
       "tests.test_static_checks.StaticGateTests.test_pdf_text_store_type_contract_rejects_invalid_usage",

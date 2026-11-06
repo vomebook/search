@@ -12,14 +12,18 @@ const required=[
   'cancel after ready keeps the owner and clears the page session',
   'worker error rejects current and future requests until cancellation resets it',
   'worker result errors reject once without permanently marking the client failed',
-  'dispose cancels the pending request, terminates the owner and rejects new work'
+  'dispose cancels the pending request, terminates the owner and rejects new work',
+  'prefetch cannot interrupt pending search or consume sequence',
+  'prefetch cannot interrupt pending page or consume sequence',
+  'prefetch reentered from progress cannot interrupt search',
+  'repeated prefetch replaces prefetch'
 ].map(name=>({name}));
 const result=spawnSync(process.execPath,[
   '--test','--test-concurrency=1','--test-reporter=tap','--experimental-test-coverage',
   '--test-coverage-include=**/static/reader/search/reader-pdf-book-search.mjs',
   ...minimum.map((value,index)=>`--test-coverage-${['lines','branches','functions'][index]}=${value}`),
   'tests/reader/pdf-search/test_pdf_book_client.mjs'
-],{encoding:'utf8'});
+],{encoding:'utf8',timeout:45000});
 if(result.stdout)process.stdout.write(result.stdout);
 if(result.stderr)process.stderr.write(result.stderr);
 if(result.error)throw result.error;
@@ -32,7 +36,7 @@ if(result.status!==0||rows.length!==1||rows[0].some((value,index)=>value<minimum
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
     lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||
-    !['1..9','# tests 9','# pass 9','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
+    !['1..13','# tests 13','# pass 13','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
     ['# tests ','# pass ','# fail ','# cancelled '].some(prefix=>lines.filter(line=>line.startsWith(prefix)).length!==1)){
   console.error('PDF book-search client requires named contracts and exactly one source row above each minimum');
   process.exitCode=1;
