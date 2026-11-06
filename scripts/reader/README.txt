@@ -4,6 +4,11 @@ Reader quality gates
 Run these commands from the repository root with Node 26:
 
   node scripts/reader/check_pdf_book_client_coverage.mjs
+  node scripts/reader/check_request_manager_coverage.mjs
+  node scripts/reader/check_document_loader_coverage.mjs
+
+The request and document loading gates are documented in
+`tests/reader/transport/README.txt`.
 
 The PDF book-search gate checks the client contracts in
 `tests/reader/pdf-search/test_pdf_book_client.mjs` against V8 coverage thresholds.
