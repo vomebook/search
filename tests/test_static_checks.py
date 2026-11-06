@@ -999,21 +999,21 @@ class StaticGateTests(unittest.TestCase):
 
     def test_pdf_network_coverage_gate_fails_closed(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
-                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",
-                 "scripts/check_pdf_network_mutations.mjs",
-                 "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_network_contract.mjs",
-                 "tests/test_reader_pdf_sparse_ranges.mjs"]
+                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/reader/check_pdf_network_coverage.mjs",
+                 "scripts/reader/check_pdf_network_mutations.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        check = ["node", "scripts/check_pdf_network_coverage.mjs"]
+        check = ["node", "scripts/reader/check_pdf_network_coverage.mjs"]
         self.assert_check(self.run_check(*check), True, "reader-pdf-network.mjs")
-        contracts = [("tests/test_reader_pdf_backpressure.mjs",
+        contracts = [("tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
                       "429 feedback, shared spacing, bounded retry, version consistency and cancellation passed"),
-                     ("tests/test_reader_pdf_network_contract.mjs",
+                     ("tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
                       "PDF network contracts: cache identity, safe revalidation and live cancellation passed"),
-                     ("tests/test_reader_pdf_sparse_ranges.mjs",
+                     ("tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs",
                       "Sparse PDF detection, exact demand ranges, bounded concurrency and disposal passed")]
         for path, marker in contracts:
             test = self.root / path
@@ -1041,22 +1041,22 @@ class StaticGateTests(unittest.TestCase):
             if path.startswith("tests/"):
                 (self.root / path).write_text(empty)
         self.assert_check(self.run_check(*check), False, "exactly one source coverage row")
-        (self.root / "tests/test_reader_pdf_network_contract.mjs").write_text(
-            'import "../static/reader/pdf/reader-pdf-network.mjs";\n')
+        (self.root / "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs").write_text(
+            'import "../../../static/reader/pdf/reader-pdf-network.mjs";\n')
         self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_pdf_network_coverage_gate_enforces_fractional_minimum(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
-                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",
-                 "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_network_contract.mjs",
-                 "tests/test_reader_pdf_sparse_ranges.mjs"]
+                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/reader/check_pdf_network_coverage.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        gate = self.root / "scripts/check_pdf_network_coverage.mjs"
+        gate = self.root / paths[3]
         source = gate.read_text()
-        measured = self.run_check("node", "scripts/check_pdf_network_coverage.mjs")
+        measured = self.run_check("node", paths[3])
         self.assert_check(measured, True, "reader-pdf-network.mjs")
         row = re.search(r"(?m)^\s*#\s*reader-pdf-network\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|", measured.stdout)
         self.assertIsNotNone(row, measured.stdout)
@@ -1066,37 +1066,37 @@ class StaticGateTests(unittest.TestCase):
         self.assertEqual(source.count(needle), 1)
         above = f"const minimum = [{(hundredths + 1) / 100:.2f}, 85.65, 88.43];"
         gate.write_text(source.replace(needle, above))
-        self.assert_check(self.run_check("node", "scripts/check_pdf_network_coverage.mjs"), False,
+        self.assert_check(self.run_check("node", paths[3]), False,
                           "PDF network coverage gate requires passing named tests")
 
     def test_pdf_network_coverage_gate_rejects_removed_branch_coverage(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
-                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",
-                 "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_network_contract.mjs",
-                 "tests/test_reader_pdf_sparse_ranges.mjs"]
+                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/reader/check_pdf_network_coverage.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        test = self.root / "tests/test_reader_pdf_network_contract.mjs"
+        test = self.root / paths[5]
         source = test.read_text()
         start = source.index("  // The optional shared cache belongs")
         end = source.index("  // Once a previously validated origin", start)
         test.write_text(source[:start] + source[end:])
-        self.assert_check(self.run_check("node", "scripts/check_pdf_network_coverage.mjs"), False,
+        self.assert_check(self.run_check("node", paths[3]), False,
                           "PDF network coverage gate requires passing named tests")
 
     def test_pdf_network_coverage_gate_keeps_cancellation_test(self):
         paths = ["static/reader/pdf/reader-pdf-network.mjs", "static/reader/core/reader-security.js",
-                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/check_pdf_network_coverage.mjs",
-                 "scripts/check_pdf_network_mutations.mjs",
-                 "tests/test_reader_pdf_backpressure.mjs", "tests/test_reader_pdf_network_contract.mjs",
-                 "tests/test_reader_pdf_sparse_ranges.mjs"]
+                 "static/reader/pdf/reader-pdf-engine.mjs", "scripts/reader/check_pdf_network_coverage.mjs",
+                 "scripts/reader/check_pdf_network_mutations.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs", "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        test = self.root / "tests/test_reader_pdf_backpressure.mjs"
+        test = self.root / paths[5]
         original = test.read_text()
         begin = "  // BEGIN_PDF_ADMISSION_CANCELLATION\n"
         end = "  // END_PDF_ADMISSION_CANCELLATION\n"
@@ -1107,7 +1107,7 @@ class StaticGateTests(unittest.TestCase):
         test.write_text(original[:start] + original[finish:])
         # Aggregate coverage alone cannot detect loss of this regression test;
         # the same lines execute in other paths. The explicit mutant must die.
-        self.assert_check(self.run_check("node", "scripts/check_pdf_network_mutations.mjs"), False,
+        self.assert_check(self.run_check("node", paths[4]), False,
                           "post-admission cancellation mutant survived")
 
     def test_reader_core_coverage_gate_requires_every_source(self):
@@ -1155,15 +1155,15 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "coverage")
 
     def test_pdf_network_safety_mutation_gate_rejects_unexpected_failure(self):
-        paths = ["static/reader/pdf/reader-pdf-network.mjs", "tests/test_reader_pdf_backpressure.mjs",
-                 "tests/test_reader_pdf_network_contract.mjs", "scripts/check_pdf_network_mutations.mjs"]
+        paths = ["static/reader/pdf/reader-pdf-network.mjs", "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs",
+                 "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs", "scripts/reader/check_pdf_network_mutations.mjs"]
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        check = ["node", "scripts/check_pdf_network_mutations.mjs"]
+        check = ["node", paths[3]]
         self.assert_check(self.run_check(*check), True, '"total":6,"killed":6,"survived":0,"errors":0')
-        (self.root / paths[1]).write_text('import "../static/reader/pdf/reader-pdf-network.mjs";\nthrow Error("unrelated");\n')
+        (self.root / paths[1]).write_text('import "../../../static/reader/pdf/reader-pdf-network.mjs";\nthrow Error("unrelated");\n')
         self.assert_check(self.run_check(*check), False, "unexpected failure, not a killed mutant")
 
     def test_chapter_scheduler_type_contract_rejects_invalid_index(self):
