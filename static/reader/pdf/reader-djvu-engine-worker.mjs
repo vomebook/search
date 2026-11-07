@@ -4,9 +4,17 @@ const SIMD128_PROBE = new Uint8Array([
   0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,22,1,20,0,253,12,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11
 ]);
-let engine, document, pageCount = 0, cacheBudget = 0, lazy = false, activeId = 0, rangeSequence = 0;
+/** @typedef {typeof import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js')} DjvuEngine */
+/** @typedef {import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js').WasmDocument} DjvuDocument */
+/** @typedef {import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js').WasmLazyDocument} DjvuLazyDocument */
+/** @type {DjvuEngine | undefined} */
+let engine;
+/** @type {DjvuDocument | DjvuLazyDocument | undefined} */
+let document;
+let pageCount = 0, cacheBudget = 0, lazy = false, activeId = 0, rangeSequence = 0;
 const ranges = new Map();
 const MAX_PIXELS = 50_000_000;
+/** @param {unknown} id @param {string} code */
 const fail = (id, code) => self.postMessage({ id, ok: false, error: code });
 
 async function prepareEngine() {
@@ -20,7 +28,9 @@ async function prepareEngine() {
   const wasmUrl = simd
     ? new URL('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs_bg.wasm', import.meta.url)
     : new URL('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/scalar/djvu_rs_bg.wasm', import.meta.url);
+  /** @type {DjvuEngine | undefined} */
   let candidate;
+  /** @type {Response | undefined} */
   let response;
   try {
     const [module,wasmResponse] = await Promise.all([
@@ -69,17 +79,20 @@ self.onmessage = async ({ data }) => {
           !Number.isSafeInteger(data.cacheBytes) || data.cacheBytes < 1 || data.cacheBytes > 64 * 1024 * 1024)
         throw new Error('DJVU_DOCUMENT_INVALID');
       await prepareEngine();
-      document = lazy ? await engine.WasmLazyDocument.open(data.total,(offset,length)=>new Promise((resolve,reject)=>{
+      // prepareEngine either assigns the engine or throws.
+      const ready = /** @type {DjvuEngine} */ (engine);
+      const opened = lazy ? await ready.WasmLazyDocument.open(data.total,(/** @type {number} */ offset,/** @type {number} */ length)=>new Promise((resolve,reject)=>{
         const rangeId=++rangeSequence;
         ranges.set(rangeId,{id:activeId,length,resolve,reject});
         self.postMessage({id:activeId,operation:'range',rangeId,offset,length});
-      }),data.cacheBytes) : engine.WasmDocument.reader_open(new Uint8Array(data.bytes), data.cacheBytes);
+      }),data.cacheBytes) : ready.WasmDocument.reader_open(new Uint8Array(data.bytes), data.cacheBytes);
+      document = opened;
       cacheBudget = data.cacheBytes;
-      pageCount = document.page_count();
+      pageCount = opened.page_count();
       if (!Number.isSafeInteger(pageCount) || pageCount < 1 || pageCount > 10000)
         throw new Error('DJVU_PAGE_COUNT_INVALID');
       self.postMessage({ id, ok: true, count: pageCount,
-        outlineNeedsFullSource:lazy && document.reader_outline_needs_full_source() });
+        outlineNeedsFullSource:lazy && /** @type {DjvuLazyDocument} */ (opened).reader_outline_needs_full_source() });
       return;
     }
     if (!document) throw new Error('DJVU_DOCUMENT_INVALID');
@@ -87,13 +100,14 @@ self.onmessage = async ({ data }) => {
       const number = data.page;
       if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
       if (lazy) {
-        const [width,height,dpi,rotation]=Array.from(await document.reader_geometry(number-1));
+        const lazyDocument = /** @type {DjvuLazyDocument} */ (document);
+        const [width,height,dpi,rotation]=Array.from(await lazyDocument.reader_geometry(number-1));
         if (![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
             width * height > MAX_PIXELS || ![0,90,180,270].includes(rotation)) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
         if (operation === 'geometry') self.postMessage({id,ok:true,width,height,dpi,rotation});
         else {
-          const text=(await document.reader_text(number-1)) || '';
-          const packed=await document.reader_text_zones_json(number-1);
+          const text=(await lazyDocument.reader_text(number-1)) || '';
+          const packed=await lazyDocument.reader_text_zones_json(number-1);
           if (text.length > 2_000_000 || (packed && packed.length > 4_000_000)) throw new Error('DJVU_TEXT_SIZE_LIMIT');
           const zones=packed ? JSON.parse(packed) : [];
           if (!Array.isArray(zones) || zones.length > 20_000) throw new Error('DJVU_TEXT_SIZE_LIMIT');
@@ -101,7 +115,7 @@ self.onmessage = async ({ data }) => {
         }
         return;
       }
-      const page = document.page(number - 1);
+      const page = /** @type {DjvuDocument} */ (document).page(number - 1);
       try {
         const dpi = page.dpi(), rotation = page.reader_rotation();
         const width = page.width_at(dpi), height = page.height_at(dpi);
@@ -126,12 +140,14 @@ self.onmessage = async ({ data }) => {
       const number = data.page;
       if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
       if (lazy) {
-        const [width,height,dpi,rotation]=Array.from(await document.reader_geometry(number-1));
+        const lazyDocument = /** @type {DjvuLazyDocument} */ (document);
+        const [width,height,dpi,rotation]=Array.from(await lazyDocument.reader_geometry(number-1));
         if (![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
             width * height > MAX_PIXELS || ![0,90,180,270].includes(rotation)) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
+        /** @type {import('../../vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/simd128/djvu_rs.js').WasmPixmap | null | undefined} */
         let pixmap;
         try {
-          pixmap=await document.reader_render_strict(number-1);
+          pixmap=await lazyDocument.reader_render_strict(number-1);
           const pixels=pixmap.to_bytes();
           if (pixmap.width()!==width || pixmap.height()!==height || !(pixels instanceof Uint8ClampedArray) ||
               pixels.byteLength!==width*height*4) throw new Error('DJVU_PAGE_DECODE_INVALID');
@@ -141,7 +157,8 @@ self.onmessage = async ({ data }) => {
         } finally { pixmap?.free(); }
         return;
       }
-      const page = document.page(number - 1);
+      const eagerDocument = /** @type {DjvuDocument} */ (document);
+      const page = eagerDocument.page(number - 1);
       let result;
       try {
         const dpi = page.dpi(), rotation = page.reader_rotation();
@@ -155,7 +172,7 @@ self.onmessage = async ({ data }) => {
         if (!(pixels instanceof Uint8ClampedArray) || pixels.byteLength !== width * height * 4)
           throw new Error('DJVU_PAGE_DECODE_INVALID');
         result = { id, ok: true, width, height, dpi, rotation, pixels: pixels.buffer };
-      } finally { page.free(); document.reader_trim_cache(cacheBudget); }
+      } finally { page.free(); eagerDocument.reader_trim_cache(cacheBudget); }
       // Do not publish success before cache cleanup: a cleanup failure must not
       // produce a second, contradictory response for the same operation.
       /** @type {{postMessage(message: unknown, transfer: Transferable[]): void}} */ (/** @type {unknown} */ (self)).postMessage(result, [result.pixels]);
@@ -179,13 +196,13 @@ self.onmessage = async ({ data }) => {
       return;
     }
     if (operation === 'stats') {
-      const cacheBytes=lazy ? (await document.reader_cache_stats())[2] : document.reader_cache_bytes();
+      const cacheBytes=lazy ? (await /** @type {DjvuLazyDocument} */ (document).reader_cache_stats())[2] : /** @type {DjvuDocument} */ (document).reader_cache_bytes();
       self.postMessage({ id, ok: true, cacheBytes });
       return;
     }
     throw new Error('DJVU_WORKER_PROTOCOL');
   } catch (error) {
-    const message = String(error?.message || error || '');
+    const message = String(/** @type {{message?: unknown} | null | undefined} */ (error)?.message || error || '');
     const known = message.match(/\bDJVU_[A-Z_]+\b/)?.[0];
     fail(id, known || (operation === 'open' || operation === 'open-range' ? 'DJVU_OPEN_FAILED' :
       operation === 'page' ? 'DJVU_PAGE_DECODE_FAILED' : operation === 'text' ? 'DJVU_TEXT_DECODE_FAILED' : 'DJVU_WORKER_FAILED'));

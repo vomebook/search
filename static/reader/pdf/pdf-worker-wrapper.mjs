@@ -20,7 +20,9 @@ if (!Math.sumPrecise) {
 }
 
 import "../../reader-resources.js";
+/** @type {MessageEvent[]} */
 const pendingMessages = [];
+/** @param {MessageEvent} event */
 const bufferMessage = event => pendingMessages.push(event);
 self.addEventListener("message", bufferMessage);
 
@@ -40,7 +42,7 @@ if (staged) {
   opening = import("./pdf-first-page-worker-adapter.mjs").then(adapter =>
     adapter.installFirstPageWorker(source, VoiceOfMLReaderResources.vendors.pdfWorkerSource.sha256,
       {signal:owner.signal, response})
-  ).then(handler => { globalThis.pdfjsWorker = {WorkerMessageHandler:handler}; })
+  ).then(handler => { /** @type {{pdfjsWorker?: unknown}} */ (globalThis).pdfjsWorker = {WorkerMessageHandler:handler}; })
     .catch(() => {
       owner.abort();
       response.then(value => value.body?.cancel().catch(() => {}), () => {});

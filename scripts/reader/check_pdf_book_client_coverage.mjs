@@ -19,11 +19,11 @@ const required=[
   'repeated prefetch replaces prefetch'
 ].map(name=>({name}));
 const result=spawnSync(process.execPath,[
-  '--test','--test-concurrency=1','--test-reporter=tap','--experimental-test-coverage',
+  '--test','--test-isolation=none','--test-concurrency=1','--test-reporter=tap','--experimental-test-coverage',
   '--test-coverage-include=**/static/reader/search/reader-pdf-book-search.mjs',
   ...minimum.map((value,index)=>`--test-coverage-${['lines','branches','functions'][index]}=${value}`),
   'tests/reader/pdf-search/test_pdf_book_client.mjs'
-],{encoding:'utf8',timeout:45000});
+],{encoding:'utf8',timeout:45000,killSignal:'SIGKILL'});
 if(result.stdout)process.stdout.write(result.stdout);
 if(result.stderr)process.stderr.write(result.stderr);
 if(result.error)throw result.error;
@@ -32,7 +32,7 @@ const rows=lines.flatMap(line=>{
   const match=/^\s*#\s*reader-pdf-book-search\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match?[match.slice(1).map(Number)]:[];
 });
-if(result.status!==0||rows.length!==1||rows[0].some((value,index)=>value<minimum[index])||
+if(result.status!==0||lines[0]!=='TAP version 13'||rows.length!==1||rows[0].some((value,index)=>value<minimum[index])||
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
     lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||

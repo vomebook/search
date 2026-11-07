@@ -23,7 +23,7 @@ function validTap(text, target, passing) {
   const expected = `${passing ? 'ok' : 'not ok'} 1 - ${target}`;
   const summary = {tests: results.length, pass: passing ? 1 : 0, fail: passing ? 0 : 1,
     skipped, cancelled: 0, todo: 0, suites: 0};
-  return active.length === 1 && active[0] === expected &&
+  return lines[0] === 'TAP version 13' && active.length === 1 && active[0] === expected &&
     lines.filter(line => line === `# Subtest: ${target}`).length === 1 &&
     lines.filter(line => /^# Subtest: /.test(line)).length === results.length &&
     lines.filter(line => /^1\.\.\d+$/.test(line)).length === 1 && lines.includes(`1..${results.length}`) &&
@@ -42,8 +42,8 @@ for (const [name, before, after, test, diagnostic] of probes) {
     const target = join(temp, 'static/reader/pdf/reader-v3.mjs');
     mkdirSync(dirname(target), {recursive:true});
     const escaped = test.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const args = ['--test', '--test-reporter=tap', `--test-name-pattern=^${escaped}$`, 'tests/reader/pdf-v3/test_reader_v3_untrusted.mjs'];
-    const run = () => spawnSync(process.execPath, args, {cwd:temp, encoding:'utf8', timeout:15000});
+    const args = ['--test', '--test-isolation=none', '--test-reporter=tap', `--test-name-pattern=^${escaped}$`, 'tests/reader/pdf-v3/test_reader_v3_untrusted.mjs'];
+    const run = () => spawnSync(process.execPath, args, {cwd:temp, encoding:'utf8', timeout:15000, killSignal:'SIGKILL'});
     writeFileSync(target, source);
     const baseline = run();
     if (baseline.error || baseline.signal || baseline.status !== 0 || !validTap(baseline.stdout, test, true)) {
