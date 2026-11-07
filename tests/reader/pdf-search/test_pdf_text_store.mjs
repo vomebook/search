@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {IDBFactory, IDBDatabase, IDBTransaction} from 'fake-indexeddb';
+import {IDBFactory, IDBDatabase, IDBTransaction, IDBObjectStore} from 'fake-indexeddb';
 import {createPdfTextStore, pdfTextStoreKey} from '../../../static/reader/pdf/reader-pdf-text-store.mjs';
 
 const key='a'.repeat(64), keyB='b'.repeat(64);
@@ -117,7 +117,7 @@ test('keys are stable, identity-bound and reject invalid inputs',async()=>{
   const a=await pdfTextStoreKey(data);
   assert.match(a,/^[0-9a-f]{64}$/);assert.equal(await pdfTextStoreKey(data),a);
   for (const other of [{...data,source:'https://example.test/other.pdf'},{...data,version:'"B"'},
-    {...data,pageCount:13},{...data,engine:'engine2'}]) assert.notEqual(await pdfTextStoreKey(other),a);
+    {...data,pageCount:13},{...data,engine:'engine2'}]) assert.notEqual(await pdfTextStoreKey(other),a,'key must bind every identity field');
   for (const bad of [{...data,source:''},{...data,version:''},{...data,pageCount:0},
     {...data,pageCount:1.2},{...data,pageCount:Number.MAX_SAFE_INTEGER+1}]) assert.equal(await pdfTextStoreKey(bad),null);
 });
@@ -161,12 +161,12 @@ test('corrupt records fail closed and a bad ledger resets the shared budget',asy
     const base={schema:1,id:key+':1',key,page:1,text:'bad',bytes:(key.length+2+3)*2+64,savedAt:clock};
     for (const corrupt of [{...base,schema:2},{...base,key:keyB},{...base,page:2},
       {...base,text:4},{...base,bytes:1},{...base,savedAt:NaN},{...base,savedAt:clock+1}]) {
-      await seed('pages',corrupt);assert.equal(await store.get(1),null);
+      await seed('pages',corrupt);assert.equal(await store.get(1),null,'corrupt page must be rejected');
     }
     assert.equal(await store.put(1,'good'),true);
     await seed('budget',{id:'total',bytes:-1,count:2,prunedAt:clock});
     assert.equal(await store.put(2,'new'),true);
-    assert.equal(await store.get(1),null);assert.equal(await store.get(2),'new');
+    assert.equal(await store.get(1),null,'corrupt ledger must purge old page');assert.equal(await store.get(2),'new');
   } finally {store?.dispose();restoreFactory();}
 });
 
@@ -242,6 +242,109 @@ test('understated and overdrawn ledgers reset instead of drifting',async()=>{
   }
 });
 
+test('zero ledger detects hidden pages and asymmetric counters',async()=>{
+  for (const [bytes,count] of [[0,0],[0,2],[400,0]]) {
+    useFactory();let store,other,db;
+    try {
+      const bounded={bytes:900,entries:4,entryBytes:210,ttl:1000};
+      store=createPdfTextStore(key,{limits:bounded,now:()=>10000});
+      other=createPdfTextStore(keyB,{limits:bounded,now:()=>10000});
+      assert.equal(await store.put(1,'x'.repeat(7)),true);
+      assert.equal(await store.put(2,'x'.repeat(8)),false);
+      assert.equal(await store.put(2,'b'),true);
+      await seed('budget',{id:'total',bytes,count,prunedAt:10000});
+      assert.deepEqual(await Promise.all([store.put(3,'c'),other.put(4,'d')]),[true,true]);
+      db=await openDatabase();
+      const tx=db.transaction(['pages','budget']);
+      const [pages,budget]=await Promise.all([requestValue(tx.objectStore('pages').getAll()),requestValue(tx.objectStore('budget').get('total'))]);
+      assert.equal(await store.get(1),null,'zero ledger must purge hidden pages');
+      assert.equal(await store.get(2),null,'zero ledger must purge hidden pages');
+      assert.equal(pages.length,2);assert.equal(budget.count,pages.length);
+      assert.equal(budget.bytes,pages.reduce((sum,row)=>sum+row.bytes,0));
+      assert.ok(budget.bytes<=bounded.bytes && budget.count<=bounded.entries);
+    } finally {db?.close();store?.dispose();other?.dispose();restoreFactory();}
+  }
+});
+
+test('empty zero ledger counts without clearing',async()=>{
+  useFactory();let store,counts=0,clears=0;
+  const originalCount=IDBObjectStore.prototype.count, originalClear=IDBObjectStore.prototype.clear;
+  try {
+    store=createPdfTextStore(key,{limits,now:()=>10000});
+    IDBObjectStore.prototype.count=function(...args){counts++;return originalCount.apply(this,args);};
+    IDBObjectStore.prototype.clear=function(){clears++;return originalClear.call(this);};
+    assert.equal(await store.put(1,'first'),true);
+    assert.equal(counts,0);assert.equal(clears,1);
+    await seed('budget',{id:'total',bytes:-1,count:0,prunedAt:10000});
+    assert.equal(await store.put(1,'reset'),true);
+    assert.equal(counts,0);assert.equal(clears,2);
+    counts=0;clears=0;
+    const db=await openDatabase();
+    try {const tx=db.transaction(['pages','budget'],'readwrite');const done=transactionDone(tx);
+      tx.objectStore('pages').clear();tx.objectStore('budget').put({id:'total',bytes:0,count:0,prunedAt:10000});await done;
+    } finally {db.close();}
+    counts=0;clears=0;
+    assert.equal(await store.put(2,'new'),true);
+    assert.equal(counts,1);assert.equal(clears,0);assert.equal(await store.get(2),'new');
+  } finally {IDBObjectStore.prototype.count=originalCount;IDBObjectStore.prototype.clear=originalClear;store?.dispose();restoreFactory();}
+});
+
+test('zero ledger count handler throw aborts before settlement',async()=>{
+  useFactory();let store,db;const events=[];
+  const originalClear=IDBObjectStore.prototype.clear, originalTransaction=IDBDatabase.prototype.transaction;
+  try {
+    store=createPdfTextStore(key,{limits,now:()=>10000});
+    assert.equal(await store.put(1,'original'),true);
+    await seed('budget',{id:'total',bytes:0,count:0,prunedAt:10000});
+    IDBObjectStore.prototype.clear=function(){throw new Error('injected clear failure');};
+    IDBDatabase.prototype.transaction=function(names,mode,...rest){
+      const tx=originalTransaction.call(this,names,mode,...rest);
+      if (mode==='readwrite') tx.addEventListener('abort',()=>events.push('abort'));
+      return tx;
+    };
+    assert.equal(await store.put(2,'new').then(value=>{events.push('settled');return value;}),false);
+    assert.deepEqual(events,['abort','settled'],'count handler abort must precede settlement');
+    IDBObjectStore.prototype.clear=originalClear;IDBDatabase.prototype.transaction=originalTransaction;
+    db=await openDatabase();const tx=db.transaction(['pages','budget']);
+    const [pages,budget]=await Promise.all([requestValue(tx.objectStore('pages').getAll()),requestValue(tx.objectStore('budget').get('total'))]);
+    assert.equal(pages.length,1);assert.equal(pages[0].text,'original');assert.equal(budget.count,0);
+  } finally {IDBObjectStore.prototype.clear=originalClear;IDBDatabase.prototype.transaction=originalTransaction;db?.close();store?.dispose();restoreFactory();}
+});
+
+test('zero ledger count sync failure rolls back before settlement',()=>countFailure('sync'));
+test('zero ledger count request failure rolls back before settlement',()=>countFailure('request'));
+
+async function countFailure(kind){
+  useFactory();let store,db;const events=[];
+  const count=IDBObjectStore.prototype.count, transaction=IDBDatabase.prototype.transaction;
+  const snapshot=async()=>{const tx=db.transaction(['pages','budget']);return Promise.all([
+    requestValue(tx.objectStore('pages').getAll()),requestValue(tx.objectStore('budget').getAll())]);};
+  try {
+    store=createPdfTextStore(key,{limits,now:()=>10000});
+    assert.equal(await store.put(1,'original'),true);
+    await seed('budget',{id:'total',bytes:0,count:0,prunedAt:10000});
+    db=await openDatabase();const before=await snapshot();
+    IDBDatabase.prototype.transaction=function(names,mode,...rest){
+      const tx=transaction.call(this,names,mode,...rest);
+      if(mode==='readwrite') for(const type of ['abort','complete']) tx.addEventListener(type,()=>events.push(type));
+      return tx;
+    };
+    IDBObjectStore.prototype.count=function(){
+      events.push('count');
+      if(kind==='sync') throw Error('injected count throw');
+      // A duplicate-add request simulates an error, not a native count failure.
+      const request=this.add({id:key+':1'});
+      request.addEventListener('error',()=>events.push('error '+request.error.name));
+      return request;
+    };
+    assert.equal(await store.put(2,'new').then(value=>{events.push('settled');return value;}),false,'count failure must fail');
+    assert.deepEqual(events,kind==='sync'?['count','abort','settled']:
+      ['count','error ConstraintError','abort','settled'],'count failure must abort before settlement');
+    IDBDatabase.prototype.transaction=transaction;IDBObjectStore.prototype.count=count;
+    assert.deepEqual(await snapshot(),before,'count failure must preserve snapshot');
+  } finally {IDBDatabase.prototype.transaction=transaction;IDBObjectStore.prototype.count=count;db?.close();store?.dispose();restoreFactory();}
+}
+
 test('expired entries are pruned and old records free budget for new pages',async()=>{
   useFactory();let now=1_000_000,store;
   try {
@@ -266,7 +369,7 @@ test('concurrent writes share the ledger and bound in-flight writes',async()=>{
     first=createPdfTextStore(key,{limits});second=createPdfTextStore(keyB,{limits});
     const pending=[first.put(1,'one'),first.put(2,'two'),first.put(3,'overflow'),second.put(1,'other')];
     const values=await Promise.all(pending);
-    assert.deepEqual(values,[true,true,false,true]);assert.equal(first.stats.skipped,1);
+    assert.deepEqual(values,[true,true,false,true],'in-flight writes must be bounded');assert.equal(first.stats.skipped,1);
     const db=await openDatabase();
     try {
       const tx=db.transaction(['pages','budget'],'readonly');

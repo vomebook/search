@@ -44,7 +44,7 @@ export function createPdfTextStore(key, options = {}) {
     return opening;
   }
   /** @template T @param {IDBTransactionMode} mode @param {number} budgetMs
-   * @param {(tx: IDBTransaction, finish: (value: T) => void) => void} work @returns {Promise<T | null>} */
+   * @param {(tx: IDBTransaction, finish: (value: T) => void, fail: () => void) => void} work @returns {Promise<T | null>} */
   async function operation(mode, budgetMs, work) {
     if (!active() || !globalThis.indexedDB) return null;
     const owner = new AbortController();
@@ -66,7 +66,7 @@ export function createPdfTextStore(key, options = {}) {
           // Uncancelled request errors abort by default. If already cancelled,
           // explicitly abort; await a terminal event to avoid early settlement.
           tx.onerror = event => { failed = true; if (event.defaultPrevented) fail(); };
-          try { work(tx, value => { result = value; }); } catch (_) { fail(); }
+          try { work(tx, value => { result = value; }, fail); } catch (_) { fail(); }
         }).catch(reject);
       });
     } catch (_) { return null; }
@@ -104,13 +104,13 @@ export function createPdfTextStore(key, options = {}) {
     writes++; pendingBytes += bytes;
     try {
       // Page bodies and the global budget are committed atomically across tabs.
-      const saved = await operation("readwrite",2000,(tx,finish) => {
+      const saved = await operation("readwrite",2000,(tx,finish,fail) => {
         const pages = tx.objectStore("pages"), budgets = tx.objectStore("budget"), timestamp = now();
         const request = budgets.get("total");
         request.onsuccess = () => {
-          let ledger = request.result;
+          let ledger = request.result, justReset = false;
           if (!ledger || !Number.isSafeInteger(ledger.bytes) || !Number.isSafeInteger(ledger.count) || ledger.bytes < 0 || ledger.count < 0) {
-            pages.clear(); ledger = {id:"total",bytes:0,count:0,prunedAt:timestamp};
+            pages.clear(); ledger = {id:"total",bytes:0,count:0,prunedAt:timestamp}; justReset = true;
           }
           const commit = () => {
             pages.put({schema:1,id,key,page,text,bytes,savedAt:timestamp});
@@ -123,32 +123,44 @@ export function createPdfTextStore(key, options = {}) {
             pages.clear(); ledger = {id:"total",bytes:0,count:0,prunedAt:timestamp};
             commit();
           };
-          const previous = pages.get(id);
-          previous.onsuccess = () => {
-            if (previous.result) {
-              if (!validStoredCost(previous.result) || previous.result.bytes > ledger.bytes || ledger.count < 1) return reset();
-              ledger.bytes -= previous.result.bytes;
-              ledger.count--; pages.delete(id);
-            }
-            const full = () => ledger.bytes+bytes > limits.bytes || ledger.count >= limits.entries;
-            const prune = timestamp-ledger.prunedAt >= 3600000;
-            if (!full() && !prune) return commit();
-            const cursor = pages.index("savedAt").openCursor();
-            cursor.onsuccess = () => {
-              const row = cursor.result;
-              if (row && (full() || (prune && timestamp-row.value.savedAt >= limits.ttl))) {
-                if (!validStoredCost(row.value) || row.value.bytes > ledger.bytes || ledger.count < 1) return reset();
-                ledger.bytes -= row.value.bytes;
-                ledger.count--;
-                row.delete(); row.continue(); return;
+          const proceed = () => {
+            const previous = pages.get(id);
+            previous.onsuccess = () => {
+              if (previous.result) {
+                if (!validStoredCost(previous.result) || previous.result.bytes > ledger.bytes || ledger.count < 1) return reset();
+                ledger.bytes -= previous.result.bytes;
+                ledger.count--; pages.delete(id);
               }
-              ledger.prunedAt = timestamp;
-              // A corrupt, unindexed row can leave the budget full after the
-              // cursor is exhausted. Roll back any previous deletions rather
-              // than committing a partial replacement with a stale ledger.
-              if (!full()) commit(); else tx.abort();
+              const full = () => ledger.bytes+bytes > limits.bytes || ledger.count >= limits.entries;
+              const prune = timestamp-ledger.prunedAt >= 3600000;
+              if (!full() && !prune) return commit();
+              const cursor = pages.index("savedAt").openCursor();
+              cursor.onsuccess = () => {
+                const row = cursor.result;
+                if (row && (full() || (prune && timestamp-row.value.savedAt >= limits.ttl))) {
+                  if (!validStoredCost(row.value) || row.value.bytes > ledger.bytes || ledger.count < 1) return reset();
+                  ledger.bytes -= row.value.bytes;
+                  ledger.count--;
+                  row.delete(); row.continue(); return;
+                }
+                ledger.prunedAt = timestamp;
+                // A corrupt, unindexed row can leave the budget full after the
+                // cursor is exhausted. Roll back any previous deletions rather
+                // than committing a partial replacement with a stale ledger.
+                if (!full()) commit(); else tx.abort();
+              };
             };
           };
+          if ((ledger.bytes === 0) !== (ledger.count === 0)) return reset();
+          if (!justReset && ledger.bytes === 0 && ledger.count === 0) {
+            try {
+              const count = pages.count();
+              count.onsuccess = () => {
+                try { if (count.result !== 0) reset(); else proceed(); }
+                catch (_) { fail(); }
+              };
+            } catch (_) { fail(); }
+          } else proceed();
         };
       });
       if (saved) stats.writes++; else stats.skipped++;
