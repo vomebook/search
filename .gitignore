@@ -6,7 +6,7 @@ __pycache__/
 node_modules/
 .ruff_cache/
 *.py[cod]
-tests/benchmark-results.json
+tests/performance/benchmark-results.json
 tests/snapshots/
 /TESTING.md
 /requirements-test.txt

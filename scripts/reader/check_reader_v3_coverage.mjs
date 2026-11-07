@@ -7,8 +7,8 @@ const names = ['resource paths use the real contract and reject JSON coercion', 
   'text index search part null', 'text partition root null', 'text partition entry null',
   'parse errors and unrelated repository error remain distinct'];
 const scripts = [
-  ['tests/test_dataset_primary_policy.mjs', 'fixed dataset primary validation and URL encoding passed'],
-  ['tests/test_reader_v3_ocr_retained.mjs', 'Independent OCR text, accepted corrections and SHA-256 checks remain available'],
+  ['tests/reader/pdf-v3/test_dataset_primary_policy.mjs', 'fixed dataset primary validation and URL encoding passed'],
+  ['tests/reader/pdf-v3/test_reader_v3_ocr_retained.mjs', 'Independent OCR text, accepted corrections and SHA-256 checks remain available'],
   ['tests/reader/djvu/test_reader_djvu_only.mjs', 'PDF and DjVu primary reading, no legacy image fallback, OCR retention passed']
 ];
 const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap',

@@ -31,7 +31,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from tests.browser_support import local_server
+from tests.support.browser_support import local_server
 PREFIX = '/search' if '/search/static/' in (ROOT / 'static/reader.html').read_text() else ''
 @contextlib.contextmanager
 def pdf_server(pdf, *, delay_ms=0):
@@ -119,7 +119,7 @@ def measure(browser, target, mode, *, local=False, variant='baseline', target_pa
     if local:
         # Warm the pinned local engine exactly as the offline browser suite
         # does, avoiding unrelated CDN/WASM variability in this comparison.
-        from tests.test_reader_performance import route_local_vendor_fallback
+        from tests.performance.test_reader_performance import route_local_vendor_fallback
         route_local_vendor_fallback(page)
     if candidate_network:
         code = candidate_network.read_text(encoding='utf-8')
