@@ -436,7 +436,9 @@ class HfSearchProjectionCiTests(unittest.TestCase):
     def test_both_sites_run_reader_v3_gates(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         gates = ('          node scripts/reader/check_reader_v3_coverage.mjs\n'
-                 '          node scripts/reader/check_reader_v3_mutations.mjs\n')
+                 '          node scripts/reader/check_reader_v3_mutations.mjs\n'
+                 '          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser chromium\n'
+                 '          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser firefox\n')
         step = '      - name: Reader v3 gates\n{}        run: |\n' + gates
 
         def registered(text):
@@ -459,6 +461,8 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         mutations = [
             workflow.replace('          node scripts/reader/check_reader_v3_coverage.mjs\n',
                              '          # node scripts/reader/check_reader_v3_coverage.mjs\n', 1),
+            workflow.replace('          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser firefox\n',
+                             '          # python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser firefox\n', 1),
             workflow.replace('      - name: Reader v3 gates\n',
                              '      - name: Reader v3 gates\n        if: false\n', 1),
             workflow.replace('      - name: Reader v3 gates\n',
