@@ -9,15 +9,16 @@ const required = [
   'cancel still rejects an active search',
   'dispose still rejects an active search'
 ].map(name => ({name}));
-const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap',
+// Run the tests in the spawned process so a timeout cannot orphan a test-runner worker.
+const result = spawnSync(process.execPath, ['--test', '--test-isolation=none', '--test-concurrency=1', '--test-reporter=tap',
   'tests/reader/pdf-search/test_pdf_prefetch_schedule.mjs',
-  'tests/reader/pdf-search/test_prefetch_priority.mjs'], {encoding: 'utf8', timeout: 45000});
+  'tests/reader/pdf-search/test_prefetch_priority.mjs'], {encoding: 'utf8', timeout: 45000, killSignal: 'SIGKILL'});
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.error) console.error(result.error);
 const lines = (result.stdout || '').split(/\r?\n/);
 const summaries = ['1..6', '# tests 6', '# pass 6', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
-if (result.status !== 0 || result.error || !hasPassingTapContracts(result.stdout || '', required) ||
+if (result.status !== 0 || result.error || lines[0] !== 'TAP version 13' || !hasPassingTapContracts(result.stdout || '', required) ||
     !summaries.every(line => lines.filter(item => item === line).length === 1) ||
     ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
       lines.filter(line => line.startsWith(prefix)).length !== 1) ||
