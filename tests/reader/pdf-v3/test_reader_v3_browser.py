@@ -24,9 +24,6 @@ def hard_deadline(_signum, _frame):
     os._exit(124)
 
 
-signal.signal(signal.SIGALRM, hard_deadline)
-signal.alarm(150)
-
 FIXTURE_ROOT = Path(__file__).resolve().parent
 CHECKOUT = Path(__file__).resolve().parents[3]
 FIXTURE_NAME = 'reader_v3_fixture.html'
@@ -232,6 +229,8 @@ def main():
     return bool(failures)
 
 if __name__ == '__main__':
+    signal.signal(signal.SIGALRM, hard_deadline)
+    signal.alarm(150)
     try:
         sys.exit(main())
     finally:
