@@ -374,6 +374,10 @@
       "kind": "direct",
       "source": ".github/workflows/static.yml"
     },
+    "tests/reader/pdf-v3/test_reader_v3_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
     "tests/reader/pdf-v3/test_reader_v3_ocr_retained.mjs": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
