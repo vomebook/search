@@ -1,4 +1,6 @@
+import contextlib
 import importlib
+import io
 import pathlib
 import sys
 import tempfile
@@ -21,6 +23,15 @@ class ShardRunnerTests(unittest.TestCase):
         importlib.invalidate_caches()
         return [[f'shard_fixture.C.test_{x}'] for x in ('a', 'b', 'c')]
 
+    def assert_run_failure(self, groups, timeout, message, allowed_skips=None):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = runner.run_groups(groups, timeout, allowed_skips)
+        output = f'captured stdout:\n{stdout.getvalue()}\ncaptured stderr:\n{stderr.getvalue()}'
+        self.assertEqual(code, 1, output)
+        self.assertIn(message, stderr.getvalue(), output)
+        return stdout.getvalue(), stderr.getvalue()
+
     def test_success_skips_and_subtests(self):
         groups = self.fixture('import unittest\nclass C(unittest.TestCase):\n def test_a(self):\n  with self.subTest(x=1): self.assertEqual(1, 1)\n @unittest.skip("skip")\n def test_b(self): pass\n def test_c(self): pass\n')
         runner.validate('shard_fixture', groups)
@@ -28,14 +39,14 @@ class ShardRunnerTests(unittest.TestCase):
         from unittest.mock import patch
         with patch.dict(os.environ, {'PYTHONPATH': self.tmp.name}):
             self.assertEqual(runner.run_groups(groups, 5, allowed_skips={groups[1][0]: 'skip'}), 0)
-            self.assertEqual(runner.run_groups(groups, 5), 1)
+            self.assert_run_failure(groups, 5, 'invalid result: invalid skips')
 
     def test_subtest_skip_rejected_end_to_end(self):
         import os
         from unittest.mock import patch
         groups = self.fixture('import unittest\nclass C(unittest.TestCase):\n def test_a(self):\n  with self.subTest(x=1): self.skipTest("skip")\n def test_b(self): pass\n def test_c(self): pass\n')
         with patch.dict(os.environ, {'PYTHONPATH': self.tmp.name}):
-            self.assertEqual(runner.run_groups(groups, 5, {groups[0][0]: 'skip'}), 1)
+            self.assert_run_failure(groups, 5, 'invalid result: invalid skips', {groups[0][0]: 'skip'})
 
     def test_leader_exit_and_sigterm_cleanup(self):
         import os, signal, subprocess, time
@@ -47,7 +58,7 @@ class ShardRunnerTests(unittest.TestCase):
         def launch(*args, **kwargs):
             return real([sys.executable, str(script)], **kwargs)
         with patch.object(runner.subprocess, 'Popen', side_effect=launch):
-            self.assertEqual(runner.run_groups([['x.C.test_a']], 5), 1)
+            self.assert_run_failure([['x.C.test_a']], 5, 'invalid result:')
         pid = int(childfile.read_text())
         for _ in range(100):
             status = pathlib.Path(f'/proc/{pid}/stat')
@@ -125,15 +136,16 @@ class ShardRunnerTests(unittest.TestCase):
         groups = self.fixture('import unittest\ndef load_tests(*args): return unittest.TestSuite()\n')
         with self.assertRaises(ValueError): runner.validate('shard_fixture', groups)
 
-    def test_failure_and_timeout(self):
+    def test_failure_and_duplicate_ids(self):
         groups = self.fixture('import unittest, time\nclass C(unittest.TestCase):\n def test_a(self): self.fail("injected")\n def test_b(self): time.sleep(10)\n def test_c(self): time.sleep(10)\n')
         runner.validate('shard_fixture', groups)
         # Workers inherit PYTHONPATH, not the parent's sys.path changes.
         import os
         from unittest.mock import patch
         with patch.dict(os.environ, {'PYTHONPATH': self.tmp.name}):
-            self.assertEqual(runner.run_groups(groups, 3), 1)
-            self.assertEqual(runner.run_groups([groups[1], groups[1], groups[1]], .2), 1)
+            self.assert_run_failure(groups, 15, 'shard 1 exited abnormally: 1')
+            # Duplicate IDs fail validation; use enough time to avoid racing worker startup.
+            self.assert_run_failure([groups[1], groups[1], groups[1]], 5, 'invalid or duplicate IDs')
 
     def test_result_validation(self):
         import json
@@ -153,7 +165,7 @@ class ShardRunnerTests(unittest.TestCase):
         from unittest.mock import patch
         groups = self.fixture('import unittest, os\nclass C(unittest.TestCase):\n def test_a(self): os._exit(0)\n def test_b(self): pass\n def test_c(self): pass\n')
         with patch.dict(os.environ, {'PYTHONPATH': self.tmp.name}):
-            self.assertEqual(runner.run_groups(groups, 5), 1)
+            self.assert_run_failure(groups, 5, 'invalid result:')
 
     def test_popen_failure_preserved(self):
         from unittest.mock import patch
@@ -167,8 +179,9 @@ class ShardRunnerTests(unittest.TestCase):
                 calls.append(p)
                 return p
             with patch.object(runner.subprocess, 'Popen', side_effect=launch):
-                with self.assertRaisesRegex(OSError, 'injected launch failure'):
-                    runner.run_groups([['missing_fixture.C.test_a']] * 3, 5)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaisesRegex(OSError, 'injected launch failure'):
+                        runner.run_groups([['missing_fixture.C.test_a']] * 3, 5)
             self.assertTrue(all(p.returncode is not None for p in calls))
 
     def test_unexpected_success(self):
@@ -176,7 +189,22 @@ class ShardRunnerTests(unittest.TestCase):
         from unittest.mock import patch
         groups = self.fixture('import unittest\nclass C(unittest.TestCase):\n @unittest.expectedFailure\n def test_a(self): pass\n def test_b(self): pass\n def test_c(self): pass\n')
         with patch.dict(os.environ, {'PYTHONPATH': self.tmp.name}):
-            self.assertEqual(runner.run_groups(groups, 5), 1)
+            self.assert_run_failure(groups, 5, 'shard 1 exited abnormally: 1')
 
     def test_worker_import_error(self):
-        self.assertEqual(runner.run_groups([['missing_fixture.C.test_a']]*3, 5), 1)
+        groups = [[f'missing_fixture.C.test_{name}'] for name in ('a', 'b', 'c')]
+        self.assert_run_failure(groups, 5, "No module named 'missing_fixture'")
+
+    def test_failure_message_printed_to_stderr(self):
+        import subprocess
+        from unittest.mock import patch
+        real = subprocess.Popen
+        def launch(*args, **kwargs):
+            # Exercise the normal failure logging path without spawning a long-lived worker.
+            return real([sys.executable, '-B', '-c', 'raise SystemExit(7)'], **kwargs)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(runner.subprocess, 'Popen', side_effect=launch), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(runner.run_groups([['x.C.test_a']], 5), 1)
+        self.assertIn('shard 1 exited abnormally: 7', stderr.getvalue())
+        self.assertIn('=== shard 1: exit 7', stdout.getvalue())
