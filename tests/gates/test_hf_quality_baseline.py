@@ -60,6 +60,37 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertNotIn('if:', hf)
 
 
+class CrossSiteSearchContractsCiTests(unittest.TestCase):
+    def test_paging_and_snapshot_contracts_run_against_each_checkout(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        commands = (
+            'node tests/support/test_search_test_projects.js',
+            'node tests/search/paging/test_page_generation.js',
+            'node tests/search/ui/test_search_interaction_state.js',
+            'node tests/search/ui/test_snapshot_clone_geometry.js',
+            'node tests/performance/test_snapshot_budget.js',
+            'node tests/performance/test_next_page_latency.js',
+        )
+        for job, name, root in ((github, 'github-Search', '${{ github.workspace }}'),
+                                (hf, 'huggingface-Search', '${{ github.workspace }}/huggingface-search')):
+            step = job.split('      - name: Check ' + ('GitHub' if job == github else 'Hugging Face')
+                             + ' search paging and snapshot contracts\n', 1)[1].split('      - name:', 1)[0]
+            self.assertIn('SEARCH_TEST_PROJECT: ' + name, step)
+            self.assertIn('SEARCH_TEST_ROOT: ' + root + '\n', step)
+            for command in commands:
+                self.assertEqual(step.count(command), 1)
+            self.assertNotIn('continue-on-error:', step)
+            self.assertNotIn('working-directory:', step)
+        integration = hf.split('      - name: Run real backend and browser integration\n', 1)[1].split('      - name:', 1)[0]
+        for required in ('working-directory: huggingface-search',
+                         "loadTestsFromName('tests.backend.test_real_integration')",
+                         'not result.wasSuccessful()', 'result.testsRun != 12', 'result.skipped', 'sys.exit(1)'):
+            self.assertIn(required, integration)
+        self.assertNotIn('continue-on-error:', integration)
+
+
 class HfSearchProjectionCiTests(unittest.TestCase):
     def test_full_projection_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
