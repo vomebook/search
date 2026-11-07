@@ -1867,8 +1867,8 @@ class StaticGateTests(unittest.TestCase):
         coverage = ['node', paths[1]]
         mutation = ['node', paths[2]]
         message = 'PDF text-store coverage requires named contracts'
-        self.assert_check(self.run_check(*coverage), True, '# pass 15')
-        self.assert_check(self.run_check(*mutation), True, '"total":14,"killed":14,"survived":0,"errors":0')
+        self.assert_check(self.run_check(*coverage), True, '# pass 20')
+        self.assert_check(self.run_check(*mutation), True, '"total":19,"killed":19,"survived":0,"errors":0')
         source = self.root / paths[4]
         original = source.read_text()
         name = 'entry, age, time reversal and invalid arguments fail closed'
@@ -1878,9 +1878,19 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(original.replace(anchor, replacement))
             self.assert_check(self.run_check(*coverage), False, message)
         for extra in ("test.skip('extra skip', () => {});", "test.todo('extra todo');",
-                      'console.log("skipped 0");', 'console.log("pass 15");'):
+                      'console.log("skipped 0");', 'console.log("pass 20");'):
             source.write_text(original + '\n' + extra + '\n')
             self.assert_check(self.run_check(*coverage), False, message)
+        for added in ('zero ledger detects hidden pages and asymmetric counters',
+                      'empty zero ledger counts without clearing',
+                      'zero ledger count handler throw aborts before settlement',
+                      'zero ledger count sync failure rolls back before settlement',
+                      'zero ledger count request failure rolls back before settlement'):
+            added_anchor = "test('" + added + "'"
+            self.assertEqual(original.count(added_anchor), 1)
+            for replacement in ("test('renamed contract'", "test.skip('" + added + "'", "test.todo('" + added + "'"):
+                source.write_text(original.replace(added_anchor, replacement))
+                self.assert_check(self.run_check(*coverage), False, message)
         source.write_text(original.replace(anchor + ',async()=>{',
                                            anchor + ",async()=>{throw new Error('injected store failure');"))
         self.assert_check(self.run_check(*coverage), False, 'injected store failure')
@@ -1914,8 +1924,8 @@ class StaticGateTests(unittest.TestCase):
         self.assertIn('"killed":4,"survived":0,"errors":1', result.stdout)
         for line, diagnostic in (("assert.equal(await store.get(2),null,'TTL is exclusive at the boundary');",
                                   'expired page accepted mutant survived'),
-                                 ("assert.equal(await store.get(1),null);assert.equal(await store.get(2),'new');",
-                                  'expected exactly one fixture assertion'),
+                                 ("assert.equal(await store.get(1),null,'corrupt ledger must purge old page');assert.equal(await store.get(2),'new');",
+                                  'corrupt ledger retained mutant survived'),
                                  ("assert.equal(await store.get(2),'y'.repeat(30),'failed replacement must preserve original page');",
                                   'full replacement commits deletion: unexpected failure')):
             self.assertEqual(original.count(line), 1)
