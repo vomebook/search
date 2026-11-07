@@ -4,6 +4,7 @@ const vm = require("vm");
 const assert = require("assert");
 const { TextEncoder } = require("util");
 const { test, run } = require("../support/test_harness");
+const { searchTestProjects } = require("../support/search_test_projects");
 
 function fixture(source) {
   const encoded = [];
@@ -39,8 +40,8 @@ function fixture(source) {
   return {c,encoded,view};
 }
 
-for (const project of ["github-Search", "huggingface-Search"]) {
-  const source = fs.readFileSync(path.resolve(__dirname, "../../../", project, "static/app.js"), "utf8");
+for (const { name: project, root } of searchTestProjects()) {
+  const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
   test(project + " snapshot bytes equal UTF-8 JSON across page boundaries and sparse holes", () => {
     const {c} = fixture(source);
     for (const length of [0,1,99,100,101,201]) {

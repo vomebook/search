@@ -1,11 +1,13 @@
 const fs = require("fs");
+const path = require("path");
 const vm = require("vm");
 const assert = require("assert");
 const {test, run} = require("../../support/test_harness");
+const {searchTestProjects} = require("../../support/search_test_projects");
 
-for (const project of ["github-Search", "huggingface-Search"]) {
+for (const {name: project, root} of searchTestProjects()) {
   test(project + " deep append touches only the new page and leaves retained snapshots independent", () => {
-    const source = fs.readFileSync("../" + project + "/static/app.js", "utf8");
+    const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
     const initial = Array.from({length:100000},(_,i)=>({File:String(i)}));
     const snapshot = initial.slice();
     const results = new Proxy(initial,{get(target,key,receiver){
@@ -28,7 +30,7 @@ for (const project of ["github-Search", "huggingface-Search"]) {
   });
   for (const cached of [false, true]) {
     test(project + (cached ? " deferred cache" : " foreground") + " append rejects updated generation before changing visible content", () => {
-      const source = fs.readFileSync("../" + project + "/static/app.js", "utf8");
+      const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
       const old = [{File:"old"}], next = [{File:"new"}];
       const metadata = new WeakMap([[old[0],{generation:"A",total:2}], [next[0],{generation:"B",total:2}]]);
       const context = {STATE:{results:old,total:2,_loadedPage:1,_pageCache:{2:next},_resultBackend:"api"},
