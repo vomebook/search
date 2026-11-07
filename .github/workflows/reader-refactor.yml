@@ -245,6 +245,17 @@ jobs:
           node tests/search/ui/test_folder_selection.js
           node tests/search/data/test_corpus_oracle.js
           node tests/search/data/test_data_integrity.js
+      - name: Check Reader request timeout in Chromium
+        run: |
+          python3 -B - <<'PY'
+          import sys
+          import unittest
+
+          suite = unittest.defaultTestLoader.loadTestsFromName('tests.reader.browser.test_reader_timeout')
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if not result.wasSuccessful() or result.testsRun != 3 or result.skipped:
+              sys.exit(1)
+          PY
       - name: Check GitHub search paging and snapshot contracts
         env:
           SEARCH_TEST_PROJECT: github-Search
@@ -634,7 +645,10 @@ jobs:
           node tests/reader/security/test_reader_security.js
           node tests/reader/images/test_reader_jxl.mjs
           node tests/reader/layout/test_reader_pdf_scroll_scheduling.mjs
+          node tests/reader/core/test_reader_store_channel.js
+          node tests/reader/transport/test_reader_preload.js
           node tests/search/ui/test_folder_selection.js
+          node tests/service_worker/test_service_worker.js
           node tests/service_worker/test_service_worker_pruning.js
       - name: Check Hugging Face search paging and snapshot contracts
         env:
@@ -655,6 +669,35 @@ jobs:
           import unittest
 
           suite = unittest.defaultTestLoader.loadTestsFromName('tests.backend.test_real_integration')
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if not result.wasSuccessful() or result.testsRun != 13 or result.skipped:
+              sys.exit(1)
+          PY
+      - name: Run additional Hugging Face search and Reader regressions
+        working-directory: huggingface-search
+        run: |
+          python3 -B - <<'PY'
+          import sys
+          import unittest
+
+          suite = unittest.defaultTestLoader.loadTestsFromNames([
+              'tests.performance.test_folder_projection_performance',
+              'tests.performance.test_random_reader_performance',
+              'tests.reader.browser.test_reader_ebook_flow',
+              'tests.reader.browser.test_reader_store_preservation',
+              'tests.search.browser.test_prefetch_pipeline',
+              'tests.search.browser.test_search_positions',
+              'tests.search.backend.test_wildcard_index_oracle',
+          ])
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if not result.wasSuccessful() or result.testsRun != 58 or result.skipped:
+              sys.exit(1)
+          PY
+          READER_STORE_TEST_BROWSER=firefox python3 -B - <<'PY'
+          import sys
+          import unittest
+
+          suite = unittest.defaultTestLoader.loadTestsFromName('tests.reader.browser.test_reader_store_preservation')
           result = unittest.TextTestRunner(verbosity=2).run(suite)
           if not result.wasSuccessful() or result.testsRun != 12 or result.skipped:
               sys.exit(1)
