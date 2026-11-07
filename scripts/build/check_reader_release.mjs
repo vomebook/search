@@ -251,7 +251,7 @@ function crossCheck(githubRoot, hfRoot) {
     );
   }
   for (const root of [githubRoot, hfRoot]) checkBehavior(root);
-  const vectors = "tests/reader-contract-vectors.json";
+  const vectors = "tests/support/reader-contract-vectors.json";
   if (fs.existsSync(path.join(githubRoot, vectors)) && fs.existsSync(path.join(hfRoot, vectors))) {
     assert(
       hash(path.join(githubRoot, vectors)) === hash(path.join(hfRoot, vectors)),

@@ -5,7 +5,7 @@ import sys
 import unittest
 from pathlib import Path
 
-PREFIX = "tests.test_sidebar_initial_payload_route_race.SidebarInitialPayloadRouteRaceTests."
+PREFIX = "tests.search.browser.test_sidebar_initial_payload_route_race.SidebarInitialPayloadRouteRaceTests."
 TEST_NAMES = (
     "test_actual_delayed_payload_survives_a_pending_folder_navigation",
     "test_first_global_payload_normalizes_and_persists_the_initial_url",
