@@ -14,7 +14,6 @@ from urllib.parse import unquote
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
-from playwright.sync_api import sync_playwright
 
 
 def hard_deadline(_signum, _frame):
@@ -133,6 +132,8 @@ def require(condition, detail):
 
 
 def main():
+    from playwright.sync_api import sync_playwright
+
     global STATIC
     parser = argparse.ArgumentParser(description='Reader v3 browser component test')
     parser.add_argument('--browser', choices=('chromium', 'firefox'), required=True)
