@@ -9,7 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / 'static/reader/search/reader-dom-search.mjs'
-TEST_MODULE = 'tests.test_reader_dom_search_contracts'
+TEST_MODULE = 'tests.reader.browser.test_reader_dom_search_contracts'
 CONTRACTS = {
     'test_literal_escape_snippets_and_pagination': 'helpers',
     'test_cross_node_highlight_cleanup_and_stale_navigation': 'crossNodeAndStaleNavigation',

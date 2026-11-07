@@ -59,5 +59,5 @@ export default [
   { files: ["tests/reader/djvu/test_reader_djvu_only.mjs"], languageOptions: { globals: { VoiceOfMLReader: "readonly" } } },
   { files: ["tests/reader/djvu/test_reader_djvu_png.mjs"], languageOptions: { globals: { VoiceOfMLReaderSecurity: "readonly" } } },
   { files: ["tests/reader/images/test_reader_image_memory.mjs"], languageOptions: { globals: { window: "readonly" } } },
-  { files: ["tests/test_reader_pdf_scroll_scheduling.mjs"], languageOptions: { globals: { document: "readonly" } } }
+  { files: ["tests/reader/layout/test_reader_pdf_scroll_scheduling.mjs"], languageOptions: { globals: { document: "readonly" } } }
 ];

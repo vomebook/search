@@ -148,7 +148,7 @@ def measure(browser, reader_url, *, fixture, prefix, mode, stall_ms, target, tim
     page.on('pageerror', lambda error: errors.append(str(error)))
     state = None
     if fixture:
-        from tests.reader_native_fixture import install, separated_pages
+        from tests.support.reader_native_fixture import install, separated_pages
         body = separated_pages() if fixture == 'separated' else (
             (ROOT/'tests/fixtures/synthetic-djvu-benchmark.djvu').read_bytes() if fixture == 'long' else None)
         options = {'prefix': prefix, 'ocr': fixture == 'ocr', 'mismatch': ocr_mismatch}
@@ -352,7 +352,7 @@ def main():
     if args.live_id:
         report['live_id_sha256']=hashlib.sha256(args.live_id.encode()).hexdigest()
     if not args.reader_url and not args.live_id:
-        from tests.reader_native_fixture import RAW, separated_pages
+        from tests.support.reader_native_fixture import RAW, separated_pages
         fixture_bytes = separated_pages() if args.fixture == 'separated' else (
             (ROOT/'tests/fixtures/synthetic-djvu-benchmark.djvu').read_bytes() if args.fixture=='long' else RAW)
         report['fixture_source_sha256']=hashlib.sha256(fixture_bytes).hexdigest()
