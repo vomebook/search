@@ -1,6 +1,8 @@
 """Negative probes for the test-file inventory checker."""
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -53,6 +55,28 @@ class TestInventoryTests(unittest.TestCase):
         (self.root / 'tests/__init__.py').unlink()
         with self.assertRaisesRegex(ValueError, 'tests package marker missing'):
             self.check()
+
+    def test_v3_browser_component_import_does_not_change_signal_or_timer(self):
+        root = Path(__file__).resolve().parents[2]
+        script = '''
+import importlib.util
+import signal
+
+def sentinel(*_args):
+    pass
+signal.signal(signal.SIGALRM, sentinel)
+signal.alarm(30)
+spec = importlib.util.spec_from_file_location('v3_component_probe',
+    'tests/reader/pdf-v3/test_reader_v3_browser.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+remaining = signal.alarm(0)
+if signal.getsignal(signal.SIGALRM) is not sentinel or not 1 <= remaining <= 30:
+    raise RuntimeError(f'component import changed signal or timer: {remaining}')
+'''
+        result = subprocess.run([sys.executable, '-B', '-c', script], cwd=root,
+                                capture_output=True, text=True, timeout=15, check=False)  # noqa: S603
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_short_exclusion_and_unsafe_paths_fail(self):
         self.doc['tests']['tests/test_example.py'] = {'kind': 'excluded', 'reason': 'skip'}
