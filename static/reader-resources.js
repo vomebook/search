@@ -1,6 +1,7 @@
 (function (root) {
   "use strict";
   // Canonical resource inventory for runtime, warming, caching and static builds.
+  /** @type {Record<string, {url: string, file: string, sha256: string, path?: string}>} */
   const vendors = {
     pdf: {
       url: "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/build/pdf.min.mjs",
@@ -158,15 +159,21 @@
     "reader/pdf/pdf-first-page-worker-adapter.mjs",
     "reader/pdf/pdf-worker-wrapper.mjs"
   ]);
+  /** @param {string} name @param {string} base */
   const vendorUrl = (name, base) => base + vendors[name].path;
+  /** @param {string} base */
   const runtimePaths = (base) => readerFiles.map((file) => base + file);
+  /** @param {string} base */
   const shellAssets = (base) =>
     ["reader.html", ...readerFiles.filter((file) => !lazyFiles.has(file))].map((file) => base + file);
   // Extracted unchanged from the checksum-pinned PDF.js archive above.
+  /** @param {string} base */
   const pdfSupportAssets = (base) => [base + "vendor/wasm/qcms_bg.wasm"];
+  /** @param {string} base */
   const djvuDecoderAssets = (base) => ["scalar/djvu_rs.js", "scalar/djvu_rs_bg.wasm",
     "simd128/djvu_rs.js", "simd128/djvu_rs_bg.wasm"].map(file =>
       base + "vendor/djvu-rs-reader/release-a23e0b3e3a44-025029b02a7c/" + file);
+  /** @param {string} extension @param {string} base @param {string} [foliateSuffix] @param {string} [workerWrapper] @returns {string[]} */
   function engineAssets(extension, base, foliateSuffix = "", workerWrapper = base + "reader/pdf/pdf-worker-wrapper.mjs") {
     if (extension === "pdf")
       return [
@@ -176,6 +183,7 @@
       ];
     // view.js statically imports these leaf modules; warm them with it so they
     // are not discovered one round trip later. Format modules follow makeBook.
+    /** @param {...string} files */
     const foliate = (...files) => [base + "foliate-reader/view.js" + foliateSuffix,
       ...["epubcfi.js", "progress.js", "overlayer.js", "text-walker.js", ...files].map(file => base + "foliate-reader/" + file)];
     if (extension === "epub") return foliate("vendor/zip.js", "epub.js", "paginator.js");
@@ -187,6 +195,7 @@
     if (["html", "htm"].includes(extension)) return [vendorUrl("purify", base)];
     return [];
   }
+  /** @param {string} project */
   function buildFiles(project) {
     return [
       ...readerFiles,
@@ -205,6 +214,7 @@
       "app.js"
     ];
   }
+  /** @param {string} filename */
   function bundleArguments(filename) {
     if (!["reader.js", "reader/reader-components.mjs"].includes(filename)) return [];
     const external = readerFiles.filter(file => !readerComponentFiles.includes(file) &&
