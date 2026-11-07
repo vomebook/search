@@ -83,7 +83,8 @@ jobs:
           npm run check:static
           npx --no-install pyright --project pyrightconfig.strict.json
           python -B scripts/check_python_static.py
-          python -B -m unittest -v tests.gates.test_static_shards_runner
+          python -B -m unittest -v tests.gates.test_static_shards_runner tests.gates.test_package_resolution tests.gates.test_test_inventory
+          python -B scripts/check_test_inventory.py --project github
           python -B run_static_gate_shards.py --project github
           python -B -m unittest -v tests.seo.test_seo_catalog
       - name: Reader v3 gates
@@ -408,7 +409,8 @@ jobs:
           npx --no-install pyright --project pyrightconfig.json
           npx --no-install pyright --project pyrightconfig.strict.json
           python -B scripts/check_python_static.py
-          python -B -m unittest -v tests.gates.test_static_shards_runner
+          python -B -m unittest -v tests.gates.test_static_shards_runner tests.gates.test_package_resolution tests.gates.test_test_inventory
+          python -B scripts/check_test_inventory.py --project hf --reader-workflow ../.github/workflows/reader-refactor.yml
           python -B run_static_gate_shards.py --project hf
       - name: Verify independent Hugging Face quality baseline
         run: |
@@ -683,6 +685,7 @@ jobs:
           suite = unittest.defaultTestLoader.loadTestsFromNames([
               'tests.performance.test_folder_projection_performance',
               'tests.performance.test_random_reader_performance',
+              'tests.reader.browser.test_reader_accessibility',
               'tests.reader.browser.test_reader_ebook_flow',
               'tests.reader.browser.test_reader_store_preservation',
               'tests.search.browser.test_prefetch_pipeline',
@@ -690,7 +693,7 @@ jobs:
               'tests.search.backend.test_wildcard_index_oracle',
           ])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if not result.wasSuccessful() or result.testsRun != 58 or result.skipped:
+          if not result.wasSuccessful() or result.testsRun != 59 or result.skipped:
               sys.exit(1)
           PY
           READER_STORE_TEST_BROWSER=firefox python3 -B - <<'PY'
