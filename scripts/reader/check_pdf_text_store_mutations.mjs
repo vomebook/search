@@ -5,17 +5,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 
 const source=readFileSync('static/reader/pdf/reader-pdf-text-store.mjs','utf8');
-let contracts=readFileSync('tests/reader/pdf-search/test_pdf_text_store.mjs','utf8');
-// Add assertion labels only in the temporary fixture; retain every original assertion.
-for (const [before,after] of [
-  ["assert.notEqual(await pdfTextStoreKey(other),a)","assert.notEqual(await pdfTextStoreKey(other),a,'key must bind every identity field')"],
-  ["assert.equal(await store.get(1),null);\n    }", "assert.equal(await store.get(1),null,'corrupt page must be rejected');\n    }"],
-  ["assert.equal(await store.get(1),null);assert.equal(await store.get(2),'new');", "assert.equal(await store.get(1),null,'corrupt ledger must purge old page');assert.equal(await store.get(2),'new');"],
-  ["assert.deepEqual(values,[true,true,false,true])", "assert.deepEqual(values,[true,true,false,true],'in-flight writes must be bounded')"]
-]) {
-  if(contracts.split(before).length!==2) throw new Error('expected exactly one fixture assertion');
-  contracts=contracts.replace(before,after);
-}
+const contracts=readFileSync('tests/reader/pdf-search/test_pdf_text_store.mjs','utf8');
 
 const probes=[
   {name:'sync throw does not abort',before:'catch (_) { fail(); }\n        }).catch(reject);',
@@ -36,6 +26,16 @@ const probes=[
     after:'true &&',diagnostic:'future savedAt is not accepted',test:'entry, age, time reversal and invalid arguments fail closed'},
   {name:'corrupt ledger retained',before:'!ledger || !Number.isSafeInteger(ledger.bytes) || !Number.isSafeInteger(ledger.count) || ledger.bytes < 0 || ledger.count < 0',
     after:'!ledger',diagnostic:'corrupt ledger must purge old page',test:'corrupt records fail closed and a bad ledger resets the shared budget'},
+  {name:'count sync throw treated as empty',before:'const count = pages.count();',
+    after:'let count; try { count = pages.count(); } catch (_) { proceed(); return; }',diagnostic:'count failure must fail',test:'zero ledger count sync failure rolls back before settlement'},
+  {name:'count success handler ignores thrown work',before:'count.onsuccess = () => {\n                try { if (count.result !== 0) reset(); else proceed(); }\n                catch (_) { fail(); }',
+    after:'count.onsuccess = () => {\n                try { if (count.result !== 0) reset(); else proceed(); }\n                catch (_) {}',diagnostic:'count handler abort must precede settlement',test:'zero ledger count handler throw aborts before settlement'},
+  {name:'zero ledger ignores hidden pages',before:'if (count.result !== 0) reset(); else proceed();',
+    after:'if (false) reset(); else proceed();',diagnostic:'zero ledger must purge hidden pages',test:'zero ledger detects hidden pages and asymmetric counters'},
+  {name:'zero byte mismatch ignored',before:'if ((ledger.bytes === 0) !== (ledger.count === 0)) return reset();',
+    after:'if (ledger.count === 0 && ledger.bytes !== 0) return reset();',diagnostic:'zero ledger must purge hidden pages',test:'zero ledger detects hidden pages and asymmetric counters'},
+  {name:'zero count mismatch ignored',before:'if ((ledger.bytes === 0) !== (ledger.count === 0)) return reset();',
+    after:'if (ledger.bytes === 0 && ledger.count !== 0) return reset();',diagnostic:'zero ledger must purge hidden pages',test:'zero ledger detects hidden pages and asymmetric counters'},
   {name:'in-flight limit removed',before:'writes >= 2 || pendingBytes+bytes > 1024*1024',
     after:'false',diagnostic:'in-flight writes must be bounded',test:'concurrent writes share the ledger and bound in-flight writes'},
   {name:'stored byte count not validated',before:'entry.bytes === cost(entry.id,entry.text) &&',
