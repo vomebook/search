@@ -3,6 +3,7 @@ const path = require("path");
 const vm = require("vm");
 const assert = require("assert");
 const {test, run} = require("../support/test_harness");
+const {searchTestProjects} = require("../support/search_test_projects");
 
 function install(source, context, names) {
   for (const name of names) {
@@ -74,8 +75,7 @@ function fixture(source) {
     start(){context.prefetchSearchPages("/api/search",{q:"query",page:1,page_size:100});}};
 }
 
-for (const project of ["github-Search","huggingface-Search"]) {
-  const root = path.resolve(__dirname,"../../../",project);
+for (const {name:project,root} of searchTestProjects()) {
   const source = fs.readFileSync(path.join(root,"static/app.js"),"utf8");
   function sparseFixture() {
     const f=fixture(source), c=f.context;

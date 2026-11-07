@@ -354,24 +354,43 @@ class ApiIntegrationTest(unittest.TestCase):
         self.page.add_init_script(
             """(() => {
                 const nativeSetTimeout = window.setTimeout.bind(window);
-                window.setTimeout = (fn, delay, ...args) => nativeSetTimeout(fn, delay === 30000 ? 50 : delay, ...args);
+                window.setTimeout = (fn, delay, ...args) => {
+                    if (delay !== 30000) return nativeSetTimeout(fn, delay, ...args);
+                    const id = nativeSetTimeout(fn, delay, ...args);
+                    window.releaseApiProbe = () => { clearTimeout(id); fn(...args); };
+                    return id;
+                };
             })();"""
         )
         self.load()
-        self.page.wait_for_function("STATE.dataLoaded === true", timeout=30000)
+        self.page.wait_for_function("STATE.dataLoaded && STATE.useLocalMode && !STATE.isLoading && STATE._loadedPage > 0", timeout=30000)
+        self.page.wait_for_load_state("networkidle")
         self.page.evaluate("apiFailureCount = 0; apiAvailable = true")
         baseline_probes = self.probe_requests
         self.search_failures = True
         search = self.page.locator("#search-input")
-        for query in ["failure-one", "failure-two", "failure-three"]:
-            self.page.locator("#local-mode-toggle").evaluate(
-                "el => { el.checked = false; el.dispatchEvent(new Event('change', {bubbles: true})); }"
-            )
+        for count, query in enumerate(["failure-one", "failure-two", "failure-three"], 1):
+            # Finish the local query first: a mode change can cancel a pending input debounce.
             search.fill(query)
-            self.page.wait_for_function("STATE.useLocalMode === true", timeout=10000)
+            self.page.wait_for_function(
+                "query => STATE.query === query && STATE.useLocalMode && STATE._resultBackend === 'local' && !STATE.isLoading",
+                arg=query, timeout=30000)
+            with self.page.expect_response(
+                lambda response: response.request.method == "POST" and "/api/search" in response.url
+                and (response.request.post_data_json or {}).get("q") == query, timeout=30000
+            ) as response_info:
+                self.page.locator("#local-mode-toggle").evaluate(
+                    "el => { el.checked = false; el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                )
+            self.assertEqual(response_info.value.status, 503)
+            self.page.wait_for_function(
+                "query => STATE.query === query && STATE.useLocalMode && !STATE.isLoading", arg=query, timeout=30000)
+            self.assertEqual(self.page.evaluate("apiFailureCount"), count)
         self.assertFalse(self.page.evaluate("apiAvailable"))
+        self.page.wait_for_function("typeof window.releaseApiProbe === 'function'")
         self.search_failures = False
-        self.page.wait_for_function("apiAvailable === true", timeout=5000)
+        self.page.evaluate("window.releaseApiProbe()")
+        self.page.wait_for_function("apiAvailable === true", timeout=10000)
         self.assertGreater(self.probe_requests, baseline_probes)
         self.assertEqual(self.page.evaluate("apiFailureCount"), 0)
 
