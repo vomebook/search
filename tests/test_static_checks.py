@@ -536,6 +536,98 @@ class StaticGateTests(unittest.TestCase):
         source.write_text('/** @type {number} */ const id = VoiceOfMLSearchIdentity.getResultStableId(null);\n')
         self.assert_check(self.run_check(*check), False, "TS2322")
 
+    def test_search_folder_selection_coverage_gate_fails_closed(self):
+        paths = ["static/search/folder-selection.js", "scripts/search/check_search_folder_selection_coverage.mjs",
+                 "tests/search/baselines/test_search_folder_selection_baseline.mjs"]
+        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "folder-selection.js")
+        test = self.root / paths[2]
+        source = test.read_text()
+        name = "lookup projects full and partial states for every node kind"
+        self.assertEqual(source.count("test('" + name + "'"), 1)
+        test.write_text(source.replace("test('" + name + "'", "test('renamed contract'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source.replace("test('" + name + "'", "test.skip('" + name + "'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        for extra in ('console.log("skipped 0"); test.skip("extra skip", () => {});',
+                      'console.log("todo 0"); test.todo("extra todo");',
+                      'console.log("skipped 0");', 'console.log("todo 0");'):
+            test.write_text(source + "\n" + extra + "\n")
+            self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source.replace("test('" + name + "', () => {", "test('" + name + "', () => { throw new Error('folder selection failure');"))
+        self.assert_check(self.run_check(*check), False, "folder selection failure")
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source)
+        module = self.root / paths[0]
+        module_source = module.read_text()
+        # An unreachable branch must drop branch coverage below the 100% floor.
+        probe = "    if (!node) return { full: false, partial: false };\n"
+        self.assertEqual(module_source.count(probe), 1)
+        module.write_text(module_source.replace(probe, probe + "    if (node === globalThis) return { full: true, partial: true };\n"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        module.write_text(module_source)
+        gate = self.root / paths[1]
+        gate_source = gate.read_text()
+        include = "--test-coverage-include=**/static/search/folder-selection.js"
+        self.assertEqual(gate_source.count(include), 1)
+        gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-folder-selection.js"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+
+    def test_search_folder_selection_declaration_matches_runtime(self):
+        config = self.root / "jsconfig.json"
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
+            self.assertIn("static/search/folder-selection.js", json.loads((ROOT / name).read_text())["files"])
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
+            "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/folder-selection.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = "  folderPathCovered(path: string, subtreeSet: ReadonlySet<string>): boolean;"
+        self.assertEqual(original.count(before), 1)
+        declaration.write_text(original.replace(before, before.replace("): boolean;", "): string;")))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        state = "interface VoiceOfMLFolderSelectionState {full: boolean; partial: boolean}"
+        self.assertEqual(original.count(state), 1)
+        declaration.write_text(original.replace(state, "interface VoiceOfMLFolderSelectionState {full: boolean; partial: boolean; extra: string}"))
+        self.assert_check(self.run_check(*check), False, "TS2741")
+
+    def test_search_folder_selection_rejects_wrong_argument_and_return_types(self):
+        source = self.root / "static/folder-selection-usage.js"
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"}, "files": [str(ROOT / "typings/reader-globals.d.ts"), str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        api = "const api = VoiceOfMLSearchFolderSelection;\nconst node = {path: \"a\", children: [{path: \"a/b\"}]};\n"
+        source.write_text(api + "/** @type {boolean} */ const covered = api.folderPathCovered(\"a/b\", new Set([\"a\"]));\n"
+                          "const lookup = api.createFolderSelectionLookup([node], new Set(), new Set());\n"
+                          "/** @type {{full: boolean, partial: boolean}} */ const state = api.folderSelectionState(node, new Set(), new Set(), lookup);\n"
+                          "api.folderSelectionState(null, new Set(), new Set());\n"
+                          "api.applyFolderSelectionToNode(node, document.createElement(\"div\"), new Set(), new Set(), null);\n")
+        self.assert_check(self.run_check(*check), True, "")
+        for usage, diagnostic in (
+                ('api.folderPathCovered(1, new Set());\n', "TS2345"),
+                ('api.folderPathCovered("a", new Set([1]));\n', "TS2345"),
+                ('api.folderPathCovered("a");\n', "TS2554"),
+                ('/** @type {string} */ const covered = api.folderPathCovered("a", new Set());\n', "TS2322"),
+                ('api.createFolderSelectionLookup([{children: []}], new Set(), new Set());\n', "TS2741"),
+                ('/** @type {Map<string, boolean>} */ const lookup = api.createFolderSelectionLookup([], new Set(), new Set());\n', "TS2322"),
+                ('/** @type {number} */ const full = api.folderSelectionState(node, new Set(), new Set()).full;\n', "TS2322"),
+                ('api.applyFolderSelectionToNode(node, {}, new Set(), new Set());\n', "TS2741"),
+                ('/** @type {boolean} */ const result = api.applyFolderSelectionToNode(node, document.body, new Set(), new Set());\n', "TS2322"),
+                ('api.applyFolderSelectionToNode(node, document.body, new Set(), new Set(), new Map([["a", 1]]));\n', "TS2345"),
+                ('VoiceOfMLSearchFolderSelection.normalizeFolderSelection(new Set(), new Set());\n', "TS2339")):
+            source.write_text(api + usage)
+            self.assert_check(self.run_check(*check), False, diagnostic)
+
     def test_search_response_validation_coverage_gate_fails_closed(self):
         paths = ["static/search/response-validation.js", "scripts/search/check_search_response_validation_coverage.mjs",
                  "tests/search/baselines/test_search_response_validation_baseline.mjs", "static/app.js"]
@@ -2122,7 +2214,7 @@ class StaticGateTests(unittest.TestCase):
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/search/search-session.js", "static/search/reader-navigation.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
-                    "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
+                    "static/search/folder-selection.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertIn("tsc --project jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])

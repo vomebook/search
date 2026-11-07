@@ -12,6 +12,7 @@ const cacheName = "search/response-cache.js";
 const typesName = "search/file-types.js";
 const validationName = "search/response-validation.js";
 const identityName = "search/result-identity.js";
+const folderSelectionName = "search/folder-selection.js";
 assert.equal(APP_DEPENDENCIES.filter(name => name === moduleName).length, 1);
 assert.equal((html.match(/<script src="[^"\n]*search\/record-path\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(moduleName) < html.lastIndexOf("app.js"));
@@ -38,6 +39,11 @@ assert.equal(APP_DEPENDENCIES.filter(name => name === identityName).length, 1);
 assert.equal((html.match(/<script src="[^"\n]*search\/result-identity\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(moduleName) < html.indexOf(identityName) && html.indexOf(identityName) < html.lastIndexOf("app.js"));
 assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/result-identity\.js"/);
+assert.equal(APP_DEPENDENCIES.filter(name => name === folderSelectionName).length, 1);
+assert.equal(APP_DEPENDENCIES.at(-1), folderSelectionName);
+assert.equal((html.match(/<script src="[^"\n]*search\/folder-selection\.js"><\/script>/g) || []).length, 1);
+assert.ok(html.indexOf(identityName) < html.indexOf(folderSelectionName) && html.indexOf(folderSelectionName) < html.lastIndexOf("app.js"));
+assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/folder-selection\.js"/);
 for (const project of ["github", "hf"]) {
   assert.equal(resources.buildFiles(project).filter(name => name === moduleName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === highlightName).length, 1);
@@ -45,6 +51,7 @@ for (const project of ["github", "hf"]) {
   assert.equal(resources.buildFiles(project).filter(name => name === typesName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === validationName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === identityName).length, 1);
+  assert.equal(resources.buildFiles(project).filter(name => name === folderSelectionName).length, 1);
 }
 assert.match(worker, /["']\/(?:search\/)?static\/app\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/record-path\.js["']/);
@@ -53,4 +60,5 @@ assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/response-cache\.
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/file-types\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/response-validation\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/result-identity\.js["']/);
+assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/folder-selection\.js["']/);
 console.log("record path source and bundled shell/SW contracts preserved");

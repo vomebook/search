@@ -212,6 +212,7 @@ function crossCheck(githubRoot, hfRoot) {
     "search/file-types.js",
     "search/response-validation.js",
     "search/result-identity.js",
+    "search/folder-selection.js",
     "search/reader-navigation.js",
     "reader.css",
     "reader/core/reader-request-manager.js",

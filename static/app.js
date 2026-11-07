@@ -5590,7 +5590,7 @@ function refreshFilterFolderSelectionState() {
   const lookup = getFolderSelectionLookup(subtreeSet, selfSet);
   DOM.filterFolderTree.querySelectorAll(".filter-folder-item").forEach(function(row) {
     const node = row._folderNode;
-    if (node) applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
+    if (node) VoiceOfMLSearchFolderSelection.applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
   });
 }
 
@@ -5706,40 +5706,6 @@ function getFolderSelfSet() {
   return new Set(STATE.filterFolderSelfs || []);
 }
 
-function folderPathCovered(path, subtreeSet) {
-  for (let prefix = path; prefix; ) {
-    if (subtreeSet.has(prefix)) return true;
-    const slash = prefix.lastIndexOf("/");
-    prefix = slash < 0 ? "" : prefix.slice(0, slash);
-  }
-  return false;
-}
-
-function createFolderSelectionLookup(nodes, subtreeSet, selfSet) {
-  const lookup = new Map();
-  const stack = (nodes || []).map(node => ({ node, covered: folderPathCovered(node.path, subtreeSet), exit: false }));
-  while (stack.length) {
-    const entry = stack.pop(), node = entry.node;
-    if (!entry.exit) {
-      const covered = entry.covered || !!node.path && subtreeSet.has(node.path);
-      stack.push({ node, covered, exit: true });
-      for (let i = (node.children || []).length - 1; i >= 0; i--) stack.push({ node: node.children[i], covered, exit: false });
-      continue;
-    }
-    const direct = selfSet.has(node.path), children = node.children || [];
-    let full;
-    if (entry.covered) full = true;
-    else if (node.isRoot) full = (!node.hasDirectFiles || direct) && (children.length ? children.every(child => lookup.get(child).full) : !!node.hasDirectFiles);
-    else if (node.showSelfToggle && !direct) full = false;
-    else if (!node.hasChildren) full = !!node.hasDirectFiles && direct || subtreeSet.has(node.path);
-    else full = children.every(child => lookup.get(child).full) && (!node.hasDirectFiles || direct);
-    lookup.set(node, { full, partial: !full && (direct || subtreeSet.has(node.path) || children.some(child => {
-      const state = lookup.get(child); return state.full || state.partial;
-    })) });
-  }
-  return lookup;
-}
-
 let folderSelectionMemo = null;
 
 function getFolderSelectionLookup(subtreeSet, selfSet) {
@@ -5747,14 +5713,9 @@ function getFolderSelectionLookup(subtreeSet, selfSet) {
       || !sameSearchFilterValues(STATE.filterFolderSubtrees, folderSelectionMemo.subtrees)
       || !sameSearchFilterValues(STATE.filterFolderSelfs, folderSelectionMemo.selfs)) {
     folderSelectionMemo = { tree: STATE.folderTree, subtrees: STATE.filterFolderSubtrees.slice(),
-      selfs: STATE.filterFolderSelfs.slice(), lookup: createFolderSelectionLookup(STATE.folderTree, subtreeSet, selfSet) };
+      selfs: STATE.filterFolderSelfs.slice(), lookup: VoiceOfMLSearchFolderSelection.createFolderSelectionLookup(STATE.folderTree, subtreeSet, selfSet) };
   }
   return folderSelectionMemo.lookup;
-}
-
-function folderSelectionState(node, subtreeSet, selfSet, lookup = null) {
-  if (!node) return { full: false, partial: false };
-  return (lookup || createFolderSelectionLookup([node], subtreeSet, selfSet)).get(node);
 }
 
 // Split covering ancestors before removing a branch or its direct files.
@@ -5785,13 +5746,13 @@ function setNodeSubtreeSelection(node, enabled, subtreeSet, selfSet) {
 }
 
 function normalizeFolderSelection(subtreeSet, selfSet) {
-  const lookup = createFolderSelectionLookup(STATE.folderTree, subtreeSet, selfSet);
+  const lookup = VoiceOfMLSearchFolderSelection.createFolderSelectionLookup(STATE.folderTree, subtreeSet, selfSet);
   for (const [node, state] of lookup) if (!node.isRoot && state.full) subtreeSet.add(node.path);
   for (const path of subtreeSet) {
     const slash = path.lastIndexOf("/");
-    if (slash >= 0 && folderPathCovered(path.slice(0, slash), subtreeSet)) subtreeSet.delete(path);
+    if (slash >= 0 && VoiceOfMLSearchFolderSelection.folderPathCovered(path.slice(0, slash), subtreeSet)) subtreeSet.delete(path);
   }
-  for (const path of selfSet) if (folderPathCovered(path, subtreeSet)) selfSet.delete(path);
+  for (const path of selfSet) if (VoiceOfMLSearchFolderSelection.folderPathCovered(path, subtreeSet)) selfSet.delete(path);
 }
 
 function persistFolderSelection(subtreeSet, selfSet) {
@@ -5815,20 +5776,6 @@ function collectFolderNodePaths(nodes, subtreePaths, selfPaths) {
     if (node.children && node.children.length > 0) {
       collectFolderNodePaths(node.children, subtreePaths, selfPaths);
     }
-  }
-}
-
-function applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup = null) {
-  const cb = row.querySelector("input[type='checkbox']");
-  if (!cb) return;
-  const { full, partial } = folderSelectionState(node, subtreeSet, selfSet, lookup);
-  cb.checked = full;
-  cb.indeterminate = !full && partial;
-  const selfBtn = row.querySelector(".folder-self-toggle");
-  if (selfBtn) {
-    const selfOn = selfSet.has(node.path) || folderPathCovered(node.path, subtreeSet);
-    selfBtn.classList.toggle("active", selfOn);
-    selfBtn.setAttribute("aria-pressed", selfOn ? "true" : "false");
   }
 }
 
@@ -5911,7 +5858,7 @@ function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, looku
     row.querySelector('input').setAttribute('aria-label', '选择文件夹：' + node.path);
     row.querySelector('.folder-self-toggle')?.setAttribute('aria-label', '本层文件：' + node.path);
     toggle?.setAttribute('aria-label', (collapsed ? '展开子文件夹：' : '收起子文件夹：') + node.path);
-    applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
+    VoiceOfMLSearchFolderSelection.applyFolderSelectionToNode(node, row, subtreeSet, selfSet, lookup);
     container.appendChild(row);
     if (has) {
       const childDiv = /** @type {HTMLDivElement & {_folderPath?: string, _folderNode?: unknown, _folderDepth?: number, _childrenRendered?: boolean}} */ (document.createElement("div"));
@@ -5932,7 +5879,7 @@ function appendFilterTreeNode(container, node, depth, subtreeSet, selfSet, looku
 function handleFolderCheckboxChange(node) {
   const subtreeSet = getFolderSubtreeSet();
   const selfSet = getFolderSelfSet();
-  const { full } = folderSelectionState(node, subtreeSet, selfSet);
+  const { full } = VoiceOfMLSearchFolderSelection.folderSelectionState(node, subtreeSet, selfSet);
   setNodeSubtreeSelection(node, !full, subtreeSet, selfSet);
   persistFolderSelection(subtreeSet, selfSet);
   refreshFilterFolderSelectionState();
@@ -6974,7 +6921,7 @@ async function init() {
     var selfSet = new Set();
     var currentSubtreeSet = getFolderSubtreeSet();
     var currentSelfSet = getFolderSelfSet();
-    var allSelected = STATE.folderTree.every(function(node) { return folderSelectionState(node, currentSubtreeSet, currentSelfSet).full; });
+    var allSelected = STATE.folderTree.every(function(node) { return VoiceOfMLSearchFolderSelection.folderSelectionState(node, currentSubtreeSet, currentSelfSet).full; });
     if (allSelected) {
       persistFolderSelection(subtreeSet, selfSet);
       refreshFilterFolderSelectionState();
@@ -6996,7 +6943,7 @@ async function init() {
     var nextSubtreeSet = new Set();
     var nextSelfSet = new Set();
     for (var j = 0; j < allSelfPaths.length; j++) {
-      if (!selfSet.has(allSelfPaths[j]) && !folderPathCovered(allSelfPaths[j], subtreeSet)) nextSelfSet.add(allSelfPaths[j]);
+      if (!selfSet.has(allSelfPaths[j]) && !VoiceOfMLSearchFolderSelection.folderPathCovered(allSelfPaths[j], subtreeSet)) nextSelfSet.add(allSelfPaths[j]);
     }
     persistFolderSelection(nextSubtreeSet, nextSelfSet);
     refreshFilterFolderSelectionState();

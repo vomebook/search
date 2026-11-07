@@ -680,7 +680,11 @@ test("Chinese multi-character queries require adjacent Chinese pairs", async () 
 test("main-thread root select-all represents and persists direct root files with the empty self path", () => {
   const context = vm.createContext({ Set, STATE:{folderTree:[]},
     updateFilterCancelButtons(){}, scheduleFilterSearch(){}, showToast(){throw Error("unexpected limit");} });
-  vm.runInContext(app.slice(app.indexOf("function folderPathCovered("), app.indexOf("// Split covering ancestors")), context);
+  vm.runInContext(fs.readFileSync("static/search/folder-selection.js", "utf8"), context);
+  const hostStart = app.indexOf("let folderSelectionMemo = null;"), hostEnd = app.indexOf("// Split covering ancestors");
+  assert(hostStart >= 0 && hostEnd > hostStart);
+  vm.runInContext(app.slice(hostStart, hostEnd), context);
+  context.folderSelectionState = context.VoiceOfMLSearchFolderSelection.folderSelectionState;
   const root = { path: "", isRoot: true, hasDirectFiles: true, children: [{ path: "child", hasDirectFiles: true }] };
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set()).full, false);
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set([""])).full, true);

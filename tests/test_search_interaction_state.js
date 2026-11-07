@@ -4,8 +4,17 @@ const vm=require('vm');
 const assert=require('assert');
 const {test,run}=require('./test_harness');
 
+// Folder selection helpers moved to static/search/folder-selection.js; expose the
+// project's own module under the original names so the host functions use it too.
+const folderSelectionNames=['folderPathCovered','createFolderSelectionLookup','folderSelectionState','applyFolderSelectionToNode'];
+const folderSelectionSources=new Map();
 function install(source,c,names) {
   for(const name of names) {
+    if(folderSelectionNames.includes(name)) {
+      if(!c.VoiceOfMLSearchFolderSelection) vm.runInContext(folderSelectionSources.get(source),c);
+      assert.strictEqual(typeof c.VoiceOfMLSearchFolderSelection[name],'function',name);
+      c[name]=c.VoiceOfMLSearchFolderSelection[name];continue;
+    }
     const match=source.match(new RegExp('^function '+name+'\\([^]*?^}', 'm'));
     assert(match,name);vm.runInContext(match[0],c);
   }
@@ -13,6 +22,7 @@ function install(source,c,names) {
 
 for(const project of ['github-Search','huggingface-Search']) {
   const source=fs.readFileSync(path.resolve(__dirname,'../../',project,'static/app.js'),'utf8');
+  folderSelectionSources.set(source,fs.readFileSync(path.resolve(__dirname,'../../',project,'static/search/folder-selection.js'),'utf8'));
   function keysFixture() {
     const c={STATE:{mode:'global',repoFull:'',query:'book',filterMinSize:null,filterMaxSize:null,
       sort:'relevance',searchFolders:true,exact:true,useLocalMode:true,pageSize:100,
