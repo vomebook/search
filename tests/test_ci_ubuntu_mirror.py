@@ -1,3 +1,6 @@
+import contextlib
+import io
+import runpy
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +9,8 @@ from unittest.mock import patch
 import stat
 
 from scripts.ci.ci_ubuntu_mirror import main, validate
+
+SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/ci/ci_ubuntu_mirror.py'
 
 
 class MirrorTests(unittest.TestCase):
@@ -94,6 +99,84 @@ class MirrorTests(unittest.TestCase):
         for uid, mode in ((1, stat.S_IFREG), (0, stat.S_IFLNK)):
             with self.assertRaises(ValueError):
                 self.check(uid, mode)
+
+    def cli(self, *, uid=1000, args=(), metadata_uid=0, read_error=None):
+        paths = iter((self.os, self.sources, self.mirror))
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch('pathlib.Path', side_effect=lambda *unused: next(paths)), \
+             patch('os.geteuid', return_value=uid), \
+             patch('sys.argv', ['script', *args]), \
+             patch.object(type(self.mirror), 'lstat', return_value=SimpleNamespace(
+                 st_mode=stat.S_IFREG, st_uid=metadata_uid)), \
+             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            if read_error is None:
+                try:
+                    runpy.run_path(str(SCRIPT), run_name='__main__')
+                    code = 0
+                except SystemExit as error:
+                    code = error.code
+            else:
+                with patch.object(type(self.os), 'read_text', side_effect=read_error):
+                    with self.assertRaises(SystemExit) as error:
+                        runpy.run_path(str(SCRIPT), run_name='__main__')
+                    code = error.exception.code
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_cli_fixed_outputs_for_all_rejections(self):
+        self.assertEqual(self.cli(), (0, 'recognized\n', ''))
+        for kwargs in ({'uid': 0}, {'args': ('secret',)}):
+            self.assertEqual(self.cli(**kwargs), (1, '', 'invocation_error\n'))
+        cases = (
+            (self.os, 'ID=secret\n', 'unsupported_os'),
+            (self.sources, ' secret\n', 'sources_layout'),
+            (self.sources, 'Types: deb\nTypes: secret\n', 'duplicate_field'),
+            (self.sources, 'Types: deb\nURIs: secret\n', 'source_uris'),
+            (self.sources, 'Enabled: no\n', 'no_enabled_source'),
+            (self.mirror, 'secret priority:1\n', 'mirror_list'),
+            (self.mirror, 'http://azure.archive.ubuntu.com/ubuntu/ priority:1\n', 'missing_fallback'),
+        )
+        for path, content, code in cases:
+            with self.subTest(code=code):
+                original = path.read_bytes()
+                path.write_text(content)
+                self.assertEqual(self.cli(), (1, '', code + '\n'))
+                path.write_bytes(original)
+        self.assertEqual(self.cli(metadata_uid=1), (1, '', 'mirror_metadata\n'))
+        for error in (PermissionError('secret'), OSError('secret'),
+                      UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'secret')):
+            with self.subTest(error=type(error)):
+                self.assertEqual(self.cli(read_error=error), (1, '', 'read_error\n'))
+        self.assertEqual(self.cli(read_error=ValueError('secret\n::warning::secret')),
+                         (1, '', 'internal_error\n'))
+
+    def test_unknown_exceptions_and_failed_output(self):
+        class BadString(ValueError):
+            def __str__(self):
+                raise RuntimeError('secret')
+
+        for error in (ValueError('not Ubuntu 24.04'), BadString(),
+                      RuntimeError('secret\n::warning::token')):
+            with self.subTest(error=type(error)):
+                self.assertEqual(self.cli(read_error=error), (1, '', 'internal_error\n'))
+        from scripts.ci import ci_ubuntu_mirror as module
+        with patch.object(module, 'main', side_effect=RuntimeError('secret')), \
+             patch.object(module.sys, 'stderr') as stream:
+            stream.write.side_effect = OSError('secret')
+            self.assertEqual(module.cli(), 1)
+        with patch.object(module, 'main', side_effect=KeyboardInterrupt()):
+            with self.assertRaises(KeyboardInterrupt):
+                module.cli()
+        for error in (SystemExit(), SystemExit(0), SystemExit(42)):
+            with self.subTest(code=error.code), patch.object(module, 'main', side_effect=error), \
+                    contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(module.cli(), 1)
+                self.assertEqual(stderr.getvalue(), 'internal_error\n')
+
+    def test_invocation_does_not_read(self):
+        for kwargs in ({'uid': 0}, {'args': ('x',)}):
+            with patch.object(type(self.os), 'read_text', side_effect=AssertionError('read')) as read:
+                self.assertEqual(self.cli(**kwargs), (1, '', 'invocation_error\n'))
+                read.assert_not_called()
 
     def test_real_symlink_rejected(self):
         self.mirror.unlink()
