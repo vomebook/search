@@ -64,7 +64,7 @@ class ShardRunnerTests(unittest.TestCase):
             status = pathlib.Path(f'/proc/{pid}/stat')
             try:
                 if status.read_text().split()[2] == 'Z': break
-            except FileNotFoundError: break
+            except (FileNotFoundError, ProcessLookupError): break
             time.sleep(.02)
         else: self.fail('same-group descendant survived cleanup')
 
