@@ -13,7 +13,7 @@ import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent
-TARGET = 'tests.test_static_checks'
+TARGET = 'tests.gates.test_static_checks'
 
 
 def validate(module_name, groups):

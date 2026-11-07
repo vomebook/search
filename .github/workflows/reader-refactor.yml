@@ -83,23 +83,23 @@ jobs:
           npm run check:static
           npx --no-install pyright --project pyrightconfig.strict.json
           python -B scripts/check_python_static.py
-          python -B -m unittest -v tests.test_static_shards_runner
+          python -B -m unittest -v tests.gates.test_static_shards_runner
           python -B run_static_gate_shards.py --project github
-          python -B -m unittest -v tests.test_seo_catalog
+          python -B -m unittest -v tests.seo.test_seo_catalog
       - name: Reader v3 gates
         run: |
           node scripts/reader/check_reader_v3_coverage.mjs
           node scripts/reader/check_reader_v3_mutations.mjs
       - name: Run chapter-search unit tests
         run: |
-          node tests/test_reader_architecture.js
-          node tests/test_reader_regression.js
+          node tests/reader/core/test_reader_architecture.js
+          node tests/reader/core/test_reader_regression.js
           node scripts/reader/check_adapter_coverage.mjs
           node scripts/search/check_search_size_coverage.mjs
           node scripts/search/check_search_record_path_coverage.mjs
           node scripts/search/check_search_highlight_coverage.mjs
           node scripts/search/check_search_response_cache_coverage.mjs
-          node --test tests/test_tap_contracts.mjs
+          node --test tests/gates/test_tap_contracts.mjs
           node scripts/search/check_download_controller_coverage.mjs
           node scripts/search/check_search_file_types_coverage.mjs
           node scripts/search/check_search_response_validation_coverage.mjs
@@ -115,7 +115,7 @@ jobs:
           node scripts/search/check_search_readability_baseline.mjs
           node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
-          node tests/test_reader_preload.js
+          node tests/reader/transport/test_reader_preload.js
           node tests/reader/chapter-search/test_reader_chapter_search.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
@@ -141,100 +141,115 @@ jobs:
           node scripts/reader/check_pdf_network_mutations.mjs
           node --test tests/reader/pdf-network/test_pdf_range_cache_release.mjs
           node scripts/reader/check_document_loader_coverage.mjs
-          node tests/test_reader_pdf_first_page_worker.mjs
-          python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_history_race tests.test_reader_engine_preload tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+          node tests/reader/pdf-network/test_reader_pdf_first_page_worker.mjs
+          python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_first_page tests.reader.browser.test_reader_pdf_history_race tests.reader.browser.test_reader_engine_preload tests.reader.browser.test_reader_pdf_loading tests.reader.browser.test_reader_pdf_followup tests.reader.browser.test_reader_close_traffic tests.reader.browser.test_reader_navigation_host
       - name: Check DjVu-only streams and image memory eviction
         run: |
           node tests/reader/djvu/test_reader_djvu_only.mjs
           node tests/reader/djvu/test_reader_djvu_png.mjs
-          node tests/test_reader_v3_ocr_retained.mjs
+          node tests/reader/pdf-v3/test_reader_v3_ocr_retained.mjs
           node tests/reader/djvu/test_reader_djvu_range.mjs
           node tests/reader/djvu/test_reader_djvu_range_fallback.mjs
           node tests/reader/djvu/test_reader_djvu_worker.mjs
           node tests/reader/djvu/test_reader_djvu_source_integrity.mjs
           node tests/reader/djvu/test_reader_djvu_scheduler.mjs
           node scripts/reader/check_reader_djvu_contracts.mjs
-          python3 -B -m unittest -v tests.test_reader_djvu_benchmark tests.test_reader_djvu_range_browser
+          python3 -B -m unittest -v tests.performance.test_reader_djvu_benchmark tests.reader.browser.test_reader_djvu_range_browser
           node tests/reader/images/test_reader_image_memory.mjs
       - name: Run multi-format preparation and navigation gates
-        run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_close_responsiveness tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+        run: python3 -B -m unittest -v tests.reader.browser.test_reader_format_pipeline tests.performance.test_reader_toc_latency tests.reader.browser.test_reader_close_responsiveness tests.reader.browser.test_reader_accessibility_browser tests.reader.browser.test_reader_formats tests.reader.browser.test_reader_conversions tests.reader.browser.test_reader_navigation
       - name: Check TOC landing ownership and cancellation
         run: |
-          node tests/test_reader_feynman_toc_reviewed.mjs
+          node tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs
           python3 -B -m unittest -v \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_holds_while_chapters_above_keep_growing \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_merged_chm_missing_toc_anchors_use_unique_in_book_links
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_holds_while_chapters_above_keep_growing \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_merged_chm_missing_toc_anchors_use_unique_in_book_links
       - name: Run search accessibility keyboard gates
-        run: python3 -B -m unittest -v tests.test_search_accessibility_browser tests.test_sidebar_keyboard tests.test_search_session_browser
+        run: python3 -B -m unittest -v tests.search.browser.test_search_accessibility_browser tests.search.browser.test_sidebar_keyboard tests.search.browser.test_search_session_browser
       - name: Check search position persistence and pagination recovery
-        run: python3 -B -m unittest -v tests.test_prefetch_pipeline tests.test_search_positions
+        run: python3 -B -m unittest -v tests.search.browser.test_prefetch_pipeline tests.search.browser.test_search_positions
       - name: Check random reader pools and UI responsiveness
         run: |
-          node tests/test_worker_contract.js
-          python3 -B -m unittest -v tests.test_converted_reader_responsiveness tests.test_browser_smoke tests.test_browser_sidebar_reorder tests.test_browser_sidebar_reorder_discovery
+          node tests/search/worker/test_worker_contract.js
+          python3 -B -m unittest -v tests.reader.browser.test_converted_reader_responsiveness tests.search.browser.test_browser_smoke tests.search.browser.test_browser_sidebar_reorder tests.search.browser.test_browser_sidebar_reorder_discovery
       - name: Check initial payload routing in both browsers
         run: |
           SIDEBAR_PAYLOAD_TEST_BROWSER=chromium python3 -B scripts/check_sidebar_payload_regressions.py
           SIDEBAR_PAYLOAD_TEST_BROWSER=firefox python3 -B scripts/check_sidebar_payload_regressions.py
       - name: Check static dependency contracts
-        run: node tests/test_static_contract.js
+        run: node tests/gates/test_static_contract.js
       - name: Check Firefox footer counter geometry
         env:
           SEARCH_POSITION_BROWSER: firefox
-        run: python3 -B -m unittest -v tests.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total
+        run: python3 -B -m unittest -v tests.search.browser.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total
       - name: Check warmed Reader shell reuse
         run: |
-          node tests/test_service_worker.js
-          python3 -B -m unittest -v tests.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_shell_does_not_wait_for_slow_revalidation
-          python3 -B -m unittest -v tests.test_service_worker_integration.ServiceWorkerIntegrationTest.test_first_install_rewarms_shell_after_delayed_controller_claim
+          node tests/service_worker/test_service_worker.js
+          python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_shell_does_not_wait_for_slow_revalidation
+          python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_first_install_rewarms_shell_after_delayed_controller_claim
       - name: Run Reader flow and cleanup regressions
-        run: python3 -B -m unittest -v tests.test_reader_ebook_flow tests.test_reader_toc_latency
+        run: python3 -B -m unittest -v tests.reader.browser.test_reader_ebook_flow tests.performance.test_reader_toc_latency
       - name: Preserve Reader local history and bookmarks
         run: |
-          node tests/test_reader_store_channel.js
-          python3 -B -m unittest -v tests.test_reader_store_preservation \
-            tests.test_reader_performance.ReaderPerformanceTest.test_reader_store_preserves_old_history_and_keeps_current_bookmarks
-          READER_STORE_TEST_BROWSER=firefox python3 -B -m unittest -v tests.test_reader_store_preservation
+          node tests/reader/core/test_reader_store_channel.js
+          python3 -B -m unittest -v tests.reader.browser.test_reader_store_preservation \
+            tests.performance.test_reader_performance.ReaderPerformanceTest.test_reader_store_preserves_old_history_and_keeps_current_bookmarks
+          READER_STORE_TEST_BROWSER=firefox python3 -B -m unittest -v tests.reader.browser.test_reader_store_preservation
       - name: Run chapter-bundle browser gate
         run: |
           node scripts/reader/check_reader_core_coverage.mjs
-          python3 -B -m unittest -v tests.test_reader_scroll_anchor_browser
-          python3 -B -m unittest -v tests.test_reader_optimizations
+          python3 -B -m unittest -v tests.reader.browser.test_reader_scroll_anchor_browser
+          python3 -B -m unittest -v tests.reader.browser.test_reader_optimizations
       - name: Run chapter-search browser gate
-        run: python3 -B -m unittest -v -k chapter_search tests.test_reader_refactor
+        run: python3 -B -m unittest -v -k chapter_search tests.reader.browser.test_reader_refactor
       - name: Check DOM-search source contracts in Chromium and Firefox
         run: |
-          python3 -B -m unittest -v tests.test_reader_dom_search_gate
+          python3 -B -m unittest -v tests.gates.test_reader_dom_search_gate
           python3 -B scripts/reader/check_reader_dom_search_contracts.py
       - name: Run PDF theme browser gate
         run: |
-          python3 -B -m unittest -v -k test_pdf_page tests.test_reader_style
-          python3 -B -m unittest -v tests.test_reader_style.ReaderStyleTests.test_page_inversion_remembers_explicit_choice_and_fits_sidebar
+          python3 -B -m unittest -v -k test_pdf_page tests.reader.browser.test_reader_style
+          python3 -B -m unittest -v tests.reader.browser.test_reader_style.ReaderStyleTests.test_page_inversion_remembers_explicit_choice_and_fits_sidebar
       - name: Check compact mobile panel and high-density pages
         run: |
           python3 -B -m unittest -v \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_folder_action_and_title_follow_breakpoint \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_title_and_controls_fit_all_formats \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_overflowing_toolbar_supports_touch_swipe \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_searches_all_entries_and_clears \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_small_directory_search_shows_empty_state_and_resets \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_multiple_virtual_results_remain_after_successful_chapter_jump \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_search_handles_groups_replacements_and_repeated_matches \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_composition_end_with_unchanged_query_keeps_directory_scroll \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_toc_search_keyboard_only_navigation \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_renders_results_when_list_starts_at_viewport_bottom \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_covers_bottom_after_fractional_scroll \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_directory_filter_keeps_rendering_bounded_for_large_books \
-            tests.test_reader_performance.ReaderPerformanceTest.test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab \
-            tests.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_folder_action_and_title_follow_breakpoint \
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_title_and_controls_fit_all_formats \
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_overflowing_toolbar_supports_touch_swipe \
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_searches_all_entries_and_clears \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_small_directory_search_shows_empty_state_and_resets \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_multiple_virtual_results_remain_after_successful_chapter_jump \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_search_handles_groups_replacements_and_repeated_matches \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_composition_end_with_unchanged_query_keeps_directory_scroll \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtual_toc_search_keyboard_only_navigation \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_renders_results_when_list_starts_at_viewport_bottom \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_covers_bottom_after_fractional_scroll \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtual_directory_filter_keeps_rendering_bounded_for_large_books \
+            tests.performance.test_reader_performance.ReaderPerformanceTest.test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab \
+            tests.performance.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
+      - name: Run Reader core, security and search data unit tests
+        run: |
+          node tests/reader/core/test_reader_models.js
+          node tests/reader/core/test_reader_runtime.js
+          node tests/reader/core/test_reader_warming.js
+          node tests/reader/security/test_reader_security.js
+          node tests/reader/ui/test_reader_accessibility.js
+          node tests/reader/pdf-search/test_reader_embedded_text_fallback.mjs
+          node tests/reader/transport/test_reader_sidecar_fetch.mjs
+          node tests/search/ui/test_folder_selection.js
+          node tests/search/paging/test_page_generation.js
+          node tests/search/data/test_corpus_oracle.js
+          node tests/search/data/test_data_integrity.js
+      - name: Run remaining Reader and search browser regressions
+        run: python3 -B -m unittest -v tests.reader.browser.test_reader_layout tests.reader.browser.test_reader_lifecycle tests.reader.browser.test_reader_djvu_engine_bootstrap tests.reader.browser.test_reader_speech tests.search.browser.test_recent_search_pages tests.search.browser.test_segmented_scroll tests.search.browser.test_download_lifecycle tests.search.browser.test_api_integration tests.search.browser.test_paging_recovery tests.search.browser.test_position_window tests.search.browser.test_scroll_stability
       - name: Run full Reader refactor suite
-        run: python3 -B -m unittest -v tests.test_reader_refactor
+        run: python3 -B -m unittest -v tests.reader.browser.test_reader_refactor
       - name: Check Reader JavaScript syntax
         run: |
           node --check static/reader.js
@@ -307,7 +322,7 @@ jobs:
       - name: Check staged PDF opening in Firefox
         env:
           READER_TEST_BROWSER: firefox
-        run: python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_history_race
+        run: python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_first_page tests.reader.browser.test_reader_pdf_history_race
 
   huggingface-search:
     runs-on: ubuntu-24.04
@@ -372,11 +387,11 @@ jobs:
           npx --no-install pyright --project pyrightconfig.json
           npx --no-install pyright --project pyrightconfig.strict.json
           python -B scripts/check_python_static.py
-          python -B -m unittest -v tests.test_static_shards_runner
+          python -B -m unittest -v tests.gates.test_static_shards_runner
           python -B run_static_gate_shards.py --project hf
       - name: Verify independent Hugging Face quality baseline
         run: |
-          python -B -m unittest -v tests.test_hf_quality_baseline
+          python -B -m unittest -v tests.gates.test_hf_quality_baseline
           mkdir -p "$RUNNER_TEMP/hf-quality-baseline"
           baseline_revision=$(python -c 'import json; print(json.load(open(".github/quality-baselines/hf-source.json"))["revision"])')
           for file in backend-coverage-debt.json strict-inventory-debt.json; do
@@ -389,15 +404,15 @@ jobs:
         working-directory: huggingface-search
         run: |
           python -B scripts/build/build_search_index_native.py --output-dir .
-          python -B -m unittest -v tests.test_quality_inventory tests.test_mutation_gate_hardening tests.test_mutation_gate_main
+          python -B -m unittest -v tests.gates.test_quality_inventory tests.gates.test_mutation_gate_hardening tests.gates.test_mutation_gate_main
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage run --branch --source=backend,app -m unittest -q \
-            tests.test_api_contract tests.search.backend.test_cache_and_malformed tests.test_async_proxy tests.test_coverage_safety \
-            tests.data.test_data_decoding tests.test_fastapi_endpoints tests.search.backend.test_native_search_indexes tests.proxy.test_proxy_ownership tests.proxy.test_proxy_streams_contract \
-            tests.test_reader_backend tests.test_reader_archive_hardening tests.test_reader_compression_safety tests.search.backend.test_search_behavior tests.search.backend.test_search tests.reader.backend.test_reader_index_warming \
-            tests.test_reader_range_flights tests.test_reader_v3_catalog tests.search.backend.test_search_order_cache tests.search.backend.test_search_execution \
-            tests.test_security tests.test_upstream_http tests.test_seo_routes tests.test_seo_catalog tests.test_reader_ocr_validation \
-            tests.search.backend.test_search_filters_contract tests.search.backend.test_search_words_contract tests.test_mixed_folder_performance \
-            tests.test_exact_search_performance tests.test_fuzzy_search_performance tests.data.test_data_formats_contract \
+            tests.backend.test_api_contract tests.search.backend.test_cache_and_malformed tests.proxy.test_async_proxy tests.backend.test_coverage_safety \
+            tests.data.test_data_decoding tests.backend.test_fastapi_endpoints tests.search.backend.test_native_search_indexes tests.proxy.test_proxy_ownership tests.proxy.test_proxy_streams_contract \
+            tests.reader.backend.test_reader_backend tests.reader.backend.test_reader_archive_hardening tests.reader.backend.test_reader_compression_safety tests.search.backend.test_search_behavior tests.search.backend.test_search tests.reader.backend.test_reader_index_warming \
+            tests.reader.backend.test_reader_range_flights tests.reader.backend.test_reader_v3_catalog tests.search.backend.test_search_order_cache tests.search.backend.test_search_execution \
+            tests.backend.test_security tests.proxy.test_upstream_http tests.seo.test_seo_routes tests.seo.test_seo_catalog tests.reader.backend.test_reader_ocr_validation \
+            tests.search.backend.test_search_filters_contract tests.search.backend.test_search_words_contract tests.performance.test_mixed_folder_performance \
+            tests.performance.test_exact_search_performance tests.performance.test_fuzzy_search_performance tests.data.test_data_formats_contract \
             tests.reader.backend.test_reader_identity_contract tests.search.backend.test_cache_core_contract tests.reader.backend.test_reader_index_contract \
             tests.search.backend.test_record_metadata_contract tests.search.backend.test_folder_tree_contract tests.search.backend.test_folder_tree_mutation_contract \
             tests.search.backend.test_search_projection_contract tests.search.backend.test_search_projection_mutation_contract \
@@ -448,7 +463,7 @@ jobs:
       - name: Run chapter-search unit tests
         working-directory: huggingface-search
         run: |
-          node tests/test_reader_architecture.js
+          node tests/reader/core/test_reader_architecture.js
           node tests/reader/chapter-search/test_reader_chapter_search.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
@@ -467,15 +482,15 @@ jobs:
           python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
           PDF_TEXT_STORE_TEST_BROWSER=firefox python3 -B tests/reader/pdf-search/test_pdf_text_store_browser.py
           node tests/reader/security/test_reader_css_sanitizer.mjs
-          node tests/test_reader_heading_cache.js
-          node tests/test_reader_engine_preload.js
-          node tests/test_reader_regression.js
+          node tests/reader/chapters/test_reader_heading_cache.js
+          node tests/reader/transport/test_reader_engine_preload.js
+          node tests/reader/core/test_reader_regression.js
           node scripts/reader/check_adapter_coverage.mjs
           node scripts/search/check_search_size_coverage.mjs
           node scripts/search/check_search_record_path_coverage.mjs
           node scripts/search/check_search_highlight_coverage.mjs
           node scripts/search/check_search_response_cache_coverage.mjs
-          node --test tests/test_tap_contracts.mjs
+          node --test tests/gates/test_tap_contracts.mjs
           node scripts/search/check_download_controller_coverage.mjs
           node scripts/search/check_search_file_types_coverage.mjs
           node scripts/search/check_search_response_validation_coverage.mjs
@@ -490,7 +505,7 @@ jobs:
           node scripts/search/check_search_readability_baseline.mjs
           node scripts/search/check_reader_navigation_baseline.mjs
           node tests/search/build/test_search_record_path_build.mjs
-          node tests/test_reader_jxl_progressive.mjs
+          node tests/reader/images/test_reader_jxl_progressive.mjs
       - name: Run Reader request and PDF loading regressions
         working-directory: huggingface-search
         run: |
@@ -499,88 +514,88 @@ jobs:
           node scripts/reader/check_pdf_network_mutations.mjs
           node --test tests/reader/pdf-network/test_pdf_range_cache_release.mjs
           node scripts/reader/check_document_loader_coverage.mjs
-          node tests/test_reader_pdf_first_page_worker.mjs
-          python3 -B -m unittest -v tests.test_reader_timeout
-          python3 -B -m unittest -v tests.test_reader_pdf_first_page tests.test_reader_pdf_history_race tests.test_reader_engine_preload tests.test_reader_pdf_loading tests.test_reader_pdf_followup tests.test_reader_close_traffic tests.test_reader_navigation_host
+          node tests/reader/pdf-network/test_reader_pdf_first_page_worker.mjs
+          python3 -B -m unittest -v tests.reader.browser.test_reader_timeout
+          python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_first_page tests.reader.browser.test_reader_pdf_history_race tests.reader.browser.test_reader_engine_preload tests.reader.browser.test_reader_pdf_loading tests.reader.browser.test_reader_pdf_followup tests.reader.browser.test_reader_close_traffic tests.reader.browser.test_reader_navigation_host
       - name: Check DjVu-only streams and image memory eviction
         working-directory: huggingface-search
         run: |
           node tests/reader/djvu/test_reader_djvu_only.mjs
           node tests/reader/djvu/test_reader_djvu_png.mjs
-          node tests/test_reader_v3_ocr_retained.mjs
+          node tests/reader/pdf-v3/test_reader_v3_ocr_retained.mjs
           node tests/reader/djvu/test_reader_djvu_range.mjs
           node tests/reader/djvu/test_reader_djvu_range_fallback.mjs
           node tests/reader/djvu/test_reader_djvu_worker.mjs
           node tests/reader/djvu/test_reader_djvu_source_integrity.mjs
           node tests/reader/djvu/test_reader_djvu_scheduler.mjs
           node scripts/reader/check_reader_djvu_contracts.mjs
-          python3 -B -m unittest -v tests.test_reader_djvu_benchmark tests.test_reader_djvu_range_browser
+          python3 -B -m unittest -v tests.performance.test_reader_djvu_benchmark tests.reader.browser.test_reader_djvu_range_browser
           node tests/reader/images/test_reader_image_memory.mjs
-          python3 -B -m unittest -v tests.test_reader_pdf_hybrid
+          python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_hybrid
       - name: Run multi-format preparation and navigation gates
         working-directory: huggingface-search
-        run: python3 -B -m unittest -v tests.test_reader_format_pipeline tests.test_reader_toc_latency tests.test_reader_close_responsiveness tests.test_reader_accessibility_browser tests.test_reader_formats tests.test_reader_conversions tests.test_reader_navigation
+        run: python3 -B -m unittest -v tests.reader.browser.test_reader_format_pipeline tests.performance.test_reader_toc_latency tests.reader.browser.test_reader_close_responsiveness tests.reader.browser.test_reader_accessibility_browser tests.reader.browser.test_reader_formats tests.reader.browser.test_reader_conversions tests.reader.browser.test_reader_navigation
       - name: Check TOC landing ownership and cancellation
         working-directory: huggingface-search
         run: |
-          node tests/test_reader_feynman_toc_reviewed.mjs
+          node tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs
           python3 -B -m unittest -v \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_holds_while_chapters_above_keep_growing \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_new_navigation_supersedes_the_previous_landing_hold \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_hold_is_cancelled_on_disposal \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_holds_while_chapters_above_keep_growing \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_landing_releases_on_reader_scroll
       - name: Run search accessibility keyboard gates
         working-directory: huggingface-search
-        run: python3 -B -m unittest -v tests.test_search_accessibility_browser tests.test_sidebar_keyboard tests.test_search_session_browser
+        run: python3 -B -m unittest -v tests.search.browser.test_search_accessibility_browser tests.search.browser.test_sidebar_keyboard tests.search.browser.test_search_session_browser
       - name: Check static dependency contracts
         working-directory: huggingface-search
-        run: python3 -B -m unittest -v tests.test_static_contract
+        run: python3 -B -m unittest -v tests.gates.test_static_contract
       - name: Check Firefox footer counter geometry
         working-directory: huggingface-search
         env:
           SEARCH_POSITION_BROWSER: firefox
-        run: python3 -B -m unittest -v tests.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total
+        run: python3 -B -m unittest -v tests.search.browser.test_position_controls.PositionControlTests.test_footer_multi_digit_display_and_editor_do_not_overlap_total
       - name: Run chapter-bundle browser gate
         working-directory: huggingface-search
         run: |
           node scripts/reader/check_reader_core_coverage.mjs
-          python3 -B -m unittest -v tests.test_reader_scroll_anchor_browser
-          python3 -B -m unittest -v tests.test_reader_optimizations
+          python3 -B -m unittest -v tests.reader.browser.test_reader_scroll_anchor_browser
+          python3 -B -m unittest -v tests.reader.browser.test_reader_optimizations
       - name: Run chapter-search browser gate
         working-directory: huggingface-search
-        run: python3 -B -m unittest -v -k chapter_search tests.test_reader_refactor
+        run: python3 -B -m unittest -v -k chapter_search tests.reader.browser.test_reader_refactor
       - name: Check DOM-search source contracts in Chromium and Firefox
         working-directory: huggingface-search
         run: |
-          python3 -B -m unittest -v tests.test_reader_dom_search_gate
+          python3 -B -m unittest -v tests.gates.test_reader_dom_search_gate
           python3 -B scripts/reader/check_reader_dom_search_contracts.py
       - name: Run PDF theme browser gate
         working-directory: huggingface-search
         run: |
-          python3 -B -m unittest -v -k test_pdf_page tests.test_reader_style
-          python3 -B -m unittest -v tests.test_reader_style.ReaderStyleTests.test_page_inversion_remembers_explicit_choice_and_fits_sidebar
-          python3 -B -m unittest -v tests.test_reader_pdf_hybrid.DirectPdfPolicyTests.test_legacy_pdf_theme_and_inversion_stay_direct_without_page_images
+          python3 -B -m unittest -v -k test_pdf_page tests.reader.browser.test_reader_style
+          python3 -B -m unittest -v tests.reader.browser.test_reader_style.ReaderStyleTests.test_page_inversion_remembers_explicit_choice_and_fits_sidebar
+          python3 -B -m unittest -v tests.reader.browser.test_reader_pdf_hybrid.DirectPdfPolicyTests.test_legacy_pdf_theme_and_inversion_stay_direct_without_page_images
       - name: Check compact mobile panel and high-density pages
         working-directory: huggingface-search
         run: |
           python3 -B -m unittest -v \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_folder_action_and_title_follow_breakpoint \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_title_and_controls_fit_all_formats \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_overflowing_toolbar_supports_touch_swipe \
-            tests.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_searches_all_entries_and_clears \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_small_directory_search_shows_empty_state_and_resets \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_multiple_virtual_results_remain_after_successful_chapter_jump \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_search_handles_groups_replacements_and_repeated_matches \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_composition_end_with_unchanged_query_keeps_directory_scroll \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_toc_search_keyboard_only_navigation \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_renders_results_when_list_starts_at_viewport_bottom \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_covers_bottom_after_fractional_scroll \
-            tests.test_reader_toc_navigation.TocNavigationTests.test_virtual_directory_filter_keeps_rendering_bounded_for_large_books \
-            tests.test_reader_performance.ReaderPerformanceTest.test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab \
-            tests.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_panel_is_compact_and_folder_scrolls_with_directory \
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_folder_action_and_title_follow_breakpoint \
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_title_and_controls_fit_all_formats \
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_overflowing_toolbar_supports_touch_swipe \
+            tests.reader.browser.test_reader_style.ReaderStyleTests.test_mobile_file_info_works_without_a_folder_target \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_accounts_for_scrolling_folder_and_search \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_searches_all_entries_and_clears \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_small_directory_search_shows_empty_state_and_resets \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_multiple_virtual_results_remain_after_successful_chapter_jump \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtualized_directory_search_handles_groups_replacements_and_repeated_matches \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_composition_end_with_unchanged_query_keeps_directory_scroll \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtual_toc_search_keyboard_only_navigation \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_renders_results_when_list_starts_at_viewport_bottom \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtual_search_covers_bottom_after_fractional_scroll \
+            tests.reader.browser.test_reader_toc_navigation.TocNavigationTests.test_virtual_directory_filter_keeps_rendering_bounded_for_large_books \
+            tests.performance.test_reader_performance.ReaderPerformanceTest.test_late_pdf_outline_reconciles_reading_panel_without_losing_selected_tab \
+            tests.performance.test_reader_performance.ReaderPerformanceTest.test_high_density_mobile_pdf_uses_backing_scale_without_distortion
       - name: Run Reader proxy cancellation and cached-range gate
         working-directory: huggingface-search
         run: |
@@ -591,7 +606,7 @@ jobs:
           import httpx
 
           suite = unittest.defaultTestLoader.loadTestsFromNames([
-              'tests.test_reader_backend', 'tests.test_reader_ocr_validation',
+              'tests.reader.backend.test_reader_backend', 'tests.reader.backend.test_reader_ocr_validation',
           ])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
           if not result.wasSuccessful() or not result.testsRun or result.skipped:
@@ -599,10 +614,24 @@ jobs:
           PY
       - name: Run Reader upstream ownership gate
         working-directory: huggingface-search
-        run: timeout 120s python3 -B -m unittest -v tests.test_async_proxy tests.test_reader_range_flights tests.proxy.test_proxy_ownership tests.proxy.test_proxy_streams_contract tests.test_coverage_safety tests.reader.backend.test_reader_index_warming tests.search.backend.test_search_execution tests.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
+        run: timeout 120s python3 -B -m unittest -v tests.proxy.test_async_proxy tests.reader.backend.test_reader_range_flights tests.proxy.test_proxy_ownership tests.proxy.test_proxy_streams_contract tests.backend.test_coverage_safety tests.reader.backend.test_reader_index_warming tests.search.backend.test_search_execution tests.search.browser.test_browser.BrowserInteractionTests.test_directory_tree_preview_stays_usable_during_slow_contents tests.search.browser.test_browser.BrowserInteractionTests.test_reader_back_closes_overlay_without_reloading_search
+      - name: Run Reader core, security and search data unit tests
+        working-directory: huggingface-search
+        run: |
+          node tests/reader/core/test_reader_models.js
+          node tests/reader/core/test_reader_runtime.js
+          node tests/reader/core/test_reader_warming.js
+          node tests/reader/security/test_reader_security.js
+          node tests/reader/images/test_reader_jxl.mjs
+          node tests/reader/layout/test_reader_pdf_scroll_scheduling.mjs
+          node tests/search/ui/test_folder_selection.js
+          node tests/service_worker/test_service_worker_pruning.js
+      - name: Run remaining Reader and search browser regressions
+        working-directory: huggingface-search
+        run: python3 -B -m unittest -v tests.search.backend.test_search_filters_mutation_contract tests.data.test_generated_data_oracle tests.reader.browser.test_reader_layout tests.reader.browser.test_reader_lifecycle tests.reader.browser.test_reader_djvu_engine_bootstrap tests.reader.browser.test_reader_speech tests.search.browser.test_download_lifecycle tests.search.browser.test_mixed_folder_browser tests.search.browser.test_recent_search_pages tests.search.browser.test_scroll_stability tests.search.browser.test_paging_recovery tests.search.browser.test_position_window
       - name: Run full Reader refactor suite
         working-directory: huggingface-search
-        run: python3 -B -m unittest -v tests.test_reader_refactor
+        run: python3 -B -m unittest -v tests.reader.browser.test_reader_refactor
       - name: Check Reader JavaScript syntax
         working-directory: huggingface-search
         run: |

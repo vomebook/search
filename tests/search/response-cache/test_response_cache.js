@@ -2,7 +2,7 @@ const vm = require("vm");
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const {test, run} = require("../../test_harness");
+const {test, run} = require("../../support/test_harness");
 
 test("response caches bound bytes, expire, preserve live oversized data and retain LRU hits", () => {
   const filename = path.join(__dirname, "../../../static/search/response-cache.js");

@@ -1,0 +1,406 @@
+"""Persistent positions: real IndexedDB, API paging, navigation and cancellation."""
+import unittest
+from tests.search.browser import test_paging_recovery as paging
+
+
+class SearchPositionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        paging.PagingRecoveryTests.setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        paging.PagingRecoveryTests.tearDownClass()
+
+    def setUp(self):
+        self.fixture = paging.PagingRecoveryTests()
+        self.fixture.setUp()
+        self.page = self.fixture.page
+        self.page.add_init_script("window.addEventListener('DOMContentLoaded',()=>{pagingMode='normal'})")
+        self.page.evaluate("pagingMode='normal'; STATE.query='paging-original'; doSearch()")
+        self.page.wait_for_function("STATE.query==='paging-original' && !STATE.isLoading && STATE._pageCache[2]")
+        self.page.evaluate('maybeLoadNextPage(false,true)')
+        self.page.wait_for_function('STATE._loadedPage>=2 && !STATE.isLoading')
+        self.page.evaluate('DOM.resultsContainer.scrollTop=getVirtualOffset(125)+17')
+        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index===125')
+        self.saved = self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.page.evaluate('''() => new Promise(resolve => {
+          const tx=searchPositionDB.transaction('positions');
+          tx.objectStore('positions').get(getSearchViewKey()); tx.oncomplete=resolve;
+        })''')
+
+    def tearDown(self):
+        self.fixture.tearDown()
+
+    def assert_position(self):
+        self.page.wait_for_function("!positionRestore && !STATE.isLoading && STATE.query==='paging-original'")
+        self.page.wait_for_function('''saved => {
+          const index=findVirtualIndex(DOM.resultsContainer.scrollTop);
+          return getResultStableId(STATE.results[index])===saved.anchorId &&
+            Math.abs(DOM.resultsContainer.scrollTop-getVirtualOffset(index)-saved.offset)<2;
+        }''', arg=self.saved)
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_reload_rebuilds_pages_from_indexeddb(self):
+        self.page.reload(wait_until='domcontentloaded')
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('pagingRequests.slice(0,2)'), [1, 2])
+        self.assertGreaterEqual(self.page.evaluate('STATE.results.length'), 200)
+
+    def test_old_database_is_reset_without_importing_legacy_positions(self):
+        self.page.goto(self.fixture.origin + '/search/manifest.json')
+        self.page.evaluate('''async saved => {
+          await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase('voice-search-positions');r.onsuccess=resolve;r.onerror=()=>reject(r.error);});
+          await new Promise((resolve,reject)=>{
+            const r=indexedDB.open('voice-search-positions',3);
+            r.onupgradeneeded=()=>{for(const name of ['positions','viewports','recent-pages']) r.result.createObjectStore(name,{keyPath:'key'});};
+            r.onsuccess=()=>{const db=r.result,tx=db.transaction('positions','readwrite');tx.objectStore('positions').put(saved);tx.oncomplete=()=>{db.close();resolve();};};
+            r.onerror=()=>reject(r.error);
+          });
+        }''', self.saved)
+        self.page.goto(self.fixture.origin + '/search/#/?q=paging-original&local=0')
+        self.page.wait_for_function('searchPositionDB?.version === 4 && !STATE.isLoading')
+        self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 0)
+        self.page.evaluate('setResultScrollTop(getVirtualOffset(25)+10);saveSearchPosition()')
+        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index === 25')
+        self.saved = self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        # Memory updates precede IndexedDB commit; assert persistence before reload.
+        persisted = self.page.evaluate('''key => new Promise((resolve,reject) => {
+          const tx=searchPositionDB.transaction('positions'), req=tx.objectStore('positions').get(key);
+          let value; req.onsuccess=()=>{value=req.result||null};
+          tx.oncomplete=()=>resolve(value);tx.onabort=()=>reject(tx.error);
+        })''', self.saved['key'])
+        self.assertEqual(persisted, self.saved)
+        self.page.reload(wait_until='domcontentloaded')
+        self.assert_position()
+
+    def test_evicted_results_after_filters_and_repo_round_trip(self):
+        for ext in ['pdf', 'epub', 'txt']:
+            self.page.evaluate('ext=>{STATE.filterExtensions=[ext]; scheduleFilterSearch()}', ext)
+            self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("ROUTER.navigate('repo','Test')")
+        self.page.wait_for_function("STATE.mode==='repo' && !STATE.isLoading")
+        self.page.evaluate("ROUTER.navigate('global')")
+        self.page.wait_for_function("STATE.mode==='global' && !STATE.isLoading")
+        self.page.evaluate('''() => {
+          searchViewSnapshots.clear(); searchResponseCache.clear();
+          STATE.useLocalMode=false; apiAvailable=true;
+          STATE.filterExtensions=[]; STATE.query='paging-original'; DOM.searchInput.value=STATE.query;
+          scheduleFilterSearch();
+        }''')
+        self.page.wait_for_function('!STATE.isLoading')
+        self.assert_position()
+
+    def test_history_click_recovers_evicted_position(self):
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("searchViewSnapshots.clear(); addHistoryItem('paging-original'); DOM.searchInput.focus(); renderDropdown()")
+        self.page.locator('.history-item[data-query="paging-original"]').click()
+        self.assert_position()
+
+    def test_cancelled_rebuild_does_not_apply_late_page(self):
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('''() => {
+          searchViewSnapshots.clear();
+          const fetchPage=fetchPositionPage;
+          fetchPositionPage=async (...args)=>{
+            const data=await fetchPage(...args);
+            if(args[1]===2) await new Promise(resolve=>{window.releaseRestore=resolve});
+            return data;
+          };
+          STATE.query='paging-original'; doSearch(false,false,true);
+        }''')
+        self.page.wait_for_function('!!window.releaseRestore')
+        self.page.evaluate("STATE.query='paging-latest'; doSearch(); releaseRestore()")
+        self.page.wait_for_function("STATE.query==='paging-latest' && !STATE.isLoading && !positionRestore")
+        self.assertEqual(self.page.evaluate('displayedSearchView.key'), self.page.evaluate('getSearchViewKey()'))
+        self.assertEqual(self.page.evaluate('searchPositions.get(' + repr(self.saved['key']) + ').anchorId'), self.saved['anchorId'])
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_rebuild_failure_keeps_position_and_retry_succeeds(self):
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('''() => {
+          searchViewSnapshots.clear(); window.positionFail=true;
+          const fetchPage=fetchPositionPage;
+          fetchPositionPage=(...args)=>window.positionFail?Promise.reject(new Error('offline')):fetchPage(...args);
+          STATE.query='paging-original'; doSearch(false,false,true);
+        }''')
+        self.page.get_by_text('重试恢复', exact=True).wait_for()
+        self.page.evaluate('window.positionFail=false')
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
+
+    def test_local_worker_rebuild_restores_position_after_cache_eviction(self):
+        self.page.evaluate("STATE.query=''; STATE.useLocalMode=true; doSearch()")
+        self.page.wait_for_function('STATE.dataLoaded && !STATE.isLoading && STATE.results.length>=100')
+        self.page.evaluate('maybeLoadNextPage(false,true)')
+        self.page.wait_for_function('STATE._loadedPage>=2 && !STATE.isLoading')
+        self.page.evaluate('DOM.resultsContainer.scrollTop=getVirtualOffset(120)+9')
+        self.page.wait_for_function('searchPositions.get(getSearchViewKey())?.index===120')
+        saved=self.page.evaluate('searchPositions.get(getSearchViewKey())')
+        self.assertTrue(self.page.evaluate('''() => {
+          const page=recentSearchPages.get(JSON.stringify([getSearchViewKey(),2]));
+          return page?.generation.startsWith('worker:') && getResultStableId(page.results[20])===searchPositions.get(getSearchViewKey()).anchorId;
+        }'''))
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate("searchViewSnapshots.clear(); STATE.query=''; doSearch(false,false,true)")
+        self.page.wait_for_function('!positionRestore && !STATE.isLoading')
+        self.page.wait_for_function('''saved=>{
+          const index=findVirtualIndex(DOM.resultsContainer.scrollTop);
+          return getResultStableId(STATE.results[index])===saved.anchorId &&
+            Math.abs(DOM.resultsContainer.scrollTop-getVirtualOffset(index)-saved.offset)<2;
+        }''',arg=saved)
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_expiry_and_count_prune_positions_independently(self):
+        result = self.page.evaluate('''async () => {
+          const original=searchPositions.get(getSearchViewKey());
+          await new Promise(resolve=>{
+            const tx=searchPositionDB.transaction('positions','readwrite'),store=tx.objectStore('positions');
+            for(let i=0;i<505;i++) store.put({...original,key:'test-'+i,savedAt:Date.now()-i*1000});
+            store.put({...original,key:'expired',savedAt:Date.now()-SEARCH_POSITION_TTL-1});
+            tx.oncomplete=resolve;
+          });
+          searchPositions.clear(); searchPositionDB.close(); await initSearchPositions();
+          return {count:searchPositions.size,expired:searchPositions.has('expired'),oldest:searchPositions.has('test-504')};
+        }''')
+        self.assertEqual(result, {'count': 500, 'expired': False, 'oldest': False})
+
+    def test_oversized_snapshot_does_not_evict_smaller_views(self):
+        kept = self.page.evaluate('''() => {
+          searchViewSnapshots.clear();
+          searchViewSnapshots.set('small', {bytes: 1024});
+          searchViewSnapshots.set('large', {bytes: SEARCH_VIEW_SNAPSHOT_BYTES_MAX+1});
+          trimSearchViewSnapshots(); return [...searchViewSnapshots.keys()];
+        }''')
+        self.assertEqual(kept, ['small'])
+
+    def prepare_deep_snapshot(self):
+        self.page.evaluate('''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();setReturnPositionTarget();
+          STATE.results=Array.from({length:5000},(_,i)=>({Repo:'VoiceOfML/Test',File:'deep-'+i,Extension:'txt',Folder:['docs'],Size:1}));
+          STATE.total=5000;STATE.page=STATE._loadedPage=50;STATE.hasMore=false;STATE.isLoading=false;STATE._pageCache={};
+          searchViewSnapshots.clear();VSCROLL.heightCache.clear();resetVirtualScrollState();renderResults();
+          setResultScrollTop(getVirtualOffset(4000)+11);
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          window.deepSnapshot=saveSearchViewSnapshot();window.deepKey=getSearchViewKey();
+        }''')
+
+    def test_deep_snapshot_restores_neighborhood_then_complete_independent_records(self):
+        self.prepare_deep_snapshot()
+        result = self.page.evaluate('''async () => {
+          restoreSearchViewSnapshot(deepKey);
+          const initial=Object.keys(STATE.results).length,index=findVirtualIndex(getResultScrollTop());
+          const pending=!!snapshotCloneTask;
+          const saved=saveSearchViewSnapshot()===deepSnapshot;
+          setResultScrollTop(getVirtualOffset(1000)+11);renderVisible();
+          const jumped=!!STATE.results[1000] && !!DOM.resultsList.querySelector('.result-item[data-index="1000"]');
+          DOM.multiSelectToggle.checked=true;updateSelectionUI();DOM.multiSelectAll.click();
+          const selected=Object.keys(selectedIndices).length;
+          selectedIndices={4999:true};const files=getSelectedFiles();
+          const download=files.length===1 && files[0].filename==='deep-4999.txt';
+          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          const complete=STATE.results.every((r,i)=>r?.File==='deep-'+i) && Object.keys(STATE.results).length===5000;
+          STATE.results[0].Folder.push('changed');
+          return {bounded:initial<1000,pending,index,saved,jumped,selected,download,complete,
+            independent:deepSnapshot.results[0].Folder.join('/')==='docs'};
+        }''')
+        self.assertEqual(result, dict(bounded=True,pending=True,index=4000,saved=True,jumped=True,
+                                      selected=5000,download=True,complete=True,independent=True))
+
+    def test_query_change_cancels_snapshot_batches_without_saving_partial_content(self):
+        self.prepare_deep_snapshot()
+        result = self.page.evaluate('''async () => {
+          restoreSearchViewSnapshot(deepKey);const old=STATE.results;
+          STATE.query='paging-latest';doSearch(false,true);const oldCount=Object.keys(old).length;
+          await new Promise(r=>setTimeout(r,100));
+          return {cancelled:!snapshotCloneTask,stable:Object.keys(old).length===oldCount,
+            complete:searchViewSnapshots.get(deepKey).results.length===5000 && Object.keys(searchViewSnapshots.get(deepKey).results).length===5000,
+            latest:STATE.query==='paging-latest' && STATE.results!==old};
+        }''')
+        self.assertEqual(result, dict(cancelled=True,stable=True,complete=True,latest=True))
+
+    def test_snapshot_restore_renders_target_once_without_jump_velocity(self):
+        self.page.add_style_tag(content='.result-item {height:160px!important;min-height:0!important;box-sizing:border-box}')
+        self.prepare_deep_snapshot()
+        result = self.page.evaluate('''async () => {
+          const original=reconcileVirtualRows;const windows=[];
+          reconcileVirtualRows=(...args)=>{windows.push([args[1],args[2]]);return original(...args)};
+          try {restoreSearchViewSnapshot(deepKey);} finally {reconcileVirtualRows=original;}
+          const initialIndex=findVirtualIndex(getResultScrollTop()),initialVelocity=VSCROLL.scrollVelocity;
+          const normalRows=3*Math.max(10,Math.floor(DOM.resultsContainer.clientHeight/VSCROLL.estimatedHeight))+
+            Math.ceil(DOM.resultsContainer.clientHeight/VSCROLL.estimatedHeight)+1;
+          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          const finalIndex=findVirtualIndex(getResultScrollTop()),offset=getResultScrollTop()-getVirtualOffset(finalIndex);
+          DOM.resultsContainer.scrollTop+=4000;renderVisible();
+          return {windows,bounded:windows.every(([a,b])=>b-a<=normalRows),initialIndex,finalIndex,
+            initialVelocity,offset,expectedOffset:deepSnapshot.scroll.offset,
+            realScrollVelocity:VSCROLL.scrollVelocity,complete:Object.keys(STATE.results).length===5000};
+        }''')
+        self.assertEqual(len(result['windows']), 1)
+        self.assertEqual([result['initialIndex'], result['finalIndex']], [4000,4000])
+        self.assertTrue(result['bounded'])
+        self.assertLess(result['initialVelocity'], 1.5)
+        self.assertGreater(result['realScrollVelocity'], 0)
+        self.assertAlmostEqual(result['offset'], result['expectedOffset'], delta=2)
+        self.assertTrue(result['complete'])
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_background_snapshot_heights_preserve_anchor_outside_prepared_pages(self):
+        self.prepare_deep_snapshot()
+        result = self.page.evaluate('''async () => {
+          const key=getHeightMeasurementKey(),base=VSCROLL.estimatedHeight;
+          for(const [index,extra] of [[150,37],[350,61]]) {
+            VSCROLL.heights[index]=base+extra;
+            VSCROLL.heightCache.set(getResultStableId(STATE.results[index]),{height:base+extra,measurementKey:key});
+          }
+          measuredHeightRevision++;VSCROLL.heightsDirty=true;
+          setResultScrollTop(getVirtualOffset(4000)+11);renderVisible();
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          deepSnapshot=saveSearchViewSnapshot();const offset=deepSnapshot.scroll.offset;
+          restoreSearchViewSnapshot(deepKey);const initiallyMissing=!STATE.results[150] && !STATE.results[350];
+          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+          const index=findVirtualIndex(getResultScrollTop());
+          return {initiallyMissing,index,offset,actualOffset:getResultScrollTop()-getVirtualOffset(index),
+            heights:[VSCROLL.heights[150],VSCROLL.heights[350]],expected:[base+37,base+61],
+            complete:Object.keys(STATE.results).length===5000};
+        }''')
+        self.assertTrue(result['initiallyMissing'])
+        self.assertEqual(result['index'], 4000)
+        self.assertAlmostEqual(result['actualOffset'], result['offset'], delta=2)
+        self.assertEqual(result['heights'], result['expected'])
+        self.assertTrue(result['complete'])
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_unchanged_controls_reuse_snapshot_and_do_not_scan_storage(self):
+        result = self.page.evaluate('''async () => {
+          const first=saveSearchViewSnapshot(), results=first.results;
+          let scans=0; const cursor=IDBIndex.prototype.openCursor;
+          IDBIndex.prototype.openCursor=function(...args){scans++; return cursor.apply(this,args)};
+          lastPositionPruneAt=Date.now();
+          try {
+            for(let i=0;i<20;i++) saveSearchViewSnapshot();
+            const tx=searchPositionDB.transaction('positions');
+            await new Promise(resolve=>{tx.oncomplete=resolve});
+            return {same:searchViewSnapshots.get(getSearchViewKey()).results===results,scans};
+          } finally {IDBIndex.prototype.openCursor=cursor;}
+        }''')
+        self.assertEqual(result, {'same': True, 'scans': 0})
+
+    def begin_rebuild(self, script):
+        self.page.evaluate("STATE.query='paging-other'; doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('searchViewSnapshots.clear()')
+        self.page.evaluate(script)
+        self.page.evaluate("STATE.query='paging-original'; doSearch(false,false,true)")
+
+    def test_retry_continues_from_failed_page(self):
+        self.begin_rebuild('''() => {
+          const original=fetchPositionPage; window.restoreCalls=[]; window.failPage=true;
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]);
+            if(args[1]===2 && failPage) throw new Error('offline');
+            return original(...args);
+          };
+        }''')
+        self.page.get_by_text('重试恢复', exact=True).wait_for()
+        self.assertEqual(self.page.evaluate('positionRestore.page'), 1)
+        self.page.evaluate('failPage=false')
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('restoreCalls.filter(page=>page<=2)'), [1, 2, 2, 2, 2])
+
+    def test_same_total_generation_change_restarts_coherent_prefix(self):
+        self.begin_rebuild('''() => {
+          const original=fetchPositionPage; window.restoreCalls=[]; window.changed=false;
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]); const data=await original(...args);
+            if(args[1]===2) changed=true;
+            return {...data,generation:changed?'new':'old'};
+          };
+        }''')
+        self.page.locator('#retry-position-btn').wait_for()
+        self.assertEqual(self.page.locator('#search-position-status').get_attribute('title'), '搜索数据已更新，请重试恢复')
+        self.assertEqual(self.page.evaluate('positionRestore.results.length'), 0)
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('restoreCalls.filter(page=>page<=2)'), [1, 2, 1, 2])
+
+    def test_moved_anchor_loads_beyond_old_page_range(self):
+        self.begin_rebuild('''() => {
+          const original=fetchPositionPage;
+          fetchPositionPage=async (...args)=>{
+            const data=await original(...args);
+            data.generation='moved';
+            if(args[1]===1) data.anchor_index=250;
+            if(args[1]===2) data.results[25].File='paging-250';
+            if(args[1]===3) data.results[50].File='paging-125';
+            return data;
+          };
+        }''')
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('findVirtualIndex(DOM.resultsContainer.scrollTop)'), 250)
+        self.assertGreaterEqual(self.page.evaluate('STATE._loadedPage'), 3)
+
+    def test_window_restore_does_not_fetch_unvisited_prefix(self):
+        self.begin_rebuild('''() => {
+          prefetchNextPage=()=>{}; // Isolate restoration from ordinary lookahead.
+          pagingTotal=800;searchResponseCache.clear();
+          const originalKey=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          searchPositions.get(originalKey).loadedPage=8;
+          const original=fetchPositionPage;window.restoreCalls=[];window.restorePeak=0;let active=0;
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]);active++;restorePeak=Math.max(restorePeak,active);
+            await new Promise(resolve=>setTimeout(resolve,args[1]%3===2?60:10));
+            try {return await original(...args);} finally {active--;}
+          };
+        }''')
+        self.assert_position()
+        self.assertLessEqual(self.page.evaluate('restorePeak'), 3)
+        self.assertEqual(self.page.evaluate('restoreCalls.slice(0,3)'), [1,2,3])
+        self.assertTrue(self.page.evaluate('restoreCalls.every(page=>page>=1 && page<=6)'), self.page.evaluate('restoreCalls'))
+        self.assertEqual(self.page.evaluate('STATE.results.filter(Boolean).slice(0,300).map(record=>record.ID)'), [str(i) for i in range(300)])
+        self.assertTrue(self.page.evaluate('STATE.results.filter(Boolean).every(record=>Number(record.ID)<600)'))
+        self.assertEqual(self.page.evaluate('STATE.results.length'), 800)
+
+    def test_window_retry_reuses_completed_neighbor(self):
+        self.begin_rebuild('''() => {
+          prefetchNextPage=()=>{};
+          pagingTotal=400;searchResponseCache.clear();
+          const key=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          searchPositions.get(key).loadedPage=4;
+          const original=fetchPositionPage;window.restoreCalls=[];window.failPage=true;
+          fetchPositionPage=async (...args)=>{
+            restoreCalls.push(args[1]);
+            if(args[1]===2 && failPage) throw new Error('offline');
+            return original(...args);
+          };
+        }''')
+        self.page.get_by_text('重试恢复', exact=True).wait_for()
+        self.assertEqual(self.page.evaluate('[positionRestore.page,...positionRestore.ready.keys()]'), [1,1,3])
+        self.page.evaluate('failPage=false')
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
+        self.assertEqual(self.page.evaluate('restoreCalls.slice(0,6)'), [1,2,3,2,2,2])
+        self.assertTrue(self.page.evaluate('restoreCalls.every(page=>page>=1 && page<=4)'))
+        self.assertEqual(self.page.evaluate('STATE.results.length'), 400)
+
+    def test_parallel_generation_mismatch_discards_entire_buffer(self):
+        self.begin_rebuild('''() => {
+          pagingTotal=400;searchResponseCache.clear();
+          const key=[...searchPositions.keys()].find(key=>JSON.parse(key).query==='paging-original');
+          searchPositions.get(key).loadedPage=4;
+          const original=fetchPositionPage;window.coherent=false;
+          fetchPositionPage=async (...args)=>({...await original(...args),generation:coherent||args[1]===3?'new':'old'});
+        }''')
+        self.page.locator('#retry-position-btn').wait_for()
+        self.assertEqual(self.page.locator('#search-position-status').get_attribute('title'), '搜索数据已更新，请重试恢复')
+        self.assertEqual(self.page.evaluate('[positionRestore.results.length,positionRestore.ready.size,positionRestore.page]'), [0,0,0])
+        self.page.evaluate('coherent=true')
+        self.page.get_by_text('重试恢复', exact=True).click()
+        self.assert_position()
