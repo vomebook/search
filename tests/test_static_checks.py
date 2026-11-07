@@ -114,6 +114,11 @@ class StaticGateTests(unittest.TestCase):
             source = self.root / relative
             source.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, source)
+        # Strictly checked modules may import vendored declarations, never vendored sources.
+        for declaration in (ROOT / "static/vendor/djvu-rs-reader").rglob("*.d.ts"):
+            target = self.root / declaration.relative_to(ROOT)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(declaration, target)
         (self.root / "jsconfig.strict.json").write_text(json.dumps(config))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", "jsconfig.strict.json"]
         self.assert_check(self.run_check(*check), True, "")
@@ -1895,16 +1900,22 @@ class StaticGateTests(unittest.TestCase):
         for injected in ("    assert.fail('unrelated');\n",
                          "    console.log('prevented error must abort before settlement');\n    assert.fail('unrelated');\n"):
             source.write_text(original.replace(marker, injected + marker))
-            self.assert_check(self.run_check(*mutation), False, 'baseline failed')
+            result = self.run_check(*mutation)
+            self.assert_check(result, False, 'transaction error handler removed: baseline failed')
+            self.assertIn('"killed":1,"survived":0,"errors":1', result.stdout)
         source.write_text(original + '\nthis is not valid javascript !\n')
-        self.assert_check(self.run_check(*mutation), False, 'baseline failed')
+        result = self.run_check(*mutation)
+        self.assert_check(result, False, 'sync throw does not abort: baseline failed')
+        self.assertIn('"killed":0,"survived":0,"errors":1', result.stdout)
         source.write_text(original.replace("assert.equal(await pdfTextStoreKey(data),a);",
                                            "assert.equal(await pdfTextStoreKey(data),a);\n  throw new Error('unrelated');"))
-        self.assert_check(self.run_check(*mutation), False, 'unexpected failure')
+        result = self.run_check(*mutation)
+        self.assert_check(result, False, 'cache key omits version: baseline failed')
+        self.assertIn('"killed":4,"survived":0,"errors":1', result.stdout)
         for line, diagnostic in (("assert.equal(await store.get(2),null,'TTL is exclusive at the boundary');",
                                   'expired page accepted mutant survived'),
                                  ("assert.equal(await store.get(1),null);assert.equal(await store.get(2),'new');",
-                                  'corrupt ledger retained mutant survived'),
+                                  'expected exactly one fixture assertion'),
                                  ("assert.equal(await store.get(2),'y'.repeat(30),'failed replacement must preserve original page');",
                                   'full replacement commits deletion: unexpected failure')):
             self.assertEqual(original.count(line), 1)

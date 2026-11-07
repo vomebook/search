@@ -14,21 +14,27 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 ||
       !Number.isSafeInteger(retries) || retries < 0 || retries > 3) throw new Error('DJVU_RANGE_CONFIG_INVALID');
   const owner = new AbortController(), cache = new Map(), active = new Map();
-  let total = 0, etag = '', retained = 0, closed = false, failure = null, transferred = 0, requests = 0;
+  // The guard above rejects a missing url or signal; hoisted functions below do not keep that narrowing.
+  const abortSignal = /** @type {AbortSignal} */ (signal), address = /** @type {string} */ (url);
+  let total = 0, etag = '', retained = 0, closed = false, transferred = 0, requests = 0;
+  /** @type {unknown} */
+  let failure = null;
   const cancelled = () => signal.reason || new DOMException('DjVu range cancelled', 'AbortError');
   const stop = () => { owner.abort(cancelled()); cache.clear(); retained = 0; closed = true; };
   signal.addEventListener('abort', stop, {once:true});
   if (signal.aborted) stop();
   function check() {
-    if (signal.aborted || closed) throw failure || (signal.aborted ? cancelled() : new DOMException('DjVu range closed','AbortError'));
+    if (abortSignal.aborted || closed) throw failure || (abortSignal.aborted ? cancelled() : new DOMException('DjVu range closed','AbortError'));
   }
+  /** @param {unknown} error */
   function fail(error) {
     if (!failure) failure = error;
     owner.abort(failure); cache.clear(); retained = 0; closed = true;
-    signal.removeEventListener('abort', stop);
+    abortSignal.removeEventListener('abort', stop);
     return failure;
   }
   const invalid = () => Object.assign(new Error('DJVU_RANGE_INVALID'), {code:'DJVU_RANGE_INVALID'});
+  /** @param {number} start @param {number} end @param {boolean} [first] */
   async function request(start, end, first = false) {
     check();
     for (let attempt = 0; ; attempt++) {
@@ -39,7 +45,7 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
       try {
         timer = setTimeout(() => controller.abort(new DOMException('DjVu range timed out','TimeoutError')), timeoutMs);
         requests++;
-        response = await fetchResponse(url, {headers:{Range:`bytes=${start}-${end}`,...(!first ? {'If-Range':etag} : {})}, signal:controller.signal, cache:'no-store'});
+        response = await fetchResponse(address, {headers:{Range:`bytes=${start}-${end}`,...(!first ? {'If-Range':etag} : {})}, signal:controller.signal, cache:'no-store'});
         if (first && response.status === 200) {
           await response.body?.cancel();
           throw Object.assign(new Error('DJVU_RANGE_UNSUPPORTED'), {code:'DJVU_RANGE_UNSUPPORTED'});
@@ -68,15 +74,17 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
         return {bytes,total:size,etag:identity};
       } catch (error) {
         await response?.body?.cancel().catch(() => {});
-        if (signal.aborted || closed) throw failure || cancelled();
+        if (abortSignal.aborted || closed) throw failure || cancelled();
         const timedOut = controller.signal.aborted && controller.signal.reason?.name === 'TimeoutError';
-        if (attempt < retries && (error?.retryable || error?.name === 'TypeError' || timedOut)) continue;
+        const detail = /** @type {{retryable?: boolean, name?: string} | null | undefined} */ (error);
+        if (attempt < retries && (detail?.retryable || detail?.name === 'TypeError' || timedOut)) continue;
         throw error;
       } finally {
         clearTimeout(timer);owner.signal.removeEventListener('abort',abort);
       }
     }
   }
+  /** @param {number} start @param {Uint8Array} bytes */
   function keep(start, bytes) {
     const previous=cache.get(start);if(previous)retained-=previous.byteLength;
     cache.delete(start);cache.set(start,bytes);retained+=bytes.byteLength;
@@ -86,6 +94,7 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
     const first=await request(0,windowBytes-1,true);
     total=first.total;etag=first.etag;keep(0,first.bytes);
   } catch (error) { fail(error);throw error; }
+  /** @param {number} offset @param {number} length */
   async function read(offset,length) {
     check();
     if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 1 ||
