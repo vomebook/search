@@ -86,9 +86,39 @@ class CrossSiteSearchContractsCiTests(unittest.TestCase):
         integration = hf.split('      - name: Run real backend and browser integration\n', 1)[1].split('      - name:', 1)[0]
         for required in ('working-directory: huggingface-search',
                          "loadTestsFromName('tests.backend.test_real_integration')",
-                         'not result.wasSuccessful()', 'result.testsRun != 12', 'result.skipped', 'sys.exit(1)'):
+                         'not result.wasSuccessful()', 'result.testsRun != 13', 'result.skipped', 'sys.exit(1)'):
             self.assertIn(required, integration)
         self.assertNotIn('continue-on-error:', integration)
+
+
+class AdditionalSuitesCiTests(unittest.TestCase):
+    def test_previously_unrun_contracts_are_required(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        timeout = github.split('      - name: Check Reader request timeout in Chromium\n', 1)[1].split('      - name:', 1)[0]
+        for required in ("loadTestsFromName('tests.reader.browser.test_reader_timeout')",
+                         'not result.wasSuccessful()', 'result.testsRun != 3', 'result.skipped', 'sys.exit(1)'):
+            self.assertIn(required, timeout)
+        for command in ('node tests/reader/core/test_reader_store_channel.js',
+                        'node tests/reader/transport/test_reader_preload.js',
+                        'node tests/service_worker/test_service_worker.js'):
+            self.assertEqual(hf.count(command + '\n'), 1)
+        additional = hf.split('      - name: Run additional Hugging Face search and Reader regressions\n', 1)[1].split('      - name:', 1)[0]
+        for required in ('working-directory: huggingface-search',
+                         'tests.performance.test_folder_projection_performance',
+                         'tests.performance.test_random_reader_performance',
+                         'tests.reader.browser.test_reader_ebook_flow',
+                         'tests.reader.browser.test_reader_store_preservation',
+                         'tests.search.browser.test_prefetch_pipeline',
+                         'tests.search.browser.test_search_positions',
+                         'tests.search.backend.test_wildcard_index_oracle',
+                         'result.testsRun != 58', 'READER_STORE_TEST_BROWSER=firefox', 'result.testsRun != 12'):
+            self.assertIn(required, additional)
+        self.assertEqual(additional.count('result.skipped'), 2)
+        self.assertEqual(additional.count('sys.exit(1)'), 2)
+        self.assertNotIn('continue-on-error:', timeout)
+        self.assertNotIn('continue-on-error:', additional)
 
 
 class HfSearchProjectionCiTests(unittest.TestCase):
