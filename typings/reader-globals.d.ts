@@ -13,6 +13,24 @@ declare function highlightText(text: unknown, query: string | null | undefined):
 declare var VoiceOfMLSearchValidation: {isValidSearchResponse(data: unknown, expectedPage: number, expectedPageSize: number): unknown};
 declare var VoiceOfMLSearchIdentity: {getResultStableId(result: unknown): string};
 declare var VoiceOfMLSearchFileTypes: {orderedExtensions: string[]; fileIconMap: Record<string, string | object>};
+interface VoiceOfMLFolderSelectionNode {
+  path: string;
+  children?: VoiceOfMLFolderSelectionNode[] | null;
+  isRoot?: boolean;
+  hasDirectFiles?: boolean;
+  hasChildren?: boolean;
+  showSelfToggle?: boolean;
+}
+interface VoiceOfMLFolderSelectionState {full: boolean; partial: boolean}
+declare var VoiceOfMLSearchFolderSelection: {
+  folderPathCovered(path: string, subtreeSet: ReadonlySet<string>): boolean;
+  createFolderSelectionLookup(nodes: readonly VoiceOfMLFolderSelectionNode[] | null | undefined, subtreeSet: ReadonlySet<string>,
+    selfSet: ReadonlySet<string>): Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState>;
+  folderSelectionState(node: VoiceOfMLFolderSelectionNode | null | undefined, subtreeSet: ReadonlySet<string>, selfSet: ReadonlySet<string>,
+    lookup?: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState> | null): VoiceOfMLFolderSelectionState;
+  applyFolderSelectionToNode(node: VoiceOfMLFolderSelectionNode, row: Pick<ParentNode, "querySelector">, subtreeSet: ReadonlySet<string>,
+    selfSet: ReadonlySet<string>, lookup?: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState> | null): void;
+};
 declare class BoundedResponseCache<T = unknown> extends Map<string, T> {
   constructor(limit: number, ttl: number, budget?: number);
   limit: number;
