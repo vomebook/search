@@ -91,6 +91,17 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertEqual(workflow.count('tests.search.backend.test_search_candidates_mutation_contract'), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_candidates'), 1)
 
+    def test_reader_archive_contract_and_mutations_are_required(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        start = workflow.index('coverage run --branch --source=backend,app')
+        end = workflow.index('coverage json', start)
+        modules = workflow[start:end].replace(chr(92), ' ').split()
+        for module in ('tests.reader.backend.test_reader_archive_contract',
+                       'tests.reader.backend.test_reader_archive_mutation_contract'):
+            self.assertEqual(modules.count(module), 1)
+            self.assertEqual(workflow.count(module), 1)
+        self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module reader_archive'), 1)
+
     def test_full_bootstrap_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('tests.search.backend.test_search_bootstrap_contract'), 1)
@@ -227,6 +238,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         for gate in ('check_search_file_types_coverage.mjs', 'check_search_response_cache_coverage.mjs',
                      'check_search_response_validation_coverage.mjs', 'check_search_result_identity_coverage.mjs',
+                     'check_search_folder_selection_coverage.mjs',
                      'check_search_filter_equality_baseline.mjs', 'check_search_folder_merge_baseline.mjs',
                      'check_search_readability_baseline.mjs'):
             self.assertEqual(workflow.count(f'node scripts/search/{gate}'), 2)
@@ -277,6 +289,11 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('node --test tests/search/baselines/test_search_stable_id_baseline.mjs'), 2)
         self.assertEqual(workflow.count('node scripts/search/check_search_result_identity_coverage.mjs'), 2)
+
+    def test_both_sites_run_original_folder_selection_contract(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()
+        self.assertEqual(workflow.count('node --test tests/search/baselines/test_search_folder_selection_baseline.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/search/check_search_folder_selection_coverage.mjs'), 2)
 
     def test_both_sites_run_original_filter_equality_contract(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/reader-refactor.yml').read_text()

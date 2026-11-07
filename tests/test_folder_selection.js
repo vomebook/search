@@ -4,13 +4,19 @@ const path = require('path');
 const vm = require('vm');
 
 // Exercise the DOM-facing selection projection against actual file membership.
+// The pure projection lives in static/search/folder-selection.js; the host keeps
+// the memo, branch splitting and normalization that call it through the namespace.
 const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const moduleSource = fs.readFileSync(path.join(__dirname, '../static/search/folder-selection.js'), 'utf8');
 const context = vm.createContext({Set, STATE: {folderTree: []}});
-const start = source.indexOf('function folderPathCovered(');
+vm.runInContext(moduleSource, context);
+assert.strictEqual(source.indexOf('function folderPathCovered('), -1);
+assert.strictEqual(source.indexOf('function applyFolderSelectionToNode('), -1);
+const start = source.indexOf('let folderSelectionMemo = null;');
 const end = source.indexOf('function persistFolderSelection(', start);
+assert(start >= 0 && end > start);
 vm.runInContext(source.slice(start, end), context);
-const renderStart = source.indexOf('function applyFolderSelectionToNode(');
-vm.runInContext(source.slice(renderStart, source.indexOf('\nfunction ', renderStart + 1)), context);
+context.applyFolderSelectionToNode = context.VoiceOfMLSearchFolderSelection.applyFolderSelectionToNode;
 
 function node(path, children = []) {
   return {path, children, isRoot: path === '', hasDirectFiles: true,
