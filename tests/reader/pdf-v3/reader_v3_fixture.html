@@ -1,0 +1,65 @@
+<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>Reader v3 component fixture</title>
+<script src="/static/reader/core/reader-contract.js"></script>
+<script src="/static/reader/core/reader-security.js"></script>
+<script type="module">
+import * as v3 from '/static/reader/pdf/reader-v3.mjs';
+import {createReaderPdfTextRuntime} from '/static/reader/pdf/reader-pdf-text-runtime.mjs';
+import {createReaderPdfPageWindow} from '/static/reader/pdf/reader-pdf-page-window.mjs';
+window.runOne = async ({test, wrongSource = false}) => {
+  const counts = {gzipAttempted:0, gzipCompleted:0, jsonAttempted:0, gzipErrorStage:null};
+  const nativeErrors = new WeakSet();
+  const Native = window.DecompressionStream, parse = JSON.parse;
+  let stage = 'manifest';
+  window.DecompressionStream = class InstrumentedNativeDecompressionStream {
+    constructor(format) {
+      counts.gzipAttempted++;
+      const native = new Native(format), reader = native.readable.getReader();
+      this.writable = native.writable;
+      this.readable = new ReadableStream({async pull(controller) {
+        try {
+          if (wrongSource && stage === 'text') throw new Error('injected unrelated source error');
+          let result;
+          try { result = await reader.read(); }
+          catch (error) { if (error && typeof error === 'object') nativeErrors.add(error); counts.gzipErrorStage = stage; throw error; }
+          if (result.done) { counts.gzipCompleted++; controller.close(); }
+          else controller.enqueue(result.value);
+        } catch (error) { controller.error(error); }
+      }, cancel(reason) { return reader.cancel(reason); }});
+    }
+  };
+  JSON.parse = function(...args) { if (stage === 'text') counts.jsonAttempted++; return parse.apply(this,args); };
+  const controller = new AbortController();
+  let finishDocument;
+  const documentPromise = new Promise(resolve => { finishDocument = resolve; });
+  const ctx = {...v3, readerAbortController:controller, fetchReaderUrl:(url, opts)=>fetch(url,opts),
+    readerDownloadApiUrl: path => `/asset?case=${encodeURIComponent(test)}&${new URL(path, location.href).searchParams}`,
+    sourceUrl:`/asset?case=${encodeURIComponent(test)}&path=reading-manifest.json`,
+    pdfManifestSource:()=>({root:`objects/aa/${'a'.repeat(64)}/fixture`}),
+    readerRuntime:{negotiate:()=>({}),update:()=>{}}, syncCapabilityControls:()=>{},
+    loadPdfDocument:()=>documentPromise, assertReaderActive:()=>{}};
+  Object.assign(ctx, createReaderPdfTextRuntime(ctx));
+  let manifest, reachedMap = false, actual = 'UNEXPECTED_COMPLETION', nativeGzipError = false, layer = null;
+  const mapComplete = new Error('fixture map complete');
+  ctx.validatePageMap = (map, m) => { v3.validatePageMap(map,m); manifest=m; reachedMap=true; throw mapComplete; };
+  Object.assign(ctx, createReaderPdfPageWindow(ctx));
+  ctx.pdfManifestSource = () => ({root:`objects/aa/${'a'.repeat(64)}/fixture`});
+  try {
+    try { await ctx.renderPdfPages(fetch(ctx.sourceUrl)); }
+    catch (error) { if (error !== mapComplete) actual = error.message; }
+    if (reachedMap) {
+      stage = 'text';
+      counts.gzipAttempted = counts.gzipCompleted = counts.jsonAttempted = 0;
+      try { layer = await ctx.pdfV3Repository.textPage(manifest.text_layer,1); actual = 'OK'; }
+      catch (error) {
+        nativeGzipError = !!error && typeof error === 'object' && nativeErrors.has(error);
+        actual = nativeGzipError ? 'INSTRUMENTED_NATIVE_GZIP_ERROR' : error instanceof SyntaxError ? 'INVALID_JSON' : error.message;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+    return {case:test, actual, stage, counts, nativeGzipError, layer};
+  } finally {
+    controller.abort(); ctx.pdfV3Repository?.dispose(); finishDocument(null);
+    window.DecompressionStream = Native; JSON.parse = parse;
+  }
+};
+</script>

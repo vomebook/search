@@ -91,6 +91,8 @@ jobs:
         run: |
           node scripts/reader/check_reader_v3_coverage.mjs
           node scripts/reader/check_reader_v3_mutations.mjs
+          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser chromium
+          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser firefox
       - name: Run chapter-search unit tests
         run: |
           node tests/reader/core/test_reader_architecture.js
@@ -483,6 +485,8 @@ jobs:
         run: |
           node scripts/reader/check_reader_v3_coverage.mjs
           node scripts/reader/check_reader_v3_mutations.mjs
+          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser chromium
+          python3 -B tests/reader/pdf-v3/test_reader_v3_browser.py --browser firefox
       - name: Run chapter-search unit tests
         working-directory: huggingface-search
         run: |
