@@ -1,0 +1,618 @@
+{
+  "version": 1,
+  "project": "github",
+  "tests": {
+    "tests/gates/test_ci_ubuntu_mirror.py": {
+      "kind": "direct",
+      "source": ".github/workflows/static.yml"
+    },
+    "tests/gates/test_hf_quality_baseline.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/gates/test_package_resolution.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/gates/test_reader_dom_search_gate.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/gates/test_static_checks.py": {
+      "kind": "manifest",
+      "source": "static_gate_ids.github.json"
+    },
+    "tests/gates/test_static_contract.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/gates/test_static_shards_runner.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/gates/test_tap_contracts.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/gates/test_test_inventory.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/live/test_live_smoke.js": {
+      "kind": "excluded",
+      "reason": "Live network smoke test depends on deployed services."
+    },
+    "tests/live/test_reader_live_formats.py": {
+      "kind": "excluded",
+      "reason": "Live Reader formats depend on mutable remote services and data."
+    },
+    "tests/live/test_reader_live_smoke.js": {
+      "kind": "excluded",
+      "reason": "Live Reader smoke test depends on deployed remote services."
+    },
+    "tests/performance/test_benchmark.js": {
+      "kind": "excluded",
+      "reason": "Benchmark measures host performance and is not a deterministic gate."
+    },
+    "tests/performance/test_benchmark_browser.py": {
+      "kind": "excluded",
+      "reason": "Browser benchmark measures host and network performance, not a deterministic gate."
+    },
+    "tests/performance/test_next_page_latency.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/performance/test_reader_djvu_benchmark.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/performance/test_reader_performance.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/performance/test_reader_toc_latency.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/performance/test_snapshot_budget.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/adapters/test_reader_adapter_registry.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_adapter_coverage.mjs"
+    },
+    "tests/reader/browser/test_converted_reader_responsiveness.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_accessibility_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_close_responsiveness.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_close_traffic.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_conversions.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_djvu_engine_bootstrap.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_djvu_range_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_dom_search_contracts.py": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_dom_search_contracts.py"
+    },
+    "tests/reader/browser/test_reader_ebook_flow.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_engine_preload.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_format_pipeline.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_formats.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_layout.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_lifecycle.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_navigation.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_navigation_host.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_optimizations.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_pdf_first_page.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_pdf_followup.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_pdf_history_race.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_pdf_loading.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_refactor.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_scroll_anchor_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_speech.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_store_preservation.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_style.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_timeout.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_toc_navigation.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_visual.py": {
+      "kind": "excluded",
+      "reason": "Visual acceptance requires external pinned screenshot baselines not present here."
+    },
+    "tests/reader/chapter-search/test_reader_chapter_search.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/chapters/test_reader_chapter_preload.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/chapters/test_reader_chapter_repository.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/chapters/test_reader_chapter_scheduler.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/core/test_reader_architecture.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/core/test_reader_models.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/core/test_reader_regression.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/core/test_reader_runtime.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/core/test_reader_store_channel.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/core/test_reader_warming.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/djvu/test_reader_djvu_only.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/djvu/test_reader_djvu_png.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/djvu/test_reader_djvu_range.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/djvu/test_reader_djvu_range_boundaries.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_djvu_contracts.mjs"
+    },
+    "tests/reader/djvu/test_reader_djvu_range_fallback.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/djvu/test_reader_djvu_scheduler.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/djvu/test_reader_djvu_source_integrity.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/djvu/test_reader_djvu_worker.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/images/test_reader_image_loader.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/images/test_reader_image_loader_contract.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_image_loader_coverage.mjs"
+    },
+    "tests/reader/images/test_reader_image_memory.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/layout/test_reader_scroll_anchor.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/layout/test_reader_section_virtualizer.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/lifecycle/test_reader_lifecycle.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_lifecycle_coverage.mjs"
+    },
+    "tests/reader/media/test_reader_media_baseline.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_media_coverage.mjs"
+    },
+    "tests/reader/media/test_reader_media_metadata.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_media_coverage.mjs"
+    },
+    "tests/reader/pdf-network/test_pdf_range_cache_release.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-network/test_pdf_range_hints_contract.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_network_coverage.mjs"
+    },
+    "tests/reader/pdf-network/test_reader_pdf_backpressure.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_network_coverage.mjs"
+    },
+    "tests/reader/pdf-network/test_reader_pdf_first_page_worker.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-network/test_reader_pdf_network_contract.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_network_coverage.mjs"
+    },
+    "tests/reader/pdf-network/test_reader_pdf_sparse_ranges.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_network_coverage.mjs"
+    },
+    "tests/reader/pdf-search/test_pdf_book_client.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_book_client_coverage.mjs"
+    },
+    "tests/reader/pdf-search/test_pdf_book_worker.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-search/test_pdf_book_worker_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-search/test_pdf_prefetch_schedule.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_prefetch_contracts.mjs"
+    },
+    "tests/reader/pdf-search/test_pdf_text_store.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_text_store_coverage.mjs"
+    },
+    "tests/reader/pdf-search/test_pdf_text_store_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-search/test_prefetch_priority.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_prefetch_contracts.mjs"
+    },
+    "tests/reader/pdf-search/test_reader_book_text.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-search/test_reader_embedded_text_fallback.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-search/test_reader_ocr_transport.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-v3/test_dataset_primary_policy.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/static.yml"
+    },
+    "tests/reader/pdf-v3/test_reader_v3_ocr_retained.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/pdf-v3/test_reader_v3_untrusted.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_v3_coverage.mjs"
+    },
+    "tests/reader/security/test_reader_css_sanitizer.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/security/test_reader_security.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/text/test_reader_text_baseline.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_text_coverage.mjs"
+    },
+    "tests/reader/text/test_reader_text_faults.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_text_coverage.mjs"
+    },
+    "tests/reader/transport/test_reader_document_loader_contract.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_document_loader_coverage.mjs"
+    },
+    "tests/reader/transport/test_reader_initial_recovery.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_request_manager_coverage.mjs"
+    },
+    "tests/reader/transport/test_reader_pdf_rate_outer.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_document_loader_coverage.mjs"
+    },
+    "tests/reader/transport/test_reader_preload.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/transport/test_reader_request_manager.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_request_manager_coverage.mjs"
+    },
+    "tests/reader/transport/test_reader_request_manager_edges.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_request_manager_coverage.mjs"
+    },
+    "tests/reader/transport/test_reader_sidecar_fetch.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/ui/test_reader_accessibility.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/baselines/test_search_extension_filter_baseline.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/baselines/test_search_extension_inventory_baseline.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/baselines/test_search_filter_equality_baseline.mjs": {
+      "kind": "script",
+      "source": "scripts/search/check_search_filter_equality_baseline.mjs"
+    },
+    "tests/search/baselines/test_search_folder_merge_baseline.mjs": {
+      "kind": "script",
+      "source": "scripts/search/check_search_folder_merge_baseline.mjs"
+    },
+    "tests/search/baselines/test_search_folder_selection_baseline.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/baselines/test_search_readability_baseline.mjs": {
+      "kind": "script",
+      "source": "scripts/search/check_search_readability_baseline.mjs"
+    },
+    "tests/search/baselines/test_search_response_validation_baseline.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/baselines/test_search_stable_id_baseline.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_api_integration.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_browser_sidebar_reorder.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_browser_sidebar_reorder_discovery.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_browser_smoke.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_download_lifecycle.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_paging_recovery.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_position_controls.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_position_window.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_prefetch_pipeline.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_recent_search_pages.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_scroll_stability.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_search_accessibility_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_search_positions.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_search_session_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_segmented_scroll.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_sidebar_initial_payload_route_race.py": {
+      "kind": "script",
+      "source": "scripts/check_sidebar_payload_regressions.py"
+    },
+    "tests/search/browser/test_sidebar_keyboard.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/build/test_search_record_path_build.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/data/test_corpus_oracle.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/data/test_data_integrity.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/download/test_download_controller_contract.js": {
+      "kind": "script",
+      "source": "scripts/search/check_download_controller_coverage.mjs"
+    },
+    "tests/search/highlight/test_search_highlight_contract.js": {
+      "kind": "script",
+      "source": "scripts/search/check_search_highlight_coverage.mjs"
+    },
+    "tests/search/paging/test_page_generation.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/reader-navigation/test_reader_navigation_baseline.mjs": {
+      "kind": "script",
+      "source": "scripts/search/check_reader_navigation_baseline.mjs"
+    },
+    "tests/search/record-path/test_search_record_path.js": {
+      "kind": "script",
+      "source": "scripts/search/check_search_record_path_coverage.mjs"
+    },
+    "tests/search/response-cache/test_response_cache.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/response-cache/test_search_response_cache_contract.js": {
+      "kind": "script",
+      "source": "scripts/search/check_search_response_cache_coverage.mjs"
+    },
+    "tests/search/size/test_search_size_format.js": {
+      "kind": "script",
+      "source": "scripts/search/check_search_size_coverage.mjs"
+    },
+    "tests/search/size/test_search_size_render_contract.js": {
+      "kind": "script",
+      "source": "scripts/search/check_search_size_coverage.mjs"
+    },
+    "tests/search/ui/test_folder_selection.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/ui/test_search_interaction_state.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/ui/test_snapshot_clone_geometry.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/worker/test_worker_contract.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/seo/test_seo_catalog.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/service_worker/test_service_worker.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/service_worker/test_service_worker_integration.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/support/test_harness.js": {
+      "kind": "helper",
+      "source": "tests/search/paging/test_page_generation.js"
+    },
+    "tests/support/test_search_test_projects.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    }
+  }
+}

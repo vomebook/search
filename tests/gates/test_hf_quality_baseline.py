@@ -91,6 +91,21 @@ class CrossSiteSearchContractsCiTests(unittest.TestCase):
         self.assertNotIn('continue-on-error:', integration)
 
 
+class TestInventoryCiTests(unittest.TestCase):
+    def test_inventory_checks_are_required_in_both_sites_and_pages(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/reader-refactor.yml').read_text()
+        pages = (root / '.github/workflows/static.yml').read_text()
+        github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        for job, project, extra in ((github, 'github', ''),
+                                    (hf, 'hf', ' --reader-workflow ../.github/workflows/reader-refactor.yml'),
+                                    (pages, 'github', '')):
+            self.assertIn('tests.gates.test_package_resolution tests.gates.test_test_inventory', job)
+            self.assertIn(f'python -B scripts/check_test_inventory.py --project {project}{extra}\n', job)
+            self.assertNotIn('continue-on-error:', job)
+
+
 class AdditionalSuitesCiTests(unittest.TestCase):
     def test_previously_unrun_contracts_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
@@ -108,12 +123,13 @@ class AdditionalSuitesCiTests(unittest.TestCase):
         for required in ('working-directory: huggingface-search',
                          'tests.performance.test_folder_projection_performance',
                          'tests.performance.test_random_reader_performance',
+                         'tests.reader.browser.test_reader_accessibility',
                          'tests.reader.browser.test_reader_ebook_flow',
                          'tests.reader.browser.test_reader_store_preservation',
                          'tests.search.browser.test_prefetch_pipeline',
                          'tests.search.browser.test_search_positions',
                          'tests.search.backend.test_wildcard_index_oracle',
-                         'result.testsRun != 58', 'READER_STORE_TEST_BROWSER=firefox', 'result.testsRun != 12'):
+                         'result.testsRun != 59', 'READER_STORE_TEST_BROWSER=firefox', 'result.testsRun != 12'):
             self.assertIn(required, additional)
         self.assertEqual(additional.count('result.skipped'), 2)
         self.assertEqual(additional.count('sys.exit(1)'), 2)
