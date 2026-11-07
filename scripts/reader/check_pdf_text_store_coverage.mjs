@@ -17,6 +17,11 @@ const required=[
   'corrupt replacement and eviction reset accounting before committing new data',
   'full replacement rolls back when damaged rows are absent from the index',
   'understated and overdrawn ledgers reset instead of drifting',
+  'zero ledger detects hidden pages and asymmetric counters',
+  'empty zero ledger counts without clearing',
+  'zero ledger count handler throw aborts before settlement',
+  'zero ledger count sync failure rolls back before settlement',
+  'zero ledger count request failure rolls back before settlement',
   'expired entries are pruned and old records free budget for new pages',
   'concurrent writes share the ledger and bound in-flight writes',
   'open failure and a late successful connection do not publish data',
@@ -40,7 +45,7 @@ if(result.status!==0||rows.length!==1||rows[0].some((value,index)=>value<minimum
     !hasPassingTapContracts(text,required)||
     ['# start of coverage report','# end of coverage report'].some(marker=>lines.filter(line=>line===marker).length!==1)||
     lines.filter(line=>/^# duration_ms \d+(?:\.\d+)?$/.test(line)).length!==1||
-    !['1..15','# tests 15','# pass 15','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
+    !['1..20','# tests 20','# pass 20','# fail 0','# cancelled 0'].every(summary=>lines.filter(line=>line===summary).length===1)||
     ['# tests ','# pass ','# fail ','# cancelled '].some(prefix=>lines.filter(line=>line.startsWith(prefix)).length!==1)){
   console.error('PDF text-store coverage requires named contracts and exactly one source row above each minimum');
   process.exitCode=1;

@@ -30,7 +30,7 @@ class PdfTextStoreBrowserTests(unittest.TestCase):
         cls.playwright = sync_playwright().start()
         cls.addClassCleanup(cls.playwright.stop)
         browser = getattr(cls.playwright, os.environ.get('PDF_TEXT_STORE_TEST_BROWSER', 'chromium'))
-        cls.browser = browser.launch(headless=True)
+        cls.browser = browser.launch(headless=True, timeout=90000)
         cls.addClassCleanup(cls.browser.close)
 
     def test_failed_write_waits_for_abort_and_rolls_back(self):
@@ -152,6 +152,178 @@ class PdfTextStoreBrowserTests(unittest.TestCase):
                     self.assertEqual(errors, [])
                 finally:
                     context.close()
+
+    def test_injected_count_failures_abort_and_preserve_snapshot(self):
+        for kind, cancel in [('sync', False), ('request', False), ('request', True)]:
+            with self.subTest(kind=kind, cancel=cancel):
+                context = self.browser.new_context()
+                try:
+                    page = context.new_page()
+                    errors = []
+                    page.on('pageerror', lambda error: errors.append(str(error)))
+                    page.goto(self.origin + '/static/reader.html?ext=txt', wait_until='domcontentloaded')
+                    result = page.evaluate('''async ({kind,cancel}) => {
+                      const {createPdfTextStore}=await import('/static/reader/pdf/reader-pdf-text-store.mjs');
+                      const store=createPdfTextStore('a'.repeat(64),{now:()=>10000}), log=[];
+                      const count=IDBObjectStore.prototype.count, transaction=IDBDatabase.prototype.transaction;
+                      const req=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+                      let db, target, injected=0;
+                      const snapshot=()=>new Promise((resolve,reject)=>{const tx=db.transaction(['pages','budget']);
+                        const pages=tx.objectStore('pages').getAll(), budget=tx.objectStore('budget').getAll();
+                        tx.oncomplete=()=>resolve({pages:pages.result,budget:budget.result});tx.onabort=()=>reject(tx.error);});
+                      try {
+                        await store.put(1,'original');db=await req(indexedDB.open('voiceofml-pdf-search-text',1));
+                        await new Promise((resolve,reject)=>{const tx=db.transaction('budget','readwrite');
+                          tx.objectStore('budget').put({id:'total',bytes:0,count:0,prunedAt:10000});
+                          tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);});
+                        const before=await snapshot();
+                        IDBDatabase.prototype.transaction=function(...args){const tx=transaction.apply(this,args);
+                          if(args[1]==='readwrite' && !target){target=tx;
+                            for(const type of ['error','abort','complete']) tx.addEventListener(type,e=>log.push('tx '+type+(type==='error'?' '+e.defaultPrevented:'')));}
+                          return tx;};
+                        IDBObjectStore.prototype.count=function(){injected++;log.push('count');
+                          if(kind==='sync') throw Error('injected count throw');
+                          // A genuine ConstraintError from duplicate add, injected as count's return;
+                          // it is not a native count-specific error.
+                          const bad=this.add({id:'a'.repeat(64)+':1'});
+                          bad.addEventListener('error',e=>{log.push('request '+bad.error.name);if(cancel)e.preventDefault();});
+                          return bad;};
+                        const value=await store.put(2,'new').then(v=>{log.push('promise '+v);return v;});
+                        IDBDatabase.prototype.transaction=transaction;IDBObjectStore.prototype.count=count;
+                        return {value,log,injected,before,after:await snapshot()};
+                      } finally {IDBDatabase.prototype.transaction=transaction;IDBObjectStore.prototype.count=count;db?.close();store.dispose();}
+                    }''', {'kind': kind, 'cancel': cancel})
+                    self.assertEqual(result['injected'], 1, result)
+                    self.assertFalse(result['value'], result)
+                    expected = ['count']
+                    if kind == 'request':
+                        expected += ['request ConstraintError', 'tx error ' + str(cancel).lower()]
+                    expected += ['tx abort', 'promise false']
+                    self.assertEqual(result['log'], expected, result)
+                    self.assertEqual(result['after'], result['before'], result)
+                    # The synchronous injection may be caught by production or reported
+                    # as pageerror; no other pageerror is acceptable.
+                    self.assertIn(errors, [[], ['injected count throw']] if kind == 'sync' else [[]])
+                finally:
+                    context.close()
+
+    def test_zero_ledger_recovery_with_queued_tab(self):
+        context = self.browser.new_context()
+        self.addCleanup(context.close)
+        context.set_default_timeout(10000)
+        a, b, lock = (context.new_page() for _ in range(3))
+        errors = []
+        for page in (a, b, lock):
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.goto(self.origin + '/static/reader.html?ext=txt', wait_until='domcontentloaded')
+        a.evaluate('''async () => {
+          const {createPdfTextStore}=await import('/static/reader/pdf/reader-pdf-text-store.mjs');
+          window.store=createPdfTextStore('a'.repeat(64),{now:()=>10000});
+          if (!await store.put(1,'first') || !await store.put(2,'second')) throw Error('seed failed');
+        }''')
+        lock.evaluate('''async () => {
+          window.db=await new Promise((ok,no)=>{const r=indexedDB.open('voiceofml-pdf-search-text',1);
+            r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)});
+          window.snapshot=()=>new Promise((ok,no)=>{const tx=db.transaction(['pages','budget']);
+            const p=tx.objectStore('pages').getAll(), q=tx.objectStore('budget').get('total');
+            tx.oncomplete=()=>ok({pages:p.result,budget:q.result});tx.onabort=()=>no(tx.error || Error('snapshot aborted'));});
+          window.before=await snapshot();
+          await new Promise((ok,no)=>{const tx=db.transaction('budget','readwrite');
+            tx.objectStore('budget').put({id:'total',bytes:0,count:0,prunedAt:10000});
+            tx.oncomplete=ok;tx.onabort=()=>no(tx.error || Error('corruption aborted'));});
+          window.corrupt=await snapshot();
+        }''')
+        before, corrupt = lock.evaluate('[before,corrupt]')
+        self.assertEqual([(p['key'], p['page'], p['text']) for p in before['pages']],
+                         [('a'*64, 1, 'first'), ('a'*64, 2, 'second')], before)
+        self.assertEqual(before['budget']['count'], 2, before)
+        self.assertEqual(before['budget']['bytes'], sum(p['bytes'] for p in before['pages']), before)
+        self.assertEqual(corrupt['pages'], before['pages'])
+        self.assertEqual((corrupt['budget']['count'], corrupt['budget']['bytes']), (0, 0))
+        b.evaluate('''async () => {
+          const {createPdfTextStore}=await import('/static/reader/pdf/reader-pdf-text-store.mjs');
+          window.store=createPdfTextStore('b'.repeat(64),{now:()=>10000});
+          await store.get(99);
+        }''')
+        for page, role in ((a, 'recovery'), (b, 'queued')):
+            page.evaluate('''role => {
+              // The lockstep test controls release explicitly. Avoid racing the
+              // production two-second best-effort deadline against Python round trips.
+              const nativeTimeout=window.setTimeout.bind(window);
+              window.setTimeout=(callback,delay,...args)=>
+                nativeTimeout(callback,delay===2000?30000:delay,...args);
+              window.events=[];
+              window.requested=new Promise(resolve=>window.onRequested=resolve);
+              const original=IDBDatabase.prototype.transaction;
+              IDBDatabase.prototype.transaction=function(...args){const tx=original.apply(this,args);
+                if(this.name==='voiceofml-pdf-search-text' && args[1]==='readwrite'){
+                  events.push('created');
+                  tx.addEventListener('complete',()=>events.push('complete'));
+                  tx.addEventListener('abort',()=>events.push('abort'));
+                } return tx;};
+              const get=IDBObjectStore.prototype.get;
+              IDBObjectStore.prototype.get=function(...args){const r=get.apply(this,args);
+                if(this.name==='budget' && this.transaction.mode==='readwrite'){
+                  window.budgetRequest=r;events.push('requested');onRequested();
+                  r.addEventListener('success',()=>events.push('success:'+String(window.observedRecoveryComplete===true)));
+                  r.addEventListener('error',()=>events.push('request-error'));}return r;};
+            }''', role)
+        lock.evaluate('''() => {
+          window.release=false;
+          window.tx=db.transaction(['pages','budget'],'readwrite');
+          window.done=new Promise(ok=>{tx.oncomplete=()=>ok('complete');tx.onabort=()=>ok('abort')});
+          const pump=()=>{if(!release){const r=tx.objectStore('budget').get('total');r.onsuccess=pump;}};pump();
+        }''')
+        try:
+            a.evaluate("() => {window.pending=store.put(3,'fresh').then(x=>{events.push('promise:'+x);return x})}")
+            a.evaluate("Promise.race([requested, new Promise((_,reject)=>setTimeout(()=>reject(Error('recovery request timeout')),10000))])")
+            self.assertEqual(a.evaluate('events'), ['created', 'requested'])
+            self.assertEqual(a.evaluate('budgetRequest.readyState'), 'pending')
+            # A second held transaction is queued between the writers. It prevents
+            # the queued request succeeding until Python has observed A's complete.
+            lock.evaluate('''() => {
+              window.releaseGate=false;
+              window.gate=db.transaction(['pages','budget'],'readwrite');
+              window.gateDone=new Promise(ok=>{gate.oncomplete=()=>ok('complete');gate.onabort=()=>ok('abort')});
+              const pump=()=>{if(!releaseGate){const r=gate.objectStore('budget').get('total');r.onsuccess=pump;}};pump();
+            }''')
+            b.evaluate("() => {window.pending=store.put(3,'queued').then(x=>{events.push('promise:'+x);return x})}")
+            b.evaluate("Promise.race([requested, new Promise((_,reject)=>setTimeout(()=>reject(Error('queued request timeout')),10000))])")
+            self.assertEqual(b.evaluate('events'), ['created', 'requested'])
+            self.assertEqual(b.evaluate('budgetRequest.readyState'), 'pending')
+            lock.evaluate('release=true')
+            self.assertEqual(lock.evaluate('done'), 'complete')
+            self.assertTrue(a.evaluate("Promise.race([pending, new Promise((_,reject)=>setTimeout(()=>reject(Error('recovery write timeout')),10000))])"), a.evaluate('events'))
+            ae = a.evaluate('events')
+            self.assertLess(ae.index('complete'), ae.index('promise:true'), ae)
+            self.assertEqual(b.evaluate('budgetRequest.readyState'), 'pending')
+            b.evaluate('window.observedRecoveryComplete=true')
+            lock.evaluate('releaseGate=true')
+            self.assertEqual(lock.evaluate('gateDone'), 'complete')
+            self.assertTrue(b.evaluate("Promise.race([pending, new Promise((_,reject)=>setTimeout(()=>reject(Error('queued write timeout')),10000))])"), b.evaluate('events'))
+            be = b.evaluate('events')
+            self.assertIn('success:true', be, (ae, be))
+            state = lock.evaluate('snapshot()')
+            self.assertEqual([(p['key'], p['page'], p['text']) for p in state['pages']],
+                             [('a'*64, 3, 'fresh'), ('b'*64, 3, 'queued')], state)
+            self.assertEqual(state['budget']['count'], 2, state)
+            self.assertEqual(state['budget']['bytes'], sum(p['bytes'] for p in state['pages']), state)
+            self.assertEqual(state['budget'], {'id': 'total', 'count': 2,
+                                               'bytes': 414,
+                                               'prunedAt': 10000}, state)
+            self.assertEqual(errors, [])
+        finally:
+            # Cleanup must not replace the assertion or timeout that led here.
+            for page, script in ((lock, '''async () => {
+                    window.release=true;window.releaseGate=true;
+                    try { if(window.tx) tx.abort() } catch (_) {}
+                    try { if(window.gate) gate.abort() } catch (_) {}
+                    db?.close();
+                  }'''), (a, 'store.dispose()'), (b, 'store.dispose()')):
+                try:
+                    page.evaluate(script)
+                except Exception:
+                    pass
 
     def test_native_indexeddb_isolation_expiry_and_concurrent_budget(self):
         context = self.browser.new_context()
