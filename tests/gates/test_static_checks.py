@@ -2092,6 +2092,20 @@ class StaticGateTests(unittest.TestCase):
         self.assertEqual(original.count('reader-djvu-range\\.mjs'), 1)
         gate.write_text(original.replace('reader-djvu-range\\.mjs', 'missing-djvu-range\\.mjs'))
         self.assert_check(self.run_check(*check), False, message)
+        # A missing or forged worker coverage row, or any higher minimum,
+        # cannot make the new module-level quality gate appear to pass.
+        gate.write_text(original)
+        for minimum in ('[100.01, 93, 100]', '[100, 101, 100]', '[100, 93, 100.01]'):
+            self.assertEqual(original.count('[100, 93, 100]'), 1)
+            gate.write_text(original.replace('[100, 93, 100]', minimum))
+            self.assert_check(self.run_check(*check), False, message)
+        self.assertEqual(original.count('reader-djvu-worker\\.mjs'), 1)
+        gate.write_text(original.replace('reader-djvu-worker\\.mjs', 'missing-djvu-worker\\.mjs'))
+        self.assert_check(self.run_check(*check), False, message)
+        gate.write_text(original)
+        worker.write_text(source + '\nconsole.log("end of coverage report");\n')
+        self.assert_check(self.run_check(*check), False, message)
+        worker.write_text(source)
 
     def test_reader_lifecycle_coverage_gate_fails_closed(self):
         paths = ["static/reader/core/reader-lifecycle.mjs", "scripts/reader/check_reader_lifecycle_coverage.mjs",
@@ -2667,7 +2681,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
-                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
+                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
                     "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
@@ -2704,6 +2718,40 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
             source.write_text(source.read_text() + '\n/** @param {string[]} values @returns {string} */ function probe(values) { return values[0]; }\n')
             self.assert_check(self.run_check(*production_check), False, "TS2322")
             shutil.copyfile(ROOT / name, source)
+
+    def test_djvu_worker_strict_signatures_and_message_boundary(self):
+        module = ROOT / "static/reader/pdf/reader-djvu-worker.mjs"
+        source = self.root / "static/djvu-worker-usage.mjs"
+        config = self.root / "jsconfig.json"
+        options = load_type_config("jsconfig.reader-exact.json")["compilerOptions"]
+        config.write_text(json.dumps({"compilerOptions": options, "files": [str(module), str(source)]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        prefix = (f'import {{createDjvuWorkerAdapter}} from "{module.as_posix()}";\n'
+                  'const adapter=createDjvuWorkerAdapter("/worker");\n')
+        valid = ('adapter.prepare(); adapter.open(new ArrayBuffer(4)); adapter.page(1); '
+                 'adapter.geometry(1); adapter.text(1); adapter.outline(); adapter.stats();\n'
+                 '/** @type {Promise<number>} */ const opened=adapter.open(new ArrayBuffer(4));\n')
+        source.write_text(prefix + valid)
+        self.assert_check(self.run_check(*check), True, "")
+        for invalid in ('adapter.page("1");', 'adapter.open("bytes");',
+                        'adapter.prepare(42);', 'adapter.stats().then(value => value.notAStatistic);',
+                        '/** @type {Promise<string>} */ const count=adapter.open(new ArrayBuffer(4));',
+                        'createDjvuWorkerAdapter("/worker", {rangeReader:{total:10}});'):
+            with self.subTest(invalid=invalid):
+                source.write_text(prefix + invalid + "\n")
+                self.assert_check(self.run_check(*check), False, "error TS")
+        local = self.root / "static/reader/pdf/reader-djvu-worker.mjs"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        original = module.read_text()
+        local.write_text(original)
+        config.write_text(json.dumps({"compilerOptions": options, "files": [str(local)]}))
+        self.assert_check(self.run_check(*check), True, "")
+        annotation = '/** @param {unknown} value @returns {value is DjvuTextZone} */'
+        self.assertEqual(original.count(annotation), 1)
+        local.write_text(original.replace(annotation, ''))
+        self.assert_check(self.run_check(*check), False, "TS7006")
+        local.write_text(original + "\nfunction uncheckedDecoderMessage(value) { return value; }\n")
+        self.assert_check(self.run_check(*check), False, "TS7006")
 
     def test_static_globals_match_their_runtime_implementations(self):
         # Compile the actual classic scripts with their public declarations so
