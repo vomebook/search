@@ -6,7 +6,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const root = process.cwd();
-const modulePath = path.join(root, 'static/search/height-index.js');
+const modulePath = path.join(root, 'static/search/domain/height-index.js');
 const source = fs.readFileSync(modulePath, 'utf8');
 const context = vm.createContext({});
 vm.runInContext(source, context, {filename: modulePath});
