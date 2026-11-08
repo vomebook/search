@@ -2,6 +2,7 @@ const PACKED_LIMIT = 64 * 1024 * 1024;
 const TEXT_LIMIT = 256 * 1024 * 1024;
 const MAX_BIGRAM_FILTER_BYTES = 32 * 1024;
 import {countMatches, resultPage, aborted, PAGE_SIZE} from "../reader-chapter-search-core.mjs";
+import {isSearchIndexProxyURL} from "../reader-chapter-search-proxy-url.mjs";
 
 async function readBounded(stream, limit, signal) {
   const reader = stream.getReader(), chunks = [];
@@ -60,14 +61,6 @@ export function validateIndex(data, chapters, textProfile) {
 }
 
 
-export function isSearchIndexProxyURL(url, origin) {
-  if (url.origin !== origin || url.username || url.password || url.hash) return false;
-  if (url.pathname === "/api/reader-content") return true;
-  return url.pathname === "/api/reader-bucket-resource" &&
-    url.searchParams.getAll("path").length === 1 &&
-    [...url.searchParams.keys()].every(key => key === "path") &&
-    /^chapters\/ebook\/(?:epub|mobi|azw3|fb2|chm)\/[0-9a-f]{64}\/[0-9a-f]{16}\/epub-search-index\.json\.gz$/.test(url.searchParams.get("path"));
-}
 
 let configuration, indexPromise, chapters, active = 0, session, loadController;
 async function loadIndex() {

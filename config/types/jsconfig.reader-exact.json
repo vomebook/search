@@ -20,6 +20,7 @@
     "../../static/reader/formats/reader-media-format.mjs",
     "../../static/reader/formats/reader-text-format.mjs",
     "../../static/reader/search/reader-pdf-book-search.mjs",
+    "../../static/reader/search/reader-chapter-search-proxy-url.mjs",
     "../../static/reader/formats/reader-chapter-repository.js",
     "../../static/reader/formats/reader-format-adapters.js",
     "../../static/reader/ui/reader-document-styles.mjs",
