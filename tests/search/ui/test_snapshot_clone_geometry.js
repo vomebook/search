@@ -5,7 +5,7 @@ const assert = require('assert');
 const {test, run} = require('../../support/test_harness');
 const {searchTestProjects} = require('../../support/search_test_projects');
 
-function fixture(source) {
+function fixture(source, root) {
   const results = new Array(5000);
   const records = Array.from({length:5000}, (_, i) => ({Id:String(i), File:'book-'+i, Extension:'txt', Folder:['docs']}));
   const task = {results, snapshot:{results:records}};
@@ -22,7 +22,11 @@ function fixture(source) {
   c.setResultScrollTop=value=>{c.top=value;c.writes++;};
   c.refreshVirtualAfterAppend=update=>{assert.strictEqual(update,false);c.refreshes++;c.ensureHeightTree();};
   vm.createContext(c);
-  for(const name of ['cloneSearchResult','ensureHeightTree','fenwickAdd','fenwickSum',
+  const heightIndex = path.join(root, 'static/search/height-index.js');
+  const extracted = source.includes('VoiceOfMLSearchHeightIndex.');
+  if (extracted) vm.runInContext(fs.readFileSync(heightIndex, 'utf8'), c, {filename: heightIndex});
+  const helpers = extracted ? [] : ['fenwickAdd', 'fenwickSum'];
+  for(const name of ['cloneSearchResult','ensureHeightTree',...helpers,
     'getVirtualOffset','findVirtualIndex','materializeSnapshotRange','applySnapshotCloneHeights','getSelectedFiles']) {
     const match=source.match(new RegExp('^function '+name+'\\([^]*?^}', 'm'));
     assert(match,name);vm.runInContext(match[0],c);
@@ -35,7 +39,7 @@ function fixture(source) {
 for(const {name:project,root} of searchTestProjects()) {
   const source=fs.readFileSync(path.join(root,'static/app.js'),'utf8');
   test(project+' cached prefix heights keep the same row and offset with one batch compensation',()=>{
-    const {c,task,cache,oracleOffset}=fixture(source);
+    const {c,task,cache,oracleOffset}=fixture(source, root);
     c.ensureHeightTree();const tree=c.VSCROLL.heightTree;
     cache(150,132);cache(200,160);
     c.materializeSnapshotRange(task,150,201,true);
@@ -50,21 +54,21 @@ for(const {name:project,root} of searchTestProjects()) {
     task.results[150].Folder.push('changed');assert.deepStrictEqual(task.snapshot.results[150].Folder,['docs']);
   });
   test(project+' heights after the anchor do not move it and shrinking anchor rows clamp the offset',()=>{
-    const {c,task,cache,oracleOffset}=fixture(source);
+    const {c,task,cache,oracleOffset}=fixture(source, root);
     cache(4500,200);c.materializeSnapshotRange(task,4500,4501);
     assert.strictEqual(c.top,400011);assert.strictEqual(c.writes,0);
     c.top=400080;cache(4000,50);c.materializeSnapshotRange(task,4000,4001);
     assert.strictEqual(c.top,oracleOffset(4000)+49);assert.strictEqual(c.findVirtualIndex(c.top),4000);
   });
   test(project+' file actions materialize complete selections and compensate cached heights once',()=>{
-    const {c,cache,oracleOffset}=fixture(source);
+    const {c,cache,oracleOffset}=fixture(source, root);
     cache(150,132);cache(200,160);c.selectedIndices={150:true,200:true};
     const files=c.getSelectedFiles();
     assert.deepStrictEqual(Array.from(files,f=>[f.filename,f.link]),[['book-150.txt','link-150'],['book-200.txt','link-200']]);
     assert.strictEqual(c.top,oracleOffset(4000)+11);assert.strictEqual(c.refreshes,1);assert.strictEqual(c.writes,1);
   });
   test(project+' old layouts and cancelled result owners cannot change active geometry',()=>{
-    const {c,task,cache}=fixture(source);
+    const {c,task,cache}=fixture(source, root);
     cache(150,132,'old-layout');c.materializeSnapshotRange(task,150,151);
     assert.strictEqual(c.refreshes,0);assert.strictEqual(c.VSCROLL.heights[150],undefined);
     cache(200,160);c.STATE.results=[];task.heightAnchor={index:4000,offset:11};
