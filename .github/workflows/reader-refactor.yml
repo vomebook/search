@@ -123,6 +123,7 @@ jobs:
           node tests/search/build/test_search_record_path_build.mjs
           node tests/reader/transport/test_reader_preload.js
           node tests/reader/chapter-search/test_reader_chapter_search.mjs
+          node scripts/reader/check_chapter_search_core_coverage.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
           node scripts/reader/check_reader_lifecycle_coverage.mjs
@@ -508,6 +509,7 @@ jobs:
         run: |
           node tests/reader/core/test_reader_architecture.js
           node tests/reader/chapter-search/test_reader_chapter_search.mjs
+          node scripts/reader/check_chapter_search_core_coverage.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
           node scripts/reader/check_reader_lifecycle_coverage.mjs

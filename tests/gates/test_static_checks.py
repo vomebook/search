@@ -2980,6 +2980,80 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         source.write_text(source.read_text() + f"\nfunction overlyComplex(value) {{ {choices} return 0; }}\n")
         self.assert_check(self.run_check(*check), False, "complexity")
 
+    def test_chapter_search_core_coverage_gate_fails_closed(self):
+        paths = ['static/reader/search/reader-chapter-search-core.mjs',
+                 'static/reader/search/workers/reader-chapter-search-worker.mjs',
+                 'scripts/reader/check_chapter_search_core_coverage.mjs', 'scripts/check_tap_contracts.mjs',
+                 'tests/reader/chapter-search/test_reader_chapter_search.mjs']
+        for name in paths:
+            target=self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name,target)
+        check=['node',paths[2]]
+        message='Chapter search core requires its passing contract and exactly one source row'
+        self.assert_check(self.run_check(*check),True,'reader-chapter-search-core.mjs |')
+        test=self.root / paths[-1];original=test.read_text()
+        marker='chapter search: complete counts, paging, literal matches, Unicode boundaries, cancellation and index identity passed'
+        self.assertEqual(original.count(marker),1)
+        test.write_text(original.replace(marker,'renamed completion marker'))
+        self.assert_check(self.run_check(*check),False,message)
+        test.write_text(original + "\nthrow new Error('injected chapter core failure');\n")
+        self.assert_check(self.run_check(*check),False,'injected chapter core failure')
+        test.unlink();self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        test.write_text(original + '\nconsole.log("end of coverage report");\n')
+        self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        gate=self.root / paths[2];gate_original=gate.read_text()
+        for minimum in ('[100.01, 96, 100]', '[100, 101, 100]', '[100, 96, 100.01]'):
+            self.assertEqual(gate_original.count('[100, 96, 100]'),1)
+            gate.write_text(gate_original.replace('[100, 96, 100]',minimum))
+            self.assert_check(self.run_check(*check),False,message)
+        self.assertEqual(gate_original.count('reader-chapter-search-core\\.mjs'),1)
+        gate.write_text(gate_original.replace('reader-chapter-search-core\\.mjs','missing-chapter-search-core\\.mjs'))
+        self.assert_check(self.run_check(*check),False,message)
+
+    def test_chapter_search_core_strict_signature_complexity_and_build(self):
+        module=ROOT / 'static/reader/search/reader-chapter-search-core.mjs'
+        source=self.root / 'static/chapter-core-usage.mjs'
+        config=self.root / 'jsconfig.json'
+        project=load_type_config('jsconfig.strict.json')
+        self.assertIn('static/reader/search/reader-chapter-search-core.mjs',project['files'])
+        self.assertIn('static/reader/search/reader-chapter-search-core.mjs',load_type_config('jsconfig.check.json')['files'])
+        config.write_text(json.dumps({'compilerOptions':project['compilerOptions'],'files':[str(module),str(source)]}))
+        check=['node',ROOT / 'node_modules/typescript/bin/tsc','--project',config]
+        prefix=(f'import {{countMatches, resultPage, scanText, queryBigramFilters}} from "{module.as_posix()}";\n'
+                'const chapters=[{index:1,title:"t",path:"1",text:"hello"}];\n')
+        source.write_text(prefix + 'countMatches(chapters,"a",()=>true).then(value=>value.total);\n'
+                          'resultPage(chapters,"a",[1],0,()=>true).then(rows=>rows[0].snippet.text);\n'
+                          'scanText("a","a",(offset,length)=>offset+length);\n')
+        self.assert_check(self.run_check(*check),True,'')
+        for bad in ('countMatches(chapters,42,()=>true);','resultPage(chapters,"a",[1],"0",()=>true);',
+                    'scanText("a","a",42);','queryBigramFilters(null);',
+                    'countMatches(chapters,"a",()=>true).then(value=>value.notAField);'):
+            with self.subTest(invalid=bad):
+                source.write_text(prefix+bad+'\n');self.assert_check(self.run_check(*check),False,'error TS')
+        local=self.root / 'static/reader/search/reader-chapter-search-core.mjs'
+        local.parent.mkdir(parents=True,exist_ok=True)
+        original=module.read_text();local.write_text(original)
+        config.write_text(json.dumps({'compilerOptions':project['compilerOptions'],'files':[str(local)]}))
+        self.assert_check(self.run_check(*check),True,'')
+        annotation='/** @param {string} gram */'
+        self.assertEqual(original.count(annotation),1);local.write_text(original.replace(annotation,''))
+        self.assert_check(self.run_check(*check),False,'TS7006')
+        local.write_text(original)
+        lint=['node',ROOT / 'node_modules/eslint/bin/eslint.js','--config',ROOT / 'eslint.config.mjs',
+              local,'--rule','complexity: [error, 10]','--max-warnings','0']
+        self.assert_check(self.run_check(*lint),True,'')
+        choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
+        local.write_text(original + f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
+        self.assert_check(self.run_check(*lint),False,'complexity')
+        listing=subprocess.check_output(['node','-e',
+            'const r=require(process.argv[1]);console.log(JSON.stringify({files:r.buildFiles("github"),runtime:r.runtimePaths("/static/"),shell:r.shellAssets("/static/")}));',
+            ROOT / 'static/reader-resources.js'],cwd=ROOT,text=True,timeout=30)
+        paths=json.loads(listing);file='reader/search/reader-chapter-search-core.mjs'
+        self.assertEqual(paths['files'].count(file),1)
+        self.assertLess(paths['files'].index(file),paths['files'].index('reader/search/workers/reader-chapter-search-worker.mjs'))
+        self.assertIn('/static/'+file,paths['runtime']);self.assertNotIn('/static/'+file,paths['shell'])
+
     def test_djvu_loader_strict_signature_and_complexity(self):
         module=ROOT / 'static/reader/pdf/reader-djvu-loader.mjs'
         source=self.root / 'static/djvu-loader-usage.mjs'
