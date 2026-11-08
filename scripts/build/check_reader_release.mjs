@@ -225,7 +225,7 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/formats/reader-format-adapters.js",
     "reader/core/reader-security.js",
     "reader/pdf/reader-v3.mjs", "reader/pdf/reader-djvu-engine-worker.mjs", "reader/pdf/reader-djvu-worker.mjs", "reader/pdf/reader-djvu-scheduler.mjs",
-    "reader/pdf/reader-djvu-adapter.mjs", "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/scalar/djvu_rs.js", "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/simd128/djvu_rs.js",
+    "reader/pdf/reader-djvu-adapter.mjs", "reader/pdf/reader-djvu-identity.mjs", "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/scalar/djvu_rs.js", "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/simd128/djvu_rs.js",
     "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/scalar/djvu_rs_bg.wasm", "vendor/djvu-rs-reader/release-a03526f445b4-a99c0e299e95/simd128/djvu_rs_bg.wasm",
     "vendor/djvu-rs-reader/strict-source.zip", "vendor/djvu-rs-reader/LICENSE.txt", "vendor/djvu-rs-reader/NOTICE.txt",
     "vendor/djvu-rs-reader/THIRD_PARTY_NOTICES.txt",

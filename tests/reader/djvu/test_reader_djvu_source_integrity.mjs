@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash, webcrypto} from 'node:crypto';
 import {openDirectDjvu, openNativeDjvu} from '../../../static/reader/pdf/reader-djvu-loader.mjs';
+import {resolveDjvuSource} from '../../../static/reader/pdf/reader-djvu-identity.mjs';
 
 Object.defineProperty(globalThis, 'crypto', {configurable: true, value: webcrypto});
 globalThis.matchMedia = () => ({matches: false});
@@ -174,5 +175,52 @@ for (const invalid of [
   const opening=openNativeDjvu(value);await rangeWaiting;
   await assert.rejects(opening,/DJVU_WORKER_FAILED/);
   assert.equal(rangeCancelled,true);assert.equal(instance.terminated,true);
+}
+// Source identity is independently fail-closed before range/full-source I/O.
+{
+  const revision='a'.repeat(40),source=url.replace(revision,'main');
+  const make=(reply,status=200)=>{
+    const calls=[];
+    return {calls,context:{sourceUrl:source,READER_PROXY_TIMEOUT_MS:7654,readerDownloadApiUrl:path=>'/proxy'+path,
+      fetchWithReaderTimeout:async(endpoint,timeout,options)=>{calls.push({endpoint,timeout,signal:options.signal});
+        return new Response(typeof reply==='string'?reply:JSON.stringify(reply),{status})}}};
+  };
+  const signal=new AbortController().signal;
+  const good=make({url,revision});const resolved=await resolveDjvuSource(good.context,source,signal);
+  assert.equal(resolved.href,url);assert.equal(good.calls.length,1);assert.equal(good.calls[0].timeout,7654);
+  assert.strictEqual(good.calls[0].signal,signal);assert.ok(good.calls[0].endpoint.startsWith('/proxy/api/reader-source-revision?url='));
+  const failed=make({},503);await assert.rejects(resolveDjvuSource(failed.context,source,signal),/DJVU_SOURCE_REVISION_HTTP_503/);
+  const malformed=make('{');await assert.rejects(resolveDjvuSource(malformed.context,source,signal),SyntaxError);
+  for(const reply of [null,{}, {url:5,revision}, {url,revision:5}, {url,revision:'b'.repeat(40)},
+    {url:url.replace('huggingface.co','evil.example'),revision}, {url:url+'?download=1',revision},
+    {url:url+'#fragment',revision}, {url:url.replace('/book.djvu','/other.djvu'),revision},
+    {url:'https://u:p@huggingface.co'+new URL(url).pathname,revision}]) {
+    const check=make(reply);await assert.rejects(resolveDjvuSource(check.context,source,signal),/DJVU_SOURCE_REVISION_INVALID/);
+  }
+  for(const badSource of [source+'?download=1',source+'#fragment',
+    source.replace('https://','https://u:p@'),source.replace('huggingface.co','evil.example')]) {
+    const check=make({url,revision});await assert.rejects(resolveDjvuSource(check.context,badSource,signal),/DJVU_SOURCE_REVISION_INVALID/);
+  }
+  const mirrored=make({url,revision});assert.equal((await resolveDjvuSource(mirrored.context,source.replace('huggingface.co','hf-mirror.com'),signal)).href,url);
+  const raw=make({url,revision});assert.equal((await resolveDjvuSource(raw.context,source.replace('/resolve/','/raw/'),signal)).href,url);
+  const fast=make({url,revision});assert.equal((await resolveDjvuSource(fast.context,url,signal)).href,url);assert.equal(fast.calls.length,0);
+  for(const suffix of ['bad%2Fbook.djvu','bad%5Cbook.djvu','bad%ZZbook.djvu','bad%2523book.djvu','bad%3Fbook.djvu',
+    'bad%23book.djvu','bad%00book.djvu','folder//book.djvu']) {
+    const bad=url.replace('book.djvu',suffix);const check=make({url,revision});
+    await resolveDjvuSource(check.context,bad,signal).catch(()=>{});
+    assert.equal(check.calls.length,1,`unsafe fast-path filename ${suffix} must use server validation`);
+  }
+  // WHATWG URL normalizes literal dot segments before this policy sees them.
+  // The resulting pinned URL is the same normalized document, not a raw path.
+  for (const suffix of ['folder/./book.djvu','folder/../book.djvu']) {
+    const normalized=url.replace('book.djvu',suffix);const check=make({url,revision});
+    assert.equal((await resolveDjvuSource(check.context,normalized,signal)).href,new URL(normalized).href);
+    assert.equal(check.calls.length,0);
+  }
+  const wrongRevision=make({url:url.replace(revision,'b'.repeat(40)),revision:'b'.repeat(40)});
+  await assert.rejects(resolveDjvuSource(wrongRevision.context,url.replace('huggingface.co','hf-mirror.com'),signal),/DJVU_SOURCE_REVISION_INVALID/);
+  const relative=make({url:'/not-an-absolute-url',revision});await assert.rejects(resolveDjvuSource(relative.context,source,signal),TypeError);
+  const offline=make({url,revision});offline.context.fetchWithReaderTimeout=async()=>{throw new DOMException('cancelled','AbortError')};
+  await assert.rejects(resolveDjvuSource(offline.context,source,signal),{name:'AbortError'});
 }
 console.log('DjVu dataset source size, hash, cancellation and map-failure guards passed');
