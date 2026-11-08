@@ -77,8 +77,33 @@ const workerComplete = worker.status === 0 && hasPassingTapContracts(worker.stdo
   workerLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
   ['# start of coverage report', '# end of coverage report'].every(marker => workerLines.filter(line => line === marker).length === 1) &&
   workerRows.length === 1 && workerRows[0].every((value, index) => value >= workerMinimum[index]);
+// Gate the scheduler separately: this measures only queue/cache behavior, not
+// the whole Reader. Keep the original range and worker thresholds unchanged.
+const schedulerMinimum = [100, 92, 100];
+const schedulerName = 'tests/reader/djvu/test_reader_djvu_scheduler.mjs';
+const scheduler = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap',
+  '--experimental-test-coverage', '--test-coverage-include=**/static/reader/pdf/reader-djvu-scheduler.mjs',
+  ...schedulerMinimum.map((value, index) => `--test-coverage-${['lines', 'branches', 'functions'][index]}=${value}`),
+  schedulerName], {encoding: 'utf8'});
+if (scheduler.stdout) process.stdout.write(scheduler.stdout);
+if (scheduler.stderr) process.stderr.write(scheduler.stderr);
+if (scheduler.error) throw scheduler.error;
+const schedulerLines = (scheduler.stdout || '').split(/\r?\n/);
+const schedulerRows = schedulerLines.flatMap(line => {
+  const match = /^\s*#\s*reader-djvu-scheduler\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
+  return match ? [match.slice(1).map(Number)] : [];
+});
+const schedulerSummaries = ['1..1', '# tests 1', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
+const schedulerComplete = scheduler.status === 0 && hasPassingTapContracts(scheduler.stdout || '', [{name: schedulerName,
+  marker:'DjVu scheduler cancellation, ordering, deduplication, LRU and closure passed'}]) &&
+  schedulerSummaries.every(summary => schedulerLines.filter(line => line === summary).length === 1) &&
+  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
+    schedulerLines.filter(line => line.startsWith(prefix)).length === 1) &&
+  schedulerLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  ['# start of coverage report', '# end of coverage report'].every(marker => schedulerLines.filter(line => line === marker).length === 1) &&
+  schedulerRows.length === 1 && schedulerRows[0].every((value, index) => value >= schedulerMinimum[index]);
 if (result.status !== 0 || !complete || !hasPassingTapContracts(result.stdout || '', required) ||
-    !boundaryComplete || !workerComplete ||
+    !boundaryComplete || !workerComplete || !schedulerComplete ||
     !summaries.every(summary => lines.filter(line => line === summary).length === 1) ||
     ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
       lines.filter(line => line.startsWith(prefix)).length !== 1) ||

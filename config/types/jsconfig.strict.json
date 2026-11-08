@@ -42,6 +42,7 @@
     "../../static/reader-resources.js",
     "../../static/reader/pdf/pdf-worker-wrapper.mjs",
     "../../static/reader/pdf/reader-djvu-worker.mjs",
+    "../../static/reader/pdf/reader-djvu-scheduler.mjs",
     "../../static/reader/pdf/reader-djvu-range.mjs",
     "../../static/reader/pdf/reader-djvu-engine-worker.mjs",
     "../../typings/reader-globals.d.ts"
