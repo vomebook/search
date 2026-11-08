@@ -108,11 +108,13 @@ class ShardRunnerTests(unittest.TestCase):
         self.assertEqual(hf['project'], 'hf')
         g = {x for group in gh['groups'] for x in group}
         h = {x for group in hf['groups'] for x in group}
-        self.assertEqual(len(g), 96)
-        self.assertEqual(len(h), 96)
+        self.assertEqual(len(g), 97)
+        self.assertEqual(len(h), 97)
         for added in ('test_search_folder_selection_coverage_gate_fails_closed', 'test_search_folder_selection_declaration_matches_runtime', 'test_search_folder_selection_rejects_wrong_argument_and_return_types'):
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, g)
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, h)
+        self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_djvu_worker_cyclomatic_complexity_cap', g)
+        self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_djvu_worker_cyclomatic_complexity_cap', h)
         self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_djvu_worker_strict_signatures_and_message_boundary', g)
         self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_djvu_worker_strict_signatures_and_message_boundary', h)
         self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_strict_service_worker_project_rejects_regressions', g)

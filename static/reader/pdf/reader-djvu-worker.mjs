@@ -5,6 +5,8 @@
 /** @typedef {{id: number, resolve(value: Record<string, unknown>): void, reject(reason?: unknown): void}} DjvuTask */
 /** @typedef {{t: string, x: number, y: number, w: number, h: number}} DjvuTextZone */
 /** @typedef {{title: string, depth: number, page: number}} DjvuOutlineEntry */
+/** @typedef {{width: number, height: number, dpi: number, rotation: number}} DjvuGeometry */
+/** @typedef {{rangeId: number, offset: number, length: number}} DjvuRangeRequest */
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
 function isRecord(value) { return value !== null && (typeof value === 'object' || typeof value === 'function'); }
@@ -15,6 +17,34 @@ function isNonNegativeFinite(value) { return typeof value === 'number' && Number
 /** @param {unknown} value @param {number} min @param {number} max @returns {value is number} */
 function isIntegerInRange(value, min, max) {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max;
+}
+
+/** @param {Record<string, unknown>} value @param {number} minDpi @param {number} maxDpi @param {number} maxPixels
+ * @returns {value is Record<string, unknown> & DjvuGeometry} */
+function isGeometry(value, minDpi, maxDpi, maxPixels) {
+  const {width, height, dpi, rotation} = value;
+  return isIntegerInRange(width, 1, Number.MAX_SAFE_INTEGER) && isIntegerInRange(height, 1, Number.MAX_SAFE_INTEGER) &&
+    isIntegerInRange(dpi, minDpi, maxDpi) && typeof rotation === 'number' && [0,90,180,270].includes(rotation) &&
+    !(width * height > maxPixels);
+}
+
+/** @param {unknown} offset @param {unknown} length @param {number} total */
+function isRangeWindow(offset, length, total) {
+  return isIntegerInRange(offset, 0, Number.MAX_SAFE_INTEGER) && isIntegerInRange(length, 1, 65536) && !(offset + length > total);
+}
+
+/** @param {Record<string, unknown>} data @param {number} total
+ * @returns {data is Record<string, unknown> & DjvuRangeRequest} */
+function isRangeRequest(data, total) {
+  return isIntegerInRange(data.rangeId, 1, Number.MAX_SAFE_INTEGER) && isRangeWindow(data.offset, data.length, total);
+}
+
+/** @param {unknown} error */
+function rangeErrorCode(error) {
+  const details = isRecord(error) ? error : null;
+  if (typeof details?.code === 'string' && /^DJVU_[A-Z_]+$/.test(details.code)) return details.code;
+  if (typeof details?.message === 'string' && /^DJVU_[A-Z_]+$/.test(details.message)) return details.message;
+  return 'DJVU_RANGE_FAILED';
 }
 
 /** @param {unknown} value @returns {value is DjvuTextZone} */
@@ -52,36 +82,32 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
   }
   worker.onerror = event => close(Object.assign(new Error('DJVU_WORKER_FAILED'), { cause: event.message }));
   worker.onmessageerror = () => close(new Error('DJVU_WORKER_MESSAGE_FAILED'));
+  /** @param {Record<string, unknown>} data */
+  function handleRange(data) {
+    const reader = rangeReader;
+    if (!reader || !active || data.id !== active.id || outstandingRange || !isRangeRequest(data, reader.total)) {
+      close(new Error('DJVU_WORKER_PROTOCOL'));return;
+    }
+    const {id, rangeId, offset, length} = data;
+    outstandingRange=rangeId;
+    Promise.resolve().then(()=>reader.read(offset,length)).then(bytes=>{
+      if (closed || active?.id !== id) return;
+      const buffer=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
+      outstandingRange=0;
+      worker.postMessage({id,operation:'range-result',rangeId,ok:true,bytes:buffer},[buffer]);
+    }).catch(error=>{
+      if (closed || active?.id !== id) return;
+      const code=rangeErrorCode(error);
+      outstandingRange=0;
+      worker.postMessage({id,operation:'range-result',rangeId,ok:false,error:code});
+      if (reader.failure) close(reader.failure);
+    });
+  }
   worker.onmessage = event => {
     /** @type {unknown} */
     const data = event.data;
     if (!isRecord(data)) { close(new Error('DJVU_WORKER_PROTOCOL')); return; }
-    if (data.operation === 'range') {
-      const reader = rangeReader;
-      const {id, rangeId, offset, length} = data;
-      if (!reader || !active || id !== active.id || outstandingRange || typeof rangeId !== 'number' || !Number.isSafeInteger(rangeId) || rangeId < 1 ||
-          typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 ||
-          typeof length !== 'number' || !Number.isSafeInteger(length) || length < 1 ||
-          length > 65536 || offset+length > reader.total) {
-        close(new Error('DJVU_WORKER_PROTOCOL'));return;
-      }
-      outstandingRange=rangeId;
-      Promise.resolve().then(()=>reader.read(offset,length)).then(bytes=>{
-        if (closed || active?.id !== id) return;
-        const buffer=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
-        outstandingRange=0;
-        worker.postMessage({id,operation:'range-result',rangeId,ok:true,bytes:buffer},[buffer]);
-      }).catch(error=>{
-        if (closed || active?.id !== id) return;
-        const details = isRecord(error) ? error : null;
-        const code = typeof details?.code === 'string' && /^DJVU_[A-Z_]+$/.test(details.code) ? details.code :
-          typeof details?.message === 'string' && /^DJVU_[A-Z_]+$/.test(details.message) ? details.message : 'DJVU_RANGE_FAILED';
-        outstandingRange=0;
-        worker.postMessage({id,operation:'range-result',rangeId,ok:false,error:code});
-        if (reader.failure) close(reader.failure);
-      });
-      return;
-    }
+    if (data.operation === 'range') { handleRange(data); return; }
     if (!active || data.id !== active.id) { close(new Error('DJVU_WORKER_PROTOCOL')); return; }
     const task = active;
     active = null;
@@ -92,13 +118,17 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
   };
   /** @param {number} id */
   function clearTask(id) { if (active?.id === id) active = null; }
+  /** @param {AbortSignal} [signal] */
+  function checkAvailable(signal) {
+    if (closed) throw fatal || abort();
+    if (signal?.aborted) { const reason = signal.reason || abort(); close(reason); throw reason; }
+    if (active) throw new Error('DJVU_ADAPTER_CONCURRENT_TASK');
+  }
   /** @param {string} operation @param {Record<string, unknown>} [data]
    * @param {{signal?: AbortSignal | undefined, transfer?: Transferable[]}} [options] */
   async function request(operation, data = {}, options = {}) {
     const { signal, transfer = [] } = options;
-    if (closed) throw fatal || abort();
-    if (signal?.aborted) { const reason = signal.reason || abort(); close(reason); throw reason; }
-    if (active) throw new Error('DJVU_ADAPTER_CONCURRENT_TASK');
+    checkAvailable(signal);
     const id = ++sequence;
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
@@ -152,21 +182,17 @@ export function createDjvuWorkerAdapter(workerUrl, { maxPixels = 50_000_000, tim
   async function page(number, signal) {
     if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
     const value = await request('page', { page: number }, { signal });
-    const { width, height, dpi, rotation, pixels } = value;
-    if (typeof width !== 'number' || typeof height !== 'number' || typeof dpi !== 'number' || typeof rotation !== 'number' ||
-        ![width, height, dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 1 ||
-        width * height > maxPixels || ![0, 90, 180, 270].includes(rotation) ||
-        !(pixels instanceof ArrayBuffer) || pixels.byteLength !== width * height * 4)
-      throw new Error('DJVU_PAGE_DECODE_INVALID');
+    if (!isGeometry(value, 1, Number.MAX_SAFE_INTEGER, maxPixels) || !(value.pixels instanceof ArrayBuffer) ||
+        value.pixels.byteLength !== value.width * value.height * 4) throw new Error('DJVU_PAGE_DECODE_INVALID');
+    const {width, height, dpi, rotation, pixels} = value;
     return { image: new ImageData(new Uint8ClampedArray(pixels), width, height), width, height, dpi, rotation };
   }
   /** @param {number} number */
   async function geometry(number) {
     if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) throw new Error('DJVU_PAGE_INVALID');
-    const {width, height, dpi, rotation} = await request('geometry', {page:number});
-    if (typeof width !== 'number' || typeof height !== 'number' || typeof dpi !== 'number' || typeof rotation !== 'number' ||
-        ![width,height,dpi].every(Number.isSafeInteger) || width < 1 || height < 1 || dpi < 25 || dpi > 6000 ||
-        width * height > maxPixels || ![0,90,180,270].includes(rotation)) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
+    const value = await request('geometry', {page:number});
+    if (!isGeometry(value, 25, 6000, maxPixels)) throw new Error('DJVU_PAGE_GEOMETRY_INVALID');
+    const {width,height,dpi,rotation} = value;
     return {width,height,dpi,rotation};
   }
   /** @param {number} number */
