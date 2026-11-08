@@ -108,14 +108,18 @@ class ShardRunnerTests(unittest.TestCase):
         self.assertEqual(hf['project'], 'hf')
         g = {x for group in gh['groups'] for x in group}
         h = {x for group in hf['groups'] for x in group}
-        self.assertEqual(len(g), 110)
-        self.assertEqual(len(h), 110)
+        self.assertEqual(len(g), 112)
+        self.assertEqual(len(h), 112)
         for added in ('test_search_folder_selection_coverage_gate_fails_closed', 'test_search_folder_selection_declaration_matches_runtime', 'test_search_folder_selection_rejects_wrong_argument_and_return_types',
                       'test_search_height_index_coverage_gate_fails_closed', 'test_search_height_index_declaration_matches_runtime', 'test_search_height_index_rejects_wrong_argument_and_return_types',
                       'test_search_stable_stringify_coverage_gate_fails_closed', 'test_search_stable_stringify_strict_type_contract',
                       'test_search_view_key_coverage_gate_fails_closed', 'test_search_view_key_strict_type_contract'):
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, g)
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, h)
+        self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_chapter_search_proxy_coverage_gate_fails_closed', g)
+        self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_chapter_search_proxy_coverage_gate_fails_closed', h)
+        self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_chapter_search_proxy_exact_signature_and_complexity', g)
+        self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_chapter_search_proxy_exact_signature_and_complexity', h)
         self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_chapter_search_core_coverage_gate_fails_closed', g)
         self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_chapter_search_core_coverage_gate_fails_closed', h)
         self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_chapter_search_core_strict_signature_complexity_and_build', g)
