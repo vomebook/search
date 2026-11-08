@@ -26,6 +26,7 @@
     "../../static/reader/pdf/pdf-first-page-worker-adapter.mjs",
     "../../static/reader/pdf/reader-djvu-worker.mjs",
     "../../static/reader/pdf/reader-djvu-scheduler.mjs",
+    "../../static/reader/pdf/reader-djvu-adapter.mjs",
     "../../static/reader/pdf/reader-pdf-range-cache.mjs",
     "../../static/reader/pdf/reader-pdf-range-hints.mjs",
     "../../static/reader/pdf/reader-pdf-text-store.mjs",

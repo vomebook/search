@@ -314,4 +314,96 @@ for(const type of ['error','messageerror','cancel']) {
   const worker=createDjvuWorkerAdapter('/worker',{rangeReader,createWorker});
   await assert.rejects(worker.openRange(),/DJVU_PAGE_COUNT_INVALID/);assert.equal(worker.closed,true);
 }
+// Document boundary: page-map integrity, rotations and caches must stay
+// correct while the PDF-shaped adapter receives typed but untrusted input.
+{
+  const valid=()=>({pages:[1,2].map(page=>({page,width:2.4,height:4.8,rotation:0,djvu:{pixels:[10,20],dpi:300}}))});
+  for(const pageMap of [{}, {pages:[]}, {pages:'bad'}]) {
+    const fake=fakeEngine();await assert.rejects(openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
+      bytes:bytes(),pageMap}),/DJVU_PAGE_MAP_MISMATCH/);assert.equal(fake.instance.terminated,true);
+  }
+  for(const change of [page=>page.page=2,page=>page.width=NaN,page=>page.height=0,
+    page=>page.rotation=45,page=>delete page.djvu,page=>page.djvu.pixels=[1],
+    page=>page.djvu.pixels=[10,0],page=>page.djvu.dpi=0,page=>page.width=99]) {
+    const pageMap=valid();change(pageMap.pages[0]);const fake=fakeEngine();
+    await assert.rejects(openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
+      bytes:bytes(),pageMap}),/DJVU_PAGE_MAP_INVALID/);assert.equal(fake.instance.terminated,true);
+  }
+  const sparse=valid();delete sparse.pages[0];const fake=fakeEngine();
+  await assert.rejects(openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
+    bytes:bytes(),pageMap:sparse}),/DJVU_PAGE_MAP_INVALID/);assert.equal(fake.instance.terminated,true);
+}
+{
+  const pageMap={pages:[1,2].map(page=>({page,width:4.8,height:2.4,rotation:90,djvu:{pixels:[10,20],dpi:300}}))};
+  const fake=fakeEngine({width:20,height:10,dpi:300,rotation:90});
+  const pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes(),pageMap});
+  const first=await pdf.getPage(1);assert.equal(first.getViewport({scale:2}).width,9.6);
+  const text=await first.getTextContent();assert.equal(text.items.map(item=>item.str).join(''),'Hello world\n');
+  await first.render({canvasContext:{canvas:{width:20,height:10},clearRect(){},drawImage(){}}}).promise;
+  pdf.destroy();
+}
+{
+  const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes()});
+  await pdf.getPage(1);await pdf.getPage(1);
+  assert.equal(fake.instance.sends.filter(({message})=>message.operation==='geometry').length,1,'second page lookup uses cached geometry');
+  await assert.rejects(pdf.getPage(0),/DJVU_PAGE_INVALID/);await assert.rejects(pdf.getPage(3),/DJVU_PAGE_INVALID/);
+  pdf.destroy();await assert.rejects(pdf.getPage(1),/DJVU_PAGE_INVALID/);
+}
+{
+  const fake=fakeEngine({count:130}),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
+    bytes:bytes(),cacheBytes:1024,cachePages:1});
+  for(let page=1;page<=130;page++) await pdf.getPage(page);
+  await pdf.getPage(1);
+  assert.equal(fake.instance.sends.filter(({message})=>message.operation==='geometry').length,131,
+    'geometry cache evicts least-recently-used pages at 128 entries');
+  pdf.destroy();
+}
+{
+  // Null canvas, cancellation and temporary raster ownership are explicit
+  // document API behaviors, not just type declarations.
+  const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes()});
+  const page=await pdf.getPage(1),viewport=page.getViewport({scale:2});
+  assert.deepEqual(viewport.convertToViewportPoint(1,2),[2,(4.8-2)*2]);
+  globalThis.OffscreenCanvas=class {getContext(){return null}};
+  await assert.rejects(page.render({canvasContext:{}}).promise,/DJVU_CANVAS_UNAVAILABLE/);
+  globalThis.OffscreenCanvas=class {getContext(){return {putImageData(){}}}};
+  const rendering=page.render({canvasContext:{canvas:{width:10,height:20},clearRect(){},drawImage(){}}});
+  rendering.cancel();await assert.rejects(rendering.promise,{name:'AbortError'});pdf.destroy();
+}
+{
+  // Real outline nesting must retain roots and correctly pop to a shallower
+  // parent; a genuine decoder failure is never mistaken for fallback.
+  const entries=[{title:'root',page:1,depth:0},{title:'child',page:2,depth:1},
+    {title:'sibling root',page:2,depth:0}];
+  const fake=fakeEngine({entries});const pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes()});
+  const outline=await pdf.getOutline();assert.equal(outline.length,2);assert.equal(outline[0].items[0].title,'child');
+  assert.equal(outline[1].title,'sibling root');pdf.destroy();
+  const failed=fakeEngine({outlineError:'DJVU_WORKER_FAILED'});let called=false;
+  const other=await openDjvuDocument({workerUrl:'/worker',createWorker:failed.createWorker,bytes:bytes(),
+    outlineFallback:async()=>{called=true;return {numPages:2,getOutline:async()=>[],destroy(){}}}});
+  await assert.rejects(other.getOutline(),/DJVU_WORKER_FAILED/);assert.equal(called,false);other.destroy();
+}
+{
+  // When the full fallback resolves after destroy, do not publish stale TOC;
+  // still destroy the fallback document exactly once.
+  const fake=fakeEngine({outlineError:'DJVU_LAZY_OUTLINE_UNCERTAIN'});let release,destroyed=0;
+  const pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes(),
+    outlineFallback:async()=>({numPages:2,getOutline:()=>new Promise(resolve=>release=resolve),destroy(){destroyed++}})});
+  const pending=pdf.getOutline();while(!release)await new Promise(resolve=>setTimeout(resolve,0));
+  pdf.destroy();release([{title:'stale',dest:[1],items:[]}]);assert.deepEqual(await pending,[]);assert.equal(destroyed,1);
+}
+{
+  // Exercise the HTML canvas fallback when OffscreenCanvas is absent, and
+  // release its backing bitmap even when drawing fails.
+  const previous=globalThis.OffscreenCanvas,oldDocument=globalThis.document;let bitmap,drawn=0;
+  try {
+    delete globalThis.OffscreenCanvas;
+    globalThis.document={createElement(name){assert.equal(name,'canvas');return bitmap={width:0,height:0,
+      getContext(){return {putImageData(){}}}}}};
+    const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,bytes:bytes()});
+    await (await pdf.getPage(1)).render({canvasContext:{canvas:{width:10,height:20},clearRect(){},drawImage(){drawn++}}}).promise;
+    assert.equal(drawn,1);assert.equal(bitmap.width,0);assert.equal(bitmap.height,0);pdf.destroy();
+  } finally {if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;
+    if(oldDocument===undefined)delete globalThis.document;else globalThis.document=oldDocument;}
+}
 console.log('DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed');

@@ -2264,6 +2264,13 @@ class StaticGateTests(unittest.TestCase):
         scheduler.write_text(scheduler_source + '\nconsole.log("end of coverage report");\n')
         self.assert_check(self.run_check(*check), False, message)
         scheduler.write_text(scheduler_source)
+        for minimum in ('[100.01, 90, 100]', '[99, 101, 100]', '[99, 90, 100.01]'):
+            self.assertEqual(original.count('[99, 90, 100]'), 1)
+            gate.write_text(original.replace('[99, 90, 100]', minimum))
+            self.assert_check(self.run_check(*check), False, message)
+        self.assertEqual(original.count('reader-djvu-adapter\\.mjs'), 1)
+        gate.write_text(original.replace('reader-djvu-adapter\\.mjs', 'missing-djvu-adapter\\.mjs'))
+        self.assert_check(self.run_check(*check), False, message)
 
     def test_reader_lifecycle_coverage_gate_fails_closed(self):
         paths = ["static/reader/core/reader-lifecycle.mjs", "scripts/reader/check_reader_lifecycle_coverage.mjs",
@@ -2839,7 +2846,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
-                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
+                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-djvu-adapter.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
                     "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
@@ -2889,6 +2896,51 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         choices = "".join(f"if (value === {n}) return {n}; " for n in range(11))
         source.write_text(source.read_text() + f"\nfunction overlyComplex(value) {{ {choices} return 0; }}\n")
         self.assert_check(self.run_check(*check), False, "complexity")
+
+    def test_djvu_document_adapter_strict_and_complexity(self):
+        module = ROOT / 'static/reader/pdf/reader-djvu-adapter.mjs'
+        source = self.root / 'static/djvu-document-usage.mjs'
+        config = self.root / 'jsconfig.json'
+        options = load_type_config('jsconfig.reader-exact.json')['compilerOptions']
+        config.write_text(json.dumps({'compilerOptions': options, 'files': [str(module), str(source)]}))
+        check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', config]
+        prefix = (f'import {{openDjvuDocument}} from "{module.as_posix()}";\n'
+                  'const pending=openDjvuDocument({workerUrl:"/worker",bytes:new ArrayBuffer(4)});\n')
+        valid = ('pending.then(async doc => { const page=await doc.getPage(1); '
+                 'const view=page.getViewport({scale:1}); view.convertToViewportPoint(1,2); '
+                 'page.getTextContent().then(content=>content.items.length); '
+                 'page.render({canvasContext:/** @type {CanvasRenderingContext2D} */ (/** @type {unknown} */ ({}))}).promise; '
+                 'doc.getOutline().then(outline=>outline[0]?.title); await doc.getPageIndex(1); doc.destroy(); });\n')
+        source.write_text(prefix + valid)
+        self.assert_check(self.run_check(*check), True, '')
+        for invalid in ('openDjvuDocument({workerUrl:42});', 'openDjvuDocument({workerUrl:"/worker",bytes:"bytes"});',
+                        'pending.then(doc => doc.getPage("1"));',
+                        'pending.then(doc => doc.getPage(1)).then(page => page.getViewport({scale:"2"}));',
+                        'pending.then(doc => doc.getPage(1)).then(page => page.render({canvasContext:42}));',
+                        'pending.then(doc => doc.getOutline()).then(outline => outline[0]?.nonsense);',
+                        'openDjvuDocument({workerUrl:"/worker",rangeReader:{total:10}});'):
+            with self.subTest(invalid=invalid):
+                source.write_text(prefix + invalid + '\n')
+                self.assert_check(self.run_check(*check), False, 'error TS')
+        target = self.root / 'static/reader/pdf/reader-djvu-adapter.mjs'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        original = module.read_text()
+        target.write_text(original)
+        for name in ('reader-djvu-worker.mjs','reader-djvu-scheduler.mjs'):
+            shutil.copyfile(ROOT / 'static/reader/pdf' / name, target.parent / name)
+        config.write_text(json.dumps({'compilerOptions': options, 'files': [str(target)]}))
+        self.assert_check(self.run_check(*check), True, '')
+        annotation='/** @param {DjvuMapPage} page @returns {[number, number]} */'
+        self.assertEqual(original.count(annotation),1)
+        target.write_text(original.replace(annotation,''))
+        self.assert_check(self.run_check(*check), False, 'TS7006')
+        target.write_text(original)
+        lint = ['node', ROOT / 'node_modules/eslint/bin/eslint.js', '--config', ROOT / 'eslint.config.mjs',
+                target, '--rule', 'complexity: [error, 10]', '--max-warnings', '0']
+        self.assert_check(self.run_check(*lint), True, '')
+        choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
+        target.write_text(original + f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
+        self.assert_check(self.run_check(*lint), False, 'complexity')
 
     def test_djvu_scheduler_strict_signatures_and_complexity(self):
         module = ROOT / 'static/reader/pdf/reader-djvu-scheduler.mjs'
