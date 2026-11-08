@@ -361,9 +361,19 @@ jobs:
       - uses: actions/checkout@v7
       - name: Checkout Hugging Face Search Space
         run: |
-          git clone https://huggingface.co/spaces/VoiceOfML/Search huggingface-search
-          git -C huggingface-search rev-parse HEAD
+          set -euo pipefail
+          url=https://huggingface.co/spaces/VoiceOfML/Search
+          refs=$(git ls-remote --exit-code --heads "$url" refs/heads/main)
+          [[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]
+          revision=${BASH_REMATCH[1]}
+          # Fetch only main and materialize its captured exact commit. Hub's
+          # multi-branch pack negotiation can fail before a checkout exists.
+          GIT_LFS_SKIP_SMUDGE=1 git clone --single-branch --branch main --no-checkout "$url" huggingface-search
+          GIT_LFS_SKIP_SMUDGE=1 git -C huggingface-search checkout --detach "$revision"
+          test "$(git -C huggingface-search rev-parse HEAD)" = "$revision"
           git -C huggingface-search merge-base --is-ancestor c7424ac3e549c9edf59f302e3809268c12bfe114 HEAD
+          git -C huggingface-search lfs pull
+          git -C huggingface-search lfs fsck
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11.17"
