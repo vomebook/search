@@ -587,7 +587,7 @@ test("Pages jobs pin the Ubuntu release and configure mirrors before apt", () =>
 });
 test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(workflow, /source-checks:[\s\S]*npm run check:static[\s\S]*scripts\/check_python_static\.py/);
-  assert.match(workflow, /python -B -m unittest -v tests\.gates\.test_static_shards_runner[\s\S]*python -B run_static_gate_shards\.py --project github[\s\S]*python -B -m unittest -v tests\.gates\.test_ci_ubuntu_mirror/);
+  assert.match(workflow, /python -B -m unittest -v tests\.gates\.test_static_shards_runner[\s\S]*python -B scripts\/ci\/run_static_gate_shards\.py --project github[\s\S]*python -B -m unittest -v tests\.gates\.test_ci_ubuntu_mirror/);
   assert.match(workflow, /deploy:\s*\n\s*needs: source-checks/);
   const deployJob = workflow.slice(workflow.indexOf("\n  deploy:\n"));
   assert.doesNotMatch(deployJob, /node tests\//);
