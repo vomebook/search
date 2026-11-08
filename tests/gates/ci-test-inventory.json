@@ -20,7 +20,7 @@
     },
     "tests/gates/test_static_checks.py": {
       "kind": "manifest",
-      "source": "static_gate_ids.github.json"
+      "source": "tests/gates/static_gate_ids.github.json"
     },
     "tests/gates/test_static_contract.js": {
       "kind": "direct",

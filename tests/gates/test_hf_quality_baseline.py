@@ -49,7 +49,7 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
             self.assertIn('name: Install Playwright system dependencies\n        timeout-minutes: 15', job)
         for job, project, following in ((github, 'github', 'python -B -m unittest -v tests.seo.test_seo_catalog'),
                                         (hf, 'hf', None)):
-            runner = f'python -B run_static_gate_shards.py --project {project}'
+            runner = f'python -B scripts/ci/run_static_gate_shards.py --project {project}'
             self.assertIn('python -B -m unittest -v tests.gates.test_static_shards_runner', job)
             self.assertEqual(job.count(runner), 1)
             self.assertNotIn('python -B -m unittest -v tests.gates.test_static_checks', job)

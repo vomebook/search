@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-import run_static_gate_shards as runner
+from scripts.ci import run_static_gate_shards as runner
 
 
 class ShardRunnerTests(unittest.TestCase):
@@ -70,7 +70,7 @@ class ShardRunnerTests(unittest.TestCase):
 
         groups = self.fixture('import os,pathlib,unittest,time\nclass C(unittest.TestCase):\n def ready(self):\n  (pathlib.Path(os.environ["READY_DIR"]) / self._testMethodName).touch()\n  while True: time.sleep(1)\n def test_a(self): self.ready()\n def test_b(self): self.ready()\n def test_c(self): self.ready()\n')
         driver = self.directory / 'driver.py'
-        driver.write_text('import run_static_gate_shards as r\nraise SystemExit(r.run_groups('+repr(groups)+', 30))\n')
+        driver.write_text('from scripts.ci import run_static_gate_shards as r\nraise SystemExit(r.run_groups('+repr(groups)+', 30))\n')
         env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(runner.ROOT), self.tmp.name)), READY_DIR=self.tmp.name)
         p = real([sys.executable, str(driver)], cwd=runner.ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
@@ -102,8 +102,8 @@ class ShardRunnerTests(unittest.TestCase):
     def test_project_and_manifests(self):
         import json
         root = self.directory
-        gh = json.loads((runner.ROOT / 'static_gate_ids.github.json').read_text())
-        hf = json.loads((runner.ROOT / 'static_gate_ids.hf.json').read_text())
+        gh = json.loads((runner.ROOT / 'tests/gates/static_gate_ids.github.json').read_text())
+        hf = json.loads((runner.ROOT / 'tests/gates/static_gate_ids.hf.json').read_text())
         self.assertEqual(gh['project'], 'github')
         self.assertEqual(hf['project'], 'hf')
         g = {x for group in gh['groups'] for x in group}
@@ -120,15 +120,16 @@ class ShardRunnerTests(unittest.TestCase):
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.test_pdf_text_store_targeted_mutants_fail_closed', ids)
         self.assertEqual({x.rsplit('.', 1)[1] for x in g - h}, {'test_pyright_strict_seo_gate_rejects_unknown_parameter'})
         self.assertEqual({x.rsplit('.', 1)[1] for x in h - g}, {'test_pyright_strict_gate_rejects_unknown_parameter'})
-        (root / 'static_gate_ids.github.json').write_text(json.dumps(gh))
-        (root / 'static_gate_ids.hf.json').write_text(json.dumps(hf))
+        (root / 'tests/gates').mkdir(parents=True)
+        (root / 'tests/gates/static_gate_ids.github.json').write_text(json.dumps(gh))
+        (root / 'tests/gates/static_gate_ids.hf.json').write_text(json.dumps(hf))
         self.assertEqual(runner.load_project('github', root), gh['groups'])
         with self.assertRaises(ValueError): runner.load_project('hf', root)
         (root / 'pyrightconfig.json').write_text('{}')
         with self.assertRaises(ValueError): runner.load_project('github', root)
         self.assertEqual(runner.load_project('hf', root), hf['groups'])
         hf['project'] = 'github'
-        (root / 'static_gate_ids.hf.json').write_text(json.dumps(hf))
+        (root / 'tests/gates/static_gate_ids.hf.json').write_text(json.dumps(hf))
         with self.assertRaises(ValueError): runner.load_project('hf', root)
 
     def test_reject_duplicate_and_class_hook(self):
