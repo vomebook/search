@@ -118,6 +118,37 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.assertEqual(result, {"ordinary": False, "executions": 3})
         self.assertEqual(self.server_state.count('/search/static/reader.123456789abc.js'), 0)
 
+    def test_offline_cache_misses_reject_as_network_errors_and_cached_data_survives(self):
+        self.prime()
+        self.page.evaluate("""async () => {
+            const cache = await caches.open('vomebook-search-v1.0.0');
+            await cache.put('/search/data/offline-available.json', new Response('{"cached":true}', {
+                headers: {'Content-Type': 'application/json'}
+            }));
+        }""")
+        self.context.set_offline(True)
+        result = self.page.evaluate("""async () => {
+            async function outcome(path) {
+                try {
+                    const response = await fetch(path);
+                    return {resolved: true, status: response.status, text: await response.text()};
+                } catch (error) {
+                    return {resolved: false, name: error.name};
+                }
+            }
+            return {
+                cached: await outcome('/search/data/offline-available.json'),
+                missingData: await outcome('/search/data/offline-not-cached.json'),
+                missingStatic: await outcome('/search/static/offline-not-cached.bin')
+            };
+        }""")
+        self.assertTrue(result["cached"]["resolved"])
+        self.assertEqual(result["cached"]["status"], 200)
+        self.assertEqual(json.loads(result["cached"]["text"]), {"cached": True})
+        for name in ("missingData", "missingStatic"):
+            with self.subTest(resource=name):
+                self.assertEqual(result[name], {"resolved": False, "name": "TypeError"})
+
     def test_existing_cache_serves_immediately_then_persists_background_refresh(self):
         self.prime()
         self.page.evaluate("""async () => {
