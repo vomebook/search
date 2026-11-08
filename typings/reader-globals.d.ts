@@ -31,6 +31,9 @@ declare var VoiceOfMLSearchFolderSelection: {
   applyFolderSelectionToNode(node: VoiceOfMLFolderSelectionNode, row: Pick<ParentNode, "querySelector">, subtreeSet: ReadonlySet<string>,
     selfSet: ReadonlySet<string>, lookup?: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState> | null): void;
 };
+declare var VoiceOfMLSearchCanonical: {
+  stableStringify(value: unknown, getVisit: () => (value: unknown) => string | undefined): string | undefined;
+};
 interface VoiceOfMLHeightIndexState {
   heights: readonly number[];
   heightTree: number[];

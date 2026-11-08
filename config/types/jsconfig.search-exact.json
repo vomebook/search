@@ -18,6 +18,7 @@
     "../../static/search/result-identity.js",
     "../../static/search/folder-selection.js",
     "../../static/search/domain/height-index.js",
+    "../../static/search/domain/stable-stringify.js",
     "../../static/search/record-path.js",
     "../../static/search/response-validation.js",
     "../../static/search/response-cache.js",

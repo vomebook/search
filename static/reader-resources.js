@@ -210,6 +210,7 @@
       "search/result-identity.js",
       "search/folder-selection.js",
       "search/domain/height-index.js",
+      "search/domain/stable-stringify.js",
       "style.css",
       ...(project === "github" ? ["search/index-worker.js"] : []),
       "app.js"

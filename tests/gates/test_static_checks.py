@@ -646,6 +646,67 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(api + usage)
             self.assert_check(self.run_check(*check), False, diagnostic)
 
+    def test_search_stable_stringify_coverage_gate_fails_closed(self):
+        paths = ["static/search/domain/stable-stringify.js", "scripts/search/check_search_stable_stringify_coverage.mjs",
+                 "tests/search/baselines/test_search_stable_stringify_baseline.mjs", "static/app.js",
+                 "scripts/check_tap_contracts.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "stable-stringify.js")
+        test = self.root / paths[2]
+        source = test.read_text()
+        name = "property access order and exception propagation remain observable"
+        self.assertEqual(source.count("test('" + name + "'"), 1)
+        test.write_text(source.replace("test('" + name + "'", "test.skip('" + name + "'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source.replace("test('" + name + "', () => {", "test('" + name + "', () => { throw new Error('canonical failure');"))
+        self.assert_check(self.run_check(*check), False, "canonical failure")
+        test.unlink()
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source)
+        module = self.root / paths[0]
+        original = module.read_text()
+        probe = "    if (value && typeof value === \"object\") {\n"
+        self.assertEqual(original.count(probe), 1)
+        module.write_text(original.replace(probe, probe + "      if (value === globalThis) return '{}';\n"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        module.write_text(original)
+        gate = self.root / paths[1]
+        gate_source = gate.read_text()
+        include = "--test-coverage-include=**/static/search/domain/stable-stringify.js"
+        self.assertEqual(gate_source.count(include), 1)
+        gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-canonical.js"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+
+    def test_search_stable_stringify_strict_type_contract(self):
+        for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
+            self.assertIn("static/search/domain/stable-stringify.js", load_type_config(name)["files"])
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
+            "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/domain/stable-stringify.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = "  stableStringify(value: unknown, getVisit: () => (value: unknown) => string | undefined): string | undefined;"
+        self.assertEqual(original.count(before), 1)
+        declaration.write_text(original.replace(before, before.replace(": string | undefined;", ": number;")))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        declaration.write_text(original)
+        usage = self.root / "static/canonical-usage.js"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"}, "files": [str(declaration), str(usage)]}))
+        usage.write_text('VoiceOfMLSearchCanonical.stableStringify({}, () => value => JSON.stringify(value));\n')
+        self.assert_check(self.run_check(*check), True, "")
+        usage.write_text('VoiceOfMLSearchCanonical.stableStringify({}, 1);\n')
+        self.assert_check(self.run_check(*check), False, "TS2345")
+
     def test_search_height_index_coverage_gate_fails_closed(self):
         paths = ["static/search/domain/height-index.js", "scripts/search/check_search_height_index_coverage.mjs",
                  "tests/search/baselines/test_search_height_index_baseline.mjs"]
@@ -2359,7 +2420,7 @@ class StaticGateTests(unittest.TestCase):
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/search/search-session.js", "static/search/reader-navigation.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
-                    "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
+                    "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertIn("tsc --project config/types/jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
