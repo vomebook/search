@@ -334,7 +334,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         for gate in ('check_search_file_types_coverage.mjs', 'check_search_response_cache_coverage.mjs',
                      'check_search_response_validation_coverage.mjs', 'check_search_result_identity_coverage.mjs',
-                     'check_search_folder_selection_coverage.mjs',
+                     'check_search_folder_selection_coverage.mjs', 'check_search_height_index_coverage.mjs',
                      'check_search_filter_equality_baseline.mjs', 'check_search_folder_merge_baseline.mjs',
                      'check_search_readability_baseline.mjs'):
             self.assertEqual(workflow.count(f'node scripts/search/{gate}'), 2)

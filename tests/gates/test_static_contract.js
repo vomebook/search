@@ -229,7 +229,9 @@ test("virtual results use bounded buffering", () => {
   assert.match(app, /const rowMeasureKey = getHeightMeasurementKey\(\)/);
   assert.match(css, /contain: paint/);
   assert.match(app, /function ensureHeightTree/);
-  assert.match(app, /const parent = i \+ \(i & -i\)/);
+  const heightIndex = fs.readFileSync("static/search/height-index.js", "utf8");
+  assert.match(heightIndex, /const parent = i \+ \(i & -i\)/);
+  assert.match(app, /VoiceOfMLSearchHeightIndex\.extendTree\(VSCROLL, oldLen\)/);
   assert.match(app, /const canExtendTree = !VSCROLL\.heightsDirty/);
   assert.match(app, /querySelectorAll\("\.result-skeleton-item"\)\.forEach/);
 });
