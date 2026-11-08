@@ -6,6 +6,7 @@
     [
       "tests.gates.test_static_checks.StaticGateTests.test_adapter_coverage_gate_fails_when_contract_tests_are_removed",
       "tests.gates.test_static_checks.StaticGateTests.test_djvu_document_adapter_strict_and_complexity",
+      "tests.gates.test_static_checks.StaticGateTests.test_djvu_source_identity_strict_complexity_and_build",
       "tests.gates.test_static_checks.StaticGateTests.test_djvu_scheduler_strict_signatures_and_complexity",
       "tests.gates.test_static_checks.StaticGateTests.test_djvu_worker_cyclomatic_complexity_cap",
       "tests.gates.test_static_checks.StaticGateTests.test_djvu_worker_strict_signatures_and_message_boundary",

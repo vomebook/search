@@ -125,8 +125,32 @@ const adapterComplete = adapter.status === 0 && hasPassingTapContracts(adapter.s
   adapterLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
   ['# start of coverage report', '# end of coverage report'].every(marker => adapterLines.filter(line => line === marker).length === 1) &&
   adapterRows.length === 1 && adapterRows[0].every((value, index) => value >= adapterMinimum[index]);
+// Exact per-module source identity guard: real rejection on malformed inputs
+// must stay in CI, without claiming coverage for the complete loader.
+const identityMinimum = [100, 96, 100];
+const identityName = 'tests/reader/djvu/test_reader_djvu_source_integrity.mjs';
+const identity = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap',
+  '--experimental-test-coverage', '--test-coverage-include=**/static/reader/pdf/reader-djvu-identity.mjs',
+  ...identityMinimum.map((value, index) => `--test-coverage-${['lines', 'branches', 'functions'][index]}=${value}`),
+  identityName], {encoding: 'utf8'});
+if (identity.stdout) process.stdout.write(identity.stdout);
+if (identity.stderr) process.stderr.write(identity.stderr);
+if (identity.error) throw identity.error;
+const identityLines = (identity.stdout || '').split(/\r?\n/);
+const identityRows = identityLines.flatMap(line => {
+  const match = /^\s*#\s*reader-djvu-identity\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
+  return match ? [match.slice(1).map(Number)] : [];
+});
+const identityComplete = identity.status === 0 && hasPassingTapContracts(identity.stdout || '', [{name: identityName,
+  marker:'DjVu dataset source size, hash, cancellation and map-failure guards passed'}]) &&
+  workerSummaries.every(summary => identityLines.filter(line => line === summary).length === 1) &&
+  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
+    identityLines.filter(line => line.startsWith(prefix)).length === 1) &&
+  identityLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  ['# start of coverage report', '# end of coverage report'].every(marker => identityLines.filter(line => line === marker).length === 1) &&
+  identityRows.length === 1 && identityRows[0].every((value, index) => value >= identityMinimum[index]);
 if (result.status !== 0 || !complete || !hasPassingTapContracts(result.stdout || '', required) ||
-    !boundaryComplete || !workerComplete || !schedulerComplete || !adapterComplete ||
+    !boundaryComplete || !workerComplete || !schedulerComplete || !adapterComplete || !identityComplete ||
     !summaries.every(summary => lines.filter(line => line === summary).length === 1) ||
     ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
       lines.filter(line => line.startsWith(prefix)).length !== 1) ||

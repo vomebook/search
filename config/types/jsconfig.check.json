@@ -46,6 +46,7 @@
     "../../static/reader/pdf/pdf-first-page-worker-adapter.mjs",
     "../../static/reader/pdf/pdf-worker-wrapper.mjs",
     "../../static/reader/pdf/reader-djvu-adapter.mjs",
+    "../../static/reader/pdf/reader-djvu-identity.mjs",
     "../../static/reader/pdf/reader-djvu-engine-worker.mjs",
     "../../static/reader/pdf/reader-djvu-loader.mjs",
     "../../static/reader/pdf/reader-djvu-range.mjs",

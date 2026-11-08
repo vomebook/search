@@ -1,39 +1,14 @@
 import { openDjvuDocument } from "./reader-djvu-adapter.mjs";
 import { openDjvuRange } from "./reader-djvu-range.mjs";
 import { createDjvuWorkerAdapter } from "./reader-djvu-worker.mjs";
+import { resolveDjvuSource } from "./reader-djvu-identity.mjs";
 
 const workerUrl = new URL("./reader-djvu-engine-worker.mjs", import.meta.url);
 
 // Native URLs can be read directly without creating or fetching a page map.
 export async function openNativeDjvu(context) {
   const signal = context.readerAbortController.signal;
-  const original = new URL(context.sourceUrl);
-  const originalRevision = /\/resolve\/([0-9a-f]{40})\//.exec(original.pathname)?.[1];
-  let pinned;
-  const canonicalPinned = /^\/datasets\/VoiceOfML\/([A-Za-z0-9._-]+)\/resolve\/([0-9a-f]{40})\/(.+\.djvu)$/.exec(original.pathname);
-  let decodedPath = '';
-  try { decodedPath = decodeURIComponent(canonicalPinned?.[3] || ''); } catch (_) {}
-  if (originalRevision && original.origin === 'https://huggingface.co' && canonicalPinned &&
-      !['.', '..'].includes(canonicalPinned[1]) && decodedPath &&
-      !/[\x00-\x1f\x7f%?#\\]/.test(decodedPath) && !decodedPath.split('/').some(part=>!part || part==='.' || part==='..') &&
-      !/%(?:2f|5c)/i.test(canonicalPinned[3])) {
-    // The URL already names an immutable commit. The 206 path still checks the
-    // strong ETag, length and every subsequent If-Range response.
-    pinned = {url:original.href, revision:originalRevision};
-  } else {
-    const endpoint = context.readerDownloadApiUrl(`/api/reader-source-revision?url=${encodeURIComponent(context.sourceUrl)}`);
-    const metadata = await context.fetchWithReaderTimeout(endpoint, context.READER_PROXY_TIMEOUT_MS, {signal});
-    if (!metadata.ok) throw new Error(`DJVU_SOURCE_REVISION_HTTP_${metadata.status}`);
-    pinned = JSON.parse(await VoiceOfMLReaderSecurity.readText(metadata, 64 * 1024));
-  }
-  const resolved = new URL(pinned?.url);
-  if (original.username || original.password || original.search || original.hash ||
-      resolved.origin !== 'https://huggingface.co' || resolved.username || resolved.password ||
-      !['huggingface.co','hf-mirror.com'].includes(original.hostname) ||
-      resolved.search || resolved.hash || !/^[0-9a-f]{40}$/.test(pinned.revision || '') ||
-      (originalRevision && originalRevision !== pinned.revision) ||
-      resolved.pathname !== original.pathname.replace(/\/(?:resolve|raw)\/(?:main|[0-9a-f]{40})\//,
-        `/resolve/${pinned.revision}/`)) throw new Error('DJVU_SOURCE_REVISION_INVALID');
+  const resolved = await resolveDjvuSource(context,context.sourceUrl,signal);
   const cacheBytes=matchMedia('(max-width: 700px)').matches ? 32*1024*1024 : 64*1024*1024;
   // Historical OCR is retained only under the already-established full-source
   // SHA-256 check below. Until the bytes can be independently authenticated,
