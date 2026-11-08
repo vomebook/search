@@ -108,8 +108,8 @@ class ShardRunnerTests(unittest.TestCase):
         self.assertEqual(hf['project'], 'hf')
         g = {x for group in gh['groups'] for x in group}
         h = {x for group in hf['groups'] for x in group}
-        self.assertEqual(len(g), 118)
-        self.assertEqual(len(h), 118)
+        self.assertEqual(len(g), 120)
+        self.assertEqual(len(h), 120)
         for added in ('test_search_folder_selection_coverage_gate_fails_closed', 'test_search_folder_selection_declaration_matches_runtime', 'test_search_folder_selection_rejects_wrong_argument_and_return_types',
                       'test_search_height_index_coverage_gate_fails_closed', 'test_search_height_index_declaration_matches_runtime', 'test_search_height_index_rejects_wrong_argument_and_return_types',
                       'test_search_stable_stringify_coverage_gate_fails_closed', 'test_search_stable_stringify_strict_type_contract',
