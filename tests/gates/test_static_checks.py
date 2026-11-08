@@ -1877,6 +1877,7 @@ class StaticGateTests(unittest.TestCase):
                         'static/reader/pdf/reader-pdf-text-runtime.mjs',
                         'static/reader/search/reader-pdf-book-search.mjs',
                         'static/reader/search/workers/reader-pdf-book-search-worker.mjs',
+                        'static/reader/search/reader-pdf-book-url.mjs',
                         'static/reader/search/reader-book-text.js',
                         'static/reader/core/reader-security.js']
         for path in dependencies:
@@ -2933,7 +2934,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
                     "static/reader/core/reader-lifecycle.mjs",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
-                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/formats/reader-chapter-repository.js",
+                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/search/reader-pdf-book-url.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-djvu-adapter.mjs", "static/reader/pdf/reader-djvu-identity.mjs", "static/reader/pdf/reader-djvu-range.mjs", "static/reader/pdf/reader-djvu-loader.mjs", "static/reader/search/reader-chapter-search-proxy-url.mjs", "static/reader/search/reader-chapter-search-index.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
                     "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
@@ -2985,6 +2986,72 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         choices = "".join(f"if (value === {n}) return {n}; " for n in range(11))
         source.write_text(source.read_text() + f"\nfunction overlyComplex(value) {{ {choices} return 0; }}\n")
         self.assert_check(self.run_check(*check), False, "complexity")
+
+    def test_pdf_book_url_coverage_gate_fails_closed(self):
+        paths=['static/reader/search/reader-pdf-book-url.mjs',
+               'tests/reader/pdf-search/test_pdf_book_url.mjs',
+               'scripts/reader/check_pdf_book_url_coverage.mjs','scripts/check_tap_contracts.mjs']
+        for name in paths:
+            target=self.root / name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT / name,target)
+        check=['node',paths[2]];message='PDF book URL requires its named passing contract and one coverage row'
+        self.assert_check(self.run_check(*check),True,'reader-pdf-book-url.mjs |')
+        test=self.root / paths[1];original=test.read_text()
+        marker='immutable origins, scopes and credentials are constrained'
+        self.assertEqual(original.count(marker),1)
+        test.write_text(original.replace(marker,'renamed contract'))
+        self.assert_check(self.run_check(*check),False,message)
+        test.write_text(original.replace("test('"+marker+"'", "test.skip('"+marker+"'"))
+        self.assert_check(self.run_check(*check),False,message)
+        test.write_text(original+"\nthrow new Error('injected PDF URL failure');\n")
+        self.assert_check(self.run_check(*check),False,'injected PDF URL failure')
+        test.unlink();self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        test.write_text(original+'\nconsole.log("end of coverage report");\n')
+        self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        gate=self.root / paths[2];gate_original=gate.read_text()
+        for minimum in ('[100.01,100,100]','[100,100.01,100]','[100,100,100.01]'):
+            self.assertEqual(gate_original.count('[100,100,100]'),1)
+            gate.write_text(gate_original.replace('[100,100,100]',minimum))
+            self.assert_check(self.run_check(*check),False,message)
+        self.assertEqual(gate_original.count('reader-pdf-book-url\\.mjs'),1)
+        gate.write_text(gate_original.replace('reader-pdf-book-url\\.mjs','missing-pdf-book-url\\.mjs'))
+        self.assert_check(self.run_check(*check),False,message)
+
+    def test_pdf_book_url_exact_signature_complexity_and_build(self):
+        module=ROOT / 'static/reader/search/reader-pdf-book-url.mjs'
+        source=self.root / 'static/pdf-book-url-usage.mjs';config=self.root / 'jsconfig.json'
+        project=load_type_config('jsconfig.reader-exact.json')
+        self.assertIn('static/reader/search/reader-pdf-book-url.mjs',project['files'])
+        self.assertIn('static/reader/search/reader-pdf-book-url.mjs',load_type_config('jsconfig.strict.json')['files'])
+        config.write_text(json.dumps({'compilerOptions':project['compilerOptions'],'files':[str(module),str(source)]}))
+        check=['node',ROOT / 'node_modules/typescript/bin/tsc','--project',config]
+        prefix=f'import {{validPdfBookUrl, searchPath}} from "{module.as_posix()}";\n'
+        source.write_text(prefix+'/** @type {boolean} */ const allowed=validPdfBookUrl("/book","https://example.test/",searchPath);\n')
+        self.assert_check(self.run_check(*check),True,'')
+        for bad in ('validPdfBookUrl(42,"https://example.test/");',
+                    'validPdfBookUrl("/book",null);','validPdfBookUrl("/book","https://example.test/",42);',
+                    '/** @type {string} */ const wrong=validPdfBookUrl("/book","https://example.test/");'):
+            with self.subTest(invalid=bad):
+                source.write_text(prefix+bad+'\n');self.assert_check(self.run_check(*check),False,'error TS')
+        local=self.root / 'static/reader/search/reader-pdf-book-url.mjs';local.parent.mkdir(parents=True,exist_ok=True)
+        original=module.read_text();local.write_text(original)
+        config.write_text(json.dumps({'compilerOptions':project['compilerOptions'],'files':[str(local)]}))
+        self.assert_check(self.run_check(*check),True,'')
+        annotation='/** @param {string} raw @param {string} href @param {RegExp} [pathPattern] */'
+        self.assertEqual(original.count(annotation),1);local.write_text(original.replace(annotation,''))
+        self.assert_check(self.run_check(*check),False,'TS7006');local.write_text(original)
+        lint=['node',ROOT / 'node_modules/eslint/bin/eslint.js','--config',ROOT / 'eslint.config.mjs',
+              local,'--rule','complexity: [error, 10]','--max-warnings','0']
+        self.assert_check(self.run_check(*lint),True,'')
+        choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
+        local.write_text(original+f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
+        self.assert_check(self.run_check(*lint),False,'complexity')
+        listing=subprocess.check_output(['node','-e',
+            'const r=require(process.argv[1]);console.log(JSON.stringify({files:r.buildFiles("github"),runtime:r.runtimePaths("/static/"),shell:r.shellAssets("/static/")}));',
+            ROOT / 'static/reader-resources.js'],cwd=ROOT,text=True,timeout=30)
+        paths=json.loads(listing);file='reader/search/reader-pdf-book-url.mjs'
+        self.assertEqual(paths['files'].count(file),1)
+        self.assertLess(paths['files'].index(file),paths['files'].index('reader/search/workers/reader-pdf-book-search-worker.mjs'))
+        self.assertIn('/static/'+file,paths['runtime']);self.assertNotIn('/static/'+file,paths['shell'])
 
     def test_chapter_search_worker_coverage_gate_fails_closed(self):
         paths = ['static/reader/search/reader-chapter-search-core.mjs',

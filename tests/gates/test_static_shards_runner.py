@@ -108,12 +108,16 @@ class ShardRunnerTests(unittest.TestCase):
         self.assertEqual(hf['project'], 'hf')
         g = {x for group in gh['groups'] for x in group}
         h = {x for group in hf['groups'] for x in group}
-        self.assertEqual(len(g), 116)
-        self.assertEqual(len(h), 116)
+        self.assertEqual(len(g), 118)
+        self.assertEqual(len(h), 118)
         for added in ('test_search_folder_selection_coverage_gate_fails_closed', 'test_search_folder_selection_declaration_matches_runtime', 'test_search_folder_selection_rejects_wrong_argument_and_return_types',
                       'test_search_height_index_coverage_gate_fails_closed', 'test_search_height_index_declaration_matches_runtime', 'test_search_height_index_rejects_wrong_argument_and_return_types',
                       'test_search_stable_stringify_coverage_gate_fails_closed', 'test_search_stable_stringify_strict_type_contract',
                       'test_search_view_key_coverage_gate_fails_closed', 'test_search_view_key_strict_type_contract'):
+            self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, g)
+            self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, h)
+        for added in ('test_pdf_book_url_coverage_gate_fails_closed',
+                      'test_pdf_book_url_exact_signature_complexity_and_build'):
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, g)
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, h)
         for added in ('test_chapter_search_worker_coverage_gate_fails_closed',
