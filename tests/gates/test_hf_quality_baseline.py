@@ -60,6 +60,33 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertNotIn('if:', hf)
 
 
+class HfCheckoutCiTests(unittest.TestCase):
+    def test_checkout_captures_main_and_checks_exact_commit_ancestor_and_lfs(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        step = hf.split('      - name: Checkout Hugging Face Search Space\n', 1)[1].split('      - uses:', 1)[0]
+        commands = (
+            'set -euo pipefail',
+            'git ls-remote --exit-code --heads "$url" refs/heads/main',
+            'revision=${BASH_REMATCH[1]}',
+            'GIT_LFS_SKIP_SMUDGE=1 git clone --single-branch --branch main --no-checkout "$url" huggingface-search',
+            'GIT_LFS_SKIP_SMUDGE=1 git -C huggingface-search checkout --detach "$revision"',
+            'test "$(git -C huggingface-search rev-parse HEAD)" = "$revision"',
+            'git -C huggingface-search merge-base --is-ancestor c7424ac3e549c9edf59f302e3809268c12bfe114 HEAD',
+            'git -C huggingface-search lfs pull',
+            'git -C huggingface-search lfs fsck',
+        )
+        for command in commands:
+            self.assertEqual(step.count(command), 1, command)
+        self.assertIn('[[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]', step)
+        self.assertLess(step.index('git ls-remote'), step.index('git clone'))
+        self.assertLess(step.index('checkout --detach'), step.index('merge-base --is-ancestor'))
+        self.assertLess(step.index('merge-base --is-ancestor'), step.index('lfs pull'))
+        self.assertNotIn('continue-on-error:', step)
+        self.assertNotIn('--depth', step)
+        self.assertNotIn('--filter', step)
+
+
 class DependencyLayoutCiTests(unittest.TestCase):
     def test_static_and_audit_dependencies_keep_distinct_pinned_install_paths(self):
         root = Path(__file__).resolve().parents[2]
