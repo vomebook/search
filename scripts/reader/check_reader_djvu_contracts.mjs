@@ -102,8 +102,31 @@ const schedulerComplete = scheduler.status === 0 && hasPassingTapContracts(sched
   schedulerLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
   ['# start of coverage report', '# end of coverage report'].every(marker => schedulerLines.filter(line => line === marker).length === 1) &&
   schedulerRows.length === 1 && schedulerRows[0].every((value, index) => value >= schedulerMinimum[index]);
+// The PDF-shaped document adapter has its own geometry/outline/render gate.
+// This is adapter-only V8 coverage and does not stand for full Reader coverage.
+const adapterMinimum = [99, 90, 100];
+const adapter = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap',
+  '--experimental-test-coverage', '--test-coverage-include=**/static/reader/pdf/reader-djvu-adapter.mjs',
+  ...adapterMinimum.map((value, index) => `--test-coverage-${['lines', 'branches', 'functions'][index]}=${value}`),
+  workerName], {encoding: 'utf8'});
+if (adapter.stdout) process.stdout.write(adapter.stdout);
+if (adapter.stderr) process.stderr.write(adapter.stderr);
+if (adapter.error) throw adapter.error;
+const adapterLines = (adapter.stdout || '').split(/\r?\n/);
+const adapterRows = adapterLines.flatMap(line => {
+  const match = /^\s*#\s*reader-djvu-adapter\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
+  return match ? [match.slice(1).map(Number)] : [];
+});
+const adapterComplete = adapter.status === 0 && hasPassingTapContracts(adapter.stdout || '', [{name: workerName,
+  marker:'DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed'}]) &&
+  workerSummaries.every(summary => adapterLines.filter(line => line === summary).length === 1) &&
+  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
+    adapterLines.filter(line => line.startsWith(prefix)).length === 1) &&
+  adapterLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  ['# start of coverage report', '# end of coverage report'].every(marker => adapterLines.filter(line => line === marker).length === 1) &&
+  adapterRows.length === 1 && adapterRows[0].every((value, index) => value >= adapterMinimum[index]);
 if (result.status !== 0 || !complete || !hasPassingTapContracts(result.stdout || '', required) ||
-    !boundaryComplete || !workerComplete || !schedulerComplete ||
+    !boundaryComplete || !workerComplete || !schedulerComplete || !adapterComplete ||
     !summaries.every(summary => lines.filter(line => line === summary).length === 1) ||
     ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
       lines.filter(line => line.startsWith(prefix)).length !== 1) ||
