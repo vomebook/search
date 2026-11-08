@@ -600,7 +600,8 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" $flags --minify'));
   assert.match(workflow, /node scripts\/data\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/data\/fetch_search_generation\.mjs "\$SEARCH_GENERATION" pages _site\/data/);
-  assert.match(workflow, /if \[\[ -n "\$SEARCH_GENERATION" \]\]; then[\s\S]*?else\s+cp -a data _site\/\s+fi/);
+  assert.match(workflow, /SEARCH_GENERATION: \$\{\{ inputs\.search_generation \|\| vars\.SEARCH_DATA_GENERATION \|\| '[a-f0-9]{64}' \}\}/);
+  assert.doesNotMatch(workflow, /cp -a data _site\//);
   assert.match(workflow, /python3 scripts\/build\/seo\.py --project pages --corpus _site\/data\/search_data\.json\.gz --output _site/);
   assert.match(workflow, /node scripts\/build\/fetch_foliate_reader\.mjs _site\/static\/foliate-reader/);
   assert.match(workflow, /node scripts\/build\/copy_reader_vendor\.mjs _site\/static\/vendor/);
