@@ -6,8 +6,8 @@ on:
   push:
     branches: ["main"]
 
-  # A supplied generation is materialized into an isolated build directory.
-  # Omitting it keeps the current Git-backed data path and rollback behavior.
+  # The normal build always selects a verified bucket generation. A manual
+  # explicit selection permits rollback without copying old generated Git data.
   workflow_dispatch:
     inputs:
       search_generation:
@@ -84,18 +84,14 @@ jobs:
           node --check static/sw.js
       - name: Build static site
         env:
-          SEARCH_GENERATION: ${{ inputs.search_generation || '' }}
+          SEARCH_GENERATION: ${{ inputs.search_generation || vars.SEARCH_DATA_GENERATION || 'dbf3ff87d7e5dd931fc8253fb0e69fffde9d3eade8d30dfd88af6d6d75e7e8aa' }}
         run: |
           set -euo pipefail
           mkdir -p _site/static
           cp static/index.html static/manifest.json static/sw.js _site/
           cp -a static/icons _site/icons
-          if [[ -n "$SEARCH_GENERATION" ]]; then
-            # A failure never falls back to an unrelated or mixed generation.
-            node scripts/data/fetch_search_generation.mjs "$SEARCH_GENERATION" pages _site/data
-          else
-            cp -a data _site/
-          fi
+          # A failed or incomplete generation never falls back to stale Git data.
+          node scripts/data/fetch_search_generation.mjs "$SEARCH_GENERATION" pages _site/data
           node scripts/data/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
           node scripts/build/fetch_foliate_reader.mjs _site/static/foliate-reader
           node scripts/build/copy_reader_vendor.mjs _site/static/vendor --foliate-output _site/static/foliate-reader/vendor
