@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "target": "esnext",
+    "lib": [
+      "esnext",
+      "webworker"
+    ],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force"
+  },
+  "files": [
+    "../../static/sw.js",
+    "../../typings/service-worker.d.ts"
+  ]
+}
