@@ -2347,6 +2347,13 @@ class StaticGateTests(unittest.TestCase):
         identity.write_text(identity_source + '\nconsole.log("end of coverage report");\n')
         self.assert_check(self.run_check(*check), False, message)
         identity.write_text(identity_source)
+        for minimum in ('[100.01, 85, 100]', '[100, 101, 100]', '[100, 85, 100.01]'):
+            self.assertEqual(original.count('[100, 85, 100]'), 1)
+            gate.write_text(original.replace('[100, 85, 100]', minimum))
+            self.assert_check(self.run_check(*check), False, message)
+        self.assertEqual(original.count('reader-djvu-loader\\.mjs'), 1)
+        gate.write_text(original.replace('reader-djvu-loader\\.mjs', 'missing-djvu-loader\\.mjs'))
+        self.assert_check(self.run_check(*check), False, message)
 
     def test_reader_lifecycle_coverage_gate_fails_closed(self):
         paths = ["static/reader/core/reader-lifecycle.mjs", "scripts/reader/check_reader_lifecycle_coverage.mjs",
@@ -2972,6 +2979,48 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         choices = "".join(f"if (value === {n}) return {n}; " for n in range(11))
         source.write_text(source.read_text() + f"\nfunction overlyComplex(value) {{ {choices} return 0; }}\n")
         self.assert_check(self.run_check(*check), False, "complexity")
+
+    def test_djvu_loader_strict_signature_and_complexity(self):
+        module=ROOT / 'static/reader/pdf/reader-djvu-loader.mjs'
+        source=self.root / 'static/djvu-loader-usage.mjs'
+        config=self.root / 'jsconfig.json'
+        options=load_type_config('jsconfig.strict.json')['compilerOptions']
+        self.assertIn('static/reader/pdf/reader-djvu-loader.mjs',load_type_config('jsconfig.strict.json')['files'])
+        config.write_text(json.dumps({'compilerOptions':options,
+            'files':[str(ROOT / 'typings/reader-globals.d.ts'),str(module),str(source)]}))
+        check=['node',ROOT / 'node_modules/typescript/bin/tsc','--project',config]
+        prefix=(f'import {{openNativeDjvu,openDirectDjvu}} from "{module.as_posix()}";\n'
+                'const context=/** @type {Parameters<typeof openNativeDjvu>[0]} */ (/** @type {unknown} */ ({}));\n'
+                'const manifest={primary:{resource:{bytes:16,sha256:"a"}}};\n')
+        valid=('openNativeDjvu(context).then(doc => doc.getPage(1));\n'
+               'openDirectDjvu(context,manifest,Promise.resolve(null)).then(doc => doc.numPages);\n')
+        source.write_text(prefix+valid)
+        self.assert_check(self.run_check(*check),True,'')
+        for invalid in ('openNativeDjvu(42);','openDirectDjvu(context,{primary:{resource:{bytes:"16",sha256:"a"}}},Promise.resolve(null));',
+                        'openDirectDjvu(context,manifest,{});','openNativeDjvu(context).then(doc=>doc.getPage("1"));',
+                        'openNativeDjvu(context).then(doc=>doc.notAProperty);'):
+            with self.subTest(invalid=invalid):
+                source.write_text(prefix+invalid+'\n')
+                self.assert_check(self.run_check(*check),False,'error TS')
+        root=self.root / 'static/reader/pdf';root.mkdir(parents=True,exist_ok=True)
+        for name in ('reader-djvu-loader.mjs','reader-djvu-identity.mjs','reader-djvu-range.mjs',
+                     'reader-djvu-adapter.mjs','reader-djvu-scheduler.mjs','reader-djvu-worker.mjs'):
+            shutil.copyfile(ROOT / 'static/reader/pdf' / name,root / name)
+        local=root / 'reader-djvu-loader.mjs';original=local.read_text()
+        config.write_text(json.dumps({'compilerOptions':options,
+            'files':[str(ROOT / 'typings/reader-globals.d.ts'),str(local)]}))
+        self.assert_check(self.run_check(*check),True,'')
+        marker='/** @param {DjvuContext} context */'
+        self.assertEqual(original.count(marker),1)
+        local.write_text(original.replace(marker,''))
+        self.assert_check(self.run_check(*check),False,'TS7006')
+        local.write_text(original)
+        lint=['node',ROOT / 'node_modules/eslint/bin/eslint.js','--config',ROOT / 'eslint.config.mjs',
+              local,'--rule','complexity: [error, 10]','--max-warnings','0']
+        self.assert_check(self.run_check(*lint),True,'')
+        choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
+        local.write_text(original + f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
+        self.assert_check(self.run_check(*lint),False,'complexity')
 
     def test_djvu_source_identity_strict_complexity_and_build(self):
         module = ROOT / 'static/reader/pdf/reader-djvu-identity.mjs'

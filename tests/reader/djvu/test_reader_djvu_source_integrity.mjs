@@ -6,13 +6,14 @@ import {resolveDjvuSource} from '../../../static/reader/pdf/reader-djvu-identity
 Object.defineProperty(globalThis, 'crypto', {configurable: true, value: webcrypto});
 globalThis.matchMedia = () => ({matches: false});
 globalThis.VoiceOfMLReaderSecurity = {
-  LIMITS: {documentBytes: 512 * 1024 * 1024},
+  LIMITS: {documentBytes: 512 * 1024 * 1024, manifestBytes: 1024 * 1024},
   async readBytes(response, limit) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.length > limit) throw new Error('READER_RESOURCE_LIMIT');
     return bytes;
   },
-  async readText(response, limit) { return new TextDecoder().decode(await this.readBytes(response,limit)); }
+  async readText(response, limit) { return new TextDecoder().decode(await this.readBytes(response,limit)); },
+  validatePdfOcrManifest(value) { if (!value || typeof value.source_sha256 !== 'string') throw Error('PDF_OCR_MANIFEST_INVALID'); return value; }
 };
 let workers = 0;
 globalThis.Worker = class { constructor() { workers++; throw new Error('unexpected decoder start'); } };
@@ -175,6 +176,213 @@ for (const invalid of [
   const opening=openNativeDjvu(value);await rangeWaiting;
   await assert.rejects(opening,/DJVU_WORKER_FAILED/);
   assert.equal(rangeCancelled,true);assert.equal(instance.terminated,true);
+}
+// Whole-original historical OCR is attached only after source hashing. A
+// malformed or mismatched manifest must not block the native original or leak
+// stale OCR into the Reader. All bytes and workers below are synthetic.
+{
+  let started=0,terminated=0;const opens=[];
+  globalThis.Worker=class {
+    constructor(){started++;}
+    postMessage(message){opens.push(message.operation);if(message.operation==='open')
+      queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:1}}));}
+    terminate(){terminated++;}
+  };
+  const make=(manifestValue,controller=new AbortController())=>{
+    const tracked=[],value=context(async()=>new Response(bytes),controller);
+    Object.assign(value,{sourceUrl:url,ocrManifestUrl:'/historical-ocr',pdfOcrManifest:null,
+      READER_PROXY_TIMEOUT_MS:1000,readerDownloadApiUrl:x=>x,readerContentUrl:x=>x,
+      fetchWithReaderTimeout:async()=>{throw Error('unexpected revision fetch')},
+      readPdfOcrJson:async()=>manifestValue,trackReaderResource:cleanup=>tracked.push(cleanup)});
+    return {value,tracked};
+  };
+  const good=make({source_sha256:sha256});const document=await openNativeDjvu(good.value);
+  assert.equal(document.sourceSha256,sha256);assert.equal(good.value.pdfOcrManifest.source_sha256,sha256);
+  assert.equal(good.tracked.length,1);good.tracked[0]();assert.equal(terminated,1);
+  const warnings=[],oldWarn=console.warn;console.warn=(...args)=>warnings.push(args);
+  try {
+    for(const candidate of [{source_sha256:'b'.repeat(64)},null]) {
+      const invalid=make(candidate),fallback=await openNativeDjvu(invalid.value);
+      assert.equal(fallback.sourceSha256,sha256);assert.equal(invalid.value.ocrManifestUrl,'');
+      assert.equal(invalid.value.pdfOcrManifest,null);invalid.tracked[0]();
+    }
+    assert.equal(warnings.length,2);
+  } finally {console.warn=oldWarn;}
+  const controller=new AbortController(),aborted=make(null,controller);
+  aborted.value.readPdfOcrJson=async()=>{controller.abort();throw controller.signal.reason};
+  await assert.rejects(openNativeDjvu(aborted.value),{name:'AbortError'});
+  assert.equal(aborted.value.ocrManifestUrl,'/historical-ocr','cancel must not erase retained OCR metadata');
+  assert.equal(started,3,'aborted OCR check must not start an additional worker');
+  assert.deepEqual(opens,['open','open','open']);
+}
+// Direct immutable primaries bind exact length, SHA-256 and page-map completion
+// before the only transfer of the checked original bytes to the decoder.
+{
+  let worker,cleanup,transferred;
+  globalThis.Worker=class {
+    constructor(){worker=this;this.terminated=false;}
+    postMessage(message,transfer){assert.equal(message.operation,'open');transferred=transfer;
+      assert.ok(message.bytes instanceof ArrayBuffer);queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:1}}));}
+    terminate(){this.terminated=true;}
+  };
+  const value=context(async()=>new Response(bytes));value.trackReaderResource=fn=>cleanup=fn;
+  const map={pages:[{page:1,width:2.4,height:4.8,rotation:0,djvu:{pixels:[10,20],dpi:300}}]};
+  const document=await openDirectDjvu(value,manifest,Promise.resolve(map));
+  assert.equal(document.numPages,1);assert.equal(transferred.length,1);
+  cleanup();assert.equal(worker.terminated,true);
+  const bad=context(async()=>new Response('',{status:503}));
+  await assert.rejects(openDirectDjvu(bad,manifest,Promise.resolve(map)),/DJVU_SOURCE_HTTP_503/);
+  let failedCleanup;const badMap=context(async()=>new Response(bytes));badMap.trackReaderResource=fn=>failedCleanup=fn;
+  await assert.rejects(openDirectDjvu(badMap,manifest,Promise.resolve({pages:[]})),/DJVU_PAGE_MAP_MISMATCH/);
+  assert.equal(failedCleanup,undefined);assert.equal(worker.terminated,true);
+}
+// Lazy outline may read the complete original only at the same strong ETag,
+// encoding and declared length as the range-backed document.
+{
+  for(const scenario of ['valid','changed','encoded','bad-length','short','cancel','cancel-throws']) {
+    let workersStarted=0,workersClosed=0,reads=0,outlineRead=0;
+    globalThis.Worker=class {
+      constructor(){workersStarted++;}
+      postMessage(message){
+        let reply;
+        if(message.operation==='prepare')reply={id:message.id,ok:true};
+        else if(message.operation==='open-range')reply={id:message.id,ok:true,count:1};
+        else if(message.operation==='outline')reply=workersStarted===1
+          ? {id:message.id,ok:false,error:'DJVU_LAZY_OUTLINE_UNCERTAIN'}
+          : {id:message.id,ok:true,entries:[{title:'verified',page:1,depth:0}]};
+        else if(message.operation==='open')reply={id:message.id,ok:true,count:1};
+        if(reply)queueMicrotask(()=>this.onmessage({data:reply}));
+      }
+      terminate(){workersClosed++;}
+    };
+    const controller=new AbortController(),value=context(async()=>{
+      outlineRead++;
+      const headers={'ETag':scenario==='changed'?'"different"':'"stable"'};
+      if(scenario==='encoded')headers['Content-Encoding']='gzip';
+      if(scenario==='bad-length')headers['Content-Length']='999';
+      const body=scenario==='short'?bytes.slice(0,-1):bytes;
+      if(scenario==='cancel')controller.abort();
+      if(scenario==='cancel-throws') {
+        headers.ETag='"different"';
+        return new Response(new ReadableStream({cancel(){throw Error('stream already closed')}}),{status:200,headers});
+      }
+      return new Response(body,{status:200,headers});
+    },controller);
+    Object.assign(value,{sourceUrl:url,readerDownloadApiUrl:x=>x,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+      fetchWithReaderTimeout:async()=>{reads++;return new Response(bytes,{status:206,headers:{'ETag':'"stable"',
+        'Content-Range':`bytes 0-${bytes.length-1}/${bytes.length}`,'Content-Length':String(bytes.length)}})},
+      trackReaderResource(){}});
+    const document=await openNativeDjvu(value);
+    if(scenario==='valid') {
+      const outline=await document.getOutline();assert.equal(outline[0].title,'verified');assert.equal(workersStarted,2);
+      assert.equal(workersClosed,1,'fallback worker is destroyed after its outline is read');
+    } else {
+      await assert.rejects(document.getOutline(),scenario==='cancel'?{name:'AbortError'}:/DJVU_SOURCE_CHANGED/);
+      assert.equal(workersStarted,1,'unverified or cancelled complete original must never reach another worker');
+    }
+    document.destroy();assert.equal(workersClosed,workersStarted);assert.equal(reads,1);assert.equal(outlineRead,1);
+  }
+}
+// A native Range session shares the exact verified first window with the
+// decoder, forwards range bytes without full download, and owns cleanup.
+{
+  let worker,cleanup,fullReads=0,rangeReads=0;
+  globalThis.Worker=class {
+    constructor(){worker=this;this.terminated=false;}
+    postMessage(message){
+      if(message.operation==='prepare')queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true}}));
+      else if(message.operation==='open-range')queueMicrotask(()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:0,length:8}}));
+      else if(message.operation==='range-result'){
+        assert.equal(message.ok,true);assert.deepEqual([...new Uint8Array(message.bytes)],[...bytes.slice(0,8)]);
+        queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:1}}));
+      }
+    }
+    terminate(){this.terminated=true;}
+  };
+  const value=context(async()=>{fullReads++;throw Error('must not use full source')});
+  Object.assign(value,{sourceUrl:url,ocrManifestUrl:'',readerDownloadApiUrl:x=>x,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:async()=>{rangeReads++;return new Response(bytes,{status:206,headers:{'ETag':'"stable"',
+      'Content-Range':`bytes 0-${bytes.length-1}/${bytes.length}`,'Content-Length':String(bytes.length)}})},
+    trackReaderResource:fn=>cleanup=fn});
+  const document=await openNativeDjvu(value);assert.equal(document.numPages,1);
+  assert.equal(rangeReads,1);assert.equal(fullReads,0);cleanup();assert.equal(worker.terminated,true);
+}
+// Unsupported lazy metadata may use the complete original, while corrupt
+// transport/worker failures never silently reach the full-source path.
+{
+  for(const [code,allow] of [['DJVU_LAZY_UNSUPPORTED',true],['DJVU_LAZY_METADATA_UNSUPPORTED',true],['DJVU_WORKER_FAILED',false]]) {
+    let workerCount=0,closed=0,fullReads=0;
+    globalThis.Worker=class {
+      constructor(){workerCount++;}
+      postMessage(message){let reply;
+        if(message.operation==='prepare')reply={id:message.id,ok:true};
+        else if(message.operation==='open-range')reply={id:message.id,ok:false,error:code};
+        else if(message.operation==='open')reply={id:message.id,ok:true,count:1};
+        if(reply)queueMicrotask(()=>this.onmessage({data:reply}));
+      }
+      terminate(){closed++;}
+    };
+    const value=context(async()=>{fullReads++;return new Response(bytes)});
+    Object.assign(value,{sourceUrl:url,ocrManifestUrl:'',readerDownloadApiUrl:x=>x,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+      fetchWithReaderTimeout:async()=>new Response(bytes,{status:206,headers:{'ETag':'"stable"',
+        'Content-Range':`bytes 0-${bytes.length-1}/${bytes.length}`,'Content-Length':String(bytes.length)}}),trackReaderResource(){}});
+    if(allow){const doc=await openNativeDjvu(value);assert.equal(doc.sourceSha256,sha256);doc.destroy();assert.equal(fullReads,1);assert.equal(workerCount,2);}
+    else {await assert.rejects(openNativeDjvu(value),new RegExp(code));assert.equal(fullReads,0);assert.equal(workerCount,1);}
+    assert.equal(closed,workerCount);
+  }
+}
+{
+  let workersStarted=0,sourceReads=0;
+  globalThis.Worker=class {constructor(){workersStarted++}postMessage(message){if(message.operation==='prepare')
+    queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true}}))}terminate(){}};
+  const value=context(async()=>{sourceReads++;return new Response(bytes)});
+  Object.assign(value,{sourceUrl:url,ocrManifestUrl:'',readerDownloadApiUrl:x=>x,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:async()=>new Response(bytes,{status:206,headers:{'ETag':'"stable"',
+      'Content-Range':`bytes 1-${bytes.length-1}/${bytes.length}`}}),trackReaderResource(){}});
+  await assert.rejects(openNativeDjvu(value),/DJVU_RANGE_INVALID/);assert.equal(sourceReads,0);
+  assert.equal(workersStarted,1,'malformed range cancels the already prewarmed decoder');
+}
+{
+  // A later range failure is authoritative even when the worker reports an
+  // otherwise fallback-eligible lazy-format error; it must not download a
+  // different complete original after transport identity was lost.
+  let closed=0,fullReads=0;
+  globalThis.Worker=class {
+    postMessage(message){
+      if(message.operation==='prepare')queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true}}));
+      else if(message.operation==='open-range')queueMicrotask(()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:1024*1024,length:1}}));
+      else if(message.operation==='range-result')queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:false,error:'DJVU_LAZY_UNSUPPORTED'}}));
+    }
+    terminate(){closed++;}
+  };
+  const value=context(async()=>{fullReads++;throw Error('must not fetch full source')});
+  Object.assign(value,{sourceUrl:url,ocrManifestUrl:'',readerDownloadApiUrl:x=>x,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:async(actual,timeout,options)=>{
+      const range=options.headers.Range;
+      if(range.startsWith('bytes=0-'))return new Response(new Uint8Array(1024*1024),{status:206,headers:{'ETag':'"stable"',
+        'Content-Range':'bytes 0-1048575/1048577','Content-Length':'1048576'}});
+      return new Response(new Uint8Array(1),{status:206,headers:{'ETag':'"changed"',
+        'Content-Range':'bytes 1048576-1048576/1048577','Content-Length':'1'}});
+    },trackReaderResource(){}});
+  await assert.rejects(openNativeDjvu(value),/DJVU_SOURCE_CHANGED/);assert.equal(fullReads,0);assert.equal(closed,1);
+}
+// A decoder asking for bytes while it is still preparing must not be sent
+// unvalidated source bytes, nor leave the initial Range fetch running.
+{
+  let started,rangeAborted=false,closed=0;
+  const waiting=new Promise(resolve=>started=resolve);
+  globalThis.Worker=class {
+    postMessage(message){if(message.operation==='prepare')setTimeout(()=>this.onmessage({data:{id:message.id,
+      operation:'range',rangeId:1,offset:0,length:8}}),0)}
+    terminate(){closed++;}
+  };
+  const value=context(async()=>{throw Error('unexpected full source')});
+  Object.assign(value,{sourceUrl:url,readerDownloadApiUrl:x=>x,readerContentUrl:x=>x,READER_PROXY_TIMEOUT_MS:1000,
+    fetchWithReaderTimeout:async(actual,timeout,options)=>new Promise((resolve,reject)=>{
+      options.signal.addEventListener('abort',()=>{rangeAborted=true;reject(options.signal.reason)},{once:true});started();
+    }),trackReaderResource(){}});
+  const pending=openNativeDjvu(value);await waiting;
+  await assert.rejects(pending,/DJVU_WORKER_PROTOCOL/);assert.equal(rangeAborted,true);assert.equal(closed,1);
 }
 // Source identity is independently fail-closed before range/full-source I/O.
 {

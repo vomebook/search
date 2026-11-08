@@ -149,8 +149,34 @@ const identityComplete = identity.status === 0 && hasPassingTapContracts(identit
   identityLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
   ['# start of coverage report', '# end of coverage report'].every(marker => identityLines.filter(line => line === marker).length === 1) &&
   identityRows.length === 1 && identityRows[0].every((value, index) => value >= identityMinimum[index]);
+// Loader-only coverage combines its two existing real source/range scripts;
+// it includes the retained legacy OCR compatibility, not OCR production.
+const loaderMinimum = [100, 85, 100];
+const loaderRequired = [
+  {name: identityName, marker:'DjVu dataset source size, hash, cancellation and map-failure guards passed'},
+  {name:'tests/reader/djvu/test_reader_djvu_range_fallback.mjs', marker:'ignored Range falls back to full original, never page images'}
+];
+const loader = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap',
+  '--experimental-test-coverage', '--test-coverage-include=**/static/reader/pdf/reader-djvu-loader.mjs',
+  ...loaderMinimum.map((value, index) => `--test-coverage-${['lines', 'branches', 'functions'][index]}=${value}`),
+  ...loaderRequired.map(({name}) => name)], {encoding:'utf8'});
+if (loader.stdout) process.stdout.write(loader.stdout);
+if (loader.stderr) process.stderr.write(loader.stderr);
+if (loader.error) throw loader.error;
+const loaderLines = (loader.stdout || '').split(/\r?\n/);
+const loaderRows = loaderLines.flatMap(line => {
+  const match = /^\s*#\s*reader-djvu-loader\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
+  return match ? [match.slice(1).map(Number)] : [];
+});
+const loaderComplete = loader.status === 0 && hasPassingTapContracts(loader.stdout || '', loaderRequired) &&
+  boundarySummaries.every(summary => loaderLines.filter(line => line === summary).length === 1) &&
+  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
+    loaderLines.filter(line => line.startsWith(prefix)).length === 1) &&
+  loaderLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  ['# start of coverage report', '# end of coverage report'].every(marker => loaderLines.filter(line => line === marker).length === 1) &&
+  loaderRows.length === 1 && loaderRows[0].every((value, index) => value >= loaderMinimum[index]);
 if (result.status !== 0 || !complete || !hasPassingTapContracts(result.stdout || '', required) ||
-    !boundaryComplete || !workerComplete || !schedulerComplete || !adapterComplete || !identityComplete ||
+    !boundaryComplete || !workerComplete || !schedulerComplete || !adapterComplete || !identityComplete || !loaderComplete ||
     !summaries.every(summary => lines.filter(line => line === summary).length === 1) ||
     ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
       lines.filter(line => line.startsWith(prefix)).length !== 1) ||
