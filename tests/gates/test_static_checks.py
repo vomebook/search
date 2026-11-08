@@ -654,8 +654,9 @@ class StaticGateTests(unittest.TestCase):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
-        if (ROOT / "Dockerfile").exists():
-            (self.root / "Dockerfile").touch()
+        # Docker's static-gate stage omits Dockerfile but copies this Space-only project.
+        if (ROOT / "pyrightconfig.json").exists():
+            shutil.copyfile(ROOT / "pyrightconfig.json", self.root / "pyrightconfig.json")
         check = ["node", paths[1]]
         self.assert_check(self.run_check(*check), True, "search-view-key.js")
         test = self.root / paths[2]

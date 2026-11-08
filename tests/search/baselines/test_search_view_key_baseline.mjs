@@ -7,7 +7,8 @@ import vm from 'node:vm';
 
 const root = process.cwd();
 const source = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
-const space = fs.existsSync(path.join(root, 'Dockerfile'));
+// The static-gate Docker stage copies pyrightconfig.json but not Dockerfile.
+const space = fs.existsSync(path.join(root, 'pyrightconfig.json'));
 const extract = name => {
   const match = source.match(new RegExp('^function ' + name + '\\([^]*?^}', 'm'));
   assert.ok(match, `missing host function ${name}`);
