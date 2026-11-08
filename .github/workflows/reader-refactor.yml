@@ -108,6 +108,7 @@ jobs:
           node scripts/search/check_search_response_validation_coverage.mjs
           node scripts/search/check_search_result_identity_coverage.mjs
           node scripts/search/check_search_folder_selection_coverage.mjs
+          node scripts/search/check_search_height_index_coverage.mjs
           node tests/search/response-cache/test_response_cache.js
           node --test tests/search/baselines/test_search_extension_inventory_baseline.mjs tests/search/baselines/test_search_extension_filter_baseline.mjs
           node --test tests/search/baselines/test_search_response_validation_baseline.mjs
@@ -526,6 +527,7 @@ jobs:
           node scripts/search/check_search_response_validation_coverage.mjs
           node scripts/search/check_search_result_identity_coverage.mjs
           node scripts/search/check_search_folder_selection_coverage.mjs
+          node scripts/search/check_search_height_index_coverage.mjs
           node --test tests/search/baselines/test_search_extension_inventory_baseline.mjs tests/search/baselines/test_search_extension_filter_baseline.mjs
           node --test tests/search/baselines/test_search_response_validation_baseline.mjs
           node --test tests/search/baselines/test_search_stable_id_baseline.mjs

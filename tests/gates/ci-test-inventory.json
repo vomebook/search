@@ -454,6 +454,10 @@
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
+    "tests/search/baselines/test_search_height_index_baseline.mjs": {
+      "kind": "script",
+      "source": "scripts/search/check_search_height_index_coverage.mjs"
+    },
     "tests/search/baselines/test_search_readability_baseline.mjs": {
       "kind": "script",
       "source": "scripts/search/check_search_readability_baseline.mjs"

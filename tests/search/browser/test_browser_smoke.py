@@ -572,7 +572,7 @@ class BrowserBehaviorTest(unittest.TestCase):
             let prefixMatches = true;
             for (let index = 0; index < VSCROLL.heights.length; index++) {
                 naiveHeight += VSCROLL.heights[index];
-                if (Math.abs(fenwickSum(VSCROLL.heightTree, index + 1) - naiveHeight) > 0.01) prefixMatches = false;
+                if (Math.abs(getVirtualOffset(index + 1) - naiveHeight) > 0.01) prefixMatches = false;
             }
             const measuredRow = DOM.resultsList.querySelector(`.result-item[data-index="${preservedIndex}"]`);
             let repeatedReads = 0;
