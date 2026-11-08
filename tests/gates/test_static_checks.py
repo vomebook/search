@@ -2719,6 +2719,19 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
             self.assert_check(self.run_check(*production_check), False, "TS2322")
             shutil.copyfile(ROOT / name, source)
 
+    def test_djvu_worker_cyclomatic_complexity_cap(self):
+        # Apply the cap to production source, then prove the command actually
+        # rejects a newly added function above the limit.
+        source = self.root / "static/reader/pdf/reader-djvu-worker.mjs"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / "static/reader/pdf/reader-djvu-worker.mjs", source)
+        check = ["node", ROOT / "node_modules/eslint/bin/eslint.js", "--config", ROOT / "eslint.config.mjs",
+                 source, "--rule", "complexity: [error, 10]", "--max-warnings", "0"]
+        self.assert_check(self.run_check(*check), True, "")
+        choices = "".join(f"if (value === {n}) return {n}; " for n in range(11))
+        source.write_text(source.read_text() + f"\nfunction overlyComplex(value) {{ {choices} return 0; }}\n")
+        self.assert_check(self.run_check(*check), False, "complexity")
+
     def test_djvu_worker_strict_signatures_and_message_boundary(self):
         module = ROOT / "static/reader/pdf/reader-djvu-worker.mjs"
         source = self.root / "static/djvu-worker-usage.mjs"
