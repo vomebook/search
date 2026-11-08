@@ -113,7 +113,8 @@ class ShardRunnerTests(unittest.TestCase):
         for added in ('test_search_folder_selection_coverage_gate_fails_closed', 'test_search_folder_selection_declaration_matches_runtime', 'test_search_folder_selection_rejects_wrong_argument_and_return_types',
                       'test_search_height_index_coverage_gate_fails_closed', 'test_search_height_index_declaration_matches_runtime', 'test_search_height_index_rejects_wrong_argument_and_return_types',
                       'test_search_stable_stringify_coverage_gate_fails_closed', 'test_search_stable_stringify_strict_type_contract',
-                      'test_search_view_key_coverage_gate_fails_closed', 'test_search_view_key_strict_type_contract'):
+                      'test_search_view_key_coverage_gate_fails_closed', 'test_search_view_key_strict_type_contract',
+                      'test_sidebar_markup_coverage_gate_fails_closed', 'test_sidebar_markup_strict_type_contract'):
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, g)
             self.assertIn('tests.gates.test_static_checks.StaticGateTests.' + added, h)
         for added in ('test_pdf_book_url_coverage_gate_fails_closed',

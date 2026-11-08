@@ -31,6 +31,21 @@ declare var VoiceOfMLSearchFolderSelection: {
   applyFolderSelectionToNode(node: VoiceOfMLFolderSelectionNode, row: Pick<ParentNode, "querySelector">, subtreeSet: ReadonlySet<string>,
     selfSet: ReadonlySet<string>, lookup?: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState> | null): void;
 };
+interface VoiceOfMLSidebarFolder {name: string; path?: string; count?: number}
+interface VoiceOfMLSidebarFile {name: string; ext?: string; size?: number | null}
+interface VoiceOfMLSidebarEntries {folders?: VoiceOfMLSidebarFolder[] | null; files?: VoiceOfMLSidebarFile[] | null}
+interface VoiceOfMLSidebarPorts {
+  escape(value: unknown): string | undefined;
+  formatSize(value: number | null | undefined): string | object | undefined;
+  iconType(extension: string | undefined): string | object;
+  name(entry: VoiceOfMLSidebarFile): string;
+  link(repo: string, path: string, entry: VoiceOfMLSidebarFile): string;
+  reader(entry: VoiceOfMLSidebarFile, repo: string, path: string): string;
+  icon(type: string | object): string;
+}
+declare var VoiceOfMLSearchSidebarRender: {
+  browserMarkup(data: VoiceOfMLSidebarEntries, repo: string, path: string, surface: "pages" | "space", ports: VoiceOfMLSidebarPorts): string;
+};
 interface VoiceOfMLSearchViewState {
   mode: string; repoFull: string; query: string; filterMinSize: number | null; filterMaxSize: number | null;
   searchFolders: boolean; exact: boolean; useLocalMode?: boolean; pageSize: number;
