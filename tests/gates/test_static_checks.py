@@ -646,6 +646,69 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(api + usage)
             self.assert_check(self.run_check(*check), False, diagnostic)
 
+    def test_sidebar_markup_coverage_gate_fails_closed(self):
+        paths = ["static/search/presentation/sidebar-render.js", "scripts/search/check_sidebar_markup_coverage.mjs",
+                 "tests/search/baselines/test_sidebar_markup_baseline.mjs", "tests/search/baselines/test_sidebar_markup_differential.mjs",
+                 "tests/search/baselines/test_sidebar_markup_module.mjs", "tests/search/baselines/sidebar-original-render.js.fixture",
+                 "static/app.js", "scripts/check_tap_contracts.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        if (ROOT / "pyrightconfig.json").exists():
+            shutil.copyfile(ROOT / "pyrightconfig.json", self.root / "pyrightconfig.json")
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "sidebar-render.js")
+        test = self.root / paths[3]
+        source = test.read_text()
+        name = "object-valued escaped labels preserve coercion and callback order"
+        self.assertEqual(source.count("test('" + name + "'"), 1)
+        test.write_text(source.replace("test('" + name + "'", "test.skip('" + name + "'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source)
+        fixture = self.root / paths[5]
+        original_fixture = fixture.read_text()
+        fixture.write_text(original_fixture + "\n// tampered\n")
+        self.assert_check(self.run_check(*check), False, "reviewed original renderer changed")
+        fixture.write_text(original_fixture)
+        module = self.root / paths[0]
+        original = module.read_text()
+        probe = "  if (surface === 'pages') {\n"
+        self.assertEqual(original.count(probe), 1)
+        module.write_text(original.replace(probe, probe + "    if (data === globalThis) return '';\n"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        module.write_text(original)
+        gate = self.root / paths[1]
+        gate_source = gate.read_text()
+        include = "--test-coverage-include=**/static/search/presentation/sidebar-render.js"
+        self.assertEqual(gate_source.count(include), 1)
+        gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-sidebar.js"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+
+    def test_sidebar_markup_strict_type_contract(self):
+        for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
+            self.assertIn("static/search/presentation/sidebar-render.js", load_type_config(name)["files"])
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
+            "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/presentation/sidebar-render.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = '  browserMarkup(data: VoiceOfMLSidebarEntries, repo: string, path: string, surface: "pages" | "space", ports: VoiceOfMLSidebarPorts): string;'
+        self.assertEqual(original.count(before), 1)
+        declaration.write_text(original.replace(before, before.replace("): string;", "): number;")))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        declaration.write_text(original)
+        usage = self.root / "static/sidebar-usage.js"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"}, "files": [str(declaration), str(usage)]}))
+        usage.write_text('VoiceOfMLSearchSidebarRender.browserMarkup({}, "r", "p", "other", {});\n')
+        self.assert_check(self.run_check(*check), False, "TS2345")
+
     def test_search_view_key_coverage_gate_fails_closed(self):
         paths = ["static/search/domain/search-view-key.js", "scripts/search/check_search_view_key_coverage.mjs",
                  "tests/search/baselines/test_search_view_key_baseline.mjs", "tests/search/baselines/test_search_view_key_module.mjs",
@@ -2517,7 +2580,7 @@ class StaticGateTests(unittest.TestCase):
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/search/search-session.js", "static/search/reader-navigation.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
-                    "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/domain/search-view-key.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
+                    "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/domain/search-view-key.js", "static/search/presentation/sidebar-render.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertIn("tsc --project config/types/jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])

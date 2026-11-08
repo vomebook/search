@@ -219,6 +219,7 @@ function crossCheck(githubRoot, hfRoot) {
     "search/domain/height-index.js",
     "search/domain/stable-stringify.js",
     "search/domain/search-view-key.js",
+    "search/presentation/sidebar-render.js",
     "search/reader-navigation.js",
     "reader.css",
     "reader/core/reader-request-manager.js",

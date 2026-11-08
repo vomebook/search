@@ -363,6 +363,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
                      'check_search_response_validation_coverage.mjs', 'check_search_result_identity_coverage.mjs',
                      'check_search_folder_selection_coverage.mjs', 'check_search_height_index_coverage.mjs',
                      'check_search_stable_stringify_coverage.mjs', 'check_search_view_key_coverage.mjs',
+                     'check_sidebar_markup_coverage.mjs',
                      'check_search_filter_equality_baseline.mjs', 'check_search_folder_merge_baseline.mjs',
                      'check_search_readability_baseline.mjs'):
             self.assertEqual(workflow.count(f'node scripts/search/{gate}'), 2)
