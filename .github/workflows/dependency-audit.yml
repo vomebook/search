@@ -10,6 +10,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "requirements*.txt"
+      - "config/dependencies/**"
       - ".github/workflows/dependency-audit.yml"
 
 permissions:
@@ -46,5 +47,5 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm audit --audit-level=moderate
-          python -m pip install -r requirements-audit.txt
+          python -m pip install -r config/dependencies/audit.txt
           python -m pip_audit -r requirements.txt --progress-spinner off
