@@ -52,8 +52,33 @@ const boundaryComplete = boundary.status === 0 && hasPassingTapContracts(boundar
   boundaryLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
   ['# start of coverage report', '# end of coverage report'].every(marker => boundaryLines.filter(line => line === marker).length === 1) &&
   coverageRows.length === 1 && coverageRows[0].every((value, index) => value >= minimum[index]);
+// Independently gate the actual adapter's typed worker/message boundary. This
+// is a module-level minimum, not coverage of the complete DjVu Reader.
+const workerMinimum = [100, 93, 100];
+const workerName = 'tests/reader/djvu/test_reader_djvu_worker.mjs';
+const worker = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap',
+  '--experimental-test-coverage', '--test-coverage-include=**/static/reader/pdf/reader-djvu-worker.mjs',
+  ...workerMinimum.map((value, index) => `--test-coverage-${['lines', 'branches', 'functions'][index]}=${value}`),
+  workerName], {encoding: 'utf8'});
+if (worker.stdout) process.stdout.write(worker.stdout);
+if (worker.stderr) process.stderr.write(worker.stderr);
+if (worker.error) throw worker.error;
+const workerLines = (worker.stdout || '').split(/\r?\n/);
+const workerRows = workerLines.flatMap(line => {
+  const match = /^\s*#\s*reader-djvu-worker\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
+  return match ? [match.slice(1).map(Number)] : [];
+});
+const workerSummaries = ['1..1', '# tests 1', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
+const workerComplete = worker.status === 0 && hasPassingTapContracts(worker.stdout || '', [{name: workerName,
+  marker:'DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed'}]) &&
+  workerSummaries.every(summary => workerLines.filter(line => line === summary).length === 1) &&
+  ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
+    workerLines.filter(line => line.startsWith(prefix)).length === 1) &&
+  workerLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
+  ['# start of coverage report', '# end of coverage report'].every(marker => workerLines.filter(line => line === marker).length === 1) &&
+  workerRows.length === 1 && workerRows[0].every((value, index) => value >= workerMinimum[index]);
 if (result.status !== 0 || !complete || !hasPassingTapContracts(result.stdout || '', required) ||
-    !boundaryComplete ||
+    !boundaryComplete || !workerComplete ||
     !summaries.every(summary => lines.filter(line => line === summary).length === 1) ||
     ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].some(prefix =>
       lines.filter(line => line.startsWith(prefix)).length !== 1) ||

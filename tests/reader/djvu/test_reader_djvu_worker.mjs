@@ -204,4 +204,114 @@ for(const type of ['error','messageerror','cancel']) {
   const page=await pdf.getPage(1);await assert.rejects(page.render({canvasContext:{}}).promise,/DJVU_PAGE_GEOMETRY_MISMATCH/);
   pdf.destroy();assert.equal(fake.instance.terminated,true);
 }
+// Untrusted worker message contracts: malformed text and outlines must fail
+// closed rather than entering the PDF-shaped Reader document.
+{
+  async function responseFor(operation, response) {
+    const createWorker=()=>({
+      postMessage(message){
+        const value=message.operation==='open' ? {count:2} : response;
+        queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,...value}}));
+      },terminate(){}
+    });
+    const worker=createDjvuWorkerAdapter('/worker',{createWorker});
+    await worker.open(bytes());
+    try { return await (operation==='text' ? worker.text(1) : worker.outline()); }
+    finally { worker.close(); }
+  }
+  for (const zones of [[null], [{t:'a',x:NaN,y:0,w:1,h:1}], [{t:'a',x:0,y:0,w:1,h:-1}], [{t:17,x:0,y:0,w:1,h:1}]])
+    await assert.rejects(responseFor('text',{text:'a',zones}),/DJVU_TEXT_INVALID/);
+  for (const entries of [[null], [{title:'wrong',depth:1,page:1}],
+    [{title:'one',depth:0,page:1},{title:'skipped depth',depth:2,page:2}],
+    [{title:'one',depth:0,page:3}], [{title:'one',depth:0,page:'1'}]])
+    await assert.rejects(responseFor('outline',{entries}),/DJVU_OUTLINE_INVALID/);
+  assert.deepEqual(await responseFor('outline',{entries:[{title:'one',depth:0,page:1},{title:'two',depth:1,page:2}]}),
+    [{title:'one',depth:0,page:1},{title:'two',depth:1,page:2}]);
+}
+{
+  const fake=fakeEngine({hang:true}),worker=createDjvuWorkerAdapter('/worker',{createWorker:fake.createWorker});
+  const opening=worker.open(bytes());fake.instance.onmessage({data:null});
+  await assert.rejects(opening,/DJVU_WORKER_PROTOCOL/);assert.equal(fake.instance.terminated,true);
+}
+{
+  const fake=fakeEngine({hang:true}),worker=createDjvuWorkerAdapter('/worker',{createWorker:fake.createWorker});
+  const opening=worker.open(bytes());fake.instance.onmessage({data:{id:1,ok:'yes'}});
+  await assert.rejects(opening,/DJVU_WORKER_PROTOCOL/);assert.equal(fake.instance.terminated,true);
+}
+{
+  // Exercise invalid operation responses and serialization without relying on
+  // the decoder process; ownership and fatal settlement remain observable.
+  let instance;
+  const createWorker=()=>instance={postMessage(message){
+    const payload=message.operation==='open'?{count:2}:message.operation==='geometry'
+      ? {width:0,height:10,dpi:300,rotation:0}:{cacheBytes:-1};
+    queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,...payload}}));
+  },terminate(){this.terminated=true}};
+  const worker=createDjvuWorkerAdapter('/worker',{createWorker});
+  await assert.rejects(worker.open(undefined),/DJVU_DOCUMENT_INVALID/);
+  await assert.rejects(worker.openRange(),/DJVU_DOCUMENT_INVALID/);
+  await worker.open(bytes());
+  for (const call of [()=>worker.page(3),()=>worker.geometry(0),()=>worker.text(3)])
+    await assert.rejects(call(),/DJVU_PAGE_INVALID/);
+  await assert.rejects(worker.geometry(1),/DJVU_PAGE_GEOMETRY_INVALID/);
+  await assert.rejects(worker.stats(),/DJVU_WORKER_PROTOCOL/);
+  assert.equal(worker.closed,false);worker.close();assert.equal(worker.closed,true);
+  await assert.rejects(worker.prepare(),{name:'AbortError'});assert.equal(instance.terminated,true);
+}
+{
+  const fake=fakeEngine({hang:true}),worker=createDjvuWorkerAdapter('/worker',{createWorker:fake.createWorker});
+  const opening=worker.open(bytes());
+  await assert.rejects(worker.prepare(),/DJVU_ADAPTER_CONCURRENT_TASK/);
+  await assert.rejects(opening,/DJVU_ADAPTER_CONCURRENT_TASK/);assert.equal(fake.instance.terminated,true);
+}
+{
+  const worker=createDjvuWorkerAdapter('/worker',{createWorker:()=>({
+    postMessage(){throw Error('message transport failed')},terminate(){this.terminated=true}
+  })});
+  await assert.rejects(worker.open(bytes()),/DJVU_WORKER_FAILED/);
+}
+{
+  // Keep the browser's default Worker factory in the contract; prior tests
+  // inject their own worker to control every response.
+  const previous=globalThis.Worker;let instance;
+  try {
+    globalThis.Worker=class {
+      constructor(url,options){assert.equal(url,'/worker');assert.equal(options.type,'module');instance=this;}
+      postMessage(message){queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true}}));}
+      terminate(){this.terminated=true;}
+    };
+    const worker=createDjvuWorkerAdapter('/worker');await worker.prepare();worker.close();
+    assert.equal(instance.terminated,true);
+  } finally { if (previous===undefined) delete globalThis.Worker; else globalThis.Worker=previous; }
+}
+{
+  // Range error codes from the main-thread transport must stay predictable,
+  // including primitive throws and unknown/malformed error messages.
+  for (const [failure, expected] of [
+    [new Error('DJVU_SOURCE_CHANGED'),'DJVU_SOURCE_CHANGED'],
+    [new Error('transport failed'),'DJVU_RANGE_FAILED'],
+    ['offline','DJVU_RANGE_FAILED'],
+    [Object.assign(()=>{}, {code:'DJVU_RANGE_INVALID'}),'DJVU_RANGE_INVALID']
+  ]) {
+    let instance;
+    const rangeReader={total:100,close(){},async read(){throw failure}};
+    const createWorker=()=>instance={postMessage(message){
+      if(message.operation==='open-range') queueMicrotask(()=>this.onmessage({data:{id:message.id,operation:'range',rangeId:1,offset:0,length:8}}));
+      else if(message.operation==='range-result') {
+        assert.equal(message.ok,false);assert.equal(message.error,expected);
+        queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:false,error:message.error}}));
+      }
+    },terminate(){}};
+    const worker=createDjvuWorkerAdapter('/worker',{rangeReader,createWorker});
+    await assert.rejects(worker.openRange(),new RegExp(expected));assert.equal(worker.closed,true);
+  }
+}
+{
+  const rangeReader={total:100,close(){},async read(){return new Uint8Array(8)}};
+  const createWorker=()=>({postMessage(message){
+    queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,count:10001}}));
+  },terminate(){this.terminated=true}});
+  const worker=createDjvuWorkerAdapter('/worker',{rangeReader,createWorker});
+  await assert.rejects(worker.openRange(),/DJVU_PAGE_COUNT_INVALID/);assert.equal(worker.closed,true);
+}
 console.log('DjVu Worker bounds, errors, timeout, cancellation and geometry checks passed');
