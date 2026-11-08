@@ -338,6 +338,10 @@
       "kind": "script",
       "source": "scripts/reader/check_pdf_book_client_coverage.mjs"
     },
+    "tests/reader/pdf-search/test_pdf_book_url.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_book_url_coverage.mjs"
+    },
     "tests/reader/pdf-search/test_pdf_book_worker.mjs": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"

@@ -1,23 +1,12 @@
 import "../../core/reader-security.js";
 import { searchBookText, validateBookText } from "../reader-book-text.js";
+import { validPdfBookUrl, searchPath } from "../reader-pdf-book-url.mjs";
 
 const aborted = () => new DOMException("Search cancelled", "AbortError");
 const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
-const bookPath = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/(?:(?:[0-9a-f]{16}\/)?ocr\/book-text\.json\.gz|[0-9a-f]{16}\/text\/book-text\.json\.gz)$/;
-const searchPath = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/text\/search-([0-9]{6})-([0-9]{6})\.json\.gz$/;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 let configuration, book, pendingBook, controller, active = 0, session;
 const partitionRequests = new Set();
-
-function validUrl(raw, pathPattern = bookPath) {
-  const url = new URL(raw, self.location.href);
-  if (url.username || url.password || url.hash) return false;
-  if (url.pathname !== "/api/reader-bucket-resource") return false;
-  return (url.origin === self.location.origin || url.origin === "https://voiceofml-search.hf.space") &&
-    url.searchParams.getAll("path").length === 1 &&
-    [...url.searchParams.keys()].every(key => key === "path") &&
-    pathPattern.test(url.searchParams.get("path"));
-}
 
 /** @overload
  * @param {ReadableStream<Uint8Array>} stream
@@ -72,7 +61,7 @@ async function readBounded(stream, signal, expected = null, text = false) {
 async function loadBook() {
   if (book) return book;
   if (pendingBook) return pendingBook;
-  if (!validUrl(configuration.url) ||
+  if (!validPdfBookUrl(configuration.url, self.location.href) ||
       !Number.isSafeInteger(configuration.bytes) || configuration.bytes < 1 || configuration.bytes > limit ||
       !/^[0-9a-f]{64}$/.test(configuration.sha256)) throw new Error("PDF_OCR_SOURCE_INVALID");
   const request = new AbortController();
@@ -128,7 +117,7 @@ function validateSearchConfiguration() {
     const suffix = `text/search-${String(part.start).padStart(6, "0")}-${String(part.end).padStart(6, "0")}.json.gz`;
     if (!Number.isSafeInteger(part.start) || !Number.isSafeInteger(part.end) || part.start !== next ||
         part.end < part.start || part.end > configuration.pageCount || part.end - part.start >= 32 ||
-        !validUrl(part.url, searchPath) || !path.endsWith(suffix) ||
+        !validPdfBookUrl(part.url, self.location.href, searchPath) || !path.endsWith(suffix) ||
         !path.includes(`objects/${configuration.sourceSha.slice(0, 2)}/${configuration.sourceSha}/`) ||
         !Number.isSafeInteger(part.bytes) || part.bytes < 1 || part.bytes > limit ||
         !/^[0-9a-f]{64}$/.test(part.sha256)) throw new Error("PDF_TEXT_INDEX_INVALID");
