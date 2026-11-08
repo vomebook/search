@@ -35,6 +35,7 @@
     "../../static/search/result-identity.js",
     "../../static/search/folder-selection.js",
     "../../static/search/domain/height-index.js",
+    "../../static/search/domain/stable-stringify.js",
     "../../static/reader/pdf/reader-engine-preload.js",
     "../../static/reader/formats/reader-chapter-repository.js",
     "../../static/reader/formats/reader-section-virtualizer.js",

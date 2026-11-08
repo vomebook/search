@@ -14,6 +14,7 @@ const validationName = "search/response-validation.js";
 const identityName = "search/result-identity.js";
 const folderSelectionName = "search/folder-selection.js";
 const heightIndexName = "search/domain/height-index.js";
+const canonicalName = "search/domain/stable-stringify.js";
 assert.equal(APP_DEPENDENCIES.filter(name => name === moduleName).length, 1);
 assert.equal((html.match(/<script src="[^"\n]*search\/record-path\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(moduleName) < html.lastIndexOf("app.js"));
@@ -42,13 +43,17 @@ assert.ok(html.indexOf(moduleName) < html.indexOf(identityName) && html.indexOf(
 assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/result-identity\.js"/);
 assert.equal(APP_DEPENDENCIES.filter(name => name === folderSelectionName).length, 1);
 assert.equal(APP_DEPENDENCIES.filter(name => name === heightIndexName).length, 1);
-assert.equal(APP_DEPENDENCIES.at(-1), heightIndexName);
+assert.equal(APP_DEPENDENCIES.filter(name => name === canonicalName).length, 1);
+assert.equal(APP_DEPENDENCIES.at(-1), canonicalName);
 assert.equal((html.match(/<script src="[^"\n]*search\/folder-selection\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(identityName) < html.indexOf(folderSelectionName) && html.indexOf(folderSelectionName) < html.lastIndexOf("app.js"));
 assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/folder-selection\.js"/);
 assert.equal((html.match(/<script src="[^"\n]*search\/domain\/height-index\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(folderSelectionName) < html.indexOf(heightIndexName) && html.indexOf(heightIndexName) < html.lastIndexOf("app.js"));
 assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/domain\/height-index\.js"/);
+assert.equal((html.match(/<script src="[^"\n]*search\/domain\/stable-stringify\.js"><\/script>/g) || []).length, 1);
+assert.ok(html.indexOf(heightIndexName) < html.indexOf(canonicalName) && html.indexOf(canonicalName) < html.lastIndexOf("app.js"));
+assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/domain\/stable-stringify\.js"/);
 for (const project of ["github", "hf"]) {
   assert.equal(resources.buildFiles(project).filter(name => name === moduleName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === highlightName).length, 1);
@@ -58,6 +63,7 @@ for (const project of ["github", "hf"]) {
   assert.equal(resources.buildFiles(project).filter(name => name === identityName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === folderSelectionName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === heightIndexName).length, 1);
+  assert.equal(resources.buildFiles(project).filter(name => name === canonicalName).length, 1);
 }
 assert.match(worker, /["']\/(?:search\/)?static\/app\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/record-path\.js["']/);
@@ -68,4 +74,5 @@ assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/response-validat
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/result-identity\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/folder-selection\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/domain\/height-index\.js["']/);
+assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/domain\/stable-stringify\.js["']/);
 console.log("record path source and bundled shell/SW contracts preserved");
