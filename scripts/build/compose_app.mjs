@@ -8,7 +8,7 @@ export const APP_DEPENDENCIES = Object.freeze([
   "reader-resources.js", "reader/core/reader-contract.js", "search/reader-navigation.js",
   "search/search-session.js", "search/download-controller.js", "search/size-format.js", "search/record-path.js",
   "search/highlight.js", "search/response-cache.js", "search/file-types.js", "search/response-validation.js", "search/result-identity.js",
-  "search/folder-selection.js"
+  "search/folder-selection.js", "search/height-index.js"
 ]);
 
 export function stripBundledScripts(html) {

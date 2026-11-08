@@ -1890,6 +1890,8 @@ const VSCROLL = {
   renderFrame: 0,
   renderAfterScroll: false,
   estimatedHeight: 60,
+  sparseHeights: false,
+  heightBase: 60,
   isDraggingThumb: false,
   lastScrollTop: 0,
   lastScrollTime: 0,
@@ -3535,7 +3537,7 @@ function materializeSnapshotRange(task, start, end, deferHeights = false) {
       const previous = VSCROLL.heights[index] || VSCROLL.heightBase || VSCROLL.estimatedHeight;
       VSCROLL.heights[index] = cached.height;
       if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
-        fenwickAdd(VSCROLL.heightTree, index + 1, cached.height - previous);
+        VoiceOfMLSearchHeightIndex.fenwickAdd(VSCROLL.heightTree, index + 1, cached.height - previous);
       } else VSCROLL.heightsDirty = true;
     }
   }
@@ -4568,7 +4570,7 @@ function renderVisible() {
   const scrollingDown = scrollTop >= previousScrollTop;
   VSCROLL.scrollDirection = scrollingDown ? 1 : -1;
   VSCROLL.lastScrollTop = scrollTop;
-  const totalH = fenwickSum(VSCROLL.heightTree, len);
+  const totalH = getVirtualOffset(len);
   const segmentLimit = RESULT_SCROLL_SEGMENT_HEIGHT;
   const physicalTop = scrollTop - resultScrollOrigin;
   const maxOrigin = Math.max(0, totalH - segmentLimit);
@@ -4595,8 +4597,8 @@ function renderVisible() {
   if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !segmentNeedsRecenter) return false;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
-  const topH = fenwickSum(VSCROLL.heightTree, start);
-  const endH = fenwickSum(VSCROLL.heightTree, end);
+  const topH = getVirtualOffset(start);
+  const endH = getVirtualOffset(end);
   const bottomH = Math.max(0, totalH - endH);
   const anchorIndex = findVirtualIndex(scrollTop);
   const anchor = { index: anchorIndex, offset: scrollTop - getVirtualOffset(anchorIndex) };
@@ -4618,62 +4620,19 @@ function renderVisible() {
 }
 
 function ensureHeightTree() {
-  const len = VSCROLL.heights.length;
-  if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === len + 1) return;
-  if (VSCROLL.sparseHeights) {
-    const tree = new Array(len + 1);
-    for (const key of Object.keys(VSCROLL.heights)) fenwickAdd(tree, Number(key) + 1, VSCROLL.heights[key] - VSCROLL.heightBase);
-    VSCROLL.heightTree = tree; VSCROLL.heightsDirty = false;
-    return;
-  }
-  const tree = new Array(len + 1).fill(0);
-  const est = VSCROLL.estimatedHeight || 60;
-  for (let i = 1; i <= len; i++) {
-    tree[i] += VSCROLL.heights[i - 1] || est;
-    const parent = i + (i & -i);
-    if (parent <= len) tree[parent] += tree[i];
-  }
-  VSCROLL.heightTree = tree;
-  VSCROLL.heightsDirty = false;
-}
-
-function fenwickAdd(tree, idx, delta) {
-  if (!delta) return;
-  for (let i = idx; i < tree.length; i += i & -i) tree[i] = (tree[i] || 0) + delta;
-}
-
-function fenwickSum(tree, idx) {
-  let sum = VSCROLL.sparseHeights ? idx * VSCROLL.heightBase : 0;
-  for (let i = idx; i > 0; i -= i & -i) sum += tree[i] || 0;
-  return sum;
+  VoiceOfMLSearchHeightIndex.ensureTree(VSCROLL);
 }
 
 function getVirtualTotalHeight() {
-  ensureHeightTree();
-  return fenwickSum(VSCROLL.heightTree, VSCROLL.heights.length);
+  return VoiceOfMLSearchHeightIndex.totalHeight(VSCROLL);
 }
 
 function getVirtualOffset(index) {
-  ensureHeightTree();
-  return fenwickSum(VSCROLL.heightTree, Math.max(0, Math.min(index, VSCROLL.heights.length)));
+  return VoiceOfMLSearchHeightIndex.offsetOf(VSCROLL, index);
 }
 
 function findVirtualIndex(offset) {
-  ensureHeightTree();
-  const len = VSCROLL.heights.length;
-  let idx = 0;
-  let bit = 1;
-  while ((bit << 1) < VSCROLL.heightTree.length) bit <<= 1;
-  let sum = 0;
-  for (; bit > 0; bit >>= 1) {
-    const next = idx + bit;
-    const height = (VSCROLL.heightTree[next] || 0) + (VSCROLL.sparseHeights ? (next & -next) * VSCROLL.heightBase : 0);
-    if (next < VSCROLL.heightTree.length && sum + height <= offset) {
-      idx = next;
-      sum += height;
-    }
-  }
-  return Math.min(Math.max(0, idx), Math.max(0, len - 1));
+  return VoiceOfMLSearchHeightIndex.indexAt(VSCROLL, offset);
 }
 
 function resetVirtualScrollState() {
@@ -4732,20 +4691,7 @@ function ensureVirtualHeights(len) {
       : VSCROLL.estimatedHeight;
   }
   if (canExtendTree) {
-    const newPrefix = new Array(len - oldLen + 1).fill(0);
-    for (let i = oldLen; i < len; i++) newPrefix[i - oldLen + 1] = newPrefix[i - oldLen] + VSCROLL.heights[i];
-    VSCROLL.heightTree.length = len + 1;
-    for (let i = oldLen + 1; i <= len; i++) {
-      const rangeStart = i - (i & -i) + 1;
-      const oldStart = Math.max(1, rangeStart);
-      const oldEnd = Math.min(oldLen, i);
-      const oldSum = oldEnd >= oldStart
-        ? fenwickSum(VSCROLL.heightTree, oldEnd) - fenwickSum(VSCROLL.heightTree, oldStart - 1)
-        : 0;
-      const newStart = Math.max(oldLen + 1, rangeStart);
-      const newSum = newPrefix[i - oldLen] - newPrefix[newStart - oldLen - 1];
-      VSCROLL.heightTree[i] = oldSum + newSum;
-    }
+    VoiceOfMLSearchHeightIndex.extendTree(VSCROLL, oldLen);
   } else {
     VSCROLL.heightsDirty = true;
   }
@@ -4764,9 +4710,9 @@ function refreshVirtualAfterAppend(updateView = true) {
     return;
   }
   ensureHeightTree();
-  const topH = fenwickSum(VSCROLL.heightTree, VSCROLL.renderStart);
-  const endH = fenwickSum(VSCROLL.heightTree, VSCROLL.renderEnd);
-  const totalH = fenwickSum(VSCROLL.heightTree, VSCROLL.heights.length);
+  const topH = getVirtualOffset(VSCROLL.renderStart);
+  const endH = getVirtualOffset(VSCROLL.renderEnd);
+  const totalH = getVirtualTotalHeight();
   const logicalTop = getResultScrollTop(), previousOrigin = resultScrollOrigin;
   layoutResultScrollSegment(topH, endH, totalH, logicalTop);
   if (previousOrigin !== resultScrollOrigin) DOM.resultsContainer.scrollTop = logicalTop - resultScrollOrigin;
@@ -4836,7 +4782,7 @@ function measureHeights(start = VSCROLL.renderStart, end = VSCROLL.renderEnd, an
       const prev = VSCROLL.heights[idx] || VSCROLL.estimatedHeight || 60;
       VSCROLL.heights[idx] = height;
       if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
-        fenwickAdd(VSCROLL.heightTree, idx + 1, height - prev);
+        VoiceOfMLSearchHeightIndex.fenwickAdd(VSCROLL.heightTree, idx + 1, height - prev);
       } else {
         VSCROLL.heightsDirty = true;
       }

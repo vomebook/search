@@ -194,7 +194,7 @@ for (const {name:project,root} of searchTestProjects()) {
       Object.assign(c,{positionRestore:null,resultWindow:null,rememberDisplayedSearchView(){},
         DOM:{resultsContainer:{clientHeight:600},resultsList:{querySelector:()=>({})}},
         ensureVirtualHeights(len){c.VSCROLL.heights.length=len;},ensureHeightTree(){},
-        fenwickSum:(_,n)=>n*60,getVirtualOffset:n=>n*60,
+        getVirtualOffset:n=>n*60,
         layoutResultScrollSegment(){},resultScrollOrigin:0});
       c.STATE.results.length=300;c.VSCROLL.heights=new Array(200);c.VSCROLL.heightTree=[];
       c.VSCROLL.estimatedHeight=60;c.VSCROLL.renderStart=near?180:0;c.VSCROLL.renderEnd=near?200:30;

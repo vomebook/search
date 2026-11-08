@@ -4,6 +4,7 @@ const vm = require('vm');
 const assert = require('assert');
 const {test, run} = require('../../support/test_harness');
 const {searchTestProjects} = require('../../support/search_test_projects');
+const {installClassicSearchModules} = require('../../support/classic_search_modules');
 
 function fixture(source, root) {
   const results = new Array(5000);
@@ -22,11 +23,8 @@ function fixture(source, root) {
   c.setResultScrollTop=value=>{c.top=value;c.writes++;};
   c.refreshVirtualAfterAppend=update=>{assert.strictEqual(update,false);c.refreshes++;c.ensureHeightTree();};
   vm.createContext(c);
-  const heightIndex = path.join(root, 'static/search/domain/height-index.js');
-  const extracted = source.includes('VoiceOfMLSearchHeightIndex.');
-  if (extracted) vm.runInContext(fs.readFileSync(heightIndex, 'utf8'), c, {filename: heightIndex});
-  const helpers = extracted ? [] : ['fenwickAdd', 'fenwickSum'];
-  for(const name of ['cloneSearchResult','ensureHeightTree',...helpers,
+  installClassicSearchModules(root, c);
+  for(const name of ['cloneSearchResult','ensureHeightTree','getVirtualTotalHeight',
     'getVirtualOffset','findVirtualIndex','materializeSnapshotRange','applySnapshotCloneHeights','getSelectedFiles']) {
     const match=source.match(new RegExp('^function '+name+'\\([^]*?^}', 'm'));
     assert(match,name);vm.runInContext(match[0],c);

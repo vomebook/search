@@ -31,6 +31,22 @@ declare var VoiceOfMLSearchFolderSelection: {
   applyFolderSelectionToNode(node: VoiceOfMLFolderSelectionNode, row: Pick<ParentNode, "querySelector">, subtreeSet: ReadonlySet<string>,
     selfSet: ReadonlySet<string>, lookup?: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState> | null): void;
 };
+interface VoiceOfMLHeightIndexState {
+  heights: readonly number[];
+  heightTree: number[];
+  heightsDirty: boolean;
+  sparseHeights: boolean;
+  heightBase: number;
+  estimatedHeight?: number;
+}
+declare var VoiceOfMLSearchHeightIndex: {
+  fenwickAdd(tree: number[], idx: number, delta: number): void;
+  ensureTree(state: VoiceOfMLHeightIndexState): number[];
+  extendTree(state: VoiceOfMLHeightIndexState, previousLength: number): boolean;
+  totalHeight(state: VoiceOfMLHeightIndexState): number;
+  offsetOf(state: VoiceOfMLHeightIndexState, index: number): number;
+  indexAt(state: VoiceOfMLHeightIndexState, offset: number): number;
+};
 declare class BoundedResponseCache<T = unknown> extends Map<string, T> {
   constructor(limit: number, ttl: number, budget?: number);
   limit: number;
