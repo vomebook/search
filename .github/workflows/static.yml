@@ -1,5 +1,6 @@
 # Simple workflow for deploying static content to GitHub Pages
 name: Deploy static content to Pages
+run-name: ${{ inputs.search_transition && format('search-transition/{0}', inputs.search_transition) || 'Deploy static content to Pages' }}
 
 on:
   # Runs on pushes targeting the default branch
@@ -12,6 +13,10 @@ on:
     inputs:
       search_generation:
         description: Optional immutable search data generation to verify and deploy
+        required: false
+        type: string
+      search_transition:
+        description: Optional unique search promotion operation ID, for correlation
         required: false
         type: string
 
@@ -85,8 +90,15 @@ jobs:
       - name: Build static site
         env:
           SEARCH_GENERATION: ${{ inputs.search_generation || vars.SEARCH_DATA_GENERATION || 'dbf3ff87d7e5dd931fc8253fb0e69fffde9d3eade8d30dfd88af6d6d75e7e8aa' }}
+          SEARCH_INPUT_GENERATION: ${{ inputs.search_generation }}
+          SEARCH_TRANSITION: ${{ inputs.search_transition }}
         run: |
           set -euo pipefail
+          if [[ -n "$SEARCH_TRANSITION" ]]; then
+            [[ "$SEARCH_TRANSITION" =~ ^[0-9a-f]{32}$ ]]
+            [[ "$SEARCH_INPUT_GENERATION" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$SEARCH_GENERATION" == "$SEARCH_INPUT_GENERATION" ]]
+          fi
           mkdir -p _site/static
           cp static/index.html static/manifest.json static/sw.js _site/
           cp -a static/icons _site/icons
