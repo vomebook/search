@@ -3341,33 +3341,9 @@ function sameSearchFilterValues(current, saved) {
 }
 
 function getSearchViewKey() {
-  const scalars = [STATE.mode, STATE.repoFull || "", STATE.query || "", STATE.filterMinSize,
-    STATE.filterMaxSize, STATE.sort || "relevance", STATE.searchFolders, STATE.exact, STATE.useLocalMode, STATE.pageSize];
-  const filters = [STATE.filterRepos, STATE.filterExtensions, STATE.filterFolderSelfs, STATE.filterFolderSubtrees,
-    STATE.filterFolderSelfs.length || STATE.filterFolderSubtrees.length ? [] : STATE.filterFolders];
-  if (searchViewKeyMemo && sameSearchFilterValues(scalars, searchViewKeyMemo.scalars)
-      && filters.every((values, index) => sameSearchFilterValues(values, searchViewKeyMemo.filters[index]))) return searchViewKeyMemo.key;
-  const key = stableSearchStringify({
-    mode: STATE.mode,
-    repo: STATE.repoFull || "",
-    query: STATE.query || "",
-    repos: STATE.filterRepos.slice().sort(),
-    extensions: STATE.filterExtensions.slice().sort(),
-    folders: {
-      self: STATE.filterFolderSelfs.slice().sort(),
-      subtree: STATE.filterFolderSubtrees.slice().sort(),
-    },
-    plainFolders: filters[4].slice().sort(),
-    minSize: STATE.filterMinSize,
-    maxSize: STATE.filterMaxSize,
-    sort: STATE.sort || "relevance",
-    searchFolders: STATE.searchFolders,
-    exact: STATE.exact,
-    useLocalMode: STATE.useLocalMode,
-    pageSize: STATE.pageSize,
-  });
-  searchViewKeyMemo = { key, scalars, filters: filters.map(values => values.slice()) };
-  return key;
+  searchViewKeyMemo = VoiceOfMLSearchViewKey.resolve(() => ({state: STATE, surface: "pages", getSort: () => STATE.sort || "relevance"}),
+    () => searchViewKeyMemo, () => sameSearchFilterValues, () => stableSearchStringify);
+  return searchViewKeyMemo.key;
 }
 function getHeightMeasurementKey() {
   return (DOM.resultsContainer?.clientWidth || 0) + ":" + (STATE.isMobile ? "mobile" : "desktop") + ":" + (STATE.isDark ? "dark" : "light");

@@ -31,6 +31,25 @@ declare var VoiceOfMLSearchFolderSelection: {
   applyFolderSelectionToNode(node: VoiceOfMLFolderSelectionNode, row: Pick<ParentNode, "querySelector">, subtreeSet: ReadonlySet<string>,
     selfSet: ReadonlySet<string>, lookup?: Map<VoiceOfMLFolderSelectionNode, VoiceOfMLFolderSelectionState> | null): void;
 };
+interface VoiceOfMLSearchViewState {
+  mode: string; repoFull: string; query: string; filterMinSize: number | null; filterMaxSize: number | null;
+  searchFolders: boolean; exact: boolean; useLocalMode?: boolean; pageSize: number;
+  filterRepos: string[]; filterExtensions: string[]; filterFolderSelfs: string[]; filterFolderSubtrees: string[]; filterFolders: string[];
+}
+interface VoiceOfMLSearchViewMemo {
+  key: string; scalars: (string | number | boolean | null | undefined)[]; filters: string[][];
+}
+interface VoiceOfMLSearchViewProjection {
+  mode: string; repo: string; query: string; repos: string[]; extensions: string[];
+  folders: {self: string[]; subtree: string[]}; plainFolders: string[]; minSize: number | null; maxSize: number | null;
+  sort: string; searchFolders: boolean; exact: boolean; pageSize: number; useLocalMode?: boolean | undefined;
+}
+declare var VoiceOfMLSearchViewKey: {
+  resolve(getSource: () => {state: VoiceOfMLSearchViewState; surface: "pages" | "space"; getSort: () => string},
+    getPrevious: () => VoiceOfMLSearchViewMemo | null,
+    getCompare: () => (current: readonly (string | number | boolean | null | undefined)[], saved: readonly (string | number | boolean | null | undefined)[] | null | undefined) => boolean,
+    getEncoder: () => (projection: VoiceOfMLSearchViewProjection) => string): VoiceOfMLSearchViewMemo;
+};
 declare var VoiceOfMLSearchCanonical: {
   stableStringify(value: unknown, getVisit: () => (value: unknown) => string | undefined): string | undefined;
 };
