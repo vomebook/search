@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import {
-  chapterMayContainBigrams, countMatches, isSearchIndexProxyURL, queryBigramFilters, resultPage, scanText, validateIndex
-} from "../../../static/reader/search/workers/reader-chapter-search-worker.mjs";
+import {chapterMayContainBigrams, countMatches, queryBigramFilters, resultPage, scanText}
+  from "../../../static/reader/search/reader-chapter-search-core.mjs";
+import {isSearchIndexProxyURL, validateIndex}
+  from "../../../static/reader/search/workers/reader-chapter-search-worker.mjs";
 
 const origin = "https://voiceofml-search.hf.space";
 const indexURL = path => new URL(origin + "/api/reader-bucket-resource?path=" + encodeURIComponent(path));
@@ -91,4 +92,42 @@ const literals = [{ index: 1, title: "literal", path: "chapters/1.xhtml", text: 
 const literalCounts = await countMatches(literals, "&nbsp;", () => true);
 assert.equal(literalCounts.total, 70);
 assert.equal((await resultPage(literals, "&nbsp;", literalCounts.counts, 50, () => true)).length, 20);
+// The same pure search logic serves both Worker backends. A sparse Bloom
+// filter may reject a chapter, whereas an all-ones filter never does.
+{
+  const filters = queryBigramFilters("手机");
+  const chapter = {index: 1, title: "filter", path: "1", text: "手机", bigramFilter: new Uint8Array(32)};
+  assert.equal(chapterMayContainBigrams(chapter, filters), false);
+  chapter.bigramFilter.fill(255);
+  assert.equal(chapterMayContainBigrams(chapter, filters), true);
+  assert.equal(queryBigramFilters("A"), null);
+  assert.equal((await countMatches([chapter], "手机", () => true)).total, 1);
+}
+// Force a cooperative yield without timing dependence. The currentness guard
+// executes inside the real scan; after the yield it must check cancellation.
+{
+  const realPerformance = globalThis.performance;
+  let now = 0;
+  try {
+    Object.defineProperty(globalThis, "performance", {configurable: true, value: {now: () => now}});
+    const chapter = {index: 1, title: "yield", path: "1", text: "x".repeat(65536 * 3)};
+    const result = await countMatches([chapter], "z", () => { now += 9; return true; });
+    assert.equal(result.total, 0);
+  } finally { Object.defineProperty(globalThis, "performance", {configurable: true, value: realPerformance}); }
+}
+// Boundary offsets, early stop, cancellation and Bloom-filter skips are
+// exercised independently of the Worker transport and index loader.
+{
+  let visited = 0, yielded = 0;
+  await scanText("needle needle", "needle", () => { visited++; return false; }, () => true,
+    async () => { yielded++; });
+  assert.equal(visited, 1); assert.equal(yielded, 0);
+  await assert.rejects(scanText("needle", "needle", () => {}, () => false), {name:"AbortError"});
+  const chapter = {index:1,title:"x",path:"1",text:"needle ".repeat(600)};
+  const count = await countMatches([chapter], "needle", () => true);
+  assert.equal((await resultPage([chapter], "needle", count.counts, 200, () => true, count.checkpoints)).length, 50);
+  await assert.rejects(resultPage([chapter], "needle", count.counts, 1, () => false), {name:"AbortError"});
+  const filtered = {index:2,title:"x",path:"2",text:"手机",bigramFilter:new Uint8Array(32)};
+  assert.deepEqual(await resultPage([filtered], "手机", [1], 0, () => true), []);
+}
 console.log("chapter search: complete counts, paging, literal matches, Unicode boundaries, cancellation and index identity passed");
