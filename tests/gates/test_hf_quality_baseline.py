@@ -34,12 +34,12 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
                 self.assertIn(cache, job)
             self.assertNotIn('path: node_modules', job)
         hf = workflow.split('  huggingface-search:\n', 1)[1]
-        for command in ('python -m pip install -r requirements.txt -r requirements-static-check.txt '
+        for command in ('python -m pip install -r requirements.txt -r config/dependencies/static-check.txt '
                         'playwright==1.63.0 Pillow==12.3.0 httpx==0.28.1',
                         'npm ci --ignore-scripts --no-audit --no-fund',
                         'playwright install-deps chromium firefox', 'playwright install chromium firefox',
                         'fetch_foliate_reader.mjs', 'copy_reader_vendor.mjs',
-                        "hashFiles('huggingface-search/requirements.txt', 'huggingface-search/requirements-static-check.txt')",
+                        "hashFiles('huggingface-search/requirements.txt', 'huggingface-search/config/dependencies/static-check.txt')",
                         "hashFiles('huggingface-search/package-lock.json')", '${{ steps.distro.outputs.version }}-1.63.0'):
             self.assertIn(command, hf)
         for job in (github, firefox, hf):
@@ -58,6 +58,21 @@ class ReaderWorkflowParallelTests(unittest.TestCase):
         self.assertNotIn('path: node_modules', hf)
         self.assertNotIn('continue-on-error:', hf)
         self.assertNotIn('if:', hf)
+
+
+class DependencyLayoutCiTests(unittest.TestCase):
+    def test_static_and_audit_dependencies_keep_distinct_pinned_install_paths(self):
+        root = Path(__file__).resolve().parents[2]
+        self.assertEqual((root / "config/dependencies/static-check.txt").read_text().splitlines(), ["ruff==0.17.3"])
+        audit = (root / ".github/workflows/dependency-audit.yml").read_text()
+        self.assertIn('"config/dependencies/**"', audit)
+        self.assertIn('python -m pip install -r config/dependencies/audit.txt', audit)
+        self.assertIn('python -m pip_audit -r requirements.txt --progress-spinner off', audit)
+        workflow = (root / ".github/workflows/reader-refactor.yml").read_text()
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        self.assertIn('working-directory: huggingface-search', hf)
+        self.assertIn('-r requirements.txt -r config/dependencies/static-check.txt', hf)
+        self.assertNotIn('requirements-static-check.txt', workflow)
 
 
 class CrossSiteSearchContractsCiTests(unittest.TestCase):

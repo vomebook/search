@@ -42,11 +42,11 @@ jobs:
         with:
           python-version: '3.11.17'
           cache: pip
-          cache-dependency-path: requirements-static-check.txt
+          cache-dependency-path: config/dependencies/static-check.txt
       - name: Install pinned static checkers
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          python -m pip install -r requirements-static-check.txt
+          python -m pip install -r config/dependencies/static-check.txt
       - name: Check JavaScript, HTML, CSS and JavaScript types
         run: npm run check:static
       - name: Check all own Python source and tests
