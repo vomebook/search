@@ -3036,7 +3036,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
         local.write_text(original+f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
         self.assert_check(self.run_check(*lint),False,'complexity')
-        if (ROOT / 'Dockerfile').exists():
+        if (ROOT / 'quality/baselines/strict-inventory-debt.json').exists():
             self.assertIn('isSearchIndexProxyURL(url, self.location.origin)',original)
             self.assertIn('credentials: "same-origin"',original)
             self.assertNotIn('credentials: "omit"',original)
