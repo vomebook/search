@@ -1,20 +1,7 @@
 const PACKED_LIMIT = 64 * 1024 * 1024;
 const TEXT_LIMIT = 256 * 1024 * 1024;
-const PAGE_SIZE = 50;
-const CHECKPOINT_STRIDE = 256;
-const BIGRAM_FILTER_HASHES = 7;
 const MAX_BIGRAM_FILTER_BYTES = 32 * 1024;
-const pause = () => new Promise(resolve => setTimeout(resolve, 0));
-function cooperativeYield() {
-  let last = performance.now();
-  return async () => {
-    if (performance.now() - last < 8) return;
-    await pause();
-    last = performance.now();
-  };
-}
-const escapePattern = value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const aborted = () => new DOMException("Search cancelled", "AbortError");
+import {countMatches, resultPage, aborted, PAGE_SIZE} from "../reader-chapter-search-core.mjs";
 
 async function readBounded(stream, limit, signal) {
   const reader = stream.getReader(), chunks = [];
@@ -72,123 +59,6 @@ export function validateIndex(data, chapters, textProfile) {
   return data.chapters;
 }
 
-function bigramHashes(gram) {
-  let first = 2166136261, second = 0x9E3779B9;
-  for (const character of gram) {
-    const codepoint = character.codePointAt(0);
-    first = Math.imul(first ^ codepoint, 16777619) >>> 0;
-    second = (second ^ (codepoint + 0x9E3779B9 + ((second << 6) >>> 0) + (second >>> 2))) >>> 0;
-  }
-  second |= 1;
-  return Array.from({ length: BIGRAM_FILTER_HASHES }, (_, probe) =>
-    (first + Math.imul(probe, second)) >>> 0);
-}
-
-export function queryBigramFilters(query) {
-  const characters = Array.from(query);
-  if (characters.length < 2 || characters.some(character =>
-    character.toLowerCase() !== character.toUpperCase())) return null;
-  return characters.slice(1).map((character, index) => bigramHashes(characters[index] + character));
-}
-
-export function chapterMayContainBigrams(chapter, filters) {
-  const bloom = chapter.bigramFilter;
-  if (!filters || !bloom) return true;
-  const mask = bloom.length * 8 - 1;
-  for (const hashes of filters) for (const hash of hashes) {
-    const bit = hash & mask;
-    if (!(bloom[bit >> 3] & (1 << (bit & 7)))) return false;
-  }
-  return true;
-}
-
-// Scan bounded pieces so a new query can cancel even one very large chapter.
-// Keep counts, rather than one object per hit; all matches remain pageable.
-export async function scanText(text, query, visit, current = () => true, yieldWork = pause,
-  startOffset = 0, matcher = null) {
-  const pattern = matcher || new RegExp(escapePattern(query), "giu");
-  let next = startOffset;
-  for (let start = startOffset; start < text.length; start += 65536) {
-    if (!current()) throw aborted();
-    const part = text.slice(start, start + 65536 + query.length + 1);
-    pattern.lastIndex = Math.max(0, next - start);
-    let match;
-    while ((match = pattern.exec(part))) {
-      if (match.index >= 65536) break;
-      const offset = start + match.index;
-      next = offset + match[0].length;
-      if (visit(offset, match[0].length) === false) return;
-    }
-    await yieldWork();
-  }
-  if (!current()) throw aborted();
-}
-
-export async function countMatches(chapters, query, current, progress = null) {
-  const counts = [], checkpoints = [], firstPage = [];
-  const yieldWork = cooperativeYield();
-  const pattern = new RegExp(escapePattern(query), "giu");
-  const filters = queryBigramFilters(query);
-  let total = 0;
-  for (const [chapterIndex, chapter] of chapters.entries()) {
-    let count = 0;
-    if (chapterMayContainBigrams(chapter, filters)) {
-      await scanText(chapter.text, query, (start, length) => {
-        if ((total + count) % CHECKPOINT_STRIDE === 0)
-          checkpoints.push({ ordinal: total + count, chapterIndex, start });
-        count++;
-        if (firstPage.length < PAGE_SIZE) firstPage.push(searchResult(chapter, start, length));
-      }, current, yieldWork, 0, pattern);
-    }
-    counts.push(count);
-    total += count;
-    if (progress && (counts.length === 1 || (count && total <= PAGE_SIZE) ||
-        counts.length % 8 === 0 || counts.length === chapters.length))
-      await progress({ counts, total, scanned: counts.length, firstPage });
-  }
-  return { counts, checkpoints, total, firstPage };
-}
-
-function searchResult(chapter, start, length) {
-  const before = Math.max(0, start - 72), after = Math.min(chapter.text.length, start + length + 88);
-  return {
-    chapterIndex: chapter.index, start, length,
-    location: `第 ${chapter.index} 章 · ${chapter.title}`,
-    snippet: { text: chapter.text.slice(before, after), matchStart: start - before,
-      matchLength: length, prefix: before ? "…" : "", suffix: after < chapter.text.length ? "…" : "" }
-  };
-}
-
-export async function resultPage(chapters, query, counts, offset, current, checkpoints = []) {
-  const results = [];
-  const pattern = new RegExp(escapePattern(query), "giu");
-  const filters = queryBigramFilters(query);
-  offset = Math.max(0, Math.floor(offset));
-  let checkpoint = null;
-  for (let low = 0, high = checkpoints.length - 1; low <= high;) {
-    const middle = (low + high) >> 1;
-    if (checkpoints[middle].ordinal <= offset) {
-      checkpoint = checkpoints[middle];
-      low = middle + 1;
-    } else high = middle - 1;
-  }
-  const yieldWork = cooperativeYield();
-  let skip = offset - (checkpoint?.ordinal || 0);
-  const firstChapter = checkpoint?.chapterIndex || 0;
-  for (let i = firstChapter; i < chapters.length && results.length < PAGE_SIZE; i++) {
-    if (!current()) throw aborted();
-    const start = checkpoint && i === firstChapter ? checkpoint.start : 0;
-    if (!start && skip >= counts[i]) { skip -= counts[i]; continue; }
-    const chapter = chapters[i];
-    if (!chapterMayContainBigrams(chapter, filters)) continue;
-    await scanText(chapter.text, query, (matchStart, length) => {
-      if (skip) { skip--; return; }
-      results.push(searchResult(chapter, matchStart, length));
-      return results.length < PAGE_SIZE;
-    }, current, yieldWork, start, pattern);
-  }
-  return results;
-}
 
 export function isSearchIndexProxyURL(url, origin) {
   if (url.origin !== origin || url.username || url.password || url.hash) return false;

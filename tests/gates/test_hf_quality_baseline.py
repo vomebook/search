@@ -472,6 +472,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         for contract in ('chapter-search/test_reader_chapter_search.mjs', 'security/test_reader_css_sanitizer.mjs'):
             self.assertEqual(workflow.count(f'node tests/reader/{contract}'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_chapter_search_core_coverage.mjs'), 2)
         self.assertNotIn('node tests/test_reader_chapter_search.mjs', workflow)
         self.assertNotIn('node tests/test_reader_css_sanitizer.mjs', workflow)
 
