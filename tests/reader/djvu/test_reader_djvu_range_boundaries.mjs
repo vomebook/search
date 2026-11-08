@@ -26,3 +26,32 @@ test('reads reject invalid lengths and offsets without dispatching new windows',
     assert.equal(requests.length, 2);
   } finally { range.close(); }
 });
+
+
+test('Content-Range decimal coordinates are bounded and identity-pinned', async () => {
+  const values = [
+    ['bytes 0-15/16', true], ['bytes 00-00015/00016', true],
+    ['bytes 0-15/15', false], ['bytes 1-15/16', false],
+    ['bytes 0-16/16', false], ['bytes 0-15/17', false],
+    ['bytes 0-15/9007199254740992', false], ['bytes 0-15/99999999999999999999999999', false],
+    ['bytes -1-15/16', false], ['bytes 0-15/*', false], ['bytes 0-15/', false],
+    ['bytes 0.0-15/16', false], ['bytes 0-15/16x', false], ['bytes 0-15/ 16', false]
+  ];
+  for (const [header, valid] of values) {
+    let readCount = 0;
+    const opening = openDjvuRange({url:'https://test/source',signal:new AbortController().signal,
+      windowBytes:65536,maxCacheBytes:65536,
+      readBytes:async response=>{readCount++;return new Uint8Array(await response.arrayBuffer());},
+      fetchResponse:async()=>new Response(new Uint8Array(16), {status:206,headers:{
+        ETag:'"stable"','Content-Range':header,'Content-Length':'16'}})});
+    if (valid) {
+      const range=await opening;
+      try { assert.equal(range.total,16,header);assert.deepEqual(await range.read(0,1),new Uint8Array(1),header); }
+      finally { range.close(); }
+      assert.equal(readCount,1,header);
+    } else {
+      await assert.rejects(opening,/DJVU_RANGE_INVALID/,header);
+      assert.equal(readCount,0,header);
+    }
+  }
+});
