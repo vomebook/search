@@ -638,7 +638,7 @@ test("PDF release gate separates and bounds dependency installation and always r
   assert.ok(deploy.indexOf('name: Check content-addressed PDF opening') < deploy.indexOf('uses: actions/upload-pages-artifact@v5'));
   assert.doesNotMatch(workflow, /continue-on-error:|\bif:/);
   assert.match(workflow, /cache: npm/);
-  assert.match(workflow, /cache-dependency-path: requirements-static-check\.txt/);
+  assert.match(workflow, /cache-dependency-path: config\/dependencies\/static-check\.txt/);
   assert.match(workflow, /npm ci --ignore-scripts --no-audit --no-fund/);
   assert.doesNotMatch(workflow, /path:.*node_modules/);
 });
