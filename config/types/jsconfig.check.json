@@ -91,6 +91,7 @@
     "../../static/search/result-identity.js",
     "../../static/search/folder-selection.js",
     "../../static/search/domain/height-index.js",
+    "../../static/search/domain/stable-stringify.js",
     "../../static/tts-client.js",
     "../../static/app.js",
     "../../static/reader.js",

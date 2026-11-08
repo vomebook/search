@@ -2407,13 +2407,7 @@ async function updateRandomTxtVisibility() {
 }
 
 function stableSearchStringify(value) {
-  if (Array.isArray(value)) return "[" + value.map(stableSearchStringify).join(",") + "]";
-  if (value && typeof value === "object") {
-    return "{" + Object.keys(value).sort().map(function(k) {
-      return JSON.stringify(k) + ":" + stableSearchStringify(value[k]);
-    }).join(",") + "}";
-  }
-  return JSON.stringify(value);
+  return VoiceOfMLSearchCanonical.stableStringify(value, () => stableSearchStringify);
 }
 
 const SEARCH_VIEW_SNAPSHOT_VERSION = 1;
