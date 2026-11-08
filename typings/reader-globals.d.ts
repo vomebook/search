@@ -68,6 +68,9 @@ declare var VoiceOfMLSearchViewKey: {
 declare var VoiceOfMLSearchCanonical: {
   stableStringify(value: unknown, getVisit: () => (value: unknown) => string | undefined): string | undefined;
 };
+declare var VoiceOfMLSearchRecovery: {
+  isRecoverable(error: {name?: string | undefined; status?: number | undefined; code?: string | undefined; message?: string | undefined} | null | undefined): boolean;
+};
 interface VoiceOfMLHeightIndexState {
   heights: readonly number[];
   heightTree: number[];
