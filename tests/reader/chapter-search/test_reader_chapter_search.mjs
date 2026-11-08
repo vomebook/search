@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {chapterMayContainBigrams, countMatches, queryBigramFilters, resultPage, scanText}
   from "../../../static/reader/search/reader-chapter-search-core.mjs";
-import {validateIndex} from "../../../static/reader/search/workers/reader-chapter-search-worker.mjs";
+import {validateIndex} from "../../../static/reader/search/reader-chapter-search-index.mjs";
 import {isSearchIndexProxyURL} from "../../../static/reader/search/reader-chapter-search-proxy-url.mjs";
 
 const origin = "https://voiceofml-search.hf.space";
@@ -130,5 +130,31 @@ assert.equal((await resultPage(literals, "&nbsp;", literalCounts.counts, 50, () 
   await assert.rejects(resultPage([chapter], "needle", count.counts, 1, () => false), {name:"AbortError"});
   const filtered = {index:2,title:"x",path:"2",text:"手机",bigramFilter:new Uint8Array(32)};
   assert.deepEqual(await resultPage([filtered], "手机", [1], 0, () => true), []);
+}
+// Index identity, chapter alignment and Bloom-filter shape are checked before
+// the Worker can search anything. Successful validation returns and updates
+// the original records, matching the existing worker contract.
+{
+  const expected=[{index:1,path:'one.xhtml',title:'First'}];
+  const entry={index:1,path:'one.xhtml',text:'手机',bf:btoa(String.fromCharCode(...new Uint8Array(32).fill(255)))};
+  const data={version:2,kind:'epub-search-index',text_profile:'dom-text-v1',chapters:[entry]};
+  const validated=validateIndex(data,expected,'dom-text-v1');
+  assert.strictEqual(validated,data.chapters);assert.strictEqual(validated[0],entry);
+  assert.equal(entry.title,'First');assert.equal('bf' in entry,false);assert.equal(entry.bigramFilter.length,32);
+  const nonString={version:2,kind:'epub-search-index',chapters:[{index:1,path:'one.xhtml',text:'x',bf:7}]};
+  assert.throws(()=>validateIndex(nonString,expected),/全文搜索过滤索引无效/);
+  for(const invalid of ['!',btoa('x'.repeat(31)),btoa('x'.repeat(33)),btoa('x'.repeat(65536))]) {
+    const index={version:2,kind:'epub-search-index',chapters:[{index:1,path:'one.xhtml',text:'x',bf:invalid}]};
+    assert.throws(()=>validateIndex(index,expected),/全文搜索过滤索引无效/);
+  }
+  for(const value of [null,{}, {version:3,kind:'epub-search-index',chapters:[]},
+      {version:1,kind:'other',chapters:[]}, {version:1,kind:'epub-search-index',chapters:'not-array'}])
+    assert.throws(()=>validateIndex(value,expected),/全文搜索索引不完整/);
+  for(const value of [null,{}, {index:1,path:'wrong.xhtml',text:'x'}, {index:1,path:'one.xhtml',text:42}]) {
+    const index={version:1,kind:'epub-search-index',chapters:[value]};
+    assert.throws(()=>validateIndex(index,expected),/全文搜索索引与章节不一致/);
+  }
+  const emptyTitle={version:1,kind:'epub-search-index',chapters:[{index:1,path:'one.xhtml',text:'x'}]};
+  assert.equal(validateIndex(emptyTitle,[{index:1,path:'one.xhtml'}])[0].title,'章节 1');
 }
 console.log("chapter search: complete counts, paging, literal matches, Unicode boundaries, cancellation and index identity passed");
