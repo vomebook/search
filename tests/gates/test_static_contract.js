@@ -557,6 +557,16 @@ test("deployment workflow runs for main pushes and manual dispatch", () => {
   assert.match(workflow, /push:\s*\n\s*branches: \["main"\]/);
   assert.match(workflow, /workflow_dispatch:/);
 });
+test("manual search promotion has an exact, validated operation identity", () => {
+  assert.match(workflow, /run-name:.*search-transition\/\{0\}.*inputs\.search_transition/);
+  assert.match(workflow, /search_transition:\s*\n\s*description:.*\n\s*required: false\s*\n\s*type: string/);
+  assert.match(workflow, /SEARCH_TRANSITION: \$\{\{ inputs\.search_transition \}\}/);
+  assert.match(workflow, /SEARCH_INPUT_GENERATION: \$\{\{ inputs\.search_generation \}\}/);
+  assert.ok(workflow.includes('[[ "$SEARCH_TRANSITION" =~ ^[0-9a-f]{32}$ ]]'));
+  assert.ok(workflow.includes('[[ "$SEARCH_INPUT_GENERATION" =~ ^[0-9a-f]{64}$ ]]'));
+  assert.ok(workflow.includes('[[ "$SEARCH_GENERATION" == "$SEARCH_INPUT_GENERATION" ]]'));
+  assert.match(workflow, /group: "pages"\s*\n\s*cancel-in-progress: false/);
+});
 test("deployment workflow grants required Pages permissions", () => {
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /pages: write/);
