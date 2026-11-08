@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "target": "esnext",
+    "lib": [
+      "esnext",
+      "webworker"
+    ],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force"
+  },
+  "files": [
+    "../../static/reader/search/workers/reader-chapter-search-worker.mjs"
+  ]
+}
