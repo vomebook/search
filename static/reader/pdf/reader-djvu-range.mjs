@@ -1,6 +1,12 @@
 // Bounded, identity-pinned byte ranges for a single immutable DjVu source.
 // A full-download fallback is legal only when the *first* request explicitly
 // ignores Range. Bad/mismatched responses never become image data.
+// Missing regex captures become NaN, so the caller's existing safe-integer
+// checks reject them exactly like the previous destructuring implementation.
+/** @param {RegExpExecArray} match */
+function rangeCoordinates(match) {
+  return {begin:Number(match[1]), last:Number(match[2]), size:Number(match[3])};
+}
 /** @param {{url?: string, signal?: AbortSignal, fetchResponse?: typeof fetch,
  * readBytes?: (response: Response, limit: number) => Promise<Uint8Array>, windowBytes?: number,
  * maxCacheBytes?: number, maxDocumentBytes?: number, timeoutMs?: number, retries?: number}} options */
@@ -55,7 +61,7 @@ export async function openDjvuRange({url, signal, fetchResponse = fetch,
         if (!first && response.status === 200) throw new Error('DJVU_SOURCE_CHANGED');
         const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('Content-Range') || '');
         if (response.status !== 206 || !match) throw invalid();
-        const [begin,last,size] = match.slice(1).map(Number);
+        const {begin,last,size} = rangeCoordinates(match);
         if (![begin,last,size].every(Number.isSafeInteger) || size < 16 || size > maxDocumentBytes ||
             begin !== start || last !== Math.min(end,size-1) || last < begin) throw invalid();
         const identity = response.headers.get('ETag') || '', encoding = response.headers.get('Content-Encoding');
