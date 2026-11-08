@@ -115,6 +115,10 @@ class AdditionalSuitesCiTests(unittest.TestCase):
         for required in ("loadTestsFromName('tests.reader.browser.test_reader_timeout')",
                          'not result.wasSuccessful()', 'result.testsRun != 3', 'result.skipped', 'sys.exit(1)'):
             self.assertIn(required, timeout)
+        worker = github.split('      - name: Check warmed Reader shell reuse\n', 1)[1].split('      - name:', 1)[0]
+        offline = 'tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_offline_cache_misses_reject_as_network_errors_and_cached_data_survives'
+        self.assertEqual(worker.count(offline), 1)
+        self.assertNotIn('continue-on-error:', worker)
         for command in ('node tests/reader/core/test_reader_store_channel.js',
                         'node tests/reader/transport/test_reader_preload.js',
                         'node tests/service_worker/test_service_worker.js'):

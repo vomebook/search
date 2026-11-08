@@ -1,8 +1,10 @@
 const readerWorkerScope = /** @type {ServiceWorkerGlobalScope} */ (/** @type {unknown} */ (self));
 importScripts("/search/static/reader-resources.js");
 const CACHE_NAME = "vomebook-search-v1.0.0";
+/** @type {string[]} */
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 let cachePruning = Promise.resolve();
+/** @param {string} pathname @returns {boolean} */
 function isRetiredAsset(pathname) {
   if (CURRENT_HASHED_ASSETS.length && isDjvuDecoderAsset(pathname)) return !CURRENT_HASHED_ASSETS.includes(pathname);
   return CURRENT_HASHED_ASSETS.length > 0 &&
@@ -15,9 +17,11 @@ function isRetiredAsset(pathname) {
 // a fallback when the network cannot serve the retired URL, never repopulated,
 // and the generation before that is deleted.
 const RETAINED_MARKER = "sw-retained-generation";
+/** @param {string} url @returns {string} */
 function retainedKey(url) {
   const key = new URL(url); key.search = "?" + RETAINED_MARKER; return key.href;
 }
+/** @param {Cache} cache @param {boolean} [resetShell] @param {boolean} [activation] @returns {Promise<void>} */
 function pruneHashedAssets(cache, resetShell = false, activation = false) {
   cachePruning = cachePruning.catch(() => {}).then(async () => {
     for (const request of await cache.keys()) {
@@ -40,6 +44,7 @@ function pruneHashedAssets(cache, resetShell = false, activation = false) {
 
 // Unversioned shells/data must revalidate with the server: a browser HTTP-cache
 // copy can predate the current deploy and reference hashes this worker prunes.
+/** @param {Request | string} request @returns {Request | string} */
 function revalidatedRequest(request) {
   const url = typeof request === "string" ? request : request.url;
   if (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url) || isDjvuDecoderAsset(url) || typeof Request !== "function" ||
@@ -47,6 +52,7 @@ function revalidatedRequest(request) {
   try { return new Request(request, { cache: "no-cache" }); } catch (_) { return request; }
 }
 
+/** @param {string} value @returns {boolean} */
 function isDjvuDecoderAsset(value) {
   try { return /^\/search\/static\/vendor\/djvu-rs-reader\/release-[0-9a-f]{12}-[0-9a-f]{12}\/(?:scalar|simd128)\/djvu_rs(?:_bg\.wasm|\.js)$/.test(value.startsWith('/') ? value : new URL(value).pathname); }
   catch (_) { return false; }
@@ -115,6 +121,7 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   const cachePromise = caches.open(CACHE_NAME).catch(() => null);
   // Pinned same-origin assets are identical across classic/module Origin headers.
   const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey, { ignoreVary: immutable }) : undefined).catch(() => undefined);
+  /** @type {Promise<void> | undefined} */
   let cacheWrite;
   const networkPromise = Promise.all([cachePromise, immutable ? cachedPromise : null]).then(([cache, cached]) => cached || fetch(revalidatedRequest(event.request)).then(response => {
     if (cache && response.ok && response.status !== 206) {
@@ -125,7 +132,13 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   // A cached response can finish immediately; keep revalidation and the entire
   // cache write alive independently, without delaying streaming cache misses.
   event.waitUntil(networkPromise.then(() => cacheWrite).catch(() => {}));
-  event.respondWith(networkFirst
+  const responsePromise = networkFirst
     ? networkPromise.then(response => response.ok ? response : cachedPromise.then(cached => cached || response)).catch(() => cachedPromise)
-    : cachedPromise.then(cached => cached || networkPromise.catch(() => cached)));
+    : cachedPromise.then(cached => cached || networkPromise.catch(() => cached));
+  event.respondWith(responsePromise.then(response => {
+    // respondWith requires a Response; reject on a true offline cache miss
+    // so the browser reports a network failure instead of receiving undefined.
+    if (!response) throw new TypeError("Network unavailable and no cached response");
+    return response;
+  }));
 });

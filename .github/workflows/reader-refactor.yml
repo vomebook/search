@@ -193,6 +193,7 @@ jobs:
           node tests/service_worker/test_service_worker.js
           python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_shell_does_not_wait_for_slow_revalidation
           python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_first_install_rewarms_shell_after_delayed_controller_claim
+          python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_offline_cache_misses_reject_as_network_errors_and_cached_data_survives
       - name: Run Reader flow and cleanup regressions
         run: python3 -B -m unittest -v tests.reader.browser.test_reader_ebook_flow tests.performance.test_reader_toc_latency
       - name: Preserve Reader local history and bookmarks

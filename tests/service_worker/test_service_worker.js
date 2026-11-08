@@ -387,9 +387,11 @@ for (const route of [
     const instance = harness({ cacheEntries: [[route.url, cached]], fetch: () => Promise.reject(new Error("offline")) });
     assert.strictEqual(await dispatchFetch(instance, route.url), cached);
   });
-  test(`${route.name} cache miss plus network failure resolves undefined`, async () => {
+  test(`${route.name} cache miss plus network failure rejects as a network error`, async () => {
     const instance = harness({ fetch: () => Promise.reject(new Error("offline")) });
-    assert.strictEqual(await dispatchFetch(instance, route.url), undefined);
+    await assert.rejects(dispatchFetch(instance, route.url), /Network unavailable and no cached response/);
+    await Promise.all(instance.operations.lifetimes);
+    assert.deepStrictEqual(instance.operations.put, []);
   });
   test(`${route.name} non-ok network response is not cached`, async () => {
     const network = response("bad", { ok: false, status: 503 });
@@ -429,9 +431,11 @@ test("general static network failure falls back to cache", async () => {
   const instance = harness({ cacheEntries: [[url, cached]], fetch: () => Promise.reject(new Error("offline")) });
   assert.strictEqual(await dispatchFetch(instance, url), cached);
 });
-test("general static miss and network failure resolves undefined", async () => {
+test("general static miss and network failure rejects as a network error", async () => {
   const instance = harness({ fetch: () => Promise.reject(new Error("offline")) });
-  assert.strictEqual(await dispatchFetch(instance, "https://example.test/search/missing.js"), undefined);
+  await assert.rejects(dispatchFetch(instance, "https://example.test/search/missing.js"), /Network unavailable and no cached response/);
+  await Promise.all(instance.operations.lifetimes);
+  assert.deepStrictEqual(instance.operations.put, []);
 });
 test("general static 206 response is not cached", async () => {
   const instance = harness({ fetch: () => Promise.resolve(response("partial", { status: 206 })) });

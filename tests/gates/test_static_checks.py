@@ -2794,6 +2794,33 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                           'scope.addEventListener("fetch", event => event.respondWith(Promise.resolve(42)));\n')
         self.assert_check(self.run_check(*check), False, "TS2345")
 
+    def test_strict_service_worker_project_rejects_regressions(self):
+        # Compile the real SW and its actual WebWorker declarations in isolation.
+        config_path = TYPE_CONFIGS / "jsconfig.service-worker-strict.json"
+        options = json.loads(config_path.read_text())["compilerOptions"]
+        for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
+            self.assertIs(options.get(flag), True, flag)
+        self.assertEqual(set(options["lib"]), {"esnext", "webworker"})
+        package = json.loads((ROOT / "package.json").read_text())
+        self.assertIn("tsc --project config/types/jsconfig.service-worker-strict.json", package["scripts"]["types"])
+        self.assertIn(str((ROOT / "static/sw.js").resolve()), subprocess.check_output(
+            ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config_path, "--listFilesOnly"],
+            cwd=ROOT, text=True, timeout=30).splitlines())
+        (self.root / "config/types").mkdir(parents=True)
+        shutil.copyfile(config_path, self.root / "config/types/jsconfig.service-worker-strict.json")
+        shutil.copytree(ROOT / "typings", self.root / "typings")
+        worker = self.root / "static/sw.js"
+        original = (ROOT / "static/sw.js").read_text()
+        worker.write_text(original)
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", "config/types/jsconfig.service-worker-strict.json"]
+        self.assert_check(self.run_check(*check), True, "")
+        worker.write_text(original + "\nfunction serviceWorkerImplicitParameter(value) { return value; }\n")
+        self.assert_check(self.run_check(*check), False, "TS7006")
+        marker = '    if (!response) throw new TypeError("Network unavailable and no cached response");\n'
+        self.assertEqual(original.count(marker), 1)
+        worker.write_text(original.replace(marker, ""))
+        self.assert_check(self.run_check(*check), False, "TS2345")
+
     def test_source_inventory_includes_production_trees(self):
         config = (ROOT / "eslint.config.mjs").read_text()
         package = json.loads((ROOT / "package.json").read_text())
