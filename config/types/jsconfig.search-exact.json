@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "files": [
+    "../../typings/reader-globals.d.ts",
+    "../../static/search/search-session.js",
+    "../../static/search/reader-navigation.js",
+    "../../static/search/download-controller.js",
+    "../../static/search/result-identity.js",
+    "../../static/search/folder-selection.js",
+    "../../static/search/record-path.js",
+    "../../static/search/response-validation.js",
+    "../../static/search/response-cache.js",
+    "../../static/search/file-types.js",
+    "../../static/search/highlight.js",
+    "../../static/search/size-format.js"
+  ]
+}

@@ -51,7 +51,7 @@ jobs:
         run: |
           python -B -m unittest -v tests.gates.test_static_shards_runner tests.gates.test_package_resolution tests.gates.test_test_inventory
           python -B scripts/check_test_inventory.py --project github
-          python -B run_static_gate_shards.py --project github
+          python -B scripts/ci/run_static_gate_shards.py --project github
           python -B -m unittest -v tests.gates.test_ci_ubuntu_mirror
       - name: Verify PDF and DjVu primary document limits
         run: node tests/reader/pdf-v3/test_dataset_primary_policy.mjs

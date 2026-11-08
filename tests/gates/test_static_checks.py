@@ -13,6 +13,19 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+TYPE_CONFIGS = ROOT / "config/types"
+
+
+def load_type_config(name):
+    """Rebase project-root paths for isolated fixtures while preserving options."""
+    config = json.loads((TYPE_CONFIGS / name).read_text())
+    config["files"] = [(TYPE_CONFIGS / value).resolve().relative_to(ROOT).as_posix()
+                       for value in config.get("files", [])]
+    options = config.get("compilerOptions", {})
+    if "paths" in options:
+        options["paths"] = {key: ["./" + (TYPE_CONFIGS / value).resolve().relative_to(ROOT).as_posix()
+                                  for value in values] for key, values in options["paths"].items()}
+    return config
 
 
 class StaticGateTests(unittest.TestCase):
@@ -108,7 +121,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_strict_javascript_gate_rejects_implicit_any(self):
-        config = json.loads((ROOT / "jsconfig.strict.json").read_text())
+        config = load_type_config("jsconfig.strict.json")
         self.assertTrue(config["compilerOptions"]["strict"])
         for relative in config["files"]:
             source = self.root / relative
@@ -318,7 +331,7 @@ class StaticGateTests(unittest.TestCase):
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json"):
-            self.assertIn("static/search/download-controller.js", json.loads((ROOT / name).read_text())["files"])
+            self.assertIn("static/search/download-controller.js", load_type_config(name)["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "module": "esnext", "moduleDetection": "force"},
@@ -452,7 +465,7 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/response-cache.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        self.assertIn("static/search/response-cache.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
             "files": [str(declaration), str(ROOT / "static/search/response-cache.js")]}))
@@ -517,7 +530,7 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/result-identity.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        self.assertIn("static/search/result-identity.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
             "files": [str(declaration), str(ROOT / "static/search/result-identity.js")]}))
@@ -589,7 +602,7 @@ class StaticGateTests(unittest.TestCase):
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/folder-selection.js", json.loads((ROOT / name).read_text())["files"])
+            self.assertIn("static/search/folder-selection.js", load_type_config(name)["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
@@ -673,7 +686,7 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/response-validation.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        self.assertIn("static/search/response-validation.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
             "files": [str(declaration), str(ROOT / "static/search/response-validation.js")]}))
@@ -749,7 +762,7 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/file-types.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        self.assertIn("static/search/file-types.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
             "files": [str(declaration), str(ROOT / "static/search/file-types.js")]}))
@@ -818,7 +831,7 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/highlight.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        self.assertIn("static/search/highlight.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
             "files": [str(declaration), str(ROOT / "static/search/highlight.js")]}))
@@ -878,7 +891,7 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/record-path.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        self.assertIn("static/search/record-path.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
             "files": [str(declaration), str(ROOT / "static/search/record-path.js")]}))
@@ -1445,7 +1458,7 @@ class StaticGateTests(unittest.TestCase):
         declaration = self.root / "reader-globals.d.ts"
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
-        self.assertIn("static/search/search-session.js", json.loads((ROOT / "jsconfig.strict.json").read_text())["files"])
+        self.assertIn("static/search/search-session.js", load_type_config("jsconfig.strict.json")["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "target": "esnext", "moduleDetection": "force"},
             "files": [str(declaration), str(ROOT / "static/search/search-session.js")]}))
@@ -1498,7 +1511,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "TS2322")
 
     def test_reader_navigation_exact_contract_rejects_wrong_usage_and_untrusted_json(self):
-        original = json.loads((ROOT / "jsconfig.search-exact.json").read_text())
+        original = load_type_config("jsconfig.search-exact.json")
         files = [str(ROOT / file) for file in original["files"]]
         source = self.root / "static/navigation-type-usage.js"
         config = self.root / "jsconfig-navigation.json"
@@ -2230,7 +2243,7 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, "original inline filter comparison")
 
     def test_search_exact_gate_rejects_unchecked_indexes_and_undefined_optionals(self):
-        original = json.loads((ROOT / "jsconfig.search-exact.json").read_text())
+        original = load_type_config("jsconfig.search-exact.json")
         options = original["compilerOptions"]
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
@@ -2238,7 +2251,7 @@ class StaticGateTests(unittest.TestCase):
                     "static/search/folder-selection.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
-        self.assertIn("tsc --project jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
+        self.assertIn("tsc --project config/types/jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
         source = self.root / "static/exact-usage.js"
         config = self.root / "jsconfig.json"
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
@@ -2283,7 +2296,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_size_exact_gate_preserves_original_lookups(self):
         config = self.root / "jsconfig.search-exact.json"
-        original = json.loads((ROOT / "jsconfig.search-exact.json").read_text())
+        original = load_type_config("jsconfig.search-exact.json")
         config.write_text(json.dumps(original))
         for name in original["files"]:
             target = self.root / name
@@ -2302,7 +2315,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_highlight_exact_gate_preserves_dynamic_escape_lookup(self):
         config = self.root / "jsconfig.search-exact.json"
-        original = json.loads((ROOT / "jsconfig.search-exact.json").read_text())
+        original = load_type_config("jsconfig.search-exact.json")
         config.write_text(json.dumps(original))
         for name in original["files"]:
             target = self.root / name
@@ -2319,7 +2332,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_reader_chapter_exact_gate_checks_original_bounds_invariant(self):
         config = self.root / "jsconfig.reader-exact.json"
-        original = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
+        original = load_type_config("jsconfig.reader-exact.json")
         config.write_text(json.dumps(original))
         for name in original["files"]:
             target = self.root / name
@@ -2358,7 +2371,7 @@ const request = options.request;
         module = (ROOT / "static/reader/pdf/pdf-first-page-worker-adapter.mjs").as_posix()
         source = self.root / "static/pdf-first-page-worker-usage.mjs"
         config = self.root / "jsconfig.json"
-        options = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())["compilerOptions"]
+        options = load_type_config("jsconfig.reader-exact.json")["compilerOptions"]
         config.write_text(json.dumps({"compilerOptions": options,
             "files": [str(ROOT / "typings/reader-globals.d.ts"), module, str(source)]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
@@ -2385,7 +2398,7 @@ const request = options.request;
         adapter.parent.mkdir(parents=True, exist_ok=True)
         original = (ROOT / "static/reader/pdf/pdf-first-page-worker-adapter.mjs").read_text()
         local_config = self.root / "jsconfig.reader-exact.json"
-        project = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
+        project = load_type_config("jsconfig.reader-exact.json")
         for name in project["files"]:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -2408,7 +2421,7 @@ const request = options.request;
         module = (ROOT / 'static/reader/search/reader-pdf-book-search.mjs').as_posix()
         source = self.root / 'static/pdf-book-client-usage.mjs'
         config = self.root / 'jsconfig.json'
-        options = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())['compilerOptions']
+        options = load_type_config('jsconfig.reader-exact.json')['compilerOptions']
         config.write_text(json.dumps({'compilerOptions': options, 'files': [module, str(source)]}))
         check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', config]
         prefix = (f'import {{createPdfBookSearch}} from "{module}";\n'
@@ -2436,7 +2449,7 @@ const prefetched = await client.prefetch();
             with self.subTest(expression=expression):
                 source.write_text(prefix + expression + '\n')
                 self.assert_check(self.run_check(*check), False, diagnostic)
-        project = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())
+        project = load_type_config('jsconfig.reader-exact.json')
         for name in project['files']:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -2462,7 +2475,7 @@ const prefetched = await client.prefetch();
         module = (ROOT / 'static/reader/formats/reader-text-format.mjs').as_posix()
         source = self.root / 'static/text-usage.mjs'
         config = self.root / 'jsconfig.json'
-        options = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())['compilerOptions']
+        options = load_type_config('jsconfig.reader-exact.json')['compilerOptions']
         config.write_text(json.dumps({'compilerOptions': options,
             'files': [str(ROOT / 'typings/reader-globals.d.ts'), module, str(source)]}))
         check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', config]
@@ -2499,7 +2512,7 @@ ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
             with self.subTest(expression=expression):
                 source.write_text(prefix + expression + '\n')
                 self.assert_check(self.run_check(*check), False, diagnostic)
-        project = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())
+        project = load_type_config('jsconfig.reader-exact.json')
         for name in project['files']:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -2525,7 +2538,7 @@ ctx.renderText(true, {response: new Response(), engines: Promise.resolve([])});
         module = (ROOT / 'static/reader/formats/reader-media-format.mjs').as_posix()
         source = self.root / 'static/media-usage.mjs'
         config = self.root / 'jsconfig.json'
-        options = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())['compilerOptions']
+        options = load_type_config('jsconfig.reader-exact.json')['compilerOptions']
         config.write_text(json.dumps({'compilerOptions': options,
             'files': [str(ROOT / 'typings/reader-globals.d.ts'), module, str(source)]}))
         check = ['node', ROOT / 'node_modules/typescript/bin/tsc', '--project', config]
@@ -2554,7 +2567,7 @@ ctx.resolvedReaderData = {original_extension: null}; ctx.resolvedReaderData = {o
             with self.subTest(expression=expression):
                 source.write_text(prefix + expression + '\n')
                 self.assert_check(self.run_check(*check), False, diagnostic)
-        project = json.loads((ROOT / 'jsconfig.reader-exact.json').read_text())
+        project = load_type_config('jsconfig.reader-exact.json')
         for name in project['files']:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -2578,7 +2591,7 @@ ctx.resolvedReaderData = {original_extension: null}; ctx.resolvedReaderData = {o
         module = (ROOT / "static/reader/core/reader-lifecycle.mjs").as_posix()
         source = self.root / "static/lifecycle-usage.mjs"
         config = self.root / "jsconfig.json"
-        options = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())["compilerOptions"]
+        options = load_type_config("jsconfig.reader-exact.json")["compilerOptions"]
         config.write_text(json.dumps({"compilerOptions": options,
             "files": [str(ROOT / "typings/reader-globals.d.ts"), module, str(source)]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
@@ -2603,7 +2616,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                 source.write_text(prefix + expression + "\n")
                 self.assert_check(self.run_check(*check), False, diagnostic)
         local_config = self.root / "jsconfig.reader-exact.json"
-        project = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
+        project = load_type_config("jsconfig.reader-exact.json")
         for name in project["files"]:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -2625,7 +2638,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
     def test_pdf_text_store_type_contract_rejects_invalid_usage(self):
         source = self.root / "static/pdf-text-store-usage.mjs"
         config = self.root / "jsconfig.json"
-        options = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())["compilerOptions"]
+        options = load_type_config("jsconfig.reader-exact.json")["compilerOptions"]
         module = ROOT / "static/reader/pdf/reader-pdf-text-store.mjs"
         config.write_text(json.dumps({"compilerOptions": options, "files": [str(module), str(source)]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
@@ -2645,7 +2658,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                 self.assert_check(self.run_check(*check), False, "error TS")
 
     def test_reader_exact_gate_rejects_unchecked_indexes_and_undefined_optionals(self):
-        original = json.loads((ROOT / "jsconfig.reader-exact.json").read_text())
+        original = load_type_config("jsconfig.reader-exact.json")
         options = original["compilerOptions"]
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
@@ -2658,8 +2671,8 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                     "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
-        self.assertTrue(required <= set(json.loads((ROOT / "jsconfig.strict.json").read_text())["files"]))
-        self.assertIn("tsc --project jsconfig.reader-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
+        self.assertTrue(required <= set(load_type_config("jsconfig.strict.json")["files"]))
+        self.assertIn("tsc --project config/types/jsconfig.reader-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
         source = self.root / "static/exact-usage.js"
         config = self.root / "jsconfig.json"
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
@@ -2711,12 +2724,12 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         compiler = ROOT / "node_modules/typescript/bin/tsc"
         checked = set()
         for config in ("jsconfig.check.json", "jsconfig.service-worker.json"):
-            options = json.loads((ROOT / config).read_text())["compilerOptions"]
+            options = load_type_config(config)["compilerOptions"]
             self.assertTrue(options.get("allowJs"), config)
             self.assertTrue(options.get("checkJs"), config)
             self.assertTrue(options.get("noEmit"), config)
             self.assertFalse(options.get("noCheck", False), config)
-            result = subprocess.run(["node", compiler, "--project", config, "--listFilesOnly"],
+            result = subprocess.run(["node", compiler, "--project", TYPE_CONFIGS / config, "--listFilesOnly"],
                                     cwd=ROOT, text=True, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout)
@@ -2739,16 +2752,33 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                 shutil.copyfile(path, target)
         shutil.copytree(ROOT / "static/vendor/djvu-rs-reader", self.root / "static/vendor/djvu-rs-reader")
         shutil.copytree(ROOT / "typings", self.root / "typings")
-        shutil.copyfile(ROOT / "jsconfig.check.json", self.root / "jsconfig.check.json")
-        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", "jsconfig.check.json"]
-        self.assert_check(self.run_check(*check), True, "")
+        # Exercise both the actual relocated CI config and the root jsconfig.json
+        # facade used by editors; neither may silently omit entry-point errors.
+        (self.root / "config/types").mkdir(parents=True)
+        shutil.copyfile(TYPE_CONFIGS / "jsconfig.check.json", self.root / "config/types/jsconfig.check.json")
+        shutil.copyfile(ROOT / "jsconfig.json", self.root / "jsconfig.json")
+        projects = ["config/types/jsconfig.check.json", "jsconfig.json"]
+        compiler = ROOT / "node_modules/typescript/bin/tsc"
+        resolved = []
+        for project in projects:
+            result = self.run_check("node", compiler, "--project", project, "--listFilesOnly")
+            self.assert_check(result, True, "")
+            resolved.append({str(Path(line).resolve().relative_to(self.root))
+                             for line in result.stdout.splitlines()
+                             if Path(line).is_absolute() and Path(line).resolve().is_relative_to(self.root)})
+        self.assertEqual(resolved[0], resolved[1], "editor and CI projects must resolve the same local files")
         for relative in ("static/app.js", "static/reader.js"):
-            source = self.root / relative
-            original = source.read_text()
-            with self.subTest(entry=relative):
-                source.write_text(original + '\n/** @type {number} */ const __staticGateBadType = "wrong";\n')
-                self.assert_check(self.run_check(*check), False, "TS2322")
-                source.write_text(original)
+            self.assertIn(relative, resolved[0])
+        for project in projects:
+            check = ["node", compiler, "--project", project]
+            self.assert_check(self.run_check(*check), True, "")
+            for relative in ("static/app.js", "static/reader.js"):
+                source = self.root / relative
+                original = source.read_text()
+                with self.subTest(project=project, entry=relative):
+                    source.write_text(original + '\n/** @type {number} */ const __staticGateBadType = "wrong";\n')
+                    self.assert_check(self.run_check(*check), False, "TS2322")
+                    source.write_text(original)
 
     def test_worker_type_contract_rejects_invalid_responses(self):
         source = self.root / "static/worker.js"
@@ -2775,9 +2805,11 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         self.assertIn('"no-undef"', config)
         self.assertIn('"tests/**/*.py" = ["F401", "F841"', (ROOT / "ruff.toml").read_text())
         paths = (self.root / "scripts/check_python_static.py").read_text()
-        for expected in ('root / "app.py"', 'root / "backend"', 'root / "scripts"', 'root / "tests"',
-                         'root / "run_static_gate_shards.py"'):
+        for expected in ('root / "app.py"', 'root / "backend"', 'root / "scripts"', 'root / "tests"'):
             self.assertIn(expected, paths)
+        runner = ROOT / "scripts/ci/run_static_gate_shards.py"
+        self.assertTrue(runner.is_file())
+        self.assertFalse((ROOT / "run_static_gate_shards.py").exists())
         if (ROOT / "pyrightconfig.json").exists():
             self.assertTrue((ROOT / "backend/app.py").is_file())
             self.assertEqual(json.loads((ROOT / "pyrightconfig.json").read_text())["include"], ["app.py", "backend"])
