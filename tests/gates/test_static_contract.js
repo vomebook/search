@@ -601,6 +601,7 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(workflow, /node scripts\/data\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/data\/fetch_search_generation\.mjs "\$SEARCH_GENERATION" pages _site\/data/);
   assert.match(workflow, /if \[\[ -n "\$SEARCH_GENERATION" \]\]; then[\s\S]*?else\s+cp -a data _site\/\s+fi/);
+  assert.match(workflow, /python3 scripts\/build\/seo\.py --project pages --corpus _site\/data\/search_data\.json\.gz --output _site/);
   assert.match(workflow, /node scripts\/build\/fetch_foliate_reader\.mjs _site\/static\/foliate-reader/);
   assert.match(workflow, /node scripts\/build\/copy_reader_vendor\.mjs _site\/static\/vendor/);
   assert.match(workflow, /cp -a static\/vendor\/djvu-rs-reader _site\/static\/vendor\//);
