@@ -12,8 +12,14 @@ import tempfile
 import time
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parent
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+MANIFEST_DIR = pathlib.Path('tests/gates')
 TARGET = 'tests.gates.test_static_checks'
+
+# Direct script execution puts scripts/ci, not the checkout root, first on
+# sys.path. Keep the checked-out test package ahead of installed distributions.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def validate(module_name, groups):
@@ -160,7 +166,7 @@ def run_groups(groups, timeout=1800, allowed_skips=None):
                     result_path = str(pathlib.Path(tmp) / f'{i}.json')
                     try:
                         module = group[0].rsplit('.', 2)[0]
-                        p = subprocess.Popen([sys.executable, '-B', str(ROOT / 'run_static_gate_shards.py'),  # noqa: S603 - fixed interpreter and validated test IDs
+                        p = subprocess.Popen([sys.executable, '-B', str(ROOT / 'scripts/ci/run_static_gate_shards.py'),  # noqa: S603 - fixed interpreter and validated test IDs
                                               '--worker', module, json.dumps(groups), str(i), result_path],
                                              stdout=out, stderr=err, start_new_session=True, env=os.environ.copy())
                     except BaseException:
@@ -238,7 +244,7 @@ def load_project(project, root=ROOT):
     # This checkout marker is checked independently of manifest metadata.
     if (root / 'pyrightconfig.json').is_file() != (project == 'hf'):
         raise ValueError('project file marker mismatch')
-    manifest = json.loads((root / f'static_gate_ids.{project}.json').read_text())
+    manifest = json.loads((root / MANIFEST_DIR / f'static_gate_ids.{project}.json').read_text())
     if (not isinstance(manifest, dict) or set(manifest) != {'version', 'project', 'module', 'groups'}
             or type(manifest['version']) is not int or manifest['version'] != 1
             or manifest['project'] != project or manifest['module'] != TARGET):
