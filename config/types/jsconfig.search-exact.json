@@ -20,6 +20,7 @@
     "../../static/search/domain/height-index.js",
     "../../static/search/domain/stable-stringify.js",
     "../../static/search/domain/search-view-key.js",
+    "../../static/search/domain/search-recovery.js",
     "../../static/search/presentation/sidebar-render.js",
     "../../static/search/record-path.js",
     "../../static/search/response-validation.js",
