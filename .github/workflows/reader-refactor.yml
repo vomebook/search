@@ -443,6 +443,8 @@ jobs:
             tests.search.backend.test_search_projection_contract tests.search.backend.test_search_projection_mutation_contract \
             tests.search.backend.test_search_candidates_contract tests.search.backend.test_search_candidates_mutation_contract \
             tests.search.backend.test_search_bootstrap_contract tests.search.backend.test_search_bootstrap_mutation_contract \
+            tests.search.backend.test_search_data_selector tests.search.backend.test_search_data_selector_faults \
+            tests.search.backend.test_search_runtime_entry tests.search.backend.test_search_start_script \
             tests.reader.backend.test_reader_archive_contract tests.reader.backend.test_reader_archive_mutation_contract
           COVERAGE_FILE="$RUNNER_TEMP/backend-coverage" python -B -m coverage json -o "$RUNNER_TEMP/backend-coverage.json"
           python -B scripts/check_strict_inventory.py "$RUNNER_TEMP/hf-quality-baseline/strict-inventory-debt.json"
