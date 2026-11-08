@@ -474,6 +474,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
             self.assertEqual(workflow.count(f'node tests/reader/{contract}'), 2)
         self.assertEqual(workflow.count('node scripts/reader/check_chapter_search_core_coverage.mjs'), 2)
         self.assertEqual(workflow.count('node scripts/reader/check_chapter_search_proxy_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_chapter_search_index_coverage.mjs'), 2)
         self.assertNotIn('node tests/test_reader_chapter_search.mjs', workflow)
         self.assertNotIn('node tests/test_reader_css_sanitizer.mjs', workflow)
 
