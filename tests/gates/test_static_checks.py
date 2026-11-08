@@ -647,7 +647,7 @@ class StaticGateTests(unittest.TestCase):
             self.assert_check(self.run_check(*check), False, diagnostic)
 
     def test_search_height_index_coverage_gate_fails_closed(self):
-        paths = ["static/search/height-index.js", "scripts/search/check_search_height_index_coverage.mjs",
+        paths = ["static/search/domain/height-index.js", "scripts/search/check_search_height_index_coverage.mjs",
                  "tests/search/baselines/test_search_height_index_baseline.mjs"]
         for path in [*paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
@@ -678,7 +678,7 @@ class StaticGateTests(unittest.TestCase):
         module.write_text(module_source)
         gate = self.root / paths[1]
         gate_source = gate.read_text()
-        include = "--test-coverage-include=**/static/search/height-index.js"
+        include = "--test-coverage-include=**/static/search/domain/height-index.js"
         self.assertEqual(gate_source.count(include), 1)
         gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-height-index.js"))
         self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
@@ -689,11 +689,11 @@ class StaticGateTests(unittest.TestCase):
         original = (ROOT / "typings/reader-globals.d.ts").read_text()
         declaration.write_text(original)
         for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
-            self.assertIn("static/search/height-index.js", load_type_config(name)["files"])
+            self.assertIn("static/search/domain/height-index.js", load_type_config(name)["files"])
         config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
             "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
             "target": "esnext", "moduleDetection": "force"},
-            "files": [str(declaration), str(ROOT / "static/search/height-index.js")]}))
+            "files": [str(declaration), str(ROOT / "static/search/domain/height-index.js")]}))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
         self.assert_check(self.run_check(*check), True, "")
         before = "  totalHeight(state: VoiceOfMLHeightIndexState): number;"
@@ -2345,7 +2345,7 @@ class StaticGateTests(unittest.TestCase):
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/search/search-session.js", "static/search/reader-navigation.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
-                    "static/search/folder-selection.js", "static/search/height-index.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
+                    "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertIn("tsc --project config/types/jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])

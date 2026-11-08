@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const MODULES = ["static/search/folder-selection.js", "static/search/height-index.js"];
+const MODULES = ["static/search/folder-selection.js", "static/search/domain/height-index.js"];
 const sources = new Map();
 const installed = new WeakMap();
 
