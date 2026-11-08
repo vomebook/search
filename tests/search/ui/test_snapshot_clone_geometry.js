@@ -22,7 +22,7 @@ function fixture(source, root) {
   c.setResultScrollTop=value=>{c.top=value;c.writes++;};
   c.refreshVirtualAfterAppend=update=>{assert.strictEqual(update,false);c.refreshes++;c.ensureHeightTree();};
   vm.createContext(c);
-  const heightIndex = path.join(root, 'static/search/height-index.js');
+  const heightIndex = path.join(root, 'static/search/domain/height-index.js');
   const extracted = source.includes('VoiceOfMLSearchHeightIndex.');
   if (extracted) vm.runInContext(fs.readFileSync(heightIndex, 'utf8'), c, {filename: heightIndex});
   const helpers = extracted ? [] : ['fenwickAdd', 'fenwickSum'];
