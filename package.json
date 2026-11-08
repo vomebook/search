@@ -1,6 +1,21 @@
 {
   "name": "reader-static-checks",
   "private": true,
+  "prettier": {
+    "overrides": [
+      {
+        "files": [
+          "static/reader*.{js,css,html}",
+          "static/reader/**/*.mjs",
+          "scripts/build/check_reader_release.mjs"
+        ],
+        "options": {
+          "printWidth": 100,
+          "trailingComma": "none"
+        }
+      }
+    ]
+  },
   "scripts": {
     "lint": "eslint static scripts tests --max-warnings 0",
     "markup": "node scripts/check_markup.mjs",
