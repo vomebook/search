@@ -2980,6 +2980,71 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         source.write_text(source.read_text() + f"\nfunction overlyComplex(value) {{ {choices} return 0; }}\n")
         self.assert_check(self.run_check(*check), False, "complexity")
 
+    def test_chapter_search_worker_coverage_gate_fails_closed(self):
+        paths = ['static/reader/search/reader-chapter-search-core.mjs',
+                 'static/reader/search/reader-chapter-search-proxy-url.mjs',
+                 'static/reader/search/reader-chapter-search-index.mjs',
+                 'static/reader/search/workers/reader-chapter-search-worker.mjs',
+                 'tests/reader/chapter-search/test_reader_chapter_worker.mjs',
+                 'scripts/reader/check_chapter_search_worker_coverage.mjs', 'scripts/check_tap_contracts.mjs']
+        for name in paths:
+            target=self.root / name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT / name,target)
+        check=['node',paths[5]]
+        message='Chapter search Worker requires its passing contract and exactly one source row'
+        self.assert_check(self.run_check(*check),True,'reader-chapter-search-worker.mjs |')
+        test=self.root / paths[4];original=test.read_text()
+        marker='chapter Worker: transport, integrity, cancellation, retry and paging passed'
+        self.assertEqual(original.count(marker),1);test.write_text(original.replace(marker,'renamed completion marker'))
+        self.assert_check(self.run_check(*check),False,message)
+        test.write_text(original+"\nthrow new Error('injected chapter Worker failure');\n")
+        self.assert_check(self.run_check(*check),False,'injected chapter Worker failure')
+        test.unlink();self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        test.write_text(original+'\nconsole.log("end of coverage report");\n')
+        self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        gate=self.root / paths[5];gate_original=gate.read_text()
+        for minimum in ('[100.01, 92, 100]', '[100, 101, 100]', '[100, 92, 100.01]'):
+            self.assertEqual(gate_original.count('[100, 92, 100]'),1)
+            gate.write_text(gate_original.replace('[100, 92, 100]',minimum))
+            self.assert_check(self.run_check(*check),False,message)
+        self.assertEqual(gate_original.count('reader-chapter-search-worker\\.mjs'),1)
+        gate.write_text(gate_original.replace('reader-chapter-search-worker\\.mjs','missing-chapter-worker\\.mjs'))
+        self.assert_check(self.run_check(*check),False,message)
+
+    def test_chapter_search_worker_strict_complexity_and_network_contract(self):
+        paths=['static/reader/search/reader-chapter-search-core.mjs',
+               'static/reader/search/reader-chapter-search-proxy-url.mjs',
+               'static/reader/search/reader-chapter-search-index.mjs',
+               'static/reader/search/workers/reader-chapter-search-worker.mjs']
+        project=load_type_config('jsconfig.chapter-worker-strict.json')
+        self.assertTrue(project['compilerOptions']['strict'])
+        self.assertEqual(project['compilerOptions']['lib'],['esnext','webworker'])
+        self.assertIn(paths[3],project['files'])
+        self.assertIn('tsc --project config/types/jsconfig.chapter-worker-strict.json',
+                      json.loads((ROOT / 'package.json').read_text())['scripts']['types'])
+        for name in paths:
+            target=self.root / name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT / name,target)
+        config=self.root / 'jsconfig.json';config.write_text(json.dumps(project))
+        check=['node',ROOT / 'node_modules/typescript/bin/tsc','--project',config]
+        self.assert_check(self.run_check(*check),True,'')
+        local=self.root / paths[3];original=local.read_text()
+        annotation='/** @param {IndexReference} index @param {URL} url */'
+        self.assertEqual(original.count(annotation),1);local.write_text(original.replace(annotation,''))
+        self.assert_check(self.run_check(*check),False,'TS7006');local.write_text(original)
+        lint=['node',ROOT / 'node_modules/eslint/bin/eslint.js','--config',ROOT / 'eslint.config.mjs',
+              local,'--rule','complexity: [error, 10]','--max-warnings','0']
+        self.assert_check(self.run_check(*lint),True,'')
+        choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
+        local.write_text(original+f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
+        self.assert_check(self.run_check(*lint),False,'complexity')
+        if (ROOT / 'Dockerfile').exists():
+            self.assertIn('isSearchIndexProxyURL(url, self.location.origin)',original)
+            self.assertIn('credentials: "same-origin"',original)
+            self.assertNotIn('credentials: "omit"',original)
+        else:
+            self.assertIn('isSearchIndexProxyURL(url, "https://voiceofml-search.hf.space")',original)
+            self.assertIn('credentials: "omit"',original)
+            self.assertNotIn('credentials: "same-origin"',original)
+
     def test_chapter_search_index_coverage_gate_fails_closed(self):
         paths=['static/reader/search/reader-chapter-search-core.mjs',
                'static/reader/search/reader-chapter-search-proxy-url.mjs',

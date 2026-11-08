@@ -126,6 +126,7 @@ jobs:
           node scripts/reader/check_chapter_search_core_coverage.mjs
           node scripts/reader/check_chapter_search_proxy_coverage.mjs
           node scripts/reader/check_chapter_search_index_coverage.mjs
+          node scripts/reader/check_chapter_search_worker_coverage.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
           node scripts/reader/check_reader_lifecycle_coverage.mjs
@@ -514,6 +515,7 @@ jobs:
           node scripts/reader/check_chapter_search_core_coverage.mjs
           node scripts/reader/check_chapter_search_proxy_coverage.mjs
           node scripts/reader/check_chapter_search_index_coverage.mjs
+          node scripts/reader/check_chapter_search_worker_coverage.mjs
           node tests/reader/images/test_reader_image_loader.mjs
           node scripts/reader/check_reader_image_loader_coverage.mjs
           node scripts/reader/check_reader_lifecycle_coverage.mjs

@@ -1,4 +1,4 @@
-/** @typedef {{index: number, title: string, path: string, text: string, bigramFilter?: Uint8Array | undefined}} SearchChapter */
+/** @typedef {{index: number, title?: unknown, path: string, text: string, bigramFilter?: unknown}} SearchChapter */
 /** @typedef {{ordinal: number, chapterIndex: number, start: number}} SearchCheckpoint */
 /** @typedef {{text: string, matchStart: number, matchLength: number, prefix: string, suffix: string}} SearchSnippet */
 /** @typedef {{chapterIndex: number, start: number, length: number, location: string, snippet: SearchSnippet}} SearchResult */
@@ -41,16 +41,33 @@ export function queryBigramFilters(query) {
   return characters.slice(1).map((character, index) => bigramHashes(characters[index] + character));
 }
 
-/** @param {SearchChapter} chapter @param {number[][] | null} filters */
-export function chapterMayContainBigrams(chapter, filters) {
-  const bloom = chapter.bigramFilter;
-  if (!filters || !bloom) return true;
+/** @param {unknown} value @param {string} key @returns {unknown} */
+function filterProperty(value, key) { return Reflect.get(Object(value), key); }
+
+/** @param {Uint8Array} bloom @param {number[][]} filters */
+function typedBloomMayContain(bloom, filters) {
   const mask = bloom.length * 8 - 1;
   for (const hashes of filters) for (const hash of hashes) {
     const bit = hash & mask;
     if (!(bloom[bit >> 3] & (1 << (bit & 7)))) return false;
   }
   return true;
+}
+/** @param {unknown} bloom @param {number[][]} filters */
+function legacyBloomMayContain(bloom, filters) {
+  const mask = Number(filterProperty(bloom, "length")) * 8 - 1;
+  for (const hashes of filters) for (const hash of hashes) {
+    const bit = hash & mask;
+    if (!(Number(filterProperty(bloom, String(bit >> 3))) & (1 << (bit & 7)))) return false;
+  }
+  return true;
+}
+
+/** @param {SearchChapter} chapter @param {number[][] | null} filters */
+export function chapterMayContainBigrams(chapter, filters) {
+  const bloom = chapter.bigramFilter;
+  if (!filters || !bloom) return true;
+  return bloom instanceof Uint8Array ? typedBloomMayContain(bloom, filters) : legacyBloomMayContain(bloom, filters);
 }
 
 /** @param {RegExp} pattern @param {string} part @param {number} start @param {number} next

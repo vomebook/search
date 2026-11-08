@@ -104,6 +104,18 @@ assert.equal((await resultPage(literals, "&nbsp;", literalCounts.counts, 50, () 
   assert.equal(queryBigramFilters("A"), null);
   assert.equal((await countMatches([chapter], "手机", () => true)).total, 1);
 }
+// Version-1 historical JSON can contain array-like filter properties rather
+// than the decoded Uint8Array; preserve the old coercion and bit decisions.
+{
+  const filters = queryBigramFilters("手机");
+  const bloom = Object.assign({length:32}, Object.fromEntries(Array.from({length:32}, (_, i) => [i,255])));
+  const chapter = {index:1,title:42,path:"one",text:"手机",bigramFilter:bloom};
+  assert.equal(chapterMayContainBigrams(chapter, filters), true);
+  for (let i=0;i<32;i++) bloom[i]=0;
+  assert.equal(chapterMayContainBigrams(chapter, filters), false);
+  chapter.bigramFilter = {};
+  assert.equal(chapterMayContainBigrams(chapter, filters), false);
+}
 // Force a cooperative yield without timing dependence. The currentness guard
 // executes inside the real scan; after the yield it must check cancellation.
 {

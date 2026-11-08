@@ -198,6 +198,10 @@
       "kind": "excluded",
       "reason": "Visual acceptance requires external pinned screenshot baselines not present here."
     },
+    "tests/reader/chapter-search/test_reader_chapter_worker.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_chapter_search_worker_coverage.mjs"
+    },
     "tests/reader/chapter-search/test_reader_chapter_search.mjs": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
