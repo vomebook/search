@@ -1,8 +1,8 @@
 const PACKED_LIMIT = 64 * 1024 * 1024;
 const TEXT_LIMIT = 256 * 1024 * 1024;
-const MAX_BIGRAM_FILTER_BYTES = 32 * 1024;
 import {countMatches, resultPage, aborted, PAGE_SIZE} from "../reader-chapter-search-core.mjs";
 import {isSearchIndexProxyURL} from "../reader-chapter-search-proxy-url.mjs";
+import {validateIndex} from "../reader-chapter-search-index.mjs";
 
 async function readBounded(stream, limit, signal) {
   const reader = stream.getReader(), chunks = [];
@@ -31,35 +31,6 @@ async function readBounded(stream, limit, signal) {
     reader.releaseLock();
   }
 }
-
-export function validateIndex(data, chapters, textProfile) {
-  if (![1, 2].includes(data?.version) || data.kind !== "epub-search-index" ||
-      !Array.isArray(data.chapters) || data.chapters.length !== chapters.length)
-    throw new Error("全文搜索索引不完整，请重试");
-  if ((textProfile !== undefined && textProfile !== "dom-text-v1") ||
-      data.text_profile !== textProfile)
-    throw new Error("全文搜索索引文本格式不一致，请重试");
-  for (let i = 0; i < chapters.length; i++) {
-    const item = data.chapters[i], expected = chapters[i];
-    if (item?.index !== expected.index || item.path !== expected.path || typeof item.text !== "string")
-      throw new Error("全文搜索索引与章节不一致");
-    if (data.version === 2 && item.bf !== undefined) {
-      let binary;
-      try { binary = atob(item.bf); }
-      catch (_) { throw new Error("全文搜索过滤索引无效"); }
-      if (binary.length < 32 || binary.length > MAX_BIGRAM_FILTER_BYTES ||
-          (binary.length & (binary.length - 1)) !== 0)
-        throw new Error("全文搜索过滤索引无效");
-      const filter = new Uint8Array(binary.length);
-      for (let j = 0; j < binary.length; j++) filter[j] = binary.charCodeAt(j);
-      item.bigramFilter = filter;
-      delete item.bf;
-    }
-    item.title = expected.title || `章节 ${expected.index}`;
-  }
-  return data.chapters;
-}
-
 
 
 let configuration, indexPromise, chapters, active = 0, session, loadController;
