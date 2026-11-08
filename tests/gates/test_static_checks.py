@@ -2284,6 +2284,12 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), False, message)
         boundary.write_text(boundary_source.replace("test('" + boundary_name + "'", "test.skip('" + boundary_name + "'"))
         self.assert_check(self.run_check(*check), False, message)
+        exact_boundary = 'Content-Range decimal coordinates are bounded and identity-pinned'
+        self.assertEqual(boundary_source.count(exact_boundary), 1)
+        boundary.write_text(boundary_source.replace(exact_boundary, 'renamed exact boundary'))
+        self.assert_check(self.run_check(*check), False, message)
+        boundary.write_text(boundary_source.replace("test('" + exact_boundary + "'", "test.skip('" + exact_boundary + "'"))
+        self.assert_check(self.run_check(*check), False, message)
         boundary.unlink()
         self.assert_check(self.run_check(*check), False, message)
         boundary.write_text(boundary_source)
@@ -2291,9 +2297,9 @@ class StaticGateTests(unittest.TestCase):
             boundary.write_text(boundary_source + '\nconsole.log(' + json.dumps(summary) + ');\n')
             self.assert_check(self.run_check(*check), False, message)
         boundary.write_text(boundary_source)
-        for minimum in ('[100.01, 86.81, 78.95]', '[100, 86.82, 78.95]', '[100, 86.81, 78.96]'):
-            self.assertEqual(original.count('[100, 86.81, 78.95]'), 1)
-            gate.write_text(original.replace('[100, 86.81, 78.95]', minimum))
+        for minimum in ('[100.01, 88, 80]', '[100, 101, 80]', '[100, 88, 100.01]'):
+            self.assertEqual(original.count('[100, 88, 80]'), 1)
+            gate.write_text(original.replace('[100, 88, 80]', minimum))
             self.assert_check(self.run_check(*check), False, message)
         self.assertEqual(original.count('reader-djvu-range\\.mjs'), 1)
         gate.write_text(original.replace('reader-djvu-range\\.mjs', 'missing-djvu-range\\.mjs'))
@@ -2929,7 +2935,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
-                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-djvu-adapter.mjs", "static/reader/pdf/reader-djvu-identity.mjs", "static/reader/search/reader-chapter-search-proxy-url.mjs", "static/reader/search/reader-chapter-search-index.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
+                    "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-djvu-adapter.mjs", "static/reader/pdf/reader-djvu-identity.mjs", "static/reader/pdf/reader-djvu-range.mjs", "static/reader/pdf/reader-djvu-loader.mjs", "static/reader/search/reader-chapter-search-proxy-url.mjs", "static/reader/search/reader-chapter-search-index.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
                     "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)

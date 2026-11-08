@@ -28,7 +28,7 @@ const complete = contracts.every(([name, marker]) => {
 });
 // Coverage is deliberately scoped to the range module, using its original
 // synthetic transport regression plus the named boundary contract.
-const minimum = [100, 86.81, 78.95];
+const minimum = [100, 88, 80];
 const boundary = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--experimental-test-coverage',
   '--test-coverage-include=**/static/reader/pdf/reader-djvu-range.mjs',
   ...minimum.map((value, index) => `--test-coverage-${['lines', 'branches', 'functions'][index]}=${value}`),
@@ -38,9 +38,10 @@ if (boundary.stderr) process.stderr.write(boundary.stderr);
 if (boundary.error) throw boundary.error;
 const boundaryName = 'reads reject invalid lengths and offsets without dispatching new windows';
 const boundaryLines = (boundary.stdout || '').split(/\r?\n/);
-const boundarySummaries = ['1..2', '# tests 2', '# pass 2', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
+const boundarySummaries = ['1..3', '# tests 3', '# pass 3', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
 const boundaryRequired = [{name: 'tests/reader/djvu/test_reader_djvu_range.mjs',
-  marker: 'DjVu range bounds, identity, retries, caching and cancellation passed'}, {name: boundaryName}];
+  marker: 'DjVu range bounds, identity, retries, caching and cancellation passed'}, {name: boundaryName},
+  {name:'Content-Range decimal coordinates are bounded and identity-pinned'}];
 const coverageRows = boundaryLines.flatMap(line => {
   const match = /^\s*#\s*reader-djvu-range\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
@@ -168,8 +169,9 @@ const loaderRows = loaderLines.flatMap(line => {
   const match = /^\s*#\s*reader-djvu-loader\.mjs\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|/.exec(line);
   return match ? [match.slice(1).map(Number)] : [];
 });
+const loaderSummaries = ['1..2', '# tests 2', '# pass 2', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
 const loaderComplete = loader.status === 0 && hasPassingTapContracts(loader.stdout || '', loaderRequired) &&
-  boundarySummaries.every(summary => loaderLines.filter(line => line === summary).length === 1) &&
+  loaderSummaries.every(summary => loaderLines.filter(line => line === summary).length === 1) &&
   ['# tests ', '# pass ', '# fail ', '# cancelled ', '# skipped ', '# todo '].every(prefix =>
     loaderLines.filter(line => line.startsWith(prefix)).length === 1) &&
   loaderLines.filter(line => /^# duration_ms \d+(?:\.\d+)?$/.test(line)).length === 1 &&
