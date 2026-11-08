@@ -3094,9 +3094,7 @@ function updateResultWindowStatus() {
 }
 
 function isRecoverableSearchError(error) {
-  if (!error || error.name === "AbortError") return false;
-  if (error.status) return [408, 429, 500, 502, 503, 504].includes(error.status);
-  return /API_TIMEOUT|WORKER_TIMEOUT|LOCAL_UNAVAILABLE|TimeoutError|network|fetch|offline|timed out/i.test(`${error.code || error.name || ""} ${error.message || ""}`) || error.message === "Load failed";
+  return VoiceOfMLSearchRecovery.isRecoverable(error);
 }
 
 function waitForSearchRecovery(signal, delay, local) {
