@@ -39,7 +39,7 @@ function installWorker(resources) {
       this.worker = new NodeWorker(new URL('./worker-bootstrap.mjs',import.meta.url),
         {workerData:{workerUrl:workerUrl.href,resources}});
       this.worker.on('message', data => {
-        if (data.testFetch) this.fetches.push(data.testFetch);
+        if (data.testFetch) this.fetches.push({url:data.testFetch, credentials:data.testCredentials});
         else this.onmessage?.({data});
       });
       this.worker.on('error', () => this.onerror?.({preventDefault(){}}));
@@ -75,6 +75,9 @@ for (const partitioned of [false,true]) {
         assert.equal(page.session,first.session);
         if (partitioned) assert.equal(page.results[0].textGeneration,textGeneration);
         if (!partitioned) assert.equal(workers.instances[0].fetches.length,1);
+        assert.ok(workers.instances[0].fetches.length > 0);
+        assert.ok(workers.instances[0].fetches.every(request => request.credentials === 'omit'));
+
         client.cancel();
         assert.equal((await client.prefetch()).session,null);
         await assert.rejects(client.page(0),/取消或加载超时/);
