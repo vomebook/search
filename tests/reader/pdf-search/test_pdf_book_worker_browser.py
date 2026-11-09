@@ -425,6 +425,30 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(result['a']['results'],result['b']['results'])
         self.assertEqual(self.state['paths'].count(target),3)
 
+    def test_partition_shape_rejects_null_page_before_progress_or_paging(self):
+        malformed = packed({
+            'version': 1, 'kind': 'pdf-search-text-partition', 'source_sha256': SOURCE_SHA,
+            'generation': GENERATION, 'offset_unit': 'unicode-codepoint', 'start': 1, 'end': 1,
+            'pages': [None],
+        })
+        target = f'{BASE}/search-000001-000001.json.gz'
+        with self.server.state_lock:
+            self.server.resources[target] = malformed
+        config = self.configuration()
+        config['partitions'][0]['bytes'] = len(malformed)
+        config['partitions'][0]['sha256'] = digest(malformed)
+        page = self.make_page()
+        result = page.evaluate('''async config => {
+          const {createPdfBookSearch} = await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'), 'import');
+          const client = window.client = createPdfBookSearch(config);
+          const progress = [];
+          const result = await window.capture(client.search('needle', value => progress.push(value)), 'search');
+          return {result, progress};
+        }''', config)
+        self.assertIn('PDF_TEXT_INDEX_INVALID', result['result'].get('message', ''))
+        self.assertEqual(result['progress'], [])
+        self.assertEqual(page.evaluate('window.unexpected'), [])
+
     def test_partition_failure_never_commits_unverified_results(self):
         page=self.make_page()
         configuration=self.configuration()
