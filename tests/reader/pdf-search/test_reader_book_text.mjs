@@ -118,4 +118,37 @@ try {
   assert.equal(iteratedUnits,0,"box-free pages must not count prefix code points");
 } finally { String.prototype[Symbol.iterator] = originalIterator; }
 
+// Page scanning cooperates with Worker cancellation without a timer per tiny
+// set of pages. A deterministic fake clock proves the deadline and byte guard.
+const schedulerClock=globalThis.performance;
+try {
+  Object.defineProperty(globalThis,'performance',{configurable:true,value:{now:()=>0}});
+  let yields=0;
+  const short={pages:Array.from({length:160},(_,index)=>({page:index+1,text:'x needle'}))};
+  let fast=await searchBookText(short,'needle',{yieldTask:async()=>{yields++;}});
+  assert.equal(fast.total,160);assert.equal(yields,0,'tiny pages should not schedule unnecessary timers');
+  const bulky={pages:Array.from({length:40},(_,index)=>({page:index+1,text:'x'.repeat(20000)}))};
+  yields=0;fast=await searchBookText(bulky,'absent',{yieldTask:async()=>{yields++;}});
+  assert.equal(fast.total,0);assert.ok(yields>0,'byte budget must yield even when the clock does not advance');
+  let live=true,firstYield;
+  const blocked=new Promise(resolve=>{firstYield=resolve;});
+  const cancelled=searchBookText(bulky,'absent',{current:()=>live,yieldTask:async()=>{
+    firstYield();await new Promise(resolve=>{globalThis.__releaseBookTextYield=resolve;});}});
+  await blocked;live=false;globalThis.__releaseBookTextYield();delete globalThis.__releaseBookTextYield;
+  await assert.rejects(cancelled,error=>error.name==='AbortError');
+  let finalLive=true,releaseFinal,startedFinal;
+  const finalWaiting=new Promise(resolve=>{startedFinal=resolve;});
+  const final=searchBookText({pages:[{page:1,text:'x'.repeat(300000)}]},'missing',{
+    current:()=>finalLive,yieldTask:()=>new Promise(resolve=>{releaseFinal=resolve;startedFinal();})});
+  await finalWaiting;finalLive=false;releaseFinal();
+  await assert.rejects(final,error=>error.name==='AbortError','cancellation at the final yield must not resolve a stale index');
+  yields=0;
+  const dense={pages:[{page:1,text:'x'.repeat(4096)}]};
+  const denseResult=await searchBookText(dense,'x',{yieldTask:async()=>{yields++;}});
+  assert.equal(denseResult.total,4096);assert.equal(yields,2,'dense-match cancellation checkpoints remain unchanged');
+  let clock=0;Object.defineProperty(globalThis,'performance',{configurable:true,value:{now:()=>clock+=9}});
+  yields=0;await searchBookText(short,'needle',{yieldTask:async()=>{yields++;}});
+  assert.ok(yields>0,'elapsed-time budget must retain cooperative yields');
+} finally {Object.defineProperty(globalThis,'performance',{configurable:true,value:schedulerClock});}
+
 console.log("reader book text search contracts passed");

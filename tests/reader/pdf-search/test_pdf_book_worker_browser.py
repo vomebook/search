@@ -574,6 +574,66 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(result['first'].get('error'),'AbortError')
         self.assertEqual(result['retry']['value']['total'],180)
 
+    def test_large_legacy_worker_search_replacement_keeps_cancellation(self):
+        target = f'{BASE}/book-text.json.gz'
+        text = '普通文本😀' * 2000
+        packed_book = packed({'version':2, 'kind':'pdf-book-text', 'complete':True,
+            'offset_unit':'unicode-codepoint', 'source_sha256':SOURCE_SHA, 'page_count':100,
+            'pages':[{'page':number, 'text':text, 'layout':{'offset_unit':'unicode-codepoint'}, 'text_spans':[]}
+                     for number in range(1,101)]})
+        with self.server.state_lock:
+            self.server.resources[target] = packed_book
+        config = {'url':self.resource(target),'bytes':len(packed_book),'sha256':digest(packed_book),
+                  'pageCount':100,'sourceSha':SOURCE_SHA}
+        page = self.make_page()
+        result = page.evaluate('''async config=>{
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          const client=window.client=createPdfBookSearch(config);
+          await window.deadline(client.prefetch(),'legacy prefetch');
+          const old=window.capture(client.search('missing'),'superseded');
+          const replacement=window.capture(client.search('普通'),'replacement');
+          const [first,second]=await Promise.all([old,replacement]);
+          const tail=await window.deadline(client.page(199950),'deep page');
+          return {first,second,tail};
+        }''', config)
+        self.assertEqual(result['first'].get('error'),'AbortError')
+        self.assertEqual(result['second']['value']['total'],200000)
+        self.assertEqual(result['tail']['offset'],199950)
+        self.assertEqual(len(result['tail']['results']),50)
+        self.assertEqual(result['tail']['results'][0]['page'],100)
+        self.assertEqual(result['tail']['results'][0]['start'],1950*len('普通文本😀'.encode('utf-16-le'))//2)
+
+    def test_replacement_during_legacy_scan_keeps_progress_and_results(self):
+        target = f'{BASE}/book-text.json.gz'
+        text = '普通文本😀' * 2000
+        packed_book = packed({'version':2, 'kind':'pdf-book-text', 'complete':True,
+            'offset_unit':'unicode-codepoint', 'source_sha256':SOURCE_SHA, 'page_count':100,
+            'pages':[{'page':number, 'text':text, 'layout':{'offset_unit':'unicode-codepoint'}, 'text_spans':[]}
+                     for number in range(1,101)]})
+        with self.server.state_lock:
+            self.server.resources[target] = packed_book
+        config = {'url':self.resource(target),'bytes':len(packed_book),'sha256':digest(packed_book),
+                  'pageCount':100,'sourceSha':SOURCE_SHA}
+        page = self.make_page()
+        result = page.evaluate('''async config=>{
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          const client=window.client=createPdfBookSearch(config);
+          await window.deadline(client.prefetch(),'legacy prefetch');
+          let replacement, observed=0;
+          const old=window.capture(client.search('missing',progress=>{
+            observed++;
+            if (!replacement) replacement=window.capture(client.search('普通'),'replacement after progress');
+          }),'superseded after progress');
+          const first=await old;
+          if (!replacement) return {first,observed};
+          const second=await replacement;
+          return {first,second,observed};
+        }''',config)
+        self.assertGreaterEqual(result['observed'],1,'replacement must begin after actual Worker progress')
+        self.assertEqual(result['first'].get('error'),'AbortError')
+        self.assertEqual(result['second']['value']['total'],200000)
+        self.assertEqual(len(result['second']['value']['results']),50)
+
     def test_search_preempts_inflight_prefetch(self):
         self.state['block_path'] = f'{BASE}/book-text.json.gz'
         config = {'url': self.resource(self.state['block_path']),
