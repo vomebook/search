@@ -2339,7 +2339,9 @@ class StaticGateTests(unittest.TestCase):
         gate = self.root / paths[1]
         gate_original = gate.read_text()
         self.assertEqual(gate_original.count('[100, 91.89, 90.91]'), 1)
-        for minimum in ('[100.01, 91.89, 90.91]', '[100, 91.90, 90.91]', '[100, 91.89, 90.92]'):
+        # Keep each injected threshold strictly above this candidate's measured
+        # coverage; these remain independent fail-closed mutations.
+        for minimum in ('[100.01, 91.89, 90.91]', '[100, 100.01, 90.91]', '[100, 91.89, 100.01]'):
             gate.write_text(gate_original.replace('[100, 91.89, 90.91]', minimum))
             self.assert_check(self.run_check(*check), False, message)
         self.assertEqual(gate_original.count('reader-text-format\\.mjs'), 1)
