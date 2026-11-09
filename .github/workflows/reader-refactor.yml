@@ -491,6 +491,7 @@ jobs:
           python -B scripts/check_search_words_mutation.py --module search_projection
           python -B scripts/check_search_words_mutation.py --module search_candidates
           python -B scripts/check_search_words_mutation.py --module search_bootstrap
+          python -B scripts/check_search_words_mutation.py --module search_browse
           python -B scripts/check_search_words_mutation.py --module reader_archive
       - name: Install Playwright system dependencies
         timeout-minutes: 15
