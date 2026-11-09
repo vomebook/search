@@ -159,11 +159,35 @@ export function populateOcrTextLayer(layer, blocks, layout = {}) {
 
 export function populateIndependentTextLayer(layer, payload) {
   const fragment = layer.ownerDocument.createDocumentFragment();
-  const chars = Array.from(payload.text), bounds = layer.parentElement.getBoundingClientRect();
+  const text = payload.text, bounds = layer.parentElement.getBoundingClientRect();
   const ratio = bounds.height / Math.max(1, bounds.width);
-  let end = 0;
+  let previous = 0;
+  const ordered = payload.regions.every(region => {
+    if (!Number.isSafeInteger(region.start) || !Number.isSafeInteger(region.end) ||
+        region.start < previous || region.end <= region.start) return false;
+    previous = region.end;
+    return true;
+  });
+  // V3 validates ordered offsets, and native DjVu zones usually have them.
+  // If a legacy/native sequence is irregular, retain the exact former slicing
+  // behavior rather than silently changing text or selection.
+  const chars = ordered ? null : Array.from(text);
+  let point = 0, unit = 0, end = 0;
+  const advance = target => {
+    while (point < target && unit < text.length) {
+      const high = text.charCodeAt(unit++);
+      if (high >= 0xd800 && high <= 0xdbff && unit < text.length) {
+        const low = text.charCodeAt(unit);
+        if (low >= 0xdc00 && low <= 0xdfff) unit++;
+      }
+      point++;
+    }
+    return unit;
+  };
   for (const region of payload.regions) {
-    fragment.appendChild(layer.ownerDocument.createTextNode(chars.slice(end, region.start).join("")));
+    const gap = unit;
+    const separator = chars ? chars.slice(end, region.start).join("") : text.slice(gap, advance(region.start));
+    fragment.appendChild(layer.ownerDocument.createTextNode(separator));
     const vertical = region.writing_mode.startsWith("vertical");
     const q = region.quad;
     const dx = q[1][0] - q[0][0], dy = (q[1][1] - q[0][1]) * ratio;
@@ -182,8 +206,9 @@ export function populateIndependentTextLayer(layer, payload) {
     if (vertical) run.style.writingMode = region.writing_mode === "vertical-lr" ? "vertical-lr" : "vertical-rl";
     fragment.appendChild(positioned);
     end = region.end;
+    if (!chars) advance(end);
   }
-  fragment.appendChild(layer.ownerDocument.createTextNode(chars.slice(end).join("")));
+  fragment.appendChild(layer.ownerDocument.createTextNode(chars ? chars.slice(end).join("") : text.slice(unit)));
   layer.replaceChildren(fragment);
   // Page surfaces disable selection; separators must be selectable along with runs.
   layer.style.userSelect = "text";
