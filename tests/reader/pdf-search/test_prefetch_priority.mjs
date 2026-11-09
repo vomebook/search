@@ -61,6 +61,9 @@ test('background prefetch cannot reject an active search or lose progress/sessio
   const progress=[];
   const search=outcome(client.search('alpha',p=>progress.push(p)));
   await wait(e=>e.event==='fetch' && e.url===partitions[1].url);
+  // Lookahead may fetch partition two before the Worker publishes progress
+  // for partition one. Synchronize both events, not their relative order.
+  await wait(e=>e.wire?.progress);
   assert.equal(progress.length,1);
   const prefetch=outcome(client.prefetch());
   release(send);
