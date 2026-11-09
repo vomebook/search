@@ -21,6 +21,7 @@ const searchOrderCache = new Map();
 const SEARCH_ORDER_CACHE_MAX = 8;
 // Bound temporary membership allocation for dense-order reuse.
 const SORT_REUSE_MAX_INDICES = 65536;
+const EXACT_INDEX_MAX_INDICES = 65536;
 let searchAnchorOwners = new WeakMap();
 const searchAnchorCache = new Map();
 const SEARCH_ANCHOR_ORDER_MAX = 8;
@@ -31,6 +32,7 @@ let repoRecordIndices = Object.create(null);
 // Unusual compact metadata retains its legacy field-coercion and error path;
 // only ordinary string fields can use the repository-only wildcard proof.
 let repoWildcardProofSafe = false;
+let extensionSearchProofSafe = false;
 let readerRecordIndices = [];
 let repoReaderRecordIndices = Object.create(null);
 let sortedByName = [];
@@ -47,6 +49,7 @@ let indexYieldChannel = null;
 const indexYieldQueue = [];
 const FULLTEXT_BATCH_RECORDS = 256;
 const FULLTEXT_BATCH_MS = 8;
+const FULLTEXT_COMPACT_BATCH_TOKENS = 4096;
 const FULLTEXT_FOLDER_CACHE_MAX = 64;
 const FULLTEXT_FOLDER_CACHE_UNITS = 65536;
 const directoryIndexes = new Map();
@@ -234,6 +237,14 @@ function compileWildcardMatcher(pattern) {
       }
     }};
   }
+  // One star separating a boundary run of questions from fixed literals is
+  // equivalent to fixed-width dots in an unanchored search.
+  const parts = core.split(/\*+/);
+  if (parts.length === 2 && ((/^\?+$/.test(parts[0]) && !parts[1].includes("?"))
+      || (/^\?+$/.test(parts[1]) && !parts[0].includes("?")))) {
+    const fixed = parts.join("").split("").map(char => char === "?" ? "." : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
+    return new RegExp(fixed, "i");
+  }
   const tokens = normalized.replace(/\*+/g, "*").split("");
   const literals = tokens.map(char => char === "*" || char === "?" ? null
     : new RegExp("^" + char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i"));
@@ -384,7 +395,19 @@ function compareRecordSize(a, b) {
 
 function buildNameOrders() {
   if (nameOrderReady) return;
-  sortedByName = recordIndices.slice().sort(compareRecordName);
+  // Ordinary decoded records have immutable string names; compute the key
+  // once instead of lowercasing during every sort comparison.
+  if (repoWildcardProofSafe) {
+    const keys = records.map(record => String(record.File || "").toLowerCase());
+    const hasSurrogate = keys.map(key => /[\uD800-\uDFFF]/.test(key));
+    sortedByName = recordIndices.slice().sort((a, b) => {
+      const left = keys[a], right = keys[b];
+      return hasSurrogate[a] || hasSurrogate[b] ? compareCodepoints(left, right)
+        : left < right ? -1 : left > right ? 1 : 0;
+    });
+  } else {
+    sortedByName = recordIndices.slice().sort(compareRecordName);
+  }
   repoSortedByName = Object.create(null);
   for (const repo of Object.keys(repoRecordIndices)) repoSortedByName[repo] = [];
   for (const index of sortedByName) repoSortedByName[records[index].Repo].push(index);
@@ -424,6 +447,7 @@ function replaceCorpus(nextRecords) {
   const nextRecordIndices = new Array(nextRecords.length);
   const nextRepoRecordIndices = Object.create(null);
   let nextRepoWildcardProofSafe = true;
+  let nextExtensionSearchProofSafe = true;
   const nextReaderRecordIndices = [];
   const nextRepoReaderRecordIndices = Object.create(null);
   for (let i = 0; i < nextRecords.length; i++) {
@@ -436,6 +460,7 @@ function replaceCorpus(nextRecords) {
     nextRecordIndices[i] = i;
     if (!nextRepoRecordIndices[repo]) nextRepoRecordIndices[repo] = [];
     nextRepoRecordIndices[repo].push(i);
+    if (typeof record.Extension !== "string") nextExtensionSearchProofSafe = false;
     const extension = String(record.Extension || "").toLowerCase();
     repoCounts[repo] = (repoCounts[repo] || 0) + 1;
     if (extension) {
@@ -497,6 +522,7 @@ function replaceCorpus(nextRecords) {
   scheduleSortOrders(generation);
   scheduleFulltext(generation, 1500);
   repoWildcardProofSafe = nextRepoWildcardProofSafe;
+  extensionSearchProofSafe = nextExtensionSearchProofSafe;
   return Object.assign({ state: "corpus-ready", generation }, metadata);
 }
 
@@ -529,10 +555,12 @@ function advanceFulltext(limit, deadline) {
   if (!advanceVocabulary(build.allVocab, deadline)) return;
   if (!build.filesVocab) build.filesVocab = createVocabularyBuild(build.files);
   if (!advanceVocabulary(build.filesVocab, deadline)) return;
-  // Publish compact immutable postings. Typed arrays avoid retaining one boxed
-  // number per occurrence; pages and intersections only need iteration/indexing.
-  for (const token of Object.keys(build.all)) build.all[token] = Uint32Array.from(build.all[token]);
-  for (const token of Object.keys(build.files)) build.files[token] = Uint32Array.from(build.files[token]);
+  // Compact bounded slices before publishing either index, so metadata and
+  // cancellation can run during a large corpus build.
+  if (!build.allCompaction) build.allCompaction = { keys: build.allVocab.keys, next: 0 };
+  if (!advancePostingCompaction(build.all, build.allCompaction, deadline)) return;
+  if (!build.filesCompaction) build.filesCompaction = { keys: build.filesVocab.keys, next: 0 };
+  if (!advancePostingCompaction(build.files, build.filesCompaction, deadline, build.all)) return;
   wordIndex = build.all;
   wordIndexFilesOnly = build.files;
   vocabSorted = build.allVocab.output;
@@ -551,8 +579,9 @@ function advanceVocabulary(build, deadline) {
     if (remaining-- <= 0 || Date.now() >= deadline) return false;
     const token = build.keys[build.next++];
     const count = build.index[token].length;
-    if (!build.groups.has(count)) build.groups.set(count, []);
-    build.groups.get(count).push([token, count]);
+    let group = build.groups.get(count);
+    if (!group) { group = []; build.groups.set(count, group); }
+    group.push([token, count]);
   }
   if (!build.counts) build.counts = Array.from(build.groups.keys()).sort((a, b) => b - a);
   while (build.group < build.counts.length) {
@@ -563,6 +592,21 @@ function advanceVocabulary(build, deadline) {
     }
     build.group++;
     build.item = 0;
+  }
+  return true;
+}
+
+function advancePostingCompaction(index, build, deadline, sharedIndex = null) {
+  let remaining = deadline === Infinity ? Infinity : FULLTEXT_COMPACT_BATCH_TOKENS;
+  while (build.next < build.keys.length) {
+    if (remaining-- <= 0 || Date.now() >= deadline) return false;
+    const token = build.keys[build.next];
+    const posting = index[token];
+    const shared = sharedIndex && sharedIndex[token];
+    // File postings are an ordered subset of all-field postings. Equal lengths
+    // prove equal IDs, so immutable arrays can be shared without a second scan.
+    index[token] = shared && shared.length === posting.length ? shared : Uint32Array.from(posting);
+    build.next++;
   }
   return true;
 }
@@ -694,6 +738,22 @@ function intersectCandidateLists(candidateLists, sorted = false) {
     if (candidateLists.length === 1) return Array.from(candidateLists[0]);
     const lists = candidateLists.slice().sort((a, b) => a.length - b.length);
     const matched = [];
+    if (lists[0].length >= 512) {
+      // Dense sorted postings are cheaper to intersect with monotonic cursors.
+      const cursors = new Array(lists.length).fill(0);
+      outer: for (const index of lists[0]) {
+        for (let i = 1; i < lists.length; i++) {
+          const list = lists[i];
+          let offset = cursors[i];
+          while (offset < list.length && list[offset] < index) offset++;
+          cursors[i] = offset;
+          if (offset === list.length) break outer;
+          if (list[offset] !== index) continue outer;
+        }
+        matched.push(index);
+      }
+      return matched;
+    }
     for (const index of lists[0]) {
       let found = true;
       for (let i = 1; i < lists.length; i++) {
@@ -730,6 +790,31 @@ function exactSearchScope(repos) {
   const indices = [];
   for (const repo of unique) for (const index of repoRecordIndices[repo] || []) indices.push(index);
   return indices.sort((a, b) => a - b);
+}
+
+function indexedExactCandidates(term, params, scopeSize) {
+  if (!wordIndex || !repoWildcardProofSafe || !extensionSearchProofSafe || !scopeSize) return null;
+  const repos = params.repos;
+  if (repos?.length && (!Array.isArray(repos) || repos.some(repo => typeof repo !== "string"))) return null;
+  const selected = repos?.length ? new Set(repos) : null;
+  const index = params.searchFolders === false ? wordIndexFilesOnly : wordIndex;
+  let best = null;
+  let bestSize = Math.min(EXACT_INDEX_MAX_INDICES, Math.floor(scopeSize / 2));
+  const runs = term.match(/[\u3400-\u4dbf\u4e00-\u9fff]{2,}/g) || [];
+  for (const run of runs) for (let offset = 0; offset < run.length - 1; offset++) {
+    const gram = run.slice(offset, offset + 2);
+    if (metadata.extensions.some(extension => extension.name.includes(gram))) continue;
+    const posting = index[gram] || [];
+    const repoMatches = metadata.repos.filter(repo => (!selected || selected.has(repo.name))
+      && repo.name.toLowerCase().includes(gram));
+    const size = posting.length + repoMatches.reduce((total, repo) => total + repo.count, 0);
+    if (size < bestSize) { best = {posting, repoMatches}; bestSize = size; }
+  }
+  if (best === null) return null;
+  const candidates = new Set();
+  for (const id of best.posting) if (!selected || selected.has(records[id].Repo)) candidates.add(id);
+  for (const repo of best.repoMatches) for (const id of repoRecordIndices[repo.name]) candidates.add(id);
+  return Array.from(candidates).sort((a, b) => a - b);
 }
 
 function emptySearchOrder(params) {
@@ -832,11 +917,16 @@ function searchLocal(params, preparedExact = null) {
     // A term may still be a wildcard pattern; every term must match.
     const terms = query.split(/\s+/).filter(Boolean);
     matched = preparedExact === null ? exactSearchScope(params.repos).slice() : preparedExact;
-    for (const term of preparedExact === null ? terms : []) {
+    for (let termIndex = 0; preparedExact === null && termIndex < terms.length; termIndex++) {
+      const term = terms[termIndex];
       const wildcard = term.includes("*") || term.includes("?");
       const lower = term.toLowerCase();
       if (wildcard && term.replace(/\*/g, "") === "") continue;
       const pattern = wildcard ? compileWildcardMatcher(term) : null;
+      if (termIndex === 0) {
+        const indexed = indexedExactCandidates(term, params, matched.length);
+        if (indexed !== null) matched = indexed;
+      }
       // The previous scan breaks here for an empty scope; avoid proving
       // universal terms against all repos repeatedly when nothing can match.
       if (!matched.length) break;
@@ -865,8 +955,15 @@ function searchLocal(params, preparedExact = null) {
     const scope = exactSearchScope(params.repos);
     const tokens = tokenize(query);
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    // Any mandatory literal term can safely bound the literal-only fallback;
+    // the fuzzy postings below still retain the complete vocabulary semantics.
+    let literalScope = scope;
+    for (const term of terms) {
+      const indexed = indexedExactCandidates(term, params, literalScope.length);
+      if (indexed !== null) literalScope = indexed;
+    }
     const seen = new Set();
-    for (const index of scope) {
+    for (const index of literalScope) {
       const fields = getRecordSearchFields(records[index]);
       if (terms.every(term => fields.file.includes(term) || fields.repo.includes(term)
           || (searchFolders && fields.folder.includes(term)))) seen.add(index);
@@ -877,16 +974,15 @@ function searchLocal(params, preparedExact = null) {
       // authoritative answer; do not expand every two-edit near match.
       if (!candidates.length && !(terms.length === 1 && seen.size)) {
         sortedCandidates = false;
-        const fuzzy = [];
+        const fuzzy = new Set();
         const maxDist = fuzzyDistanceBudget(token);
         for (const entry of maxDist ? activeVocab : []) {
           const vocab = entry[0];
           if (couldBeFuzzy(token, vocab, maxDist) && editDistance(token, vocab, maxDist) <= maxDist) {
-            // A posting can exceed the engine's maximum argument count.
-            for (const index of activeIndex[vocab] || []) fuzzy.push(index);
+            for (const index of activeIndex[vocab] || []) fuzzy.add(index);
           }
         }
-        candidates = Array.from(new Set(fuzzy));
+        candidates = Array.from(fuzzy);
       }
       if (!candidates.length) {
         tokenCandidates.length = 0;
