@@ -135,7 +135,11 @@ def decode_corpus(payload: object) -> list[CatalogRecord]:
 def relative_path(record: CatalogRecord) -> str:
     name = record["File"] + ("." + record["Extension"] if record["Extension"] else "")
     path = "/".join([*record["Folder"], name])
-    if any(part in (".", "..") for part in path.split("/")) or "\x00" in path or "\\" in path:
+    # The path is already assembled. Boundary checks avoid allocating and
+    # visiting a list of components for every record in the catalog.
+    if ("\x00" in path or "\\" in path or path in (".", "..")
+            or path.startswith(("./", "../")) or path.endswith(("/.", "/.."))
+            or "/./" in path or "/../" in path):
         raise ValueError("Unsafe source path")
     return path
 
