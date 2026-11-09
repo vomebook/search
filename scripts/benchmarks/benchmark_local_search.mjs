@@ -9,6 +9,9 @@
  * O_NONBLOCK and O_NOFOLLOW are required; platforms without them fail closed.
  * Directory path components (including --data-dir) may be symlinks; the two
  * input files themselves must not be. This is not a parent-directory sandbox.
+ * The benchmark accepts only a single gzip member with FLG=0, the subset emitted
+ * by the generation's gzip.compress. It can reject historical inputs accepted
+ * by the production selector; it does not change that selector's policy.
  *
  * Timings are direct searchLocal calls in one Node VM, not Worker message
  * dispatch, cooperative preparation, a browser, or end-to-end latency. The
@@ -24,7 +27,7 @@ import path from "node:path";
 import {performance} from "node:perf_hooks";
 import {fileURLToPath} from "node:url";
 import vm from "node:vm";
-import {gunzipSync} from "node:zlib";
+import * as zlib from "node:zlib";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const workerPath = path.join(root, "static/search/index-worker.js");
@@ -43,6 +46,7 @@ const queries = [
 ];
 const usage = "usage: node scripts/benchmarks/benchmark_local_search.mjs --data-dir DIR --generation SHA256 [--iterations 1..100] [--warmup 0..10]";
 const pathPolicy = "Directory components, including --data-dir, may be symlinks; the manifest and corpus files must not be symlinks. O_NONBLOCK and O_NOFOLLOW are required; this is not a parent-directory sandbox.";
+const gzipPolicy = "Benchmark-only gzip subset: exactly one DEFLATE gzip member with FLG=0 (as emitted by gzip.compress), no trailing bytes or padding, valid CRC32 and ISIZE; compressed <= 32 MiB and expanded <= 256 MiB. This conservative subset may reject historical inputs accepted by the production selector; it does not change production. Requires Node zlib inflateRawSync info/bytesWritten and crc32 (Node 22.15+ or 23.6+).";
 
 function parseArgs(args) {
   const options = {};
@@ -98,6 +102,40 @@ function validMember(item, limit) {
     Number.isSafeInteger(item.bytes) && item.bytes > 0 && item.bytes <= limit;
 }
 
+function inflateSingleMember(compressed) {
+  // RFC 1952 fixed header. No optional fields: gzip.compress emits FLG=0.
+  if (compressed.length < 20 || compressed[0] !== 0x1f || compressed[1] !== 0x8b ||
+      compressed[2] !== 8 || compressed[3] !== 0)
+    throw new Error("unsupported or truncated gzip header (single member, FLG=0 required)");
+  if (typeof zlib.crc32 !== "function") throw new Error("Node zlib crc32 support is required");
+
+  // Node's info.engine.bytesWritten counts input actually consumed. Require
+  // Z_FINISH and probe the first-stream boundary, truncation, and output cap:
+  // the trailer and any subsequent members must remain unconsumed.
+  const options = {info: true, finishFlush: zlib.constants.Z_FINISH};
+  const probe = zlib.inflateRawSync(Buffer.from([0x03, 0x00, 0x1f, 0x8b]), {...options, maxOutputLength: 1});
+  let rejectsTruncated = false, enforcesOutputLimit = false;
+  try { zlib.inflateRawSync(Buffer.from([0x03]), {...options, maxOutputLength: 1}); }
+  catch (error) { rejectsTruncated = error.code === "Z_BUF_ERROR"; }
+  // Raw DEFLATE for "AA" cannot fit in a one-byte output bound.
+  try { zlib.inflateRawSync(Buffer.from([0x73, 0x74, 0x04, 0x00]), {...options, maxOutputLength: 1}); }
+  catch (error) { enforcesOutputLimit = error.code === "ERR_BUFFER_TOO_LARGE"; }
+  if (!rejectsTruncated || !enforcesOutputLimit || probe.buffer?.length !== 0 || probe.engine?.bytesWritten !== 2)
+    throw new Error("Node zlib cannot reliably identify the end of a DEFLATE stream or enforce its output bound");
+
+  // Raw inflate stops after one DEFLATE stream even when followed by another
+  // gzip member. Its output bound is independent of the untrusted ISIZE.
+  const result = zlib.inflateRawSync(compressed.subarray(10), {...options, maxOutputLength: MAX_EXPANDED_BYTES});
+  const consumed = result.engine?.bytesWritten;
+  if (!Number.isSafeInteger(consumed) || consumed < 1 || 10 + consumed + 8 !== compressed.length)
+    throw new Error("gzip must contain exactly one member with no trailing bytes");
+  const raw = result.buffer;
+  const trailer = 10 + consumed;
+  if (compressed.readUInt32LE(trailer) !== zlib.crc32(raw)) throw new Error("gzip CRC32 mismatch");
+  if (compressed.readUInt32LE(trailer + 4) !== raw.length) throw new Error("gzip ISIZE mismatch");
+  return raw;
+}
+
 function loadGeneration(dataDir, generation) {
   const manifestBytes = readBounded(path.join(dataDir, "generation-manifest.json"), MAX_MANIFEST_BYTES);
   const manifest = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(manifestBytes));
@@ -117,7 +155,7 @@ function loadGeneration(dataDir, generation) {
       !Number.isSafeInteger(manifest.record_count) || manifest.record_count < 1) throw new Error("invalid corpus identity or record count");
   const compressed = readBounded(path.join(dataDir, "search_data.json.gz"), MAX_COMPRESSED_BYTES);
   if (compressed.length !== member.bytes || hash(compressed) !== member.sha256) throw new Error("Pages corpus gzip size or SHA-256 mismatch");
-  const raw = gunzipSync(compressed, {maxOutputLength: MAX_EXPANDED_BYTES});
+  const raw = inflateSingleMember(compressed);
   // The generation pins the original source metadata and the Pages gzip
   // separately; JSON serialization can change between those two artifacts.
   const data = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(raw));
@@ -242,7 +280,7 @@ function benchmark(options, corpus, source) {
 }
 
 function main() {
-  if (process.argv.length === 3 && process.argv[2] === "--help") { console.log(`${usage}\n${pathPolicy}`); return; }
+  if (process.argv.length === 3 && process.argv[2] === "--help") { console.log(`${usage}\n${pathPolicy}\n${gzipPolicy}`); return; }
   const options = parseArgs(process.argv.slice(2));
   const corpus = loadGeneration(options.dataDir, options.generation);
   const workerBytes = readFileSync(workerPath);
@@ -251,6 +289,7 @@ function main() {
     scope: "Warm-process offline single Node VM direct searchLocal calls, not real Worker dispatch, browser or end-to-end latency. Worker timers and cooperative preparation are not run; the direct single-character path differs from Worker dispatch. First observations follow fixed query order and may build indexes or fields; measured samples reuse process state. Order cache cleared before each uncached call; cached timing is first-page only. VM-only hit and miss counter increments add overhead to both paths; cache reuse, full-order verification and pagination are checked outside timings. No independent correctness oracle.",
     ordering_hash: "SHA-256 of UTF-8 JSON.stringify(array of all ordered stable ID strings)",
     validation: "Caller-pinned manifest identity and Pages gzip size and SHA-256, expanded compact-v2 shape and record count; source payload metadata is manifest-declared and source bytes are unavailable. Other generation members, provenance and live production pointer not verified.",
+    gzip_compatibility: gzipPolicy,
     node: process.version, versions: process.versions, platform: process.platform, arch: process.arch, cpu: os.cpus()[0]?.model || null,
     benchmark_source_sha256: hash(readFileSync(fileURLToPath(import.meta.url))), worker_source_sha256: hash(workerBytes),
     data_dir: options.dataDir, generation: options.generation, manifest_sha256: corpus.manifestSha256,
