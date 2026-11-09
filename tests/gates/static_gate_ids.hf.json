@@ -65,7 +65,8 @@
       "tests.gates.test_static_checks.StaticGateTests.test_strict_chapter_repository_and_scheduler_contracts",
       "tests.gates.test_static_checks.StaticGateTests.test_strict_scroll_anchor_type_contract",
       "tests.gates.test_static_checks.StaticGateTests.test_unused_imports_are_checked_in_production_scripts",
-      "tests.gates.test_static_checks.StaticGateTests.test_pdf_text_store_targeted_mutants_fail_closed"
+      "tests.gates.test_static_checks.StaticGateTests.test_pdf_text_store_targeted_mutants_fail_closed",
+      "tests.gates.test_static_checks.StaticGateTests.test_pdf_text_store_timeout_probe_keeps_baseline_deadline"
     ],
     [
       "tests.gates.test_static_checks.StaticGateTests.test_backend_security_rule_is_enabled",
