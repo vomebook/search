@@ -192,23 +192,32 @@ function waitForReaderAssetFirstPaint(signal, targetKey) {
     };
     const resume = () => finish(null);
     const abort = () => finish(new DOMException("Reader assets timed out", "AbortError"));
+    const ready = () => STATE._loadedPage >= 1 && !STATE.isLoading && displayedSearchView?.key === targetKey;
     const afterPaint = () => {
       if (firstFrame || secondFrame || settled) return;
-      if (typeof requestAnimationFrame === "function")
-        firstFrame = requestAnimationFrame(() => { secondFrame = requestAnimationFrame(resume); });
+      if (typeof requestAnimationFrame === "function") {
+        firstFrame = requestAnimationFrame(() => {
+          firstFrame = 0;
+          secondFrame = requestAnimationFrame(() => {
+            secondFrame = 0;
+            // The state may change between ready() and paint: don't decode an
+            // old frame while the same view starts a fresh request.
+            if (getSearchViewKey() !== targetKey || ready()) resume();
+          });
+        });
+      }
     };
     // RAF may be paused; do not hold metadata forever when search stalls.
     const timer = setTimeout(resume, 750);
     readerAssetParseWake = resume;
     if (signal.aborted) { abort(); return; }
     signal.addEventListener("abort", abort, { once: true });
-    const ready = () => STATE._loadedPage >= 1 && !STATE.isLoading && displayedSearchView?.key === targetKey;
     observer = new MutationObserver(() => {
       if (getSearchViewKey() !== targetKey) { resume(); return; }
-      if (ready()) { observer.disconnect(); afterPaint(); }
+      if (ready()) afterPaint();
     });
     observer.observe(DOM.resultsList, { childList: true, subtree: true });
-    if (ready()) { observer.disconnect(); afterPaint(); }
+    if (ready()) afterPaint();
   });
 }
 
