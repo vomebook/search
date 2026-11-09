@@ -205,6 +205,7 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/search/reader-chapter-search-proxy-url.mjs",
     "reader/search/reader-chapter-search-index.mjs",
     "reader/search/reader-pdf-search-stream.mjs",
+    "reader/search/reader-pdf-partition-shape.mjs",
     "reader/search/workers/reader-pdf-book-search-worker.mjs",
     "reader/search/reader-pdf-book-search.mjs",
     "search/search-session.js",

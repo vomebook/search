@@ -2,6 +2,7 @@ import "../../core/reader-security.js";
 import { searchBookText, validateBookText } from "../reader-book-text.js";
 import { validPdfBookUrl, searchPath } from "../reader-pdf-book-url.mjs";
 import { readPdfSearchBytes, readPdfSearchText } from "../reader-pdf-search-stream.mjs";
+import { validatePdfSearchPartition } from "../reader-pdf-partition-shape.mjs";
 
 const aborted = () => new DOMException("Search cancelled", "AbortError");
 const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
@@ -134,15 +135,7 @@ async function loadSearchPartition(part, current, owners = null, prefetched = nu
     const value = JSON.parse(await readPdfSearchText(
       stream.pipeThrough(new DecompressionStream("gzip")), signal, limit));
     if (!current() || signal.aborted) throw aborted();
-    if (value.version !== 1 || value.kind !== "pdf-search-text-partition" ||
-        value.source_sha256 !== configuration.sourceSha || value.generation !== configuration.generation ||
-        value.offset_unit !== "unicode-codepoint" || value.start !== part.start || value.end !== part.end ||
-        !Array.isArray(value.pages) || value.pages.length !== part.end - part.start + 1 ||
-        value.pages.some((page, i) => page.page !== part.start + i || typeof page.text !== "string" ||
-          !/^[0-9a-f]{64}$/.test(page.text_generation) ||
-          Object.keys(page).some(key => !["page", "text", "text_generation"].includes(key))))
-      throw new Error("PDF_TEXT_INDEX_INVALID");
-    return value;
+    return validatePdfSearchPartition(value, part, configuration);
   });
 }
 
