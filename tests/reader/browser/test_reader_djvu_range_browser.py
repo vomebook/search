@@ -81,6 +81,23 @@ class DjvuRangeBrowserTests(unittest.TestCase):
         self.assertTrue(state['source'] and all(row['range'] for row in state['source']))
         self.assert_no_page_images()
 
+    def test_embedded_text_remains_selectable(self):
+        state = install(self.page, self.origin, prefix=PREFIX)
+        self.page.goto(state['url'], wait_until='domcontentloaded')
+        shell = self.page.locator('.reader-page[data-page="1"][data-text-ready="1"]')
+        shell.locator('canvas.ready').wait_for()
+        run = shell.locator('.reader-pdf-text-run').filter(has_text='Page1text').first
+        run.dblclick()
+        self.page.wait_for_function("() => getSelection().toString().includes('Page1text')")
+        selected = self.page.evaluate('''() => {
+          const layer=document.querySelector('.reader-page[data-page="1"] .reader-pdf-text');
+          const range=document.createRange();range.selectNodeContents(layer);
+          getSelection().removeAllRanges();getSelection().addRange(range);return getSelection().toString();
+        }''')
+        self.assertIn('Page1text',selected)
+        self.assertTrue(state['source'] and all(row['range'] for row in state['source']))
+        self.assert_no_page_images()
+
     def test_missing_range_support_falls_back_to_the_complete_original(self):
         data = separated_pages()
         state = None

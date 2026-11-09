@@ -99,6 +99,69 @@ const map={pages:[1,2].map(page=>({page,width:2.4,height:4.8,rotation:0,
   assert.equal(drawn,1);pdf.destroy();assert.equal(fake.instance.terminated,true);
 }
 {
+  // Compare the production adapter through the real worker boundary against
+  // the former Array.from semantics, including segments that split a pair.
+  const geometry={width:10,height:20,dpi:300,rotation:0};
+  let payload={text:'',zones:[]};
+  const createWorker=()=>({postMessage(message){
+    const value=message.operation==='open' ? {count:1} : message.operation==='geometry' ? geometry :
+      message.operation==='text' ? payload : {};
+    queueMicrotask(()=>this.onmessage({data:{id:message.id,ok:true,...value}}));
+  },terminate(){}});
+  const document=await openDjvuDocument({workerUrl:'/worker',createWorker,bytes:bytes()});
+  const page=await document.getPage(1);
+  const coordinate=(t,x=0)=>({t,x,y:0,w:1,h:1});
+  const oracle=({text,zones})=>{
+    const items=[],positions=[];let cursor=0,codepoints=0;
+    for(const zone of zones) {
+      const at=text.indexOf(zone.t,cursor);
+      if(!zone.t || at<0 || zone.x+zone.w>geometry.width || zone.y+zone.h>geometry.height)continue;
+      if(at>cursor){const gap=text.slice(cursor,at);items.push(gap);codepoints+=Array.from(gap).length;}
+      const start=codepoints,end=start+Array.from(zone.t).length;
+      positions.push({text:zone.t,box:[zone.x/geometry.width,zone.y/geometry.height,
+        (zone.x+zone.w)/geometry.width,(zone.y+zone.h)/geometry.height],start,end});
+      items.push(zone.t);cursor=at+zone.t.length;codepoints=end;
+    }
+    if(cursor<text.length)items.push(text.slice(cursor));return {items,positions};
+  };
+  const samples=[
+    {text:'😀中A\ud800X\udc00B',zones:[coordinate('😀'),coordinate('X'),coordinate('B')]},
+    {text:'A😀B',zones:[coordinate('\ud83d'),coordinate('\ude00'),coordinate('B')]},
+    {text:'A😀B',zones:[coordinate('\ude00'),coordinate('B')]},
+    {text:'A😀B',zones:[coordinate('\ud83d'),coordinate('B')]},
+    {text:'甲 甲😀尾',zones:[coordinate('甲'),coordinate('甲'),coordinate('missing'),coordinate('尾',10)]},
+    {text:'plain 😀 text',zones:[]}
+  ];
+  let seed=0x79381f02;
+  const random=n=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed % n;};
+  const alphabet=['甲','A','😀','\ud800','\udc00',' ','\n'];
+  for(let trial=0;trial<220;trial++) {
+    let text='';for(let i=0,n=random(28);i<n;i++)text+=alphabet[random(alphabet.length)];
+    const zones=[];for(let i=0,n=random(8);i<n;i++) {
+      const from=random(text.length+1), length=random(5);
+      zones.push(coordinate(random(5)?text.slice(from,from+length):'not-present',random(6)===0?10:0));
+    }
+    samples.push({text,zones});
+  }
+  for(const value of samples) {
+    payload=value;const expected=oracle(value), actual=await page.getTextContent();
+    assert.deepEqual(actual.items.map(item=>item.str),expected.items);
+    assert.deepEqual(actual.readerTextZones,expected.positions);
+    assert.equal(actual.items.map(item=>item.str).join(''),value.text);
+    await new Promise(resolve=>setImmediate(resolve));
+  }
+  // A long gap must never allocate a full code-point array; checks remain
+  // structural rather than machine-specific wall-clock or heap thresholds.
+  payload={text:'😀中'.repeat(150000)+'END',zones:[coordinate('END')]};
+  const native=Array.from;
+  try {
+    Array.from=function(value,...args){if(typeof value==='string' && value.length>100000)throw Error('unbounded gap array');return native(value,...args);};
+    const actual=await page.getTextContent();
+    assert.equal(actual.readerTextZones[0].start,300000);
+    assert.equal(actual.items.map(item=>item.str).join(''),payload.text);
+  } finally {Array.from=native;document.destroy();}
+}
+{
   const fake=fakeEngine(),pdf=await openDjvuDocument({workerUrl:'/worker',createWorker:fake.createWorker,
     bytes:bytes(),pageMap:map,cacheBytes:1024,cachePages:2});
   const page=await pdf.getPage(1);
