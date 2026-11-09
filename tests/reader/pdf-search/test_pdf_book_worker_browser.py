@@ -670,6 +670,59 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(result['generation'], 'fixture')
         self.assertEqual(result['userSelect'], 'text')
 
+    def test_independent_text_render_unicode_gaps_and_selection(self):
+        page = self.make_page()
+        result = page.evaluate('''async () => {
+          const {populateIndependentTextLayer}=await import('/static/reader/pdf/reader-pdf-text.js');
+          const {paintTextHit}=await import('/static/reader/search/reader-book-text.js');
+          const shell=document.createElement('div'),layer=document.createElement('div');
+          shell.className='reader-page';shell.style.cssText='position:relative;width:600px;height:800px;container-type:inline-size';
+          layer.className='reader-pdf-text';shell.append(layer);document.body.append(shell);
+          const quad=[[.1,.1],[.3,.1],[.3,.2],[.1,.2]], region=(id,start,end,text,writing_mode,direction)=>
+            ({id,start,end,text,quad,writing_mode,direction,mapping_precision:'glyph'});
+          const text='前😀A\ud800B\udc00结尾';
+          const regions=[region('emoji',1,2,'😀','horizontal-ltr','ltr'),
+            region('high',3,4,'\ud800','vertical-rl','rtl'),region('low',5,6,'\udc00','vertical-lr','ltr')];
+          let fullArrays=0;const oldFrom=Array.from;
+          Array.from=function(value,...args){if(value===text)fullArrays++;return oldFrom.call(this,value,...args);};
+          try {
+            populateIndependentTextLayer(layer,{text,regions,generation:'unicode'});
+            const gaps=[...layer.childNodes].filter((_,i)=>i%2===0).map(n=>n.data);
+            const runs=[...layer.querySelectorAll('.reader-pdf-text-run')].map(n=>
+              ({text:n.textContent,id:n.dataset.regionId,dir:n.dir,mode:getComputedStyle(n).writingMode}));
+            const range=document.createRange();range.selectNodeContents(layer);
+            const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+            const selectedExact=selection.toString()===text;selection.removeAllRanges();
+            const textExact=layer.textContent===text;
+            const units=value=>Array.from({length:value.length},(_,i)=>value.charCodeAt(i));
+            const runUnits=runs.map(r=>units(r.text));
+            paintTextHit(shell,[],{start:1,length:2});
+            const highlights=shell.querySelectorAll('.reader-text-hit-box').length;
+            const first=layer.querySelector('.reader-pdf-text-run').firstChild;
+            const cut=document.createRange();cut.setStart(first,0);cut.setEnd(first,2);
+            selection.removeAllRanges();selection.addRange(cut);
+            const partial=selection.toString()==='😀';selection.removeAllRanges();
+            const empty='😀中'.repeat(5000);populateIndependentTextLayer(layer,{text:empty,regions:[],generation:'empty'});
+            range.selectNodeContents(layer);selection.addRange(range);
+            const emptySelected=selection.toString()===empty;selection.removeAllRanges();
+            const odd={text:'ABCDE',regions:[region('one',1,4,'BCD','horizontal-ltr','ltr'),
+              region('two',2,3,'C','horizontal-ltr','ltr')]};
+            populateIndependentTextLayer(layer,odd);
+            const oddNodes=[...layer.childNodes].filter((_,i)=>i%2===0).map(n=>n.data);
+            return {gaps,runs,runUnits,selectedExact,textExact,partial,emptySelected,highlights,fullArrays,oddText:layer.textContent,oddNodes};
+          } finally {Array.from=oldFrom;getSelection().removeAllRanges();shell.remove();}
+        }''')
+        self.assertEqual(result['gaps'], ['前','A','B','结尾'])
+        self.assertEqual(result['runUnits'], [[0xd83d,0xde00],[0xd800],[0xdc00]])
+        self.assertEqual([r['id'] for r in result['runs']], ['emoji','high','low'])
+        self.assertEqual([r['mode'] for r in result['runs']], ['horizontal-tb','vertical-rl','vertical-lr'])
+        self.assertEqual([r['dir'] for r in result['runs']], ['ltr','rtl','ltr'])
+        self.assertTrue(result['selectedExact'] and result['textExact'] and result['partial'] and result['emptySelected'])
+        self.assertGreater(result['highlights'],0)
+        self.assertEqual(result['fullArrays'],0)
+        self.assertEqual(result['oddText'],'ABCDCDE')
+        self.assertEqual(result['oddNodes'],['A','','DE'])
+
     def test_chapter_search_mapping_respects_nodes_ranges_and_detachment(self):
         page = self.make_page()
         result = page.evaluate('''async () => {

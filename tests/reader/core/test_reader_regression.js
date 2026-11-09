@@ -117,6 +117,46 @@ function runTextLayerContract(independent) {
 runTextLayerContract(false);
 runTextLayerContract(true);
 
+// A source oracle for text-node gaps is the former Array.from/slice path.
+// Include sparse and irregular native zones, paired/unpaired surrogates,
+// adjacent regions and ranges extending beyond the end of the text.
+{
+  const quad = [[0,0],[.1,0],[.1,.2],[0,.2]], alphabet = ['甲','B','😀','\ud800','\udc00','\n'];
+  let seed = 0x8123abcd;
+  const random = n => { seed = (Math.imul(seed,1664525)+1013904223)>>>0;return seed % n; };
+  for (let trial=0;trial<300;trial++) {
+    let text = '';
+    for (let i=0,n=random(24);i<n;i++) text+=alphabet[random(alphabet.length)];
+    const chars = Array.from(text), regions=[];
+    let cursor=0;
+    for (let i=0,n=random(7);i<n;i++) {
+      let start=cursor+random(3), end=start+1+random(4);
+      if (trial % 7 === 0 && i === 1) start=Math.max(0,cursor-1);
+      if (trial % 11 === 0 && i === 2) {start=1;end=1;}
+      regions.push({start,end,text:chars.slice(start,end).join(''),quad,writing_mode:'horizontal-tb',direction:'ltr',id:String(i)});
+      cursor=end;
+    }
+    const layer = textLayer();
+    pdfText.populateIndependentTextLayer(layer,{text,regions,generation:'fixture'});
+    const expected=[];let end=0;
+    for (const region of regions) {expected.push(chars.slice(end,region.start).join(''));end=region.end;}
+    expected.push(chars.slice(end).join(''));
+    const gaps=layer.children.filter((_,i)=>i%2===0).map(node=>node.textContent);
+    assert.deepStrictEqual(gaps,expected,JSON.stringify({trial,text,regions}));
+    assert.deepStrictEqual(layer.querySelectorAll('.reader-pdf-text-run').map(node=>node.textContent),regions.map(r=>r.text));
+  }
+  const text='😀中'.repeat(150000), layer=textLayer();
+  const nativeFrom=Array.from;
+  try {
+    Array.from=function(value,...args){if(value===text) throw new Error('full text array');return nativeFrom(value,...args);};
+    pdfText.populateIndependentTextLayer(layer,{text,generation:'large',regions:[{id:'last',start:299998,end:300000,
+      text:'😀中',quad,writing_mode:'horizontal-tb',direction:'ltr'}]});
+    assert.strictEqual(layer.children[0].textContent.length,text.length-3);
+    assert.strictEqual(layer.children[1].children[0].textContent,'😀中');
+    assert.strictEqual(layer.children[2].textContent,'');
+  } finally {Array.from=nativeFrom;}
+}
+
 const assets = sandbox.self.VoiceOfMLReader
 const retiredLink = new URL(assets.readerUrl({ Link: 'https://example.test/book.pdf', Extension: 'pdf',
   OcrUrl: 'https://voiceofml-search.hf.space/txt/book.txt',
