@@ -6,6 +6,10 @@
  * node scripts/benchmarks/benchmark_local_search.mjs --data-dir /path/to/data \
  *   --generation <64-hex-generation> [--iterations 7] [--warmup 1]
  *
+ * O_NONBLOCK and O_NOFOLLOW are required; platforms without them fail closed.
+ * Directory path components (including --data-dir) may be symlinks; the two
+ * input files themselves must not be. This is not a parent-directory sandbox.
+ *
  * Timings are direct searchLocal calls in one Node VM, not Worker message
  * dispatch, cooperative preparation, a browser, or end-to-end latency. The
  * first observation is separately reported; later calls reuse process state.
@@ -14,7 +18,7 @@
  * incorrect order.
  */
 import {createHash} from "node:crypto";
-import {fstatSync, openSync, closeSync, readFileSync, readSync} from "node:fs";
+import {constants, fstatSync, openSync, closeSync, readFileSync, readSync} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {performance} from "node:perf_hooks";
@@ -38,6 +42,7 @@ const queries = [
   {q: "*.pdf", exact: true}, {q: "不存在", exact: true},
 ];
 const usage = "usage: node scripts/benchmarks/benchmark_local_search.mjs --data-dir DIR --generation SHA256 [--iterations 1..100] [--warmup 0..10]";
+const pathPolicy = "Directory components, including --data-dir, may be symlinks; the manifest and corpus files must not be symlinks. O_NONBLOCK and O_NOFOLLOW are required; this is not a parent-directory sandbox.";
 
 function parseArgs(args) {
   const options = {};
@@ -72,7 +77,11 @@ function canonical(value) {
 }
 
 function readBounded(file, max) {
-  const fd = openSync(file, "r");
+  // A blocking open can hang on a FIFO before fstat can reject it. Do not
+  // silently fall back to unsafe flags if this platform lacks either one.
+  if (!constants.O_NONBLOCK || !constants.O_NOFOLLOW)
+    throw new Error("safe snapshot open requires O_NONBLOCK and O_NOFOLLOW support");
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size < 1 || stat.size > max) throw new Error(`invalid file size or type: ${file}`);
@@ -233,7 +242,7 @@ function benchmark(options, corpus, source) {
 }
 
 function main() {
-  if (process.argv.length === 3 && process.argv[2] === "--help") { console.log(usage); return; }
+  if (process.argv.length === 3 && process.argv[2] === "--help") { console.log(`${usage}\n${pathPolicy}`); return; }
   const options = parseArgs(process.argv.slice(2));
   const corpus = loadGeneration(options.dataDir, options.generation);
   const workerBytes = readFileSync(workerPath);
