@@ -4,6 +4,7 @@ import { validPdfBookUrl } from "../reader-pdf-book-url.mjs";
 import { validatePdfPartitionConfiguration } from "../reader-pdf-partition-config.mjs";
 import { canPrefetchPdfPartition, canRetainPdfPartition } from "../reader-pdf-partition-policy.mjs";
 import { pdfPartitionPageOffset, decoratePdfPartitionHits } from "../reader-pdf-partition-page.mjs";
+import { createPdfPartitionRequests } from "../reader-pdf-partition-requests.mjs";
 import { readPdfSearchBytes, readPdfSearchText } from "../reader-pdf-search-stream.mjs";
 import { validatePdfSearchPartition } from "../reader-pdf-partition-shape.mjs";
 
@@ -11,17 +12,7 @@ const aborted = () => new DOMException("Search cancelled", "AbortError");
 const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 let configuration, book, pendingBook, controller, active = 0, session;
-const partitionRequests = new Set();
-const idlePartitionWaiters = new Set();
-
-function abortPartitionRequests() {
-  for (const request of partitionRequests) request.abort();
-}
-
-function waitForPartitionRequests() {
-  if (!partitionRequests.size) return Promise.resolve();
-  return new Promise(resolve => idlePartitionWaiters.add(resolve));
-}
+const partitionRequests = createPdfPartitionRequests();
 
 async function loadBook() {
   if (book) return book;
@@ -70,26 +61,6 @@ async function loadBook() {
   return pendingBook;
 }
 
-async function withPartitionRequest(current, owners, action) {
-  if (!current()) throw aborted();
-  const request = new AbortController();
-  partitionRequests.add(request);
-  owners?.add(request);
-  const timer = setTimeout(() => request.abort(), 120000);
-  try {
-    return await action(request.signal);
-  } finally {
-    clearTimeout(timer);
-    partitionRequests.delete(request);
-    owners?.delete(request);
-    request.abort();
-    if (!partitionRequests.size) {
-      for (const resolve of idlePartitionWaiters) resolve();
-      idlePartitionWaiters.clear();
-    }
-  }
-}
-
 async function fetchPartitionBytes(part, signal) {
   const response = await fetch(part.url, {signal, credentials: "omit"});
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -97,7 +68,7 @@ async function fetchPartitionBytes(part, signal) {
 }
 
 async function loadSearchPartition(part, current, owners = null, prefetched = null) {
-  return withPartitionRequest(current, owners, async signal => {
+  return partitionRequests.run(current, owners, async signal => {
     let packed = prefetched || await fetchPartitionBytes(part, signal);
     const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
       .map(value => value.toString(16).padStart(2, "0")).join("");
@@ -170,7 +141,7 @@ async function searchPartitions(query, current, progress) {
       if (next && canPrefetchPdfPartition(connection, next.bytes)) {
         // Only compressed future bytes are retained. Each of the (at most
         // two) overlapping future transfers is capped independently.
-        pending = withPartitionRequest(current, owners, signal => fetchPartitionBytes(next, signal))
+        pending = partitionRequests.run(current, owners, signal => fetchPartitionBytes(next, signal))
           .then(packed => ({packed}), error => ({error}));
       }
       const outcome = await valueOutcome;
@@ -203,7 +174,7 @@ self.onmessage = async ({ data }) => {
     active++;
     session = null;
     controller?.abort();
-    abortPartitionRequests();
+    partitionRequests.abort();
     return;
   }
   if (data.type !== "search" && data.type !== "page" && data.type !== "prefetch") return;
@@ -211,11 +182,11 @@ self.onmessage = async ({ data }) => {
   const current = () => token === active;
   try {
     if (data.type === "search") {
-      abortPartitionRequests();
+      partitionRequests.abort();
       session = null;
       // Drain both search and result-page requests from the old session before
       // starting another load, including a switch to the legacy book path.
-      await waitForPartitionRequests();
+      await partitionRequests.wait();
       if (!current()) return;
       const query = String(data.query || "").trim();
       if (!query || query.length > 2048) throw new Error("请输入 1–2048 个字符");
