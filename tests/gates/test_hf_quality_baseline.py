@@ -148,6 +148,22 @@ class TestInventoryCiTests(unittest.TestCase):
             self.assertNotIn('continue-on-error:', job)
 
 
+class PagesSearchBenchmarkCiTests(unittest.TestCase):
+    def test_offline_search_benchmark_is_a_required_pages_gate(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/reader-refactor.yml').read_text()
+        github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
+        step = ('      - name: Test offline Pages search benchmark\n'
+                '        run: node --test tests/performance/test_benchmark_local_search.mjs\n')
+        self.assertEqual(workflow.count(step), 1)
+        self.assertIn(step, github)
+        job_header = github.split('    steps:\n', 1)[0]
+        benchmark_step = github.split('      - name: Test offline Pages search benchmark\n', 1)[1].split('      - name:', 1)[0]
+        self.assertEqual(benchmark_step, '        run: node --test tests/performance/test_benchmark_local_search.mjs\n')
+        for option in ('if:', 'continue-on-error:', 'defaults:'):
+            self.assertNotIn(option, job_header)
+
+
 class AdditionalSuitesCiTests(unittest.TestCase):
     def test_previously_unrun_contracts_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
