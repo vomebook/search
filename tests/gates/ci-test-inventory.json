@@ -338,6 +338,10 @@
       "kind": "script",
       "source": "scripts/reader/check_pdf_book_client_coverage.mjs"
     },
+    "tests/reader/pdf-search/test_pdf_partition_config.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_partition_config_coverage.mjs"
+    },
     "tests/reader/pdf-search/test_pdf_partition_shape.mjs": {
       "kind": "script",
       "source": "scripts/reader/check_pdf_partition_shape_coverage.mjs"
