@@ -277,6 +277,8 @@
       }
     }
     if (manifest.ocr !== undefined) {
+      if (typeof manifest.source_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(manifest.source_sha256))
+        throw error("PDF_MANIFEST_INVALID");
       if (!Array.isArray(manifest.ocr) || manifest.ocr.length !== pageCount)
         throw error("PDF_MANIFEST_INVALID");
       for (const [index, page] of manifest.ocr.entries()) {
@@ -344,12 +346,13 @@
   function validatePdfOcrPage(payload, pageNumber) {
     if (!payload || payload.version !== 1 || payload.kind !== "pdf-ocr-page" ||
         payload.page !== pageNumber || !Array.isArray(payload.blocks) || payload.blocks.length > 10000 ||
-        !Number.isFinite(Number(payload.width)) || !Number.isFinite(Number(payload.height)))
+        !Number.isFinite(payload.width) || payload.width <= 0 ||
+        !Number.isFinite(payload.height) || payload.height <= 0)
       throw error("PDF_OCR_PAGE_INVALID");
     for (const block of payload.blocks) {
       const box = block?.b;
       if (!block || typeof block.t !== "string" || block.t.length > 4096 ||
-          !Array.isArray(box) || box.length !== 4 || box.some((value) => !Number.isFinite(Number(value))) ||
+          !Array.isArray(box) || box.length !== 4 || box.some((value) => !Number.isFinite(value)) ||
           box[0] < 0 || box[1] < 0 || box[2] > 1 || box[3] > 1 || box[2] < box[0] || box[3] < box[1])
         throw error("PDF_OCR_PAGE_INVALID");
     }

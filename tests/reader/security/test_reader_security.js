@@ -156,6 +156,35 @@ async function main() {
     pages: [{ p: 1, o: ocrRoot + "/ocr/page-000001.json.gz" }],
     book_text: { path: ocrRoot + "/ocr/book-text.json.gz", sha256: "c".repeat(64), bytes: 1 } });
 
+  const ocrPage = {p:1,o:ocrRoot + "/ocr/page-000001.json.gz",os:"c".repeat(64),ob:2};
+  const pageWithOcr = {...validTocManifest,source_sha256:"a".repeat(64),ocr:[ocrPage]};
+  assert.strictEqual(security.validatePdfPageManifest(pageWithOcr), pageWithOcr);
+  for (const source_sha256 of [undefined, null, 0, "", "a".repeat(63), "g".repeat(64), ["a".repeat(64)]]) {
+    assert.throws(() => security.validatePdfPageManifest({...pageWithOcr,source_sha256}),
+      error => error?.code === "PDF_MANIFEST_INVALID", `bad OCR source ${source_sha256}`);
+  }
+  const mismatch = {p:1,o:"objects/bb/" + "b".repeat(64) + "/ocr/page-000001.json.gz",os:"c".repeat(64),ob:2};
+  assert.throws(() => security.validatePdfPageManifest({...pageWithOcr,ocr:[mismatch]}),
+    error => error?.code === "PDF_MANIFEST_INVALID");
+  // Legacy image-only manifests have no source hash and must remain valid.
+  security.validatePdfPageManifest({version:2,kind:"pdf-pages",page_count:1,codec:"webp"});
+
+  const validOcrPage = {version:1,kind:"pdf-ocr-page",page:1,width:100,height:200,
+    blocks:[{t:"text",b:[0.1,0.2,0.9,0.8]}]};
+  assert.strictEqual(security.validatePdfOcrPage(validOcrPage,1),validOcrPage);
+  for (const [width,height] of [[0,100],[-1,100],[100,0],[100,-1],[null,100],["100",200],
+    [100,"200"],[true,200],[Infinity,200],[100,NaN]]) {
+    assert.throws(() => security.validatePdfOcrPage({...validOcrPage,width,height},1),
+      error => error?.code === "PDF_OCR_PAGE_INVALID", `bad size ${width},${height}`);
+  }
+  for (const b of [["0.1",0.2,"0.9",0.8],[false,0,1,1],[null,0,1,1],
+    [0.9,0,0.1,1],[0,0.9,1,0.1],[-0.1,0,1,1],[0,0,1,Infinity]]) {
+    assert.throws(() => security.validatePdfOcrPage({...validOcrPage,blocks:[{t:"text",b}]},1),
+      error => error?.code === "PDF_OCR_PAGE_INVALID", `bad box ${JSON.stringify(b)}`);
+  }
+  // Zero-area boxes are legacy fallback text; keep them valid.
+  security.validatePdfOcrPage({...validOcrPage,blocks:[{t:"text",b:[0,0,0,0]}]},1);
+
   const oversized = streamResponse([], "9");
   assert.throws(() => security.assertResponseSize(oversized.response, 8), /READER_RESOURCE_LIMIT/);
   await assert.rejects(security.readBytes(oversized.response, 8), /READER_RESOURCE_LIMIT/);
