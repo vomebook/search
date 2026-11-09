@@ -411,7 +411,11 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assert.match(reader, /PDF_MANIFEST_INVALID/);
    assert.match(contract, /page-manifest\.json/);
   assert.match(app, /reader_assets\.json\.gz/);
-  assert.match(app, /fetchReaderAssetMap\(\)/);
+  // The shared load must use the same bounded fetcher and explicitly pass
+  // the first-paint decode policy; other Reader safety assertions remain.
+  assert.match(app, /readerAssetsPending\s*=\s*fetchReaderAssetMap\(deferDecode === true\)\.then\(/);
+  assert.match(app, /if \(firstView\) await waitForReaderAssetFirstPaint\(controller\.signal, firstViewKey\)/);
+  assert.match(app, /if \(readerAssetParseWake\) readerAssetParseWake\(\)/);
   assert.match(app, /readerAssetsRetryAt = Date\.now\(\) \+ 5000/);
   assert.doesNotMatch(app, /readerAssets = \{\};\s*convertedReaderRecords = \[\];/);
   assert.doesNotMatch(app, /var currentRepo = STATE\.repoFull;\s*await loadReaderAssets\(\)/);
