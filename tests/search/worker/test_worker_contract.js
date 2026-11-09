@@ -233,6 +233,8 @@ test("inherited object names remain ordinary tokens and repository keys", async 
 test("bounded wildcards preserve regex case, UTF-16 and line-terminator semantics", () => {
   const { context } = makeWorker();
   const alphabet = ["a", "A", "?", "*", "\n", "\r", "\u2028", "\u2029", ".", "[", "İ", "ı", "ſ", "K", "Σ", "σ", "ς", "ß", "😀"];
+  // Kelvin/long-s one-literal globs intentionally follow Python IGNORECASE.
+  const special = pattern => /^[*]*[Kſ][*]*$/.test(pattern) && pattern.includes('*');
   let seed = 17;
   const random = n => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % n; };
   const string = n => Array.from({length: random(n)}, () => alphabet[random(alphabet.length)]).join("");
@@ -240,7 +242,8 @@ test("bounded wildcards preserve regex case, UTF-16 and line-terminator semantic
   for (let i = 0; i < 1500; i++) pairs.push([string(20), string(7) + "*"]);
   for (const [text, pattern] of pairs) {
     const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    const expected = new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "i").test(text);
+    const expected = special(pattern) ? new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "iu").test(text)
+      : new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "i").test(text);
     assert.strictEqual(context.compileWildcardMatcher(pattern).test(text), expected, JSON.stringify([text, pattern]));
   }
   vm.runInContext('if (compileWildcardMatcher("*a".repeat(100)+"b").test("a".repeat(120))) throw new Error("bad match");', context, {timeout: 1000});
@@ -257,7 +260,7 @@ test("boundary-only wildcard scans preserve literal matching and bounded work", 
     assert.strictEqual(context.compileWildcardMatcher(pattern).test("\n"), true);
   }
   for (const pattern of ["*İ*", "*ı*", "*ſ*", "*K*"]) {
-    const expression = new RegExp(pattern.replace(/\*/g, ".*"), "i");
+    const expression = new RegExp(pattern.replace(/\*/g, ".*"), /[Kſ]/.test(pattern) ? "iu" : "i");
     for (const text of ["i", "I", "s", "S", "k", "K", "İıſK"]) {
       assert.strictEqual(context.compileWildcardMatcher(pattern).test(text), expression.test(text), JSON.stringify([pattern, text]));
     }
@@ -287,6 +290,21 @@ test("boundary question-star matching stays bounded and preserves non-u regex se
   assert.strictEqual(vm.runInContext('Object.prototype.toString.call(compileWildcardMatcher("?*.pdf"))',context),'[object RegExp]');
   assert.notStrictEqual(vm.runInContext('Object.prototype.toString.call(compileWildcardMatcher("a?*b"))',context),'[object RegExp]');
 });
+test("Kelvin and long-s boundary globs match Python Unicode case folding", async () => {
+  const input = [
+    {...records[0],Repo:'Repo/A',File:'book',Folder:[]},
+    {...records[0],Repo:'Repo/A',File:'loss',Folder:[]},
+    {...records[0],Repo:'Repo/B',File:'book',Folder:[]},
+  ];
+  for (const [q,expected] of [['K*',['book']],['*K',['book']],['**ſ**',['loss']]]) {
+    const result=await namesWithCorpus(input,{q,exact:true,repos:['Repo/A'],searchFolders:false});
+    assert.deepStrictEqual(result,expected,q);
+  }
+  assert.deepStrictEqual(await namesWithCorpus(input,{q:'K',exact:true,repos:['Repo/A'],searchFolders:false}),['book']);
+  assert.deepStrictEqual(await namesWithCorpus(input,{q:'ſ',exact:true,repos:['Repo/A'],searchFolders:false}),[]);
+  assert.deepStrictEqual(await namesWithCorpus(input,{q:'ſ*',exact:false,repos:['Repo/A'],searchFolders:false}),['loss']);
+});
+
 test("ordered interior stars preserve overlapping literals and line boundaries", () => {
   const {context} = makeWorker();
   const cases = [
@@ -428,6 +446,76 @@ test("demanded indexing yields to metadata and cancellation without discarding p
   assert.strictEqual(response.error.code, "SEARCH_CANCELLED");
   assert(vm.runInContext("fulltextBuild !== null && searchJobs.size === 0", worker.context));
   assert.strictEqual((await worker.request("local-search", {q:"alpha"})).total, 1200);
+});
+
+test("single-character cold search agrees with a warmed index without building one", async () => {
+  const input = [
+    {Repo:"Repo/x",File:"plain",Extension:"pdf",Folder:["alpha"],Size:1,HasTxt:false},
+    {Repo:"Repo/B",File:"alpha",Extension:"xtx",Folder:[],Size:2,HasTxt:false},
+    {Repo:"Repo/B",File:"axle",Extension:"txt",Folder:["x"],Size:3,HasTxt:false},
+    {Repo:"Repo/C",File:"𠮷猫",Extension:"txt",Folder:[],Size:4,HasTxt:false},
+    {Repo:"Repo/C",File:"İ",Extension:"txt",Folder:[],Size:5,HasTxt:false},
+    {Repo:"Repo/B",File:"手。机",Extension:"txt",Folder:[],Size:6,HasTxt:false},
+  ];
+  const cold = await loaded(input), warm = await loaded(input);
+  vm.runInContext('buildFulltext()', warm.worker.context);
+  for (const q of ['x', 'X', 'a', '猫', '𠮷', 'İ', '。']) {
+    for (const filters of [{}, {searchFolders:false}, {repos:['Repo/B']},
+      {repos:['Repo/B'],extensions:['txt'],sort:'name'}, {folders:['x'],folderMatchMode:'exact'}]) {
+      const params={q,exact:false,page:1,pageSize:2,...filters};
+      for (const page of [1,2]) {
+        const a=await cold.worker.request('local-search',{...params,page});
+        const b=await warm.worker.request('local-search',{...params,page});
+        assert.deepStrictEqual(a.ids,b.ids,JSON.stringify({q,filters,page}));
+        assert.strictEqual(a.total,b.total,JSON.stringify({q,filters}));
+      }
+    }
+  }
+  assert.strictEqual(vm.runInContext('wordIndex === null && fulltextBuild === null',cold.worker.context),true);
+});
+
+test("single-character scans preserve all indexed results for varied fields and filters", async () => {
+  const values=['a','A','x','X','猫','手','机','😀','𠮷','İ','ı','K','ſ','。','.', 'ß','Σ','ς','/','-',' '];
+  let seed=19;
+  const random=n=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed%n;};
+  const word=()=>Array.from({length:1+random(7)},()=>values[random(values.length)]).join('');
+  const input=Array.from({length:96},(_,i)=>({Repo:i%3?'Repo/A':'Repo/B',File:word(),Extension:word(),
+    Folder:[word(),word()],Size:i+1,HasTxt:false}));
+  const cold=await loaded(input),warm=await loaded(input);
+  vm.runInContext('buildFulltext()',warm.worker.context);
+  for(const q of values.filter(value=>value.trim())) for(const filters of [
+    {},{searchFolders:false},{repos:['Repo/A'],extensions:['txt']},{sort:'name'},
+    {folderMatchMode:'mixed',folderSelfs:[input[0].Folder.join('/')]},
+  ]){
+    const params={q,exact:false,pageSize:7,...filters};
+    const first=await cold.worker.request('local-search',params);
+    const second=await warm.worker.request('local-search',params);
+    assert.deepStrictEqual(first.ids,second.ids,JSON.stringify(params));
+    assert.strictEqual(first.total,second.total,JSON.stringify(params));
+  }
+  assert(vm.runInContext('wordIndex === null && fulltextBuild === null',cold.worker.context));
+});
+
+test("single-character scans yield, cancel and reject old corpus generations", async () => {
+  const {worker,tasks,tick}=scheduledWorker({navigator:{deviceMemory:2}});
+  const input=Array.from({length:1200},(_,i)=>({...records[0],File:'alpha '+i}));
+  await worker.request('replace-corpus',{data:compact(input)});
+  while(tasks.size) tick();
+  const work=worker.listeners.message({data:{protocol:1,type:'local-search',id:'char',payload:{q:'a'}}});
+  await Promise.resolve();
+  assert.strictEqual((await worker.request('metadata')).count,1200);
+  await worker.request('cancel-search',{requestId:'char'},{id:'cancel-char'});
+  while(tasks.size){tick();await Promise.resolve();}
+  await work;
+  assert.strictEqual(worker.messages.find(message=>message.id==='char').error.code,'SEARCH_CANCELLED');
+  assert(vm.runInContext('wordIndex === null && fulltextBuild === null',worker.context));
+  const pending=worker.listeners.message({data:{protocol:1,type:'local-search',id:'old-char',payload:{q:'a'}}});
+  await Promise.resolve();
+  await worker.request('replace-corpus',{data:compact([records[4]])},{id:'replace-char'});
+  while(tasks.size){tick();await Promise.resolve();}
+  await pending;
+  assert.strictEqual(worker.messages.find(message=>message.id==='old-char').error.code,'CORPUS_REPLACED');
+  assert.strictEqual((await worker.request('local-search',{q:'手'})).total,1);
 });
 
 test("long wildcard search yields to metadata and cancellation", async () => {
@@ -784,7 +872,7 @@ test("snapshot identity survives Worker restarts but changes with content and se
   assert.deepStrictEqual(old.ids, current.ids);
   await second.worker.request('replace-corpus', {data: compact(records)});
   assert.strictEqual(old.snapshot_generation, (await second.worker.request('local-search', {})).snapshot_generation);
-  const changed = makeWorker(source.replace('worker-search-v5', 'worker-search-v6'));
+  const changed = makeWorker(source.replace('worker-search-v6', 'worker-search-v7'));
   await changed.request('replace-corpus', {data: compact(records)});
   assert.notStrictEqual(old.snapshot_generation, (await changed.request('local-search', {})).snapshot_generation);
   const resized = records.map(record => Object.assign({}, record, {Size: 1}));
@@ -925,6 +1013,27 @@ test("large fuzzy posting does not exceed the engine argument limit", async () =
   const result = await worker.request('local-search', {q:'alphx', pageSize:1});
   assert.strictEqual(result.total, 200000);
   assert.strictEqual(result.records.length, 1);
+});
+
+test("ASCII separator queries retain literal and fuzzy matches without changing explicit exact mode", async () => {
+  const fuzzy = [
+    {...records[0], Repo:'Repo/A', File:'alpha guide', Folder:[]},
+    {...records[0], Repo:'Repo/A', File:'alpha', Folder:['guide']},
+    {...records[0], Repo:'Repo/B', File:'alpha guide', Folder:[]},
+  ];
+  for (const separator of ['-', '_', '.']) {
+    const q='alpha'+separator+'guied';
+    const files=await namesWithCorpus(fuzzy,{q,exact:false,repos:['Repo/A'],searchFolders:false});
+    assert.deepStrictEqual(files,['alpha guide'],q);
+    const all=await namesWithCorpus(fuzzy,{q,exact:false,repos:['Repo/A']});
+    assert.deepStrictEqual(all,['alpha guide','alpha'],q);
+  }
+  const literal=[...fuzzy,{...records[0],Repo:'Repo/A',File:'alpha-guied',Folder:[]}];
+  assert.deepStrictEqual(await namesWithCorpus(literal,{q:'alpha-guied',exact:false,repos:['Repo/A']}),['alpha-guied']);
+  assert.deepStrictEqual(await namesWithCorpus(literal,{q:'alpha-guied',exact:true,repos:['Repo/A']}),['alpha-guied']);
+  assert.deepStrictEqual(await namesWithCorpus(literal,{q:'alpha.guied',exact:true}),[]);
+  assert.deepStrictEqual(await namesWithCorpus(fuzzy,{q:'alpha*guide',exact:false,searchFolders:false}),['alpha guide','alpha guide']);
+  assert.deepStrictEqual(await namesWithCorpus(fuzzy,{q:'alpha-guied guide',exact:false}),[]);
 });
 
 test("normal multi-token search intersects candidates", async () => {
@@ -1395,6 +1504,16 @@ test("implicit literal searches reuse only a ready dense repository name order",
   const warm = await worker.request("local-search",params);
   assert.strictEqual(warm.total,cold.total);
   assert.deepStrictEqual(warm.ids,cold.ids);
+});
+test("ASCII fuzzy searches never take the dense exact-order shortcut", async () => {
+  const input=Array.from({length:30},(_,i)=>({...records[0],Repo:'Repo/A',File:i%2?'alpha guide':'alpha other'}));
+  const {worker}=await loaded(input);
+  await worker.request('local-search',{q:'',repos:['Repo/A'],sort:'name'});
+  vm.runInContext(`globalThis.beforeCompare=compareRecordName; globalThis.compares=0;
+    compareRecordName=(a,b)=>{compares++;return beforeCompare(a,b);}`,worker.context);
+  const result=await worker.request('local-search',{q:'alpha-guied',exact:false,repos:['Repo/A'],sort:'name'});
+  assert.strictEqual(result.total,15);
+  assert(vm.runInContext('compares > 0',worker.context));
 });
 test("searched name order reuse respects the exact temporary set cap", async () => {
   for (const count of [65536,65537]) {

@@ -47,8 +47,10 @@ async function realWorkerSearch(params, warmParams) {
 }
 
 function wildcard(pattern) {
-  const escaped = String(pattern || "").replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), "i");
+  const value = String(pattern || "");
+  const escaped = value.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const special = /^[*]*[Kſ][*]*$/.test(value) && value.includes('*');
+  return new RegExp(escaped.replace(/\*/g, ".*").replace(/\?/g, "."), special ? "iu" : "i");
 }
 
 function bruteForce(params) {
@@ -151,6 +153,24 @@ test("independent decoder reconstructs corpus count and known first record", () 
     Repo: compact.rp[compact.rc[0][0]], File: compact.rc[0][1], Extension: compact.rc[0][2],
     Folder: compact.fd[compact.rc[0][3]], Size: compact.rc[0][4], HasTxt: !!compact.rc[0][5],
   });
+});
+test("Kelvin boundary wildcard matches an independent Unicode scan", async () => {
+  await compare({q:'K*',exact:true,repos:['VoiceOfML/Omnibus'],searchFolders:false,pageSize:10});
+  await compare({q:'*ſ',exact:true,repos:['VoiceOfML/Omnibus'],searchFolders:false,pageSize:10});
+});
+test("ASCII separator typo queries retain real-corpus hits and exact literal behavior", async () => {
+  for (const [q,needle] of [['marx-engls','Karl Marx'],['karl-marxx','Karl Marx'],['2024-2025','2024衆院選']]) {
+    const result=await realWorkerSearch({q,exact:false,pageSize:100});
+    assert(result.records.some(record=>record.File.includes(needle)),q);
+    await compare({q,exact:true,pageSize:10});
+  }
+});
+test("single-character normal searches match independent corpus scan", async () => {
+  for (const params of [
+    {q:"x",exact:false,pageSize:37}, {q:"x",exact:false,searchFolders:false,sort:"name",page:2,pageSize:23},
+    {q:"文",exact:false,repos:["VoiceOfML/Omnibus"],extensions:["pdf"],sort:"size",pageSize:19},
+    {q:"灬",exact:false,pageSize:11},
+  ]) await compare(params);
 });
 test("exact literal filename query matches brute-force corpus scan", () => compare({ q: "目录", exact: true, page: 1, pageSize: 37 }));
 test("full displayed filenames and extensions match independent scan", async () => {

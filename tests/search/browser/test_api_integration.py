@@ -109,6 +109,51 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(observed, {'cancelled':'AbortError', 'count':4000, 'total':4000,
                                     'rows':100, 'sameWorker':True, 'restarts':0})
 
+    def test_special_unicode_boundary_wildcard_matches_ascii_file(self):
+        self.load()
+        self.page.wait_for_function('STATE.dataLoaded', timeout=30000)
+        result = self.page.evaluate('''async () => {
+          await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['VoiceOfML/Repo'],fd:[[]],
+            rc:[[0,'book','txt',0,1,0],[0,'loss','txt',0,1,0]]}});
+          const options={page:1,pageSize:10,searchFolders:false,exact:true};
+          const kelvin=await doSearchLocal({...options,q:'K*'});
+          const longS=await doSearchLocal({...options,q:'ſ*'});
+          return {kelvin:kelvin.results.map(row=>row.File),longS:longS.results.map(row=>row.File)};
+        }''')
+        self.assertEqual(result, {'kelvin':['book'], 'longS':['loss']})
+
+    def test_ascii_separator_search_uses_fuzzy_matching_in_local_mode(self):
+        self.load()
+        self.page.wait_for_function('STATE.dataLoaded', timeout=30000)
+        result = self.page.evaluate('''async () => {
+          await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['VoiceOfML/Test'],fd:[[]],
+            rc:[[0,'alpha guide','txt',0,1,0]]}});
+          const options={page:1,pageSize:10,searchFolders:false};
+          const fuzzy=await doSearchLocal({...options,q:'alpha-guied',exact:false});
+          const exact=await doSearchLocal({...options,q:'alpha-guied',exact:true});
+          return {fuzzy:fuzzy.results.map(row=>row.File),exact:exact.results.length};
+        }''')
+        self.assertEqual(result, {'fuzzy':['alpha guide'], 'exact':0})
+
+    def test_single_character_search_cancels_without_restarting_or_blocking_metadata(self):
+        self.load()
+        self.page.wait_for_function('STATE.dataLoaded', timeout=30000)
+        result = self.page.evaluate('''async () => {
+          await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['VoiceOfML/Test'],fd:[[]],
+            rc:Array.from({length:40000},(_,i)=>[0,'alpha '+i,'txt',0,1,0])}});
+          const worker=corpusWorker, restarts=corpusWorkerRestartCount, controller=new AbortController();
+          const pending=doSearchLocal({q:'a',page:1,pageSize:100,signal:controller.signal})
+            .then(()=> 'completed', error=>error.name);
+          const metadata=await corpusWorkerRequest('metadata', {});
+          controller.abort();
+          const cancelled=await pending;
+          const current=await doSearchLocal({q:'a',page:1,pageSize:100});
+          return {cancelled,count:metadata.count,total:current.total,rows:current.results.length,
+            sameWorker:worker===corpusWorker,restarts:corpusWorkerRestartCount-restarts};
+        }''')
+        self.assertEqual(result, {'cancelled':'AbortError', 'count':40000, 'total':40000, 'rows':100,
+                                  'sameWorker':True, 'restarts':0})
+
     def test_real_worker_long_wildcard_can_be_cancelled_without_restart(self):
         self.load()
         self.page.wait_for_function("STATE.dataLoaded", timeout=30000)
