@@ -5,8 +5,26 @@ import { validPdfBookUrl, searchPath } from "../reader-pdf-book-url.mjs";
 const aborted = () => new DOMException("Search cancelled", "AbortError");
 const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
+// Hold at most one small compressed future partition. Decompression and
+// verification happen only when that partition reaches the head of the scan.
+const PARTITION_LOOKAHEAD_MAX_BYTES = 1024 * 1024;
 let configuration, book, pendingBook, controller, active = 0, session;
 const partitionRequests = new Set();
+const idlePartitionWaiters = new Set();
+
+function abortPartitionRequests() {
+  for (const request of partitionRequests) request.abort();
+}
+
+function waitForPartitionRequests() {
+  if (!partitionRequests.size) return Promise.resolve();
+  return new Promise(resolve => idlePartitionWaiters.add(resolve));
+}
+
+function canPrefetchPartition(connection, bytes) {
+  return !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType) &&
+    Number.isSafeInteger(bytes) && bytes > 0 && bytes <= PARTITION_LOOKAHEAD_MAX_BYTES;
+}
 
 /** @overload
  * @param {ReadableStream<Uint8Array>} stream
@@ -126,23 +144,43 @@ function validateSearchConfiguration() {
   if (next !== configuration.pageCount + 1) throw new Error("PDF_TEXT_INDEX_INCOMPLETE");
 }
 
-async function loadSearchPartition(part, current) {
+async function withPartitionRequest(current, owners, action) {
   if (!current()) throw aborted();
   const request = new AbortController();
   partitionRequests.add(request);
+  owners?.add(request);
   const timer = setTimeout(() => request.abort(), 120000);
   try {
-    const response = await fetch(part.url, {signal: request.signal, credentials: "omit"});
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    let packed = await readBounded(response.body, request.signal, part.bytes);
+    return await action(request.signal);
+  } finally {
+    clearTimeout(timer);
+    partitionRequests.delete(request);
+    owners?.delete(request);
+    request.abort();
+    if (!partitionRequests.size) {
+      for (const resolve of idlePartitionWaiters) resolve();
+      idlePartitionWaiters.clear();
+    }
+  }
+}
+
+async function fetchPartitionBytes(part, signal) {
+  const response = await fetch(part.url, {signal, credentials: "omit"});
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return readBounded(response.body, signal, part.bytes);
+}
+
+async function loadSearchPartition(part, current, owners = null, prefetched = null) {
+  return withPartitionRequest(current, owners, async signal => {
+    let packed = prefetched || await fetchPartitionBytes(part, signal);
     const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
       .map(value => value.toString(16).padStart(2, "0")).join("");
     if (digest !== part.sha256) throw new Error("PDF_OCR_HASH_MISMATCH");
     const stream = new ReadableStream({start(owner) {owner.enqueue(packed); owner.close();}});
     packed = null;
     const value = JSON.parse(await readBounded(
-      stream.pipeThrough(new DecompressionStream("gzip")), request.signal, null, true));
-    if (!current() || request.signal.aborted) throw aborted();
+      stream.pipeThrough(new DecompressionStream("gzip")), signal, null, true));
+    if (!current() || signal.aborted) throw aborted();
     if (value.version !== 1 || value.kind !== "pdf-search-text-partition" ||
         value.source_sha256 !== configuration.sourceSha || value.generation !== configuration.generation ||
         value.offset_unit !== "unicode-codepoint" || value.start !== part.start || value.end !== part.end ||
@@ -152,11 +190,7 @@ async function loadSearchPartition(part, current) {
           Object.keys(page).some(key => !["page", "text", "text_generation"].includes(key))))
       throw new Error("PDF_TEXT_INDEX_INVALID");
     return value;
-  } finally {
-    clearTimeout(timer);
-    partitionRequests.delete(request);
-    request.abort();
-  }
+  });
 }
 
 async function searchPartitions(query, current, progress) {
@@ -187,20 +221,48 @@ async function searchPartitions(query, current, progress) {
     }
     return {total, offset, pageSize: 50, results, complete};
   }};
-  for (const part of configuration.partitions) {
-    if (!current()) throw aborted();
-    // Each iteration releases its text/index; retain only counts and the first result page.
-    const value = await loadSearchPartition(part, current);
-    const local = await searchBookText(value, query, {current, yieldTask: pause});
-    if (!current()) throw aborted();
-    counts.push(local.total);
-    total += local.total;
-    if (first.length < 50) first.push(...decorate(local.page(0).results.slice(0, 50 - first.length), value.pages));
-    await progress(index, part.end, configuration.pageCount);
-    await pause();
+  const owners = new Set(), connection = self.navigator?.connection;
+  let pending = null;
+  try {
+    for (let position = 0; position < configuration.partitions.length; position++) {
+      if (!current()) throw aborted();
+      const part = configuration.partitions[position], ahead = pending;
+      pending = null;
+      const valuePromise = ahead ? ahead.then(outcome => {
+        if ("error" in outcome) throw outcome.error;
+        return loadSearchPartition(part, current, owners, outcome.packed);
+      }) : loadSearchPartition(part, current, owners);
+      // Own failures immediately, including if starting lookahead throws.
+      const valueOutcome = valuePromise.then(value => ({value}), error => ({error}));
+      const next = configuration.partitions[position + 1];
+      if (next && canPrefetchPartition(connection, next.bytes)) {
+        // Only compressed future bytes are retained. Each of the (at most
+        // two) overlapping future transfers is capped independently.
+        pending = withPartitionRequest(current, owners, signal => fetchPartitionBytes(next, signal))
+          .then(packed => ({packed}), error => ({error}));
+      }
+      const outcome = await valueOutcome;
+      if ("error" in outcome) throw outcome.error;
+      const value = outcome.value;
+      if (!current()) throw aborted();
+      // Commit counts and progress strictly in manifest order; never publish a
+      // later successful partition past a failed or unverified predecessor.
+      const local = await searchBookText(value, query, {current, yieldTask: pause});
+      if (!current()) throw aborted();
+      counts.push(local.total);
+      total += local.total;
+      if (first.length < 50) first.push(...decorate(local.page(0).results.slice(0, 50 - first.length), value.pages));
+      await progress(index, part.end, configuration.pageCount);
+      await pause();
+    }
+    complete = true;
+    return index;
+  } catch (error) {
+    // A replacement search can start before this catch resumes; abort only
+    // this search's lookahead, never another search or a result-page request.
+    for (const request of owners) request.abort();
+    throw error;
   }
-  complete = true;
-  return index;
 }
 
 self.onmessage = async ({ data }) => {
@@ -209,7 +271,7 @@ self.onmessage = async ({ data }) => {
     active++;
     session = null;
     controller?.abort();
-    for (const request of partitionRequests) request.abort();
+    abortPartitionRequests();
     return;
   }
   if (data.type !== "search" && data.type !== "page" && data.type !== "prefetch") return;
@@ -217,8 +279,12 @@ self.onmessage = async ({ data }) => {
   const current = () => token === active;
   try {
     if (data.type === "search") {
-      for (const request of partitionRequests) request.abort();
+      abortPartitionRequests();
       session = null;
+      // Drain both search and result-page requests from the old session before
+      // starting another load, including a switch to the legacy book path.
+      await waitForPartitionRequests();
+      if (!current()) return;
       const query = String(data.query || "").trim();
       if (!query || query.length > 2048) throw new Error("请输入 1–2048 个字符");
       if (controller?.signal.aborted && pendingBook) await pendingBook.catch(() => {});

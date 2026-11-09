@@ -63,6 +63,13 @@ const scope={self:{location:{href:'https://voiceofml-search.hf.space/static/work
   crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validateBookText,searchBookText,validPdfBookUrl,searchPath};
 const context=vm.createContext(scope);
 vm.runInContext(source.replace(/^import .*;\n/gm,''),context);
+// Exercise the Worker's actual network/size policy in its existing test scope.
+const canPrefetchPartition=vm.runInContext('canPrefetchPartition',context);
+for(const [connection,bytes,expected] of [[undefined,1024,true],[{saveData:true},1024,false],
+  [{effectiveType:'slow-2g'},1024,false],[{effectiveType:'2g'},1024,false],
+  [{effectiveType:'3g'},1024,true],[{saveData:false,effectiveType:'4g'},1048576,true],
+  [undefined,1048577,false],[undefined,0,false],[undefined,NaN,false]])
+  assert.equal(canPrefetchPartition(connection,bytes),expected);
 await scope.self.onmessage({data:{type:'init',configuration}});
 await scope.self.onmessage({data:{type:'search',id:7,query:'needle'}});
 assert.equal(posted[0].bookReady,true);

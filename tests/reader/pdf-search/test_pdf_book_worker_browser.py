@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 import unittest
 import uuid
 from urllib.parse import parse_qs, urlsplit
@@ -77,6 +78,8 @@ class Handler(SimpleHTTPRequestHandler):
                     self.send_error(410, 'stale test case')
                     return
                 state['active'] += 1
+                state['peak'] = max(state['peak'], state['active'])
+                state['paths'].append('/'.join(parts))
                 state['done'].clear()
         try:
             if state and '/'.join(parts) == state['block_path']:
@@ -96,6 +99,7 @@ class Handler(SimpleHTTPRequestHandler):
             if state:
                 with self.server.state_lock:
                     state['active'] -= 1
+                    state['completed_paths'].append('/'.join(parts))
                     if not state['active']:
                         state['done'].set()
 
@@ -126,7 +130,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.state = {
             'token': uuid.uuid4().hex[:16], 'block_path': None, 'timeout': 10,
             'arrived': threading.Event(), 'release': threading.Event(),
-            'done': threading.Event(), 'active': 0,
+            'done': threading.Event(), 'active': 0, 'peak': 0, 'paths': [], 'completed_paths': [],
         }
         self.state['done'].set()
         with self.server.state_lock:
@@ -235,7 +239,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
           }), 'search');
         }''', self.configuration())
         self.assertTrue(self.state['arrived'].wait(10), 'second partition was not requested')
-        self.assertTrue(page.evaluate('window.progressSeen'))
+        page.wait_for_function('window.progressSeen === true', timeout=4000)
         self.state['release'].set()
         prefetch = page.evaluate('window.prefetchOutcome')
         self.assertEqual(prefetch.get('error'), 'AbortError', f'progress prefetch unexpectedly completed: {prefetch}')
@@ -257,6 +261,166 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(len(result['page']['results']), 30)
         self.assertEqual(result['page']['results'][0]['page'], 2)
         self.assertEqual(page.evaluate('window.unexpected'), [])
+
+    def test_partition_lookahead_preserves_order_progress_and_paging(self):
+        self.state['block_path'] = f'{BASE}/search-000001-000001.json.gz'
+        page = self.make_page()
+        page.evaluate('''async config => {
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);window.updates=[];
+          window.outcome=window.capture(window.client.search('needle',p=>window.updates.push({
+            scanned:p.scanned,total:p.total,pages:p.pages,first:p.results[0]?.page})), 'parallel search');
+        }''', self.configuration())
+        self.assertTrue(self.state['arrived'].wait(10), 'first partition not requested')
+        # The second request must finish while the first remains blocked;
+        # wall-clock speed is not used as the contract.
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            with self.server.state_lock:
+                completed = list(self.state['completed_paths'])
+            if f'{BASE}/search-000002-000002.json.gz' in completed:
+                break
+            page.wait_for_timeout(20)
+        else:
+            self.fail('second partition did not complete while first was blocked')
+        self.assertEqual(page.evaluate('window.updates'), [], 'out-of-order work cannot publish past an unfinished predecessor')
+        self.state['release'].set()
+        result=page.evaluate('''async()=>{
+          const done=await window.outcome;if(!done.value)return {done};
+          const page=await window.deadline(window.client.page(100),'page');return {done,page,updates:window.updates};
+        }''')
+        self.assertEqual(result['done']['value']['total'], 180)
+        self.assertEqual(result['updates'], [dict(scanned=1,total=120,pages=2,first=1),
+                                               dict(scanned=2,total=180,pages=2,first=1)])
+        self.assertEqual(result['page']['offset'], 100)
+        self.assertEqual([hit['page'] for hit in result['page']['results']], [1]*20+[2]*30)
+        self.assertTrue(all(hit['textGeneration'] == TEXT_GENERATION for hit in result['page']['results']))
+        self.assertEqual(self.state['peak'],2,'exactly one lookahead may overlap the first partition')
+
+    def test_partition_failure_never_commits_unverified_results(self):
+        page=self.make_page()
+        configuration=self.configuration()
+        configuration['partitions'][0]['sha256']='0'*64
+        result=page.evaluate('''async config=>{
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);window.updates=[];
+          const outcome=await window.capture(client.search('needle',p=>window.updates.push(p.scanned)),'failed search');
+          return {outcome,updates:window.updates};
+        }''',configuration)
+        self.assertIn('PDF_OCR_HASH_MISMATCH',result['outcome'].get('message',''))
+        self.assertEqual(result['updates'],[])
+
+    def test_failed_lookahead_waits_for_verified_predecessor(self):
+        self.state['block_path'] = f'{BASE}/search-000001-000001.json.gz'
+        configuration = self.configuration()
+        configuration['partitions'][1]['sha256'] = '0' * 64
+        page = self.make_page()
+        page.evaluate('''async config => {
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);window.updates=[];
+          window.outcome=window.capture(client.search('needle',p=>window.updates.push({
+            scanned:p.scanned,total:p.total,complete:p.complete})), 'bad lookahead');
+        }''', configuration)
+        self.assertTrue(self.state['arrived'].wait(10))
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            with self.server.state_lock:
+                finished = f'{BASE}/search-000002-000002.json.gz' in self.state['completed_paths']
+            if finished:
+                break
+            page.wait_for_timeout(20)
+        self.assertTrue(finished, 'lookahead request did not finish')
+        self.assertEqual(page.evaluate('window.updates'), [])
+        self.state['release'].set()
+        result = page.evaluate('''async()=>({outcome:await window.outcome,updates:window.updates})''')
+        self.assertIn('PDF_OCR_HASH_MISMATCH', result['outcome'].get('message', ''))
+        self.assertEqual(result['updates'], [dict(scanned=1,total=120,complete=False)])
+
+    def test_cancel_after_legacy_prefetch_drains_partition_requests(self):
+        page = self.make_page()
+        self.state['block_path'] = f'{BASE}/search-000002-000002.json.gz'
+        configuration = self.configuration()
+        legacy = {key: configuration[key] for key in ('url', 'bytes', 'sha256', 'sourceSha')}
+        legacy['pageCount'] = 1
+        # A legacy ready Worker can receive cancel without termination; use the
+        # protocol directly to exercise cleanup before a replacement search.
+        page.evaluate('''async config => {
+          window.worker = new Worker('/static/reader/search/workers/reader-pdf-book-search-worker.mjs', {type:'module'});
+          window.workerMessages = [];
+          worker.onmessage = event => window.workerMessages.push(event.data);
+          worker.postMessage({type:'init',configuration:config});worker.postMessage({type:'prefetch',id:1});
+        }''', legacy)
+        page.wait_for_function('window.workerMessages.some(m=>m.id===1 && m.ready)', timeout=4000)
+        page.evaluate('''config => {
+          worker.postMessage({type:'init',configuration:config});worker.postMessage({type:'search',id:2,query:'needle'});
+        }''', configuration)
+        self.assertTrue(self.state['arrived'].wait(10))
+        page.wait_for_function('window.workerMessages.some(m=>m.id===2 && m.progress)', timeout=4000)
+        page.evaluate('''() => {
+          worker.postMessage({type:'cancel'});worker.postMessage({type:'search',id:3,query:'needle'});
+        }''')
+        self.state['release'].set()
+        page.wait_for_function('window.workerMessages.some(m=>m.id===3 && !m.progress)', timeout=4000)
+        result = page.evaluate('''() => {
+          const result = window.workerMessages.find(m=>m.id===3 && !m.progress);
+          worker.terminate();return result;
+        }''')
+        self.assertEqual(result.get('total'), 180)
+        self.assertEqual(len(result.get('results', [])), 50)
+
+    def test_large_lookahead_is_not_started_early(self):
+        self.state['block_path'] = f'{BASE}/search-000001-000001.json.gz'
+        configuration = self.configuration()
+        configuration['partitions'][1]['bytes'] = 1024 * 1024 + 1
+        page = self.make_page()
+        page.evaluate('''async config => {
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);
+          window.outcome=window.capture(client.search('needle'), 'large lookahead');
+        }''', configuration)
+        self.assertTrue(self.state['arrived'].wait(10))
+        page.wait_for_timeout(250)
+        with self.server.state_lock:
+            self.assertNotIn(f'{BASE}/search-000002-000002.json.gz', self.state['paths'])
+        self.state['release'].set()
+        outcome = page.evaluate('window.outcome')
+        self.assertIn('PDF_OCR_SIZE_MISMATCH', outcome.get('message', ''))
+        self.assertIn(f'{BASE}/search-000002-000002.json.gz', self.state['paths'])
+
+    def test_cancelled_partition_search_cannot_abort_replacement(self):
+        self.state['block_path']=f'{BASE}/search-000001-000001.json.gz'
+        page=self.make_page()
+        page.evaluate('''async config=>{
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);
+          window.first=window.capture(client.search('needle'),'old search');
+        }''',self.configuration())
+        self.assertTrue(self.state['arrived'].wait(10),'old request did not arrive')
+        page.evaluate('''()=>{window.second=window.capture(window.client.search('needle'),'replacement');}''')
+        self.state['release'].set()
+        result=page.evaluate('''async()=>({first:await window.first,second:await window.second})''')
+        self.assertEqual(result['first'].get('error'),'AbortError')
+        self.assertEqual(result['second']['value']['total'],180)
+        self.assertEqual(len(result['second']['value']['results']),50)
+
+    def test_cancellation_aborts_lookahead_and_retry_succeeds(self):
+        self.state['block_path']=f'{BASE}/search-000002-000002.json.gz'
+        page=self.make_page()
+        page.evaluate('''async config=>{
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);window.updates=[];
+          window.first=window.capture(client.search('needle',p=>window.updates.push(p.scanned)),'cancelled search');
+        }''',self.configuration())
+        self.assertTrue(self.state['arrived'].wait(10),'lookahead request did not arrive')
+        page.wait_for_function('window.updates.includes(1)',timeout=4000)
+        page.evaluate('window.client.cancel()')
+        self.state['release'].set()
+        result=page.evaluate('''async()=>{
+          const first=await window.first,retry=await window.capture(window.client.search('needle'),'retry');
+          return {first,retry};
+        }''')
+        self.assertEqual(result['first'].get('error'),'AbortError')
+        self.assertEqual(result['retry']['value']['total'],180)
 
     def test_search_preempts_inflight_prefetch(self):
         self.state['block_path'] = f'{BASE}/book-text.json.gz'
