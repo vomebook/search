@@ -148,6 +148,27 @@ class CatalogTests(unittest.TestCase):
         conflict = {**self.records[0], "Size": 999}
         with self.assertRaises(ValueError): self.build(records=[*self.records, conflict])
 
+    def test_relative_path_matches_split_reference_on_boundary_and_unicode_cases(self):
+        import itertools
+        alphabet = ('', '.', '..', '...', 'a', '/', '\\', '\x00', '书', '😀')
+        for pieces in itertools.product(alphabet, repeat=4):
+            record = {**self.records[0], 'Folder': list(pieces[:2]), 'File': pieces[2], 'Extension': pieces[3]}
+            name = record['File'] + ('.' + record['Extension'] if record['Extension'] else '')
+            expected = '/'.join([*record['Folder'], name])
+            unsafe = any(part in ('.', '..') for part in expected.split('/')) or '\x00' in expected or '\\' in expected
+            with self.subTest(pieces=pieces):
+                if unsafe:
+                    with self.assertRaisesRegex(ValueError, '^Unsafe source path$'):
+                        seo.relative_path(record)
+                else:
+                    self.assertEqual(seo.relative_path(record), expected)
+        for name in ('.', '..', './file', '../file', 'file/.', 'file/..', 'a/./b', 'a/../b', 'a//b'):
+            record = {**self.records[0], 'Folder': [], 'File': name, 'Extension': ''}
+            if any(part in ('.', '..') for part in name.split('/')):
+                with self.subTest(name=name), self.assertRaises(ValueError): seo.relative_path(record)
+            else:
+                self.assertEqual(seo.relative_path(record), name)
+
     def test_output_is_deterministic_and_does_not_mutate_search_records(self):
         before = copy.deepcopy(self.records)
         self.assertEqual(self.build(), self.build())
