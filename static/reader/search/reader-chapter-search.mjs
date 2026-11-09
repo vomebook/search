@@ -87,8 +87,18 @@ export function chapterTextMap(roots, textProfile) {
     text: chunks.join(""),
     parts(start, end, body) {
       const output = [];
-      for (const run of runs) {
-        if (run.to <= start || run.from >= end || !run.node || !body.contains(run.node)) continue;
+      // Runs are append-only, strictly ordered ranges. Seek directly to the
+      // first intersecting range rather than rescanning a whole long chapter.
+      let low = 0, high = runs.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (runs[middle].to <= start) low = middle + 1;
+        else high = middle;
+      }
+      for (let index = low; index < runs.length; index++) {
+        const run = runs[index];
+        if (run.from >= end) break;
+        if (run.to <= start || !run.node || !body.contains(run.node)) continue;
         const part = { node: run.node,
           start: run.linear ? run.start + Math.max(start - run.from, 0) : run.start,
           end: run.linear ? run.end - Math.max(run.to - end, 0) : run.end };

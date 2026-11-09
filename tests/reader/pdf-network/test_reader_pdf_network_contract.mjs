@@ -22,6 +22,179 @@ const pdfjs = {PDFDataRangeTransport:Transport,getDocument:opts=>({
   promise:Promise.resolve(opts),destroy:async()=>{}})};
 
 try {
+  // Large-flat policy joins only already requested chunks, at most 96 KiB of
+  // aggregate gaps and 256 KiB per response. Published slices remain exact.
+  {
+    const total=8*1024*1024,chunk=32768,start=2*1024*1024,requests=[];
+    globalThis.fetch=async(_url,init)=>{
+      const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
+      const begin=Number(a),end=Number(b)+1;requests.push([begin,end]);
+      const body=Uint8Array.from({length:end-begin},(_,i)=>((begin+i)>>>8)&255);
+      return new Response(body,{status:206,headers:{'Content-Range':`bytes ${begin}-${end-1}/${total}`,ETag:'"A"'}});
+    };
+    const initial={bytes:new Uint8Array(262144),total,etag:'"A"',rangeChunkSize:chunk,
+      tail:{begin:total-262144,end:total,read:async()=>null,onFailure(){}}};
+    const controller=new AbortController(), errors=[];
+    const opened=await openPdfRangeTask(pdfjs,{url:options.url,rangeChunkSize:262144},{
+      signal:controller.signal,readBytes,limit:total,rangeCache:null,initial:Promise.resolve(initial),
+      boundedMetadata:true,onError:error=>errors.push(error)});
+    const captured=await opened.promise,transport=captured.range;
+    assert.equal(captured.rangeChunkSize,chunk);
+    for(const index of [0,2,4,6,8])transport.requestDataRange(start+index*chunk,start+(index+1)*chunk);
+    await new Promise(resolve=>setTimeout(resolve,40));
+    assert.deepEqual(requests,[[start,start+7*chunk],[start+8*chunk,start+9*chunk]]);
+    assert.deepEqual(transport.received.map(row=>row.begin).sort((a,b)=>a-b),[0,2,4,6,8].map(i=>start+i*chunk));
+    for(const row of transport.received){
+      assert.equal(row.bytes.length,chunk);
+      assert.equal(row.bytes[0],(row.begin>>>8)&255);
+      assert.equal(row.bytes.at(-1),((row.begin+chunk-1)>>>8)&255);
+    }
+    assert.deepEqual(errors,[]);await opened.destroy();
+  }
+
+  // Foreground range joins a delayed batch immediately rather than waiting for
+  // its timer. Cancellation before that timer never sends a request or result.
+  {
+    const total=8*1024*1024,chunk=32768,start=2*1024*1024,requests=[];
+    globalThis.fetch=async(_url,init)=>{
+      const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
+      const begin=Number(a),end=Number(b)+1;requests.push([begin,end]);
+      return new Response(new Uint8Array(end-begin),{status:206,headers:{'Content-Range':`bytes ${begin}-${end-1}/${total}`,ETag:'"A"'}});
+    };
+    const initial={bytes:new Uint8Array(262144),total,etag:'"A"',rangeChunkSize:chunk,
+      tail:{begin:total-262144,end:total,read:async()=>null,onFailure(){}}};
+    const controller=new AbortController(),opened=await openPdfRangeTask(pdfjs,{url:options.url,rangeChunkSize:262144},{
+      signal:controller.signal,readBytes,limit:total,rangeCache:null,initial:Promise.resolve(initial),boundedMetadata:true});
+    const transport=(await opened.promise).range;
+    transport.requestDataRange(start,start+chunk);
+    opened.prioritizeRange({begin:start+4*chunk,end:start+5*chunk});
+    transport.requestDataRange(start+4*chunk,start+5*chunk);
+    await turn();await turn();
+    assert.ok(requests.some(([begin,end])=>begin<=start+4*chunk && end>=start+5*chunk),
+      'priority must promote the queued batch without waiting for its timer');
+    await opened.destroy();
+    const queuedOwner=new AbortController(),queued=await openPdfRangeTask(pdfjs,{url:options.url,rangeChunkSize:262144},{
+      signal:queuedOwner.signal,readBytes,limit:total,rangeCache:null,initial:Promise.resolve(initial),boundedMetadata:true});
+    const queuedTransport=(await queued.promise).range, oldRequests=requests.length;
+    queuedTransport.requestDataRange(start,start+chunk);
+    queued.prioritizeRange({begin:start+1,end:start+2});
+    await turn();await turn();
+    assert.equal(requests.length,oldRequests+1,'a range already waiting for batching is promoted');
+    await queued.destroy();
+    const cancelled=new AbortController(),discard=await openPdfRangeTask(pdfjs,{url:options.url,rangeChunkSize:262144},{
+      signal:cancelled.signal,readBytes,limit:total,rangeCache:null,initial:Promise.resolve(initial),boundedMetadata:true});
+    const stale=(await discard.promise).range, before=requests.length;
+    stale.requestDataRange(start,start+chunk);cancelled.abort(new DOMException('closed','AbortError'));
+    await new Promise(resolve=>setTimeout(resolve,30));
+    assert.equal(requests.length,before);assert.deepEqual(stale.received,[]);await discard.destroy();
+  }
+
+  // Source identity and framing remain mandatory on a bridged response.
+  for(const kind of ['changed','truncated','range-ignored']) {
+    const total=8*1024*1024,chunk=32768,start=2*1024*1024,errors=[];
+    globalThis.fetch=async(_url,init)=>{
+      const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
+      const begin=Number(a),end=Number(b)+1;
+      if(kind==='range-ignored')return new Response(new Uint8Array(8),{status:200});
+      return new Response(new Uint8Array(kind==='truncated'?end-begin-1:end-begin),{status:206,headers:{
+        'Content-Range':`bytes ${begin}-${end-1}/${total}`,ETag:kind==='changed'?'"B"':'"A"'}});
+    };
+    const initial={bytes:new Uint8Array(262144),total,etag:'"A"',rangeChunkSize:chunk,
+      tail:{begin:total-262144,end:total,read:async()=>null,onFailure(){}}};
+    const opened=await openPdfRangeTask(pdfjs,{url:options.url,rangeChunkSize:262144},{
+      signal:new AbortController().signal,readBytes,limit:total,rangeCache:null,initial:Promise.resolve(initial),
+      boundedMetadata:true,onError:error=>errors.push(error)});
+    const transport=(await opened.promise).range;
+    transport.requestDataRange(start,start+chunk);transport.requestDataRange(start+2*chunk,start+3*chunk);
+    await new Promise(resolve=>setTimeout(resolve,40));
+    assert.equal(errors.length,1,kind);assert.deepEqual(transport.received,[],kind);
+    assert.match(errors[0].message,kind==='changed'?/PDF_SOURCE_CHANGED/:/PDF_RANGE_INVALID/);await opened.destroy();
+  }
+
+  // Large-flat PDFs get one bounded, version-checked tail lookahead for the
+  // parser's xref; save-data and slow connections do not get that extra hint.
+  {
+    const total=8*1024*1024,chunk=262144,requests=[];
+    const ids=[50000,...Array.from({length:1400},(_,i)=>10000+i*17)];
+    const tree='%PDF-1.7\n1 0 obj<</Length 4500>>\nstream\n'+'x'.repeat(4500)+'\nendstream\nendobj\n'+
+      '2 0 obj<</Type/Pages/Count '+ids.length+'/Kids['+ids.map(id=>`${id} 0 R`).join(' ')+']>>\nendobj\n';
+    const first=new TextEncoder().encode(tree);assert.ok(first.length>16384);
+    globalThis.fetch=async(_url,init)=>{
+      const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
+      const begin=Number(a),end=Number(b)+1;requests.push([begin,end]);
+      const body=new Uint8Array(end-begin);if(!begin)body.set(first);
+      return new Response(body,{status:206,headers:{'Content-Range':`bytes ${begin}-${end-1}/${total}`,ETag:'"A"'}});
+    };
+    const nativeNavigator=Object.getOwnPropertyDescriptor(globalThis,'navigator');
+    try {
+      for (const [connection,expected] of [[{},true],[{saveData:true},false],[{effectiveType:'2g'},false]]) {
+        Object.defineProperty(globalThis,'navigator',{configurable:true,value:{connection}});
+        const row=await preparePdfInitialRange({url:options.url,rangeChunkSize:chunk},{
+          signal:new AbortController().signal,readBytes,limit:total,rangeCache:null,canPrefetchFirstPage:()=>false});
+        assert.equal(row.rangeChunkSize,32768);assert.equal(!!row.extendedTail,expected);
+        if(expected){assert.equal(row.extendedTail.end-row.extendedTail.begin,chunk);await row.extendedTail.promise;}
+        row.cancelInitial();
+      }
+    } finally {if(nativeNavigator)Object.defineProperty(globalThis,'navigator',nativeNavigator);else delete globalThis.navigator;}
+  }
+
+  // A malformed extended tail can never be published or cached as valid.
+  {
+    const total=8*1024*1024,chunk=262144,errors=[];
+    const ids=[50000,...Array.from({length:1400},(_,i)=>10000+i*17)];
+    const tree='%PDF-1.7\n1 0 obj<</Length 4500>>\nstream\n'+'x'.repeat(4500)+'\nendstream\nendobj\n'+
+      '2 0 obj<</Type/Pages/Count '+ids.length+'/Kids['+ids.map(id=>`${id} 0 R`).join(' ')+']>>\nendobj\n';
+    const first=new TextEncoder().encode(tree);
+    globalThis.fetch=async(_url,init)=>{
+      const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
+      const begin=Number(a),end=Number(b)+1;
+      if(begin!==0 && begin<total-2*chunk)return new Response(new Uint8Array(chunk-1),{status:206,headers:{
+        'Content-Range':`bytes ${begin}-${end-1}/${total}`,'Content-Length':String(chunk),ETag:'"A"'}});
+      const body=new Uint8Array(end-begin);if(begin===0)body.set(first);
+      return new Response(body,{status:206,headers:{'Content-Range':`bytes ${begin}-${end-1}/${total}`,ETag:'"A"'}});
+    };
+    const owner=new AbortController(),initial=await preparePdfInitialRange({url:options.url,rangeChunkSize:chunk},{
+      signal:owner.signal,readBytes,limit:total,rangeCache:null});
+    assert.ok(initial.extendedTail);await initial.extendedTail.promise;
+    const opened=await openPdfRangeTask(pdfjs,{url:options.url,rangeChunkSize:chunk},{signal:owner.signal,
+      readBytes,limit:total,rangeCache:null,initial:Promise.resolve(initial),onError:error=>errors.push(error)});
+    const transport=(await opened.promise).range;
+    transport.requestDataRange(initial.extendedTail.begin,initial.extendedTail.begin+32768);
+    await new Promise(resolve=>setTimeout(resolve,30));
+    assert.deepEqual(transport.received,[]);assert.equal(errors.length,1);assert.match(errors[0].message,/PDF_RANGE_INVALID/);
+    await opened.destroy();
+  }
+
+  // Many nonadjacent demands stay within the existing 24-slot limit. Closing
+  // must drop both admitted and waiting work, even with the batching timer.
+  {
+    const total=8*1024*1024,chunk=32768,start=2*1024*1024,seen=[],releases=[];
+    let active=0,peak=0;
+    globalThis.fetch=async(_url,init)=>{
+      const [,a,b]=/^bytes=(\d+)-(\d+)$/.exec(new Headers(init.headers).get('Range'));
+      const begin=Number(a),end=Number(b)+1;seen.push([begin,end]);active++;peak=Math.max(peak,active);
+      try {await new Promise((resolve,reject)=>{
+        const finish=()=>{init.signal.removeEventListener('abort',abort);resolve()};
+        const abort=()=>reject(init.signal.reason);init.signal.addEventListener('abort',abort,{once:true});releases.push(finish);
+      });return new Response(new Uint8Array(end-begin),{status:206,headers:{'Content-Range':`bytes ${begin}-${end-1}/${total}`,ETag:'"A"'}})}
+      finally {active--}
+    };
+    const initial={bytes:new Uint8Array(262144),total,etag:'"A"',rangeChunkSize:chunk,
+      tail:{begin:total-262144,end:total,read:async()=>null,onFailure(){}}};
+    const owner=new AbortController(),opened=await openPdfRangeTask(pdfjs,{url:options.url,rangeChunkSize:262144},{
+      signal:owner.signal,readBytes,limit:total,rangeCache:null,initial:Promise.resolve(initial),boundedMetadata:true});
+    const transport=(await opened.promise).range;
+    for(let i=0;i<30;i++)transport.requestDataRange(start+i*5*chunk,start+(i*5+1)*chunk);
+    await new Promise(resolve=>setTimeout(resolve,30));
+    assert.equal(seen.length,23);assert.equal(peak,23);
+    const promoted=start+27*5*chunk;opened.prioritizeRange({begin:promoted,end:promoted+1});
+    await turn();await turn();assert.equal(seen.at(-1)[0],promoted);assert.equal(peak,24);
+    const before=seen.length;owner.abort(new DOMException('closed','AbortError'));
+    await new Promise(resolve=>setTimeout(resolve,30));
+    assert.equal(seen.length,before);assert.equal(active,0);assert.deepEqual(transport.received,[]);
+    await opened.destroy();
+  }
+
   // Cache entries are version-bound, copied on both ingress and egress, and
   // bounded by LRU, age and byte/entry limits. Invalid identities never enter.
   {

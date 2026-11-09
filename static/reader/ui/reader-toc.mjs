@@ -1,4 +1,9 @@
 export function createReaderToc(readerContext) {
+  // setToc owns normalized entries. Cache parsed page numbers only for those
+  // entries; externally replaced arrays retain the original scan path.
+  let ownedTocEntries = null, pageLookupEntries = null, pageLookup = [];
+  const PAGE_LOOKUP_MIN_ENTRIES = 256;
+
   function updateNavigationState(patch) {
     return readerContext.readerRuntime.update("navigation", patch);
   }
@@ -241,6 +246,10 @@ export function createReaderToc(readerContext) {
       href: String(entry.href || ""),
       label: readerContext.cleanTocLabel(entry.label)
     }));
+    // Invalidate before publishing; event listeners may replace the entries.
+    ownedTocEntries = normalizedEntries;
+    pageLookupEntries = null;
+    pageLookup = [];
     readerContext.updateNavigationState({
       tocEntries: normalizedEntries,
       currentChapterIndex: normalizedEntries.findIndex((entry) => !entry.group)
@@ -305,13 +314,38 @@ export function createReaderToc(readerContext) {
     );
   }
 
+  // The legacy scan selects the *last directory entry* whose page is at or
+  // before the current page, even when the outline itself is not page-sorted.
+  function indexTocPages(entries) {
+    pageLookup = entries.flatMap((entry, index) => {
+      const match = entry.label.match(/第\s*(\d+)\s*页/u);
+      return match ? [{page:Number(match[1]),index}] : [];
+    }).sort((a, b) => (a.page < b.page ? -1 : a.page > b.page ? 1 : a.index - b.index));
+    let last = -1;
+    for (const row of pageLookup) { last = Math.max(last, row.index); row.index = last; }
+    pageLookupEntries = entries;
+  }
+
   function updateTocCurrentMark() {
     const rows = [...document.querySelectorAll("#toc-list .toc-item")].map(row => /** @type {HTMLElement} */ (row));
     if (readerContext.documentState.pageCount > 1 && readerContext.documentState.page > 0) {
+      const entries = readerContext.navigationState.tocEntries;
       let pageIndex = -1;
-      for (const [index, entry] of readerContext.navigationState.tocEntries.entries()) {
-        const match = entry.label.match(/第\s*(\d+)\s*页/u);
-        if (match && Number(match[1]) <= readerContext.documentState.page) pageIndex = index;
+      if (entries.length > PAGE_LOOKUP_MIN_ENTRIES && entries === ownedTocEntries && ownedTocEntries !== pageLookupEntries)
+        indexTocPages(ownedTocEntries);
+      if (entries === pageLookupEntries) {
+        let low = 0, high = pageLookup.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          if (pageLookup[middle].page <= readerContext.documentState.page) low = middle + 1;
+          else high = middle;
+        }
+        if (low) pageIndex = pageLookup[low - 1].index;
+      } else {
+        for (const [index, entry] of entries.entries()) {
+          const match = entry.label.match(/第\s*(\d+)\s*页/u);
+          if (match && Number(match[1]) <= readerContext.documentState.page) pageIndex = index;
+        }
       }
       if (pageIndex >= 0) readerContext.updateNavigationState({ currentChapterIndex: pageIndex });
     }
