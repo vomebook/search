@@ -496,6 +496,61 @@ test("single-character scans preserve all indexed results for varied fields and 
   assert(vm.runInContext('wordIndex === null && fulltextBuild === null',cold.worker.context));
 });
 
+test("cached single-character pages skip rescans without weakening eviction or generation checks", async () => {
+  const input=Array.from({length:1200},(_,i)=>({...records[0],File:'alpha '+i}));
+  const {worker}=await loaded(input);
+  const params={q:'a',exact:false,pageSize:17};
+  const first=await worker.request('local-search',params);
+  const completeFirstPage=await worker.request('local-search',{...params,pageSize:500});
+  vm.runInContext(`globalThis.savedPrepareChar = prepareSingleCharacter;
+    globalThis.savedPrepareIndex = prepareSearchIndex;
+    prepareSingleCharacter = () => {throw Error('cached page rescanned')};
+    prepareSearchIndex = () => {throw Error('cached page rebuilt index')};`,worker.context);
+  const later=await worker.request('local-search',{...params,page:2,pageSize:23});
+  assert.strictEqual(later.total,first.total);
+  assert.deepStrictEqual(later.ids,completeFirstPage.ids.slice(23,46));
+  assert.strictEqual(later.snapshot_generation,first.snapshot_generation);
+  vm.runInContext('prepareSingleCharacter = savedPrepareChar; prepareSearchIndex = savedPrepareIndex',worker.context);
+  const paged=await worker.request('local-search',{...params,page:1,pageSize:500});
+  const anchor = 'Repo/A\0docs/root/alpha 1199.txt';
+  vm.runInContext(`globalThis.savedFields = getRecordSearchFields;
+    getRecordSearchFields = () => {throw Error('cache miss rescanned')};`,worker.context);
+  const position=await worker.request('local-search',{...params,page:3,pageSize:1,anchorId:anchor});
+  assert.strictEqual(position.anchor_index,1199);
+  assert.strictEqual(paged.total,1200);
+  const key=vm.runInContext('searchOrderKey({q:"a",exact:false,pageSize:17})',worker.context);
+  worker.context.cachedParams={...params,page:2};
+  assert.strictEqual(vm.runInContext(`searchOrderKey(cachedParams) === ${JSON.stringify(key)}`,worker.context),true);
+  await assert.rejects(() => vm.runInContext('dispatch("local-search", cachedParams, {generation, cancelled:true})',worker.context),
+    error => error.code === 'SEARCH_CANCELLED');
+  await assert.rejects(() => vm.runInContext('dispatch("local-search", cachedParams, {generation:generation-1, cancelled:false})',worker.context),
+    error => error.code === 'CORPUS_REPLACED');
+  const missing=await worker.send('local-search',{...params,searchFolders:false},{id:'changed'});
+  assert.strictEqual(missing.error.message,'cache miss rescanned');
+  vm.runInContext('getRecordSearchFields = savedFields',worker.context);
+  for (let i=0;i<8;i++) await worker.request('local-search',{q:'z'+i,exact:true});
+  assert.strictEqual(vm.runInContext(`searchOrderCache.has(${JSON.stringify(key)})`,worker.context),false);
+  vm.runInContext('getRecordSearchFields = () => {throw Error("evicted page rescanned")}',worker.context);
+  assert.strictEqual((await worker.send('local-search',params)).error.message,'evicted page rescanned');
+  vm.runInContext('getRecordSearchFields = savedFields',worker.context);
+  await worker.request('replace-corpus',{data:compact([{...records[0],File:'another'}])});
+  const replacement=await worker.request('local-search',params);
+  assert.strictEqual(replacement.total,1);
+  assert.notStrictEqual(replacement.snapshot_generation,first.snapshot_generation);
+});
+
+test("cached orders return without an asynchronous preparation window", async () => {
+  const {worker}=await loaded(Array.from({length:1200},(_,i)=>({...records[0],File:'alpha '+i})));
+  const params={q:'a',exact:false,pageSize:5};
+  await worker.request('local-search',params);
+  const pending=worker.listeners.message({data:{protocol:1,type:'local-search',id:'cached-now',payload:{...params,page:2}}});
+  await Promise.resolve();
+  const message=worker.messages.find(item=>item.id==='cached-now');
+  assert(message && message.ok, 'cached result must be published without a preparatory scan');
+  assert.strictEqual(message.result.total,1200);
+  await pending;
+});
+
 test("single-character scans yield, cancel and reject old corpus generations", async () => {
   const {worker,tasks,tick}=scheduledWorker({navigator:{deviceMemory:2}});
   const input=Array.from({length:1200},(_,i)=>({...records[0],File:'alpha '+i}));

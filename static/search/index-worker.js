@@ -909,14 +909,18 @@ function pageResult(indices, params) {
   return result;
 }
 
-function searchLocal(params, preparedExact = null) {
-  const query = String(params.q || "").trim();
-  const searchFolders = params.searchFolders !== false;
+function searchOrderKey(params) {
   const cacheParams = Object.assign({}, params);
   delete cacheParams.page;
   delete cacheParams.pageSize;
   delete cacheParams.anchorId;
-  const cacheKey = JSON.stringify(cacheParams);
+  return JSON.stringify(cacheParams);
+}
+
+function searchLocal(params, preparedExact = null) {
+  const query = String(params.q || "").trim();
+  const searchFolders = params.searchFolders !== false;
+  const cacheKey = searchOrderKey(params);
   let ordered = searchOrderCache.get(cacheKey);
   if (ordered) {
     searchOrderCache.delete(cacheKey);
@@ -1087,9 +1091,7 @@ async function prepareLongWildcard(params, job) {
   // proofs and dense-order reuse; only long patterns require cooperative work.
   if (query.length < 32 || !/[*?]/.test(query)
       || query.split(/\s+/).every(term => /^\*+$/.test(term))) return null;
-  const cacheParams = Object.assign({}, params);
-  delete cacheParams.page; delete cacheParams.pageSize; delete cacheParams.anchorId;
-  if (searchOrderCache.has(JSON.stringify(cacheParams))) return null;
+  if (searchOrderCache.has(searchOrderKey(params))) return null;
   const terms = query.split(/\s+/).filter(Boolean).map(term => ({
     lower: term.toLowerCase(),
     matcher: /[*?]/.test(term) ? compileWildcardMatcher(term) : null,
@@ -1214,6 +1216,13 @@ async function dispatch(type, payload, job) {
   if (type === "local-search") {
     if (Array.from(String(payload.q || "")).length > 256)
       throw protocolError("QUERY_TOO_LONG", "Search query exceeds 256 characters");
+    // A complete cached order already includes filtering and sorting. Serve it
+    // before a cooperative single-character scan can revisit the whole corpus.
+    if (searchOrderCache.has(searchOrderKey(payload))) {
+      if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+      if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+      return searchLocal(payload);
+    }
     await prepareSearchIndex(payload || {}, job);
     const prepared = await prepareSingleCharacter(payload || {}, job) ?? await prepareLongWildcard(payload || {}, job);
     if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");

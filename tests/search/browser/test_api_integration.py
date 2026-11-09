@@ -154,6 +154,32 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(result, {'cancelled':'AbortError', 'count':40000, 'total':40000, 'rows':100,
                                   'sameWorker':True, 'restarts':0})
 
+    def test_single_character_cached_pages_match_cold_pages_and_replace_corpus(self):
+        self.load()
+        self.page.wait_for_function('STATE.dataLoaded', timeout=30000)
+        result = self.page.evaluate('''async () => {
+          const corpus = {v:2,rp:['VoiceOfML/Test'],fd:[['folder']],
+            rc:Array.from({length:5000},(_,i)=>[0,'alpha '+i,'txt',0,i,0])};
+          const search = async (page, anchor) => corpusWorkerRequest('local-search', {
+            q:'a',exact:false,page,pageSize:50,searchFolders:true,anchorId:anchor});
+          const anchor='VoiceOfML/Test\\0folder/alpha 4999.txt';
+          await corpusWorkerRequest('replace-corpus', {data:corpus});
+          const first=await search(1,anchor), cached=await search(2,anchor);
+          await corpusWorkerRequest('replace-corpus', {data:corpus});
+          const cold=await search(2,anchor);
+          await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['VoiceOfML/Test'],fd:[[]],
+            rc:[[0,'other','txt',0,1,0]]}});
+          const replaced=await search(2,anchor);
+          return {total:first.total, firstAnchor:first.anchor_index, cachedAnchor:cached.anchor_index,
+            coldAnchor:cold.anchor_index, sameIds:JSON.stringify(cached.ids)===JSON.stringify(cold.ids),
+            sameSnapshot:cached.snapshot_generation===cold.snapshot_generation,
+            replacedTotal:replaced.total, replacedAnchor:replaced.anchor_index,
+            changedSnapshot:replaced.snapshot_generation!==cold.snapshot_generation};
+        }''')
+        self.assertEqual(result, {'total':5000, 'firstAnchor':4999, 'cachedAnchor':4999,
+                                  'coldAnchor':4999, 'sameIds':True, 'sameSnapshot':True,
+                                  'replacedTotal':0, 'replacedAnchor':-1, 'changedSnapshot':True})
+
     def test_real_worker_long_wildcard_can_be_cancelled_without_restart(self):
         self.load()
         self.page.wait_for_function("STATE.dataLoaded", timeout=30000)
