@@ -619,6 +619,60 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(result['tail']['results'][0]['page'],100)
         self.assertEqual(result['tail']['results'][0]['start'],1950*len('普通文本😀'.encode('utf-16-le'))//2)
 
+    def test_legacy_dense_results_keep_mapped_coordinates_across_pages(self):
+        target = f'{BASE}/book-text.json.gz'
+        text = '😀needle ' * 3500
+        spans = [{'start':number*8+1, 'end':number*8+7,
+                  'box':[0,0,1,1], 'block':number, 'precision':'glyph'} for number in range(3500)]
+        body = packed({'version':2, 'kind':'pdf-book-text', 'complete':True,
+            'offset_unit':'unicode-codepoint', 'source_sha256':SOURCE_SHA, 'page_count':1,
+            'pages':[{'page':1, 'text':text, 'layout':{'offset_unit':'unicode-codepoint'}, 'text_spans':spans}]})
+        with self.server.state_lock:
+            self.server.resources[target] = body
+        config = {'url':self.resource(target),'bytes':len(body),'sha256':digest(body),
+                  'pageCount':1,'sourceSha':SOURCE_SHA}
+        page = self.make_page()
+        result = page.evaluate('''async config=>{
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          const client=window.client=createPdfBookSearch(config);
+          const search=await window.deadline(client.search('needle'),'mapped search');
+          const pages=[];for(const offset of [500,1000,2250,3450])pages.push(await window.deadline(client.page(offset),'mapped page'));
+          return {total:search.total,pages};
+        }''',config)
+        self.assertEqual(result['total'],3500)
+        for expected, group in zip([500,1000,2250,3450],result['pages']):
+            self.assertEqual(group['offset'],expected)
+            self.assertEqual(len(group['results']),50)
+            self.assertEqual([hit['boxes'][0]['block'] for hit in group['results']],list(range(expected,expected+50)))
+            self.assertTrue(all(hit['boxes'][0]['precision']=='glyph' for hit in group['results']))
+            self.assertEqual(group['results'][0]['start'],expected*len('😀needle '.encode('utf-16-le'))//2+2)
+
+    def test_legacy_sparse_page_boundaries_return_exact_result_page(self):
+        target = f'{BASE}/book-text.json.gz'
+        pages = [{'page':number, 'text':'中' * 150 + '😀' * 530,
+                  'layout':{'offset_unit':'unicode-codepoint'},
+                  'text_spans':[{'start':0,'end':680,'box':[0,0,1,1],'block':number}]}
+                 for number in range(1,5)]
+        body = packed({'version':2,'kind':'pdf-book-text','complete':True,'offset_unit':'unicode-codepoint',
+                       'source_sha256':SOURCE_SHA,'page_count':4,'pages':pages})
+        with self.server.state_lock:
+            self.server.resources[target] = body
+        config = {'url':self.resource(target),'bytes':len(body),'sha256':digest(body),
+                  'pageCount':4,'sourceSha':SOURCE_SHA}
+        page = self.make_page()
+        result = page.evaluate('''async config=>{
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          const client=window.client=createPdfBookSearch(config);
+          const first=await window.deadline(client.search('中'),'search');
+          const last=await window.deadline(client.page(500),'last page');return {first,last};
+        }''',config)
+        self.assertEqual(result['first']['total'],600)
+        self.assertEqual(result['last']['offset'],500)
+        self.assertEqual(len(result['last']['results']),50)
+        self.assertEqual([hit['page'] for hit in result['last']['results']],[4]*50)
+        self.assertEqual([hit['start'] for hit in result['last']['results']],list(range(50,100)))
+        self.assertTrue(all(hit['boxes'][0]['block']==4 for hit in result['last']['results']))
+
     def test_replacement_during_legacy_scan_keeps_progress_and_results(self):
         target = f'{BASE}/book-text.json.gz'
         text = '普通文本😀' * 2000
