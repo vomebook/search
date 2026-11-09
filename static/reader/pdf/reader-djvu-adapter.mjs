@@ -57,6 +57,20 @@ function validateTextGeometry(map,geometry) {
 function usableZone(zone,at,geometry) {
   return !!zone.t && at>=0 && zone.x+zone.w<=geometry.width && zone.y+zone.h<=geometry.height;
 }
+// Preserve String iteration semantics, including surrogate pairs and lone
+// surrogate halves, without materializing a per-code-point array for gaps.
+/** @param {string} text */
+function codePointLength(text) {
+  let length = 0;
+  for (let unit = 0; unit < text.length; unit++, length++) {
+    const high = text.charCodeAt(unit);
+    if (high >= 0xd800 && high <= 0xdbff && unit + 1 < text.length) {
+      const low = text.charCodeAt(unit + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) unit++;
+    }
+  }
+  return length;
+}
 /** @param {DjvuText} result @param {DjvuGeometry} geometry @param {number} pageHeight */
 function textContent({text,zones},geometry,pageHeight) {
   const size = 72/geometry.dpi, items = [], positions = [];
@@ -64,8 +78,8 @@ function textContent({text,zones},geometry,pageHeight) {
   for (const zone of zones) {
     const at = text.indexOf(zone.t,cursor);
     if (!usableZone(zone,at,geometry)) continue;
-    if (at > cursor) { const gap=text.slice(cursor,at); items.push({str:gap}); codepoints+=Array.from(gap).length; }
-    const start=codepoints, end=start+Array.from(zone.t).length;
+    if (at > cursor) { const gap=text.slice(cursor,at); items.push({str:gap}); codepoints+=codePointLength(gap); }
+    const start=codepoints, end=start+codePointLength(zone.t);
     positions.push({text:zone.t,box:[zone.x/geometry.width,zone.y/geometry.height,
       (zone.x+zone.w)/geometry.width,(zone.y+zone.h)/geometry.height],start,end});
     const height = Math.max(zone.h*size,.01);
