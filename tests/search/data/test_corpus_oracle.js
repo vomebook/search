@@ -158,6 +158,16 @@ test("full displayed filenames and extensions match independent scan", async () 
   await compare({q:"*.pdf", exact:true, page:1, pageSize:37});
   await compare({q:"pdf", exact:true, searchFolders:false, page:1, pageSize:37});
 });
+test("warmed Chinese index matches full corpus scans, filters and wildcards", async () => {
+  const warm = {q:"手机"};
+  for (const params of [
+    {q:"手机",exact:true,pageSize:19},
+    {q:"文化革命",exact:true,sort:"size",page:2,pageSize:11},
+    {q:"马克思*.pdf",exact:true,searchFolders:false,sort:"name",pageSize:17},
+    {q:"文化*",exact:true,repos:["VoiceOfML/Omnibus"],extensions:["pdf"],pageSize:13},
+    {q:"不存在",exact:true,pageSize:19},
+  ]) await compare(params,warm);
+});
 test("exact repository metadata query matches brute-force corpus scan", () => compare({ q: "VoiceOfML/Omnibus", exact: true, page: 1, pageSize: 23 }));
 test("exact folder search toggle matches brute-force corpus scan", async () => {
   await compare({ q: "原版目录", exact: true, searchFolders: true, page: 1, pageSize: 50 });
