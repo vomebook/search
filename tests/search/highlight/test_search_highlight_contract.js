@@ -42,6 +42,8 @@ test("highlighting matches raw text without marking tags or encoded entities", (
     ["A+B a.b [C] $5 (x)", "a+b a.b [c] $5 (x)",
       "<mark>A+B</mark> <mark>a.b</mark> <mark>[C]</mark> <mark>$5</mark> <mark>(x)</mark>"],
     ["中文😀 中文", "中文😀", "<mark>中文😀</mark> 中文"],
+    ["Marxism", "marx*", "<mark>Marx</mark>ism"],
+    ["abc", "a?c", "<mark>a</mark>b<mark>c</mark>"],
     ["a & b", "   ", "a &amp; b"],
     ["a & b", "", "a &amp; b"],
     [null, "a", "null"],

@@ -1,8 +1,10 @@
 const WORKER_PROTOCOL_VERSION = 1;
 const MAX_PAGE_SIZE = 500;
+const MAX_CORPUS_COMPRESSED_BYTES = 32 * 1024 * 1024;
+const MAX_CORPUS_EXPANDED_BYTES = 256 * 1024 * 1024;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
 // Bump when matching, filtering, collation or public record semantics change.
-const SEARCH_SEMANTICS_VERSION = "worker-search-v3";
+const SEARCH_SEMANTICS_VERSION = "worker-search-v5";
 let snapshotGeneration = null;
 
 let records = [];
@@ -49,7 +51,14 @@ const FULLTEXT_FOLDER_CACHE_MAX = 64;
 const FULLTEXT_FOLDER_CACHE_UNITS = 65536;
 const directoryIndexes = new Map();
 const DIRECTORY_INDEX_MAX = 4;
-const recordNameCollator = new Intl.Collator("zh");
+// Python compares lowercased Unicode code points; avoid UTF-16 surrogate ordering.
+function compareCodepoints(left, right) {
+  if (!/[\uD800-\uDFFF]/.test(left) && !/[\uD800-\uDFFF]/.test(right)) return left < right ? -1 : left > right ? 1 : 0;
+  const a = Array.from(left, char => char.codePointAt(0));
+  const b = Array.from(right, char => char.codePointAt(0));
+  for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return a.length - b.length;
+}
 // Native file extensions understood by the Reader. Converted-only formats
 // are supplied separately by the asset sidecar, not by this pool.
 const NATIVE_READER_EXTENSIONS = new Set([
@@ -86,7 +95,7 @@ function getRecordSearchFields(record) {
   let fields = recordSearchFields.get(record);
   if (fields) return fields;
   fields = {
-    file: String(record.File || "").toLowerCase(),
+    file: (String(record.File || "") + (record.Extension ? "." + String(record.Extension) : "")).toLowerCase(),
     repo: String(record.Repo || "").toLowerCase(),
     folder: (record.Folder || []).join("/").toLowerCase(),
   };
@@ -134,6 +143,12 @@ function editDistance(s1, s2, maxDist) {
 
 function isChineseToken(token) {
   return /^[\u4e00-\u9fff\u3400-\u4dbf]+$/.test(token);
+}
+
+function fuzzyDistanceBudget(token) {
+  // A two-edit radius makes every single character match every other one.
+  if (token.length <= 1) return 0;
+  return token.length <= 3 ? 1 : 2;
 }
 
 function couldBeFuzzy(token, word, maxDist) {
@@ -287,21 +302,51 @@ function decodeSearchPayload(data) {
   });
 }
 
+async function readBoundedBytes(stream, limit) {
+  const reader = stream.getReader(), chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) throw protocolError("CORPUS_TOO_LARGE", "Search corpus exceeds its size limit");
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const output = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+  return output;
+}
+
 async function fetchGzipJSON(url) {
   const response = await fetch(url);
   if (!response.ok) throw protocolError("CORPUS_FETCH_FAILED", "HTTP " + response.status);
   if (!response.body || typeof DecompressionStream === "undefined") {
     throw protocolError("GZIP_UNAVAILABLE", "Streaming gzip decompression is unavailable");
   }
-  const stream = response.body.pipeThrough(new DecompressionStream("gzip"));
-  return new Response(stream).text();
+  const declared = response.headers.get("content-length");
+  if (declared && /^\d+$/.test(declared) && Number(declared) > MAX_CORPUS_COMPRESSED_BYTES) {
+    await response.body.cancel().catch(() => {});
+    throw protocolError("CORPUS_TOO_LARGE", "Search corpus exceeds its compressed size limit");
+  }
+  const compressed = await readBoundedBytes(response.body, MAX_CORPUS_COMPRESSED_BYTES);
+  const stream = new Response(compressed).body.pipeThrough(new DecompressionStream("gzip"));
+  const expanded = await readBoundedBytes(stream, MAX_CORPUS_EXPANDED_BYTES);
+  return new TextDecoder("utf-8", {fatal:true}).decode(expanded);
 }
 
 async function corpusFingerprint(source) {
   if (typeof crypto === "undefined" || !crypto.subtle || typeof TextEncoder === "undefined") return null;
   const bytes = new TextEncoder().encode(source || "");
   const hash = await crypto.subtle.digest("SHA-256", bytes);
-  // Browser upgrades may change ICU collation; only reuse within that runtime.
+  // Keep snapshots isolated across runtime and Unicode-version changes.
   const runtime = typeof navigator !== "undefined" ? navigator.userAgent : "";
   const versionHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SEARCH_SEMANTICS_VERSION + runtime));
   const hex = buffer => Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -330,11 +375,11 @@ function stableRecordId(record, occurrence) {
 }
 
 function compareRecordName(a, b) {
-  return recordNameCollator.compare(String(records[a].File || ""), String(records[b].File || ""));
+  return compareCodepoints(String(records[a].File || "").toLowerCase(), String(records[b].File || "").toLowerCase());
 }
 
 function compareRecordSize(a, b) {
-  return (Number(records[b].Size) || 0) - (Number(records[a].Size) || 0);
+  return (Number(records[b].Size) || 0) - (Number(records[a].Size) || 0) || compareRecordName(a, b);
 }
 
 function buildNameOrders() {
@@ -368,10 +413,58 @@ function scheduleSortOrders(expectedGeneration) {
 }
 
 function replaceCorpus(nextRecords) {
-  // A failed replacement can leave partially rebuilt indexes visible. Only
-  // publish the proof flag after the entire new corpus has been installed.
-  repoWildcardProofSafe = false;
-  snapshotGeneration = null;
+  // Build all fallible metadata off to the side. A rejected corpus must never
+  // expose its records under the previous generation or damage old indexes.
+  const repoCounts = Object.create(null);
+  const extensionCounts = Object.create(null);
+  const extensionsByRepo = Object.create(null);
+  const readerByRepo = Object.create(null);
+  const idOccurrences = Object.create(null);
+  const nextRecordIds = new Array(nextRecords.length);
+  const nextRecordIndices = new Array(nextRecords.length);
+  const nextRepoRecordIndices = Object.create(null);
+  let nextRepoWildcardProofSafe = true;
+  const nextReaderRecordIndices = [];
+  const nextRepoReaderRecordIndices = Object.create(null);
+  for (let i = 0; i < nextRecords.length; i++) {
+    const record = nextRecords[i];
+    if (typeof record.Repo !== "string" || typeof record.File !== "string"
+        || !Array.isArray(record.Folder) || Array.prototype.some.call(record.Folder, part => typeof part !== "string")) {
+      nextRepoWildcardProofSafe = false;
+    }
+    const repo = record.Repo || "";
+    nextRecordIndices[i] = i;
+    if (!nextRepoRecordIndices[repo]) nextRepoRecordIndices[repo] = [];
+    nextRepoRecordIndices[repo].push(i);
+    const extension = String(record.Extension || "").toLowerCase();
+    repoCounts[repo] = (repoCounts[repo] || 0) + 1;
+    if (extension) {
+      extensionCounts[extension] = (extensionCounts[extension] || 0) + 1;
+      if (!extensionsByRepo[repo]) extensionsByRepo[repo] = Object.create(null);
+      extensionsByRepo[repo][extension] = (extensionsByRepo[repo][extension] || 0) + 1;
+    }
+    if (NATIVE_READER_EXTENSIONS.has(extension)) {
+      nextReaderRecordIndices.push(i);
+      readerByRepo[repo] = (readerByRepo[repo] || 0) + 1;
+      if (!nextRepoReaderRecordIndices[repo]) nextRepoReaderRecordIndices[repo] = [];
+      nextRepoReaderRecordIndices[repo].push(i);
+    }
+    const base = [repo, (record.Folder || []).join("/"), record.File || "", record.Extension || ""].join("\u001f");
+    const occurrence = idOccurrences[base] || 0;
+    idOccurrences[base] = occurrence + 1;
+    nextRecordIds[i] = stableRecordId(record, occurrence);
+  }
+  const nextMetadata = {
+    count: nextRecords.length,
+    repos: Object.keys(repoCounts).map((name) => ({ name, count: repoCounts[name] })).sort((a, b) => a.name.localeCompare(b.name)),
+    extensions: Object.keys(extensionCounts).sort().map((name) => ({ name, count: extensionCounts[name] })),
+    extensionsByRepo: Object.create(null),
+    reader: { available: nextReaderRecordIndices.length > 0, count: nextReaderRecordIndices.length, byRepo: readerByRepo },
+  };
+  for (const repo of Object.keys(extensionsByRepo)) {
+    nextMetadata.extensionsByRepo[repo] = Object.keys(extensionsByRepo[repo]).sort().map((name) => ({ name, count: extensionsByRepo[repo][name] }));
+  }
+  // Publication is synchronous: existing searches see either complete snapshot.
   if (sortBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(sortBuildTimer);
   if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
   fulltextBuildTimer = null;
@@ -381,56 +474,14 @@ function replaceCorpus(nextRecords) {
   searchAnchorOwners = new WeakMap();
   searchAnchorCache.clear();
   recordSearchFields = new WeakMap();
+  snapshotGeneration = null;
   records = nextRecords;
-  const repoCounts = Object.create(null);
-  const extensionCounts = Object.create(null);
-  const extensionsByRepo = Object.create(null);
-  const readerByRepo = Object.create(null);
-  const idOccurrences = Object.create(null);
-  recordIds = new Array(records.length);
-  recordIndices = new Array(records.length);
-  repoRecordIndices = Object.create(null);
-  let nextRepoWildcardProofSafe = true;
-  readerRecordIndices = [];
-  repoReaderRecordIndices = Object.create(null);
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i];
-    if (typeof record.Repo !== "string" || typeof record.File !== "string"
-        || !Array.isArray(record.Folder) || Array.prototype.some.call(record.Folder, part => typeof part !== "string")) {
-      nextRepoWildcardProofSafe = false;
-    }
-    const repo = record.Repo || "";
-    recordIndices[i] = i;
-    if (!repoRecordIndices[repo]) repoRecordIndices[repo] = [];
-    repoRecordIndices[repo].push(i);
-    const extension = String(record.Extension || "").toLowerCase();
-    repoCounts[repo] = (repoCounts[repo] || 0) + 1;
-    if (extension) {
-      extensionCounts[extension] = (extensionCounts[extension] || 0) + 1;
-      if (!extensionsByRepo[repo]) extensionsByRepo[repo] = Object.create(null);
-      extensionsByRepo[repo][extension] = (extensionsByRepo[repo][extension] || 0) + 1;
-    }
-    if (NATIVE_READER_EXTENSIONS.has(extension)) {
-      readerRecordIndices.push(i);
-      readerByRepo[repo] = (readerByRepo[repo] || 0) + 1;
-      if (!repoReaderRecordIndices[repo]) repoReaderRecordIndices[repo] = [];
-      repoReaderRecordIndices[repo].push(i);
-    }
-    const base = [repo, (record.Folder || []).join("/"), record.File || "", record.Extension || ""].join("\u001f");
-    const occurrence = idOccurrences[base] || 0;
-    idOccurrences[base] = occurrence + 1;
-    recordIds[i] = stableRecordId(record, occurrence);
-  }
-  metadata = {
-    count: records.length,
-    repos: Object.keys(repoCounts).map((name) => ({ name, count: repoCounts[name] })).sort((a, b) => a.name.localeCompare(b.name)),
-    extensions: Object.keys(extensionCounts).sort().map((name) => ({ name, count: extensionCounts[name] })),
-    extensionsByRepo: Object.create(null),
-    reader: { available: readerRecordIndices.length > 0, count: readerRecordIndices.length, byRepo: readerByRepo },
-  };
-  for (const repo of Object.keys(extensionsByRepo)) {
-    metadata.extensionsByRepo[repo] = Object.keys(extensionsByRepo[repo]).sort().map((name) => ({ name, count: extensionsByRepo[repo][name] }));
-  }
+  recordIds = nextRecordIds;
+  recordIndices = nextRecordIndices;
+  repoRecordIndices = nextRepoRecordIndices;
+  readerRecordIndices = nextReaderRecordIndices;
+  repoReaderRecordIndices = nextRepoReaderRecordIndices;
+  metadata = nextMetadata;
   wordIndex = null;
   wordIndexFilesOnly = null;
   vocabSorted = [];
@@ -478,7 +529,10 @@ function advanceFulltext(limit, deadline) {
   if (!advanceVocabulary(build.allVocab, deadline)) return;
   if (!build.filesVocab) build.filesVocab = createVocabularyBuild(build.files);
   if (!advanceVocabulary(build.filesVocab, deadline)) return;
-  // Publish only complete indexes. Foreground searches finish this same builder.
+  // Publish compact immutable postings. Typed arrays avoid retaining one boxed
+  // number per occurrence; pages and intersections only need iteration/indexing.
+  for (const token of Object.keys(build.all)) build.all[token] = Uint32Array.from(build.all[token]);
+  for (const token of Object.keys(build.files)) build.files[token] = Uint32Array.from(build.files[token]);
   wordIndex = build.all;
   wordIndexFilesOnly = build.files;
   vocabSorted = build.allVocab.output;
@@ -597,8 +651,9 @@ function matchesFolderFilters(recordFolders, folderPath, params, filters) {
   }
   if (!filters.folders) return true;
   if (params.folderMatchMode === "exact") return filters.folders.has(folderPath);
-  // An empty prefix selects only root files in the Worker, not all descendants.
-  if (!folderPath) return recordFolders.length === 0 && filters.folders.has("");
+  // The API's root prefix denotes the entire selected repository scope.
+  if (filters.folders.has("")) return true;
+  if (!folderPath) return false;
   if (filters.folders.has(folderPath)) return true;
   if (filters.folderPrefix) return folderPath.startsWith(filters.folderPrefix);
   for (let end = folderPath.lastIndexOf("/"); end > 0; end = folderPath.lastIndexOf("/", end - 1)) {
@@ -636,7 +691,7 @@ function cleanPath(path) {
 function intersectCandidateLists(candidateLists, sorted = false) {
   if (!candidateLists.length) return [];
   if (sorted) {
-    if (candidateLists.length === 1) return candidateLists[0].slice();
+    if (candidateLists.length === 1) return Array.from(candidateLists[0]);
     const lists = candidateLists.slice().sort((a, b) => a.length - b.length);
     const matched = [];
     for (const index of lists[0]) {
@@ -749,7 +804,7 @@ function pageResult(indices, params) {
   return result;
 }
 
-function searchLocal(params) {
+function searchLocal(params, preparedExact = null) {
   const query = String(params.q || "").trim();
   const searchFolders = params.searchFolders !== false;
   const cacheParams = Object.assign({}, params);
@@ -776,8 +831,8 @@ function searchLocal(params) {
     // Whitespace separates independent literal terms, matching the HF API.
     // A term may still be a wildcard pattern; every term must match.
     const terms = query.split(/\s+/).filter(Boolean);
-    matched = exactSearchScope(params.repos).slice();
-    for (const term of terms) {
+    matched = preparedExact === null ? exactSearchScope(params.repos).slice() : preparedExact;
+    for (const term of preparedExact === null ? terms : []) {
       const wildcard = term.includes("*") || term.includes("?");
       const lower = term.toLowerCase();
       if (wildcard && term.replace(/\*/g, "") === "") continue;
@@ -807,15 +862,29 @@ function searchLocal(params) {
     const activeVocab = searchFolders ? vocabSorted : vocabSortedFilesOnly;
     const tokenCandidates = [];
     let sortedCandidates = true;
-    for (const token of tokenize(query)) {
+    const scope = exactSearchScope(params.repos);
+    const tokens = tokenize(query);
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const seen = new Set();
+    for (const index of scope) {
+      const fields = getRecordSearchFields(records[index]);
+      if (terms.every(term => fields.file.includes(term) || fields.repo.includes(term)
+          || (searchFolders && fields.folder.includes(term)))) seen.add(index);
+    }
+    for (const token of tokens) {
       let candidates = activeIndex[token] || [];
-      if (!candidates.length) {
+      // A missing vocabulary token with literal hits already has a complete
+      // authoritative answer; do not expand every two-edit near match.
+      if (!candidates.length && !(terms.length === 1 && seen.size)) {
         sortedCandidates = false;
         const fuzzy = [];
-        for (const entry of activeVocab) {
+        const maxDist = fuzzyDistanceBudget(token);
+        for (const entry of maxDist ? activeVocab : []) {
           const vocab = entry[0];
-          if (couldBeFuzzy(token, vocab, 2) && editDistance(token, vocab, 2) <= 2) fuzzy.push.apply(fuzzy, activeIndex[vocab] || []);
-          if (fuzzy.length >= 200) break;
+          if (couldBeFuzzy(token, vocab, maxDist) && editDistance(token, vocab, maxDist) <= maxDist) {
+            // A posting can exceed the engine's maximum argument count.
+            for (const index of activeIndex[vocab] || []) fuzzy.push(index);
+          }
         }
         candidates = Array.from(new Set(fuzzy));
       }
@@ -826,6 +895,8 @@ function searchLocal(params) {
       tokenCandidates.push(candidates);
     }
     matched = intersectCandidateLists(tokenCandidates, sortedCandidates);
+    for (const index of matched) seen.add(index);
+    matched = Array.from(seen).sort((a, b) => a - b);
   }
   const filtered = applyFilters(matched, params);
   if (params.sort === "name" || params.sort === "size") {
@@ -867,6 +938,40 @@ function searchLocal(params) {
   searchOrderCache.set(cacheKey, ordered);
   while (searchOrderCache.size > SEARCH_ORDER_CACHE_MAX) searchOrderCache.delete(searchOrderCache.keys().next().value);
   return pageResult(ordered, params);
+}
+
+async function prepareLongWildcard(params, job) {
+  const query = String(params.q || "").trim();
+  // Ordinary searches keep their fast synchronous path. Expensive wildcard
+  // scans yield between bounded batches so cancellation and metadata work.
+  // Keep short glob scans on the existing fast path, including repository
+  // proofs and dense-order reuse; only long patterns require cooperative work.
+  if (query.length < 32 || !/[*?]/.test(query)
+      || query.split(/\s+/).every(term => /^\*+$/.test(term))) return null;
+  const cacheParams = Object.assign({}, params);
+  delete cacheParams.page; delete cacheParams.pageSize; delete cacheParams.anchorId;
+  if (searchOrderCache.has(JSON.stringify(cacheParams))) return null;
+  const terms = query.split(/\s+/).filter(Boolean).map(term => ({
+    lower: term.toLowerCase(),
+    matcher: /[*?]/.test(term) ? compileWildcardMatcher(term) : null,
+  }));
+  const scope = exactSearchScope(params.repos);
+  const matched = [];
+  for (let start = 0; start < scope.length; start += FULLTEXT_BATCH_RECORDS) {
+    if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+    if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+    const end = Math.min(scope.length, start + FULLTEXT_BATCH_RECORDS);
+    for (let offset = start; offset < end; offset++) {
+      const index = scope[offset], fields = getRecordSearchFields(records[index]);
+      if (terms.every(({lower, matcher}) => matcher
+        ? matcher.test(fields.file) || matcher.test(fields.repo) || (params.searchFolders !== false && matcher.test(fields.folder))
+        : fields.file.includes(lower) || fields.repo.includes(lower) || (params.searchFolders !== false && fields.folder.includes(lower)))) matched.push(index);
+    }
+    if (end < scope.length) await yieldSearchIndex();
+  }
+  if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+  if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+  return matched;
 }
 
 function randomRecord(params) {
@@ -968,10 +1073,13 @@ async function dispatch(type, payload, job) {
   if (!records.length) throw protocolError("CORPUS_NOT_READY", "Search corpus is not ready");
   if (type === "metadata") return Object.assign({ generation }, metadata);
   if (type === "local-search") {
+    if (Array.from(String(payload.q || "")).length > 256)
+      throw protocolError("QUERY_TOO_LONG", "Search query exceeds 256 characters");
     await prepareSearchIndex(payload || {}, job);
+    const prepared = await prepareLongWildcard(payload || {}, job);
     if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
     if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
-    return searchLocal(payload || {});
+    return searchLocal(payload || {}, prepared);
   }
   if (type === "random-record") return randomRecord(payload || {});
   if (type === "folder-contents") return folderContents(payload || {});

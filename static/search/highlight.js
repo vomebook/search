@@ -15,7 +15,8 @@
   /** @param {string} query @returns {RegExp | null} */
   function searchHighlightRegex(query) {
     if (highlightRegexCache.has(query)) return /** @type {RegExp | null} */ (highlightRegexCache.get(query));
-    const terms = [...new Set(query.split(/\s+/).filter((t) => t.length > 0))]
+    // Highlight mandatory literal pieces, never a potentially expensive glob.
+    const terms = [...new Set(query.split(/[\s*?]+/).filter((t) => t.length > 0))]
       .sort((a, b) => b.length - a.length)
       .map((tok) => tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
     const regex = terms.length ? new RegExp(terms.join("|"), "gi") : null;

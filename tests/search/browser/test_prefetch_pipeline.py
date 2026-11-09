@@ -58,6 +58,36 @@ class PrefetchPipelineTests(unittest.TestCase):
         self.page.evaluate('STATE.page=3;consumeCachedAppendPage()')
         self.assertEqual(self.page.evaluate('STATE.results.slice(200).map(r=>r.ID)'), [str(i) for i in range(200,300)])
 
+    def test_cancelled_prefetch_does_not_cancel_joined_foreground(self):
+        result = self.page.evaluate('''async () => {
+          const original=window.fetch, bg=new AbortController(), fg=new AbortController();
+          let finish, calls=0, aborted=false;
+          window.fetch=(url,options)=>{
+            if (String(url) !== '/api/search/shared-test') return original(url,options);
+            calls++; options.signal.addEventListener('abort',()=>aborted=true);
+            return new Promise(resolve=>{finish=()=>resolve(new Response(JSON.stringify({page:2,page_size:1,total:2,results:[{File:'ok'}]})))});
+          };
+          try {
+            const body={page:2,page_size:1}, first=fetchSearchPage('shared-test','/api/search/shared-test',body,bg.signal,5000).catch(e=>e.name);
+            const second=fetchSearchPage('shared-test','/api/search/shared-test',body,fg.signal,5000);
+            bg.abort(); finish();
+            const result={first:await first, second:(await second).results[0].File, calls, aborted};
+            calls=0; aborted=false;
+            const noSignal=fetchSearchPage('no-signal','/api/search/shared-test',body,undefined,5000);
+            const controller=new AbortController();
+            const optional=fetchSearchPage('no-signal','/api/search/shared-test',body,controller.signal,5000).catch(e=>e.name);
+            controller.abort(); finish();
+            result.noSignal=[(await noSignal).results[0].File,await optional,calls,aborted];
+            calls=0; aborted=false;
+            const last=new AbortController();
+            const abandoned=fetchSearchPage('last-owner','/api/search/shared-test',body,last.signal,5000).catch(e=>e.name);
+            last.abort(); result.last=[await abandoned,calls,aborted];
+            return result;
+          } finally { window.fetch=original; }
+        }''')
+        self.assertEqual(result, {'first':'AbortError', 'second':'ok', 'calls':1, 'aborted':False,
+                                  'noSignal':['ok','AbortError',1,False], 'last':['AbortError',1,True]})
+
     def test_query_change_discards_all_late_lookahead_pages(self):
         self.start_pipeline()
         self.page.evaluate("STATE.query='paging-new';window.pagingTotal=1;doSearch()")

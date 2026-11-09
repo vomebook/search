@@ -340,6 +340,34 @@ test("demanded indexing yields to metadata and cancellation without discarding p
   assert.strictEqual((await worker.request("local-search", {q:"alpha"})).total, 1200);
 });
 
+test("long wildcard search yields to metadata and cancellation", async () => {
+  const {worker, tasks, tick} = scheduledWorker({navigator:{deviceMemory:2}});
+  await worker.request("replace-corpus", {data:compact(Array.from({length:1200},()=>records[0]))});
+  while (tasks.size) tick();
+  const pending = worker.listeners.message({data:{protocol:1,type:"local-search",id:"wildcard",payload:{q:"a?*".repeat(20),exact:true}}});
+  await Promise.resolve(); await Promise.resolve();
+  assert.strictEqual((await worker.request("metadata")).count, 1200);
+  await worker.request("cancel-search", {requestId:"wildcard"}, {id:"cancel-wildcard"});
+  while (tasks.size) { tick(); await Promise.resolve(); }
+  await pending;
+  assert.strictEqual(worker.messages.find(message=>message.id==="wildcard").error.code,"SEARCH_CANCELLED");
+});
+
+test("yielded multi-term wildcards preserve ordinary matching and order", async () => {
+  const input = [{...records[0],File:"alpha " + "a".repeat(40)}, {...records[1],File:"beta"}];
+  const {worker} = await loaded(input);
+  const q = "alpha " + "a?*".repeat(11);
+  const expected = vm.runInContext(`searchLocal({q:${JSON.stringify(q)},exact:true,pageSize:5}).ids`, worker.context);
+  vm.runInContext('searchOrderCache.clear()', worker.context);
+  assert.deepStrictEqual((await worker.request('local-search', {q,exact:true,pageSize:5})).ids, Array.from(expected));
+});
+
+test("query limit counts Unicode code points", async () => {
+  const {worker} = await loaded();
+  assert.strictEqual((await worker.send("local-search", {q:"😀".repeat(257),exact:true})).error.code, "QUERY_TOO_LONG");
+  assert.strictEqual((await worker.send("local-search", {q:"😀".repeat(256),exact:true})).ok, true);
+});
+
 test("corpus replacement invalidates a yielded foreground query", async () => {
   const {worker, tasks, tick} = scheduledWorker({navigator:{deviceMemory:2}});
   await worker.request("replace-corpus", {data:compact(Array.from({length:700},()=>records[0]))});
@@ -418,7 +446,11 @@ test("shared token parts preserve complete postings and vocabulary ties with bou
   assert.strictEqual(vm.runInContext("fulltextBuild.folderTokens.size <= 64 && fulltextBuild.folderUnits <= 65536", worker.context), true);
   assert.strictEqual(vm.runInContext('fulltextBuild.folderTokens.has("z".repeat(70000))', worker.context), false);
   vm.runInContext("buildFulltext()", worker.context);
-  const actual = JSON.parse(vm.runInContext("JSON.stringify({all: wordIndex, files: wordIndexFilesOnly})", worker.context));
+  const actual = JSON.parse(vm.runInContext(`JSON.stringify({
+    all: Object.fromEntries(Object.entries(wordIndex).map(([key, value]) => [key, Array.from(value)])),
+    files: Object.fromEntries(Object.entries(wordIndexFilesOnly).map(([key, value]) => [key, Array.from(value)]))
+  })`, worker.context));
+  assert.strictEqual(vm.runInContext('Object.values(wordIndex).every(value => value instanceof Uint32Array)', worker.context), true);
   for (const name of ["all", "files"]) {
     assert.deepStrictEqual(Object.entries(actual[name]), Object.entries(expected[name]));
     const vocab = Object.keys(expected[name]).map(token => [token, expected[name][token].length]).sort((a, b) => b[1] - a[1]);
@@ -554,7 +586,7 @@ test("snapshot identity survives Worker restarts but changes with content and se
   assert.deepStrictEqual(old.ids, current.ids);
   await second.worker.request('replace-corpus', {data: compact(records)});
   assert.strictEqual(old.snapshot_generation, (await second.worker.request('local-search', {})).snapshot_generation);
-  const changed = makeWorker(source.replace('worker-search-v3', 'worker-search-v4'));
+  const changed = makeWorker(source.replace('worker-search-v5', 'worker-search-v6'));
   await changed.request('replace-corpus', {data: compact(records)});
   assert.notStrictEqual(old.snapshot_generation, (await changed.request('local-search', {})).snapshot_generation);
   const resized = records.map(record => Object.assign({}, record, {Size: 1}));
@@ -635,6 +667,54 @@ test("page records are capped while total remains exact", async () => {
   assert.strictEqual(result.total, records.length);
   assert.strictEqual(result.records.length, records.length);
 });
+test("complete filenames and extension-boundary wildcards match in either mode", async () => {
+  const input = [{...records[0], File:"目录", Extension:"txt"}, {...records[1], File:"alpha", Extension:"pdf"}];
+  for (const exact of [true, false]) for (const [q, expected] of [["目录.txt", "目录"], ["*.pdf", "alpha"], ["alpha*pdf", "alpha"]]) {
+    assert.deepStrictEqual(await namesWithCorpus(input, {q, exact}), [expected]);
+  }
+});
+test("fuzzy candidates retain selected repository and other terms after 200 matches", async () => {
+  const input = Array.from({length:220}, (_, i) => ({...records[0], Repo:"Repo/A", File:"alp " + i}));
+  input.push({...records[0], Repo:"Repo/B", File:"alpha omega"});
+  for (const q of ["alpa", "alpa omega"]) {
+    assert.deepStrictEqual(await namesWithCorpus(input, {q, repos:["Repo/B"]}), ["alpha omega"]);
+  }
+});
+test("non-exact results include literal filename and repository hits", async () => {
+  const input = [{...records[0], Repo:"Repo/A", File:"Marxist"}];
+  assert.deepStrictEqual(await namesWithCorpus(input, {q:"marx"}), ["Marxist"]);
+  assert.deepStrictEqual(await namesWithCorpus(input, {q:"repo", searchFolders:false}), ["Marxist"]);
+});
+
+test("corpus stream rejects oversized compressed and expanded bodies", async () => {
+  const stream = bytes => new ReadableStream({start(controller) { controller.enqueue(bytes); controller.close(); }});
+  const tiny = makeWorker(source.replace('32 * 1024 * 1024', '64').replace('256 * 1024 * 1024', '128'), {
+    ReadableStream, Response, TextDecoder, DecompressionStream,
+  });
+  tiny.context.fetch = async () => new Response(stream(new Uint8Array(65)));
+  await assert.rejects(tiny.context.fetchGzipJSON('/corpus'), {code:'CORPUS_TOO_LARGE'});
+  const zlib = require('node:zlib');
+  const bomb = zlib.gzipSync(Buffer.from('x'.repeat(129)));
+  assert(bomb.length < 64);
+  tiny.context.fetch = async () => new Response(stream(bomb));
+  await assert.rejects(tiny.context.fetchGzipJSON('/corpus'), {code:'CORPUS_TOO_LARGE'});
+  const valid = zlib.gzipSync(Buffer.from('{"v":2}'));
+  tiny.context.fetch = async () => new Response(stream(valid));
+  assert.strictEqual(await tiny.context.fetchGzipJSON('/corpus'), '{"v":2}');
+});
+
+test("large fuzzy posting does not exceed the engine argument limit", async () => {
+  const {worker} = await loaded([{...records[0], File:'alpha'}]);
+  vm.runInContext(`records = Array.from({length: 200000}, () => records[0]);
+    recordIds = Array.from({length: records.length}, (_,i) => String(i));
+    recordIndices = Array.from({length: records.length}, (_,i) => i);
+    wordIndex = {alpha: recordIndices}; vocabSorted = [['alpha', recordIndices.length]];
+    wordIndexFilesOnly = wordIndex; vocabSortedFilesOnly = vocabSorted;`, worker.context);
+  const result = await worker.request('local-search', {q:'alphx', pageSize:1});
+  assert.strictEqual(result.total, 200000);
+  assert.strictEqual(result.records.length, 1);
+});
+
 test("normal multi-token search intersects candidates", async () => {
   assert.deepStrictEqual(await names({ q: "alpha beta", exact: false }), ["beta alpha"]);
 });
@@ -651,11 +731,22 @@ test("explicit sorts preserve collation and ties without computing relevance tok
   const {worker} = await loaded(input);
   vm.runInContext('tokenize = () => {throw new Error("unneeded scoring tokens");};', worker.context);
   for (const sort of ["name", "size"]) {
-    const compare = sort === "name" ? (a, b) => a.File.localeCompare(b.File, "zh") : (a, b) => b.Size - a.Size;
+    const byName = (a, b) => a.File.toLowerCase() < b.File.toLowerCase() ? -1 : a.File.toLowerCase() > b.File.toLowerCase() ? 1 : 0;
+    const compare = sort === "name" ? byName : (a, b) => b.Size - a.Size || byName(a, b);
     const result = await worker.request("local-search", {q: "book", exact: true, sort});
     assert.deepStrictEqual(result.records, input.slice().sort(compare));
     assert.strictEqual(result.total, input.length);
   }
+});
+test("short fuzzy terms use a length-sensitive edit budget", async () => {
+  const input = ['猫', '狗', 'ab', 'ac', 'cd', 'abx', 'apple', 'ample'].map(File => ({
+    ...records[0], Repo:'Repo/Animals', File, Folder:[],
+  }));
+  assert.deepStrictEqual(await namesWithCorpus(input, {q:'灬', exact:false}), []);
+  assert.deepStrictEqual(await namesWithCorpus(input, {q:'囧', exact:false}), []);
+  assert.deepStrictEqual(await namesWithCorpus(input, {q:'ad', exact:false}), ['ab','ac','cd']);
+  assert.deepStrictEqual(await namesWithCorpus(input, {q:'aplpe', exact:false}), ['apple','ample']);
+  assert.strictEqual((await search({q:'手',exact:false})).total, 2);
 });
 test("normal search is case-insensitive and retains fuzzy behavior", async () => {
   assert.deepStrictEqual(await names({ q: "ALPHA", exact: false }), ["alpha guide", "beta alpha", "gamma"]);
@@ -721,7 +812,7 @@ test("root folder selection includes direct files alongside child directories", 
       }], count: 2, hasDirectFiles: true, hasChildren: true, showSelfToggle: true,
     }], count: 3, isRoot: true, hasDirectFiles: true, hasChildren: true, showSelfToggle: false,
   });
-  assert.deepStrictEqual(await namesWithCorpus(rootRecords, { folders: [""], folderMatchMode: "prefix" }), ["root-file"]);
+  assert.deepStrictEqual(await namesWithCorpus(rootRecords, { folders: [""], folderMatchMode: "prefix" }), ["root-file", "nested-file", "deep-file"]);
   assert.deepStrictEqual(await namesWithCorpus(rootRecords, { folders: ["child"], folderMatchMode: "prefix" }), ["nested-file", "deep-file"]);
   const mixed = await harness.worker.request("local-search", {
     folderMatchMode: "mixed", folderSelfs: [""], folderSubtrees: ["child"], page: 1, pageSize: 10,
@@ -749,7 +840,7 @@ test("repository extension and size filters compose", async () => {
 test("prefix exact root and mixed folder filters retain semantics", async () => {
   assert.deepStrictEqual(await names({ q: "", folders: ["docs"], folderMatchMode: "prefix" }), ["alpha guide", "beta alpha", "delta", "same"]);
   assert.deepStrictEqual(await names({ q: "", folders: ["docs"], folderMatchMode: "exact" }), ["delta"]);
-  assert.deepStrictEqual(await names({ q: "", folders: [""], folderMatchMode: "prefix" }), ["手机资料", "手。机"]);
+  assert.deepStrictEqual(await names({ q: "", folders: [""], folderMatchMode: "prefix" }), records.map(record => record.File));
   assert.deepStrictEqual(await names({ q: "", folderMatchMode: "mixed", folderSelfs: ["archive"], folderSubtrees: ["docs"] }), ["alpha guide", "beta alpha", "beta notes", "delta", "same"]);
 });
 test("mixed direct-only search skips ancestor construction but retains component boundaries", async () => {
@@ -775,9 +866,9 @@ test("mixed direct-only search skips ancestor construction but retains component
   assert.strictEqual(filtered, false);
 });
 test("name size and relevance sorting retain stable order", async () => {
-  const expectedName = records.slice().sort((a, b) => a.File.localeCompare(b.File, "zh")).map((r) => r.File);
+  const expectedName = records.slice().sort((a, b) => a.File.toLowerCase() < b.File.toLowerCase() ? -1 : a.File.toLowerCase() > b.File.toLowerCase() ? 1 : 0).map((r) => r.File);
   assert.deepStrictEqual(await names({ q: "", sort: "name" }), expectedName);
-  assert.deepStrictEqual(await names({ q: "", sort: "size" }), ["beta alpha", "delta", "gamma", "alpha guide", "same", "same", "beta notes", "手机资料", "手。机"]);
+  assert.deepStrictEqual(await names({ q: "", sort: "size" }), ["beta alpha", "delta", "gamma", "alpha guide", "same", "same", "beta notes", "手。机", "手机资料"]);
   assert.deepStrictEqual(await names({ q: "alpha" }), ["alpha guide", "beta alpha", "gamma"]);
 });
 test("paging reports exact totals and boundaries", async () => {
@@ -792,7 +883,7 @@ test("empty global and single-repository searches bypass record filtering", asyn
   assert.deepStrictEqual((await worker.request("local-search", { q: "", page: 2, pageSize: 2 })).records, records.slice(2, 4));
   assert.deepStrictEqual((await worker.request("local-search", { q: "", repos: ["Repo/B"] })).records.map((record) => record.File), ["beta notes", "gamma"]);
   const expectedRepoName = records.filter((record) => record.Repo === "Repo/C")
-    .sort((a, b) => a.File.localeCompare(b.File, "zh")).map((record) => record.File);
+    .sort((a, b) => a.File.toLowerCase() < b.File.toLowerCase() ? -1 : a.File.toLowerCase() > b.File.toLowerCase() ? 1 : 0).map((record) => record.File);
   assert.deepStrictEqual((await worker.request("local-search", { q: "", repos: ["Repo/C"], sort: "name" })).records.map((record) => record.File), expectedRepoName);
   assert.deepStrictEqual((await worker.request("local-search", { q: "", repos: ["Repo/A"], sort: "size" })).records.map((record) => record.File), ["beta alpha", "alpha guide"]);
 });
@@ -833,7 +924,7 @@ test("filtered empty relevance skips scoring while preserving pages and anchors"
   assert.deepStrictEqual(second.records.map(record => record.File), ["手机资料", "delta"]);
   assert.strictEqual(second.anchor_index, 3);
   const sorted = await worker.request("local-search", {...params, sort:"size", pageSize:10});
-  assert.deepStrictEqual(sorted.records.map(record => record.File), ["delta", "gamma", "alpha guide", "same", "same", "手机资料", "手。机"]);
+  assert.deepStrictEqual(sorted.records.map(record => record.File), ["delta", "gamma", "alpha guide", "same", "same", "手。机", "手机资料"]);
   const controls = await worker.request("local-search", {q:"", folderMatchMode:"mixed", folderSelfs:[""], folderSubtrees:["docs"], pageSize:20});
   assert.deepStrictEqual(controls.records.map(record => record.File), ["alpha guide", "beta alpha", "手机资料", "delta", "手。机", "same"]);
   await worker.request("replace-corpus", {data:compact(records.slice().reverse())});
@@ -854,7 +945,7 @@ test("wildcard-only queries preserve stable zero-score order without field reads
   assert.deepStrictEqual(next.records.map(record => record.File),["手机资料","delta"]);
   assert.strictEqual(next.anchor_index,3);
   const sorted = await worker.request("local-search",{...params,sort:"size",pageSize:10});
-  assert.deepStrictEqual(sorted.records.map(record => record.File),["delta","gamma","alpha guide","same","same","手机资料","手。机"]);
+  assert.deepStrictEqual(sorted.records.map(record => record.File),["delta","gamma","alpha guide","same","same","手。机","手机资料"]);
   await worker.request("replace-corpus",{data:compact(records.slice().reverse())});
   const replaced = await worker.request("local-search",params);
   assert.deepStrictEqual(replaced.records.map(record => record.File),["same","same"]);
@@ -887,7 +978,7 @@ test("mixed wildcard repo proof skips only demonstrably matching string corpora"
   ];
   await worker.request("replace-corpus",{data:compact(fallback)});
   vm.runInContext('globalThis.scans = 0; getRecordSearchFields = record => {scans++; return originalFields(record);};',worker.context);
-  assert.deepStrictEqual((await worker.request("local-search",{q:"?*?",exact:true})).records.map(record=>record.File),["abc",""]);
+  assert.deepStrictEqual((await worker.request("local-search",{q:"?*?",exact:true})).records.map(record=>record.File),["abc","z","",""]);
   assert.strictEqual(vm.runInContext('scans',worker.context),fallback.length);
   assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
   vm.runInContext('getRecordSearchFields = originalFields;',worker.context);
@@ -902,7 +993,7 @@ test("mixed wildcard repo proof skips only demonstrably matching string corpora"
   assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),false);
   vm.runInContext('globalThis.scans = 0; getRecordSearchFields = record => {scans++; return originalFields(record);};',worker.context);
   const malformedResult = await worker.request("local-search",{q:"?*?",exact:true,pageSize:10});
-  assert.strictEqual(malformedResult.total,3);
+  assert.strictEqual(malformedResult.total,5);
   assert.ok(vm.runInContext('scans > 0',worker.context));
   vm.runInContext('getRecordSearchFields = originalFields;',worker.context);
   // Preserve field coercion for unusual filenames and folder components too;
@@ -928,13 +1019,22 @@ test("mixed wildcard repo proof skips only demonstrably matching string corpora"
 });
 test("a failed corpus replacement never publishes a partial repo proof", async () => {
   const {worker} = await loaded([{...records[0], Repo:"AA"}]);
+  const before = await worker.request('local-search', {q:'alpha', exact:true});
+  const folderBefore = await worker.request('folder-tree', {repo:'AA'});
   assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
   const invalid = {v:2, rp:["BB", "CC"], fd:[[], [{toString:null, valueOf:null}]], rc:[
     [0,"first","txt",0,1,0], [1,"second","txt",1,1,0],
   ]};
   const response = await worker.send("replace-corpus", {data:invalid});
   assert.strictEqual(response.ok,false);
-  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),false);
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
+  const after = await worker.request('local-search', {q:'alpha', exact:true});
+  assert.deepStrictEqual(after, before);
+  const browse = await worker.request('local-search', {});
+  assert.strictEqual(browse.total, 1);
+  assert.strictEqual(browse.records[0].Repo, 'AA');
+  assert.strictEqual((await worker.request('metadata')).generation, before.generation);
+  assert.deepStrictEqual(await worker.request('folder-tree', {repo:'AA'}), folderBefore);
   await worker.request("replace-corpus",{data:compact([{...records[0], Repo:"DD"}])});
   assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
 });
@@ -1028,10 +1128,10 @@ test("searched name order reuse preserves malformed and failed replacement fallb
     [0,"a","txt",0,1,0],[0,"b","txt",1,1,0],
   ]};
   assert.strictEqual((await worker.send("replace-corpus",{data:invalid})).ok,false);
-  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),false);
-  const failed = await worker.send("local-search",params);
-  assert.strictEqual(failed.ok,false);
-  assert.strictEqual(failed.error.code,"WORKER_ERROR");
+  assert.strictEqual(vm.runInContext('repoWildcardProofSafe',worker.context),true);
+  const preserved = await worker.request("local-search",params);
+  assert.deepStrictEqual(preserved.ids,before.ids);
+  assert.strictEqual(preserved.snapshot_generation,before.snapshot_generation);
   await worker.request("replace-corpus",{data:compact(input)});
   assert.strictEqual(vm.runInContext('nameOrderReady',worker.context),false);
   const restored = await worker.request("local-search",params);

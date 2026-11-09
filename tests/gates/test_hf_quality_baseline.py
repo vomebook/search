@@ -175,7 +175,7 @@ class AdditionalSuitesCiTests(unittest.TestCase):
                          'tests.search.browser.test_prefetch_pipeline',
                          'tests.search.browser.test_search_positions',
                          'tests.search.backend.test_wildcard_index_oracle',
-                         'result.testsRun != 59', 'READER_STORE_TEST_BROWSER=firefox', 'result.testsRun != 12'):
+                         'result.testsRun != 61', 'READER_STORE_TEST_BROWSER=firefox', 'result.testsRun != 12'):
             self.assertIn(required, additional)
         self.assertEqual(additional.count('result.skipped'), 2)
         self.assertEqual(additional.count('sys.exit(1)'), 2)
