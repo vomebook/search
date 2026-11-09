@@ -51,6 +51,35 @@ test('encoding detection handles BOMs, valid UTF-8, UTF-16 heuristics and legacy
     assert.equal(detect(Uint8Array.of(0xff),'Русский'),'windows-1251');
     assert.equal(detect(Uint8Array.of(0xc4,0xe3,0xba,0xc3),'中文'),'gb18030');
     assert.equal(detect(Uint8Array.of(0xa4,0xa4,0xa4,0xe5),'中文'),'big5');
+    // Compare the original two-filter heuristic on random bytes, BOMs and
+    // threshold edges. Only the zero scan is replaced; decoder scoring stays.
+    const oldHeuristic=bytes=>{
+      if(bytes[0]===0xef&&bytes[1]===0xbb&&bytes[2]===0xbf)return 'utf-8';
+      if(bytes[0]===0xff&&bytes[1]===0xfe)return 'utf-16le';
+      if(bytes[0]===0xfe&&bytes[1]===0xff)return 'utf-16be';
+      const even=bytes.filter((value,index)=>!value&&index%2===0).length;
+      const odd=bytes.filter((value,index)=>!value&&index%2===1).length;
+      return odd>bytes.length/8&&odd>even*4?'utf-16le':even>bytes.length/8&&even>odd*4?'utf-16be':null;
+    };
+    let seed=0x7621ac39;
+    const random=n=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed%n;};
+    for(let trial=0;trial<500;trial++) {
+      const bytes=new Uint8Array(random(300));
+      for(let i=0;i<bytes.length;i++)bytes[i]=random(5)?random(255)+1:0;
+      const expected=oldHeuristic(bytes);
+      if(expected)assert.equal(detect(bytes,'中文'),expected,`zero heuristic case ${trial}`);
+    }
+    const savedFilter=Uint8Array.prototype.filter;
+    try {
+      Uint8Array.prototype.filter=function(){throw new Error('unexpected copied byte array');};
+      assert.equal(detect(new TextEncoder().encode('中文 plain text')),'utf-8');
+    } finally {Uint8Array.prototype.filter=savedFilter;}
+    for(const size of [0,1,7,8,9,63,64,65,65536,65540]) {
+      const sample=new Uint8Array(size).fill(65);
+      for(let i=1;i<size;i+=2)sample[i]=0;
+      const expected=oldHeuristic(sample);
+      if(expected)assert.equal(detect(sample),expected,`UTF-16 threshold ${size}`);
+    }
   } finally {f.restore();}
 });
 
@@ -142,6 +171,14 @@ test('resource cleanup cancels an outstanding stream and always releases ownersh
     assert.equal(typeof f.context.cleanup,'function');f.context.cleanup();await pending;
     assert.equal(cancelled,1);assert.deepEqual(f.events.filter(event=>event==='track'||event==='untrack'),['track','untrack']);
   } finally {f.restore();}
+  // If stream cancellation itself rejects, cleanup still consumes the error.
+  const rejected=fixture(), cancelFailure=new Error('cancel failed');
+  try {
+    const stream=new ReadableStream({cancel(){return Promise.reject(cancelFailure);}});
+    const pending=rejected.context.renderPlainText(new Response(stream));
+    rejected.context.cleanup();await pending;
+    assert.deepEqual(rejected.events.filter(event=>event==='track'||event==='untrack'),['track','untrack']);
+  } finally {rejected.restore();}
 });
 
 test('large samples select the decoder before EOF and retain all streamed text',async()=>{
