@@ -6,11 +6,11 @@ import { gzipSync } from 'node:zlib';
 import { createPdfBookSearch } from '../../../static/reader/search/reader-pdf-book-search.mjs';
 import { validateBookText, searchBookText } from '../../../static/reader/search/reader-book-text.js';
 import { validPdfBookUrl, searchPath } from '../../../static/reader/search/reader-pdf-book-url.mjs';
+import { readPdfSearchBytes, readPdfSearchText } from '../../../static/reader/search/reader-pdf-search-stream.mjs';
 
 const source=fs.readFileSync(new URL('../../../static/reader/search/workers/reader-pdf-book-search-worker.mjs',import.meta.url),'utf8');
-const start=source.indexOf('async function readBounded('), end=source.indexOf('\nasync function loadBook()',start);
-const read=vm.runInNewContext('const limit=1024; const aborted=()=>new DOMException("cancelled","AbortError");'+
-  source.slice(start,end)+';readBounded',{TextDecoder,Uint8Array,DOMException});
+const read=(body,signal,expected,text)=>text
+  ? readPdfSearchText(body,signal,1024) : readPdfSearchBytes(body,signal,expected,1024);
 const stream=chunks=>new ReadableStream({start(controller){for(const chunk of chunks)controller.enqueue(chunk);controller.close();}});
 const signal=new AbortController().signal;
 const text='手机 😀 كتاب';
@@ -60,7 +60,7 @@ const configuration={url,bytes:packed.length,sha256:Buffer.from(await webcrypto.
 const scope={self:{location:{href:'https://voiceofml-search.hf.space/static/worker.mjs',origin:'https://voiceofml-search.hf.space'},
   VoiceOfMLReaderSecurity:{LIMITS:{chapterTotalBytes:1024*1024}},postMessage:data=>posted.push(data)},
   URL,DOMException,AbortController,TextDecoder,Uint8Array,ReadableStream,DecompressionStream,
-  crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validateBookText,searchBookText,validPdfBookUrl,searchPath};
+  crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validateBookText,searchBookText,validPdfBookUrl,searchPath,readPdfSearchBytes,readPdfSearchText};
 const context=vm.createContext(scope);
 vm.runInContext(source.replace(/^import .*;\n/gm,''),context);
 // Exercise the Worker's actual network/size policy in its existing test scope.
