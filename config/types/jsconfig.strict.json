@@ -21,6 +21,7 @@
     "../../static/reader/search/reader-pdf-search-stream.mjs",
     "../../static/reader/search/reader-pdf-partition-shape.mjs",
     "../../static/reader/search/reader-pdf-partition-config.mjs",
+    "../../static/reader/search/reader-pdf-partition-policy.mjs",
     "../../static/reader/search/reader-chapter-search-core.mjs",
     "../../static/reader/search/reader-chapter-search-proxy-url.mjs",
     "../../static/reader/search/reader-chapter-search-index.mjs",

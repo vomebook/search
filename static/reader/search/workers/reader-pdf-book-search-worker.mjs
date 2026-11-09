@@ -2,17 +2,13 @@ import "../../core/reader-security.js";
 import { searchBookText, validateBookText } from "../reader-book-text.js";
 import { validPdfBookUrl } from "../reader-pdf-book-url.mjs";
 import { validatePdfPartitionConfiguration } from "../reader-pdf-partition-config.mjs";
+import { canPrefetchPdfPartition, canRetainPdfPartition } from "../reader-pdf-partition-policy.mjs";
 import { readPdfSearchBytes, readPdfSearchText } from "../reader-pdf-search-stream.mjs";
 import { validatePdfSearchPartition } from "../reader-pdf-partition-shape.mjs";
 
 const aborted = () => new DOMException("Search cancelled", "AbortError");
 const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
-// Hold at most one small compressed future partition. Decompression and
-// verification happen only when that partition reaches the head of the scan.
-const PARTITION_LOOKAHEAD_MAX_BYTES = 1024 * 1024;
-// Keep at most one small, already validated partition search index per query.
-const PARTITION_PAGE_CACHE_BYTES = 1024 * 1024;
 let configuration, book, pendingBook, controller, active = 0, session;
 const partitionRequests = new Set();
 const idlePartitionWaiters = new Set();
@@ -24,11 +20,6 @@ function abortPartitionRequests() {
 function waitForPartitionRequests() {
   if (!partitionRequests.size) return Promise.resolve();
   return new Promise(resolve => idlePartitionWaiters.add(resolve));
-}
-
-function canPrefetchPartition(connection, bytes) {
-  return !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType) &&
-    Number.isSafeInteger(bytes) && bytes > 0 && bytes <= PARTITION_LOOKAHEAD_MAX_BYTES;
 }
 
 async function loadBook() {
@@ -125,16 +116,8 @@ async function searchPartitions(query, current, progress) {
   let total = 0, complete = false, retained = null;
   const remember = (number, part, local) => {
     retained = null;
-    let bytes = 0;
-    // Validate allocation cost before walking the complete text. JSON escaping
-    // can expand it, so count the actual UTF-8 representation as well.
-    for (const page of part.pages) {
-      bytes += page.text.length * 2;
-      if (bytes > PARTITION_PAGE_CACHE_BYTES) return;
-    }
-    try {
-      if (new TextEncoder().encode(JSON.stringify(part)).byteLength > PARTITION_PAGE_CACHE_BYTES) return;
-    } catch (_) { return; } // Allocation failure must not break an otherwise valid result page.
+    // Preserve the per-query owner and avoid retaining oversized verified text.
+    if (!canRetainPdfPartition(part)) return;
     // The index owns this SHA-256-verified immutable snapshot and checkpoints.
     // Reuse is scoped to this query; no unverified or oversized body is kept.
     retained = {number, part, local};
@@ -185,7 +168,7 @@ async function searchPartitions(query, current, progress) {
       // Own failures immediately, including if starting lookahead throws.
       const valueOutcome = valuePromise.then(value => ({value}), error => ({error}));
       const next = configuration.partitions[position + 1];
-      if (next && canPrefetchPartition(connection, next.bytes)) {
+      if (next && canPrefetchPdfPartition(connection, next.bytes)) {
         // Only compressed future bytes are retained. Each of the (at most
         // two) overlapping future transfers is capped independently.
         pending = withPartitionRequest(current, owners, signal => fetchPartitionBytes(next, signal))

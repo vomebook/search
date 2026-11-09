@@ -9,6 +9,7 @@ import { validPdfBookUrl, searchPath } from '../../../static/reader/search/reade
 import { readPdfSearchBytes, readPdfSearchText } from '../../../static/reader/search/reader-pdf-search-stream.mjs';
 import { validatePdfSearchPartition } from '../../../static/reader/search/reader-pdf-partition-shape.mjs';
 import { validatePdfPartitionConfiguration } from '../../../static/reader/search/reader-pdf-partition-config.mjs';
+import { canPrefetchPdfPartition, canRetainPdfPartition } from '../../../static/reader/search/reader-pdf-partition-policy.mjs';
 
 const source=fs.readFileSync(new URL('../../../static/reader/search/workers/reader-pdf-book-search-worker.mjs',import.meta.url),'utf8');
 const read=(body,signal,expected,text)=>text
@@ -62,11 +63,11 @@ const configuration={url,bytes:packed.length,sha256:Buffer.from(await webcrypto.
 const scope={self:{location:{href:'https://voiceofml-search.hf.space/static/worker.mjs',origin:'https://voiceofml-search.hf.space'},
   VoiceOfMLReaderSecurity:{LIMITS:{chapterTotalBytes:1024*1024}},postMessage:data=>posted.push(data)},
   URL,DOMException,AbortController,TextDecoder,Uint8Array,ReadableStream,DecompressionStream,
-  crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validateBookText,searchBookText,validPdfBookUrl,searchPath,readPdfSearchBytes,readPdfSearchText,validatePdfSearchPartition,validatePdfPartitionConfiguration};
+  crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validateBookText,searchBookText,validPdfBookUrl,searchPath,readPdfSearchBytes,readPdfSearchText,validatePdfSearchPartition,validatePdfPartitionConfiguration,canPrefetchPdfPartition,canRetainPdfPartition};
 const context=vm.createContext(scope);
 vm.runInContext(source.replace(/^import .*;\n/gm,''),context);
 // Exercise the Worker's actual network/size policy in its existing test scope.
-const canPrefetchPartition=vm.runInContext('canPrefetchPartition',context);
+const canPrefetchPartition=canPrefetchPdfPartition;
 for(const [connection,bytes,expected] of [[undefined,1024,true],[{saveData:true},1024,false],
   [{effectiveType:'slow-2g'},1024,false],[{effectiveType:'2g'},1024,false],
   [{effectiveType:'3g'},1024,true],[{saveData:false,effectiveType:'4g'},1048576,true],
