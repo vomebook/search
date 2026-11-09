@@ -57,6 +57,75 @@ test('page map null entry', () => {
 test('text index, partition and layer positive chain', async () => {
   assert.deepEqual(await repository().textPage(json(indexRef), 1), layer);
   assert.deepEqual(validateTextLayer(json(layer), json(entry), s), layer);
+  const region = (order,start,end,text) => ({id:`r${order}`,order,start,end,text,box:[0,0,1,1],
+    quad:[[0,0],[1,0],[1,1],[0,1]],writing_mode:'horizontal-ltr',direction:'ltr'});
+  // The cursor treats a surrogate pair as one point and lone halves as
+  // individual points, exactly as Array.from; omitted gaps are allowed.
+  const sample = {...layer,text:'A😀中\ud800X\udc00Z',regions:[
+    region(0,1,2,'😀'),region(1,3,4,'\ud800'),region(2,5,6,'\udc00')]};
+  assert.strictEqual(validateTextLayer(sample,entry,s),sample);
+  // Every field below is independent of the Unicode-offset optimization.
+  for (const mutate of [
+    r=>({...r,box:[0,0,0,1]}), r=>({...r,box:[0,0,NaN,1]}),
+    r=>({...r,quad:[[0,0],[0,0],[0,0],[0,0]]}),
+    r=>({...r,quad:[[0,0],[1,0],[1,1],[0,2]]}),
+    r=>({...r,writing_mode:'invalid'}), r=>({...r,direction:'invalid'}),
+    r=>({...r,id:null}), r=>({...r,start:0.5}), r=>({...r,end:Number.MAX_SAFE_INTEGER+1}),
+    r=>({...r,text:null})
+  ]) assert.throws(()=>validateTextLayer({...sample,regions:[mutate(sample.regions[0])]},entry,s),invalid);
+  for (const mutate of [
+    v=>({...v,generation:'0'.repeat(64)}), v=>({...v,page_identity:'0'.repeat(64)}),
+    v=>({...v,source_sha256:'0'.repeat(64)}), v=>({...v,page:2}),
+    v=>({...v,offset_unit:'utf16'}), v=>({...v,quality:'partially-reviewed'}),
+    v=>({...v,processing:'pending'}), v=>({...v,geometry:{...v.geometry,width:0}}),
+    v=>({...v,geometry:{...v.geometry,coordinate_space:'pixels'}}),
+    v=>({...v,regions:Array(10001).fill(sample.regions[0])})
+  ]) assert.throws(()=>validateTextLayer(mutate(sample),entry,s),invalid);
+  const correctedEntry = {...entry,quality:'partially-reviewed'};
+  const corrected = {...sample,revision:'accepted',quality:'partially-reviewed',
+    parent_generation:s,acceptances:[{id:'accepted'}]};
+  assert.strictEqual(validateTextLayer(corrected,correctedEntry,s),corrected);
+  for (const broken of [
+    {...corrected,parent_generation:'bad'}, {...corrected,acceptances:[]},
+    {...corrected,quality:'unreviewed'}
+  ]) assert.throws(()=>validateTextLayer(broken,correctedEntry,s),invalid);
+  for (const regions of [
+    [region(0,1,2,'中')], [region(0,1,2,'\ud83d')],
+    [region(0,7,8,'Z')], [region(0,6,8,'Z')], [region(0,2,2,'')],
+    [region(0,0,2,'A😀'),region(1,1,2,'😀')], [region(0,1,2,'😀'),region(1,3,4,'\ud800')].map(r=>({...r,id:'same'})),
+    [region(0,0,1,'A'),{...region(1,1,2,'😀'),order:2}],
+  ]) assert.throws(()=>validateTextLayer({...sample,regions},entry,s),invalid);
+
+  // Differentially check the code-point/text envelope against the prior
+  // Array.from semantics, including unpaired surrogates and escaped controls.
+  let seed = 0x12345678;
+  const random = n => {seed = (Math.imul(seed,1664525)+1013904223)>>>0; return seed % n;};
+  const alphabet = ['A','中','😀','\ud800','\udc00','\u0000','\n','🦋'];
+  for (let trial = 0; trial < 400; trial++) {
+    let text = '';
+    for (let i=0, length=random(25); i<length; i++) text += alphabet[random(alphabet.length)];
+    const chars = Array.from(text), start = random(chars.length+4)-1, end = random(chars.length+5)-1;
+    const pieces = [chars.slice(Math.max(0,start),Math.max(0,end)).join(''),
+      text.slice(Math.max(0,start),Math.max(0,end)), '', '😀'];
+    const value = {...layer,text,regions:[region(0,start,end,pieces[random(pieces.length)])]};
+    const expected = start >= 0 && end > start && end <= chars.length &&
+      chars.slice(start,end).join('') === value.regions[0].text;
+    let accepted = true;
+    try {validateTextLayer(value,entry,s);} catch (error) {if (!invalid(error)) throw error; accepted = false;}
+    assert.equal(accepted,expected,JSON.stringify({text,start,end,regions:value.regions}));
+  }
+
+  // The validation path must not allocate a code-point array, including for
+  // an empty region list and for a small region near a long-page tail.
+  const nativeFrom = Array.from, hugeText = '😀中'.repeat(150000);
+  try {
+    Array.from = (...args) => {if (typeof args[0] === 'string') throw new Error('unexpected code-point array');return nativeFrom(...args);};
+    assert.strictEqual(validateTextLayer({...layer,text:hugeText,regions:[]},entry,s).text,hugeText);
+    const last = {...layer,text:hugeText,regions:[region(0,299998,300000,'😀中')]};
+    assert.strictEqual(validateTextLayer(last,entry,s),last);
+    const tooLong = {...layer,text:hugeText,regions:[region(0,299998,300001,'😀中')]};
+    assert.throws(()=>validateTextLayer(tooLong,entry,s),invalid);
+  } finally {Array.from = nativeFrom;}
 });
 test('text layer null entry', () => {
   // Direct API boundary, not independently reachable through validated partition pages.
