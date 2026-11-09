@@ -64,6 +64,10 @@ test('text index, partition and layer positive chain', async () => {
   const sample = {...layer,text:'A😀中\ud800X\udc00Z',regions:[
     region(0,1,2,'😀'),region(1,3,4,'\ud800'),region(2,5,6,'\udc00')]};
   assert.strictEqual(validateTextLayer(sample,entry,s),sample);
+  const ambiguous = {...layer,text:'\ud800\udc00\ud800\ud800\udc00\udc00',regions:[
+    region(0,0,1,'\ud800\udc00'),region(1,1,2,'\ud800'),
+    region(2,2,3,'\ud800\udc00'),region(3,3,4,'\udc00')]};
+  assert.strictEqual(validateTextLayer(ambiguous,entry,s),ambiguous);
   // Every field below is independent of the Unicode-offset optimization.
   for (const mutate of [
     r=>({...r,box:[0,0,0,1]}), r=>({...r,box:[0,0,NaN,1]}),
