@@ -2005,6 +2005,7 @@ class StaticGateTests(unittest.TestCase):
                         'static/reader/search/reader-pdf-partition-shape.mjs',
                         'static/reader/search/reader-pdf-partition-config.mjs',
                         'static/reader/search/reader-pdf-partition-policy.mjs',
+                        'static/reader/search/reader-pdf-partition-page.mjs',
                         'static/reader/search/reader-book-text.js',
                         'static/reader/core/reader-security.js']
         for path in dependencies:
@@ -3085,7 +3086,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
                     "static/reader/core/reader-lifecycle.mjs",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
-                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/search/reader-pdf-book-url.mjs", "static/reader/search/reader-pdf-search-stream.mjs", "static/reader/search/reader-pdf-partition-shape.mjs", "static/reader/search/reader-pdf-partition-config.mjs", "static/reader/search/reader-pdf-partition-policy.mjs", "static/reader/formats/reader-chapter-repository.js",
+                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/search/reader-pdf-book-url.mjs", "static/reader/search/reader-pdf-search-stream.mjs", "static/reader/search/reader-pdf-partition-shape.mjs", "static/reader/search/reader-pdf-partition-config.mjs", "static/reader/search/reader-pdf-partition-policy.mjs", "static/reader/search/reader-pdf-partition-page.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-djvu-adapter.mjs", "static/reader/pdf/reader-djvu-identity.mjs", "static/reader/pdf/reader-djvu-range.mjs", "static/reader/pdf/reader-djvu-loader.mjs", "static/reader/search/reader-chapter-search-proxy-url.mjs", "static/reader/search/reader-chapter-search-index.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
                     "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
@@ -3137,6 +3138,72 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         choices = "".join(f"if (value === {n}) return {n}; " for n in range(11))
         source.write_text(source.read_text() + f"\nfunction overlyComplex(value) {{ {choices} return 0; }}\n")
         self.assert_check(self.run_check(*check), False, "complexity")
+
+    def test_pdf_partition_page_coverage_gate_fails_closed(self):
+        paths=['static/reader/search/reader-pdf-partition-page.mjs',
+               'tests/reader/pdf-search/test_pdf_partition_page.mjs',
+               'scripts/reader/check_pdf_partition_page_coverage.mjs','scripts/check_tap_contracts.mjs']
+        for name in paths:
+            target=self.root / name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT / name,target)
+        check=['node',paths[2]];message='PDF partition page requires named contracts and one coverage row'
+        self.assert_check(self.run_check(*check),True,'reader-pdf-partition-page.mjs |')
+        test=self.root / paths[1];original=test.read_text();marker='generation mapping preserves result fields and input identity'
+        anchor="test('"+marker+"'";self.assertEqual(original.count(anchor),1)
+        for replacement in ("test('renamed contract'", "test.skip('"+marker+"'", "test.todo('"+marker+"'"):
+            test.write_text(original.replace(anchor,replacement));self.assert_check(self.run_check(*check),False,message)
+        test.write_text(original+"\nthrow new Error('injected page failure');\n")
+        self.assert_check(self.run_check(*check),False,'injected page failure')
+        test.unlink();self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        test.write_text(original+'\nconsole.log("end of coverage report");\n')
+        self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        source=self.root / paths[0];body=source.read_text()
+        guard='return {...hit, textGeneration: page.text_generation};'
+        self.assertEqual(body.count(guard),1);source.write_text(body.replace(guard,'return {...hit, textGeneration: "bad"};'))
+        self.assert_check(self.run_check(*check),False,'Expected values to be strictly equal');source.write_text(body)
+        gate=self.root / paths[2];gate_original=gate.read_text()
+        for minimum in ('[100.01,100,100]','[100,100.01,100]','[100,100,100.01]'):
+            self.assertEqual(gate_original.count('[100,100,100]'),1)
+            gate.write_text(gate_original.replace('[100,100,100]',minimum))
+            self.assert_check(self.run_check(*check),False,message)
+        self.assertEqual(gate_original.count('reader-pdf-partition-page\\.mjs'),1)
+        gate.write_text(gate_original.replace('reader-pdf-partition-page\\.mjs','missing-pdf-page\\.mjs'))
+        self.assert_check(self.run_check(*check),False,message)
+
+    def test_pdf_partition_page_exact_signature_complexity_and_build(self):
+        module=ROOT / 'static/reader/search/reader-pdf-partition-page.mjs'
+        source=self.root / 'static/pdf-partition-page-usage.mjs';config=self.root / 'jsconfig.json'
+        project=load_type_config('jsconfig.reader-exact.json')
+        self.assertIn('static/reader/search/reader-pdf-partition-page.mjs',project['files'])
+        self.assertIn('static/reader/search/reader-pdf-partition-page.mjs',load_type_config('jsconfig.strict.json')['files'])
+        config.write_text(json.dumps({'compilerOptions':project['compilerOptions'],'files':[str(module),str(source)]}))
+        check=['node',ROOT / 'node_modules/typescript/bin/tsc','--project',config]
+        prefix=f'import {{pdfPartitionPageOffset, decoratePdfPartitionHits}} from "{module.as_posix()}";\n'
+        source.write_text(prefix+'pdfPartitionPageOffset(50,100); decoratePdfPartitionHits([{page:1}], [{page:1,text_generation:"x"}]);\n')
+        self.assert_check(self.run_check(*check),True,'')
+        for bad in ('pdfPartitionPageOffset(0,"100");','decoratePdfPartitionHits([{page:"1"}], []);',
+                    '/** @type {string} */ const value=pdfPartitionPageOffset(0,100);'):
+            with self.subTest(invalid=bad):
+                source.write_text(prefix+bad+'\n');self.assert_check(self.run_check(*check),False,'error TS')
+        local=self.root / 'static/reader/search/reader-pdf-partition-page.mjs';local.parent.mkdir(parents=True,exist_ok=True)
+        body=module.read_text();local.write_text(body)
+        config.write_text(json.dumps({'compilerOptions':project['compilerOptions'],'files':[str(local)]}))
+        self.assert_check(self.run_check(*check),True,'')
+        annotation='/** @param {unknown} requested @param {number} total */'
+        self.assertEqual(body.count(annotation),1);local.write_text(body.replace(annotation,''))
+        self.assert_check(self.run_check(*check),False,'TS7006');local.write_text(body)
+        lint=['node',ROOT / 'node_modules/eslint/bin/eslint.js','--config',ROOT / 'eslint.config.mjs',
+              local,'--rule','complexity: [error, 10]','--max-warnings','0']
+        self.assert_check(self.run_check(*lint),True,'')
+        choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
+        local.write_text(body+f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
+        self.assert_check(self.run_check(*lint),False,'complexity')
+        listing=subprocess.check_output(['node','-e',
+            'const r=require(process.argv[1]);console.log(JSON.stringify({files:r.buildFiles("github"),runtime:r.runtimePaths("/static/"),shell:r.shellAssets("/static/")}));',
+            ROOT / 'static/reader-resources.js'],cwd=ROOT,text=True,timeout=30)
+        paths=json.loads(listing);file='reader/search/reader-pdf-partition-page.mjs'
+        self.assertEqual(paths['files'].count(file),1)
+        self.assertLess(paths['files'].index(file),paths['files'].index('reader/search/workers/reader-pdf-book-search-worker.mjs'))
+        self.assertIn('/static/'+file,paths['runtime']);self.assertNotIn('/static/'+file,paths['shell'])
 
     def test_pdf_partition_policy_coverage_gate_fails_closed(self):
         paths=['static/reader/search/reader-pdf-partition-policy.mjs',
