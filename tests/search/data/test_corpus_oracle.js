@@ -59,7 +59,7 @@ function bruteForce(params) {
   let matched = [];
   for (let index = 0; index < corpus.length; index += 1) {
     const record = corpus[index];
-    const file = record.File.toLowerCase();
+    const file = (record.File + (record.Extension ? "." + record.Extension : "")).toLowerCase();
     const repo = record.Repo.toLowerCase();
     const folderPath = record.Folder.join("/");
     const folder = folderPath.toLowerCase();
@@ -83,7 +83,7 @@ function bruteForce(params) {
       for (const raw of params.folders) {
         const selected = cleanPath(raw);
         if (params.folderMatchMode === "exact") folderMatch = folderPath === selected;
-        else if (!selected) folderMatch = record.Folder.length === 0;
+        else if (!selected) folderMatch = true;
         else folderMatch = folderPath === selected || folderPath.indexOf(selected + "/") === 0;
         if (folderMatch) break;
       }
@@ -95,8 +95,10 @@ function bruteForce(params) {
     }
     matched.push(index);
   }
-  if (params.sort === "name") matched.sort((a, b) => corpus[a].File.localeCompare(corpus[b].File, "zh"));
-  else if (params.sort === "size") matched.sort((a, b) => (Number(corpus[b].Size) || 0) - (Number(corpus[a].Size) || 0));
+  const byName = (a, b) => corpus[a].File.toLowerCase() < corpus[b].File.toLowerCase() ? -1
+    : corpus[a].File.toLowerCase() > corpus[b].File.toLowerCase() ? 1 : 0;
+  if (params.sort === "name") matched.sort(byName);
+  else if (params.sort === "size") matched.sort((a, b) => (Number(corpus[b].Size) || 0) - (Number(corpus[a].Size) || 0) || byName(a, b));
   else if (query) {
     const tokens = query.toLowerCase().match(/[a-z0-9]+/g) || [];
     const chinese = [];
@@ -110,7 +112,7 @@ function bruteForce(params) {
     const uniqueTokens = Array.from(new Set(tokens));
     matched.sort((a, b) => {
       function score(record) {
-        const file = record.File.toLowerCase();
+        const file = (record.File + (record.Extension ? "." + record.Extension : "")).toLowerCase();
         const repo = record.Repo.toLowerCase();
         const folder = record.Folder.join("/").toLowerCase();
         return uniqueTokens.reduce((total, token) => total + (file.indexOf(token) >= 0 ? 3 : 0) + (searchFolders && folder.indexOf(token) >= 0 ? 2 : 0) + (repo.indexOf(token) >= 0 ? 1 : 0), 0);
@@ -151,6 +153,11 @@ test("independent decoder reconstructs corpus count and known first record", () 
   });
 });
 test("exact literal filename query matches brute-force corpus scan", () => compare({ q: "目录", exact: true, page: 1, pageSize: 37 }));
+test("full displayed filenames and extensions match independent scan", async () => {
+  await compare({q:"目录.txt", exact:true, page:1, pageSize:37});
+  await compare({q:"*.pdf", exact:true, page:1, pageSize:37});
+  await compare({q:"pdf", exact:true, searchFolders:false, page:1, pageSize:37});
+});
 test("exact repository metadata query matches brute-force corpus scan", () => compare({ q: "VoiceOfML/Omnibus", exact: true, page: 1, pageSize: 23 }));
 test("exact folder search toggle matches brute-force corpus scan", async () => {
   await compare({ q: "原版目录", exact: true, searchFolders: true, page: 1, pageSize: 50 });
