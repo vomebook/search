@@ -276,7 +276,11 @@ test("versioned Worker dispatcher returns bounded records and supports lifecycle
   assert.match(app, /function corpusWorkerRequest/);
   assert.match(app, /corpusWorkerPending/);
   assert.match(app, /addEventListener\("messageerror"/);
-  assert.match(app, /corpusWorkerRestartCount >= 1/);
+  assert.match(app, /const CORPUS_WORKER_MAX_CONSECUTIVE_RESTARTS = 1/);
+  assert.match(app, /corpusWorkerConsecutiveRestarts >= CORPUS_WORKER_MAX_CONSECUTIVE_RESTARTS/);
+  assert.match(app, /corpusWorkerConsecutiveRestarts\+\+/);
+  assert.match(app, /corpusWorkerRestartCount\+\+/);
+  assert.strictEqual((app.match(/corpusWorkerConsecutiveRestarts = 0;/g) || []).length, 3);
   assert.match(worker, /MAX_PAGE_SIZE/);
   assert.match(worker, /records: pageItems\.map/);
   assert.match(worker, /ids: pageItems\.map/);
