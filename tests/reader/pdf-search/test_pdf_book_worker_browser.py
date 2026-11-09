@@ -71,7 +71,6 @@ class Handler(SimpleHTTPRequestHandler):
             return super().do_GET()
         state = None
         if parsed.path == '/api/reader-bucket-resource':
-            query = parse_qs(parsed.query)
             with self.server.state_lock:
                 state = self.server.state
                 if state is None or len(parts) <= 3 or path.split('/')[3] != state['token']:
