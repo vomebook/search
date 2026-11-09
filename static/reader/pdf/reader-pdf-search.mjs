@@ -1,3 +1,10 @@
+// One shared, bounded per-query checkpoint budget. Checkpoints are hints only:
+// if extracted text is replaced or the budget fills, retain the complete scan.
+const PDF_SEARCH_CHECKPOINT_STRIDE = 2048;
+const PDF_SEARCH_CHECKPOINT_MAX = 4096;
+const PDF_SEARCH_CHECKPOINT_PAGE_BYTES = 512 * 1024;
+const PDF_SEARCH_CHECKPOINT_BYTES = 4 * 1024 * 1024;
+
 export function createReaderPdfSearch(readerContext) {
   async function ensurePdfBookSearchClient(manifest) {
     let textUrl = "";
@@ -135,8 +142,30 @@ export function createReaderPdfSearch(readerContext) {
           continue;
         }
         const text = await readerContext.loadPdfSearchText(pdf, group.page, generation);
-        let examined = 0;
-        for (const match of text.matchAll(pattern)) {
+        let examined = 0, start = 0, accelerated = false;
+        if (group.checkpoints?.length && text === group.checkpointText) {
+          const requestedInPage = offset - skipped;
+          let low = 0, high = group.checkpoints.length;
+          while (low < high) {
+            const middle = (low + high) >> 1;
+            if (group.checkpoints[middle].ordinal <= requestedInPage) low = middle + 1;
+            else high = middle;
+          }
+          if (low) {
+            const checkpoint = group.checkpoints[low - 1];
+            skipped += checkpoint.ordinal;
+            start = checkpoint.start;
+            accelerated = true;
+          }
+        }
+        // Preserve a cancellation opportunity for a deep jump, even when
+        // checkpoints remove the previous long skip loop.
+        if (accelerated) {
+          await readerContext.waitForReader();
+          if (!readerContext.isReaderGenerationCurrent("search", generation))
+            throw new DOMException("Search cancelled", "AbortError");
+        }
+        for (const match of text.slice(start).matchAll(pattern)) {
           if (++examined % 2048 === 0) {
             await readerContext.waitForReader();
             if (!readerContext.isReaderGenerationCurrent("search", generation))
@@ -145,7 +174,7 @@ export function createReaderPdfSearch(readerContext) {
           if (skipped++ < offset) continue;
           results.push({
             location: `第 ${group.page} 页`,
-            snippet: readerContext.fullSearchSnippet(text, match.index, match[0].length),
+            snippet: readerContext.fullSearchSnippet(text, start + match.index, match[0].length),
             activate: (navigationGeneration) => readerContext.goToPage(group.page, navigationGeneration)
           });
           if (results.length === pageSize) break;
@@ -253,7 +282,7 @@ export function createReaderPdfSearch(readerContext) {
       }
     };
     fill();
-    let total = 0, hasText = false;
+    let total = 0, hasText = false, checkpointCount = 0, checkpointBytes = 0;
     for (let page = 1; page <= pdf.numPages; page++) {
       if (!readerContext.isReaderGenerationCurrent("search", generation)) return [];
       const result = await pending.get(page);
@@ -264,8 +293,16 @@ export function createReaderPdfSearch(readerContext) {
       fill();
       hasText ||= !!text.trim();
       let count = 0;
+      const checkpoints = [];
+      // Keep sparse checkpoints only for small-enough normalized pages and
+      // cap total retained text separately from the regular LRU caches.
+      const canCheckpoint = text.length * 2 <= PDF_SEARCH_CHECKPOINT_PAGE_BYTES &&
+        checkpointBytes + text.length * 2 <= PDF_SEARCH_CHECKPOINT_BYTES;
       for (const match of text.matchAll(pattern)) {
         count++;
+        if (count % PDF_SEARCH_CHECKPOINT_STRIDE === 0 && canCheckpoint &&
+            checkpointCount + checkpoints.length < PDF_SEARCH_CHECKPOINT_MAX)
+          checkpoints.push({ ordinal: count - 1, start: match.index });
         if (firstPage.length < 50) firstPage.push({
           location: `第 ${page} 页`,
           snippet: readerContext.fullSearchSnippet(text, match.index, match[0].length),
@@ -277,7 +314,11 @@ export function createReaderPdfSearch(readerContext) {
         }
       }
       if (count) {
-        groups.push({ page, count });
+        if (checkpoints.length) {
+          checkpointCount += checkpoints.length;
+          checkpointBytes += text.length * 2;
+          groups.push({ page, count, checkpoints, checkpointText: text });
+        } else groups.push({ page, count });
         total += count;
         readerContext.highlightPdfText(readerContext.content.querySelector(`.reader-page[data-page="${page}"]`), query);
       }
