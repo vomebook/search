@@ -132,8 +132,84 @@ test("sorted posting intersection agrees with set intersection without changing 
     context.lists=Array.from({length:1+random()%5},()=>Array.from({length:100},(_,i)=>i).filter(()=>random()%4===0));
     assert.strictEqual(vm.runInContext('JSON.stringify(intersectCandidateLists(lists,true)) === JSON.stringify(intersectCandidateLists(lists))',context),true);
   }
+  for (const size of [511,512,513,5000]) {
+    context.lists = Array.from({length:4}, () => Array.from({length:size*3}, (_,i)=>i).filter(() => random()%3 !== 0));
+    assert.strictEqual(vm.runInContext('JSON.stringify(intersectCandidateLists(lists,true)) === JSON.stringify(intersectCandidateLists(lists))',context),true);
+  }
   context.lists=[[9,2,7,1],[7,9,1]];
   assert.strictEqual(vm.runInContext('JSON.stringify(intersectCandidateLists(lists))',context),'[9,7,1]');
+});
+
+test("warm exact Chinese postings preserve full-scan results, ties, filters and anchors", async () => {
+  const input = Array.from({length: 600}, (_, i) => ({...records[0],
+    Repo: i % 29 === 0 ? "Repo/手机" : i % 2 ? "Repo/A" : "Repo/B",
+    File: i % 31 === 0 ? "手机笔记" : i % 37 === 0 ? "目录手机" : `资料${i}`,
+    Folder: i % 41 === 0 ? ["手机", "目录"] : ["其他"],
+    Extension: i % 43 === 0 ? "手机" : i % 3 === 0 ? "pdf" : "txt", Size:i % 9}));
+  const {worker} = await loaded(input);
+  vm.runInContext('buildFulltext(); globalThis.indexedCandidates = indexedExactCandidates;',worker.context);
+  for (const q of ["手机", "手机*", "手?机", "手*机", "手机.txt", "手机 资料", "不存在"]) {
+    for (const repos of [null, ["Repo/A"], ["Repo/手机", "Repo/B", "Repo/B"]]) {
+      for (const searchFolders of [true,false]) for (const sort of ["relevance","name","size"]) {
+        const params = {q,exact:true,repos,searchFolders,sort,extensions:["pdf","txt","手机"],
+          page:2,pageSize:7,anchorId:"Repo/手机\\0其他/资料29.txt"};
+        vm.runInContext('indexedExactCandidates = indexedCandidates; searchOrderCache.clear();',worker.context);
+        const accelerated = await worker.request("local-search", params);
+        vm.runInContext('indexedExactCandidates = () => null; searchOrderCache.clear();',worker.context);
+        const full = await worker.request("local-search", params);
+        assert.deepStrictEqual(accelerated,full,JSON.stringify(params));
+      }
+    }
+  }
+  vm.runInContext('indexedExactCandidates = indexedCandidates;',worker.context);
+});
+
+test("fuzzy search keeps literal fallback and complete fuzzy postings with indexed scope", async () => {
+  const input = Array.from({length:500}, (_, i) => ({...records[0],
+    Repo:i % 91 === 0 ? "Repo/手机" : i % 2 ? "Repo/A" : "Repo/B",
+    File:i % 53 === 0 ? "手机 guide" : i % 67 === 0 ? "手册 alpha" : `资料${i}`,
+    Folder:i % 79 === 0 ? ["手机", "其他"] : ["guide"], Extension:i % 3 ? "txt" : "pdf"}));
+  const {worker} = await loaded(input);
+  vm.runInContext('buildFulltext();globalThis.savedIndexedCandidates=indexedExactCandidates',worker.context);
+  for (const q of ["手机", "手机 guide", "手机 alpa", "手册 alpha", "手机 不存在", "不存在", "repo 手机"]) {
+    for (const repos of [null,["Repo/A"],["Repo/B","Repo/手机"]]) {
+      for (const searchFolders of [true,false]) for (const sort of ["relevance","name","size"]) {
+        const params={q,repos,searchFolders,sort,extensions:["txt","pdf"],page:2,pageSize:5};
+        vm.runInContext('indexedExactCandidates=savedIndexedCandidates;searchOrderCache.clear()',worker.context);
+        const accelerated=await worker.request("local-search",params);
+        vm.runInContext('indexedExactCandidates=()=>null;searchOrderCache.clear()',worker.context);
+        const full=await worker.request("local-search",params);
+        assert.deepStrictEqual(accelerated,full,JSON.stringify(params));
+      }
+    }
+  }
+});
+
+test("warm exact preselection bounds work and falls back for uncovered extension and cold indexes", async () => {
+  const input = Array.from({length: 500}, (_, i) => ({...records[0],Repo:"Repo/A",
+    File:i === 123 ? "手机" : `unrelated ${i}`,Folder:[],Extension:"txt"}));
+  const {worker} = await loaded(input);
+  assert.strictEqual((await worker.request("local-search",{q:"手机",exact:true})).total,1);
+  vm.runInContext('buildFulltext(); searchOrderCache.clear(); globalThis.beforeFields = getRecordSearchFields; globalThis.scans = 0; getRecordSearchFields = record => {scans++; return beforeFields(record)};',worker.context);
+  assert.strictEqual((await worker.request("local-search",{q:"手机",exact:true})).total,1);
+  assert(vm.runInContext('scans < 10',worker.context));
+  const asRepo = await loaded(input.map((record,i)=>({...record,Repo:i%80===0?"Repo/手机":"Repo/B",File:`other ${i}`})));
+  vm.runInContext('buildFulltext()',asRepo.worker.context);
+  assert.strictEqual((await asRepo.worker.request("local-search",{q:"手机",exact:true})).total,7);
+  const asFolder = await loaded(input.map((record,i)=>({...record,File:`other ${i}`,Folder:i===0?["手机"]:[]})));
+  vm.runInContext('buildFulltext()',asFolder.worker.context);
+  assert.strictEqual((await asFolder.worker.request("local-search",{q:"手机",exact:true})).total,1);
+  assert.strictEqual((await asFolder.worker.request("local-search",{q:"手机",exact:true,searchFolders:false})).total,0);
+  const extension = await loaded(input.map((record,i)=>({...record,File:`other ${i}`,Extension:i===0?"手机":"txt"})));
+  vm.runInContext('buildFulltext()',extension.worker.context);
+  assert.strictEqual((await extension.worker.request("local-search",{q:"手机",exact:true})).total,1);
+  assert.strictEqual(vm.runInContext('indexedExactCandidates("手机",{},records.length)',extension.worker.context),null);
+  // Unusual extension values retain the full-scan coercion/error path rather
+  // than relying on an index built for ordinary string metadata.
+  const unusual = makeWorker();
+  await unusual.request("replace-corpus", {data:{v:2,rp:["R"],fd:[[]],rc:[[0,"a","txt",0,1,0],[0,"手",["机"],0,1,0]]}});
+  vm.runInContext('buildFulltext()',unusual.context);
+  assert.strictEqual(vm.runInContext('indexedExactCandidates("手机",{},records.length)',unusual.context),null);
 });
 
 test("inherited object names remain ordinary tokens and repository keys", async () => {
@@ -197,6 +273,20 @@ test("boundary-only wildcard scans preserve literal matching and bounded work", 
   vm.runInContext('if (compileWildcardMatcher("*"+"a".repeat(127)+"b*").test("a".repeat(20000))) throw Error("bad match");', context, {timeout: 1000});
 });
 
+test("boundary question-star matching stays bounded and preserves non-u regex semantics", () => {
+  const {context}=makeWorker();
+  const patterns=["?*.pdf","??**PDF","???*İ","a*?","K**??","*?*.pdf*","*.pdf*?*","?*\n","\n*?","?*😀"];
+  const alphabet=["a",".","\n","\r","\u2028","\u2029","İ","i","K","k","😀","\ud800"];
+  const texts=["",...alphabet,...alphabet.flatMap(a=>alphabet.map(b=>a+b)),"a.pdf","A.PDF","a\n.pdf","a😀"];
+  for(const pattern of patterns){
+    const escaped=pattern.replace(/[.+^${}()|[\]\\]/g,"\\$&");
+    const reference=new RegExp(escaped.replace(/\*/g,".*").replace(/\?/g,"."),"i");
+    for(const text of texts) assert.strictEqual(context.compileWildcardMatcher(pattern).test(text),reference.test(text),JSON.stringify([pattern,text]));
+  }
+  vm.runInContext('if (compileWildcardMatcher("?".repeat(100)+"*z").test("a".repeat(20000))) throw Error("bad match")',context,{timeout:1000});
+  assert.strictEqual(vm.runInContext('Object.prototype.toString.call(compileWildcardMatcher("?*.pdf"))',context),'[object RegExp]');
+  assert.notStrictEqual(vm.runInContext('Object.prototype.toString.call(compileWildcardMatcher("a?*b"))',context),'[object RegExp]');
+});
 test("ordered interior stars preserve overlapping literals and line boundaries", () => {
   const {context} = makeWorker();
   const cases = [
@@ -458,6 +548,114 @@ test("shared token parts preserve complete postings and vocabulary ties with bou
   }
   assert.strictEqual(vm.runInContext("fulltextBuild === null", worker.context), true);
 });
+test("posting compaction yields before atomic publication and resumes after cancellation", async () => {
+  const input = Array.from({length: 5000}, (_, i) => ({...records[0], File: `unique${i}`}));
+  const {worker, tasks, tick} = scheduledWorker({navigator:{deviceMemory:2}});
+  await worker.request("replace-corpus", {data:compact(input)});
+  while (tasks.size) tick();
+  // Prepare through vocabulary construction; leave conversion to the same
+  // demanded, yielding path used by a real Worker search.
+  vm.runInContext(`globalThis.savedCompaction = advancePostingCompaction;
+    advancePostingCompaction = () => false; advanceFulltext(records.length, Infinity);
+    advancePostingCompaction = savedCompaction;`, worker.context);
+  const pending = worker.listeners.message({data:{protocol:1,type:"local-search",id:"compact",payload:{q:"unique1"}}});
+  await Promise.resolve();
+  assert(vm.runInContext(`wordIndex === null && wordIndexFilesOnly === null &&
+    fulltextBuild.allCompaction.next > 0 && fulltextBuild.allCompaction.next < fulltextBuild.allCompaction.keys.length`, worker.context));
+  assert.strictEqual((await worker.request("metadata")).count, input.length);
+  await worker.request("cancel-search", {requestId:"compact"}, {id:"cancel-compact"});
+  while (tasks.size) { tick(); await Promise.resolve(); }
+  await pending;
+  assert.strictEqual(worker.messages.find(message=>message.id==="compact").error.code, "SEARCH_CANCELLED");
+  assert(vm.runInContext("wordIndex === null && fulltextBuild !== null", worker.context));
+  const result = await worker.request("local-search", {q:"unique1"});
+  const expected = await (await loaded(input)).worker.request("local-search", {q:"unique1"});
+  assert.deepStrictEqual(result.ids, expected.ids);
+  assert.strictEqual(result.total, expected.total);
+  assert(vm.runInContext("wordIndex !== null && wordIndexFilesOnly !== null && fulltextBuild === null", worker.context));
+});
+test("file-only compaction reuses equal postings but converts differing postings", async () => {
+  const input = [{...records[0],File:"unique shared",Folder:[]},
+    {...records[1],File:"unique",Folder:[]}, {...records[2],File:"other",Folder:["shared"]}];
+  const {worker}=await loaded(input);
+  vm.runInContext(`globalThis.realCompact=advancePostingCompaction;
+    advancePostingCompaction=()=>false;advanceFulltext(records.length,Infinity);advancePostingCompaction=realCompact;
+    realCompact(fulltextBuild.all,fulltextBuild.allCompaction,Infinity);
+    fulltextBuild.filesCompaction={keys:fulltextBuild.filesVocab.keys,next:0};
+    globalThis.originalFrom=Uint32Array.from;globalThis.conversions=0;
+    Uint32Array.from=function(value){conversions++;return originalFrom.call(Uint32Array,value)};
+    realCompact(fulltextBuild.files,fulltextBuild.filesCompaction,Infinity,fulltextBuild.all);
+    Uint32Array.from=originalFrom;`,worker.context);
+  assert(vm.runInContext('fulltextBuild.files.unique === fulltextBuild.all.unique',worker.context));
+  assert(vm.runInContext('fulltextBuild.files.shared !== fulltextBuild.all.shared',worker.context));
+  assert(vm.runInContext('conversions > 0 && conversions < fulltextBuild.filesVocab.keys.length',worker.context));
+  vm.runInContext('buildFulltext()',worker.context);
+  assert.strictEqual((await worker.request("local-search",{q:"unique",searchFolders:false})).total,2);
+});
+test("file-only compaction yields and resumes with shared postings", async () => {
+  const input=Array.from({length:5000},(_,i)=>({...records[0],File:`unique${i} shared`,Folder:[]}));
+  input.push({...records[1],File:"other",Folder:["shared"]});
+  const {worker,tasks,tick}=scheduledWorker({navigator:{deviceMemory:2}});
+  await worker.request("replace-corpus",{data:compact(input)});
+  while(tasks.size) tick();
+  vm.runInContext(`globalThis.realCompact=advancePostingCompaction;advancePostingCompaction=()=>false;
+    advanceFulltext(records.length,Infinity);advancePostingCompaction=realCompact;
+    realCompact(fulltextBuild.all,fulltextBuild.allCompaction,Infinity);
+    fulltextBuild.filesCompaction={keys:fulltextBuild.filesVocab.keys,next:0}`,worker.context);
+  const pending=worker.listeners.message({data:{protocol:1,type:"local-search",id:"file-compact",payload:{q:"unique1"}}});
+  await Promise.resolve();
+  assert(vm.runInContext('wordIndex === null && fulltextBuild.filesCompaction.next > 0 && fulltextBuild.filesCompaction.next < fulltextBuild.filesCompaction.keys.length',worker.context));
+  assert.strictEqual((await worker.request("metadata")).count,input.length);
+  await worker.request("cancel-search",{requestId:"file-compact"},{id:"cancel-file-compact"});
+  while(tasks.size){tick();await Promise.resolve()}
+  await pending;
+  assert.strictEqual(worker.messages.find(message=>message.id==="file-compact").error.code,"SEARCH_CANCELLED");
+  const result=await worker.request("local-search",{q:"unique1",searchFolders:false});
+  assert.strictEqual(result.total,1111); // literal substring unique1, unique10…unique1999
+  assert(vm.runInContext('wordIndexFilesOnly.unique1 === wordIndex.unique1',worker.context));
+});
+test("partially shared file postings resume after a conversion failure", async () => {
+  const input=[{...records[0],File:"unique shared",Folder:[]},
+    {...records[1],File:"unique",Folder:[]},{...records[2],File:"other",Folder:["shared"]}];
+  const {worker}=await loaded(input);
+  vm.runInContext(`globalThis.realCompact=advancePostingCompaction;advancePostingCompaction=()=>false;
+    advanceFulltext(records.length,Infinity);advancePostingCompaction=realCompact;
+    realCompact(fulltextBuild.all,fulltextBuild.allCompaction,Infinity);
+    fulltextBuild.filesCompaction={keys:["unique","shared","other"],next:0};
+    globalThis.originalFrom=Uint32Array.from;Uint32Array.from=()=>{throw Error("file conversion failed")}`,worker.context);
+  assert.throws(()=>vm.runInContext('advanceFulltext(records.length,Infinity)',worker.context),/file conversion failed/);
+  assert(vm.runInContext('wordIndex === null && wordIndexFilesOnly === null && fulltextBuild.filesCompaction.next === 1 && fulltextBuild.files.unique === fulltextBuild.all.unique',worker.context));
+  vm.runInContext('Uint32Array.from=originalFrom;buildFulltext()',worker.context);
+  assert.strictEqual((await worker.request("local-search",{q:"shared",searchFolders:false})).total,1);
+});
+test("posting compaction resumes after a conversion failure without publishing partial indexes", async () => {
+  const {worker} = await loaded(records);
+  vm.runInContext(`globalThis.originalCompact = advancePostingCompaction;
+    advancePostingCompaction = () => false; advanceFulltext(records.length, Infinity);
+    advancePostingCompaction = originalCompact;
+    globalThis.originalFrom = Uint32Array.from;
+    Uint32Array.from = () => { throw Error("conversion failed"); };`, worker.context);
+  assert.throws(() => vm.runInContext("advanceFulltext(records.length, Infinity)", worker.context), /conversion failed/);
+  assert(vm.runInContext("wordIndex === null && wordIndexFilesOnly === null && fulltextBuild.allCompaction.next === 0", worker.context));
+  vm.runInContext("Uint32Array.from = originalFrom; buildFulltext()", worker.context);
+  assert.strictEqual((await worker.request("local-search", {q:"alpha"})).total, 3);
+});
+test("corpus replacement invalidates partial posting compaction", async () => {
+  const {worker, tasks, tick} = scheduledWorker({navigator:{deviceMemory:2}});
+  await worker.request("replace-corpus", {data:compact(Array.from({length:5000}, (_, i) => ({...records[0],File:`unique${i}`})))});
+  while (tasks.size) tick();
+  vm.runInContext(`globalThis.savedCompaction = advancePostingCompaction;
+    advancePostingCompaction = () => false; advanceFulltext(records.length, Infinity);
+    advancePostingCompaction = savedCompaction;`, worker.context);
+  const pending = worker.listeners.message({data:{protocol:1,type:"local-search",id:"old-compaction",payload:{q:"unique1"}}});
+  await Promise.resolve();
+  assert(vm.runInContext("fulltextBuild.allCompaction.next > 0 && wordIndex === null",worker.context));
+  await worker.request("replace-corpus", {data:compact([records[4]])}, {id:"new-corpus"});
+  while (tasks.size) { tick(); await Promise.resolve(); }
+  await pending;
+  assert.strictEqual(worker.messages.find(message=>message.id==="old-compaction").error.code, "CORPUS_REPLACED");
+  assert.strictEqual((await worker.request("local-search", {q:"手机"})).total, 1);
+});
 test("foreground indexing resumes partial work and clears the scheduled continuation", async () => {
   const input = Array.from({length: 400}, (_, i) => Object.assign({}, records[i % records.length]));
   const { worker, tasks, tick } = scheduledWorker();
@@ -680,6 +878,20 @@ test("fuzzy candidates retain selected repository and other terms after 200 matc
     assert.deepStrictEqual(await namesWithCorpus(input, {q, repos:["Repo/B"]}), ["alpha omega"]);
   }
 });
+test("fuzzy collection deduplicates postings while preserving first-seen order", async () => {
+  const input = Array.from({length:900},(_, i)=>({...records[0],
+    Repo:i%2?'Repo/A':'Repo/B', File:['za','zb','zc','zd','ze','zf'][i%6]+' '+i, Folder:[]}));
+  const {worker}=await loaded(input);
+  vm.runInContext('buildFulltext();globalThis.originalIntersect=intersectCandidateLists;globalThis.firstProbe=[];intersectCandidateLists=(lists,sorted)=>{if(!sorted)firstProbe=Array.from(lists[0]);return originalIntersect(lists,sorted)}',worker.context);
+  const result=await worker.request('local-search',{q:'zz',pageSize:100});
+  const observed=JSON.parse(vm.runInContext('JSON.stringify(firstProbe)',worker.context));
+  const expected=JSON.parse(vm.runInContext(`JSON.stringify((()=>{const old=[];for(const [word] of vocabSorted)
+    if(couldBeFuzzy('zz',word,1)&&editDistance('zz',word,1)<=1)for(const id of wordIndex[word])old.push(id);
+    return Array.from(new Set(old))})())`,worker.context));
+  assert.deepStrictEqual(observed,expected);
+  assert.strictEqual(new Set(observed).size,observed.length);
+  assert.strictEqual(result.total,900);
+});
 test("non-exact results include literal filename and repository hits", async () => {
   const input = [{...records[0], Repo:"Repo/A", File:"Marxist"}];
   assert.deepStrictEqual(await namesWithCorpus(input, {q:"marx"}), ["Marxist"]);
@@ -724,6 +936,32 @@ test("exact mode treats whitespace as independent AND terms", async () => {
   assert.deepStrictEqual(await names({ q: "guide alpha", exact: true }), ["alpha guide"]);
   assert.deepStrictEqual(await names({ q: "alpha missing", exact: true }), []);
   assert.deepStrictEqual(await names({ q: "alpha* guide", exact: true }), ["alpha guide"]);
+});
+test("precomputed name keys match the original comparator and remain generation-local", async () => {
+  const alphabet = ["手机", "ABC", "abc", "重", "😀", "🀄", "𠮷", "\ue000", "\ud800", "\udfff",
+    "aΣ", "Aς", "é", "e\u0301", ""];
+  const input = Array.from({length:600},(_,i)=>({...records[0],
+    Repo:i%2?"Repo/A":"Repo/B",File:alphabet[(i*19)%alphabet.length]+(i%7===0?"x":"")}));
+  const {worker}=await loaded(input);
+  const expected=JSON.parse(vm.runInContext('JSON.stringify(recordIndices.slice().sort(compareRecordName))',worker.context));
+  vm.runInContext('buildNameOrders()',worker.context);
+  assert.deepStrictEqual(JSON.parse(vm.runInContext('JSON.stringify(sortedByName)',worker.context)),expected);
+  for (const repo of ["Repo/A","Repo/B"]) {
+    worker.context.currentRepo=repo;
+    assert.deepStrictEqual(JSON.parse(vm.runInContext('JSON.stringify(repoSortedByName[currentRepo])',worker.context)),
+      expected.filter(index=>input[index].Repo===repo));
+  }
+  const replacement = [{...records[0],File:"b"},{...records[0],File:"a"}];
+  await worker.request("replace-corpus",{data:compact(replacement)});
+  assert.deepStrictEqual((await worker.request("local-search",{sort:"name"})).records.map(record=>record.File),["a","b"]);
+});
+test("unusual filename metadata retains the original name comparator", async () => {
+  const worker=makeWorker();
+  await worker.request("replace-corpus",{data:{v:2,rp:["Repo/A"],fd:[[]],rc:[[0,42,"txt",0,1,0],[0,"1","txt",0,2,0]]}});
+  vm.runInContext(`globalThis.originalNameCompare=compareRecordName;globalThis.comparisons=0;
+    compareRecordName=(a,b)=>{comparisons++;return originalNameCompare(a,b)};`,worker.context);
+  assert.strictEqual((await worker.request("local-search",{sort:"name"})).total,2);
+  assert(vm.runInContext('comparisons > 0',worker.context));
 });
 test("explicit sorts preserve collation and ties without computing relevance tokens", async () => {
   const input = ["book 中国", "book 重", "book Chong", "book chong", "book 10", "book 2", "book e\u0301", "book é", "book 重"]
