@@ -62,7 +62,7 @@ class Handler(SimpleHTTPRequestHandler):
             parts = path.split('/')
             if len(parts) > 3:
                 parts[3] = 'bbbbbbbbbbbbbbbb'
-            body = RESOURCES.get('/'.join(parts))
+            body = self.server.resources.get('/'.join(parts))
             if body is None:
                 self.send_error(404)
                 return
@@ -112,6 +112,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
     def setUpClass(cls):
         cls.server = ThreadingHTTPServer(('127.0.0.1', 0), partial(Handler, directory=str(ROOT)))
         cls.server.state_lock = threading.Lock()
+        cls.server.resources = dict(RESOURCES)
         cls.server.state = None
         cls.server.block_timed_out = threading.Event()
         cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -136,6 +137,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         with self.server.state_lock:
             self.assertIsNone(self.server.state)
             self.server.block_timed_out.clear()
+            self.server.resources = dict(RESOURCES)
             self.server.state = self.state
         self.addCleanup(self.cleanup_requests)
 
@@ -296,6 +298,125 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual([hit['page'] for hit in result['page']['results']], [1]*20+[2]*30)
         self.assertTrue(all(hit['textGeneration'] == TEXT_GENERATION for hit in result['page']['results']))
         self.assertEqual(self.state['peak'],2,'exactly one lookahead may overlap the first partition')
+
+    def test_result_page_cache_reuses_verified_index_and_resets_with_query(self):
+        page = self.make_page()
+        page.evaluate('''async config => {
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);
+          window.first=await window.deadline(client.search('needle'), 'initial search');
+        }''', self.configuration())
+        initial = list(self.state['paths'])
+        a = page.evaluate('''async() => {
+          const a=await window.deadline(client.page(50),'first page');
+          const b=await window.deadline(client.page(100),'cross-partition page');
+          const c=await window.deadline(client.page(150),'next partition reuse');
+          return {a,b,c};
+        }''')
+        self.assertEqual([a[k]['offset'] for k in ('a','b','c')], [50,100,150])
+        self.assertEqual([hit['page'] for hit in a['b']['results']], [1]*20+[2]*30)
+        self.assertTrue(all(hit['textGeneration'] == TEXT_GENERATION for k in a for hit in a[k]['results']))
+        first_path = f'{BASE}/search-000001-000001.json.gz'
+        second_path = f'{BASE}/search-000002-000002.json.gz'
+        self.assertEqual(self.state['paths'][len(initial):], [first_path,second_path])
+        page.evaluate('''async() => {window.same=await window.deadline(client.search('needle'),'new query');}''')
+        self.assertNotEqual(page.evaluate('window.first.session'),page.evaluate('window.same.session'))
+        self.assertEqual(self.state['paths'][len(initial):], [first_path,second_path,first_path,second_path])
+        page.evaluate('''async() => {window.second=await window.deadline(client.page(150),'new session page');}''')
+        self.assertEqual(self.state['paths'][-1], second_path)
+        self.assertEqual(len(self.state['paths']),len(initial)+5)
+        self.assertEqual(len(page.evaluate('window.second.results')),30)
+
+    def test_result_page_cache_never_masks_a_changed_uncached_partition(self):
+        page = self.make_page()
+        page.evaluate('''async config => {
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);
+          await window.deadline(client.search('needle'),'search');
+          await window.deadline(client.page(50),'retain first partition');
+        }''', self.configuration())
+        target = f'{BASE}/search-000002-000002.json.gz'
+        with self.server.state_lock:
+            self.server.resources[target] = PARTITION2[:-1] + bytes([PARTITION2[-1] ^ 1])
+        result = page.evaluate('''async()=>{
+          const failed=await window.capture(client.page(100),'changed partition');
+          const retry=await window.capture(client.page(50),'previous partition retry');
+          return {failed,retry};
+        }''')
+        self.assertIn('PDF_OCR_HASH_MISMATCH',result['failed'].get('message',''))
+        self.assertEqual(result['retry']['value']['offset'],50)
+        self.assertEqual(len(result['retry']['value']['results']),50)
+        self.assertEqual(self.state['paths'].count(f'{BASE}/search-000001-000001.json.gz'),3)
+
+    def test_result_cache_is_discarded_after_cancellation(self):
+        page = self.make_page()
+        page.evaluate('''async config => {
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);
+          await window.deadline(client.search('needle'),'search');
+          await window.deadline(client.page(50),'retain');
+          client.cancel();
+        }''', self.configuration())
+        target = f'{BASE}/search-000001-000001.json.gz'
+        self.assertEqual(self.state['paths'].count(target),2)
+        with self.server.state_lock:
+            self.server.resources[target] = PARTITION[:-1] + bytes([PARTITION[-1] ^ 1])
+        invalid = page.evaluate('''async()=>window.capture(client.page(50),'old session')''')
+        self.assertIn('取消或加载超时',invalid.get('message',''))
+        self.assertEqual(self.state['paths'].count(target),2)
+        result = page.evaluate('''async()=>window.capture(client.search('needle'),'search after cancel')''')
+        self.assertIn('PDF_OCR_HASH_MISMATCH',result.get('message',''))
+        self.assertEqual(self.state['paths'].count(target),3)
+
+    def test_result_page_cache_bounds_json_expansion(self):
+        large = packed({
+            'version':1, 'kind':'pdf-search-text-partition', 'source_sha256':SOURCE_SHA,
+            'generation':GENERATION, 'offset_unit':'unicode-codepoint', 'start':1, 'end':1,
+            # UTF-16 text fits, but serializing these control characters needs
+            # six UTF-8 bytes apiece; it must not become a retained index.
+            'pages':[{'page':1, 'text':'needle '*120 + '\u0001'*180000,
+                      'text_generation':TEXT_GENERATION}],
+        })
+        target = f'{BASE}/search-000001-000001.json.gz'
+        with self.server.state_lock:
+            self.server.resources[target] = large
+        config = self.configuration()
+        config['partitions'][0]['bytes'] = len(large)
+        config['partitions'][0]['sha256'] = digest(large)
+        page = self.make_page()
+        page.evaluate('''async config => {
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);
+          await window.deadline(client.search('needle'),'search');
+          await window.deadline(client.page(50),'first page');
+          await window.deadline(client.page(50),'repeated page');
+        }''', config)
+        self.assertEqual(self.state['paths'].count(target),3)
+
+    def test_result_page_cache_rejects_oversized_text(self):
+        large = packed({
+            'version':1, 'kind':'pdf-search-text-partition', 'source_sha256':SOURCE_SHA,
+            'generation':GENERATION, 'offset_unit':'unicode-codepoint', 'start':1, 'end':1,
+            'pages':[{'page':1, 'text':'needle '*120 + '中'*(1024*1024//2),
+                      'text_generation':TEXT_GENERATION}],
+        })
+        target = f'{BASE}/search-000001-000001.json.gz'
+        with self.server.state_lock:
+            self.server.resources[target] = large
+        config = self.configuration()
+        config['partitions'][0]['bytes'] = len(large)
+        config['partitions'][0]['sha256'] = digest(large)
+        page = self.make_page()
+        result = page.evaluate('''async config => {
+          const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
+          window.client=createPdfBookSearch(config);
+          await window.deadline(client.search('needle'),'search');
+          const a=await window.deadline(client.page(50),'first page');
+          const b=await window.deadline(client.page(50),'repeated page');
+          return {a,b};
+        }''',config)
+        self.assertEqual(result['a']['results'],result['b']['results'])
+        self.assertEqual(self.state['paths'].count(target),3)
 
     def test_partition_failure_never_commits_unverified_results(self):
         page=self.make_page()
