@@ -81,6 +81,11 @@ class Handler(SimpleHTTPRequestHandler):
                 state['paths'].append('/'.join(parts))
                 state['done'].clear()
         try:
+            if state and state['after_block_path'] and '/'.join(parts) == state['after_block_path']:
+                if not state['arrived'].wait(state['timeout']):
+                    self.server.block_timed_out.set()
+                    self.send_error(503, 'first request did not arrive')
+                    return
             if state and '/'.join(parts) == state['block_path']:
                 state['arrived'].set()
                 if not state['release'].wait(state['timeout']):
@@ -128,7 +133,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
 
     def setUp(self):
         self.state = {
-            'token': uuid.uuid4().hex[:16], 'block_path': None, 'timeout': 10,
+            'token': uuid.uuid4().hex[:16], 'block_path': None, 'after_block_path': None, 'timeout': 10,
             'arrived': threading.Event(), 'release': threading.Event(),
             'done': threading.Event(), 'active': 0, 'peak': 0, 'paths': [], 'completed_paths': [],
         }
@@ -265,6 +270,9 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
 
     def test_partition_lookahead_preserves_order_progress_and_paging(self):
         self.state['block_path'] = f'{BASE}/search-000001-000001.json.gz'
+        # Either request can reach the server first. Hold the second until
+        # the first is blocked so peak concurrency is deterministic.
+        self.state['after_block_path'] = f'{BASE}/search-000002-000002.json.gz'
         page = self.make_page()
         page.evaluate('''async config => {
           const {createPdfBookSearch}=await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'),'import');
