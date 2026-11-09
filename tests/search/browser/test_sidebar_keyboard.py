@@ -568,7 +568,34 @@ class SidebarKeyboardTests(unittest.TestCase):
         }''')
         self.assertEqual(outcome, dict(before=dict(done=False,frames=0),wrong=dict(done=False,frames=0),
             ready=dict(done=False,frames=1),first=dict(done=False,frames=1),done=True,frames=0,
-            disconnected=2,wake=True,delay=False))
+            disconnected=1,wake=True,delay=False))
+
+    def test_first_view_gate_rechecks_loading_before_releasing_frame(self):
+        result = self.page.evaluate(r'''async () => {
+          const old={observer:window.MutationObserver,request:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
+            getSearchViewKey,loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView,
+            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetDelayUntilPaint,wake:readerAssetParseWake};
+          const frames=new Map();let next=0,callback,disconnected=0,done=false;
+          try {
+            window.MutationObserver=class {constructor(fn){callback=fn}observe(){}disconnect(){disconnected++}};
+            window.requestAnimationFrame=fn=>{const id=++next;frames.set(id,fn);return id};
+            window.cancelAnimationFrame=id=>frames.delete(id);
+            STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=1;STATE.isLoading=false;
+            readerAssetDelayUntilPaint=true;getSearchViewKey=()=>'expected';displayedSearchView={...displayedSearchView,key:'expected'};
+            const pending=waitForReaderAssetFirstPaint(new AbortController().signal,'expected').then(()=>{done=true});
+            const tick=()=>{const [id,fn]=frames.entries().next().value;frames.delete(id);fn()};
+            STATE.isLoading=true;tick();tick();await Promise.resolve();
+            const stalled={done,frames:frames.size,disconnected};
+            STATE.isLoading=false;callback();tick();tick();await pending;
+            return {stalled,done,disconnected,wake:readerAssetParseWake===null};
+          } finally {
+            window.MutationObserver=old.observer;window.requestAnimationFrame=old.request;window.cancelAnimationFrame=old.cancel;
+            getSearchViewKey=old.getSearchViewKey;STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;
+            displayedSearchView=old.view;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
+            readerAssetDelayUntilPaint=old.delay;readerAssetParseWake=old.wake;
+          }
+        }''')
+        self.assertEqual(result,dict(stalled=dict(done=False,frames=0,disconnected=0),done=True,disconnected=1,wake=True))
 
     def test_first_view_decode_gate_handles_timeout_abort_and_unsupported_context(self):
         self.page.clock.install()
