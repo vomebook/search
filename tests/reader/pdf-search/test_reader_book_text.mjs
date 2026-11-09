@@ -118,6 +118,69 @@ try {
   assert.equal(iteratedUnits,0,"box-free pages must not count prefix code points");
 } finally { String.prototype[Symbol.iterator] = originalIterator; }
 
+// Deep mapped pages reuse bounded code-point projections. Compare every
+// returned field with the old full-prefix oracle, including split surrogates.
+const mappedCases = [
+  {text:'😀needle '.repeat(3000),query:'needle'},
+  {text:'a'.repeat(700)+'😀needle '.repeat(1500),query:'needle'},
+  {text:'x😀'.repeat(2000),query:'\ud83d'},
+  {text:'x😀'.repeat(2000),query:'\ude00'},
+  {text:'\ud800x\udc00中'.repeat(1200),query:'\ud800'},
+];
+for (const {text,query} of mappedCases) {
+  const points=Array.from(text), spans=points.map((_,i)=>({start:i,end:i+1,box:[0,0,1,1],block:i}));
+  const book={pages:[{page:1,text,text_spans:spans}]};
+  const oracleIndex=await searchBookText(book,query,{yieldTask:async()=>{}});
+  for (const offset of [0,250,500,750,1000,1450,1950,2950]) {
+    const expected=bruteBookPage(book,query,offset,50);
+    assert.deepEqual(oracleIndex.page(offset),expected,JSON.stringify({query,offset}));
+  }
+}
+// Seeded multi-page differential check keeps global match checkpoints,
+// page transitions and Unicode result boxes equivalent to the old oracle.
+{
+  let seed=0x716293ab;
+  const random=n=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed%n;};
+  const pieces=['x','😀','中','needle','NEEDLE','\ud800','\udc00',' '];
+  const pages=[];
+  for(let p=0;p<4;p++) {
+    // 530 matches per page makes later checkpoints cross page boundaries.
+    let text='😀'.repeat(530);for(let i=0;i<1600;i++)text+=pieces[random(pieces.length)];
+    const chars=Array.from(text),spans=[];
+    for(let i=0;i<chars.length;i+=3)spans.push({start:i,end:Math.min(chars.length,i+3),box:[0,0,1,1],block:i});
+    pages.push({page:p+1,text,text_spans:spans});
+  }
+  const book={pages};
+  for(const query of ['needle','😀','中','\ud800','\udc00']) {
+    const index=await searchBookText(book,query,{yieldTask:async()=>{}});
+    for(const offset of [0,50,250,500,750,1250,2000,3000,5000])
+      assert.deepEqual(index.page(offset),bruteBookPage(book,query,offset,50),JSON.stringify({query,offset}));
+  }
+}
+// A changed text value cannot reuse a projection for the old string.
+{
+  const text='😀needle '.repeat(3000),book={pages:[{page:1,text,text_spans:[{start:0,end:30000,box:[0,0,1,1]}]}]};
+  const index=await searchBookText(book,'needle',{yieldTask:async()=>{}});
+  book.pages[0].text='x'+text;
+  assert.deepEqual(index.page(1500),bruteBookPage(book,'needle',1500,50));
+}
+// Bounded checkpoints avoid the long page-prefix walk on repeated deep pages,
+// while oversized pages deliberately fall back without dropping matches.
+{
+  const text='😀needle '.repeat(20000),book={pages:[{page:1,text,text_spans:[{start:0,end:160000,box:[0,0,1,1]}]}]};
+  const index=await searchBookText(book,'needle',{yieldTask:async()=>{}}), native=String.prototype[Symbol.iterator];
+  index.page(14000); // First deep access builds the bounded projection lazily.
+  let units=0;String.prototype[Symbol.iterator]=function(...args){units+=this.length;return native.apply(this,args);};
+  try {const result=index.page(15000);assert.equal(result.results.length,50);assert.ok(units<20000,`incremental projection walked ${units} units`);}
+  finally {String.prototype[Symbol.iterator]=native;}
+  const huge='😀needle '.repeat(30000),largeBook={pages:[{page:1,text:huge,text_spans:[{start:0,end:240000,box:[0,0,1,1]}]}]};
+  const fallback=await searchBookText(largeBook,'needle',{yieldTask:async()=>{}});
+  units=0;String.prototype[Symbol.iterator]=function(...args){units+=this.length;return native.apply(this,args);};
+  try {assert.equal(fallback.page(25000).results.length,50);assert.ok(units>200000,'oversized text must use fallback');}
+  finally {String.prototype[Symbol.iterator]=native;}
+
+}
+
 // Page scanning cooperates with Worker cancellation without a timer per tiny
 // set of pages. A deterministic fake clock proves the deadline and byte guard.
 const schedulerClock=globalThis.performance;
