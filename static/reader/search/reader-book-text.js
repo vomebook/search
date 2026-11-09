@@ -34,6 +34,8 @@ function pattern(query) {
 }
 
 const CHECKPOINT_STRIDE = 256;
+const CHECKPOINT_PROJECTION_UNITS = 256 * 1024;
+const CHECKPOINT_PROJECTION_COUNT = 4096;
 const SEARCH_YIELD_MS = 8;
 const SEARCH_YIELD_UNITS = 256 * 1024;
 
@@ -65,6 +67,37 @@ export async function searchBookText(book, query, options = {}) {
   let total = 0, deadline = performance.now() + SEARCH_YIELD_MS, pendingUnits = 0;
   if (!query) return { total: 0, page: () => ({ total: 0, offset: 0, pageSize: 50, results: [] }) };
   const pageCache = new Map();
+  // Materialize code-point checkpoints only for the page actually opened by
+  // the reader. Never add work to the foreground full-book scan.
+  let projectionPage = null;
+  function projectionFor(page, pageIndex, target, checkpointPosition) {
+    if (!page.text_spans?.length || page.text.length > CHECKPOINT_PROJECTION_UNITS || target < CHECKPOINT_STRIDE) return null;
+    if (!projectionPage || projectionPage.text !== page.text || projectionPage.pageIndex !== pageIndex)
+      projectionPage = {text:page.text, pageIndex, end:0, point:0, checkpoints:new Map()};
+    const state = projectionPage;
+    if (state.checkpoints.has(target)) return state.checkpoints.get(target);
+    if (state.end > target || state.checkpoints.size >= CHECKPOINT_PROJECTION_COUNT) return null;
+    // Scan only gaps between *existing* match checkpoints; do not rerun the
+    // query or alter its Unicode matching semantics.
+    // Checkpoints are sorted by page. Visit only this page's prefix, never the
+    // full book's checkpoint list when jumping to a late mapped page.
+    let low = 0, high = checkpointPosition + 1;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (checkpoints[middle].pageIndex < pageIndex) low = middle + 1;
+      else high = middle;
+    }
+    for (let position = low; position <= checkpointPosition; position++) {
+      const candidate = checkpoints[position];
+      if (candidate.start < state.end) continue;
+      const end = candidate.end;
+      state.point += codePointLength(page.text.slice(state.end,end));
+      state.end = end;
+      state.checkpoints.set(candidate.start,{end,point:state.point});
+      if (state.checkpoints.size >= CHECKPOINT_PROJECTION_COUNT) break;
+    }
+    return state.checkpoints.get(target) || null;
+  }
   const indexResult = { get total() { return total; }, page(offset = 0, pageSize = 50) {
     offset = Math.max(0, Math.min(Math.max(0, total - 1), Math.floor(offset)));
     offset = Math.floor(offset / pageSize) * pageSize;
@@ -76,32 +109,40 @@ export async function searchBookText(book, query, options = {}) {
       return cached;
     }
     const results = [];
-    let checkpoint = null;
+    let checkpoint = null, checkpointPosition = -1;
     for (let low = 0, high = checkpoints.length - 1; low <= high;) {
       const middle = (low + high) >> 1;
       if (checkpoints[middle].ordinal <= offset) {
         checkpoint = checkpoints[middle];
+        checkpointPosition = middle;
         low = middle + 1;
       } else high = middle - 1;
     }
     let passed = checkpoint?.ordinal || 0;
     const firstPage = checkpoint?.pageIndex || 0;
     for (let index = firstPage; index < counts.length && results.length < pageSize; index++) {
-      if (passed + counts[index] <= offset) { passed += counts[index]; continue; }
+      // A global checkpoint's ordinal is already inside its page. Do not add
+      // that page's full count again; only whole subsequent pages can skip.
+      if (!(checkpoint && index === firstPage) && passed + counts[index] <= offset) { passed += counts[index]; continue; }
       const page = book.pages[index];
       const start = checkpoint && index === firstPage ? checkpoint.start : 0;
       // Partitioned v3 text carries no boxes; computing code-point offsets
       // from the beginning of a large page cannot affect those results.
       const hasBoxes = !!page.text_spans?.length;
-      let previousUnitEnd = 0, previousPointEnd = 0;
+      const projection = checkpoint && index === firstPage ? projectionFor(page,index,start,checkpointPosition) : null;
+      let previousUnitEnd = projection?.end ?? 0, previousPointEnd = projection?.point ?? 0;
       for (const match of page.text.slice(start).matchAll(re)) {
         const matchIndex = start + match.index;
         if (passed++ < offset) continue;
         const begin = Math.max(0, matchIndex - 72), end = Math.min(page.text.length, matchIndex + match[0].length + 88);
         let boxes = [];
         if (hasBoxes) {
-          const pointStart = previousPointEnd + codePointLength(page.text.slice(previousUnitEnd, matchIndex));
-          const pointEnd = pointStart + codePointLength(match[0]);
+          // If the checkpoint already counted this match, recover its start
+          // with the same independent code-point count used by hitBoxes.
+          const matchPoints = codePointLength(match[0]);
+          const pointEnd = matchIndex < previousUnitEnd ? previousPointEnd :
+            previousPointEnd + codePointLength(page.text.slice(previousUnitEnd, matchIndex)) + matchPoints;
+          const pointStart = pointEnd - matchPoints;
           previousUnitEnd = matchIndex + match[0].length;
           previousPointEnd = pointEnd;
           boxes = hitBoxesAtOffsets(page, pointStart, pointEnd);
@@ -124,9 +165,10 @@ export async function searchBookText(book, query, options = {}) {
   for (let index = 0; index < book.pages.length; index++) {
     if (!current()) throw new DOMException("Search cancelled", "AbortError");
     let count = 0;
-    for (const match of book.pages[index].text.matchAll(re)) {
+    const text = book.pages[index].text;
+    for (const match of text.matchAll(re)) {
       if ((total + count) % CHECKPOINT_STRIDE === 0)
-        checkpoints.push({ ordinal: total + count, pageIndex: index, start: match.index });
+        checkpoints.push({ ordinal: total + count, pageIndex: index, start: match.index, end: match.index + match[0].length });
       count++;
       if (count % 2048 === 0) {
         await yieldTask();
@@ -135,7 +177,7 @@ export async function searchBookText(book, query, options = {}) {
         if (!current()) throw new DOMException("Search cancelled", "AbortError");
       }
     }
-    pendingUnits += book.pages[index].text.length;
+    pendingUnits += text.length;
     counts.push(count);
     total += count;
     if (progress && (index === 0 || (count && total <= 50) || index % 16 === 15 || index === book.pages.length - 1))
