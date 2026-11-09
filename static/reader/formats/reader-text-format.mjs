@@ -179,8 +179,13 @@ export function createReaderTextFormat(readerContext) {
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
     if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
     if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
-    const evenNulls = bytes.filter((value, index) => !value && index % 2 === 0).length;
-    const oddNulls = bytes.filter((value, index) => !value && index % 2 === 1).length;
+    let evenNulls = 0, oddNulls = 0;
+    for (let index = 0; index < bytes.length; index++) {
+      if (!bytes[index]) {
+        if (index % 2 === 0) evenNulls++;
+        else oddNulls++;
+      }
+    }
     if (oddNulls > bytes.length / 8 && oddNulls > evenNulls * 4) return "utf-16le";
     if (evenNulls > bytes.length / 8 && evenNulls > oddNulls * 4) return "utf-16be";
     try {
