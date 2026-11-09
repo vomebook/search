@@ -225,6 +225,18 @@ class HfSearchProjectionCiTests(unittest.TestCase):
             self.assertEqual(workflow.count(module), 1)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module reader_archive'), 1)
 
+    def test_browse_mutation_gate_runs_once_without_optional_failure(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        job = workflow.split('  huggingface-search:\n', 1)[1]
+        job = re.split(r'\n  [A-Za-z0-9_-]+:\s*\n', job, maxsplit=1)[0]
+        quality = job.split('      - name: Check backend coverage and quality inventory\n', 1)[1]
+        quality = quality.split('      - name:', 1)[0]
+        command = '          python -B scripts/check_search_words_mutation.py --module search_browse'
+        self.assertEqual(quality.splitlines().count(command), 1)
+        self.assertEqual(workflow.splitlines().count(command), 1)
+        self.assertNotIn('continue-on-error:', quality)
+        self.assertNotIn(command + ' || true', quality)
+
     def test_full_bootstrap_contract_and_mutations_are_required(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         self.assertEqual(workflow.count('tests.search.backend.test_search_bootstrap_contract'), 1)
