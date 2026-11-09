@@ -63,16 +63,30 @@ export function validateTextLayer(layer, entry, source) {
   if ((layer.revision === "raw" && layer.quality !== "unreviewed") ||
       (layer.revision === "accepted" && (layer.quality !== "partially-reviewed" ||
         !sha(layer.parent_generation) || !Array.isArray(layer.acceptances) || !layer.acceptances.length))) invalid();
-  const chars = Array.from(layer.text), ids = new Set();
-  let end = 0;
+  const ids = new Set(), text = layer.text;
+  // Regions are ordered and non-overlapping in code points. Keep one forward
+  // UTF-16 cursor instead of allocating an array for every point on the page.
+  let end = 0, unit = 0;
+  const advance = target => {
+    while (end < target && unit < text.length) {
+      const high = text.charCodeAt(unit++);
+      if (high >= 0xd800 && high <= 0xdbff && unit < text.length) {
+        const low = text.charCodeAt(unit);
+        if (low >= 0xdc00 && low <= 0xdfff) unit++;
+      }
+      end++;
+    }
+    return end === target;
+  };
   for (const [order, region] of layer.regions.entries()) {
     if (!region || typeof region.id !== "string" || ids.has(region.id) || region.order !== order ||
         !Number.isSafeInteger(region.start) || !Number.isSafeInteger(region.end) || region.start < end ||
-        region.end <= region.start || region.end > chars.length || typeof region.text !== "string" ||
-        chars.slice(region.start, region.end).join("") !== region.text || !validBox(region.box) ||
-         !validQuad(region.quad) ||
+        region.end <= region.start || typeof region.text !== "string" || !validBox(region.box) ||
+        !validQuad(region.quad) ||
         !modes.has(region.writing_mode) || !["ltr", "rtl", "mixed", "neutral"].includes(region.direction)) invalid();
-    end = region.end;
+    if (!advance(region.start)) invalid();
+    const begin = unit;
+    if (!advance(region.end) || text.slice(begin, unit) !== region.text) invalid();
     ids.add(region.id);
   }
   return layer;
