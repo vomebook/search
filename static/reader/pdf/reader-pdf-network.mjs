@@ -1,10 +1,12 @@
 import { createPdfRangeCache, sharedPdfRangeCache } from "./reader-pdf-range-cache.mjs";
-import { PDF_ADAPTIVE_CHUNK_BYTES, PDF_DEFAULT_CHUNK_BYTES, firstPageSectionEnd,
+import { PDF_ADAPTIVE_CHUNK_BYTES, PDF_LARGE_FLAT_CHUNK_BYTES, PDF_DEFAULT_CHUNK_BYTES, firstPageSectionEnd,
   firstPageTailHintStart, firstImageSectionEnd, choosePdfRangeChunkSize, isFirstPageCandidate }
   from "./reader-pdf-range-hints.mjs";
 export { choosePdfRangeChunkSize, isFirstPageCandidate };
 
 export const PDF_METADATA_RANGE_CONCURRENCY = 24;
+const PDF_LARGE_FLAT_BATCH_DELAY_MS = 12;
+const PDF_LARGE_FLAT_GAP_BUDGET = PDF_LARGE_FLAT_CHUNK_BYTES * 3;
 
 // Preserve the existing public import path while cache ownership is isolated.
 export { createPdfRangeCache };
@@ -181,7 +183,16 @@ export async function preparePdfInitialRange(options, hooks) {
     const pageOne = !first.complete && hooks.canPrefetchFirstPage?.();
     const connection = globalThis.navigator?.connection;
     const extraLookahead = pageOne && !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType);
-    const tailStart = extraLookahead ? firstPageTailHintStart(first.bytes, first.total, options.rangeChunkSize) : 0;
+    const rangeChunkSize = first.complete ? options.rangeChunkSize :
+      choosePdfRangeChunkSize(first.bytes, first.total, options.rangeChunkSize);
+    // The ordinary tail ends after startxref but some flat files store a
+    // large xref immediately before it. One extra chunk avoids serial tiny
+    // reads; it remains ETag-bound and is suppressed for data-saving modes.
+    const largeFlatTail = !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType) &&
+      first.total > options.rangeChunkSize * 6 && tail && rangeChunkSize === PDF_LARGE_FLAT_CHUNK_BYTES;
+    const tailStart = largeFlatTail
+      ? Math.max(options.rangeChunkSize, tail.begin - options.rangeChunkSize)
+      : extraLookahead ? firstPageTailHintStart(first.bytes, first.total, options.rangeChunkSize) : 0;
     if (tailStart && tail) extendedTail = preparePdfRangeHint(options, tailStart, tail.begin, {...hooks, signal}, first);
     const end = pageOne
       ? firstPageSectionEnd(first.bytes, first.total, options.rangeChunkSize) ||
@@ -190,8 +201,6 @@ export async function preparePdfInitialRange(options, hooks) {
       const last = Math.min(end, begin + options.rangeChunkSize * 2);
       openingRanges.push(preparePdfRangeHint(options, begin, last, {...hooks, signal}, first));
     }
-    const rangeChunkSize = first.complete ? options.rangeChunkSize :
-      choosePdfRangeChunkSize(first.bytes, first.total, options.rangeChunkSize);
     return {...first, tail, extendedTail, openingRanges, rangeChunkSize, cancelInitial:reason => owner.abort(reason)};
   } catch (error) {
     owner.abort(error);
@@ -211,7 +220,7 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
   failure.promise.catch(() => {});
   const rangeWaiters = [], demandQueue = [];
   const priorityRanges = [];
-  let demandScheduled = false;
+  let demandScheduled = false, demandTimer = 0;
   let rangeReads = 0, metadataAdmission = false;
   // Reserve one existing transport slot for current foreground demand ranges.
   // This promotes a PDF.js demand already in the queue; it never fetches a
@@ -262,6 +271,8 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     if (stopped) return;
     stopped = true;
     owner.abort(reason);
+    if (demandTimer) clearTimeout(demandTimer);
+    demandTimer = 0;
     for (const row of demandQueue.splice(0)) row.reject(active.reason);
     prepared?.cancelInitial?.(reason);
     signal.removeEventListener("abort", cancelled);
@@ -281,10 +292,12 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
       metadataRelease?.();
     }
   };
-  // Coalesce only ranges PDF.js has already requested. Adjacent metadata
-  // chunks can travel together; never read across a gap or speculate on images.
+  // Coalesce only queued PDF.js requests. The large-flat policy may bridge at
+  // most 96 KiB in total per 256 KiB response; no future request is guessed.
+  // Other documents retain the old adjacent-only, immediate-microtask path.
   const flushDemand = () => {
     demandScheduled = false;
+    demandTimer = 0;
     if (active.aborted) {
       for (const row of demandQueue.splice(0)) row.reject(active.reason);
       return;
@@ -293,10 +306,14 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     const groups = [];
     for (const row of pending) {
       const previous = groups.at(-1);
-      if (previous && row.begin <= previous.end && Math.max(previous.end, row.end) - previous.begin <= PDF_DEFAULT_CHUNK_BYTES) {
+      const gap = previous ? Math.max(0, row.begin - previous.end) : 0;
+      const maxGap = chunkSize === PDF_LARGE_FLAT_CHUNK_BYTES ? PDF_LARGE_FLAT_GAP_BUDGET : 0;
+      if (previous && previous.gapBytes + gap <= maxGap &&
+          Math.max(previous.end, row.end) - previous.begin <= PDF_DEFAULT_CHUNK_BYTES) {
         previous.end = Math.max(previous.end, row.end);
+        previous.gapBytes += gap;
         previous.rows.push(row);
-      } else groups.push({begin:row.begin, end:row.end, rows:[row]});
+      } else groups.push({begin:row.begin, end:row.end, rows:[row], gapBytes:0});
     }
     for (const group of groups) read(group.begin, group.end, prepared).then(result => {
       for (const row of group.rows)
@@ -308,7 +325,17 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     if (active.aborted) return Promise.reject(active.reason);
     return new Promise((resolve, reject) => {
       demandQueue.push({begin, end, resolve, reject});
-      if (!demandScheduled) { demandScheduled = true; queueMicrotask(flushDemand); }
+      const priority = isPriority({begin,end});
+      if (priority && demandTimer) {
+        clearTimeout(demandTimer);
+        demandTimer = 0;
+        queueMicrotask(flushDemand);
+      } else if (!demandScheduled) {
+        demandScheduled = true;
+        if (chunkSize === PDF_LARGE_FLAT_CHUNK_BYTES && !priority)
+          demandTimer = setTimeout(flushDemand, PDF_LARGE_FLAT_BATCH_DELAY_MS);
+        else queueMicrotask(flushDemand);
+      }
     });
   };
   try {
@@ -326,8 +353,8 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     // The initial prefix and tail remain available at their original size;
     // only PDF.js's subsequent demand chunk granularity changes.
     const candidate = first.rangeChunkSize ?? choosePdfRangeChunkSize(first.bytes, first.total, options.rangeChunkSize);
-    if (candidate === PDF_ADAPTIVE_CHUNK_BYTES && options.rangeChunkSize === PDF_DEFAULT_CHUNK_BYTES)
-      chunkSize = candidate;
+    if ((candidate === PDF_ADAPTIVE_CHUNK_BYTES || candidate === PDF_LARGE_FLAT_CHUNK_BYTES) &&
+        options.rangeChunkSize === PDF_DEFAULT_CHUNK_BYTES) chunkSize = candidate;
     metadataAdmission = boundedMetadata || chunkSize < options.rangeChunkSize;
     // PDF.js owns parsing and range demand; the bootstrap is the first real range.
     const transport = new pdfjs.PDFDataRangeTransport(first.total, first.bytes, true);
@@ -406,6 +433,14 @@ export async function openPdfRangeTask(pdfjs, options, {signal, readBytes, limit
     const prioritizeRange = ({begin,end} = {}) => {
       if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin || end > first.total) return;
       ratePriority?.(begin,end);
+      // A requested range may already be in the short large-flat batching
+      // window when the page worker promotes it. Flush now, without adding
+      // any new range or waiting for the remainder of the timer.
+      if (demandTimer && demandQueue.some(row => row.begin < end && row.end > begin)) {
+        clearTimeout(demandTimer);
+        demandTimer = 0;
+        queueMicrotask(flushDemand);
+      }
       // Keep a small rolling set of PDF.js misses. Hints only reorder existing
       // requests; they neither fetch bytes nor identify a page.
       if (priorityRanges.some(range => range.begin <= begin && range.end >= end)) { drainRanges(); return; }

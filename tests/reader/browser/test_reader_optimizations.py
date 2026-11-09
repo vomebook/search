@@ -203,6 +203,88 @@ class ReaderOptimizationTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('__extraction.calls'), [1, 2])
 
 
+    def test_native_pdf_deep_search_uses_bounded_checkpoints_and_safe_fallback(self):
+        self.expose()
+        self.serve('checkpoint fixture')
+        self.open(self.reader_url('txt'))
+        result = self.page.evaluate('''async () => {
+          const {createReaderPdfSearch}=await import(new URL('reader/pdf/reader-pdf-search.mjs',location.href));
+          const original=RegExp.prototype[Symbol.matchAll], query='needle';
+          const pages=['😀Needle '.repeat(15000),'prefix needle suffix'];
+          const scan={visits:0,reads:[],waits:0,current:true,groups:null};
+          const context={pdfDocument:{numPages:pages.length},readerRuntime:{currentGeneration:()=>1},
+            normalizePdfSearchText:s=>s,fullSearchEscape:s=>s,
+            fullSearchPageOffset:(total,offset,size)=>Math.max(0,Math.min(Math.floor((total-1)/size),Math.floor(offset/size)))*size,
+            loadPdfSearchText:async (_pdf,page)=>{scan.reads.push(page);return pages[page-1]},
+            isReaderGenerationCurrent:()=>scan.current,waitForReader:async()=>{scan.waits++},
+            fullSearchSnippet:(text,index,length)=>({text:text.slice(Math.max(0,index-72),index+length+88),
+              matchStart:index-Math.max(0,index-72),matchLength:length}),
+            goToPage:(page)=>page,highlightPdfText:()=>{},content:{querySelector:()=>null}};
+          const api=createReaderPdfSearch(context);
+          context.makePdfSearchPageLoader=api.makePdfSearchPageLoader;
+          context.publishPdfSearchProgress=(generation,groups,total,pattern,first)=>{
+            scan.groups=groups;context.loader=api.makePdfSearchPageLoader(groups,total,pattern,first);return true;
+          };
+          context.fullSearchSession={page:{results:[]}};
+          await api.fullSearchPdfMatches(query,1);
+          const currentLoader=context.loader;
+          const sparse=[];
+          for (let page=0;page<25;page++) pages.push('x'.repeat(59000)+'y'.repeat(41000));
+          pages.push('x'.repeat(300000));
+          const budgetContext={...context,pdfDocument:{numPages:26},
+            loadPdfSearchText:async (_pdf,page)=>pages[page+1]};
+          const budgetApi=createReaderPdfSearch(budgetContext);
+          budgetContext.makePdfSearchPageLoader=budgetApi.makePdfSearchPageLoader;
+          budgetContext.fullSearchSession={page:{results:[]}};
+          budgetContext.publishPdfSearchProgress=(generation,groups,total,pattern,first)=>{
+            sparse.push(groups.slice());budgetContext.loader=budgetApi.makePdfSearchPageLoader(groups,total,pattern,first);return true;
+          };
+          await budgetApi.fullSearchPdfMatches('x',1);
+          const groups=sparse.at(-1), marked=groups.filter(group=>group.checkpoints?.length);
+          const budget={bytes:marked.reduce((sum,group)=>sum+group.checkpointText.length*2,0),
+            count:marked.reduce((sum,group)=>sum+group.checkpoints.length,0),marked:marked.length,
+            lastIsFallback:!groups.at(-1).checkpoints};
+          function track() {
+            scan.visits=0;
+            RegExp.prototype[Symbol.matchAll]=function(text) {
+              const iterator=original.call(this,text);
+              return {[Symbol.iterator](){return this},next(){scan.visits++;return iterator.next()}};
+            };
+          }
+          try {
+            track(); const deep=await currentLoader(10000);const accelerated=scan.visits;
+            const expectedStart=10000*'😀Needle '.length+2;
+            const snippet=deep.results[0].snippet;
+            pages[0]='x '+pages[0];track();const changed=await currentLoader(10000);const fallback=scan.visits;
+            const changedSnippet=changed.results[0].snippet;
+            pages[0]=pages[0].slice(2);
+            let waitStarted,releaseWait;
+            const waiting=new Promise(resolve=>waitStarted=resolve);
+            context.waitForReader=()=>new Promise(resolve=>{releaseWait=resolve;waitStarted()});
+            const pending=currentLoader(10000).then(()=>'completed',error=>error.name);
+            await waiting;scan.current=false;releaseWait();const cancelled=await pending;
+            return {total:deep.total,offset:deep.offset,length:deep.results.length,accelerated,fallback,
+              match:snippet.text.slice(snippet.matchStart,snippet.matchStart+snippet.matchLength),
+              prefix:snippet.text.slice(0,snippet.matchStart),
+              expectedPrefix:pages[0].slice(expectedStart-72,expectedStart),
+              changedMatch:changedSnippet.text.slice(changedSnippet.matchStart,changedSnippet.matchStart+changedSnippet.matchLength),
+              checkpoints:scan.groups[0].checkpoints.length,retainedBytes:scan.groups[0].checkpointText.length*2,cancelled,budget};
+          } finally {RegExp.prototype[Symbol.matchAll]=original}
+        }''')
+        self.assertEqual((result['total'], result['offset'], result['length']), (15001, 10000, 50))
+        self.assertLess(result['accelerated'], 2048)
+        self.assertGreater(result['fallback'], 10000)
+        self.assertEqual(result['match'], 'Needle')
+        self.assertEqual(result['prefix'], result['expectedPrefix'])
+        self.assertEqual(result['changedMatch'], 'Needle')
+        self.assertGreater(result['checkpoints'], 0)
+        self.assertLessEqual(result['retainedBytes'], 512 * 1024)
+        self.assertEqual(result['cancelled'], 'AbortError')
+        self.assertLessEqual(result['budget']['bytes'], 4 * 1024 * 1024)
+        self.assertLessEqual(result['budget']['count'], 4096)
+        self.assertLess(result['budget']['marked'], 25)
+        self.assertTrue(result['budget']['lastIsFallback'])
+
     def test_mobile_pdf_search_keeps_one_demand_slot_and_drops_queued_cancelled_work(self):
         self.expose()
         self.serve('mobile scheduling fixture')

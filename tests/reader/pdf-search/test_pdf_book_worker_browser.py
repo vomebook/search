@@ -320,6 +320,132 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertNotEqual(result['retry']['session'], first['session'])
         self.assertEqual(page.evaluate('window.unexpected'), [])
 
+    def test_pdf_text_layer_vertical_geometry_and_selection(self):
+        page = self.make_page()
+        result = page.evaluate('''async () => {
+          const stylesheet=document.createElement('link');
+          stylesheet.rel='stylesheet';stylesheet.href='/static/reader.css';document.head.append(stylesheet);
+          await new Promise((resolve,reject)=>{stylesheet.onload=resolve;stylesheet.onerror=reject});
+          const {populatePdfTextLayer,populateIndependentTextLayer}=await import('/static/reader/pdf/reader-pdf-text.js');
+          const shell=document.createElement('div');
+          shell.style.cssText='position:relative;width:600px;height:800px;container-type:inline-size';
+          const layer=document.createElement('div');layer.className='reader-pdf-text';shell.append(layer);document.body.append(shell);
+          const viewport={width:600,height:800,scale:1,transform:[1,0,0,1,0,0],convertToViewportPoint:(x,y)=>[x,y]};
+          const trace=[];const descriptor=Object.getOwnPropertyDescriptor(HTMLElement.prototype,'offsetHeight');
+          Object.defineProperty(HTMLElement.prototype,'offsetHeight',{...descriptor,get(){
+            if(this.classList.contains('reader-pdf-text-run')) trace.push('read');return descriptor.get.call(this);
+          }});
+          const position=n=>Math.round(n*1000)/1000;
+          function inspect() {
+            const runs=[...layer.querySelectorAll('.reader-pdf-text-run')];
+            const range=document.createRange();range.selectNodeContents(layer);
+            const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+            const value={selected:selection.toString(),runs:runs.map(run=>{
+              const box=run.getBoundingClientRect();
+              return {text:run.textContent,writingMode:getComputedStyle(run).writingMode,
+                width:position(box.width),height:position(box.height)};
+            })};
+            selection.removeAllRanges();return value;
+          }
+          try {
+            const items=[{str:'竖排 Latin😀',dir:'ttb',width:35,height:100,transform:[12,0,0,12,30,40]},
+              {str:'第二列 Latin',dir:'ttb',width:35,height:80,transform:[12,0,0,12,80,40]},
+              {str:'水平文字',dir:'ltr',width:100,height:12,transform:[12,0,0,12,150,40]}];
+            populatePdfTextLayer(layer,items,viewport);
+            const native=inspect(), nativeReads=trace.length;
+            const regions=[{id:'a',text:'甲乙😀',start:0,end:3,writing_mode:'vertical-rl',direction:'ltr',
+                quad:[[.1,.1],[.13,.1],[.13,.3],[.1,.3]],mapping_precision:'glyph'},
+              {id:'b',text:'mixed Latin',start:4,end:15,writing_mode:'vertical-lr',direction:'ltr',
+                quad:[[.2,.1],[.23,.1],[.23,.4],[.2,.4]],mapping_precision:'glyph'}];
+            trace.length=0;
+            populateIndependentTextLayer(layer,{text:'甲乙😀 mixed Latin',regions,generation:'fixture'});
+            const independent=inspect(), independentReads=trace.length;
+            return {native,nativeReads,independent,independentReads,generation:layer.dataset.textGeneration,
+              userSelect:layer.style.userSelect,regionIds:[...layer.querySelectorAll('.reader-pdf-text-run')].map(n=>n.dataset.regionId)};
+          } finally {Object.defineProperty(HTMLElement.prototype,'offsetHeight',descriptor);shell.remove();stylesheet.remove()}
+        }''')
+        self.assertEqual(result['native']['selected'], '竖排 Latin😀第二列 Latin水平文字')
+        self.assertEqual(result['nativeReads'], 2)
+        self.assertEqual([r['writingMode'] for r in result['native']['runs']],
+                         ['vertical-rl', 'vertical-rl', 'horizontal-tb'])
+        self.assertAlmostEqual(result['native']['runs'][0]['height'], 100, delta=2)
+        self.assertAlmostEqual(result['native']['runs'][1]['height'], 80, delta=2)
+        self.assertEqual(result['independent']['selected'], '甲乙😀 mixed Latin')
+        self.assertEqual(result['independentReads'], 2)
+        self.assertEqual([r['writingMode'] for r in result['independent']['runs']], ['vertical-rl', 'vertical-lr'])
+        self.assertTrue(all(r['height'] > 0 for r in result['independent']['runs']))
+        self.assertEqual(result['regionIds'], ['a', 'b'])
+        self.assertEqual(result['generation'], 'fixture')
+        self.assertEqual(result['userSelect'], 'text')
+
+    def test_chapter_search_mapping_respects_nodes_ranges_and_detachment(self):
+        page = self.make_page()
+        result = page.evaluate('''async () => {
+          const {chapterTextMap}=await import('/static/reader/search/reader-chapter-search.mjs');
+          const root=document.createElement('article');
+          root.innerHTML='<h2>标题 😀</h2><p id="one">甲 &amp; 中文 <b>needle</b> 后续</p>'+
+            '<script>hidden needle</script><p id="two">zero needle 😀 tail</p>';
+          document.body.append(root);
+          try {
+            const outputs=[];
+            for (const profile of ['dom-text-v1',undefined]) {
+              const map=chapterTextMap([root],profile), text=map.text;
+              const matches=[...text.matchAll(/needle/giu)].map(match=>[match.index,match.index+match[0].length]);
+              const cases=[];
+              for (const [start,end] of [[0,1],[0,text.length],[3,25],...matches]) {
+                const parts=map.parts(start,end,root);
+                cases.push({start,end,text:parts.map(part=>part.node.data.slice(part.start,part.end)).join('')});
+              }
+              const target=root.querySelector('#two');target.remove();
+              const detached=map.parts(matches[1][0],matches[1][1],root).length;
+              root.append(target);
+              outputs.push({profile:profile||'legacy',text,cases,detached});
+            }
+            return outputs;
+          } finally {root.remove()}
+        }''')
+        for item in result:
+            self.assertNotIn('hidden needle', item['text'])
+            self.assertEqual(item['detached'], 0)
+            needle = [case for case in item['cases'] if case['text'] == 'needle']
+            self.assertEqual(len(needle), 2)
+            self.assertTrue(item['cases'][1]['text'].startswith('标题 😀'))
+
+    def test_pdf_search_highlight_cross_node_unicode_and_bounded_projection(self):
+        page = self.make_page()
+        result = page.evaluate(r'''async () => {
+          const {createReaderPdfTextRuntime}=await import('/static/reader/pdf/reader-pdf-text-runtime.mjs');
+          const {pdfSearchText,pdfSourceOffset,normalizePdfSearchText}=await import('/static/reader/pdf/reader-pdf-text.js');
+          const shell=document.createElement('div'), layer=document.createElement('div');
+          layer.className='reader-pdf-text';shell.append(layer);document.body.append(shell);
+          let highlights=[];
+          const context={readerAbortController:{signal:{aborted:false}},searchState:{query:''},
+            pdfSearchText,pdfSourceOffset,normalizePdfSearchText,fullSearchEscape:x=>x,
+            highlightTextParts:parts=>highlights.push(parts.map(p=>p.node.data.slice(p.start,p.end)))};
+          const search=createReaderPdfTextRuntime(context);
+          try {
+            for(const text of ['手',' ', '机','', '😀','nee','dle',' ','手','\n','机']) {
+              const node=document.createElement('span');node.textContent=text;layer.append(node);
+            }
+            search.highlightPdfText(shell,'手机');const chinese=highlights;
+            highlights=[];search.highlightPdfText(shell,'needle');const split=highlights;
+            highlights=[];search.highlightPdfText(shell,'😀');const emoji=highlights;
+            layer.replaceChildren();const fragment=document.createDocumentFragment();
+            for(let i=0;i<20000;i++) {const node=document.createElement('span');
+              node.textContent=i%100===0?'needle':'ordinary';fragment.append(node)}
+            layer.append(fragment);highlights=[];
+            const oldFilter=Array.prototype.filter;let largeFilters=0;
+            Array.prototype.filter=function(...args){if(this.length>=20000)largeFilters++;return oldFilter.apply(this,args)};
+            try {search.highlightPdfText(shell,'needle')} finally {Array.prototype.filter=oldFilter}
+            return {chinese,split,emoji,dense:highlights.length,largeFilters};
+          } finally {shell.remove()}
+        }''')
+        self.assertEqual(result['chinese'], [['手', '\n', '机'], ['手', ' ', '机']])
+        self.assertEqual(result['split'], [['nee', 'dle']])
+        self.assertEqual(result['emoji'], [['😀']])
+        self.assertEqual(result['dense'], 100)
+        self.assertEqual(result['largeFilters'], 0)
+
     def test_book_text_prefetch_after_search(self):
         self.check_prefetch_after_search(False)
 

@@ -40,6 +40,83 @@ for (const raw of ['\u624b \u673a \u624b\n\u673a', '\ud840\udc00 \ud840\udc01\r\
   assert.deepStrictEqual(Array.from({length:mapped.text.length}, (_,i)=>pdfText.pdfSourceOffset(mapped,i)), oracle)
 }
 
+
+// Dense vertical pages must measure every attached run before writing any
+// final scale. A fake DOM makes forced-layout ordering deterministic.
+class TextElement {
+  constructor(tag, owner) {
+    this.tagName = tag; this.ownerDocument = owner; this.children = [];
+    this.dataset = {}; this.className = ''; this.textContent = '';
+    this.style = { setProperty(key,value) { this[key] = value; } };
+  }
+  appendChild(node) { this.children.push(node); return node; }
+  replaceChildren(fragment) { this.children = fragment.children; }
+  querySelector(selector) { return selector === '.reader-pdf-text-run'
+    ? this.children.find(child => child.className === 'reader-pdf-text-run') : null; }
+  querySelectorAll(selector) {
+    const found = [];
+    const walk = node => {
+      if (node.className === selector.slice(1)) found.push(node);
+      for (const child of node.children || []) walk(child);
+    };
+    for (const child of this.children) walk(child);
+    return found;
+  }
+  get offsetHeight() { this.ownerDocument.events.push('read'); return this.measuredHeight ?? 24; }
+}
+const fakeDoc = {
+  events: [],
+  createElement(tag) {
+    if (tag === 'canvas') return {getContext:()=>({measureText:()=>({width:200})})};
+    return new TextElement(tag,this);
+  },
+  createDocumentFragment() { return new TextElement('fragment',this); },
+  createTextNode(text) { return {textContent:text}; },
+  defaultView: {getComputedStyle(run) { return {fontSize: run.measuredHeight === 0 ? '0px' : '12px'}; }}
+};
+function textLayer() {
+  const layer = new TextElement('div',fakeDoc);
+  layer.parentElement = {getBoundingClientRect:()=>({width:600,height:800})};
+  return layer;
+}
+function traceVerticalWrites(layer) {
+  for (const run of layer.querySelectorAll('.reader-pdf-text-run')) {
+    let transform = run.style.transform;
+    Object.defineProperty(run.style,'transform',{get:()=>transform,set(value) {
+      fakeDoc.events.push('write'); transform=value;
+    }});
+  }
+}
+function runTextLayerContract(independent) {
+  const layer = textLayer(), nativeReplace = layer.replaceChildren;
+  layer.replaceChildren = function(fragment) {
+    nativeReplace.call(this,fragment);
+    const runs = this.querySelectorAll('.reader-pdf-text-run');
+    runs[1].measuredHeight = 0; // Hidden/zero-height text retains its estimate.
+    traceVerticalWrites(this);
+  };
+  fakeDoc.events.length = 0;
+  if (independent) {
+    const text = '甲乙丙', quad = [[0,0],[.1,0],[.1,.3],[0,.3]];
+    pdfText.populateIndependentTextLayer(layer,{text,generation:'g',regions:Array.from(text,(value,i)=>({
+      start:i,end:i+1,text:value,quad,writing_mode:i===2?'horizontal-tb':'vertical-rl',direction:'ltr',id:String(i)
+    }))});
+    assert.strictEqual(layer.dataset.textGeneration,'g');
+    assert.strictEqual(layer.style.userSelect,'text');
+  } else {
+    pdfText.populatePdfTextLayer(layer,Array.from({length:3},(_,i)=>({str:String(i),fontName:'f',
+      transform:[12,0,0,12,20,40],height:40,width:40,dir:i===2?'ltr':'ttb'})),
+    {width:600,height:800,scale:1,transform:[1,0,0,1,0,0],convertToViewportPoint:(x,y)=>[x,y]});
+  }
+  const runs = layer.querySelectorAll('.reader-pdf-text-run');
+  assert.deepStrictEqual(fakeDoc.events,['read','read','write']);
+  assert.notStrictEqual(runs[0].style.transform,'scaleY(0)');
+  assert.match(runs[1].style.transform,/^scaleY\(/);
+  assert.match(runs[2].style.transform,/^scaleX\(/);
+}
+runTextLayerContract(false);
+runTextLayerContract(true);
+
 const assets = sandbox.self.VoiceOfMLReader
 const retiredLink = new URL(assets.readerUrl({ Link: 'https://example.test/book.pdf', Extension: 'pdf',
   OcrUrl: 'https://voiceofml-search.hf.space/txt/book.txt',

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { hitBoxes, searchBookText } from "../../../static/reader/search/reader-book-text.js";
+import { hitBoxes, searchBookText, validateBookText } from "../../../static/reader/search/reader-book-text.js";
 
 const spans = [
   { start: 0, end: 1, box: [0, 0, 0.2, 1], block: 0 },
@@ -45,4 +45,77 @@ const deepBook = { pages: Array.from({ length: 3 }, (_, page) => ({
 const deepIndex = await searchBookText(deepBook, "needle", { yieldTask: async () => {} });
 assert.equal(deepIndex.page(500).results[0].page, 2);
 assert.equal(deepIndex.page(500).results[0].start, 200 * "needle ".length);
+
+// Differential oracle for the box-free v3 partition path and legacy box pages.
+// Full result equality covers totals, UTF-16 offsets, snippets and mappings.
+function bruteBookPage(book, query, requested, pageSize) {
+  const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+  const hits = [];
+  for (const page of book.pages) for (const match of page.text.matchAll(re)) {
+    const start = match.index, length = match[0].length;
+    const begin = Math.max(0, start - 72), end = Math.min(page.text.length, start + length + 88);
+    hits.push({page:page.page,start,length,boxes:hitBoxes(page,start,length),
+      snippet:{text:page.text.slice(begin,end),matchStart:start-begin,matchLength:length,
+        prefix:begin?"…":"",suffix:end<page.text.length?"…":""}});
+  }
+  let offset = Math.max(0, Math.min(Math.max(0, hits.length - 1), Math.floor(requested)));
+  offset = Math.floor(offset / pageSize) * pageSize;
+  return {total:hits.length,offset,pageSize,results:hits.slice(offset,offset+pageSize)};
+}
+const mixedBook = {pages:[
+  {page:1,text:("😀needle 中文 ".repeat(480))+"end"},
+  {page:2,text:"😀needle 😀Needle needle",text_spans:[]},
+  {page:3,text:"😀needle 中文 needle",text_spans:[
+    {start:1,end:7,box:[0,0,.4,1],block:1,precision:"glyph"},
+    {start:11,end:17,box:[.5,0,1,1],block:2} ]},
+]};
+for (const query of ["needle", "😀", "中文", "Needle", "absent"]) {
+  const candidate = await searchBookText(mixedBook, query, {yieldTask:async()=>{}});
+  for (const size of [1,13,50,51]) for (const offset of [0,1,49,50,255,256,477,10000])
+    assert.deepEqual(candidate.page(offset,size),bruteBookPage(mixedBook,query,offset,size),
+      JSON.stringify({query,size,offset}));
+}
+// Validate box-free pages without scanning their contents, while retaining
+// every normal envelope and mapping validation for pages with boxes.
+const validBook = {version:2,kind:"pdf-book-text",complete:true,offset_unit:"unicode-codepoint",page_count:1,
+  source_sha256:"fixture",pages:[{page:1,text:"😀ab".repeat(20000),layout:{offset_unit:"unicode-codepoint"},text_spans:[]}]};
+const originalCodePointIterator = String.prototype[Symbol.iterator];
+let validationUnits = 0;
+String.prototype[Symbol.iterator] = function (...args) {validationUnits += this.length;return originalCodePointIterator.apply(this,args);};
+try {assert.equal(validateBookText(validBook,1,"fixture"),validBook);assert.equal(validationUnits,0);}
+finally {String.prototype[Symbol.iterator] = originalCodePointIterator;}
+const mappedBook = structuredClone(validBook);
+mappedBook.pages[0].text = "😀abc";
+mappedBook.pages[0].text_spans = [{start:1,end:4,box:[0,0,1,1]}];
+assert.equal(validateBookText(mappedBook,1,"fixture"),mappedBook);
+for (const span of [
+  {start:1,end:5,box:[0,0,1,1]}, {start:0,end:1,box:[1,0,0,1]},
+  {start:0,end:1,box:[0,0,1,Infinity]}, {start:0,end:0,box:[0,0,1,1]},
+]) {
+  mappedBook.pages[0].text_spans = [span];
+  assert.throws(()=>validateBookText(mappedBook,1,"fixture"),/PDF_TEXT_MAPPING_INVALID/);
+}
+assert.throws(()=>validateBookText(validBook,2,"fixture"),/PDF_TEXT_INDEX_INCOMPLETE/);
+assert.throws(()=>validateBookText(validBook,1,"wrong"),/PDF_TEXT_INDEX_INCOMPLETE/);
+const invalidPage = structuredClone(validBook);invalidPage.pages[0].layout.offset_unit = "utf16";
+assert.throws(()=>validateBookText(invalidPage,1,"fixture"),/PDF_TEXT_INDEX_INVALID/);
+
+// Count the code-point iterator to detect a regression to a page-prefix scan,
+// without relying on a device-specific timing threshold.
+const longPartition = {pages:[{page:1,text:"😀needle ".repeat(20000)}]};
+const originalIterator = String.prototype[Symbol.iterator];
+let iteratedUnits = 0, longIndex;
+String.prototype[Symbol.iterator] = function (...args) {
+  iteratedUnits += this.length;
+  return originalIterator.apply(this,args);
+};
+try {
+  longIndex = await searchBookText(longPartition,"needle",{yieldTask:async()=>{}});
+  iteratedUnits = 0;
+  const result = longIndex.page(15000);
+  assert.equal(result.results.length,50);
+  assert.equal(result.results[0].start,15000*"😀needle ".length+2);
+  assert.equal(iteratedUnits,0,"box-free pages must not count prefix code points");
+} finally { String.prototype[Symbol.iterator] = originalIterator; }
+
 console.log("reader book text search contracts passed");

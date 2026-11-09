@@ -337,9 +337,22 @@ export function createReaderPdfTextRuntime(readerContext) {
     }
     for (const hit of hits.reverse()) {
       const start = readerContext.pdfSourceOffset(mapping, hit.index), end = readerContext.pdfSourceOffset(mapping, hit.index + hit[0].length - 1) + 1;
-      readerContext.highlightTextParts(runs.filter((run) => run.end > start && run.start < end).map((run) => ({
-        node: run.node, start: Math.max(start, run.start) - run.start, end: Math.min(end, run.end) - run.start
-      })));
+      // Runs have monotonically increasing boundaries; seek to the first
+      // possible overlap instead of filtering every text node for each hit.
+      let low = 0, high = runs.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (runs[middle].end <= start) low = middle + 1;
+        else high = middle;
+      }
+      const parts = [];
+      for (let index = low; index < runs.length && runs[index].start < end; index++) {
+        const run = runs[index];
+        if (run.end <= start) continue;
+        parts.push({ node: run.node, start: Math.max(start, run.start) - run.start,
+          end: Math.min(end, run.end) - run.start });
+      }
+      readerContext.highlightTextParts(parts);
     }
   }
 

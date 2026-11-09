@@ -11,6 +11,9 @@ export function validateBookText(book, pageCount, sourceSha = "") {
         !page.layout || page.layout.offset_unit !== "unicode-codepoint" ||
         !Array.isArray(page.text_spans))
       throw new Error("PDF_TEXT_INDEX_INVALID");
+    // No mapping can refer to this page's offsets when it has no spans.
+    // Avoid a full Unicode pass over potentially very large plain text pages.
+    if (!page.text_spans.length) continue;
     const length = codePointLength(page.text);
     let previousEnd = 0;
     for (const span of page.text_spans) {
@@ -85,17 +88,24 @@ export async function searchBookText(book, query, options = {}) {
       if (passed + counts[index] <= offset) { passed += counts[index]; continue; }
       const page = book.pages[index];
       const start = checkpoint && index === firstPage ? checkpoint.start : 0;
+      // Partitioned v3 text carries no boxes; computing code-point offsets
+      // from the beginning of a large page cannot affect those results.
+      const hasBoxes = !!page.text_spans?.length;
       let previousUnitEnd = 0, previousPointEnd = 0;
       for (const match of page.text.slice(start).matchAll(re)) {
         const matchIndex = start + match.index;
         if (passed++ < offset) continue;
         const begin = Math.max(0, matchIndex - 72), end = Math.min(page.text.length, matchIndex + match[0].length + 88);
-        const pointStart = previousPointEnd + codePointLength(page.text.slice(previousUnitEnd, matchIndex));
-        const pointEnd = pointStart + codePointLength(match[0]);
-        previousUnitEnd = matchIndex + match[0].length;
-        previousPointEnd = pointEnd;
+        let boxes = [];
+        if (hasBoxes) {
+          const pointStart = previousPointEnd + codePointLength(page.text.slice(previousUnitEnd, matchIndex));
+          const pointEnd = pointStart + codePointLength(match[0]);
+          previousUnitEnd = matchIndex + match[0].length;
+          previousPointEnd = pointEnd;
+          boxes = hitBoxesAtOffsets(page, pointStart, pointEnd);
+        }
         results.push({ page: page.page, start: matchIndex, length: match[0].length,
-          boxes: hitBoxesAtOffsets(page, pointStart, pointEnd),
+          boxes,
           snippet: { text: page.text.slice(begin, end), matchStart: matchIndex - begin,
             matchLength: match[0].length, prefix: begin ? "…" : "", suffix: end < page.text.length ? "…" : "" } });
         if (results.length === pageSize) break;

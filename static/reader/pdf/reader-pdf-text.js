@@ -113,13 +113,9 @@ export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
     if (item.hasEOL) fragment.appendChild(layer.ownerDocument.createTextNode("\n"));
   }
   layer.replaceChildren(fragment);
-  // Vertical spaces and fallback glyphs have font-dependent advances. Measure
-  // the attached run so selection covers the PDF's actual vertical extent.
-  for (const run of layer.querySelectorAll('.reader-pdf-text-run')) {
-    if (!(run._readerVerticalAdvance > 0) || !run.offsetHeight) continue;
-    const em = parseFloat(layer.ownerDocument.defaultView.getComputedStyle(run).fontSize);
-    run.style.transform = `scaleY(${run._readerVerticalAdvance * em / run.offsetHeight})`;
-  }
+  // Read attached glyph geometry before writing transforms, avoiding a layout
+  // flush for each vertical run on text-heavy pages.
+  scaleVerticalRuns(layer);
 }
 
 export function populateOcrTextLayer(layer, blocks, layout = {}) {
@@ -193,16 +189,21 @@ export function populateIndependentTextLayer(layer, payload) {
   layer.style.userSelect = "text";
   layer.style.webkitUserSelect = "text";
   layer.dataset.textGeneration = payload.generation;
-  // Mixed-script vertical runs do not have one-em advances for every source
-  // codepoint (notably spaces/Latin accents). Measure attached native glyph
-  // advances rather than stretching by a character count alone.
-  for (const run of layer.querySelectorAll('.reader-pdf-text-run')) {
-    if (!(run._readerVerticalAdvance > 0) || !run.offsetHeight) continue;
-    const em = parseFloat(layer.ownerDocument.defaultView.getComputedStyle(run).fontSize);
-    run.style.transform = `scaleY(${run._readerVerticalAdvance * em / run.offsetHeight})`;
-  }
+  // Mixed-script advances need attached native glyph metrics too.
+  scaleVerticalRuns(layer);
 }
 
+function scaleVerticalRuns(layer) {
+  const scales = [];
+  for (const run of layer.querySelectorAll('.reader-pdf-text-run')) {
+    if (!(run._readerVerticalAdvance > 0)) continue;
+    const height = run.offsetHeight;
+    if (!height) continue;
+    const em = parseFloat(layer.ownerDocument.defaultView.getComputedStyle(run).fontSize);
+    scales.push([run, run._readerVerticalAdvance * em / height]);
+  }
+  for (const [run, scale] of scales) run.style.transform = `scaleY(${scale})`;
+}
 
 export function independentTextCaret(doc, x, y) {
   const position = doc.caretPositionFromPoint?.(x, y);

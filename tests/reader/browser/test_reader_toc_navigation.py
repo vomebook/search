@@ -73,6 +73,8 @@ class TocNavigationTests(unittest.TestCase):
             route.fulfill(response=response, body=response.text() + '''
               window.__replaceTocForSearch=setToc;
               window.__toc={nav:()=>navigationState, jump:i=>navigateTocEntry(i),
+                set:setToc, setPageCount:count=>updateDocumentState({pageCount:count}),
+                setPage:page=>{updateDocumentState({page});updateTocCurrentMark()},
                 state:()=>tocVirtualState,
                 align:(selector, offset)=>alignReaderDestination(document.querySelector(selector), offset || 0),
                 hold:(target, offset)=>holdReaderDestination(target, offset),
@@ -121,6 +123,32 @@ class TocNavigationTests(unittest.TestCase):
             wait_until="domcontentloaded")
         self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
         self.assert_instrumented()
+
+    def test_large_pdf_toc_page_lookup_preserves_unsorted_labels_and_resets(self):
+        self.expose()
+        self.page.route('**/api/reader-content**',lambda route:route.fulfill(content_type='text/plain',body='text'))
+        self.page.goto(self.origin+support.PREFIX+'/static/reader.html?'+urlencode(dict(
+            url='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/large-toc.txt',ext='txt')))
+        self.page.wait_for_function("()=>document.documentElement.dataset.readerPhase==='ready'")
+        result=self.page.evaluate('''() => {
+          const entries=Array.from({length:3000},(_,index)=>({label:index%19===0?'分组 '+index:
+            '条目 '+index+' · 第 '+(index===19?'9'.repeat(400):index===29?'8'.repeat(400):((index*97)%1800))+' 页',
+            group:index%31===0,activate:()=>true}));
+          __toc.set(entries);__toc.setPageCount(5000);
+          const actual=__toc.nav().tocEntries;
+          function reference(page){let result=-1;for(const [index,entry] of actual.entries()){
+            const match=entry.label.match(/第\s*(\d+)\s*页/u);if(match&&Number(match[1])<=page)result=index;
+          }return result}
+          const pages=[1,2,10,99,500,999,1500,1799,1800,4999,Infinity],cases=[];
+          for(const page of pages){const expected=reference(page);__toc.setPage(page);cases.push({page,expected,actual:__toc.nav().currentChapterIndex})}
+          __toc.set([{label:'第一章 · 第 10 页',activate:()=>true},{label:'先出现 · 第 3 页',activate:()=>true},
+            {label:'最后一项 · 第 20 页',activate:()=>true}]);
+          __toc.setPage(12);const reset=__toc.nav().currentChapterIndex;
+          return {cases,reset};
+        }''')
+        for case in result['cases']:
+            self.assertEqual(case['actual'],case['expected'],case)
+        self.assertEqual(result['reset'],1)
 
     def click_entry(self, index):
         """Click the sidebar row for a directory index, as a reader does."""
