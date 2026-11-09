@@ -34,6 +34,8 @@ function pattern(query) {
 }
 
 const CHECKPOINT_STRIDE = 256;
+const SEARCH_YIELD_MS = 8;
+const SEARCH_YIELD_UNITS = 256 * 1024;
 
 export function hitBoxes(page, start, length) {
   const begin = codePointLength(page.text.slice(0, start));
@@ -60,7 +62,7 @@ function hitBoxesAtOffsets(page, begin, end) {
 export async function searchBookText(book, query, options = {}) {
   const { current = () => true, yieldTask = () => new Promise(r => setTimeout(r, 0)), progress = null } = options;
   const counts = [], checkpoints = [], re = pattern(query);
-  let total = 0;
+  let total = 0, deadline = performance.now() + SEARCH_YIELD_MS, pendingUnits = 0;
   if (!query) return { total: 0, page: () => ({ total: 0, offset: 0, pageSize: 50, results: [] }) };
   const pageCache = new Map();
   const indexResult = { get total() { return total; }, page(offset = 0, pageSize = 50) {
@@ -128,14 +130,25 @@ export async function searchBookText(book, query, options = {}) {
       count++;
       if (count % 2048 === 0) {
         await yieldTask();
+        deadline = performance.now() + SEARCH_YIELD_MS;
+        pendingUnits = 0;
         if (!current()) throw new DOMException("Search cancelled", "AbortError");
       }
     }
+    pendingUnits += book.pages[index].text.length;
     counts.push(count);
     total += count;
     if (progress && (index === 0 || (count && total <= 50) || index % 16 === 15 || index === book.pages.length - 1))
       await progress(indexResult, index + 1, book.pages.length);
-    if (index % 16 === 0) await yieldTask();
+    // Check at the existing 16-page boundaries. The time budget avoids
+    // gratuitous timer clamping on short pages; the volume guard still yields
+    // when a background tab's clock has coarse resolution or is paused.
+    if (index % 16 === 0 && (performance.now() >= deadline || pendingUnits >= SEARCH_YIELD_UNITS)) {
+      await yieldTask();
+      if (!current()) throw new DOMException("Search cancelled", "AbortError");
+      deadline = performance.now() + SEARCH_YIELD_MS;
+      pendingUnits = 0;
+    }
   }
   return indexResult;
 }
