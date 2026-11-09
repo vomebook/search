@@ -275,6 +275,8 @@ jobs:
           if not result.wasSuccessful() or result.testsRun != 3 or result.skipped:
               sys.exit(1)
           PY
+      - name: Test offline Pages search benchmark
+        run: node --test tests/performance/test_benchmark_local_search.mjs
       - name: Check GitHub search paging and snapshot contracts
         env:
           SEARCH_TEST_PROJECT: github-Search

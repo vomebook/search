@@ -58,6 +58,10 @@
       "kind": "excluded",
       "reason": "Browser benchmark measures host and network performance, not a deterministic gate."
     },
+    "tests/performance/test_benchmark_local_search.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
     "tests/performance/test_next_page_latency.js": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"

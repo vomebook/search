@@ -9,7 +9,9 @@
  * Timings are direct searchLocal calls in one Node VM, not Worker message
  * dispatch, cooperative preparation, a browser, or end-to-end latency. The
  * first observation is separately reported; later calls reuse process state.
- * Full-order checks detect instability, not a consistently incorrect order.
+ * VM-only hit and miss counters verify the measured paths, adding a small
+ * overhead to both. Full-order checks detect instability, not a consistently
+ * incorrect order.
  */
 import {createHash} from "node:crypto";
 import {fstatSync, openSync, closeSync, readFileSync, readSync} from "node:fs";
@@ -102,18 +104,19 @@ function loadGeneration(dataDir, generation) {
       member.sha256 !== object.sha256 || member.bytes !== object.bytes ||
       object.object !== `objects/sha256/${member.sha256.slice(0, 2)}/${member.sha256}`)
     throw new Error("invalid Pages corpus manifest member");
-  if (!validMember(manifest.source_payload, MAX_EXPANDED_BYTES) ||
+  if (!validMember(manifest.source_payload, Number.MAX_SAFE_INTEGER) ||
       !Number.isSafeInteger(manifest.record_count) || manifest.record_count < 1) throw new Error("invalid corpus identity or record count");
   const compressed = readBounded(path.join(dataDir, "search_data.json.gz"), MAX_COMPRESSED_BYTES);
   if (compressed.length !== member.bytes || hash(compressed) !== member.sha256) throw new Error("Pages corpus gzip size or SHA-256 mismatch");
   const raw = gunzipSync(compressed, {maxOutputLength: MAX_EXPANDED_BYTES});
-  if (raw.length !== manifest.source_payload.bytes || hash(raw) !== manifest.source_payload.sha256)
-    throw new Error("expanded corpus size or SHA-256 mismatch");
+  // The generation pins the original source metadata and the Pages gzip
+  // separately; JSON serialization can change between those two artifacts.
   const data = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(raw));
   if (!data || data.v !== 2 || !Array.isArray(data.rp) || !Array.isArray(data.fd) || !Array.isArray(data.rc) ||
       data.rc.length !== manifest.record_count) throw new Error("compact-v2 corpus or record count mismatch");
   return {data, manifestSha256: hash(manifestBytes), gzipSha256: member.sha256, gzipBytes: compressed.length,
-    expandedSha256: manifest.source_payload.sha256, expandedBytes: raw.length, count: data.rc.length};
+    sourceSha256: manifest.source_payload.sha256, sourceBytes: manifest.source_payload.bytes,
+    expandedSha256: hash(raw), expandedBytes: raw.length, count: data.rc.length};
 }
 
 function measure(fn) {
@@ -130,9 +133,24 @@ function distribution(times) {
 function digest(ids) { return hash(Buffer.from(JSON.stringify(ids), "utf8")); }
 
 function benchmark(options, corpus, source) {
-  const context = {self: {addEventListener() {}, postMessage() {}}};
+  // Instrument the exact hit return and miss branch. Fail closed if the
+  // Worker's dispatch changes rather than silently reporting unverified paths.
+  const boundary = `  if (ordered) {
+    searchOrderCache.delete(cacheKey);
+    searchOrderCache.set(cacheKey, ordered);
+    return pageResult(ordered, params);
+  }
+  let matched = [];`;
+  if (source.split(boundary).length !== 2) throw new Error("cannot instrument search order cache miss path");
+  const instrumentedBoundary = boundary
+    .replace("    return pageResult(ordered, params);",
+      "    globalThis.__benchmarkSearchCacheHits++;\n    return pageResult(ordered, params);")
+    .replace("  let matched = [];", "  globalThis.__benchmarkSearchCacheMisses++;\n  let matched = [];");
+  const instrumented = source.replace(boundary, instrumentedBoundary);
+  const context = {self: {addEventListener() {}, postMessage() {}},
+    __benchmarkSearchCacheHits: 0, __benchmarkSearchCacheMisses: 0};
   vm.createContext(context);
-  vm.runInContext(source, context, {filename: "static/search/index-worker.js"});
+  vm.runInContext(instrumented, context, {filename: "static/search/index-worker.js"});
   context.payload = corpus.data;
   const install = measure(() => vm.runInContext("replaceCorpus(decodeSearchPayload(payload))", context));
   if (install.value.count !== corpus.count) throw new Error("installed record count mismatch");
@@ -142,11 +160,8 @@ function benchmark(options, corpus, source) {
   const controls = vm.runInContext(`({
     clear: () => searchOrderCache.clear(),
     indexed: () => wordIndex !== null,
-    ids: params => {
-      const order = searchOrderCache.get(searchOrderKey(params));
-      if (!Array.isArray(order)) throw new Error("missing cached search order");
-      return order.map(index => recordIds[index]);
-    }
+    order: params => searchOrderCache.get(searchOrderKey(params)),
+    ids: order => order.map(index => recordIds[index])
   })`, context);
   const results = [];
   for (const params of queries) {
@@ -156,9 +171,14 @@ function benchmark(options, corpus, source) {
       controls.clear();
       const indexedBefore = controls.indexed();
       const request = {...params, page: 1, pageSize: PAGE_SIZE};
+      const missesBefore = context.__benchmarkSearchCacheMisses, hitsBefore = context.__benchmarkSearchCacheHits;
       const uncached = measure(() => context.searchLocal(request));
+      if (context.__benchmarkSearchCacheMisses !== missesBefore + 1 || context.__benchmarkSearchCacheHits !== hitsBefore)
+        throw new Error(`uncached order path not observed: ${JSON.stringify(params)}`);
       const indexedAfter = controls.indexed();
-      const orderedIds = Array.from(controls.ids(request));
+      const order = controls.order(request);
+      if (!Array.isArray(order)) throw new Error("missing cached search order");
+      const orderedIds = Array.from(controls.ids(order));
       if (orderedIds.length > corpus.count || orderedIds.some(id => typeof id !== "string") ||
           uncached.value.total !== orderedIds.length || uncached.value.page !== 1 || uncached.value.pageSize !== PAGE_SIZE ||
           JSON.stringify(uncached.value.ids) !== JSON.stringify(orderedIds.slice(0, PAGE_SIZE)))
@@ -167,11 +187,24 @@ function benchmark(options, corpus, source) {
       if (expected && (expected.total !== orderedIds.length || expected.hash !== uncachedHash))
         throw new Error(`unstable uncached order: ${JSON.stringify(params)}`);
       expected = {total: orderedIds.length, hash: uncachedHash};
+      const misses = context.__benchmarkSearchCacheMisses;
+      const assertCacheHit = previousHits => {
+        if (context.__benchmarkSearchCacheHits !== previousHits + 1 ||
+            context.__benchmarkSearchCacheMisses !== misses || controls.order(request) !== order)
+          throw new Error(`cached order not reused: ${JSON.stringify(params)}`);
+      };
+      const cachedHitsBefore = context.__benchmarkSearchCacheHits;
       const cached = measure(() => context.searchLocal(request));
+      assertCacheHit(cachedHitsBefore);
       const pagedIds = [];
       const pages = Math.max(1, Math.ceil(orderedIds.length / PAGE_SIZE));
       for (let page = 1; page <= pages; page++) {
-        const result = page === 1 ? cached.value : context.searchLocal({...request, page});
+        let result = cached.value;
+        if (page > 1) {
+          const pageHitsBefore = context.__benchmarkSearchCacheHits;
+          result = context.searchLocal({...request, page});
+          assertCacheHit(pageHitsBefore);
+        }
         const size = Math.min(PAGE_SIZE, orderedIds.length - pagedIds.length);
         if (result.total !== orderedIds.length || result.page !== page || result.pageSize !== PAGE_SIZE ||
             !Array.isArray(result.ids) || result.ids.length !== size || result.ids.some(id => typeof id !== "string"))
@@ -206,13 +239,14 @@ function main() {
   const workerBytes = readFileSync(workerPath);
   const report = benchmark(options, corpus, workerBytes.toString("utf8"));
   console.log(JSON.stringify({
-    scope: "Warm-process offline single Node VM direct searchLocal calls, not real Worker dispatch, browser or end-to-end latency. Worker timers and cooperative preparation are not run; the direct single-character path differs from Worker dispatch. First observations follow fixed query order and may build indexes or fields; measured samples reuse process state. Order cache cleared before each uncached call; cached timing is first-page only. Full-order verification and pagination are outside timings. No independent correctness oracle.",
+    scope: "Warm-process offline single Node VM direct searchLocal calls, not real Worker dispatch, browser or end-to-end latency. Worker timers and cooperative preparation are not run; the direct single-character path differs from Worker dispatch. First observations follow fixed query order and may build indexes or fields; measured samples reuse process state. Order cache cleared before each uncached call; cached timing is first-page only. VM-only hit and miss counter increments add overhead to both paths; cache reuse, full-order verification and pagination are checked outside timings. No independent correctness oracle.",
     ordering_hash: "SHA-256 of UTF-8 JSON.stringify(array of all ordered stable ID strings)",
-    validation: "Caller-pinned manifest identity and Pages corpus only; other generation members, provenance and live production pointer not verified.",
+    validation: "Caller-pinned manifest identity and Pages gzip size and SHA-256, expanded compact-v2 shape and record count; source payload metadata is manifest-declared and source bytes are unavailable. Other generation members, provenance and live production pointer not verified.",
     node: process.version, versions: process.versions, platform: process.platform, arch: process.arch, cpu: os.cpus()[0]?.model || null,
     benchmark_source_sha256: hash(readFileSync(fileURLToPath(import.meta.url))), worker_source_sha256: hash(workerBytes),
     data_dir: options.dataDir, generation: options.generation, manifest_sha256: corpus.manifestSha256,
     corpus_gzip_sha256: corpus.gzipSha256, corpus_gzip_bytes: corpus.gzipBytes,
+    manifest_source_payload_sha256: corpus.sourceSha256, manifest_source_payload_bytes: corpus.sourceBytes,
     corpus_expanded_sha256: corpus.expandedSha256, corpus_expanded_bytes: corpus.expandedBytes,
     records: corpus.count, iterations: options.iterations, warmup: options.warmup, ...report,
   }, null, 2));
