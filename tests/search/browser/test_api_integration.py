@@ -1,3 +1,4 @@
+import gzip
 import json
 import unittest
 
@@ -107,6 +108,49 @@ class ApiIntegrationTest(unittest.TestCase):
         }''')
         self.assertEqual(observed, {'cancelled':'AbortError', 'count':4000, 'total':4000,
                                     'rows':100, 'sameWorker':True, 'restarts':0})
+
+    def test_real_worker_long_wildcard_can_be_cancelled_without_restart(self):
+        self.load()
+        self.page.wait_for_function("STATE.dataLoaded", timeout=30000)
+        observed = self.page.evaluate('''async () => {
+          await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['R'],fd:[[]],
+            rc:Array.from({length:8000},(_,i)=>[0,'a'.repeat(150)+i,'txt',0,1,0])}});
+          const worker=corpusWorker, restarts=corpusWorkerRestartCount, controller=new AbortController();
+          const pending=doSearchLocal({q:'a?*'.repeat(60),exact:true,page:1,pageSize:100,signal:controller.signal})
+            .then(()=> 'completed', error=>error.name);
+          const metadata=await corpusWorkerRequest('metadata', {});
+          controller.abort();
+          return {cancelled:await pending,count:metadata.count,same:worker===corpusWorker,
+            restarts:corpusWorkerRestartCount-restarts};
+        }''')
+        self.assertEqual(observed, {'cancelled':'AbortError', 'count':8000, 'same':True, 'restarts':0})
+
+    def test_actual_worker_preserves_snapshot_after_rejected_corpus_load(self):
+        self.context.close()
+        self.context = self.browser.new_context(viewport={'width':1280,'height':800}, service_workers='block')
+        self.page = self.context.new_page()
+        self.page.route('https://voiceofml-search.hf.space/**', self.api_route)
+        self.page.route('https://vomebook-hitokoto.hf.space/**',
+            lambda route: route.fulfill(status=200, content_type='application/json', body='{}'))
+        self.load()
+        self.page.wait_for_function('STATE.dataLoaded', timeout=30000)
+        corpus = {'v':2, 'rp':['VoiceOfML/Test'], 'fd':[[], [{'toString':None,'valueOf':None}]],
+                  'rc':[[0,'new','txt',0,1,0], [0,'broken','txt',1,1,0]]}
+        body = gzip.compress(json.dumps(corpus).encode(), mtime=0)
+        self.page.route('**/search/bad-corpus.json.gz', lambda route: route.fulfill(
+            status=200, content_type='application/gzip', body=body))
+        observed = self.page.evaluate('''async () => {
+          const before=await corpusWorkerRequest('local-search',{q:'',page:1,pageSize:2});
+          const failed=await postCorpusWorkerRequest('load-corpus',{url:new URL('bad-corpus.json.gz',location.href).href},10000)
+            .then(()=>null,error=>error.code);
+          const after=await corpusWorkerRequest('local-search',{q:'',page:1,pageSize:2});
+          return {failed,before:before.snapshot_generation,after:after.snapshot_generation,
+            beforeIds:before.ids,afterIds:after.ids,totalBefore:before.total,totalAfter:after.total};
+        }''')
+        self.assertEqual(observed['failed'], 'WORKER_ERROR')
+        self.assertEqual(observed['before'], observed['after'])
+        self.assertEqual(observed['beforeIds'], observed['afterIds'])
+        self.assertEqual(observed['totalBefore'], observed['totalAfter'])
 
     def test_initial_to_local_handoff_preserves_render_and_scroll(self):
         with self.server_state.lock:
@@ -393,6 +437,26 @@ class ApiIntegrationTest(unittest.TestCase):
         self.page.wait_for_function("apiAvailable === true", timeout=10000)
         self.assertGreater(self.probe_requests, baseline_probes)
         self.assertEqual(self.page.evaluate("apiFailureCount"), 0)
+
+    def test_separate_worker_failures_each_get_one_bounded_restart(self):
+        self.load()
+        self.page.wait_for_function('STATE.dataLoaded', timeout=30000)
+        result = self.page.evaluate('''async () => {
+          const first=corpusWorker, before=corpusWorkerRestartCount;
+          terminateCorpusWorker(makeWorkerError('WORKER_TERMINATED','injected'));
+          const a=await corpusWorkerRequest('metadata', {});
+          const second=corpusWorker;
+          terminateCorpusWorker(makeWorkerError('WORKER_TERMINATED','injected'));
+          const b=await corpusWorkerRequest('metadata', {});
+          return {counts:[a.count,b.count], restarts:corpusWorkerRestartCount-before,
+            workersDistinct:first!==second && second!==corpusWorker,
+            consecutive:corpusWorkerConsecutiveRestarts};
+        }''')
+        self.assertGreater(result['counts'][0], 0)
+        self.assertEqual(result['counts'][0], result['counts'][1])
+        self.assertEqual(result['restarts'], 2)
+        self.assertTrue(result['workersDistinct'])
+        self.assertEqual(result['consecutive'], 0)
 
     def test_worker_failure_restarts_once_then_uses_api_fallback(self):
         self.page.add_init_script(

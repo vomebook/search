@@ -1,6 +1,13 @@
 const DATA_URL = "data/search_data.json.gz";
 const API_BASE = "https://voiceofml-search.hf.space";
 const MIRROR_HOST = "hf-mirror.com";
+
+function readSearchPreference(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
+}
+function writeSearchPreference(key, value) {
+  try { localStorage.setItem(key, value); } catch (_) { /* Preferences are optional. */ }
+}
 const HF_DATASET_BASE = "https://huggingface.co/datasets";
 const WORKER_PROTOCOL_VERSION = 1;
 const WORKER_REQUEST_TIMEOUT = 10000;
@@ -66,6 +73,8 @@ let corpusWorker = null;
 let corpusWorkerStartPromise = null;
 let corpusWorkerRequestId = 0;
 let corpusWorkerRestartCount = 0;
+let corpusWorkerConsecutiveRestarts = 0;
+const CORPUS_WORKER_MAX_CONSECUTIVE_RESTARTS = 1;
 const corpusWorkerPending = new Map();
 const folderTreeCache = new Map();
 
@@ -535,7 +544,7 @@ function handleReaderMessage(event) {
     if (message.theme !== "dark" && message.theme !== "light") return;
     STATE.isDark = message.theme === "dark";
     applyTheme();
-    localStorage.setItem("theme", message.theme);
+    writeSearchPreference("theme", message.theme);
     return;
   }
   if (message.type === "voice-reader-open") {
@@ -1144,11 +1153,14 @@ function ensureCorpusWorker() {
 async function corpusWorkerRequest(type, payload, timeoutMs, signal) {
   try {
     await ensureCorpusWorker();
-    return await postCorpusWorkerRequest(type, payload, timeoutMs, signal);
+    const result = await postCorpusWorkerRequest(type, payload, timeoutMs, signal);
+    corpusWorkerConsecutiveRestarts = 0;
+    return result;
   } catch (error) {
     if (signal?.aborted || error?.name === "AbortError") throw error;
     if (error && error.code === "PROTOCOL_MISMATCH") throw error;
-    if (corpusWorkerRestartCount >= 1) throw error;
+    if (corpusWorkerConsecutiveRestarts >= CORPUS_WORKER_MAX_CONSECUTIVE_RESTARTS) throw error;
+    corpusWorkerConsecutiveRestarts++;
     corpusWorkerRestartCount++;
     terminateCorpusWorker(error);
     await ensureCorpusWorker();
@@ -1157,7 +1169,9 @@ async function corpusWorkerRequest(type, payload, timeoutMs, signal) {
         url: new URL(DATA_URL, document.baseURI).href,
       }, WORKER_LOAD_TIMEOUT);
     }
-    return postCorpusWorkerRequest(type, payload, timeoutMs, signal);
+    const result = await postCorpusWorkerRequest(type, payload, timeoutMs, signal);
+    corpusWorkerConsecutiveRestarts = 0;
+    return result;
   }
 }
 
@@ -1221,7 +1235,7 @@ function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
   });
   entry.promise = Promise.race([request, stopped]).finally(() => {
     clearTimeout(timer);
-    entry.listeners.forEach(({ owner, cancel }) => owner.removeEventListener("abort", cancel));
+    entry.listeners.forEach(({ owner, cancel }) => { if (owner) owner.removeEventListener("abort", cancel); });
     entry.listeners.clear();
     if (pendingSearchPages.get(cacheKey) === entry) pendingSearchPages.delete(cacheKey);
   });
@@ -1235,21 +1249,36 @@ function fetchSearchPage(cacheKey, url, body, signal, timeoutMs) {
   let entry = pendingSearchPages.get(cacheKey);
   if (entry && Date.now() >= entry.deadline) entry.expire();
   if (!entry || entry.controller.signal.aborted) entry = createSearchPageRequest(cacheKey, url, body, timeoutMs);
-  if (signal) {
-    const listenerId = ++entry.nextListenerId;
-    const cancel = () => {
-      const listener = entry.listeners.get(listenerId);
-      if (!listener) return;
+  if (!signal) {
+    // A caller without an abort signal still owns the shared request.
+    entry.listeners.set(++entry.nextListenerId, { owner: null, cancel: null });
+    return entry.promise;
+  }
+  const listenerId = ++entry.nextListenerId;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      signal.removeEventListener("abort", cancel);
       entry.listeners.delete(listenerId);
+    };
+    const cancel = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new DOMException("Cancelled", "AbortError"));
       if (!entry.listeners.size && !entry.controller.signal.aborted) entry.controller.abort();
     };
-    signal.addEventListener("abort", cancel, { once: true });
     entry.listeners.set(listenerId, { owner: signal, cancel });
-    // Abort may have happened between the early check and listener
-    // registration. Re-check so no cancelled subscriber remains attached.
+    signal.addEventListener("abort", cancel, { once: true });
     if (signal.aborted) cancel();
-  }
-  return entry.promise;
+    entry.promise.then(data => {
+      if (settled) return;
+      settled = true; cleanup(); resolve(data);
+    }, error => {
+      if (settled) return;
+      settled = true; cleanup(); reject(error);
+    });
+  });
 }
 
 function expireSearchRequests() {
@@ -2118,6 +2147,10 @@ const ROUTER = {
     }
     if (route.params.q !== undefined) {
       STATE.query = route.params.q;
+      if (Array.from(STATE.query).length > 256) {
+        STATE.query = Array.from(STATE.query).slice(0, 256).join("");
+        showToast("搜索内容已限制为 256 个字符");
+      }
       setSearchInputValue(STATE.query);
     } else {
       STATE.query = "";
@@ -2797,7 +2830,8 @@ function validSearchPosition(value) {
 
 async function initSearchPositions() {
   await /** @type {Promise<void>} */ (new Promise(resolve => {
-    const timer = setTimeout(resolve, 1500);
+    let expired = false;
+    const timer = setTimeout(() => { expired = true; resolve(); }, 1500);
     try {
       const request = indexedDB.open("voice-search-positions", 4);
       request.onupgradeneeded = () => {
@@ -2808,8 +2842,9 @@ async function initSearchPositions() {
           store.createIndex("savedAt", "savedAt");
         }
       };
-      request.onerror = request.onblocked = () => { clearTimeout(timer); resolve(); };
+      request.onerror = request.onblocked = () => { expired = true; clearTimeout(timer); resolve(); };
       request.onsuccess = () => {
+        if (expired) { request.result.close(); return; }
         searchPositionDB = request.result;
         searchPositionDB.onversionchange = () => { searchPositionDB.close(); searchPositionDB = null; };
         const transaction = searchPositionDB.transaction("positions", "readwrite");
@@ -3912,6 +3947,10 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
 }
 
 function submitSearchQuery(query, { restore = false, record = false, refreshHistory = false, clearResults = false, blur = false, updateInput = restore } = {}) {
+  if (Array.from(query).length > 256) {
+    showToast("搜索内容不能超过 256 个字符");
+    return;
+  }
   // Another search can preempt the size debounce: include its visible input.
   applyPendingSizeFilters();
   cancelPendingSearchControls();
@@ -6320,7 +6359,7 @@ function toggleTheme() {
   document.body.classList.add("theme-transitioning");
   STATE.isDark = !STATE.isDark;
   applyTheme();
-  localStorage.setItem("theme", STATE.isDark ? "dark" : "light");
+  writeSearchPreference("theme", STATE.isDark ? "dark" : "light");
   ripple.addEventListener("animationend", () => {
     ripple.remove();
     document.body.classList.remove("theme-transitioning");
@@ -6344,7 +6383,7 @@ function applyTheme() {
 function toggleMobile() {
   STATE.isMobile = !STATE.isMobile;
   applyMobileMode();
-  localStorage.setItem("mobileMode", STATE.isMobile ? "mobile" : "desktop");
+  writeSearchPreference("mobileMode", STATE.isMobile ? "mobile" : "desktop");
 }
 
 function applyMobileMode() {
@@ -6640,9 +6679,9 @@ async function init() {
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   STATE.sessionRestored = await restoreSearchSession();
   setupReaderIntentWarming();
-  STATE.isDark = localStorage.getItem("theme") !== "light";
+  STATE.isDark = readSearchPreference("theme") !== "light";
   applyTheme();
-  const savedMobile = localStorage.getItem("mobileMode");
+  const savedMobile = readSearchPreference("mobileMode");
   if (savedMobile === "mobile") STATE.isMobile = true;
   else if (savedMobile === "desktop") STATE.isMobile = false;
   else STATE.isMobile = autoDetectMobile();
@@ -6862,7 +6901,7 @@ async function init() {
     ROUTER.apply();
   });
   window.addEventListener("resize", function() {
-    if (!localStorage.getItem("mobileMode")) {
+    if (!readSearchPreference("mobileMode")) {
       var wasMobile = STATE.isMobile;
       STATE.isMobile = autoDetectMobile();
       if (wasMobile !== STATE.isMobile) applyMobileMode();

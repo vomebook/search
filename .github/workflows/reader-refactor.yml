@@ -730,7 +730,7 @@ jobs:
               'tests.search.backend.test_wildcard_index_oracle',
           ])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if not result.wasSuccessful() or result.testsRun != 59 or result.skipped:
+          if not result.wasSuccessful() or result.testsRun != 61 or result.skipped:
               sys.exit(1)
           PY
           READER_STORE_TEST_BROWSER=firefox python3 -B - <<'PY'
