@@ -18,6 +18,7 @@
     "../../static/reader/formats/reader-text-format.mjs",
     "../../static/reader/search/reader-pdf-book-search.mjs",
     "../../static/reader/search/reader-pdf-book-url.mjs",
+    "../../static/reader/search/reader-pdf-search-stream.mjs",
     "../../static/reader/search/reader-chapter-search-core.mjs",
     "../../static/reader/search/reader-chapter-search-proxy-url.mjs",
     "../../static/reader/search/reader-chapter-search-index.mjs",
