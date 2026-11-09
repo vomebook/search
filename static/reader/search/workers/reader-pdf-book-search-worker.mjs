@@ -8,6 +8,8 @@ const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 // Hold at most one small compressed future partition. Decompression and
 // verification happen only when that partition reaches the head of the scan.
 const PARTITION_LOOKAHEAD_MAX_BYTES = 1024 * 1024;
+// Keep at most one small, already validated partition search index per query.
+const PARTITION_PAGE_CACHE_BYTES = 1024 * 1024;
 let configuration, book, pendingBook, controller, active = 0, session;
 const partitionRequests = new Set();
 const idlePartitionWaiters = new Set();
@@ -196,7 +198,23 @@ async function loadSearchPartition(part, current, owners = null, prefetched = nu
 async function searchPartitions(query, current, progress) {
   validateSearchConfiguration();
   const counts = [], first = [];
-  let total = 0, complete = false;
+  let total = 0, complete = false, retained = null;
+  const remember = (number, part, local) => {
+    retained = null;
+    let bytes = 0;
+    // Validate allocation cost before walking the complete text. JSON escaping
+    // can expand it, so count the actual UTF-8 representation as well.
+    for (const page of part.pages) {
+      bytes += page.text.length * 2;
+      if (bytes > PARTITION_PAGE_CACHE_BYTES) return;
+    }
+    try {
+      if (new TextEncoder().encode(JSON.stringify(part)).byteLength > PARTITION_PAGE_CACHE_BYTES) return;
+    } catch (_) { return; } // Allocation failure must not break an otherwise valid result page.
+    // The index owns this SHA-256-verified immutable snapshot and checkpoints.
+    // Reuse is scoped to this query; no unverified or oversized body is kept.
+    retained = {number, part, local};
+  };
   const decorate = (results, pages) => results.map(hit => ({...hit,
     textGeneration: pages[hit.page - pages[0].page].text_generation}));
   const index = {async page(requested = 0) {
@@ -207,9 +225,17 @@ async function searchPartitions(query, current, progress) {
     for (let i = 0; i < counts.length && results.length < 50; i++) {
       if (!current()) throw aborted();
       if (skipped + counts[i] <= offset) {skipped += counts[i]; continue;}
-      const part = await loadSearchPartition(configuration.partitions[i], current);
-      const local = await searchBookText(part, query, {current, yieldTask: pause});
-      if (local.total !== counts[i]) throw new Error("PDF_V3_GENERATION_CHANGED");
+      let part, local;
+      if (retained?.number === i) ({part, local} = retained);
+      else {
+        retained = null;
+        part = await loadSearchPartition(configuration.partitions[i], current);
+        local = await searchBookText(part, query, {current, yieldTask: pause});
+        if (!current()) throw aborted();
+        if (local.total !== counts[i]) throw new Error("PDF_V3_GENERATION_CHANGED");
+        remember(i, part, local);
+      }
+      if (!current()) throw aborted();
       let position = Math.max(0, offset - skipped);
       while (position < local.total && results.length < 50) {
         const page = local.page(position);
