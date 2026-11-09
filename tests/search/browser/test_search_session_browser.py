@@ -134,6 +134,77 @@ class SearchSessionBrowserTests(unittest.TestCase):
         }''')
         self.assertEqual(result, {'openedBefore':False, 'deleted':True, 'openedAfter':False})
 
+    def test_delayed_session_read_does_not_override_new_navigation(self):
+        self.open_session_fixture()
+        observed = self.page.evaluate("""async () => {
+          history.replaceState(null, '', '?old');
+          const allowed = () => !location.search || location.search === '?old';
+          const session = VoiceOfMLSearchSession.createSearchSession({
+            canPersist: () => true, canRestore: target => !target ? allowed() : target.origin === location.origin
+          });
+          await session.persistSearchSession();
+          const nativeOpen = indexedDB.open.bind(indexedDB);
+          let release;
+          indexedDB.open = (...args) => {
+            const actual = nativeOpen(...args), proxy = {};
+            Object.defineProperties(proxy, {
+              result: {get: () => actual.result}, error: {get: () => actual.error},
+              onupgradeneeded: {set: handler => { actual.onupgradeneeded = handler; }},
+              onerror: {set: handler => { actual.onerror = handler; }},
+              onblocked: {set: handler => { actual.onblocked = handler; }},
+              onsuccess: {set: handler => { actual.onsuccess = event => { release = () => handler(event); }; }}
+            });
+            return proxy;
+          };
+          try {
+            const pending = session.restoreSearchSession();
+            while (!release) await new Promise(resolve => setTimeout(resolve, 1));
+            history.replaceState(null, '', '?new');
+            release();
+            return {restored: await pending, search: location.search};
+          } finally { indexedDB.open = nativeOpen; }
+        }""")
+        self.assertEqual(observed, {"restored": False, "search": "?new"})
+
+
+    def test_independent_position_and_session_databases_open_in_parallel(self):
+        self.page.goto(self.origin + support.PREFIX + "/static/reader.html")
+        test_page = self.context.new_page()
+        errors = []
+        test_page.on('pageerror', lambda error: errors.append(str(error)))
+        test_page.add_init_script("""(() => {
+          window.__dbOpenNames = [];
+          const open = indexedDB.open.bind(indexedDB);
+          indexedDB.open = function(name, ...args) {
+            window.__dbOpenNames.push(name);
+            const request = open(name, ...args);
+            if (name !== 'voice-search-positions') return request;
+            const proxy = {};
+            for (const field of ['result','error','transaction','readyState'])
+              Object.defineProperty(proxy, field, {get: () => request[field]});
+            for (const field of ['onupgradeneeded','onerror','onblocked'])
+              Object.defineProperty(proxy, field, {set: handler => { request[field] = handler; }});
+            Object.defineProperty(proxy, 'onsuccess', {set: handler => {
+              request.onsuccess = event => { window.__releasePositionOpen = () => handler(event); };
+            }});
+            return proxy;
+          };
+        })();""")
+        try:
+            shell = (support.ROOT / 'static/index.html').read_text()
+            destination = self.origin + (support.PREFIX + '/' if support.PREFIX else '/')
+            test_page.route(destination, lambda route: route.fulfill(content_type='text/html', body=shell))
+            test_page.goto(destination, wait_until='domcontentloaded')
+            test_page.wait_for_function("typeof window.__releasePositionOpen === 'function'")
+            test_page.wait_for_function("window.__dbOpenNames.includes('voiceofml-search-state')", timeout=800)
+            self.assertFalse(test_page.evaluate("routeInitialized"))
+            test_page.evaluate('window.__releasePositionOpen()')
+            test_page.wait_for_function('routeInitialized')
+            self.assertEqual(errors, [])
+        finally:
+            test_page.close()
+
+
     def test_disabled_policy_does_not_create_or_restore_a_session(self):
         self.open_session_fixture()
         result = self.page.evaluate("""async () => {
