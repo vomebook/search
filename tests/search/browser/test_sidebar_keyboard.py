@@ -536,6 +536,183 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.assertEqual(outcome,dict(calls=1,sameInflightResult=True,concurrent=['txt','ghost'],
                                       later=['txt'],source=['txt']))
 
+    def test_first_view_gates_decode_until_matching_result_has_painted(self):
+        outcome = self.page.evaluate(r'''async () => {
+          const old={observer:window.MutationObserver,request:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
+            getSearchViewKey,loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView,
+            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetDelayUntilPaint,wake:readerAssetParseWake};
+          const frames=new Map();let next=0,callback,disconnected=0,done=false;
+          try {
+            window.MutationObserver=class {constructor(fn){callback=fn}observe(){}disconnect(){disconnected++}};
+            window.requestAnimationFrame=fn=>{const id=++next;frames.set(id,fn);return id};
+            window.cancelAnimationFrame=id=>frames.delete(id);
+            STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=0;STATE.isLoading=true;
+            readerAssetDelayUntilPaint=true;getSearchViewKey=()=>'expected';
+            const controller=new AbortController();
+            const pending=waitForReaderAssetFirstPaint(controller.signal,'expected').then(()=>{done=true});
+            callback();const before={done,frames:frames.size};
+            STATE._loadedPage=1;STATE.isLoading=false;displayedSearchView={...displayedSearchView,key:'wrong'};callback();
+            const wrong={done,frames:frames.size};
+            displayedSearchView={...displayedSearchView,key:'expected'};callback();
+            const ready={done,frames:frames.size};
+            const tick=()=>{const [id,fn]=frames.entries().next().value;frames.delete(id);fn()};
+            tick();const first={done,frames:frames.size};tick();await pending;
+            return {before,wrong,ready,first,done,frames:frames.size,disconnected,
+              wake:readerAssetParseWake===null,delay:readerAssetDelayUntilPaint};
+          } finally {
+            window.MutationObserver=old.observer;window.requestAnimationFrame=old.request;window.cancelAnimationFrame=old.cancel;
+            getSearchViewKey=old.getSearchViewKey;STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;
+            displayedSearchView=old.view;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
+            readerAssetDelayUntilPaint=old.delay;readerAssetParseWake=old.wake;
+          }
+        }''')
+        self.assertEqual(outcome, dict(before=dict(done=False,frames=0),wrong=dict(done=False,frames=0),
+            ready=dict(done=False,frames=1),first=dict(done=False,frames=1),done=True,frames=0,
+            disconnected=2,wake=True,delay=False))
+
+    def test_first_view_decode_gate_handles_timeout_abort_and_unsupported_context(self):
+        self.page.clock.install()
+        self.page.evaluate(r'''() => {
+          window.__gateOld={observer:window.MutationObserver,getSearchViewKey,loaded:STATE._loadedPage,
+            loading:STATE.isLoading,mobile:STATE.isMobile,open:STATE.leftSidebarOpen,
+            delay:readerAssetDelayUntilPaint,wake:readerAssetParseWake};
+          window.__gateObservers=[];window.__gateResults=[];
+          window.MutationObserver=class {constructor(fn){this.fn=fn;this.closed=false;__gateObservers.push(this)}
+            observe(){}disconnect(){this.closed=true}};
+          STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=0;STATE.isLoading=true;
+          readerAssetDelayUntilPaint=true;getSearchViewKey=()=>'expected';
+          window.__gateController=new AbortController();
+          waitForReaderAssetFirstPaint(__gateController.signal,'expected').then(()=>__gateResults.push('released'),
+            error=>__gateResults.push(error.name));
+        }''')
+        self.page.clock.fast_forward(751)
+        self.page.wait_for_function('__gateResults.length === 1')
+        self.assertEqual(self.page.evaluate('[__gateResults[0],__gateObservers[0].closed,readerAssetParseWake,readerAssetDelayUntilPaint]'),
+                         ['released', True, None, False])
+        self.page.evaluate('''() => {
+          readerAssetDelayUntilPaint=true;window.__gateController=new AbortController();
+          waitForReaderAssetFirstPaint(__gateController.signal,'expected').then(()=>__gateResults.push('released'),
+            error=>__gateResults.push(error.name));__gateController.abort();
+        }''')
+        self.page.wait_for_function('__gateResults.length === 2')
+        self.assertEqual(self.page.evaluate('[__gateResults[1],__gateObservers[1].closed,readerAssetParseWake,readerAssetDelayUntilPaint]'),
+                         ['AbortError', True, None, False])
+        result = self.page.evaluate('''async () => {
+          const controller=new AbortController();readerAssetDelayUntilPaint=true;STATE.isMobile=true;
+          await waitForReaderAssetFirstPaint(controller.signal,'expected');
+          STATE.isMobile=false;STATE.leftSidebarOpen=false;await waitForReaderAssetFirstPaint(controller.signal,'expected');
+          STATE.leftSidebarOpen=true;await waitForReaderAssetFirstPaint(controller.signal,'stale');
+          return {observers:__gateObservers.length,wake:readerAssetParseWake};
+        }''')
+        self.assertEqual(result, {'observers':2,'wake':None})
+        self.page.evaluate('''() => {
+          const old=__gateOld;window.MutationObserver=old.observer;getSearchViewKey=old.getSearchViewKey;
+          STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
+          readerAssetDelayUntilPaint=old.delay;readerAssetParseWake=old.wake;
+        }''')
+
+    def test_sidecar_fetch_continues_before_paint_and_user_demand_unblocks_decode(self):
+        result = self.page.evaluate(r'''async () => {
+          const old={fetch:window.fetch,observer:window.MutationObserver,getSearchViewKey,
+            loaded:STATE._loadedPage,loading:STATE.isLoading,mobile:STATE.isMobile,open:STATE.leftSidebarOpen,
+            delay:readerAssetDelayUntilPaint,assets:readerAssets,pending:readerAssetsPending,
+            retry:readerAssetsRetryAt,wake:readerAssetParseWake};
+          let calls=0,observer;
+          try {
+            readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;readerAssetDelayUntilPaint=true;
+            STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=0;STATE.isLoading=true;
+            getSearchViewKey=()=>'expected';
+            window.MutationObserver=class {constructor(){observer=this;this.closed=false}observe(){}disconnect(){this.closed=true}};
+            const payload={v:1,f:{sample:{s:2,m:'p',p:'sample.pdf'}}};
+            window.fetch=(url, options)=>{
+              if (!String(url).endsWith('/reader_assets.json.gz')) return old.fetch(url, options);
+              calls++;return Promise.resolve(new Response(new Blob([JSON.stringify(payload)]).stream()
+                .pipeThrough(new CompressionStream('gzip'))));
+            };
+            const first=loadReaderAssetsAfterFirstPaint();
+            while (!readerAssetParseWake) await new Promise(resolve=>setTimeout(resolve,1));
+            const before={calls,published:readerAssets!==null,pending:readerAssetsPending===first};
+            const urgent=loadReaderAssets();
+            const same=urgent===first;const value=await urgent;
+            return {before,same,calls,value,published:readerAssets===value,observerClosed:observer.closed,
+              wake:readerAssetParseWake,delay:readerAssetDelayUntilPaint};
+          } finally {
+            window.fetch=old.fetch;window.MutationObserver=old.observer;getSearchViewKey=old.getSearchViewKey;
+            STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;
+            readerAssetDelayUntilPaint=old.delay;readerAssets=old.assets;readerAssetsPending=old.pending;
+            readerAssetsRetryAt=old.retry;readerAssetParseWake=old.wake;
+          }
+        }''')
+        self.assertEqual(result, dict(before=dict(calls=1,published=False,pending=True),same=True,calls=1,
+            value={'sample':{'s':2,'m':'p','p':'sample.pdf'}},published=True,observerClosed=True,wake=None,delay=False))
+
+    def test_sidecar_view_identity_is_captured_before_slow_transfer(self):
+        result = self.page.evaluate(r'''async () => {
+          const old={fetch:window.fetch,loaded:STATE._loadedPage,loading:STATE.isLoading,
+            mobile:STATE.isMobile,open:STATE.leftSidebarOpen,delay:readerAssetDelayUntilPaint,
+            assets:readerAssets,pending:readerAssetsPending,retry:readerAssetsRetryAt,
+            wake:readerAssetParseWake,getSearchViewKey,observer:window.MutationObserver};
+          let release,calls=0,observerCount=0;
+          try {
+            readerAssets=null;readerAssetsPending=null;readerAssetsRetryAt=0;readerAssetDelayUntilPaint=true;
+            STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE._loadedPage=0;STATE.isLoading=true;
+            let identity='initial';getSearchViewKey=()=>identity;
+            window.MutationObserver=class {constructor(){observerCount++}observe(){}disconnect(){}};
+            const payload={v:1,f:{sample:{s:2}}};
+            window.fetch=(url,options)=>{
+              if (!String(url).endsWith('/reader_assets.json.gz')) return old.fetch(url,options);
+              calls++;return new Promise(resolve=>{release=()=>resolve(new Response(new Blob([JSON.stringify(payload)]).stream()
+                .pipeThrough(new CompressionStream('gzip'))))});
+            };
+            const pending=loadReaderAssetsAfterFirstPaint();
+            await Promise.resolve();await Promise.resolve();
+            identity='different-route';
+            while (!release) await new Promise(resolve=>setTimeout(resolve,1));
+            release();
+            const result=await Promise.race([pending,new Promise((_,reject)=>setTimeout(()=>reject(Error('stale view waited')),400))]);
+            return {result,calls,observerCount,wake:readerAssetParseWake};
+          } finally {
+            window.fetch=old.fetch;STATE._loadedPage=old.loaded;STATE.isLoading=old.loading;
+            STATE.isMobile=old.mobile;STATE.leftSidebarOpen=old.open;readerAssetDelayUntilPaint=old.delay;
+            readerAssets=old.assets;readerAssetsPending=old.pending;readerAssetsRetryAt=old.retry;
+            readerAssetParseWake=old.wake;getSearchViewKey=old.getSearchViewKey;window.MutationObserver=old.observer;
+          }
+        }''')
+        self.assertEqual(result, dict(result={'sample':{'s':2}},calls=1,observerCount=0,wake=None))
+
+    def test_initial_sidecar_completion_updates_only_current_directory(self):
+        result = self.page.evaluate(r'''async () => {
+          cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();
+          const previous={loadReaderAssets,getFolderContents,assets:readerAssets,pending:readerAssetsPending,
+            delay:readerAssetDelayUntilPaint,mobile:STATE.isMobile,open:STATE.leftSidebarOpen,
+            loaded:STATE._loadedPage,loading:STATE.isLoading,view:displayedSearchView};
+          try {
+            STATE.mode='repo';STATE.repo='Test';STATE.repoFull='VoiceOfML/Test';STATE.browserPath='';
+            STATE.isMobile=false;STATE.leftSidebarOpen=true;STATE.useLocalMode=true;STATE.dataLoaded=true;
+            STATE._loadedPage=0;STATE.isLoading=true;readerAssets=null;readerAssetsPending=null;
+            readerAssetDelayUntilPaint=true;
+            let release,loads=0;const assetPromise=new Promise(resolve=>{release=resolve});
+            loadReaderAssets=()=>{loads++;return assetPromise};
+            getFolderContents=async(_repo,path)=>({folders:[],files:[{name:path,ext:'chm',size:1}]});
+            await renderBrowser('old',++routeRenderId);
+            const oldRow=DOM.sidebarContent.querySelector('[data-type="file"]');
+            await renderBrowser('new',++routeRenderId);
+            const current=DOM.sidebarContent.querySelector('[data-type="file"]');
+            const digest='a'.repeat(64);
+            readerAssets={'VoiceOfML/Test\u0000new/new.chm':
+              {s:2,m:'h',p:`objects/aa/${digest}/0123456789abcdef/document.html`}};
+            release(readerAssets);await new Promise(resolve=>setTimeout(resolve,0));
+            return {oldConnected:oldRow.isConnected,oldAfter:oldRow.dataset.readerUrl||'',
+              current:!!current.dataset.readerUrl,label:current.querySelector('.browser-name').getAttribute('aria-label'),loads};
+          } finally {
+            loadReaderAssets=previous.loadReaderAssets;getFolderContents=previous.getFolderContents;
+            readerAssets=previous.assets;readerAssetsPending=previous.pending;readerAssetDelayUntilPaint=previous.delay;
+            STATE.isMobile=previous.mobile;STATE.leftSidebarOpen=previous.open;
+            STATE._loadedPage=previous.loaded;STATE.isLoading=previous.loading;displayedSearchView=previous.view;
+          }
+        }''')
+        self.assertEqual(result, dict(oldConnected=False,oldAfter='',current=True,label='打开阅读器：new.chm',loads=2))
+
     def test_reader_assets_body_deadline_releases_shared_load_and_retries(self):
         self.page.clock.install()
         self.page.evaluate('''() => {

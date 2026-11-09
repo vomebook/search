@@ -112,6 +112,7 @@ function buildRecordPath(rec) {
 var readerAssets = null;
 var readerAssetsPending = null;
 var readerAssetsRetryAt = 0;
+var readerAssetDelayUntilPaint = false;
 var convertedReaderRecords = null;
 var READER_ASSETS_COMPRESSED_LIMIT = 32 * 1024 * 1024;
 var READER_ASSETS_EXPANDED_LIMIT = 128 * 1024 * 1024;
@@ -166,10 +167,59 @@ function yieldReaderAssetLoad(signal) {
   });
 }
 
-async function fetchReaderAssetMap() {
+// Download may overlap initial rendering, but defer decompression/JSON work
+// until the first result window has painted or the user needs Reader metadata.
+var readerAssetParseWake = null;
+
+/** @param {AbortSignal} signal @param {string | null} targetKey @returns {Promise<void>} */
+function waitForReaderAssetFirstPaint(signal, targetKey) {
+  if (!readerAssetDelayUntilPaint || !targetKey || STATE.isMobile || !STATE.leftSidebarOpen ||
+      typeof MutationObserver !== "function" || !DOM.resultsList || getSearchViewKey() !== targetKey)
+    return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let settled = false, firstFrame = 0, secondFrame = 0, observer = null;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (firstFrame) cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+      if (observer) observer.disconnect();
+      signal.removeEventListener("abort", abort);
+      if (readerAssetParseWake === resume) readerAssetParseWake = null;
+      readerAssetDelayUntilPaint = false;
+      if (error) reject(error); else resolve();
+    };
+    const resume = () => finish(null);
+    const abort = () => finish(new DOMException("Reader assets timed out", "AbortError"));
+    const afterPaint = () => {
+      if (firstFrame || secondFrame || settled) return;
+      if (typeof requestAnimationFrame === "function")
+        firstFrame = requestAnimationFrame(() => { secondFrame = requestAnimationFrame(resume); });
+    };
+    // RAF may be paused; do not hold metadata forever when search stalls.
+    const timer = setTimeout(resume, 750);
+    readerAssetParseWake = resume;
+    if (signal.aborted) { abort(); return; }
+    signal.addEventListener("abort", abort, { once: true });
+    const ready = () => STATE._loadedPage >= 1 && !STATE.isLoading && displayedSearchView?.key === targetKey;
+    observer = new MutationObserver(() => {
+      if (getSearchViewKey() !== targetKey) { resume(); return; }
+      if (ready()) { observer.disconnect(); afterPaint(); }
+    });
+    observer.observe(DOM.resultsList, { childList: true, subtree: true });
+    if (ready()) { observer.disconnect(); afterPaint(); }
+  });
+}
+
+async function fetchReaderAssetMap(deferDecode = false) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, 10000);
+  // renderBrowser runs inside route application. Capture the settled view key
+  // in a microtask, rather than the intermediate state seen on entry.
+  var firstView = deferDecode ? Promise.resolve().then(() => getSearchViewKey()).catch(() => null) : null;
   try {
+    var firstViewKey = firstView ? await firstView : null;
     var response = await fetch("/search/data/reader_assets.json.gz", { signal: controller.signal });
     if (!response.ok || !response.body || typeof DecompressionStream === "undefined") throw new Error("READER_ASSETS_UNAVAILABLE");
     var compressedLength = Number(response.headers && response.headers.get && response.headers.get("content-length"));
@@ -178,6 +228,8 @@ async function fetchReaderAssetMap() {
       throw new Error("READER_ASSETS_LIMIT");
     }
     var compressed = await readBoundedReaderStream(response.body, READER_ASSETS_COMPRESSED_LIMIT, controller.signal);
+    if (firstView) await waitForReaderAssetFirstPaint(controller.signal, firstViewKey);
+    if (controller.signal.aborted) throw new DOMException("Reader assets timed out", "AbortError");
     var expandedStream = new Response(compressed).body.pipeThrough(new DecompressionStream("gzip"));
     var expanded = await readBoundedReaderStream(expandedStream, READER_ASSETS_EXPANDED_LIMIT, controller.signal);
     // Keep decoding and parsing separate from decompression so a pending
@@ -193,11 +245,15 @@ async function fetchReaderAssetMap() {
   }
 }
 
-function loadReaderAssets() {
+function loadReaderAssets(deferDecode) {
+  if (!deferDecode) {
+    readerAssetDelayUntilPaint = false;
+    if (readerAssetParseWake) readerAssetParseWake();
+  }
   if (readerAssets) return Promise.resolve(readerAssets);
   if (Date.now() < readerAssetsRetryAt) return Promise.resolve({});
   if (readerAssetsPending) return readerAssetsPending;
-  readerAssetsPending = fetchReaderAssetMap().then(function(assets) {
+  readerAssetsPending = fetchReaderAssetMap(deferDecode === true).then(function(assets) {
     readerAssets = assets;
     readerAssetsRetryAt = 0;
     convertedReaderRecords = null;
@@ -208,6 +264,10 @@ function loadReaderAssets() {
     return {};
   }).finally(function() { readerAssetsPending = null; });
   return readerAssetsPending;
+}
+
+function loadReaderAssetsAfterFirstPaint() {
+  return loadReaderAssets(readerAssetDelayUntilPaint);
 }
 
 function applyReaderAsset(record, repo, relativePath, originalLink) {
@@ -5073,7 +5133,7 @@ async function renderBrowser(path, routeId) {
   var initialData = null;
   var displayedData = null;
   var initialAssets = readerAssets;
-  loadReaderAssets().then(function() {
+  loadReaderAssetsAfterFirstPaint().then(function() {
     if (!list.isConnected || !displayedData || readerAssets === initialAssets ||
         (routeId && routeId !== routeRenderId) || STATE.mode !== "repo" ||
         STATE.repoFull !== currentRepo || STATE.browserPath !== path) return;
@@ -6673,11 +6733,15 @@ async function init() {
     if (document.visibilityState === "hidden") flushSidebarScroll();
   });
   syncSearchInputState();
-  await initSearchPositions();
+  // Session and position databases are independent; start both without
+  // serializing their I/O. Route handling still waits for both to settle.
+  const positionsReady = initSearchPositions();
+  const restoredSession = restoreSearchSession();
+  await positionsReady;
   setupSearchPositionControls();
   setupSearchPositionSaving();
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
-  STATE.sessionRestored = await restoreSearchSession();
+  STATE.sessionRestored = await restoredSession;
   setupReaderIntentWarming();
   STATE.isDark = readSearchPreference("theme") !== "light";
   applyTheme();
@@ -6922,6 +6986,7 @@ async function init() {
   window.addEventListener("pageshow", resumeResultRecovery);
   window.addEventListener("online", resumeResultRecovery);
   window.setInterval(function() { warmConnection(); }, KEEPALIVE_INTERVAL_MS);
+  readerAssetDelayUntilPaint = true;
   ROUTER.apply();
   restoreReaderFromSession();
   // Keep the first search paint independent of the multi-megabyte Reader sidecar.

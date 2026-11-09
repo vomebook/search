@@ -99,7 +99,8 @@
           if (!saved || typeof saved !== "object" || !("version" in saved) || saved.version !== 1 ||
               !("url" in saved) || typeof saved.url !== "string") return false;
           const target = new URL(saved.url);
-          if (!canRestore(target)) return false;
+          // A user may have navigated while IndexedDB was opening or reading.
+          if (!canRestore() || !canRestore(target)) return false;
           history.replaceState(null, "", target.href);
           return true;
         } catch (_) {
