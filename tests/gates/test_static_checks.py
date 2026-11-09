@@ -2161,6 +2161,23 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(source_original)
             mutant_gate.write_text(mutant_original)
 
+    def test_pdf_text_store_timeout_probe_keeps_baseline_deadline(self):
+        import ast
+        module = ast.parse(Path(__file__).read_text())
+        method = next(node for node in ast.walk(module) if isinstance(node, ast.FunctionDef)
+                      and node.name == 'test_pdf_text_store_targeted_mutants_fail_closed')
+        literals = [node.value for node in ast.walk(method)
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        self.assertIn("    writeFileSync(target,mutant);\n    const result=run();", literals)
+        timed = next(value for value in literals if value.startswith('    writeFileSync(target,mutant);\n')
+                     and 'timeout:500' in value)
+        self.assertIn("killSignal:'SIGKILL'", timed)
+        self.assertNotIn('timeout:15000', literals)
+        gate = (ROOT / 'scripts/reader/check_pdf_text_store_mutations.mjs').read_text()
+        self.assertEqual(gate.count("const run=()=>spawnSync(process.execPath,args,{encoding:'utf8',timeout:15000,killSignal:'SIGKILL'});"), 1)
+        self.assertEqual(gate.count("const baseline=run();"), 1)
+        self.assertEqual(gate.count("    writeFileSync(target,mutant);\n    const result=run();"), 1)
+
     def test_pdf_text_store_targeted_mutants_fail_closed(self):
         paths = ['static/reader/pdf/reader-pdf-text-store.mjs',
                  'scripts/reader/check_pdf_text_store_mutations.mjs',
@@ -2197,8 +2214,15 @@ class StaticGateTests(unittest.TestCase):
         test.write_text(original)
         before = "after:'catch (_) {}\\n        }).catch(reject);'"
         self.assertEqual(script.count(before), 1)
+        # Only shorten the injected mutant deadline. Keep the baseline's real
+        # 15s budget so slow startup cannot masquerade as the intended timeout.
+        mutant_setup = """    writeFileSync(target,mutant);
+    const result=run();"""
+        self.assertEqual(script.count(mutant_setup), 1)
+        timed_mutant = """    writeFileSync(target,mutant);
+    const result=spawnSync(process.execPath,args,{encoding:'utf8',timeout:500,killSignal:'SIGKILL'});"""
         gate.write_text(script.replace(before, "after:'catch (_) { while (true) {} }\\n        }).catch(reject);'")
-                        .replace('timeout:15000', 'timeout:500'))
+                        .replace(mutant_setup, timed_mutant))
         result = self.run_check('node', paths[1])
         self.assert_check(result, False, '"killed":0,"survived":0,"errors":1')
         self.assertIn('timed out or failed to execute', result.stdout)
