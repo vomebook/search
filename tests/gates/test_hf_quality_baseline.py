@@ -565,6 +565,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_partition_config_coverage.mjs'), 2)
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_partition_policy_coverage.mjs'), 2)
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_partition_page_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_pdf_partition_requests_coverage.mjs'), 2)
         github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
         hf = workflow.split('  huggingface-search:\n', 1)[1]
         gate = '          node scripts/reader/check_pdf_prefetch_contracts.mjs'
