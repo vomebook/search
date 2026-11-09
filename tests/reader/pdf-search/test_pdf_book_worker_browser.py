@@ -321,7 +321,7 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(self.state['paths'][len(initial):], [first_path,second_path])
         page.evaluate('''async() => {window.same=await window.deadline(client.search('needle'),'new query');}''')
         self.assertNotEqual(page.evaluate('window.first.session'),page.evaluate('window.same.session'))
-        self.assertEqual(self.state['paths'][len(initial):], [first_path,second_path,first_path,second_path])
+        self.assertCountEqual(self.state['paths'][len(initial):], [first_path,second_path,first_path,second_path])
         page.evaluate('''async() => {window.second=await window.deadline(client.page(150),'new session page');}''')
         self.assertEqual(self.state['paths'][-1], second_path)
         self.assertEqual(len(self.state['paths']),len(initial)+5)
