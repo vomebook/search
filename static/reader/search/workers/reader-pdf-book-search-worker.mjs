@@ -1,6 +1,7 @@
 import "../../core/reader-security.js";
 import { searchBookText, validateBookText } from "../reader-book-text.js";
-import { validPdfBookUrl, searchPath } from "../reader-pdf-book-url.mjs";
+import { validPdfBookUrl } from "../reader-pdf-book-url.mjs";
+import { validatePdfPartitionConfiguration } from "../reader-pdf-partition-config.mjs";
 import { readPdfSearchBytes, readPdfSearchText } from "../reader-pdf-search-stream.mjs";
 import { validatePdfSearchPartition } from "../reader-pdf-partition-shape.mjs";
 
@@ -77,27 +78,6 @@ async function loadBook() {
   return pendingBook;
 }
 
-function validateSearchConfiguration() {
-  if (!/^[0-9a-f]{64}$/.test(configuration.generation) ||
-      !/^[0-9a-f]{64}$/.test(configuration.sourceSha) ||
-      !Number.isSafeInteger(configuration.pageCount) || configuration.pageCount < 1 ||
-      !Array.isArray(configuration.partitions)) throw new Error("PDF_TEXT_INDEX_INCOMPLETE");
-  let next = 1;
-  for (const part of configuration.partitions) {
-    const url = new URL(part.url, self.location.href);
-    const path = url.searchParams.get("path") || decodeURIComponent(url.pathname);
-    const suffix = `text/search-${String(part.start).padStart(6, "0")}-${String(part.end).padStart(6, "0")}.json.gz`;
-    if (!Number.isSafeInteger(part.start) || !Number.isSafeInteger(part.end) || part.start !== next ||
-        part.end < part.start || part.end > configuration.pageCount || part.end - part.start >= 32 ||
-        !validPdfBookUrl(part.url, self.location.href, searchPath) || !path.endsWith(suffix) ||
-        !path.includes(`objects/${configuration.sourceSha.slice(0, 2)}/${configuration.sourceSha}/`) ||
-        !Number.isSafeInteger(part.bytes) || part.bytes < 1 || part.bytes > limit ||
-        !/^[0-9a-f]{64}$/.test(part.sha256)) throw new Error("PDF_TEXT_INDEX_INVALID");
-    next = part.end + 1;
-  }
-  if (next !== configuration.pageCount + 1) throw new Error("PDF_TEXT_INDEX_INCOMPLETE");
-}
-
 async function withPartitionRequest(current, owners, action) {
   if (!current()) throw aborted();
   const request = new AbortController();
@@ -140,7 +120,7 @@ async function loadSearchPartition(part, current, owners = null, prefetched = nu
 }
 
 async function searchPartitions(query, current, progress) {
-  validateSearchConfiguration();
+  validatePdfPartitionConfiguration(configuration, self.location.href, limit);
   const counts = [], first = [];
   let total = 0, complete = false, retained = null;
   const remember = (number, part, local) => {
@@ -272,7 +252,7 @@ self.onmessage = async ({ data }) => {
       session = { id: data.id, index };
       self.postMessage({ id: data.id, session: session.id, ...await index.page(0) });
     } else if (data.type === "prefetch") {
-      if (configuration.partitions) validateSearchConfiguration();
+      if (configuration.partitions) validatePdfPartitionConfiguration(configuration, self.location.href, limit);
       else await loadBook();
       // Keep the search index (and its methods) inside the Worker. Only its
       // cloneable identity is needed to preserve pagination after prefetch.

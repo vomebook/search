@@ -425,6 +425,22 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(result['a']['results'],result['b']['results'])
         self.assertEqual(self.state['paths'].count(target),3)
 
+    def test_partition_configuration_rejects_wrong_source_before_fetch(self):
+        config = self.configuration()
+        config['partitions'][0]['url'] = config['partitions'][0]['url'].replace(SOURCE_SHA, 'f' * 64)
+        page = self.make_page()
+        result = page.evaluate('''async config => {
+          const {createPdfBookSearch} = await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'), 'import');
+          const client = window.client = createPdfBookSearch(config);
+          const progress = [];
+          const result = await window.capture(client.search('needle', value => progress.push(value)), 'search');
+          return {result, progress};
+        }''', config)
+        self.assertIn('PDF_TEXT_INDEX_INVALID', result['result'].get('message', ''))
+        self.assertEqual(result['progress'], [])
+        self.assertEqual(self.state['paths'], [])
+        self.assertEqual(page.evaluate('window.unexpected'), [])
+
     def test_partition_shape_rejects_null_page_before_progress_or_paging(self):
         malformed = packed({
             'version': 1, 'kind': 'pdf-search-text-partition', 'source_sha256': SOURCE_SHA,
