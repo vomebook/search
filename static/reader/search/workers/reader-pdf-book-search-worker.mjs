@@ -1,6 +1,7 @@
 import "../../core/reader-security.js";
 import { searchBookText, validateBookText } from "../reader-book-text.js";
 import { validPdfBookUrl, searchPath } from "../reader-pdf-book-url.mjs";
+import { readPdfSearchBytes, readPdfSearchText } from "../reader-pdf-search-stream.mjs";
 
 const aborted = () => new DOMException("Search cancelled", "AbortError");
 const limit = self.VoiceOfMLReaderSecurity.LIMITS.chapterTotalBytes;
@@ -28,56 +29,6 @@ function canPrefetchPartition(connection, bytes) {
     Number.isSafeInteger(bytes) && bytes > 0 && bytes <= PARTITION_LOOKAHEAD_MAX_BYTES;
 }
 
-/** @overload
- * @param {ReadableStream<Uint8Array>} stream
- * @param {AbortSignal} signal
- * @param {number} expected
- * @param {false} [text]
- * @returns {Promise<Uint8Array<ArrayBuffer>>}
- */
-/** @overload
- * @param {ReadableStream<Uint8Array>} stream
- * @param {AbortSignal} signal
- * @param {null} expected
- * @param {true} text
- * @returns {Promise<string>}
- */
-async function readBounded(stream, signal, expected = null, text = false) {
-  const reader = stream.getReader(), chunks = [];
-  const bytes = expected === null ? null : new Uint8Array(expected);
-  const decoder = text ? new TextDecoder() : null;
-  let size = 0;
-  const cancel = () => reader.cancel().catch(() => {});
-  signal.addEventListener("abort", cancel, { once: true });
-  try {
-    while (true) {
-      if (signal.aborted) throw aborted();
-      const { value, done } = await reader.read();
-      if (signal.aborted) throw aborted();
-      if (done) break;
-      size += value.byteLength;
-      if (size > limit || (bytes && size > bytes.length)) throw new Error("READER_RESOURCE_LIMIT");
-      if (bytes) bytes.set(value, size - value.byteLength);
-      else chunks.push(decoder ? decoder.decode(value, {stream:true}) : value);
-    }
-    if (bytes) {
-      if (size !== expected) throw new Error("PDF_OCR_SIZE_MISMATCH");
-      return bytes;
-    }
-    if (decoder) { chunks.push(decoder.decode()); return chunks.join(""); }
-    const result = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
-    return result;
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
-  } finally {
-    signal.removeEventListener("abort", cancel);
-    reader.releaseLock();
-  }
-}
-
 async function loadBook() {
   if (book) return book;
   if (pendingBook) return pendingBook;
@@ -90,15 +41,15 @@ async function loadBook() {
   pendingBook = (async () => {
     const response = await fetch(configuration.url, { signal: request.signal, credentials: "omit" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    let packed = await readBounded(response.body, request.signal, configuration.bytes);
+    let packed = await readPdfSearchBytes(response.body, request.signal, configuration.bytes, limit);
     if (packed.byteLength !== configuration.bytes) throw new Error("PDF_OCR_SIZE_MISMATCH");
     const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
       .map(value => value.toString(16).padStart(2, "0")).join("");
     if (digest !== configuration.sha256) throw new Error("PDF_OCR_HASH_MISMATCH");
     const stream = new ReadableStream({start(controller) {controller.enqueue(packed); controller.close();}});
     packed = null;
-    const decoded = JSON.parse(await readBounded(
-      stream.pipeThrough(new DecompressionStream("gzip")), request.signal, null, true));
+    const decoded = JSON.parse(await readPdfSearchText(
+      stream.pipeThrough(new DecompressionStream("gzip")), request.signal, limit));
     if (request.signal.aborted) throw aborted();
     const validated = validateBookText(decoded, configuration.pageCount, configuration.sourceSha);
     // Search needs offsets and hit boxes, not the duplicate full page layout.
@@ -169,7 +120,7 @@ async function withPartitionRequest(current, owners, action) {
 async function fetchPartitionBytes(part, signal) {
   const response = await fetch(part.url, {signal, credentials: "omit"});
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return readBounded(response.body, signal, part.bytes);
+  return readPdfSearchBytes(response.body, signal, part.bytes, limit);
 }
 
 async function loadSearchPartition(part, current, owners = null, prefetched = null) {
@@ -180,8 +131,8 @@ async function loadSearchPartition(part, current, owners = null, prefetched = nu
     if (digest !== part.sha256) throw new Error("PDF_OCR_HASH_MISMATCH");
     const stream = new ReadableStream({start(owner) {owner.enqueue(packed); owner.close();}});
     packed = null;
-    const value = JSON.parse(await readBounded(
-      stream.pipeThrough(new DecompressionStream("gzip")), signal, null, true));
+    const value = JSON.parse(await readPdfSearchText(
+      stream.pipeThrough(new DecompressionStream("gzip")), signal, limit));
     if (!current() || signal.aborted) throw aborted();
     if (value.version !== 1 || value.kind !== "pdf-search-text-partition" ||
         value.source_sha256 !== configuration.sourceSha || value.generation !== configuration.generation ||
