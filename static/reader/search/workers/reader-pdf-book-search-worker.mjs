@@ -3,6 +3,7 @@ import { searchBookText, validateBookText } from "../reader-book-text.js";
 import { validPdfBookUrl } from "../reader-pdf-book-url.mjs";
 import { validatePdfPartitionConfiguration } from "../reader-pdf-partition-config.mjs";
 import { canPrefetchPdfPartition, canRetainPdfPartition } from "../reader-pdf-partition-policy.mjs";
+import { pdfPartitionPageOffset, decoratePdfPartitionHits } from "../reader-pdf-partition-page.mjs";
 import { readPdfSearchBytes, readPdfSearchText } from "../reader-pdf-search-stream.mjs";
 import { validatePdfSearchPartition } from "../reader-pdf-partition-shape.mjs";
 
@@ -122,10 +123,8 @@ async function searchPartitions(query, current, progress) {
     // Reuse is scoped to this query; no unverified or oversized body is kept.
     retained = {number, part, local};
   };
-  const decorate = (results, pages) => results.map(hit => ({...hit,
-    textGeneration: pages[hit.page - pages[0].page].text_generation}));
   const index = {async page(requested = 0) {
-    const offset = Math.floor(Math.max(0, Math.min(total - 1, Number(requested) || 0)) / 50) * 50;
+    const offset = pdfPartitionPageOffset(requested, total);
     if (!offset) return {total, offset, pageSize: 50, results: first.slice(), complete};
     const results = [];
     let skipped = 0;
@@ -147,7 +146,7 @@ async function searchPartitions(query, current, progress) {
       while (position < local.total && results.length < 50) {
         const page = local.page(position);
         const hits = page.results.slice(position - page.offset, position - page.offset + 50 - results.length);
-        results.push(...decorate(hits, part.pages));
+        results.push(...decoratePdfPartitionHits(hits, part.pages));
         position += hits.length;
       }
       skipped += counts[i];
@@ -184,7 +183,7 @@ async function searchPartitions(query, current, progress) {
       if (!current()) throw aborted();
       counts.push(local.total);
       total += local.total;
-      if (first.length < 50) first.push(...decorate(local.page(0).results.slice(0, 50 - first.length), value.pages));
+      if (first.length < 50) first.push(...decoratePdfPartitionHits(local.page(0).results.slice(0, 50 - first.length), value.pages));
       await progress(index, part.end, configuration.pageCount);
       await pause();
     }
