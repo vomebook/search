@@ -4,7 +4,7 @@ const MAX_CORPUS_COMPRESSED_BYTES = 32 * 1024 * 1024;
 const MAX_CORPUS_EXPANDED_BYTES = 256 * 1024 * 1024;
 const SORT_PRECOMPUTE_DELAY_MS = 1000;
 // Bump when matching, filtering, collation or public record semantics change.
-const SEARCH_SEMANTICS_VERSION = "worker-search-v5";
+const SEARCH_SEMANTICS_VERSION = "worker-search-v6";
 let snapshotGeneration = null;
 
 let records = [];
@@ -177,6 +177,13 @@ function couldBeFuzzy(token, word, maxDist) {
 
 function compileWildcardMatcher(pattern) {
   const normalized = String(pattern || "");
+  // Python's Unicode case-insensitive matcher equates Kelvin sign and long s
+  // with ASCII k and s. JS non-unicode regex deliberately does not. Handle
+  // these one-literal edge patterns without changing UTF-16/dot semantics.
+  const special = normalized.replace(/^\*+|\*+$/g, "");
+  if (normalized.includes("*") && /^[Kſ]$/.test(special)) {
+    return new RegExp(special === "K" ? "[kK]" : "[sſ]", "i");
+  }
   if (normalized.includes("*") && normalized.includes("?") && /^[*?]+$/.test(normalized)) {
     // Stars may match nothing; questions require adjacent regex-dot code units.
     const requiredLength = normalized.replace(/\*/g, "").length;
@@ -291,6 +298,12 @@ function compileWildcardMatcher(pattern) {
 
 function literalSearch(query) {
   return /[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\s]/i.test(String(query || ""));
+}
+
+function asciiSeparatorSearch(query, params) {
+  // Only one ASCII term joined by common separators is eligible. Explicit
+  // exact and wildcard queries retain their literal behavior.
+  return !params.exact && /^[a-z0-9]+(?:[._-][a-z0-9]+)+$/i.test(query);
 }
 
 function decodeSearchPayload(data) {
@@ -648,9 +661,16 @@ function yieldSearchIndex() {
   return new Promise(resolve => { indexYieldQueue.push(resolve); indexYieldChannel.port2.postMessage(null); });
 }
 
+function singleCharacterSearch(query, params) {
+  // One code point has no fuzzy expansion: the complete literal scan also
+  // includes filename, extension, repository and optional folder hits.
+  return !params.exact && Array.from(query).length === 1 && !/[\s*?]/u.test(query);
+}
+
 async function prepareSearchIndex(params, job) {
   const query = String(params.q || "").trim();
-  if (wordIndex || !query || params.exact || literalSearch(query)) return;
+  if (wordIndex || !query || params.exact || singleCharacterSearch(query, params)
+      || (literalSearch(query) && !asciiSeparatorSearch(query, params))) return;
   if (fulltextBuildTimer !== null && typeof clearTimeout === "function") clearTimeout(fulltextBuildTimer);
   fulltextBuildTimer = null;
   try {
@@ -904,7 +924,9 @@ function searchLocal(params, preparedExact = null) {
     return pageResult(ordered, params);
   }
   let matched = [];
-  if (!query) {
+  if (singleCharacterSearch(query, params) && preparedExact !== null) {
+    matched = preparedExact;
+  } else if (!query) {
     const order = emptySearchOrder(params);
     if (order !== null) return pageResult(order, params);
     const repos = params.repos;
@@ -912,7 +934,7 @@ function searchLocal(params, preparedExact = null) {
     // single nonempty string; other inputs keep the existing global scan.
     matched = Array.isArray(repos) && repos.length === 1 && typeof repos[0] === "string" && repos[0]
       ? (repoRecordIndices[repos[0]] || []).slice() : recordIndices.slice();
-  } else if (params.exact || literalSearch(query)) {
+  } else if (params.exact || (literalSearch(query) && !asciiSeparatorSearch(query, params))) {
     // Whitespace separates independent literal terms, matching the HF API.
     // A term may still be a wildcard pattern; every term must match.
     const terms = query.split(/\s+/).filter(Boolean);
@@ -1002,7 +1024,8 @@ function searchLocal(params, preparedExact = null) {
     const order = repos.length === 1 ? (byRepo[repos[0]] || []) : null;
     // Exact single-repo matches retain source order, so stable name ties match
     // the prepared repository order. Fuzzy, unusual and cold paths still sort.
-    const exactSingleRepoName = query && params.sort === "name" && (params.exact || literalSearch(query))
+    const exactSingleRepoName = query && params.sort === "name"
+      && (params.exact || (literalSearch(query) && !asciiSeparatorSearch(query, params)))
       && repoWildcardProofSafe && Array.isArray(repos) && repos.length === 1
       && typeof repos[0] === "string" && repos[0];
     if ((!query || exactSingleRepoName) && ready && order && filtered.length <= SORT_REUSE_MAX_INDICES
@@ -1034,6 +1057,26 @@ function searchLocal(params, preparedExact = null) {
   searchOrderCache.set(cacheKey, ordered);
   while (searchOrderCache.size > SEARCH_ORDER_CACHE_MAX) searchOrderCache.delete(searchOrderCache.keys().next().value);
   return pageResult(ordered, params);
+}
+
+async function prepareSingleCharacter(params, job) {
+  const query = String(params.q || "").trim();
+  if (!singleCharacterSearch(query, params)) return null;
+  const lower = query.toLowerCase(), scope = exactSearchScope(params.repos), matched = [];
+  for (let start = 0; start < scope.length; start += FULLTEXT_BATCH_RECORDS) {
+    if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+    if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+    const end = Math.min(scope.length, start + FULLTEXT_BATCH_RECORDS);
+    for (let offset = start; offset < end; offset++) {
+      const index = scope[offset], fields = getRecordSearchFields(records[index]);
+      if (fields.file.includes(lower) || fields.repo.includes(lower)
+          || (params.searchFolders !== false && fields.folder.includes(lower))) matched.push(index);
+    }
+    if (end < scope.length) await yieldSearchIndex();
+  }
+  if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
+  if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
+  return matched;
 }
 
 async function prepareLongWildcard(params, job) {
@@ -1172,7 +1215,7 @@ async function dispatch(type, payload, job) {
     if (Array.from(String(payload.q || "")).length > 256)
       throw protocolError("QUERY_TOO_LONG", "Search query exceeds 256 characters");
     await prepareSearchIndex(payload || {}, job);
-    const prepared = await prepareLongWildcard(payload || {}, job);
+    const prepared = await prepareSingleCharacter(payload || {}, job) ?? await prepareLongWildcard(payload || {}, job);
     if (job.cancelled) throw protocolError("SEARCH_CANCELLED", "Search cancelled");
     if (job.generation !== generation) throw protocolError("CORPUS_REPLACED", "Search corpus changed");
     return searchLocal(payload || {}, prepared);
