@@ -3,16 +3,19 @@
 import assert from "node:assert/strict";
 import {spawnSync} from "node:child_process";
 import {createHash} from "node:crypto";
-import {mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from "node:fs";
+import {constants, lstatSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
-import {test} from "node:test";
+import {test as nodeTest} from "node:test";
 import {gzipSync} from "node:zlib";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = readFileSync(path.join(root, "scripts/benchmarks/benchmark_local_search.mjs"));
 const worker = readFileSync(path.join(root, "static/search/index-worker.js"), "utf8");
+const safeOpenSupported = Boolean(constants.O_NONBLOCK && constants.O_NOFOLLOW);
+// Skip only cases that require real snapshot opens; all others still run.
+const snapshotTest = (name, fn) => nodeTest(name, {skip: safeOpenSupported ? false : "O_NONBLOCK or O_NOFOLLOW unavailable"}, fn);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(",")}]`
   : value !== null && typeof value === "object"
@@ -71,10 +74,10 @@ function fixture({bypassCache = false} = {}) {
     writeFileSync(manifestPath, JSON.stringify(manifest));
   }
   save();
-  function run(extra = [], generation = manifest.generation) {
-    return spawnSync(process.execPath, [scriptPath, "--data-dir", dataDir, "--generation", generation,
+  function run(extra = [], generation = manifest.generation, {sourceDir = dataDir, timeout = 30000} = {}) {
+    return spawnSync(process.execPath, [scriptPath, "--data-dir", sourceDir, "--generation", generation,
       ...(extra.includes("--iterations") ? [] : ["--iterations", "1"]),
-      ...(extra.includes("--warmup") ? [] : ["--warmup", "0"]), ...extra], {encoding: "utf8", timeout: 30000});
+      ...(extra.includes("--warmup") ? [] : ["--warmup", "0"]), ...extra], {encoding: "utf8", timeout});
   }
   function inject(before, after) {
     assert.equal(worker.split(before).length, 2, "injection point must be unique");
@@ -93,7 +96,105 @@ function failed(result, pattern) {
   assert.equal(result.stdout, "", "no partial benchmark report on error");
 }
 
-test("full stable ID order, pagination, sort ties, and source identity", () => withFixture(f => {
+function makeSymlink(t, target, link, type) {
+  try { symlinkSync(target, link, type); return true; }
+  catch (error) {
+    if (["ENOSYS", "ENOTSUP", "EOPNOTSUPP"].includes(error.code) ||
+        (process.platform === "win32" && ["EPERM", "EACCES"].includes(error.code))) {
+      t.skip(`symlinks unavailable: ${error.code}`);
+      return false;
+    }
+    throw error;
+  }
+}
+
+function makeFifo(t, file) {
+  if (process.platform === "win32") { t.skip("POSIX FIFO unavailable on Windows"); return false; }
+  const result = spawnSync("mkfifo", [file], {encoding: "utf8", timeout: 5000, env: {...process.env, LC_ALL: "C"}});
+  if (result.error?.code === "ENOENT" ||
+      (result.status !== 0 && /operation not supported|function not implemented|operation not permitted/i.test(result.stderr || ""))) {
+    t.skip(`mkfifo or filesystem FIFO support unavailable: ${(result.stderr || result.error?.message || "").trim()}`);
+    return false;
+  }
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(lstatSync(file).isFIFO(), true, "fixture must be a FIFO");
+  return true;
+}
+
+nodeTest("missing safe-open flags fail closed before opening input", () => {
+  const importLine = 'import {constants, fstatSync, openSync, closeSync, readFileSync, readSync} from "node:fs";';
+  const source = script.toString("utf8");
+  assert.equal(source.split(importLine).length, 2, "fs import must be unique");
+  for (const missing of ["O_NONBLOCK", "O_NOFOLLOW"]) withFixture(f => {
+    const replacement = `import {constants as nodeFsConstants, fstatSync, closeSync, readFileSync, readSync} from "node:fs";
+const constants = {...nodeFsConstants, O_NONBLOCK: 1, O_NOFOLLOW: 2, ${missing}: undefined};
+const openSync = () => { throw new Error("unsafe open attempted"); };`;
+    writeFileSync(f.scriptPath, source.replace(importLine, replacement));
+    failed(f.run([], undefined, {timeout: 5000}), /safe snapshot open requires.*O_NONBLOCK.*O_NOFOLLOW/);
+  });
+});
+
+for (const [name, key] of [["manifest", "manifestPath"], ["corpus", "corpusPath"]]) {
+  for (const mode of ["direct", "leaf symlink", "directory symlink"]) {
+    snapshotTest(`${name} FIFO without a writer fails promptly (${mode})`, t => withFixture(f => {
+      rmSync(f[key]);
+      const fifo = mode === "leaf symlink" ? path.join(f.dir, `${name}.fifo`) : f[key];
+      if (!makeFifo(t, fifo)) return;
+      if (mode === "leaf symlink" && !makeSymlink(t, fifo, f[key], "file")) return;
+      const sourceDir = mode === "directory symlink" ? path.join(f.dir, "data-link") : f.dataDir;
+      if (mode === "directory symlink" && !makeSymlink(t, f.dataDir, sourceDir, "dir")) return;
+      const result = f.run([], undefined, {sourceDir, timeout: 5000});
+      assert.notEqual(result.error?.code, "ETIMEDOUT", "benchmark blocked waiting for a FIFO writer");
+      assert.ifError(result.error);
+      failed(result, mode === "leaf symlink" ? /ELOOP/ : /invalid file size or type:/);
+    }));
+  }
+}
+
+snapshotTest("directory symlinks are allowed but manifest and corpus leaf symlinks are rejected", t => withFixture(f => {
+  const alias = path.join(f.dir, "data-link");
+  if (!makeSymlink(t, f.dataDir, alias, "dir")) return;
+  const options = {sourceDir: alias};
+  const result = f.run([], undefined, options);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).generation, f.manifest.generation);
+  for (const key of ["manifestPath", "corpusPath"]) {
+    const original = `${f[key]}.original`;
+    renameSync(f[key], original);
+    if (!makeSymlink(t, path.basename(original), f[key], "file")) return;
+    failed(f.run([], undefined, options), /ELOOP/);
+    rmSync(f[key]);
+    renameSync(original, f[key]);
+  }
+}));
+
+for (const [name, key, limit] of [["manifest", "manifestPath", 1024 * 1024], ["corpus", "corpusPath", 32 * 1024 * 1024]]) {
+  snapshotTest(`${name} directory with an in-range size is rejected as non-file`, t => withFixture(f => {
+    rmSync(f[key]);
+    mkdirSync(f[key]);
+    writeFileSync(path.join(f[key], "entry"), "x");
+    const stat = lstatSync(f[key]);
+    assert.equal(stat.isDirectory(), true);
+    if (stat.size < 1 || stat.size > limit) { t.skip("filesystem does not report an in-range directory size"); return; }
+    failed(f.run(), /invalid file size or type:/);
+  }));
+}
+
+snapshotTest("regular manifest and corpus sizes remain bounded", () => withFixture(f => {
+  writeFileSync(f.manifestPath, "");
+  failed(f.run(), /invalid file size or type:/);
+  f.save();
+  truncateSync(f.manifestPath, 1024 * 1024 + 1);
+  failed(f.run(), /invalid file size or type:/);
+  f.save();
+  truncateSync(f.corpusPath, 0);
+  failed(f.run(), /invalid file size or type:/);
+  truncateSync(f.corpusPath, 32 * 1024 * 1024 + 1);
+  failed(f.run(), /invalid file size or type:/);
+}));
+
+snapshotTest("full stable ID order, pagination, sort ties, and source identity", () => withFixture(f => {
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout);
@@ -117,7 +218,7 @@ test("full stable ID order, pagination, sort ties, and source identity", () => w
   assert.equal(output.queries.find(q => q.params.q === "不存在").total, 0);
 }));
 
-test("CLI requires an explicit directory and generation; validates all counts and options", () => withFixture(f => {
+nodeTest("CLI requires an explicit directory and generation; validates all counts and options", () => withFixture(f => {
   for (const args of [[], ["--data-dir", f.dataDir], ["--generation", f.manifest.generation]]) {
     const result = spawnSync(process.execPath, [f.scriptPath, ...args], {encoding: "utf8"});
     failed(result, /usage:/);
@@ -133,9 +234,11 @@ test("CLI requires an explicit directory and generation; validates all counts an
   const help = spawnSync(process.execPath, [f.scriptPath, "--help"], {encoding: "utf8"});
   assert.equal(help.status, 0);
   assert.match(help.stdout, /--generation/);
+  assert.match(help.stdout, /Directory components.*may be symlinks/);
+  assert.match(help.stdout, /manifest and corpus files must not be symlinks/);
 }));
 
-test("missing manifest, corpus, or expected generation fails closed", () => withFixture(f => {
+snapshotTest("missing manifest, corpus, or expected generation fails closed", () => withFixture(f => {
   failed(f.run([], "0".repeat(64)), /unexpected generation/);
   rmSync(f.corpusPath);
   failed(f.run(), /ENOENT/);
@@ -143,7 +246,7 @@ test("missing manifest, corpus, or expected generation fails closed", () => with
   failed(f.run(), /ENOENT/);
 }));
 
-test("manifest identity and Pages object metadata are checked", () => withFixture(f => {
+snapshotTest("manifest identity and Pages object metadata are checked", () => withFixture(f => {
   f.manifest.record_count++;
   f.save(false);
   failed(f.run(), /generation identity mismatch/);
@@ -160,7 +263,7 @@ test("manifest identity and Pages object metadata are checked", () => withFixtur
   failed(f.run(), /invalid Pages corpus manifest member/);
 }));
 
-test("object path, gzip identity, source metadata and record count fail closed", () => {
+snapshotTest("object path, gzip identity, source metadata and record count fail closed", () => {
   const cases = [
     [f => { delete f.manifest.files.pages["search_data.json.gz"].sha256; }, /invalid Pages corpus manifest member/],
     [f => { delete f.manifest.files.pages["search_data.json.gz"].bytes; }, /invalid Pages corpus manifest member/],
@@ -180,7 +283,7 @@ test("object path, gzip identity, source metadata and record count fail closed",
   for (const [change, message] of cases) withFixture(f => { change(f); f.save(); failed(f.run(), message); });
 });
 
-test("a repinned invalid expanded JSON cannot pass even with matching gzip metadata", () => withFixture(f => {
+snapshotTest("a repinned invalid expanded JSON cannot pass even with matching gzip metadata", () => withFixture(f => {
   const compressed = gzipSync(Buffer.from("not JSON"));
   const member = {bytes: compressed.length, sha256: hash(compressed)};
   f.manifest.files.pages["search_data.json.gz"] = {...member};
@@ -190,7 +293,7 @@ test("a repinned invalid expanded JSON cannot pass even with matching gzip metad
   failed(f.run(), /benchmark failed:/);
 }));
 
-test("manifest source and expanded Pages JSON may have equivalent values but different bytes", () => withFixture(f => {
+snapshotTest("manifest source and expanded Pages JSON may have equivalent values but different bytes", () => withFixture(f => {
   const source = Buffer.from(JSON.stringify(f.data, null, 2) + "\n");
   assert.deepEqual(JSON.parse(source.toString("utf8")), JSON.parse(f.raw.toString("utf8")));
   assert.notEqual(hash(source), hash(f.raw));
@@ -206,7 +309,7 @@ test("manifest source and expanded Pages JSON may have equivalent values but dif
   assert.match(output.validation, /source bytes are unavailable/);
 }));
 
-test("warmup and measured samples retain index state and reject a warmup tail permutation", () => withFixture(f => {
+snapshotTest("warmup and measured samples retain index state and reject a warmup tail permutation", () => withFixture(f => {
   const warm = f.run(["--warmup", "2", "--iterations", "2"]);
   assert.equal(warm.status, 0, warm.stderr);
   const output = JSON.parse(warm.stdout);
@@ -225,7 +328,7 @@ test("warmup and measured samples retain index state and reject a warmup tail pe
   failed(f.run(["--warmup", "1"]), /unstable uncached order:.*\*\.pdf/);
 }));
 
-test("a second uncached order with only its tail reversed is rejected", () => withFixture(f => {
+snapshotTest("a second uncached order with only its tail reversed is rejected", () => withFixture(f => {
   const point = "  searchOrderCache.set(cacheKey, ordered);\n  while (searchOrderCache.size > SEARCH_ORDER_CACHE_MAX)";
   f.inject(point, `  if (params.q === "*.pdf") {
     globalThis.benchFaultCount = (globalThis.benchFaultCount || 0) + 1;
@@ -234,7 +337,7 @@ test("a second uncached order with only its tail reversed is rejected", () => wi
   failed(f.run(), /unstable uncached order:.*\*\.pdf/);
 }));
 
-test("cache bypass fault otherwise produces identical verified results", () => withFixture(f => {
+snapshotTest("cache bypass fault otherwise produces identical verified results", () => withFixture(f => {
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
   const query = JSON.parse(result.stdout).queries.find(item => item.params.q === "*.pdf");
@@ -242,7 +345,7 @@ test("cache bypass fault otherwise produces identical verified results", () => w
   assert.equal(query.cached.ordered_ids_sha256, query.uncached.ordered_ids_sha256);
 }, {bypassCache: true}));
 
-test("recomputing an identical order instead of hitting the cache is rejected", () => withFixture(f => {
+snapshotTest("recomputing an identical order instead of hitting the cache is rejected", () => withFixture(f => {
   const point = "  let ordered = searchOrderCache.get(cacheKey);\n  if (ordered) {";
   // Return the same results and restore the original cache entry. A cache
   // existence or reference check alone cannot detect this redundant search.
@@ -257,7 +360,7 @@ test("recomputing an identical order instead of hitting the cache is rejected", 
   failed(f.run(), /cached order not reused:.*\*\.pdf/);
 }));
 
-test("using a cached order via a different uninstrumented path is rejected", () => withFixture(f => {
+snapshotTest("using a cached order via a different uninstrumented path is rejected", () => withFixture(f => {
   const point = "  let ordered = searchOrderCache.get(cacheKey);\n  if (ordered) {";
   f.inject(point, `  let ordered = searchOrderCache.get(cacheKey);
   if (ordered && params.q === "*.pdf") return pageResult(ordered, params);
@@ -265,7 +368,7 @@ test("using a cached order via a different uninstrumented path is rejected", () 
   failed(f.run(), /cached order not reused:.*\*\.pdf/);
 }));
 
-test("recomputing an identical cached page-two order is rejected", () => withFixture(f => {
+snapshotTest("recomputing an identical cached page-two order is rejected", () => withFixture(f => {
   const point = "  let ordered = searchOrderCache.get(cacheKey);\n  if (ordered) {";
   f.inject(point, `  let ordered = searchOrderCache.get(cacheKey);
   if (ordered && params.q === "*.pdf" && Number(params.page) === 2) {
@@ -278,13 +381,13 @@ test("recomputing an identical cached page-two order is rejected", () => withFix
   failed(f.run(), /cached order not reused:.*\*\.pdf/);
 }));
 
-test("cache instrumentation fails closed if the Worker cache branch changes", () => withFixture(f => {
+snapshotTest("cache instrumentation fails closed if the Worker cache branch changes", () => withFixture(f => {
   const point = "    searchOrderCache.set(cacheKey, ordered);\n    return pageResult(ordered, params);";
   f.inject(point, "    searchOrderCache.set(cacheKey, ordered);\n    return pageResult(ordered, {...params});");
   failed(f.run(), /cannot instrument search order cache miss path/);
 }));
 
-test("a cached page-two tail permutation is rejected", () => withFixture(f => {
+snapshotTest("a cached page-two tail permutation is rejected", () => withFixture(f => {
   const point = "  if (typeof params.anchorId === \"string\") {\n    result.anchor_index = findSearchAnchor(indices, params.anchorId);";
   f.inject(point, `  if (params.q === "*.pdf" && Number(params.page) === 2) result.ids.reverse();\n${point}`);
   failed(f.run(), /cached full-order mismatch:.*\*\.pdf/);
