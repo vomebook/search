@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 const resources = createRequire(import.meta.url)(
   path.join(process.cwd(), "static/reader-resources.js")
 );
@@ -151,6 +152,15 @@ function currentAsset(output, filename) {
   return path.join(directory, matches[0]);
 }
 
+// The app must warm the entire current Reader shell, not just have a valid
+// content-addressed filename (even an empty file has a valid SHA-256).
+export function assertReaderShellWarmed(app, project, current = file => file) {
+  const staticBase = project === "github" ? "/search/static/" : "/static/";
+  const shellAssets = resources.shellAssets(staticBase).map(url =>
+    staticBase + current(url.slice(staticBase.length)).split(path.sep).join("/"));
+  assert(app.includes(JSON.stringify(shellAssets)), "missing versioned Reader shell warming inventory");
+}
+
 function checkProject(root, artifact) {
   const source = path.join(root, "static");
   for (const file of sourceRequired) {
@@ -173,6 +183,7 @@ function checkProject(root, artifact) {
     assert(scripts.length === 1 && /\/app\.[0-9a-f]{12}\.js$/.test(scripts[0]),
       "search shell must load one hashed app bundle");
     const app = fs.readFileSync(path.join(output, currentAsset(output, "app.js")), "utf8");
+    assertReaderShellWarmed(app, project, file => currentAsset(output, file));
     const swPath = fs.existsSync(path.join(output, "sw.js"))
       ? path.join(output, "sw.js")
       : path.join(output, "../sw.js");
@@ -212,6 +223,7 @@ function crossCheck(githubRoot, hfRoot) {
     "reader/search/reader-pdf-partition-page.mjs",
     "reader/search/reader-pdf-partition-requests.mjs",
     "reader/search/reader-pdf-book-compact.mjs",
+    "reader/search/reader-pdf-book-validate.mjs",
     "reader/search/workers/reader-pdf-book-search-worker.mjs",
     "reader/search/reader-pdf-book-search.mjs",
     "search/search-session.js",
@@ -276,7 +288,7 @@ function crossCheck(githubRoot, hfRoot) {
   }
 }
 
-try {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) try {
   if (args.cross) {
     crossCheck(path.resolve(args["github-root"]), path.resolve(args["hf-root"]));
     console.log("reader cross-project release gate ok");

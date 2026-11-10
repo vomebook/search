@@ -568,6 +568,8 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_partition_requests_coverage.mjs'), 2)
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_book_compact_coverage.mjs'), 2)
         self.assertEqual(workflow.count('node scripts/reader/check_pdf_search_decode_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('node scripts/reader/check_pdf_book_validate_coverage.mjs'), 2)
+        self.assertEqual(workflow.count('tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_offline_loads_legacy_validation_dependency'), 1)
         github = workflow.split('  github-search:\n', 1)[1].split('  firefox-staged-pdf:\n', 1)[0]
         hf = workflow.split('  huggingface-search:\n', 1)[1]
         gate = '          node scripts/reader/check_pdf_prefetch_contracts.mjs'

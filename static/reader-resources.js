@@ -133,6 +133,7 @@
     "reader/formats/reader-image-loader.mjs",
     "reader/pdf/reader-pdf-text.js",
     "reader/pdf/reader-v3.mjs",
+    "reader/search/reader-pdf-book-validate.mjs",
     "reader/search/reader-book-text.js",
     "reader/search/reader-pdf-book-url.mjs",
     "reader/search/reader-pdf-search-stream.mjs",

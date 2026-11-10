@@ -2010,6 +2010,7 @@ class StaticGateTests(unittest.TestCase):
                         'static/reader/search/reader-pdf-partition-requests.mjs',
                         'static/reader/search/reader-pdf-book-compact.mjs',
                         'static/reader/search/reader-book-text.js',
+                        'static/reader/search/reader-pdf-book-validate.mjs',
                         'static/reader/core/reader-security.js']
         for path in dependencies:
             target = self.root / path
@@ -3091,7 +3092,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
                     "static/reader/core/reader-lifecycle.mjs",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
-                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/search/reader-pdf-book-url.mjs", "static/reader/search/reader-pdf-search-stream.mjs", "static/reader/search/reader-pdf-search-decode.mjs", "static/reader/search/reader-pdf-partition-shape.mjs", "static/reader/search/reader-pdf-partition-config.mjs", "static/reader/search/reader-pdf-partition-policy.mjs", "static/reader/search/reader-pdf-partition-page.mjs", "static/reader/search/reader-pdf-partition-requests.mjs", "static/reader/search/reader-pdf-book-compact.mjs", "static/reader/formats/reader-chapter-repository.js",
+                    "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/search/reader-pdf-book-url.mjs", "static/reader/search/reader-pdf-search-stream.mjs", "static/reader/search/reader-pdf-search-decode.mjs", "static/reader/search/reader-pdf-partition-shape.mjs", "static/reader/search/reader-pdf-partition-config.mjs", "static/reader/search/reader-pdf-partition-policy.mjs", "static/reader/search/reader-pdf-partition-page.mjs", "static/reader/search/reader-pdf-partition-requests.mjs", "static/reader/search/reader-pdf-book-compact.mjs", "static/reader/search/reader-pdf-book-validate.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-djvu-adapter.mjs", "static/reader/pdf/reader-djvu-identity.mjs", "static/reader/pdf/reader-djvu-range.mjs", "static/reader/pdf/reader-djvu-loader.mjs", "static/reader/search/reader-chapter-search-proxy-url.mjs", "static/reader/search/reader-chapter-search-index.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
                     "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
@@ -3143,6 +3144,96 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         choices = "".join(f"if (value === {n}) return {n}; " for n in range(11))
         source.write_text(source.read_text() + f"\nfunction overlyComplex(value) {{ {choices} return 0; }}\n")
         self.assert_check(self.run_check(*check), False, "complexity")
+
+    def test_pdf_book_validate_coverage_gate_fails_closed(self):
+        paths=['static/reader/search/reader-pdf-book-validate.mjs',
+               'tests/reader/pdf-search/test_pdf_book_validate.mjs',
+               'scripts/reader/check_pdf_book_validate_coverage.mjs','scripts/check_tap_contracts.mjs']
+        for name in paths:
+            target=self.root / name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT / name,target)
+        check=['node',paths[2]];message='PDF book validation requires named contracts and one coverage row'
+        self.assert_check(self.run_check(*check),True,'reader-pdf-book-validate.mjs |')
+        test=self.root / paths[1];original=test.read_text();marker='page and Unicode mapping bounds reject invalid records'
+        anchor="test('"+marker+"'";self.assertEqual(original.count(anchor),1)
+        for replacement in ("test('renamed contract'", "test.skip('"+marker+"'", "test.todo('"+marker+"'"):
+            test.write_text(original.replace(anchor,replacement));self.assert_check(self.run_check(*check),False,message)
+        test.write_text(original+"\nthrow new Error('injected book validation failure');\n")
+        self.assert_check(self.run_check(*check),False,'injected book validation failure')
+        test.unlink();self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        test.write_text(original+'\nconsole.log("end of coverage report");\n')
+        self.assert_check(self.run_check(*check),False,message);test.write_text(original)
+        source=self.root / paths[0];body=source.read_text()
+        guard='span.end <= length && validBox(span.box)';self.assertEqual(body.count(guard),1)
+        source.write_text(body.replace(guard,'validBox(span.box)'))
+        self.assert_check(self.run_check(*check),False,'Missing expected exception');source.write_text(body)
+        gate=self.root / paths[2];gate_original=gate.read_text()
+        for minimum in ('[100.01,100,100]','[100,100.01,100]','[100,100,100.01]'):
+            self.assertEqual(gate_original.count('[100,100,100]'),1)
+            gate.write_text(gate_original.replace('[100,100,100]',minimum))
+            self.assert_check(self.run_check(*check),False,message)
+        self.assertEqual(gate_original.count('reader-pdf-book-validate\\.mjs'),1)
+        gate.write_text(gate_original.replace('reader-pdf-book-validate\\.mjs','missing-pdf-book-validate\\.mjs'))
+        self.assert_check(self.run_check(*check),False,message)
+
+    def test_pdf_book_validate_exact_signature_complexity_and_build(self):
+        module=ROOT / 'static/reader/search/reader-pdf-book-validate.mjs'
+        source=self.root / 'static/pdf-book-validate-usage.mjs';config=self.root / 'jsconfig.json'
+        project=load_type_config('jsconfig.reader-exact.json')
+        self.assertIn('static/reader/search/reader-pdf-book-validate.mjs',project['files'])
+        self.assertIn('static/reader/search/reader-pdf-book-validate.mjs',load_type_config('jsconfig.strict.json')['files'])
+        config.write_text(json.dumps({'compilerOptions':project['compilerOptions'],'files':[str(module),str(source)]}))
+        check=['node',ROOT / 'node_modules/typescript/bin/tsc','--project',config]
+        prefix=f'import {{validatePdfBookText}} from "{module.as_posix()}";\n'
+        source.write_text(prefix+'validatePdfBookText({},1,"x").pages[0]?.text.toUpperCase();\n')
+        self.assert_check(self.run_check(*check),True,'')
+        for bad in ('validatePdfBookText({},"1");','validatePdfBookText({},1,42);',
+                    'validatePdfBookText({},1).pages[0]?.notAField;'):
+            with self.subTest(invalid=bad):
+                source.write_text(prefix+bad+'\n');self.assert_check(self.run_check(*check),False,'error TS')
+        local=self.root / 'static/reader/search/reader-pdf-book-validate.mjs';local.parent.mkdir(parents=True,exist_ok=True)
+        body=module.read_text();local.write_text(body)
+        config.write_text(json.dumps({'compilerOptions':project['compilerOptions'],'files':[str(local)]}))
+        self.assert_check(self.run_check(*check),True,'')
+        annotation='/** @param {string} text */'
+        self.assertEqual(body.count(annotation),1);local.write_text(body.replace(annotation,''))
+        self.assert_check(self.run_check(*check),False,'TS7006');local.write_text(body)
+        lint=['node',ROOT / 'node_modules/eslint/bin/eslint.js','--config',ROOT / 'eslint.config.mjs',
+              local,'--rule','complexity: [error, 10]','--max-warnings','0']
+        self.assert_check(self.run_check(*lint),True,'')
+        choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
+        local.write_text(body+f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
+        self.assert_check(self.run_check(*lint),False,'complexity')
+        listing=subprocess.check_output(['node','-e',
+            'const r=require(process.argv[1]);console.log(JSON.stringify({files:r.buildFiles("github"),runtime:r.runtimePaths("/static/"),shell:r.shellAssets("/static/")}));',
+            ROOT / 'static/reader-resources.js'],cwd=ROOT,text=True,timeout=30)
+        paths=json.loads(listing);file='reader/search/reader-pdf-book-validate.mjs'
+        self.assertEqual(paths['files'].count(file),1)
+        self.assertLess(paths['files'].index(file),paths['files'].index('reader/search/reader-book-text.js'))
+        self.assertIn('/static/'+file,paths['runtime']);self.assertIn('/static/'+file,paths['shell'])
+        self.assertIn('/static/reader/search/reader-book-text.js',paths['shell'])
+        # A valid SHA can still name an empty app. Exercise the production
+        # release inventory assertion for both sites with synthetic hashes.
+        script = self.root / 'check-release-shell.mjs'
+        release_gate = (ROOT / 'scripts/build/check_reader_release.mjs').as_uri()
+        resources = (ROOT / 'static/reader-resources.js').as_posix()
+        script.write_text(f"""import {{createRequire}} from 'node:module';
+process.chdir({json.dumps(str(ROOT))});
+const {{assertReaderShellWarmed}} = await import('{release_gate}');
+const r = createRequire(import.meta.url)('{resources}');
+for (const [project, base] of [['github','/search/static/'], ['hf','/static/']]) {{
+  const current = file => file.replace(/(\.[^.]+)$/, '.0123456789ab$1');
+  const shell = r.shellAssets(base).map(url => base + current(url.slice(base.length)));
+  const check = app => assertReaderShellWarmed(app, project, current);
+  check(JSON.stringify(shell));
+  for (const broken of ['', JSON.stringify(shell.filter(url => !url.includes('reader-pdf-book-validate.'))),
+                        JSON.stringify(r.shellAssets(base))]) {{
+    let rejected = false;
+    try {{ check(broken); }} catch (error) {{ rejected = error.message.includes('warming inventory'); }}
+    if (!rejected) throw Error('Invalid shell warming inventory was accepted');
+  }}
+}}
+""")
+        self.assert_check(self.run_check('node', script), True, '')
 
     def test_pdf_search_decode_coverage_gate_fails_closed(self):
         paths=['static/reader/search/reader-pdf-search-decode.mjs',

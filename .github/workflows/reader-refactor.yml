@@ -144,6 +144,7 @@ jobs:
           node scripts/reader/check_pdf_partition_requests_coverage.mjs
           node scripts/reader/check_pdf_book_compact_coverage.mjs
           node scripts/reader/check_pdf_search_decode_coverage.mjs
+          node scripts/reader/check_pdf_book_validate_coverage.mjs
           node scripts/reader/check_pdf_prefetch_contracts.mjs
           node scripts/reader/check_pdf_text_store_coverage.mjs
           node scripts/reader/check_pdf_text_store_mutations.mjs
@@ -210,6 +211,7 @@ jobs:
         run: |
           node tests/service_worker/test_service_worker.js
           python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_shell_does_not_wait_for_slow_revalidation
+          python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_warmed_reader_offline_loads_legacy_validation_dependency
           python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_first_install_rewarms_shell_after_delayed_controller_claim
           python3 -B -m unittest -v tests.service_worker.test_service_worker_integration.ServiceWorkerIntegrationTest.test_offline_cache_misses_reject_as_network_errors_and_cached_data_survives
       - name: Run Reader flow and cleanup regressions
@@ -545,6 +547,7 @@ jobs:
           node scripts/reader/check_pdf_partition_requests_coverage.mjs
           node scripts/reader/check_pdf_book_compact_coverage.mjs
           node scripts/reader/check_pdf_search_decode_coverage.mjs
+          node scripts/reader/check_pdf_book_validate_coverage.mjs
           node scripts/reader/check_pdf_prefetch_contracts.mjs
           node scripts/reader/check_pdf_text_store_coverage.mjs
           node scripts/reader/check_pdf_text_store_mutations.mjs

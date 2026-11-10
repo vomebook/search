@@ -590,6 +590,27 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(result['first'].get('error'),'AbortError')
         self.assertEqual(result['retry']['value']['total'],180)
 
+    def test_legacy_null_mapping_rejected_before_progress(self):
+        target = f'{BASE}/book-text.json.gz'
+        body = packed({'version': 2, 'kind': 'pdf-book-text', 'complete': True,
+                       'offset_unit': 'unicode-codepoint', 'source_sha256': SOURCE_SHA, 'page_count': 1,
+                       'pages': [{'page': 1, 'text': 'needle', 'layout': {'offset_unit': 'unicode-codepoint'},
+                                  'text_spans': [None]}]})
+        with self.server.state_lock:
+            self.server.resources[target] = body
+        config = {'url': self.resource(target), 'bytes': len(body), 'sha256': digest(body),
+                  'pageCount': 1, 'sourceSha': SOURCE_SHA}
+        page = self.make_page()
+        result = page.evaluate('''async config => {
+          const {createPdfBookSearch} = await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'), 'import');
+          const client = window.client = createPdfBookSearch(config), progress = [];
+          const result = await window.capture(client.search('needle', item => progress.push(item)), 'search');
+          return {result, progress};
+        }''', config)
+        self.assertIn('PDF_TEXT_MAPPING_INVALID', result['result'].get('message', ''))
+        self.assertEqual(result['progress'], [])
+        self.assertEqual(page.evaluate('window.unexpected'), [])
+
     def test_legacy_hash_mismatch_rejects_without_partial_progress(self):
         target = f'{BASE}/book-text.json.gz'
         config = {'url': self.resource(target), 'bytes': len(BOOK), 'sha256': '0' * 64,
