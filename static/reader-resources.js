@@ -240,6 +240,7 @@
       "search/domain/stable-stringify.js",
       "search/domain/search-view-key.js",
       "search/domain/search-recovery.js",
+      "search/domain/search-window-page.js",
       "search/presentation/sidebar-render.js",
       "style.css",
       ...(project === "github" ? ["search/index-worker.js"] : []),
