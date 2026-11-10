@@ -676,13 +676,23 @@ const readerWarmupRetryAt = new Map();
 function cancelReaderWarmup() {
   if (readerWarmupPending) readerWarmupPending.cancel();
 }
-function startReaderSourceWarmup(base, readerId, sourceUrl) {
+function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
   const key = readerId ? "id:" + readerId : sourceUrl;
-  if (!key || readerWarmupPending || warmedReaderSources.size >= 8 || warmedReaderSources.has(key) ||
+  if (!key) return;
+  // A pointer press or keyboard focus on a different book supersedes the
+  // single speculative slot. Hover-only transitions keep the existing bound.
+  if (readerWarmupPending) {
+    if (!urgent || readerWarmupPending.key === key) return;
+    readerWarmupPending.cancel(true);
+    // Aborting can synchronously notify listeners. Never displace a newer task
+    // that such a listener may have started or leave its timeout unowned.
+    if (readerWarmupPending) return;
+  }
+  if (warmedReaderSources.size >= 8 || warmedReaderSources.has(key) ||
       Date.now() < (readerWarmupRetryAt.get(key) || 0)) return;
   const controller = new AbortController();
-  const task = { cancel() { controller.abort(); finish(false); } };
-  const finish = (success) => {
+  const task = { key, cancel(superseded = false) { finish(false, superseded); } };
+  const finish = (success, superseded = false) => {
     if (readerWarmupPending !== task) return;
     clearTimeout(timer);
     readerWarmupPending = null;
@@ -692,14 +702,16 @@ function startReaderSourceWarmup(base, readerId, sourceUrl) {
       readerWarmupRetryAt.delete(key);
     } else {
       controller.abort();
-      readerWarmupRetryAt.delete(key);
-      readerWarmupRetryAt.set(key, Date.now() + 5000);
-      if (readerWarmupRetryAt.size > 64) readerWarmupRetryAt.delete(readerWarmupRetryAt.keys().next().value);
+      if (!superseded) {
+        readerWarmupRetryAt.delete(key);
+        readerWarmupRetryAt.set(key, Date.now() + 5000);
+        if (readerWarmupRetryAt.size > 64) readerWarmupRetryAt.delete(readerWarmupRetryAt.keys().next().value);
+      }
     }
   };
   readerWarmupPending = task;
   readerWarmupInFlight = 1;
-  const timer = setTimeout(task.cancel, 8000);
+  const timer = setTimeout(() => task.cancel(), 8000);
   (async () => {
     try {
       const url = base + (readerId ? "/api/reader-resolve?id=" + encodeURIComponent(readerId)
@@ -715,7 +727,7 @@ function startReaderSourceWarmup(base, readerId, sourceUrl) {
     } catch (_) { finish(false); }
   })();
 }
-function warmReaderIntent(rawUrl) {
+function warmReaderIntent(rawUrl, urgent = false) {
   if (!rawUrl || document.hidden || !navigator.onLine) return;
   var extension = "", sourceUrl = "", readerId = "";
   try {
@@ -757,7 +769,7 @@ function warmReaderIntent(rawUrl) {
     }
     preload(href);
   });
-  startReaderSourceWarmup(API_BASE, readerId, sourceUrl);
+  startReaderSourceWarmup(API_BASE, readerId, sourceUrl, urgent);
   warmConnection();
 }
 
@@ -768,7 +780,8 @@ function setupReaderIntentWarming() {
   var warm = function(event) {
     if (event.target.closest('[data-action="download"], [data-download]')) return;
     var target = event.target.closest("[data-reader-url], [data-read-url]");
-    if (target) warmReaderIntent(target.dataset.readerUrl || target.dataset.readUrl);
+    if (target) warmReaderIntent(target.dataset.readerUrl || target.dataset.readUrl,
+      event.type === "pointerdown" || event.type === "focusin");
   };
   ["pointerover", "pointerdown", "focusin"].forEach(function(type) { document.addEventListener(type, warm, { passive: true }); });
   var warmShell = () => warmReaderIntent("/search/static/reader.html");
