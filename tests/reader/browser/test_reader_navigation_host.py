@@ -482,6 +482,156 @@ process.stdout.write(stripBundledScripts(readFileSync('static/index.html','utf8'
         }''')
         self.assertEqual(result, dict(same=True, opacity='1', pointer='auto'))
 
+    def test_reader_intent_preempts_a_stalled_hover_without_stale_cache(self):
+        result = self.page.evaluate(r'''async () => {
+          cancelReaderWarmup();
+          const originalFetch=window.fetch, savedUrl=location.href;
+          const calls=[], errors=[];
+          const handler=event=>errors.push(String(event.reason));
+          window.addEventListener('unhandledrejection',handler);
+          window.fetch=(url,options)=>{
+            if (!String(url).includes('/api/reader-resolve?id=warm-')) return originalFetch(url,options);
+            return new Promise(resolve=>calls.push({url:String(url),options,resolve}));
+          };
+          const make=(id,attribute)=>{
+            const button=document.createElement('button');button.type='button';
+            button.dataset[attribute]='/static/reader.html?id=warm-'+id+'&ext=txt';
+            document.body.appendChild(button);return button;
+          };
+          const hover=make('hover','readerUrl'), click=make('click','readUrl'), keyboard=make('keyboard','readerUrl');
+          try {
+            hover.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
+            let releaseBody;
+            calls[0].resolve({ok:true,json:()=>new Promise(resolve=>{releaseBody=resolve})});
+            await Promise.resolve();await Promise.resolve();
+            click.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
+            const before=calls.length;
+            click.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'mouse'}));
+            const replaced=calls[0].options.signal.aborted && calls[1].url.endsWith('id=warm-click');
+            releaseBody({url:'https://source.test/stale'});
+            await new Promise(resolve=>setTimeout(resolve,0));
+            const stale=sessionStorage.getItem('reader-resolve:warm-hover');
+            const slot=readerWarmupInFlight;
+            calls[1].resolve({ok:true,json:async()=>({url:'https://source.test/click'})});
+            await new Promise(resolve=>setTimeout(resolve,0));
+            const cached=JSON.parse(sessionStorage.getItem('reader-resolve:warm-click') || 'null');
+            // A keyboard focus supersedes a different hover, too.
+            hover.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
+            keyboard.focus();
+            const keyboardReplaced=calls[2].options.signal.aborted && calls[3].url.endsWith('id=warm-keyboard');
+            calls[3].resolve({ok:true,json:async()=>({url:'https://source.test/keyboard'})});
+            await new Promise(resolve=>setTimeout(resolve,0));
+            return {before,replaced,stale,slot,cached:cached?.url,keyboardReplaced,
+              keyboard:JSON.parse(sessionStorage.getItem('reader-resolve:warm-keyboard') || 'null')?.url,
+              active:readerWarmupInFlight,errors};
+          } finally {
+            cancelReaderWarmup();window.fetch=originalFetch;window.removeEventListener('unhandledrejection',handler);
+            hover.remove();click.remove();keyboard.remove();history.replaceState(null,'',savedUrl);
+          }
+        }''')
+        self.assertEqual(result, dict(before=1,replaced=True,stale=None,slot=1,
+                                      cached='https://source.test/click',keyboardReplaced=True,
+                                      keyboard='https://source.test/keyboard',active=0,errors=[]))
+
+    def test_priority_warmup_is_consumed_by_real_reader(self):
+        # The target resolves before activation; the real Reader must use the
+        # session handoff rather than issue a second metadata request.
+        self.page.unroute('**/static/reader.html?**')
+        lookups = []
+        self.page.route('**/api/reader-resolve?**', lambda route: (
+            lookups.append(route.request.url), route.fulfill(json={'error':'unexpected resolve'}, status=500,
+                                                               headers={'Access-Control-Allow-Origin':'*'})))
+        self.page.route('**/api/reader-content?**', lambda route: route.fulfill(
+            content_type='text/plain', body='Priority handoff document', headers={'Access-Control-Allow-Origin':'*'}))
+        self.page.evaluate(r'''() => {
+          cancelReaderWarmup();
+          window.__priorityFetch=window.fetch;
+          window.__priorityCalls=[];
+          window.fetch=(url,options={})=>{
+            if (!String(url).includes('/api/reader-resolve?id=')) return __priorityFetch(url,options);
+            return new Promise((resolve,reject)=>{
+              const id=new URL(String(url),location.href).searchParams.get('id');
+              __priorityCalls.push({id,signal:options.signal});
+              options.signal.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')),{once:true});
+              if(id==='bbbbbbbbbbbbb')setTimeout(()=>resolve({ok:true,json:async()=>({
+                url:'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/warm.txt',
+                download:'https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/warm.txt',extension:'txt'})}),50);
+            });
+          };
+          const holder=document.createElement('div');holder.id='priority-reader-test';
+          DOM.sidebarContent.parentNode.insertBefore(holder,DOM.sidebarContent);
+          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          for(const id of ['aaaaaaaaaaaaa','bbbbbbbbbbbbb']){
+            const row=document.createElement('div');row.className='browser-item';row.dataset.type='file';
+            row.dataset.readerUrl=path+'?id='+id+'&ext=txt';row.dataset.readUrl=row.dataset.readerUrl;
+            const button=document.createElement('button');button.textContent=id;row.appendChild(button);holder.appendChild(row);
+          }
+          holder.addEventListener('click',event=>{
+            const row=event.target.closest('.browser-item');if(row)navigateToReader(row.dataset.readerUrl);
+          });
+        }''')
+        try:
+            self.page.evaluate("document.querySelectorAll('#priority-reader-test button')[0].dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}))")
+            self.page.wait_for_function('__priorityCalls.length === 1')
+            self.page.evaluate("document.querySelectorAll('#priority-reader-test button')[1].focus()")
+            self.page.wait_for_function('__priorityCalls.length === 2')
+            self.assertTrue(self.page.evaluate('__priorityCalls[0].signal.aborted'))
+            self.page.wait_for_function('!!sessionStorage.getItem("reader-resolve:bbbbbbbbbbbbb")')
+            self.page.evaluate("document.querySelectorAll('#priority-reader-test button')[1].click()")
+            frame = self.page.frame_locator('.reader-overlay')
+            frame.locator('.reader-text').wait_for(state='visible', timeout=12000)
+            self.assertIn('Priority handoff document', frame.locator('.reader-text').inner_text())
+            self.assertEqual(lookups, [])
+        finally:
+            self.page.evaluate('''() => {
+              if(readerOverlay) { readerNavigation.dismiss();closeReaderOverlay(); }
+              document.querySelector('#priority-reader-test')?.remove();
+              window.fetch=window.__priorityFetch;cancelReaderWarmup();
+            }''')
+
+    def test_late_priority_metadata_never_disrupts_an_open_reader(self):
+        self.page.unroute('**/static/reader.html?**')
+        source='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/late.txt'
+        lookups=[]
+        self.page.route('**/api/reader-resolve?**', lambda route: (
+            lookups.append(route.request.url),route.fulfill(json={'url':source,'download':source,'extension':'txt'},
+                                                              headers={'Access-Control-Allow-Origin':'*'})))
+        self.page.route('**/api/reader-content?**', lambda route: route.fulfill(
+            content_type='text/plain',body='Reader independent of delayed warmup',headers={'Access-Control-Allow-Origin':'*'}))
+        self.page.evaluate(r'''() => {
+          cancelReaderWarmup();window.__lateOriginalFetch=fetch;window.__lateCalls=[];
+          window.fetch=(url,options={})=>{
+            if(!String(url).includes('/api/reader-resolve?id='))return __lateOriginalFetch(url,options);
+            return new Promise((resolve,reject)=>{
+              __lateCalls.push({resolve,signal:options.signal});
+              options.signal.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')),{once:true});
+            });
+          };
+          const path=new URL(document.querySelector('script[src*="search/reader-navigation.js"]').src).pathname.replace('search/reader-navigation.js','reader.html');
+          const first=document.createElement('button'),second=document.createElement('button');
+          first.dataset.readerUrl=path+'?id=aaaaaaaaaaaaa&ext=txt';
+          second.dataset.readerUrl=path+'?id=ccccccccccccc&ext=txt';
+          document.body.append(first,second);window.__lateButtons=[first,second];
+          first.dispatchEvent(new PointerEvent('pointerover',{bubbles:true}));
+          second.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+          navigateToReader(second.dataset.readerUrl);
+        }''')
+        try:
+            self.assertTrue(self.page.evaluate('__lateCalls.length === 2 && __lateCalls[0].signal.aborted'))
+            frame=self.page.frame_locator('.reader-overlay')
+            frame.locator('.reader-text').wait_for(state='visible',timeout=12000)
+            self.assertIn('Reader independent of delayed warmup',frame.locator('.reader-text').inner_text())
+            self.assertEqual(len(lookups),1)
+            self.page.evaluate('''url=>__lateCalls[1].resolve({ok:true,json:async()=>({url,extension:'txt'})})''', source)
+            self.page.wait_for_function('readerWarmupInFlight === 0')
+            self.assertIn('Reader independent of delayed warmup',frame.locator('.reader-text').inner_text())
+            self.assertEqual(len(lookups),1)
+        finally:
+            self.page.evaluate('''() => {
+              if(readerOverlay){readerNavigation.dismiss();closeReaderOverlay();}
+              __lateButtons.forEach(button=>button.remove());window.fetch=__lateOriginalFetch;cancelReaderWarmup();
+            }''')
+
     def test_shell_is_warmed_without_pointer_intent_or_reader_execution(self):
         self.page.wait_for_function('warmedReaderAssets.has("/search/static/reader.html")')
         # Under SW control the link follows the cached shell fetch.
