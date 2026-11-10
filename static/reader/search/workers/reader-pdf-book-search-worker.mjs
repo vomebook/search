@@ -5,6 +5,7 @@ import { validatePdfPartitionConfiguration } from "../reader-pdf-partition-confi
 import { canPrefetchPdfPartition, canRetainPdfPartition } from "../reader-pdf-partition-policy.mjs";
 import { pdfPartitionPageOffset, decoratePdfPartitionHits } from "../reader-pdf-partition-page.mjs";
 import { createPdfPartitionRequests } from "../reader-pdf-partition-requests.mjs";
+import { compactPdfBookPage } from "../reader-pdf-book-compact.mjs";
 import { readPdfSearchBytes, readPdfSearchText } from "../reader-pdf-search-stream.mjs";
 import { validatePdfSearchPartition } from "../reader-pdf-partition-shape.mjs";
 
@@ -43,8 +44,7 @@ async function loadBook() {
     for (let index = 0; index < compact.pages.length; index++) {
       if (request.signal.aborted) throw aborted();
       const page = compact.pages[index];
-      compact.pages[index] = {page:page.page, text:page.text,
-        text_spans:page.text_spans.map(({start,end,box,block,precision}) => ({start,end,box,block,precision}))};
+      compact.pages[index] = compactPdfBookPage(page);
       if (index % 16 === 15 && performance.now() >= deadline) {
         await pause();
         deadline = performance.now() + 8;

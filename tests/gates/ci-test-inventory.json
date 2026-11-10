@@ -342,6 +342,10 @@
       "kind": "script",
       "source": "scripts/reader/check_pdf_book_client_coverage.mjs"
     },
+    "tests/reader/pdf-search/test_pdf_book_compact.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_book_compact_coverage.mjs"
+    },
     "tests/reader/pdf-search/test_pdf_partition_requests.mjs": {
       "kind": "script",
       "source": "scripts/reader/check_pdf_partition_requests_coverage.mjs"
