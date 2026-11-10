@@ -1,33 +1,8 @@
 // One complete, validated text file per PDF. Offsets in generated mappings are
 // Unicode code points; JavaScript RegExp returns UTF-16 offsets.
-export function validateBookText(book, pageCount, sourceSha = "") {
-  if (!book || book.version !== 2 || book.kind !== "pdf-book-text" ||
-      book.complete !== true || book.offset_unit !== "unicode-codepoint" ||
-      book.page_count !== pageCount || (sourceSha && book.source_sha256 !== sourceSha) ||
-      !Array.isArray(book.pages) || book.pages.length !== pageCount)
-    throw new Error("PDF_TEXT_INDEX_INCOMPLETE");
-  for (const [index, page] of book.pages.entries()) {
-    if (page.page !== index + 1 || typeof page.text !== "string" ||
-        !page.layout || page.layout.offset_unit !== "unicode-codepoint" ||
-        !Array.isArray(page.text_spans))
-      throw new Error("PDF_TEXT_INDEX_INVALID");
-    // No mapping can refer to this page's offsets when it has no spans.
-    // Avoid a full Unicode pass over potentially very large plain text pages.
-    if (!page.text_spans.length) continue;
-    const length = codePointLength(page.text);
-    let previousEnd = 0;
-    for (const span of page.text_spans) {
-      if (!Number.isInteger(span.start) || !Number.isInteger(span.end) ||
-          span.start < previousEnd || span.end <= span.start || span.end > length ||
-          !Array.isArray(span.box) || span.box.length !== 4 ||
-          span.box.some(v => !Number.isFinite(v) || v < 0 || v > 1) ||
-          span.box[0] > span.box[2] || span.box[1] > span.box[3])
-        throw new Error("PDF_TEXT_MAPPING_INVALID");
-      previousEnd = span.end;
-    }
-  }
-  return book;
-}
+import {validatePdfBookText} from "./reader-pdf-book-validate.mjs";
+// Keep the public legacy export and argument order while validation is isolated.
+export {validatePdfBookText as validateBookText};
 
 function pattern(query) {
   return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");

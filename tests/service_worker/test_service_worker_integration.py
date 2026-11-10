@@ -215,6 +215,37 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.page.locator('#back').wait_for(state='visible')
 
+    def test_warmed_reader_offline_loads_legacy_validation_dependency(self):
+        self.prime()
+        # The Reader eagerly imports reader-book-text.js; its validation
+        # dependency must be warmed with the shell even before PDF search.
+        self.assertTrue(self.page.evaluate('''async () => {
+          const cache = await caches.open('vomebook-search-v1.0.0');
+          const paths = ['/search/static/reader.html', '/search/static/reader.js',
+            '/search/static/reader/search/reader-book-text.js',
+            '/search/static/reader/search/reader-pdf-book-validate.mjs'];
+          for (let i=0; i<200; i++) {
+            if ((await Promise.all(paths.map(path=>cache.match(path,{ignoreVary:true})))).every(Boolean)) return true;
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          return false;
+        }'''), 'Reader shell and validation dependency must be warmed')
+        errors = []
+        self.page.on('pageerror', lambda error: errors.append(str(error)))
+        self.context.set_offline(True)
+        response = self.page.goto(self.origin + '/search/static/reader.html?ext=txt', wait_until='domcontentloaded')
+        self.assertTrue(response.from_service_worker)
+        self.assertEqual(response.status, 200)
+        self.page.locator('#back').wait_for(state='visible')
+        self.assertFalse(self.page.locator('#error').is_visible() if self.page.locator('#error').count() else False)
+        self.assertEqual(self.page.evaluate('''async () => {
+          const {validateBookText} = await import('/search/static/reader/search/reader-book-text.js');
+          const book = {version:2,kind:'pdf-book-text',complete:true,offset_unit:'unicode-codepoint',page_count:1,
+            pages:[{page:1,text:'offline',layout:{offset_unit:'unicode-codepoint'},text_spans:[]}]};
+          return validateBookText(book,1) === book;
+        }'''), True)
+        self.assertEqual(errors, [])
+
     def test_first_install_rewarms_shell_after_delayed_controller_claim(self):
         self.page.add_init_script('''(() => {
           const register = navigator.serviceWorker.register.bind(navigator.serviceWorker);

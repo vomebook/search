@@ -342,6 +342,10 @@
       "kind": "script",
       "source": "scripts/reader/check_pdf_book_client_coverage.mjs"
     },
+    "tests/reader/pdf-search/test_pdf_book_validate.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_book_validate_coverage.mjs"
+    },
     "tests/reader/pdf-search/test_pdf_book_compact.mjs": {
       "kind": "script",
       "source": "scripts/reader/check_pdf_book_compact_coverage.mjs"
