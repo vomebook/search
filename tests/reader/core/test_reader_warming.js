@@ -76,6 +76,122 @@ function fixture() {
   assert.strictEqual(t.timers.size,1,'the delayed shell warmup remains scheduled');
   console.log('reader warming: cancellation, stale responses, invalid metadata, HEAD and eight-source bound passed');
 
+  // Exercise the actual delegated events, not only the helper. Hover is
+  // speculative; pointer and keyboard intent may replace a different hover.
+  const emitIntent = (fixture, type, id, download = false) => {
+    const target = {dataset:{readerUrl:'/reader?id='+id+'&ext=pdf'}};
+    fixture.events[type]({type, target:{closest:selector =>
+      selector.includes('data-download') ? (download ? target : null) : target}});
+  };
+  const resolverCalls = fixture => fixture.calls.filter(call=>call.url.includes('/api/reader-resolve'));
+  const priority=fixture();
+  emitIntent(priority,'pointerover','old');
+  const old=resolverCalls(priority)[0];
+  emitIntent(priority,'pointerover','other');
+  emitIntent(priority,'focusin','old');
+  emitIntent(priority,'pointerdown','old');
+  assert.strictEqual(resolverCalls(priority).length,1,'hover changes and same-book intent coalesce');
+  assert.ok(!old.options.signal.aborted);
+  let finishOld;
+  old.resolve({ok:true,json:()=>new Promise(resolve=>finishOld=resolve)});await tick();
+  emitIntent(priority,'pointerdown','new');
+  const next=resolverCalls(priority)[1];
+  assert.ok(old.options.signal.aborted,'active intent must abort the previous speculative request');
+  assert.ok(next.url.endsWith('id=new'));
+  assert.strictEqual(priority.run('readerWarmupInFlight'),1);
+  assert.strictEqual(priority.run('readerWarmupRetryAt.size'),0,'superseded work is not a failure');
+  finishOld({url:'https://source.test/stale'});await tick();
+  assert.strictEqual(priority.stored.has('reader-resolve:old'),false,'late old JSON cannot enter cache');
+  assert.strictEqual(priority.run('readerWarmupInFlight'),1,'late completion cannot release new task');
+  next.resolve({ok:true,json:async()=>({url:'https://source.test/new'})});await tick();
+  assert.ok(priority.stored.has('reader-resolve:new'));
+  emitIntent(priority,'pointerover','old');
+  const retried=resolverCalls(priority)[2];
+  assert.ok(retried.url.endsWith('id=old'),'superseded book can immediately be warmed again');
+  emitIntent(priority,'focusin','keyboard');
+  assert.ok(retried.options.signal.aborted);
+  assert.ok(resolverCalls(priority)[3].url.endsWith('id=keyboard'),'keyboard focus is urgent');
+  emitIntent(priority,'pointerdown','download',true);
+  assert.strictEqual(resolverCalls(priority).length,4,'download actions never preempt');
+  priority.events.offline();await tick();
+  assert.strictEqual(priority.run('readerWarmupInFlight'),0);
+  assert.ok(priority.run('readerWarmupRetryAt.has("id:keyboard")'),'offline cancellation retains backoff');
+
+  const reentrant=fixture();
+  emitIntent(reentrant,'pointerover','owner');
+  const owner=resolverCalls(reentrant)[0];
+  // Abort dispatches listeners synchronously; a different intent can claim
+  // the slot before the original activation finishes handling cancellation.
+  owner.options.signal.addEventListener('abort',()=>emitIntent(reentrant,'focusin','reentrant'),{once:true});
+  emitIntent(reentrant,'pointerdown','outer');
+  const reentrantCalls=resolverCalls(reentrant);
+  assert.strictEqual(reentrantCalls.length,2,'abort listener may claim the only slot');
+  assert.ok(owner.options.signal.aborted && reentrantCalls[1].url.endsWith('id=reentrant'));
+  assert.strictEqual(reentrant.run('readerWarmupPending.key'),'id:reentrant');
+  reentrantCalls[1].resolve({ok:true,json:async()=>({url:'https://source.test/reentrant'})});await tick();
+  assert.strictEqual(reentrant.run('readerWarmupInFlight'),0);
+
+  const rapid=fixture();
+  emitIntent(rapid,'pointerover','rapid0');
+  for(let i=1;i<=20;i++)emitIntent(rapid,'pointerdown','rapid'+i);
+  const rapidCalls=resolverCalls(rapid);
+  assert.strictEqual(rapidCalls.length,21);
+  assert.ok(rapidCalls.slice(0,-1).every(call=>call.options.signal.aborted));
+  assert.ok(!rapidCalls.at(-1).options.signal.aborted);
+  assert.strictEqual(rapid.run('readerWarmupInFlight'),1);
+  assert.strictEqual(rapid.run('readerWarmupRetryAt.size'),0);
+  rapidCalls.at(-1).resolve({ok:true,json:async()=>({url:'https://source.test/final'})});
+  await tick();
+  assert.ok(rapid.stored.has('reader-resolve:rapid20'));
+  assert.strictEqual(rapid.run('readerWarmupInFlight'),0);
+
+  const sources=fixture();
+  sources.run(`warmReaderIntent('/reader?url=https://source.test/hover');
+    warmReaderIntent('/reader?url=https://source.test/activate',true)`);
+  const heads=sources.calls.filter(call=>call.options.method==='HEAD');
+  assert.strictEqual(heads.length,2);
+  assert.ok(heads[0].options.signal.aborted);
+  assert.ok(heads[1].url.includes(encodeURIComponent('https://source.test/activate')));
+  heads[1].resolve({ok:true});await tick();
+  assert.strictEqual(sources.run('readerWarmupInFlight'),0);
+  assert.strictEqual(sources.run('warmedReaderSources.size'),1);
+
+  const capacity=fixture();
+  capacity.run(`warmReaderIntent('/reader?url=https://source.test/busy')`);
+  capacity.run(`for(let i=0;i<8;i++)warmedReaderSources.add('id:done'+i)`);
+  emitIntent(capacity,'focusin','limit');
+  assert.ok(capacity.calls.find(call=>call.options.method==='HEAD').options.signal.aborted);
+  assert.strictEqual(resolverCalls(capacity).length,0,'urgent work still honors the eight-source bound');
+  assert.strictEqual(capacity.run('readerWarmupInFlight'),0);
+
+  const timeout=fixture();
+  emitIntent(timeout,'pointerover','timed-out');
+  // Browsers normally pass no argument, but timer shims may provide one.
+  // Such a callback argument must not accidentally mark a timeout superseded.
+  for (const timer of [...timeout.timers.values()]) timer({simulatedTimer:true});
+  await tick();
+  assert.strictEqual(timeout.run('readerWarmupInFlight'),0);
+  assert.ok(timeout.run('readerWarmupRetryAt.has("id:timed-out")'));
+
+  const previous=fixture();
+  emitIntent(previous,'pointerover','failed');
+  resolverCalls(previous)[0].resolve({ok:false});await tick();
+  emitIntent(previous,'pointerover','busy');
+  const busy=resolverCalls(previous)[1];
+  emitIntent(previous,'pointerdown','failed');
+  assert.ok(busy.options.signal.aborted,'even a backed-off target should cancel unrelated speculation');
+  assert.strictEqual(resolverCalls(previous).length,2,'priority does not bypass retry backoff');
+  assert.strictEqual(previous.run('readerWarmupInFlight'),0);
+  previous.advance();emitIntent(previous,'focusin','failed');
+  assert.strictEqual(resolverCalls(previous).length,3);
+  resolverCalls(previous)[2].resolve({ok:true,json:async()=>({url:'https://source.test/failed'})});await tick();
+  emitIntent(previous,'pointerover','busy-again');
+  const busyAgain=resolverCalls(previous)[3];
+  emitIntent(previous,'focusin','failed');
+  assert.ok(busyAgain.options.signal.aborted,'a cached target still cancels unrelated speculation');
+  assert.strictEqual(resolverCalls(previous).length,4,'priority does not repeat a successful warmup');
+  console.log('reader warming: delegated intent preemption, stale responses, limits and backoff passed');
+
   const cache=fixture();
   cache.stored.set('reader-navigation-current','keep');
   for(let i=0;i<1000;i++) cache.stored.set('reader-source:legacy'+i,'x'.repeat(2000));
