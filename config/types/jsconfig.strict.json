@@ -24,6 +24,7 @@
     "../../static/reader/search/reader-pdf-partition-policy.mjs",
     "../../static/reader/search/reader-pdf-partition-page.mjs",
     "../../static/reader/search/reader-pdf-partition-requests.mjs",
+    "../../static/reader/search/reader-pdf-book-compact.mjs",
     "../../static/reader/search/reader-chapter-search-core.mjs",
     "../../static/reader/search/reader-chapter-search-proxy-url.mjs",
     "../../static/reader/search/reader-chapter-search-index.mjs",
