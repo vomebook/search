@@ -36,6 +36,8 @@ async function loadBook() {
     if (request.signal.aborted) throw aborted();
     const validated = validateBookText(decoded, configuration.pageCount, configuration.sourceSha);
     // Search needs offsets and hit boxes, not the duplicate full page layout.
+    // The validated array is deliberately updated in place during compaction.
+    /** @type {{pages: import('../reader-pdf-book-compact.mjs').SearchPage[]}} */
     const compact = { pages: validated.pages };
     let deadline = performance.now() + 8;
     for (let index = 0; index < compact.pages.length; index++) {
