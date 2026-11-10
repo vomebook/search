@@ -590,6 +590,22 @@ class PdfBookWorkerBrowserTests(unittest.TestCase):
         self.assertEqual(result['first'].get('error'),'AbortError')
         self.assertEqual(result['retry']['value']['total'],180)
 
+    def test_legacy_hash_mismatch_rejects_without_partial_progress(self):
+        target = f'{BASE}/book-text.json.gz'
+        config = {'url': self.resource(target), 'bytes': len(BOOK), 'sha256': '0' * 64,
+                  'pageCount': 1, 'sourceSha': SOURCE_SHA}
+        page = self.make_page()
+        result = page.evaluate('''async config => {
+          const {createPdfBookSearch} = await window.deadline(import('/static/reader/search/reader-pdf-book-search.mjs'), 'import');
+          const client = window.client = createPdfBookSearch(config), progress = [];
+          const result = await window.capture(client.search('needle', item => progress.push(item)), 'search');
+          return {result, progress};
+        }''', config)
+        self.assertIn('PDF_OCR_HASH_MISMATCH', result['result'].get('message', ''))
+        self.assertEqual(result['progress'], [])
+        self.assertEqual(self.state['paths'].count(target), 1)
+        self.assertEqual(page.evaluate('window.unexpected'), [])
+
     def test_large_legacy_worker_search_replacement_keeps_cancellation(self):
         target = f'{BASE}/book-text.json.gz'
         text = '普通文本😀' * 2000

@@ -366,6 +366,10 @@
       "kind": "script",
       "source": "scripts/reader/check_pdf_partition_shape_coverage.mjs"
     },
+    "tests/reader/pdf-search/test_pdf_search_decode.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_pdf_search_decode_coverage.mjs"
+    },
     "tests/reader/pdf-search/test_pdf_search_stream.mjs": {
       "kind": "script",
       "source": "scripts/reader/check_pdf_search_stream_coverage.mjs"
