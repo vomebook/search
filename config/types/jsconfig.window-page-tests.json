@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node"]
+  },
+  "files": [
+    "../../typings/reader-globals.d.ts",
+    "../../static/search/domain/search-window-page.js",
+    "../../scripts/check_tap_contracts.mjs",
+    "../../scripts/search/check_search_window_page_coverage.mjs",
+    "../../tests/search/baselines/test_search_window_page_baseline.mjs",
+    "../../tests/search/baselines/test_search_window_page_module.mjs"
+  ]
+}

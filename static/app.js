@@ -3168,11 +3168,7 @@ function applyValidatedSearchViewport(snapshot) {
 }
 
 function validatePositionWindowPage(data, page, pageSize, expected) {
-  if (!data || !Array.isArray(data.results) || data.page !== page || data.page_size !== pageSize ||
-      !Number.isInteger(data.total) || data.total < 0 ||
-      data.results.length !== Math.min(pageSize, Math.max(0, data.total - (page - 1) * pageSize)) ||
-      data.results.some(record => !record || typeof record !== "object") ||
-      (expected && (data.total !== expected.total || data.generation !== expected.generation))) throw new Error("RESTORE_PAGE_CHANGED");
+  VoiceOfMLSearchWindowPage.validate(data, page, pageSize, expected);
 }
 
 function resultWindowCurrent(window) {
