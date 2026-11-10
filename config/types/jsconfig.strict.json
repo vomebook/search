@@ -19,6 +19,7 @@
     "../../static/reader/search/reader-pdf-book-search.mjs",
     "../../static/reader/search/reader-pdf-book-url.mjs",
     "../../static/reader/search/reader-pdf-search-stream.mjs",
+    "../../static/reader/search/reader-pdf-search-decode.mjs",
     "../../static/reader/search/reader-pdf-partition-shape.mjs",
     "../../static/reader/search/reader-pdf-partition-config.mjs",
     "../../static/reader/search/reader-pdf-partition-policy.mjs",

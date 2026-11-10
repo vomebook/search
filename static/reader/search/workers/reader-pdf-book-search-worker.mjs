@@ -6,7 +6,8 @@ import { canPrefetchPdfPartition, canRetainPdfPartition } from "../reader-pdf-pa
 import { pdfPartitionPageOffset, decoratePdfPartitionHits } from "../reader-pdf-partition-page.mjs";
 import { createPdfPartitionRequests } from "../reader-pdf-partition-requests.mjs";
 import { compactPdfBookPage } from "../reader-pdf-book-compact.mjs";
-import { readPdfSearchBytes, readPdfSearchText } from "../reader-pdf-search-stream.mjs";
+import { readPdfSearchBytes } from "../reader-pdf-search-stream.mjs";
+import { readVerifiedPdfSearchText } from "../reader-pdf-search-decode.mjs";
 import { validatePdfSearchPartition } from "../reader-pdf-partition-shape.mjs";
 
 const aborted = () => new DOMException("Search cancelled", "AbortError");
@@ -29,13 +30,9 @@ async function loadBook() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     let packed = await readPdfSearchBytes(response.body, request.signal, configuration.bytes, limit);
     if (packed.byteLength !== configuration.bytes) throw new Error("PDF_OCR_SIZE_MISMATCH");
-    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
-      .map(value => value.toString(16).padStart(2, "0")).join("");
-    if (digest !== configuration.sha256) throw new Error("PDF_OCR_HASH_MISMATCH");
-    const stream = new ReadableStream({start(controller) {controller.enqueue(packed); controller.close();}});
+    const decoding = readVerifiedPdfSearchText(packed, configuration.sha256, request.signal, limit);
     packed = null;
-    const decoded = JSON.parse(await readPdfSearchText(
-      stream.pipeThrough(new DecompressionStream("gzip")), request.signal, limit));
+    const decoded = JSON.parse(await decoding);
     if (request.signal.aborted) throw aborted();
     const validated = validateBookText(decoded, configuration.pageCount, configuration.sourceSha);
     // Search needs offsets and hit boxes, not the duplicate full page layout.
@@ -70,13 +67,9 @@ async function fetchPartitionBytes(part, signal) {
 async function loadSearchPartition(part, current, owners = null, prefetched = null) {
   return partitionRequests.run(current, owners, async signal => {
     let packed = prefetched || await fetchPartitionBytes(part, signal);
-    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", packed))]
-      .map(value => value.toString(16).padStart(2, "0")).join("");
-    if (digest !== part.sha256) throw new Error("PDF_OCR_HASH_MISMATCH");
-    const stream = new ReadableStream({start(owner) {owner.enqueue(packed); owner.close();}});
+    const decoding = readVerifiedPdfSearchText(packed, part.sha256, signal, limit);
     packed = null;
-    const value = JSON.parse(await readPdfSearchText(
-      stream.pipeThrough(new DecompressionStream("gzip")), signal, limit));
+    const value = JSON.parse(await decoding);
     if (!current() || signal.aborted) throw aborted();
     return validatePdfSearchPartition(value, part, configuration);
   });
