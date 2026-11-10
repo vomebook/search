@@ -6,6 +6,8 @@
     [
       "tests.gates.test_static_checks.StaticGateTests.test_adapter_coverage_gate_fails_when_contract_tests_are_removed",
       "tests.gates.test_static_checks.StaticGateTests.test_chapter_search_core_coverage_gate_fails_closed",
+      "tests.gates.test_static_checks.StaticGateTests.test_pdf_search_decode_coverage_gate_fails_closed",
+      "tests.gates.test_static_checks.StaticGateTests.test_pdf_search_decode_exact_signature_complexity_and_build",
       "tests.gates.test_static_checks.StaticGateTests.test_pdf_book_compact_coverage_gate_fails_closed",
       "tests.gates.test_static_checks.StaticGateTests.test_pdf_book_compact_exact_signature_complexity_and_build",
       "tests.gates.test_static_checks.StaticGateTests.test_pdf_partition_requests_coverage_gate_fails_closed",

@@ -143,6 +143,7 @@ jobs:
           node scripts/reader/check_pdf_partition_page_coverage.mjs
           node scripts/reader/check_pdf_partition_requests_coverage.mjs
           node scripts/reader/check_pdf_book_compact_coverage.mjs
+          node scripts/reader/check_pdf_search_decode_coverage.mjs
           node scripts/reader/check_pdf_prefetch_contracts.mjs
           node scripts/reader/check_pdf_text_store_coverage.mjs
           node scripts/reader/check_pdf_text_store_mutations.mjs
@@ -543,6 +544,7 @@ jobs:
           node scripts/reader/check_pdf_partition_page_coverage.mjs
           node scripts/reader/check_pdf_partition_requests_coverage.mjs
           node scripts/reader/check_pdf_book_compact_coverage.mjs
+          node scripts/reader/check_pdf_search_decode_coverage.mjs
           node scripts/reader/check_pdf_prefetch_contracts.mjs
           node scripts/reader/check_pdf_text_store_coverage.mjs
           node scripts/reader/check_pdf_text_store_mutations.mjs

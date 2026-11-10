@@ -13,6 +13,7 @@ import { canPrefetchPdfPartition, canRetainPdfPartition } from '../../../static/
 import { pdfPartitionPageOffset, decoratePdfPartitionHits } from '../../../static/reader/search/reader-pdf-partition-page.mjs';
 import { createPdfPartitionRequests } from '../../../static/reader/search/reader-pdf-partition-requests.mjs';
 import { compactPdfBookPage } from '../../../static/reader/search/reader-pdf-book-compact.mjs';
+import { readVerifiedPdfSearchText } from '../../../static/reader/search/reader-pdf-search-decode.mjs';
 
 const source=fs.readFileSync(new URL('../../../static/reader/search/workers/reader-pdf-book-search-worker.mjs',import.meta.url),'utf8');
 const read=(body,signal,expected,text)=>text
@@ -66,7 +67,7 @@ const configuration={url,bytes:packed.length,sha256:Buffer.from(await webcrypto.
 const scope={self:{location:{href:'https://voiceofml-search.hf.space/static/worker.mjs',origin:'https://voiceofml-search.hf.space'},
   VoiceOfMLReaderSecurity:{LIMITS:{chapterTotalBytes:1024*1024}},postMessage:data=>posted.push(data)},
   URL,DOMException,AbortController,TextDecoder,Uint8Array,ReadableStream,DecompressionStream,
-  crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validateBookText,searchBookText,validPdfBookUrl,searchPath,readPdfSearchBytes,readPdfSearchText,validatePdfSearchPartition,validatePdfPartitionConfiguration,canPrefetchPdfPartition,canRetainPdfPartition,pdfPartitionPageOffset,decoratePdfPartitionHits,createPdfPartitionRequests,compactPdfBookPage};
+  crypto:webcrypto,performance,setTimeout,clearTimeout,fetch:async()=>new Response(packed),validateBookText,searchBookText,validPdfBookUrl,searchPath,readPdfSearchBytes,readPdfSearchText,validatePdfSearchPartition,validatePdfPartitionConfiguration,canPrefetchPdfPartition,canRetainPdfPartition,pdfPartitionPageOffset,decoratePdfPartitionHits,createPdfPartitionRequests,compactPdfBookPage,readVerifiedPdfSearchText};
 const context=vm.createContext(scope);
 vm.runInContext(source.replace(/^import .*;\n/gm,''),context);
 // Exercise the Worker's actual network/size policy in its existing test scope.
