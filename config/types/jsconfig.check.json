@@ -98,6 +98,7 @@
     "../../static/search/domain/stable-stringify.js",
     "../../static/search/domain/search-view-key.js",
     "../../static/search/domain/search-recovery.js",
+    "../../static/search/domain/search-window-page.js",
     "../../static/search/presentation/sidebar-render.js",
     "../../static/tts-client.js",
     "../../static/app.js",

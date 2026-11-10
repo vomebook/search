@@ -526,6 +526,14 @@
       "kind": "script",
       "source": "scripts/search/check_sidebar_markup_coverage.mjs"
     },
+    "tests/search/baselines/test_search_window_page_baseline.mjs": {
+      "kind": "script",
+      "source": "scripts/search/check_search_window_page_coverage.mjs"
+    },
+    "tests/search/baselines/test_search_window_page_module.mjs": {
+      "kind": "script",
+      "source": "scripts/search/check_search_window_page_coverage.mjs"
+    },
     "tests/search/baselines/test_search_recovery_baseline.mjs": {
       "kind": "script",
       "source": "scripts/search/check_search_recovery_coverage.mjs"

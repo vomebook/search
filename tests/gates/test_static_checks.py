@@ -646,6 +646,226 @@ class StaticGateTests(unittest.TestCase):
             source.write_text(api + usage)
             self.assert_check(self.run_check(*check), False, diagnostic)
 
+    def test_search_window_page_coverage_gate_fails_closed(self):
+        paths = ["static/search/domain/search-window-page.js", "scripts/search/check_search_window_page_coverage.mjs",
+                 "tests/search/baselines/test_search_window_page_baseline.mjs", "tests/search/baselines/test_search_window_page_module.mjs",
+                 "tests/search/baselines/search-window-original.js.fixture", "static/app.js", "scripts/check_tap_contracts.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[1]]
+        self.assert_check(self.run_check(*check), True, "search-window-page.js")
+        test = self.root / paths[2]
+        source = test.read_text()
+        name = "page validation preserves getter, array and coercion evaluation order"
+        self.assertEqual(source.count("test('" + name + "'"), 1)
+        test.write_text(source.replace("test('" + name + "'", "test.skip('" + name + "'"))
+        self.assert_check(self.run_check(*check), False, "passing named contracts")
+        test.write_text(source)
+        module_test = self.root / paths[3]
+        module_source = module_test.read_text()
+        arity_check = "    if (arguments.length >= 4) args.push(expected);"
+        self.assertEqual(module_source.count(arity_check), 1)
+        for replacement in ("    args.push(expected);", "    if (expected !== undefined) args.push(expected);"):
+            with self.subTest(replacement=replacement):
+                module_test.write_text(module_source.replace(arity_check, replacement))
+                self.assert_check(self.run_check(*check), False, "malformed adapter must preserve argument counts and values")
+        module_test.write_text(module_source)
+        fixture = self.root / paths[4]
+        original_fixture = fixture.read_text()
+        fixture.write_text(original_fixture + "\n// tampered\n")
+        self.assert_check(self.run_check(*check), False, "reviewed original validator changed")
+        fixture.write_text(original_fixture)
+        module = self.root / paths[0]
+        original = module.read_text()
+        probe = "    if (!data || !Array.isArray(data.results) || invalidContents(data, page, pageSize) ||\n"
+        self.assertEqual(original.count(probe), 1)
+        module.write_text(original.replace(probe, "    if (data === globalThis) return;\n" + probe))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+        module.write_text(original)
+        gate = self.root / paths[1]
+        gate_source = gate.read_text()
+        include = "--test-coverage-include=**/static/search/domain/search-window-page.js"
+        self.assertEqual(gate_source.count(include), 1)
+        gate.write_text(gate_source.replace(include, "--test-coverage-include=**/missing-window.js"))
+        self.assert_check(self.run_check(*check), False, "exactly one fully covered source row")
+
+    def assert_window_page_composition(self):
+        # Production redirects only stdout into app.js; diagnostics must not
+        # satisfy the assertion when the composer writes to the wrong stream.
+        result = subprocess.run(["node", "scripts/build/compose_app.mjs"], cwd=self.root, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy(), timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        module = (self.root / "static/search/domain/search-window-page.js").read_text()
+        host = (self.root / "static/app.js").read_text()
+        self.assertGreater(len(module), 0)
+        self.assertGreater(len(host), 0)
+        self.assertEqual(result.stdout.count(module), 1, "window page must occur once in composer output")
+        self.assertEqual(result.stdout.count(host), 1, "host must occur once in composer output")
+        self.assertLess(result.stdout.index(module), result.stdout.index(host), "window page must precede host")
+
+    def test_search_window_page_build_contract_fails_closed(self):
+        paths = ["static/index.html", "static/sw.js", "static/reader-resources.js",
+                 "scripts/build/compose_app.mjs", "tests/search/build/test_search_record_path_build.mjs"]
+        for path in paths:
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, target)
+        check = ["node", paths[-1]]
+        self.assert_check(self.run_check(*check), True, "record path source and bundled shell/SW contracts preserved")
+        html = self.root / paths[0]
+        original_html = html.read_text()
+        line = next(line for line in original_html.splitlines(keepends=True) if "search/domain/search-window-page.js" in line)
+        self.assertEqual(original_html.count(line), 1)
+        html.write_text(original_html.replace(line, ""))
+        self.assert_check(self.run_check(*check), False, "window page source script must be present once")
+        html.write_text(original_html)
+        compose = self.root / paths[3]
+        original_compose = compose.read_text()
+        dependency = '"search/domain/search-window-page.js", '
+        self.assertEqual(original_compose.count(dependency), 1)
+        compose.write_text(original_compose.replace(dependency, ""))
+        self.assert_check(self.run_check(*check), False, "bundled shell must contain only the application script")
+        compose.write_text(original_compose)
+        resources = self.root / paths[2]
+        original_resources = resources.read_text()
+        resource = '      "search/domain/search-window-page.js",\n'
+        self.assertEqual(original_resources.count(resource), 1)
+        resources.write_text(original_resources.replace(resource, ""))
+        self.assert_check(self.run_check(*check), False, "window page must be a build dependency")
+        resources.write_text(original_resources)
+
+        # Execute the actual CLI on its complete production inputs, not just its
+        # exported dependency metadata. The deploy job consumes stdout as app.js.
+        shutil.copytree(ROOT / "static", self.root / "static", dirs_exist_ok=True)
+        self.assert_window_page_composition()
+        emit = '[...APP_DEPENDENCIES, "app.js"]'
+        self.assertEqual(original_compose.count(emit), 1)
+        compose.write_text(original_compose.replace(emit,
+            '[...APP_DEPENDENCIES.filter(file => file !== "search/domain/search-window-page.js"), "app.js"]'))
+        with self.assertRaisesRegex(AssertionError, "window page must occur once in composer output"):
+            self.assert_window_page_composition()
+        compose.write_text(original_compose.replace(emit,
+            '[...APP_DEPENDENCIES, "app.js", "search/domain/search-window-page.js"]'))
+        with self.assertRaisesRegex(AssertionError, "window page must occur once in composer output"):
+            self.assert_window_page_composition()
+        compose.write_text(original_compose.replace(emit, '["app.js", ...APP_DEPENDENCIES]'))
+        with self.assertRaisesRegex(AssertionError, "window page must precede host"):
+            self.assert_window_page_composition()
+        output = "process.stdout.write("
+        self.assertEqual(original_compose.count(output), 1)
+        compose.write_text(original_compose.replace(output, "process.stderr.write("))
+        with self.assertRaisesRegex(AssertionError, "window page must occur once in composer output"):
+            self.assert_window_page_composition()
+
+    def test_search_window_page_strict_type_contract(self):
+        for name in ("jsconfig.strict.json", "jsconfig.search-exact.json", "jsconfig.check.json"):
+            self.assertIn("static/search/domain/search-window-page.js", load_type_config(name)["files"])
+        declaration = self.root / "reader-globals.d.ts"
+        original = (ROOT / "typings/reader-globals.d.ts").read_text()
+        declaration.write_text(original)
+        config = self.root / "jsconfig.json"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "noUncheckedIndexedAccess": True, "exactOptionalPropertyTypes": True,
+            "target": "esnext", "moduleDetection": "force"},
+            "files": [str(declaration), str(ROOT / "static/search/domain/search-window-page.js")]}))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config]
+        self.assert_check(self.run_check(*check), True, "")
+        before = "  validate(data: VoiceOfMLSearchWindowPageData | null | undefined, page: number, pageSize: number, expected?: VoiceOfMLSearchWindowExpected | null | undefined): void;"
+        self.assertEqual(original.count(before), 1)
+        declaration.write_text(original.replace(before, before.replace("): void;", "): number;")))
+        self.assert_check(self.run_check(*check), False, "TS2322")
+        declaration.write_text(original)
+        usage = self.root / "static/search-window-page-usage.js"
+        config.write_text(json.dumps({"compilerOptions": {"allowJs": True, "checkJs": True, "noEmit": True,
+            "strict": True, "target": "esnext"}, "files": [str(declaration), str(usage)]}))
+        usage.write_text('VoiceOfMLSearchWindowPage.validate({results: [], page: 1, page_size: 10, total: "bad"}, 1, 10);\n')
+        self.assert_check(self.run_check(*check), False, "TS2322")
+
+    def test_search_window_page_test_types_fail_closed(self):
+        config_name = "jsconfig.window-page-tests.json"
+        config = load_type_config(config_name)
+        options = config["compilerOptions"]
+        for option in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
+            self.assertIs(options.get(option), True, option)
+        for option in ("noImplicitAny", "strictNullChecks", "strictFunctionTypes", "strictBindCallApply",
+                       "strictPropertyInitialization", "strictBuiltinIteratorReturn", "alwaysStrict", "useUnknownInCatchVariables"):
+            self.assertIsNot(options.get(option), False, option)
+        for option in ("skipLibCheck", "skipDefaultLibCheck", "noCheck"):
+            self.assertFalse(options.get(option, False), option)
+        for option in ("typeRoots", "paths"):
+            self.assertNotIn(option, options)
+        self.assertNotIn("extends", config)
+        self.assertEqual(options.get("types"), ["node"])
+        self.assertEqual(options.get("target"), "esnext")
+        self.assertEqual(options.get("module"), "esnext")
+        self.assertEqual(options.get("moduleResolution"), "bundler")
+        expected_files = {
+            "typings/reader-globals.d.ts",
+            "static/search/domain/search-window-page.js",
+            "scripts/check_tap_contracts.mjs",
+            "scripts/search/check_search_window_page_coverage.mjs",
+            "tests/search/baselines/test_search_window_page_baseline.mjs",
+            "tests/search/baselines/test_search_window_page_module.mjs",
+        }
+        self.assertEqual(set(config["files"]), expected_files)
+        self.assertEqual(len(config["files"]), len(expected_files))
+        package = json.loads((ROOT / "package.json").read_text())
+        lock = json.loads((ROOT / "package-lock.json").read_text())
+        self.assertEqual(package["devDependencies"].get("@types/node"), "26.6.6")
+        self.assertNotIn("@types/node", package.get("dependencies", {}))
+        self.assertEqual(lock["packages"][""]["devDependencies"].get("@types/node"), "26.6.6")
+        self.assertEqual(lock["packages"]["node_modules/@types/node"]["version"], "26.6.6")
+        self.assertEqual(lock["packages"]["node_modules/undici-types"]["version"], "8.9.0")
+        self.assertIn("tsc --project config/types/" + config_name, package["scripts"]["types"].split(" && "))
+        for relative in expected_files:
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, target)
+        (self.root / config_name).write_text(json.dumps(config))
+        check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", config_name, "--pretty", "false"]
+        self.assert_check(self.run_check(*check), True, "")
+
+        baseline = "tests/search/baselines/test_search_window_page_baseline.mjs"
+        module = "tests/search/baselines/test_search_window_page_module.mjs"
+        gate = "scripts/search/check_search_window_page_coverage.mjs"
+        tap = "scripts/check_tap_contracts.mjs"
+        production = "static/search/domain/search-window-page.js"
+        declaration = "typings/reader-globals.d.ts"
+        probes = [
+            (baseline, "\nfunction windowBaselineProbe(value) { return value; }\n", "TS7006"),
+            (module, "\nfunction windowModuleProbe(value) { return value; }\n", "TS7006"),
+            (gate, "\nspawnSync(process.execPath, [], {encoding: 123});\n", "TS2769"),
+            (gate, "\nfunction windowGateProbe(value) { return value; }\n", "TS7006"),
+            (tap, '\nhasPassingTapContracts(123, [{name: "contract"}]);\n', "TS2345"),
+            (tap, "\nfunction windowTapProbe(value) { return value; }\n", "TS7006"),
+            (production, '\n  /** @type {number} */ const windowProductionProbe = "bad";\n', "TS2322"),
+            (declaration, '\ndeclare const windowDeclarationProbe: MissingWindowDeclarationType;\n', "TS2304"),
+            (baseline, '\npage({total: "bad"});\n', "TS2322"),
+            (baseline, '\ncompare(() => [page(), "bad", 2, null]);\n', "TS2322"),
+            (baseline, '\ncompare(() => [page(), 1, "bad", null]);\n', "TS2322"),
+            (module, '\nvalidateMalformed({}, "bad", 2);\n', "TS2345"),
+            (module, '\nvalidateMalformed({}, 1, "bad");\n', "TS2345"),
+            (module, '\nvalidateMalformed({}, 1, 2, {total: "bad"});\n', "TS2322"),
+            (module, '\nvalidateMalformed({}, 1, 2, {total: 3, generation: 42});\n', "TS2322"),
+            (module, '\nvalidate({results: [], page: 1, page_size: 2, total: "bad"}, 1, 2);\n', "TS2322"),
+        ]
+        for relative, addition, diagnostic in probes:
+            with self.subTest(file=relative, addition=addition):
+                target = self.root / relative
+                original = target.read_text()
+                try:
+                    target.write_text(original + addition)
+                    result = self.run_check(*check)
+                    self.assert_check(result, False, diagnostic)
+                    errors = [line for line in result.stdout.splitlines() if "error TS" in line]
+                    self.assertEqual(len(errors), 1, result.stdout)
+                    self.assertIn(f"error {diagnostic}:", errors[0], result.stdout)
+                finally:
+                    target.write_text(original)
+        self.assert_check(self.run_check(*check), True, "")
+
     def test_search_recovery_coverage_gate_fails_closed(self):
         paths = ["static/search/domain/search-recovery.js", "scripts/search/check_search_recovery_coverage.mjs",
                  "tests/search/baselines/test_search_recovery_baseline.mjs", "tests/search/baselines/test_search_recovery_module.mjs",
@@ -2675,7 +2895,7 @@ class StaticGateTests(unittest.TestCase):
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/search/search-session.js", "static/search/reader-navigation.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
-                    "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/domain/search-view-key.js", "static/search/domain/search-recovery.js", "static/search/presentation/sidebar-render.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
+                    "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/domain/search-view-key.js", "static/search/domain/search-recovery.js", "static/search/domain/search-window-page.js", "static/search/presentation/sidebar-render.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
         self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
         self.assertIn("tsc --project config/types/jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])

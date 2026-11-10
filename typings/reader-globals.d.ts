@@ -71,6 +71,11 @@ declare var VoiceOfMLSearchCanonical: {
 declare var VoiceOfMLSearchRecovery: {
   isRecoverable(error: {name?: string | undefined; status?: number | undefined; code?: string | undefined; message?: string | undefined} | null | undefined): boolean;
 };
+interface VoiceOfMLSearchWindowPageData {results: unknown[]; page: number; page_size: number; total: number; generation?: string | undefined}
+interface VoiceOfMLSearchWindowExpected {total: number; generation?: string | undefined}
+declare var VoiceOfMLSearchWindowPage: {
+  validate(data: VoiceOfMLSearchWindowPageData | null | undefined, page: number, pageSize: number, expected?: VoiceOfMLSearchWindowExpected | null | undefined): void;
+};
 interface VoiceOfMLHeightIndexState {
   heights: readonly number[];
   heightTree: number[];

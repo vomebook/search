@@ -240,6 +240,7 @@ function crossCheck(githubRoot, hfRoot) {
     "search/domain/stable-stringify.js",
     "search/domain/search-view-key.js",
     "search/domain/search-recovery.js",
+    "search/domain/search-window-page.js",
     "search/presentation/sidebar-render.js",
     "search/reader-navigation.js",
     "reader.css",

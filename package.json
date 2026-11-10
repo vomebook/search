@@ -19,13 +19,14 @@
   "scripts": {
     "lint": "eslint static scripts tests --max-warnings 0",
     "markup": "node scripts/check_markup.mjs",
-    "types": "tsc --project config/types/jsconfig.check.json && tsc --project config/types/jsconfig.service-worker.json && tsc --project config/types/jsconfig.service-worker-strict.json && tsc --project config/types/jsconfig.chapter-worker-strict.json && tsc --project config/types/jsconfig.strict.json && tsc --project config/types/jsconfig.search-exact.json && tsc --project config/types/jsconfig.reader-exact.json",
+    "types": "tsc --project config/types/jsconfig.check.json && tsc --project config/types/jsconfig.service-worker.json && tsc --project config/types/jsconfig.service-worker-strict.json && tsc --project config/types/jsconfig.chapter-worker-strict.json && tsc --project config/types/jsconfig.strict.json && tsc --project config/types/jsconfig.search-exact.json && tsc --project config/types/jsconfig.reader-exact.json && tsc --project config/types/jsconfig.window-page-tests.json",
     "check:static": "npm run lint && npm run markup && npm run types"
   },
   "_overrideNote": "minimatch 11.0.3 addresses GHSA-g3hv-75wg-m249 in the 10.x dependency; rerun checker regressions when updating ESLint.",
   "overrides": { "minimatch": "11.0.3" },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@types/node": "26.6.6",
     "eslint": "10.14.0",
     "espree": "11.2.0",
     "fake-indexeddb": "6.2.7",

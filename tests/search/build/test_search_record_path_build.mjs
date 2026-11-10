@@ -17,13 +17,14 @@ const heightIndexName = "search/domain/height-index.js";
 const canonicalName = "search/domain/stable-stringify.js";
 const viewKeyName = "search/domain/search-view-key.js";
 const recoveryName = "search/domain/search-recovery.js";
+const windowPageName = "search/domain/search-window-page.js";
 const sidebarName = "search/presentation/sidebar-render.js";
 assert.equal(APP_DEPENDENCIES.filter(name => name === moduleName).length, 1);
 assert.equal((html.match(/<script src="[^"\n]*search\/record-path\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(moduleName) < html.lastIndexOf("app.js"));
 const bundled = stripBundledScripts(html);
 assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/record-path\.js"/);
-assert.equal((bundled.match(/<script\s+src=/g) || []).length, 1);
+assert.equal((bundled.match(/<script\s+src=/g) || []).length, 1, "bundled shell must contain only the application script");
 assert.equal(APP_DEPENDENCIES.filter(name => name === highlightName).length, 1);
 assert.equal((html.match(/<script src="[^"\n]*search\/highlight\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(highlightName) < html.lastIndexOf("app.js"));
@@ -49,6 +50,7 @@ assert.equal(APP_DEPENDENCIES.filter(name => name === heightIndexName).length, 1
 assert.equal(APP_DEPENDENCIES.filter(name => name === canonicalName).length, 1);
 assert.equal(APP_DEPENDENCIES.filter(name => name === viewKeyName).length, 1);
 assert.equal(APP_DEPENDENCIES.filter(name => name === recoveryName).length, 1);
+assert.equal(APP_DEPENDENCIES.filter(name => name === windowPageName).length, 1, "window page must be composed once");
 assert.equal(APP_DEPENDENCIES.filter(name => name === sidebarName).length, 1);
 assert.equal(APP_DEPENDENCIES.at(-1), sidebarName);
 assert.equal((html.match(/<script src="[^"\n]*search\/folder-selection\.js"><\/script>/g) || []).length, 1);
@@ -66,8 +68,11 @@ assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/domain\/search-view-ke
 assert.equal((html.match(/<script src="[^"\n]*search\/domain\/search-recovery\.js"><\/script>/g) || []).length, 1);
 assert.ok(html.indexOf(viewKeyName) < html.indexOf(recoveryName) && html.indexOf(recoveryName) < html.lastIndexOf("app.js"));
 assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/domain\/search-recovery\.js"/);
+assert.equal((html.match(/<script src="[^"\n]*search\/domain\/search-window-page\.js"><\/script>/g) || []).length, 1, "window page source script must be present once");
+assert.ok(html.indexOf(recoveryName) < html.indexOf(windowPageName) && html.indexOf(windowPageName) < html.lastIndexOf("app.js"));
+assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/domain\/search-window-page\.js"/);
 assert.equal((html.match(/<script src="[^"\n]*search\/presentation\/sidebar-render\.js"><\/script>/g) || []).length, 1);
-assert.ok(html.indexOf(recoveryName) < html.indexOf(sidebarName) && html.indexOf(sidebarName) < html.lastIndexOf("app.js"));
+assert.ok(html.indexOf(windowPageName) < html.indexOf(sidebarName) && html.indexOf(sidebarName) < html.lastIndexOf("app.js"));
 assert.doesNotMatch(bundled, /<script src="[^"\n]*search\/presentation\/sidebar-render\.js"/);
 for (const project of ["github", "hf"]) {
   assert.equal(resources.buildFiles(project).filter(name => name === moduleName).length, 1);
@@ -81,6 +86,7 @@ for (const project of ["github", "hf"]) {
   assert.equal(resources.buildFiles(project).filter(name => name === canonicalName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === viewKeyName).length, 1);
   assert.equal(resources.buildFiles(project).filter(name => name === recoveryName).length, 1);
+  assert.equal(resources.buildFiles(project).filter(name => name === windowPageName).length, 1, "window page must be a build dependency");
   assert.equal(resources.buildFiles(project).filter(name => name === sidebarName).length, 1);
 }
 assert.match(worker, /["']\/(?:search\/)?static\/app\.js["']/);
@@ -95,5 +101,6 @@ assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/domain\/height-i
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/domain\/stable-stringify\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/domain\/search-view-key\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/domain\/search-recovery\.js["']/);
+assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/domain\/search-window-page\.js["']/);
 assert.doesNotMatch(worker, /["']\/(?:search\/)?static\/search\/presentation\/sidebar-render\.js["']/);
 console.log("record path source and bundled shell/SW contracts preserved");
