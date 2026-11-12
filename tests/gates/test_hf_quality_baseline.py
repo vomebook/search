@@ -1,10 +1,15 @@
 """The separate immutable baseline must fail closed on malformed or changed input."""
 import hashlib
 from pathlib import Path
+import os
 import re
+import subprocess
+import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+from scripts import select_hf_history as bridge
 
 from scripts.check_sidebar_payload_regressions import TEST_NAMES, passed
 from scripts.verify_hf_quality_baseline import REQUIRED, validate_baselines
@@ -64,7 +69,7 @@ class HfCheckoutCiTests(unittest.TestCase):
     def test_checkout_captures_main_and_checks_exact_commit_ancestor_and_lfs(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
         hf = workflow.split('  huggingface-search:\n', 1)[1]
-        step = hf.split('      - name: Checkout Hugging Face Search Space\n', 1)[1].split('      - uses:', 1)[0]
+        step = hf.split('      - name: Checkout Hugging Face Search Space\n', 1)[1].split('      - name:', 1)[0]
         commands = (
             'set -euo pipefail',
             'git ls-remote --exit-code --heads "$url" refs/heads/main',
@@ -72,7 +77,8 @@ class HfCheckoutCiTests(unittest.TestCase):
             'GIT_LFS_SKIP_SMUDGE=1 git clone --single-branch --branch main --no-checkout "$url" huggingface-search',
             'GIT_LFS_SKIP_SMUDGE=1 git -C huggingface-search checkout --detach "$revision"',
             'test "$(git -C huggingface-search rev-parse HEAD)" = "$revision"',
-            'git -C huggingface-search merge-base --is-ancestor c7424ac3e549c9edf59f302e3809268c12bfe114 HEAD',
+            'python3 -B scripts/select_hf_history.py huggingface-search "$revision" >/dev/null',
+            'echo "revision=$revision" >> "$GITHUB_OUTPUT"',
             'git -C huggingface-search lfs pull',
             'git -C huggingface-search lfs fsck',
         )
@@ -80,11 +86,149 @@ class HfCheckoutCiTests(unittest.TestCase):
             self.assertEqual(step.count(command), 1, command)
         self.assertIn('[[ "$refs" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]', step)
         self.assertLess(step.index('git ls-remote'), step.index('git clone'))
-        self.assertLess(step.index('checkout --detach'), step.index('merge-base --is-ancestor'))
-        self.assertLess(step.index('merge-base --is-ancestor'), step.index('lfs pull'))
+        self.assertLess(step.index('checkout --detach'), step.index('scripts/select_hf_history.py'))
+        self.assertLess(step.index('scripts/select_hf_history.py'), step.index('lfs pull'))
         self.assertNotIn('continue-on-error:', step)
         self.assertNotIn('--depth', step)
         self.assertNotIn('--filter', step)
+
+
+class HfHistoryBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name)
+        self.git('init', '-q')
+        self.git('config', 'user.name', 'test')
+        self.git('config', 'user.email', 'test@example.invalid')
+        self.git('commit', '--allow-empty', '-qm', 'base')
+        self.base = self.git('rev-parse', 'HEAD')
+        self.git('commit', '--allow-empty', '-qm', 'anchor')
+        self.anchor = self.git('rev-parse', 'HEAD')
+        self.git('commit', '--allow-empty', '-qm', 'head')
+        self.head = self.git('rev-parse', 'HEAD')
+        self.missing = 'f' * 40
+
+    def git(self, *args):
+        return subprocess.check_output(['git', '-C', str(self.repo), *args], text=True).strip()
+
+    def test_unique_old_and_new_history_select_fixed_pair(self):
+        for histories in ({self.anchor: self.base, self.missing: 'e' * 40},
+                          {self.missing: 'e' * 40, self.anchor: self.base}):
+            with self.subTest(histories=histories), patch.object(bridge, 'HISTORIES', histories):
+                self.assertEqual(bridge.select(self.repo, self.head), self.base)
+
+    def test_neither_both_and_baseline_not_in_history_fail(self):
+        for histories in ({'f' * 40: 'e' * 40, 'd' * 40: 'c' * 40},
+                          {self.anchor: self.base, self.base: self.base},
+                          {self.anchor: 'e' * 40, self.missing: self.base}):
+            with self.subTest(histories=histories), patch.object(bridge, 'HISTORIES', histories):
+                with self.assertRaises(ValueError):
+                    bridge.select(self.repo, self.head)
+
+    def test_real_merge_of_two_histories_is_ambiguous(self):
+        self.git('checkout', '-qb', 'side', self.base)
+        self.git('commit', '--allow-empty', '-qm', 'other')
+        other = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-q', '-')
+        self.git('merge', '--no-ff', '-qm', 'merge', 'side')
+        merged = self.git('rev-parse', 'HEAD')
+        with patch.object(bridge, 'HISTORIES', {self.anchor: self.base, other: self.base}):
+            with self.assertRaisesRegex(ValueError, 'exactly one'):
+                bridge.select(self.repo, merged)
+
+    def test_bad_capture_shallow_graft_and_git_failure_fail_closed(self):
+        for capture in ('main', '0' * 40, self.base):
+            with self.subTest(capture=capture), self.assertRaises(ValueError):
+                bridge.select(self.repo, capture)
+        with patch.object(bridge.subprocess, 'run', side_effect=subprocess.CalledProcessError(2, 'git')):
+            with self.assertRaises(subprocess.CalledProcessError):
+                bridge.select(self.repo, self.head)
+
+    def test_shallow_and_graft_guards_independently_reject_otherwise_valid_graph(self):
+        histories = {self.anchor: self.base, self.missing: 'e' * 40}
+        with patch.object(bridge, 'HISTORIES', histories):
+            self.assertEqual(bridge.select(self.repo, self.head), self.base)
+            # Boundary at the root changes no ancestry, but marks the repo shallow.
+            shallow = self.repo / '.git/shallow'
+            shallow.write_text(self.base + '\n')
+            try:
+                with self.assertRaisesRegex(ValueError, '^shallow history cannot establish ancestry$'):
+                    bridge.select(self.repo, self.head)
+            finally:
+                shallow.unlink()
+            self.assertEqual(bridge.select(self.repo, self.head), self.base)
+            # An equivalent graft preserves the complete valid graph.
+            graft = self.repo / '.git/info/grafts'
+            graft.write_text(self.head + ' ' + self.anchor + '\n')
+            try:
+                with self.assertRaisesRegex(ValueError, '^grafted history is not accepted$'):
+                    bridge.select(self.repo, self.head)
+            finally:
+                graft.unlink()
+            self.assertEqual(bridge.select(self.repo, self.head), self.base)
+
+    def test_shallow_and_graft_guard_deletion_mutations_are_killed(self):
+        source = (Path(__file__).resolve().parents[2] / 'scripts/select_hf_history.py').read_text()
+        mutations = (
+            ('    if git("rev-parse", "--is-shallow-repository") != "false":\n'
+             '        raise ValueError("shallow history cannot establish ancestry")\n', 'shallow'),
+            ('    if grafts.exists() and grafts.stat().st_size:\n'
+             '        raise ValueError("grafted history is not accepted")\n', 'graft'),
+        )
+        for guard, kind in mutations:
+            with self.subTest(kind=kind):
+                self.assertEqual(source.count(guard), 1)
+                mutated = source.replace(guard, '')
+                module = self.repo / ('mutated_' + kind + '.py')
+                module.write_text(mutated)
+                path = self.repo / ('.git/shallow' if kind == 'shallow' else '.git/info/grafts')
+                path.write_text(self.base + '\n' if kind == 'shallow' else self.head + ' ' + self.anchor + '\n')
+                try:
+                    program = ('import importlib.util, pathlib, sys; '
+                               's=importlib.util.spec_from_file_location("mutant", sys.argv[1]); '
+                               'm=importlib.util.module_from_spec(s); s.loader.exec_module(m); '
+                               'm.HISTORIES={sys.argv[3]:sys.argv[4],"f"*40:"e"*40}; '
+                               'print(m.select(pathlib.Path(sys.argv[2]),sys.argv[5]))')
+                    result = subprocess.run([sys.executable, '-B', '-c', program, str(module), str(self.repo),
+                                             self.anchor, self.base, self.head], capture_output=True, text=True,
+                                            env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), self.base)
+                finally:
+                    path.unlink()
+
+    def test_baseline_must_precede_selected_anchor_and_unreadable_repo_fails(self):
+        with patch.object(bridge, 'HISTORIES', {self.base: self.anchor, self.missing: self.base}):
+            with self.assertRaises(subprocess.CalledProcessError):
+                bridge.select(self.repo, self.head)
+        with self.assertRaises(subprocess.CalledProcessError):
+            bridge.select(self.repo / 'nonexistent', self.head)
+
+    def test_workflow_binds_selection_to_capture_and_download(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
+        hf = workflow.split('  huggingface-search:\n', 1)[1]
+        step = hf.split('      - name: Verify independent Hugging Face quality baseline\n', 1)[1].split('      - name:', 1)[0]
+        for text in ('CAPTURED_HF_REVISION: ${{ steps.hf-checkout.outputs.revision }}',
+                     'set -euo pipefail',
+                     'baseline_revision=$(python3 -B scripts/select_hf_history.py huggingface-search "$CAPTURED_HF_REVISION")',
+                     'curl --fail --location --silent --show-error',
+                     '/resolve/$baseline_revision/$file',
+                     'python3 -B scripts/verify_hf_quality_baseline.py "$RUNNER_TEMP/hf-quality-baseline" "$baseline_revision"'):
+            self.assertIn(text, step)
+        self.assertLess(step.index('select_hf_history.py'), step.index('curl --fail'))
+        self.assertLess(step.index('curl --fail'), step.index('verify_hf_quality_baseline.py'))
+        self.assertNotIn('continue-on-error:', step)
+        self.assertNotIn('|| true', step)
+        self.assertLess(hf.index('Verify independent Hugging Face quality baseline'), hf.index('Install Python dependencies'))
+        self.assertLess(hf.index('Verify independent Hugging Face quality baseline'), hf.index('Install npm dependencies'))
+        self.assertLess(hf.index('Verify independent Hugging Face quality baseline'), hf.index('Check source and exercise static gates'))
+        before = hf.split('      - name: Verify independent Hugging Face quality baseline\n', 1)[0]
+        self.assertIn('tests.gates.test_hf_quality_baseline tests.gates.test_hf_history_shell', before)
+        allowed = {'Test Hugging Face history bridge', 'Checkout Hugging Face Search Space'}
+        self.assertEqual(set(re.findall(r'^      - name: (.+)$', before, re.M)), allowed)
+        self.assertEqual(before.count('      - uses:'), 1)
+        self.assertIn('      - uses: actions/checkout@v7\n', before)
 
 
 class DependencyLayoutCiTests(unittest.TestCase):
@@ -205,7 +349,7 @@ class HfSearchProjectionCiTests(unittest.TestCase):
         self.assertIn('tests.search.backend.test_search_projection_contract', workflow)
         self.assertIn('tests.search.backend.test_search_projection_mutation_contract', workflow)
         self.assertEqual(workflow.count('scripts/check_search_words_mutation.py --module search_projection'), 1)
-        self.assertIn('merge-base --is-ancestor c7424ac3e549c9edf59f302e3809268c12bfe114 HEAD', workflow)
+        self.assertIn('python3 -B scripts/select_hf_history.py huggingface-search "$revision" >/dev/null', workflow)
 
     def test_synthetic_reader_archive_boundaries_are_in_backend_coverage_gate(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/reader-refactor.yml').read_text()
