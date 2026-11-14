@@ -60,7 +60,7 @@ function isDjvuDecoderAsset(value) {
 
 /** @param {string} value @returns {boolean} */
 function isRuffleAsset(value) {
-  try { return /^\/search\/static\/vendor\/ruffle\/release-[0-9a-f]{12}\/(?:ruffle\.js|core\.ruffle\.[0-9a-f]{20}\.js|[0-9a-f]{20}\.wasm)$/.test(value.startsWith('/') ? value.split(/[?#]/)[0] : new URL(value).pathname); }
+  try { return /^\/search\/static\/vendor\/ruffle\/release-[0-9a-f]{12}\/(?:ruffle\.js|core\.ruffle\.[0-9a-f]{20}\.js|[0-9a-f]{20}\.wasm)$/.test(value.startsWith('/') ? (value.split(/[?#]/)[0] || '') : new URL(value).pathname); }
   catch (_) { return false; }
 }
 

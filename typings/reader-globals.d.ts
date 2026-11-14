@@ -130,6 +130,7 @@ interface ReaderResourcesApi {
   shellAssets(base: string): string[];
   pdfSupportAssets(base: string): string[];
   djvuDecoderAssets(base: string): string[];
+  ruffleAssets(base: string): string[];
   engineAssets(extension: string, base: string, foliateSuffix?: string, workerWrapper?: string): string[];
 }
 
