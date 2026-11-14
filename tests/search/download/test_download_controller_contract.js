@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 // Behavioral baseline against the original shared download controller.
 // Only synthetic requests and a controlled clock are used; no file is downloaded.
-function fixture() {
+function fixture(overrides = {}) {
   let now = 1000, nextTimer = 0;
   const timers = new Map(), requests = [], launches = [], toasts = [];
   const sandbox = {
@@ -29,6 +29,7 @@ function fixture() {
     buildDownloadUrl: (name, link) => `${name}|${link}`,
     triggerDownload: url => launches.push(url),
     showToast: (...args) => toasts.push(args),
+    ...overrides,
   });
   return {
     controller, requests, launches, toasts, timers, context: sandbox,
@@ -277,6 +278,39 @@ test("download failures restore controls and emit the appropriate feedback", asy
   assert.deepEqual(launches, []);
   assert.equal(button.textContent, "下载");
   assert.equal(attrs.has("aria-busy"), false);
+  assert.equal(c.pendingDownloads.size, 0);
+});
+
+test("a throwing success toast does not turn a shared launched download into failure", async () => {
+  const messages = [];
+  const {controller: c, launches, timers, advance, fireDelay} = fixture({
+    showToast(message) {
+      messages.push(message);
+      if (message === "已发起下载，请在浏览器下载列表查看") throw new Error("toast failed");
+    },
+  });
+  const first = c.downloadFile("book.txt", "shared", {skipCheck: true});
+  const second = c.downloadFile("book.txt", "shared", {quiet: true});
+  assert.equal(await first, true);
+  assert.equal(await second, true);
+  assert.deepEqual(launches, ["book.txt|shared"]);
+  assert.deepEqual(messages, ["正在准备下载…", "已发起下载，请在浏览器下载列表查看"]);
+  assert.equal(c.pendingDownloads.size, 0);
+  const next = c.downloadFile("next.txt", "next", {quiet: true, skipCheck: true});
+  await flush();
+  assert.equal(timers.size, 1);
+  advance(300);
+  fireDelay(300);
+  assert.equal(await next, true);
+  assert.deepEqual(launches, ["book.txt|shared", "next.txt|next"]);
+});
+
+test("a throwing triggerDownload still reports failure", async () => {
+  const {controller: c, toasts} = fixture({
+    triggerDownload() { throw new Error("handoff failed"); },
+  });
+  assert.equal(await c.downloadFile("book.txt", "book", {skipCheck: true}), false);
+  assert.deepEqual(toasts.map(args => args[0]), ["正在准备下载…", "下载失败，请稍后重试"]);
   assert.equal(c.pendingDownloads.size, 0);
 });
 
