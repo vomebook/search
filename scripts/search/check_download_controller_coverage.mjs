@@ -31,6 +31,8 @@ const required = [
   "successful check cache retains at most 64 entries in insertion order",
   "shared downloads retain other owners and restore button feedback",
   "download failures restore controls and emit the appropriate feedback",
+  "a throwing success toast does not turn a shared launched download into failure",
+  "a throwing triggerDownload still reports failure",
   "a failed browser handoff does not strand later queued downloads",
   "handoffs are paced and a cancelled queued handoff never launches"
 ].map(name => ({name}));
