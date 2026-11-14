@@ -178,7 +178,10 @@
               return false;
             }
             const started = await scheduleDownloadLaunch(filename, link, cancelled);
-            if (started && !options.quiet) showToast("已发起下载，请在浏览器下载列表查看");
+            if (started && !options.quiet) {
+              // Feedback must not undo a browser handoff that already succeeded.
+              try { showToast("已发起下载，请在浏览器下载列表查看"); } catch (_) { /* best effort */ }
+            }
             return started;
           } catch (_) {
             if (!options.quiet) showToast("下载失败，请稍后重试", 3500);
