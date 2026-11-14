@@ -314,6 +314,14 @@
       "kind": "script",
       "source": "scripts/reader/check_reader_lifecycle_coverage.mjs"
     },
+    "tests/reader/media/test_ruffle_closure.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_media_coverage.mjs"
+    },
+    "tests/reader/test_foliate_proxy.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_media_coverage.mjs"
+    },
     "tests/reader/media/test_reader_media_baseline.mjs": {
       "kind": "script",
       "source": "scripts/reader/check_reader_media_coverage.mjs"
@@ -701,6 +709,10 @@
     "tests/seo/test_seo_catalog.py": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/service_worker/test_ruffle_retention.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_media_coverage.mjs"
     },
     "tests/service_worker/test_service_worker.js": {
       "kind": "direct",

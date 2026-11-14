@@ -43,4 +43,18 @@ if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => v
     ['# tests ', '# pass ', '# fail ', '# cancelled '].some(prefix => lines.filter(line => line.startsWith(prefix)).length !== 1)) {
   console.error('Reader media requires named contracts and exactly one source row above each minimum');
   process.exitCode = 1;
+} else {
+  // Keep these independent of the fixed TAP and coverage counts above.
+  for (const args of [
+    ['--test', '--test-concurrency=1', 'tests/reader/copy_reader_vendor.test.mjs', 'tests/reader/test_foliate_proxy.mjs'],
+    ['tests/reader/media/test_ruffle_closure.mjs'],
+    ['tests/service_worker/test_ruffle_retention.js']
+  ]) {
+    const extra = spawnSync(process.execPath, args, {stdio: 'inherit'});
+    if (extra.error) throw extra.error;
+    if (extra.status !== 0) {
+      process.exitCode = 1;
+      break;
+    }
+  }
 }
