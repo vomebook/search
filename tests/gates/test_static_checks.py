@@ -300,7 +300,7 @@ class StaticGateTests(unittest.TestCase):
         contract = self.root / paths[3]
         original = contract.read_text()
         names = re.findall(r'^test\("([^"\n]+)"', original, re.M)
-        self.assertEqual(len(names), 14)
+        self.assertEqual(len(names), 16)
         self.assertEqual(len(set(names)), len(names))
         for name in names:
             anchor = 'test("' + name + '"'
