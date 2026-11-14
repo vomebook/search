@@ -6,7 +6,7 @@ const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 let cachePruning = Promise.resolve();
 /** @param {string} pathname @returns {boolean} */
 function isRetiredAsset(pathname) {
-  if (CURRENT_HASHED_ASSETS.length && isDjvuDecoderAsset(pathname)) return !CURRENT_HASHED_ASSETS.includes(pathname);
+  if (CURRENT_HASHED_ASSETS.length && (isDjvuDecoderAsset(pathname) || isRuffleAsset(pathname))) return !CURRENT_HASHED_ASSETS.includes(pathname);
   return CURRENT_HASHED_ASSETS.length > 0 &&
     (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
     !CURRENT_HASHED_ASSETS.includes(pathname);
@@ -32,7 +32,7 @@ function pruneHashedAssets(cache, resetShell = false, activation = false) {
       }
       if (resetShell && url.pathname === "/search/static/reader.html") { await cache.delete(request); continue; }
       if (!isRetiredAsset(url.pathname)) continue;
-      if (activation && (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href))) {
+      if (activation && (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href))) {
         const response = await cache.match(request, { ignoreVary: true });
         if (response) await cache.put(retainedKey(url.href), response);
       }
@@ -47,7 +47,7 @@ function pruneHashedAssets(cache, resetShell = false, activation = false) {
 /** @param {Request | string} request @returns {Request | string} */
 function revalidatedRequest(request) {
   const url = typeof request === "string" ? request : request.url;
-  if (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url) || isDjvuDecoderAsset(url) || typeof Request !== "function" ||
+  if (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url) || isDjvuDecoderAsset(url) || isRuffleAsset(url) || typeof Request !== "function" ||
       (typeof request !== "string" && request.cache && request.cache !== "default")) return request;
   try { return new Request(request, { cache: "no-cache" }); } catch (_) { return request; }
 }
@@ -55,6 +55,12 @@ function revalidatedRequest(request) {
 /** @param {string} value @returns {boolean} */
 function isDjvuDecoderAsset(value) {
   try { return /^\/search\/static\/vendor\/djvu-rs-reader\/release-[0-9a-f]{12}-[0-9a-f]{12}\/(?:scalar|simd128)\/djvu_rs(?:_bg\.wasm|\.js)$/.test(value.startsWith('/') ? value : new URL(value).pathname); }
+  catch (_) { return false; }
+}
+
+/** @param {string} value @returns {boolean} */
+function isRuffleAsset(value) {
+  try { return /^\/search\/static\/vendor\/ruffle\/release-[0-9a-f]{12}\/(?:ruffle\.js|core\.ruffle\.[0-9a-f]{20}\.js|[0-9a-f]{20}\.wasm)$/.test(value.startsWith('/') ? value.split(/[?#]/)[0] : new URL(value).pathname); }
   catch (_) { return false; }
 }
 
@@ -117,7 +123,7 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   const generatedData = url.pathname.startsWith("/search/data/");
   const networkFirst = !readerShell && (searchNavigation || generatedData || READER_RUNTIME_PATHS.has(url.pathname));
   const cacheKey = readerShell ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
-  const immutable = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href);
+  const immutable = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href);
   const cachePromise = caches.open(CACHE_NAME).catch(() => null);
   // Pinned same-origin assets are identical across classic/module Origin headers.
   const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey, { ignoreVary: immutable }) : undefined).catch(() => undefined);

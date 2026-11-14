@@ -54,7 +54,26 @@ function checkBehavior(root) {
   }
 }
 
+export function checkRuffleAssets(output) {
+  const expected = {
+    "ruffle.js": "26036a94567088dfb3de88a759e8ed10a4cea07b29500af36f345eef42420098",
+    "core.ruffle.16d61072ac7fdc4d5013.js": "d27c6bdce2a34afb32e8dfa40970bc7e86cbcb912f92db7eb3e1ac70e943bd82",
+    "core.ruffle.994eeef0a471a88cd0e3.js": "d89e507ee60d550629e9229aa1e4dd4f9e75ec7db271e0135cbc87dab042ea51",
+    "172de42e6619eac8f371.wasm": "1ed33b9b71a6b01b9aafafed660be343ffeb2d246c5d79e6425a32bf93e38207",
+    "878d548199cddef07035.wasm": "af9b6a13a8f5e8d305bc3ce28a4edf3f6242df1183e8576ad4ca086e9f21eaea",
+    "LICENSE_APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+    "LICENSE_MIT": "4de9338a7879c68e911742a7d691f0797ff1ef8d8a6fb978b0c711e258fe959c"
+  };
+  assert(JSON.stringify(Object.keys(expected)) === JSON.stringify(resources.ruffleArchive.files), "Ruffle inventory mismatch");
+  for (const [file, digest] of Object.entries(expected)) {
+    const target = path.join(output, resources.ruffleArchive.directory, file);
+    assert(fs.existsSync(target) && fs.statSync(target).isFile() && hash(target) === digest,
+      `Ruffle asset missing or integrity mismatch: ${target}`);
+  }
+}
+
 function checkAssets(output, hashed = false) {
+  checkRuffleAssets(output);
   const djvuFiles = {
     "release-a03526f445b4-a99c0e299e95/scalar/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
     "release-a03526f445b4-a99c0e299e95/simd128/djvu_rs.js": "4174a8f1da0f63206a6c3aa447e396ae24c3926ff5c9ed72fc7184c627513e1f",
