@@ -4,12 +4,64 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import https from "node:https";
 import http from "node:http";
 import net from "node:net";
 import { gzipSync, gunzipSync } from "node:zlib";
 
+// Fixed self-signed credentials for local tests only; public and not secret.
+// SAN: example.test, localhost, 127.0.0.1; expires 2046-11-09 UTC.
+const TEST_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC/73saPTntjwNm
+odAEUTt7sytZpJkW6Wc7si8xxVHLzHlD/LTwLl+dDAj6OW6O1Weomp5lTat9Huho
+YtDT9CvMDoHJz5Kd6Q6vI6VdKoJOLk2vocK1XYYs0VoQPYe8JIiQZihqEAGMdMHC
+UCVGBBVxgNLFTPu1PMkadCS3t4DeMF78Y23g8NgPXXJKqvSo12nxKfLpSS11kzjC
+OswbmRT2hbArVQBfff9soJVhHsNAhr94XYke9/JRESRWCZ1lNW6E9mriLLscDmU+
+VdMOqPOOvN8xQmbPaCc+aOHSaMETdEqeSy8ajq6GX6EZnGM1ELSrm/DrtuKUP/w8
+PfzfgsARAgMBAAECggEABurQrF/VA4qs2XPO9/zdJdvi8yfeDD1CBxzTRm9Wqj+M
+BkcoVo32obBnmWxc9OuxgO9+R7yJHT5c1g2WT5vkQTDWUh7iPpaB544jZ/cVJk//
+ukBG8LuLuffwj5ccGiEp7879ZAyAIHRWcFRBnPie343q6rPtJWQTrlmjDMuhqsA8
+5Q7KsgAi/6X5FakG0qd4qlaIEeYO5CWs7qrVPKzdiDjpPMGLgtmd53QzXOZblEjd
+R0pYeLkkOqgA1TtLAcj9qJUP++wXMULlhsTo/DqOcK6XjRYsxn98w7AXfTPk8aKv
+xRBMpLF4iZ43t5pQK2GjG8pJwi6xGIv8ZV+7lwn+zQKBgQD/Qr4aRmBf01M/v4t0
+FXFyT9Rai4I1WsEr/xxx8tlE2DFtUWHhMZBhNgK5BmqHFNZexwKI/K25kX68JwEW
+JtasqqqiknZBCxwjCo+b1KVYbvv4Hg7Ob05lhcAWbwTDxfghCYe87F3Y2n68eP8f
+4oRkwztquPhF4UCkjaGTvga7zQKBgQDAfcmEsHMUNUAtAFS/vItVxos2Gnkt7rxv
+qfQCsLonhdE+hl8CfIWMZOeHfqxqWJEuwUZcUXriJG1wdXiOWkC44oS7fw+DUnvC
+y0BZTJRtnvpQLns+oXKBgqmNVQYg/qfhK3n7j6m97yQMIG0E/0YkWB3hF7LQHu66
+vEfkIQz5VQKBgDvWZn/8TW1JObOw8DznJe/5HLuZBo4BV1U7+WwQ1LPZxkRtFnfW
+yZSwN5UuFtzRmqsfFc4NBaCBpebvccbClgJmA5gWo1f+BbuFJ0MNZzFC2xg/25Ky
+7vrHjs7zeXd3OgJsnIBCHIHQPnNqHcxYqlaAmbYb5D9lXWT1upHKswNlAoGAOar1
+no0GTP2PFmxM94xS6gWrWzAfMcWeKo3uDohHnOOYRnUXLbWEhQUN4CfxG4MhK7K3
+k5zNhcaICvMGhQ9A6KLkRQ/R4/PoI/mkc5xfs1+3eiISxja0CVzN0wuv5F6miOzv
+hJALuF1WnVNxldeseeL0QKVK6tL5jnQtzYihTGkCgYEAy7gXvl5pnQf2e/p32JPq
+CwXgphw1Aao9ACwzvYZt6mjQOrb+8FVmvlAHf2Mdp/Uh6SVz6FuzxZbCg15M0hnU
+29AofQyG3KAq0v7eBN78vLbLu08UzbMVu1X0cRvlhDbD1ZlYUD2p+Z3Wjc05oMLD
+57q9Hg+w7PmwDN4W7XPpick=
+-----END PRIVATE KEY-----
+`;
+const TEST_CERT = `-----BEGIN CERTIFICATE-----
+MIIDMzCCAhugAwIBAgIUV+JfkJNDAADEo1ISGQwiagOQ0WYwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MTExNDE2MTEzMFoXDTQ2MTEw
+OTE2MTEzMFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAv+97Gj057Y8DZqHQBFE7e7MrWaSZFulnO7IvMcVRy8x5
+Q/y08C5fnQwI+jlujtVnqJqeZU2rfR7oaGLQ0/QrzA6Byc+SnekOryOlXSqCTi5N
+r6HCtV2GLNFaED2HvCSIkGYoahABjHTBwlAlRgQVcYDSxUz7tTzJGnQkt7eA3jBe
+/GNt4PDYD11ySqr0qNdp8Sny6UktdZM4wjrMG5kU9oWwK1UAX33/bKCVYR7DQIa/
+eF2JHvfyUREkVgmdZTVuhPZq4iy7HA5lPlXTDqjzjrzfMUJmz2gnPmjh0mjBE3RK
+nksvGo6uhl+hGZxjNRC0q5vw67bilD/8PD3834LAEQIDAQABo30wezAdBgNVHQ4E
+FgQUss6walah2y6xHk0DCPHWJodsy40wHwYDVR0jBBgwFoAUss6walah2y6xHk0D
+CPHWJodsy40wDwYDVR0TAQH/BAUwAwEB/zAoBgNVHREEITAfggxleGFtcGxlLnRl
+c3SCCWxvY2FsaG9zdIcEfwAAATANBgkqhkiG9w0BAQsFAAOCAQEAHFb0Y3zhzQ3s
+VrJGrgX+3jR8hfQNn6cJgXlhEtgZcJvRjSDO3MM1UNVZD5CkXqUZy8OF5/3+eJNj
+lYWxmA8PVgeHO/SF4cjPQdvYYTIvD4zqbSVVivgLsieTcSqrFPFyogPrOemW03WW
+WBMGCce3D92r+B3KCGdwO70oDofFe7/Bi3soffQ0mVOKFA9otVV3QVxD2NEOo1Ym
+vZ/NjRre6WexUaICRXtKNoPnFp4UdlCnZDDqnW7oTvaxKzVDczMYNgtbVtOZ6+EQ
+eh06pGOd4MtLpXZSfos+FUnL4y6R1p6gRSacT6Y7ffwU3jqrE8y/4m5g0bjlEDz0
+momx60pAKw==
+-----END CERTIFICATE-----
+`;
 const script = resolve("scripts/build/copy_reader_vendor.mjs");
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const listen = (server) => new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -62,8 +114,8 @@ test("environment proxy, bounded concurrent downloads, bypass and hash failure",
   };
   try {
     const key = join(dir, "key.pem"), cert = join(dir, "cert.pem");
-    const generated = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,DNS:example.test,IP:127.0.0.1"], { stdio: "ignore", timeout: 15000 });
-    assert.equal(generated.status, 0, "openssl is needed to generate the test certificate");
+    writeFileSync(key, TEST_KEY);
+    writeFileSync(cert, TEST_CERT);
     const ruffleFiles = { "ruffle.js": "ruffle loader", "core.js": "ruffle core", "core.wasm": "wasm bytes", "LICENSE": "license" };
     const pdfFiles = { "cmaps/existing": "new pdf", "standard_fonts/font": "font", "wasm/decoder": "wasm" };
     const bodies = { "/archive": tarGzip(pdfFiles), "/ruffle": tarGzip({ ...ruffleFiles, "ignored.txt": "ignored" }), "/a": Buffer.from("a"), "/b": Buffer.from("b"), "/c": Buffer.from("c"), "/d": Buffer.from("d"), "/f": Buffer.from("f") };
