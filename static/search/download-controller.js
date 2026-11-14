@@ -7,7 +7,8 @@
     /** @typedef {{users: number, controller: AbortController, promise: Promise<DownloadCheckResult>, expires: number}} DownloadCheckEntry */
     // The pending entry is initialized with null before its promise is attached;
     // it is published to subscribers only after assignment in the same turn.
-    /** @typedef {{users: number, controller: AbortController, promise: Promise<boolean> | null}} PendingDownloadEntry */
+    /** @typedef {"started" | "failed" | "uncertain" | "cancelled"} DownloadResult */
+    /** @typedef {{users: number, controller: AbortController, promise: Promise<DownloadResult> | null, handoff: boolean}} PendingDownloadEntry */
     /** @typedef {{link: string, entry: DownloadCheckEntry, resolve: (value: DownloadCheckResult) => void}} DownloadQueueItem */
     /** @typedef {{button?: HTMLElement, quiet?: boolean, skipCheck?: boolean, batch?: {cancelled?: boolean, abortController?: AbortController}}} DownloadOptions */
     /** @param {Parameters<DownloadControllerApi["createDownloadController"]>[0]} options
@@ -16,6 +17,7 @@
       buildCheckUrl,
       buildDownloadUrl,
       triggerDownload,
+      onUncertain = () => {},
       showToast,
       isSpeculativeAllowed = () => true,
       isBatchActive = () => false,
@@ -33,8 +35,9 @@
 
       /** @template T
        * @param {{users: number, promise: Promise<T> | null}} entry
-       * @param {AbortSignal | null | undefined} signal @param {() => void} abandon @returns {Promise<T | false>} */
-      function subscribe(entry, signal, abandon) {
+       * @param {AbortSignal | null | undefined} signal @param {() => void} abandon
+       * @param {() => boolean} [canCancel] @returns {Promise<T | false>} */
+      function subscribe(entry, signal, abandon, canCancel = () => true) {
         entry.users++;
         return new Promise(resolve => {
           let settled = false;
@@ -47,6 +50,7 @@
             resolve(value);
           };
           const abort = () => {
+            if (!canCancel()) return;
             finish(false);
             if (!entry.users) abandon();
           };
@@ -149,14 +153,48 @@
         return launch;
       }
 
+      /** @param {string} filename @param {string} link @param {() => boolean} cancelled @param {() => void} onHandoff
+       * @returns {Promise<DownloadResult>} */
+      function scheduleDetailedLaunch(filename, link, cancelled, onHandoff) {
+        const launch = downloadLaunchTail.then(async () => {
+          if (cancelled()) return /** @type {const} */ ("cancelled");
+          const delay = Math.max(0, 300 - (Date.now() - lastDownloadLaunch));
+          if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+          if (cancelled()) return /** @type {const} */ ("cancelled");
+          const url = buildDownloadUrl(filename, link);
+          if (cancelled()) return /** @type {const} */ ("cancelled");
+          onHandoff();
+          // An exception may occur after the browser has received the handoff.
+          lastDownloadLaunch = Date.now();
+          try { triggerDownload(url); } catch (_) {
+            try { onUncertain(filename, link); } catch (_) { /* best effort */ }
+            return /** @type {const} */ ("uncertain");
+          }
+          return /** @type {const} */ ("started");
+        });
+        downloadLaunchTail = launch.then(() => {}, () => {});
+        return launch;
+      }
+
       /** @param {string} filename @param {string} link @param {DownloadOptions} [options] */
       function downloadFile(filename, link, options = {}) {
-        if (options.batch && options.batch.cancelled) return Promise.resolve(false);
+        return downloadFileDetailed(filename, link, options).then(result => result === "started");
+      }
+
+      /** @param {string} filename @param {string} link @param {DownloadOptions} [options] @returns {Promise<DownloadResult>} */
+      function downloadFileDetailed(filename, link, options = {}) {
+        if (options.batch && options.batch.cancelled) return Promise.resolve("cancelled");
         const signal = options.batch?.abortController?.signal;
+        if (signal?.aborted) return Promise.resolve("cancelled");
         /** @param {PendingDownloadEntry} entry */
         const join = entry => subscribe(entry, signal, () => {
           if (pendingDownloads.get(link) === entry) pendingDownloads.delete(link);
           entry.controller.abort();
+        }, () => !entry.handoff).then(result => {
+          if (result === "uncertain" && !options.quiet) {
+            try { showToast("下载状态不确定，请检查浏览器下载列表后再重试", 3500); } catch (_) { /* best effort */ }
+          }
+          return result === false ? /** @type {const} */ ("cancelled") : result;
         });
         if (pendingDownloads.has(link)) return join(/** @type {PendingDownloadEntry} */ (pendingDownloads.get(link)));
         const button = options.button;
@@ -164,28 +202,28 @@
         if (button) { button.textContent = "准备中…"; button.setAttribute("aria-busy", "true"); }
         if (!options.quiet) showToast("正在准备下载…");
         /** @type {PendingDownloadEntry} */
-        const entry = { users: 0, controller: new AbortController(), promise: null };
+        const entry = { users: 0, controller: new AbortController(), promise: null, handoff: false };
         const cancelled = () => entry.controller.signal.aborted;
         entry.promise = Promise.resolve().then(async () => {
           try {
-            if (cancelled()) return false;
+            if (cancelled()) return "cancelled";
             const checked = options.skipCheck
               ? true
               : await checkDownload(link, false, entry.controller.signal);
-            if (cancelled()) return false;
+            if (cancelled()) return "cancelled";
             if (checked !== true) {
               if (!options.quiet) showToast(checked || "下载检查失败，请重试", 3500);
-              return false;
+              return "failed";
             }
-            const started = await scheduleDownloadLaunch(filename, link, cancelled);
-            if (started && !options.quiet) {
+            const result = await scheduleDetailedLaunch(filename, link, cancelled, () => { entry.handoff = true; });
+            if (result === "started" && !options.quiet) {
               // Feedback must not undo a browser handoff that already succeeded.
               try { showToast("已发起下载，请在浏览器下载列表查看"); } catch (_) { /* best effort */ }
             }
-            return started;
+            return result;
           } catch (_) {
             if (!options.quiet) showToast("下载失败，请稍后重试", 3500);
-            return false;
+            return "failed";
           } finally {
             if (pendingDownloads.get(link) === entry) pendingDownloads.delete(link);
             if (button && button.textContent === "准备中…") {
@@ -207,6 +245,7 @@
         pumpDownloadChecks,
         scheduleDownloadLaunch,
         downloadFile,
+        downloadFileDetailed,
         get activeDownloadChecks() { return activeDownloadChecks; },
       };
     }

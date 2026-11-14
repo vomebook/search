@@ -820,10 +820,20 @@ function triggerDownload(url) {
 }
 
 let downloadBatch = null;
+/** @type {{filename: string, link: string}[]} */
+const uncertainDownloads = [];
 const downloadController = VoiceOfMLDownloadController.createDownloadController({
   buildCheckUrl: link => API_BASE + "/api/download/check?link=" + encodeURIComponent(link || ""),
   buildDownloadUrl,
   triggerDownload: url => triggerDownload(url),
+  onUncertain(filename, link) {
+    if (!uncertainDownloads.some(item => item.link === link)) uncertainDownloads.push({filename, link});
+    if (downloadBatch) {
+      const index = downloadBatch.failed.findIndex(item => item.link === link);
+      if (index !== -1) downloadBatch.blockedFailures.push(...downloadBatch.failed.splice(index, 1));
+      renderDownloadBatch();
+    }
+  },
   showToast,
   isSpeculativeAllowed: () => !document.hidden && navigator.onLine,
   isBatchActive: () => !!(downloadBatch && !downloadBatch.done),
@@ -838,6 +848,7 @@ const {
   pumpDownloadChecks,
   scheduleDownloadLaunch,
   downloadFile,
+  downloadFileDetailed,
 } = downloadController;
 Object.defineProperty(globalThis, "activeDownloadChecks", {
   configurable: true,
@@ -852,8 +863,15 @@ function renderDownloadBatch() {
     panel = document.createElement("section");
     panel.id = "download-queue";
     panel.className = "download-queue";
+    panel.style.maxHeight = "calc(100vh - 32px)";
+    panel.style.overflowY = "auto";
     panel.setAttribute("aria-label", "批量下载");
     panel.innerHTML = '<span role="status" aria-live="polite"></span><button type="button" data-queue="cancel">取消待下载</button><button type="button" data-queue="retry">重试失败项</button><button type="button" data-queue="close">关闭</button>';
+    const status = /** @type {HTMLElement} */ (panel.querySelector('[role="status"]'));
+    status.style.maxHeight = "min(40vh, 240px)";
+    status.style.overflowY = "auto";
+    status.style.overflowWrap = "anywhere";
+    status.style.wordBreak = "break-word";
     panel.addEventListener("click", event => {
       const action = /** @type {HTMLElement} */ (event.target).dataset.queue;
       if (action === "cancel") {
@@ -861,12 +879,16 @@ function renderDownloadBatch() {
         downloadBatch.abortController?.abort();
         renderDownloadBatch();
       }
-      if (action === "retry" && downloadBatch.done) startDownloadBatch(downloadBatch.failed);
+      if (action === "retry" && downloadBatch.done) startDownloadBatch(downloadBatch.failed, true);
       if (action === "close" && downloadBatch.done) { panel.remove(); downloadBatch = null; }
     });
     document.body.appendChild(panel);
   }
-  panel.querySelector('[role="status"]').textContent = `${batch.cancelled ? "已取消待下载 · " : ""}已发起 ${batch.started}/${batch.items.length} · 失败 ${batch.failed.length}。请在浏览器下载列表查看文件进度。`;
+  const describe = item => `${JSON.stringify(item.filename)}（${JSON.stringify(item.link)}）`;
+  const uncertainFiles = batch.uncertain.map(describe).join("、");
+  const blockedFiles = batch.blockedFailures.map(describe).join("、");
+  const skippedFiles = batch.skippedUncertain.map(describe).join("、");
+  panel.querySelector('[role="status"]').textContent = `${batch.cancelled ? "已取消待下载 · " : ""}已发起 ${batch.started}/${batch.items.length} · 失败 ${batch.failed.length} · 本次失败但此前状态不确定（不自动重试） ${batch.blockedFailures.length}${blockedFiles ? `：${blockedFiles}` : ""} · 因状态不确定跳过重试 ${batch.skippedUncertain.length}${skippedFiles ? `：${skippedFiles}` : ""} · 状态不确定 ${batch.uncertain.length}${uncertainFiles ? `：${uncertainFiles}` : ""}。请在浏览器下载列表查看文件进度，不确定项请检查后再手动重试。`;
   /** @type {HTMLElement} */ (panel.querySelector('[data-queue="cancel"]')).hidden = batch.done || batch.cancelled;
   /** @type {HTMLElement} */ (panel.querySelector('[data-queue="retry"]')).hidden = !batch.done || !batch.failed.length;
   /** @type {HTMLElement} */ (panel.querySelector('[data-queue="close"]')).hidden = !batch.done;
@@ -883,12 +905,12 @@ function getSelectedFiles() {
   return files;
 }
 
-function startDownloadBatch(items) {
+function startDownloadBatch(items, retry = false) {
   if (downloadBatch && !downloadBatch.done) { showToast("已有批量任务，请先完成或取消"); return; }
   items = Array.from(new Map(items.filter(item => item.link).map(item => [item.link, item])).values());
   if (!items.length) { showToast("未选中任何文件"); return; }
   const batch = {
-    items, next: 0, started: 0, failed: [], cancelled: false, done: false,
+    items, next: 0, started: 0, failed: [], blockedFailures: [], skippedUncertain: [], uncertain: uncertainDownloads, retry, cancelled: false, done: false,
     abortController: new AbortController(),
   };
   downloadBatch = batch;
@@ -902,9 +924,18 @@ function startDownloadBatch(items) {
 async function runDownloadBatchWorker(batch) {
   while (!batch.cancelled && batch.next < batch.items.length) {
     const item = batch.items[batch.next++];
-    const started = await downloadFile(item.filename, item.link, { quiet: true, batch });
-    if (started) batch.started++;
-    else if (!batch.cancelled) batch.failed.push(item);
+    if (batch.retry && batch.uncertain.some(previous => previous.link === item.link)) {
+      batch.skippedUncertain.push(item);
+      renderDownloadBatch();
+      continue;
+    }
+    const result = await downloadFileDetailed(item.filename, item.link, { quiet: true, batch });
+    if (result === "started") batch.started++;
+    else if (result === "uncertain" && !batch.uncertain.some(previous => previous.link === item.link)) batch.uncertain.push(item);
+    else if (result === "failed") {
+      if (batch.uncertain.some(previous => previous.link === item.link)) batch.blockedFailures.push(item);
+      else batch.failed.push(item);
+    }
     renderDownloadBatch();
   }
 }

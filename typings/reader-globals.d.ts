@@ -292,6 +292,7 @@ interface DownloadControllerApi {
     buildCheckUrl(link: string): string;
     buildDownloadUrl(filename: string, link: string): string;
     triggerDownload(url: string): void;
+    onUncertain?(filename: string, link: string): void;
     showToast(message: unknown, duration?: number): void;
     isSpeculativeAllowed?(): boolean;
     isBatchActive?(): boolean;
@@ -305,6 +306,7 @@ interface DownloadControllerApi {
     pumpDownloadChecks(): void;
     scheduleDownloadLaunch(filename: string, link: string, cancelled: () => boolean): Promise<boolean>;
     downloadFile(filename: string, link: string, options?: {button?: HTMLElement; quiet?: boolean; skipCheck?: boolean; batch?: {cancelled?: boolean; abortController?: AbortController}}): Promise<boolean>;
+    downloadFileDetailed(filename: string, link: string, options?: {button?: HTMLElement; quiet?: boolean; skipCheck?: boolean; batch?: {cancelled?: boolean; abortController?: AbortController}}): Promise<"started" | "failed" | "uncertain" | "cancelled">;
     readonly activeDownloadChecks: number;
   };
 }

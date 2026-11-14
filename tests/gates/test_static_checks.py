@@ -290,7 +290,7 @@ class StaticGateTests(unittest.TestCase):
 
     def test_download_controller_coverage_gate_fails_closed(self):
         paths = ["static/search/download-controller.js", "scripts/search/check_download_controller_coverage.mjs",
-                 "scripts/check_tap_contracts.mjs", "tests/search/download/test_download_controller_contract.js"]
+                 "scripts/check_tap_contracts.mjs", "tests/search/download/test_download_controller_contract.js", "static/app.js"]
         for relative in paths:
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -299,9 +299,43 @@ class StaticGateTests(unittest.TestCase):
         self.assert_check(self.run_check(*check), True, "download-controller.js")
         contract = self.root / paths[3]
         original = contract.read_text()
-        names = re.findall(r'^test\("([^"\n]+)"', original, re.M)
-        self.assertEqual(len(names), 16)
+        all_names = re.findall(r'^test\("([^"\n]+)"', original, re.M)
+        names = [
+            "shared checks preserve independent cancellation, cached success and expiration",
+            "two active checks bound the queue and abandoned work never starts",
+            "occupied queue starts the next live check only after a slot is released",
+            "check failures report legacy messages and permit a retry",
+            "truthy rejection messages retain their original non-string values",
+            "mutated native lookups retain their existing unchecked failure behavior",
+            "generic signal option is ignored but batch abort owns cancellation",
+            "a stalled response body times out, releases its slot and retries without caching failure",
+            "an abandoned active check cannot evict a successful retry when its body resolves late",
+            "successful check cache retains at most 64 entries in insertion order",
+            "shared downloads retain other owners and restore button feedback",
+            "download failures restore controls and emit the appropriate feedback",
+            "a throwing success toast does not turn a shared launched download into failure",
+            "a throwing triggerDownload still reports failure",
+            "a failed browser handoff does not strand later queued downloads",
+            "handoffs are paced and a cancelled queued handoff never launches",
+            "detailed results distinguish pre-handoff failure, uncertain handoff and cancellation",
+            "detailed shared callers cancel independently and handoff attempts remain paced",
+            "batch retries only definite failures and reports uncertainty",
+            "abort during browser handoff cannot erase the shared uncertain result",
+            "uncertain feedback belongs to each live non-quiet shared subscriber",
+            "single uncertain handoff is retained and a later batch failure is visible but not retried",
+            "retry workers recheck uncertainty when consuming queued items, unlike explicit batches",
+            "legacy launch scheduler preserves pacing, cancellation and recovery after throws",
+        ]
+        gate_source = (self.root / paths[1]).read_text()
+        required_block = gate_source.split("const required = [", 1)[1].split("].map(name", 1)[0]
+        gate_names = re.findall(r'^  "([^"\n]+)"[,]?$', required_block, re.M)
+        self.assertEqual(len(names), 24)
+        self.assertEqual(len(all_names), 24)
+        self.assertEqual(len(gate_names), 24)
+        self.assertEqual(len(set(all_names)), len(all_names))
         self.assertEqual(len(set(names)), len(names))
+        self.assertEqual(set(gate_names), set(names))
+        self.assertEqual(set(all_names), set(names))
         for name in names:
             anchor = 'test("' + name + '"'
             self.assertEqual(original.count(anchor), 1)
@@ -322,7 +356,7 @@ class StaticGateTests(unittest.TestCase):
         source = gate.read_text()
         anchor = "const minimum = [100, 88.89, 100];"
         self.assertEqual(source.count(anchor), 1)
-        gate.write_text(source.replace(anchor, "const minimum = [100, 89, 100];"))
+        gate.write_text(source.replace(anchor, "const minimum = [100, 100, 100];"))
         self.assert_check(self.run_check(*check), False, "above each minimum")
 
     def test_download_controller_declaration_matches_exact_runtime(self):
