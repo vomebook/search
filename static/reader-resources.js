@@ -19,14 +19,14 @@
       sha256: "43710009ea26bfbcb615524946e46e3aaf8ad927514f5e465e8ff6d18044ffe9"
     },
     marked: {
-      url: "https://cdn.jsdelivr.net/npm/marked@18.1.2/lib/marked.umd.js",
+      url: "https://cdn.jsdelivr.net/npm/marked@18.2.0/lib/marked.umd.js",
       file: "marked.min.js",
-      sha256: "9eb730d2362ae1a8c6201698f17009e16671be6946d3d06503ddc0575283db7c"
+      sha256: "392f4df89533b50f1dadff3f6dc0952350bd39c9f17def50a0374ef47d6147ef"
     },
     purify: {
-      url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js",
+      url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.18/dist/purify.min.js",
       file: "purify.min.js",
-      sha256: "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31"
+      sha256: "8053ee2a6a09f9d50f7fcd6fb7f07072f52c7f3fa9aa12147cab4feaf65ee970"
     },
     ruffle: {
       url: "https://unpkg.com/@ruffle-rs/ruffle@0.7.1/ruffle.js",
@@ -44,6 +44,20 @@
       vendor.file.slice(dot);
     Object.freeze(vendor);
   }
+  // Keep the upstream filenames together: Ruffle's webpack loader resolves its
+  // core chunks and WASM relative to ruffle.js, not relative to the page.
+  const ruffleArchive = Object.freeze({
+    url: "https://registry.npmjs.org/@ruffle-rs/ruffle/-/ruffle-0.7.1.tgz",
+    sha256: "dc9e7407549a91accc41a14932b0b9d9a9d51a3742ce6f020888c8a76682b157",
+    directory: "vendor/ruffle/release-dc9e7407549a",
+    files: Object.freeze([
+      "ruffle.js", "core.ruffle.16d61072ac7fdc4d5013.js",
+      "core.ruffle.994eeef0a471a88cd0e3.js", "172de42e6619eac8f371.wasm",
+      "878d548199cddef07035.wasm", "LICENSE_APACHE", "LICENSE_MIT"
+    ])
+  });
+  /** @param {string} base */
+  const ruffleAssets = (base) => ruffleArchive.files.slice(0, 5).map(file => base + ruffleArchive.directory + "/" + file);
   const pdfArchive = Object.freeze({
     url: "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.5.438.tgz",
     sha256: "7461aefcd27c4ef0dd76f9ca5760f09466eb6b3f934432670c12132e7b3d6faa"
@@ -262,6 +276,8 @@
     foliateArchive,
     foliateFiles,
     pdfArchive,
+    ruffleArchive,
+    ruffleAssets,
     readerFiles,
     readerComponentFiles,
     vendorUrl,

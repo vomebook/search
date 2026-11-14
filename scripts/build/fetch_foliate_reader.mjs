@@ -3,8 +3,13 @@ import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { get } from "node:https";
+import { Agent, get } from "node:https";
 import { gunzipSync } from "node:zlib";
+
+// proxyEnv is supported by Node 22.21+, 24.5+, and later major versions.
+const [major, minor] = process.versions.node.split(".").map(Number);
+if (major < 22 || (major === 22 && minor < 21) || major === 23 || (major === 24 && minor < 5))
+  throw new Error("Node.js 22.21+, 24.5+, or later is required for proxy support");
 
 const resources = createRequire(import.meta.url)(join(process.cwd(), "static/reader-resources.js"));
 const output = resolve(process.argv[2] || "static/foliate-reader");
@@ -14,24 +19,33 @@ if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(enc
   throw new Error("Foliate local adaptation patch is not valid base64");
 const localPatch = Buffer.from(encodedPatch, "base64").toString("utf8");
 
+// The proxy-aware agent honors HTTP(S)_PROXY and NO_PROXY, including on redirects.
+const agent = new Agent({ proxyEnv: process.env });
+
 function download(url, redirects = 0) {
   return new Promise((resolvePromise, reject) => {
-    const request = get(url, (response) => {
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location && redirects < 5) {
-        response.resume();
-        return download(new URL(response.headers.location, url), redirects + 1).then(resolvePromise, reject);
-      }
-      if (response.statusCode !== 200) {
-        response.resume();
-        return reject(new Error(`${url}: HTTP ${response.statusCode}`));
-      }
-      const chunks = [];
-      response.on("data", chunk => chunks.push(chunk));
-      response.on("end", () => resolvePromise(Buffer.concat(chunks)));
-      response.on("error", reject);
-    });
-    request.setTimeout(180000, () => request.destroy(new Error(`${url}: request timed out`)));
-    request.on("error", reject);
+    // Never propagate transport errors or URLs: either can contain proxy credentials.
+    const fail = () => reject(new Error("Foliate archive download failed"));
+    try {
+      const request = get(url, { agent }, (response) => {
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location && redirects < 5) {
+          response.resume();
+          try { return download(new URL(response.headers.location, url), redirects + 1).then(resolvePromise, reject); }
+          catch { return fail(); }
+        }
+        if (response.statusCode !== 200) {
+          response.resume();
+          return reject(new Error(`Foliate archive download: HTTP ${response.statusCode}`));
+        }
+        const chunks = [];
+        response.on("data", chunk => chunks.push(chunk));
+        response.on("end", () => resolvePromise(Buffer.concat(chunks)));
+        response.on("error", fail);
+        response.on("aborted", fail);
+      });
+      request.setTimeout(180000, () => request.destroy());
+      request.on("error", fail);
+    } catch { fail(); }
   });
 }
 
