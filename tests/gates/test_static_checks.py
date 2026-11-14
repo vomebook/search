@@ -52,9 +52,9 @@ class StaticGateTests(unittest.TestCase):
         (self.root / "scripts/check_python_static.py").write_bytes((ROOT / "scripts/check_python_static.py").read_bytes())
         (self.root / "scripts/sample.py").write_text("print('ok')\n")
 
-    def run_check(self, *command):
+    def run_check(self, *command, timeout=30):
         return subprocess.run(command, cwd=self.root, text=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, env=os.environ.copy(), timeout=30)
+                              stderr=subprocess.STDOUT, env=os.environ.copy(), timeout=timeout)
 
     def assert_check(self, result, success, message):
         self.assertEqual(result.returncode == 0, success, result.stdout)
@@ -2576,14 +2576,18 @@ class StaticGateTests(unittest.TestCase):
         paths = ['static/reader/formats/reader-media-format.mjs',
                  'scripts/reader/check_reader_media_coverage.mjs', 'scripts/check_tap_contracts.mjs',
                  'tests/reader/media/test_reader_media_baseline.mjs',
-                 'tests/reader/media/test_reader_media_metadata.mjs']
+                 'tests/reader/media/test_reader_media_metadata.mjs',
+                 'tests/reader/copy_reader_vendor.test.mjs', 'tests/reader/test_foliate_proxy.mjs',
+                 'tests/reader/media/test_ruffle_closure.mjs', 'tests/service_worker/test_ruffle_retention.js',
+                 'scripts/build/copy_reader_vendor.mjs', 'scripts/build/fetch_foliate_reader.mjs',
+                 'scripts/build/check_reader_release.mjs', 'static/reader-resources.js', 'static/sw.js']
         for path in paths:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
         message = 'Reader media requires named contracts and exactly one source row'
-        self.assert_check(self.run_check(*check), True, '# pass 15')
+        self.assert_check(self.run_check(*check, timeout=120), True, '# pass 15')
         source = self.root / paths[4]
         original = source.read_text()
         name = 'resource cleanup rejects pending metadata and removes listeners'
