@@ -34,7 +34,15 @@ const required = [
   "a throwing success toast does not turn a shared launched download into failure",
   "a throwing triggerDownload still reports failure",
   "a failed browser handoff does not strand later queued downloads",
-  "handoffs are paced and a cancelled queued handoff never launches"
+  "handoffs are paced and a cancelled queued handoff never launches",
+  "detailed results distinguish pre-handoff failure, uncertain handoff and cancellation",
+  "detailed shared callers cancel independently and handoff attempts remain paced",
+  "batch retries only definite failures and reports uncertainty",
+  "abort during browser handoff cannot erase the shared uncertain result",
+  "uncertain feedback belongs to each live non-quiet shared subscriber",
+  "single uncertain handoff is retained and a later batch failure is visible but not retried",
+  "retry workers recheck uncertainty when consuming queued items, unlike explicit batches",
+  "legacy launch scheduler preserves pacing, cancellation and recovery after throws"
 ].map(name => ({name}));
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
     !hasPassingTapContracts(text, required)) {

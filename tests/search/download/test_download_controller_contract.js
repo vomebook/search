@@ -310,7 +310,7 @@ test("a throwing triggerDownload still reports failure", async () => {
     triggerDownload() { throw new Error("handoff failed"); },
   });
   assert.equal(await c.downloadFile("book.txt", "book", {skipCheck: true}), false);
-  assert.deepEqual(toasts.map(args => args[0]), ["正在准备下载…", "下载失败，请稍后重试"]);
+  assert.deepEqual(toasts.map(args => args[0]), ["正在准备下载…", "下载状态不确定，请检查浏览器下载列表后再重试"]);
   assert.equal(c.pendingDownloads.size, 0);
 });
 
@@ -339,4 +339,240 @@ test("handoffs are paced and a cancelled queued handoff never launches", async (
   assert.deepEqual(launches, ["one.txt|one"]);
   assert.equal(c.pendingDownloads.size, 0);
   assert.equal(timers.size, 0);
+});
+
+
+test("detailed results distinguish pre-handoff failure, uncertain handoff and cancellation", async () => {
+  const badUrl = fixture({buildDownloadUrl() { throw new Error("bad url"); }});
+  assert.equal(await badUrl.controller.downloadFileDetailed("x", "x", {quiet: true, skipCheck: true}), "failed");
+  const handoff = fixture({triggerDownload() { throw new Error("possibly launched"); }});
+  assert.equal(await handoff.controller.downloadFileDetailed("x", "x", {quiet: true, skipCheck: true}), "uncertain");
+  const owner = new AbortController();
+  owner.abort();
+  assert.equal(await handoff.controller.downloadFileDetailed("x", "x", {batch: {abortController: owner}, quiet: true}), "cancelled");
+});
+
+test("detailed shared callers cancel independently and handoff attempts remain paced", async () => {
+  let attempts = 0;
+  const f = fixture({triggerDownload() { if (++attempts === 1) throw new Error("unknown"); }});
+  const owner = new AbortController();
+  const cancelled = f.controller.downloadFileDetailed("x", "x", {batch: {abortController: owner}, quiet: true});
+  const shared = f.controller.downloadFileDetailed("x", "x", {quiet: true});
+  await flush();
+  owner.abort();
+  assert.equal(await cancelled, "cancelled");
+  f.requests[0].resolve(response({ok: true}));
+  assert.equal(await shared, "uncertain");
+  const next = f.controller.downloadFileDetailed("y", "y", {quiet: true, skipCheck: true});
+  await flush();
+  f.advance(300);
+  f.fireDelay(300);
+  assert.equal(await next, "started");
+});
+
+
+test("batch retries only definite failures and reports uncertainty", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "../../../static/app.js"), "utf8");
+  const start = source.indexOf("function renderDownloadBatch() {");
+  const end = source.indexOf("function setupDownloadIntentWarming() {", start);
+  assert.ok(start >= 0 && end > start);
+  const outcomes = {a: "started", b: "failed", c: "uncertain", d: "cancelled"};
+  const status = {style: {}}, buttons = {cancel: {}, retry: {}, close: {}};
+  let click, panelCreated = false;
+  const panel = {
+    style: {}, remove() { panelCreated = false; },
+    setAttribute() {}, addEventListener(_name, fn) { click = fn; },
+    querySelector(selector) {
+      if (selector === '[role="status"]') return status;
+      return buttons[selector.match(/data-queue="(.*?)"/)[1]];
+    },
+  };
+  const sandbox = {
+    AbortController, document: {getElementById: () => panelCreated ? panel : null, createElement: () => panel, body: {appendChild() { panelCreated = true; }} },
+    downloadFileDetailed: async (_name, link) => outcomes[link], showToast() {},
+  };
+  vm.runInNewContext("let downloadBatch = null; const uncertainDownloads = [];\n" + source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch;", sandbox);
+  sandbox.start(Object.keys(outcomes).map(link => ({filename: link, link})));
+  await flush();
+  const batch = sandbox.current();
+  assert.equal(batch.done, true);
+  assert.equal(batch.started, 1);
+  assert.deepEqual(Array.from(batch.uncertain, item => item.link), ["c"]);
+  assert.deepEqual(Array.from(batch.failed, item => item.link), ["b"]);
+  assert.match(status.textContent, /状态不确定 1/);
+  assert.match(status.textContent, /检查后再手动重试/);
+  assert.equal(buttons.retry.hidden, false);
+  assert.match(status.textContent, /"c"（"c"）/);
+  outcomes.b = "uncertain";
+  click({target: {dataset: {queue: "retry"}}});
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().items, item => item.link), ["b"]);
+  assert.deepEqual(Array.from(sandbox.current().uncertain, item => item.link), ["c", "b"]);
+  assert.match(status.textContent, /状态不确定 2/);
+  assert.match(status.textContent, /"c"（"c"）/);
+  assert.match(status.textContent, /"b"（"b"）/);
+  assert.equal(buttons.retry.hidden, true);
+  assert.equal(status.style.maxHeight, "min(40vh, 240px)");
+  assert.equal(status.style.overflowY, "auto");
+  assert.equal(status.style.overflowWrap, "anywhere");
+  assert.equal(panel.style.overflowY, "auto");
+  assert.equal(panel.style.maxHeight, "calc(100vh - 32px)");
+  click({target: {dataset: {queue: "close"}}});
+  const longLink = "z".repeat(4000);
+  outcomes[longLink] = "uncertain";
+  sandbox.start([{filename: "old", link: "c"}, {filename: "long", link: longLink}]);
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().uncertain, item => item.link), ["c", "b", longLink]);
+  assert.match(status.textContent, /状态不确定 3/);
+  assert.ok(status.textContent.includes(longLink));
+  // A deliberate new selection can try c, but a later failed check must not
+  // put its still-uncertain identity in the automatic retry list.
+  outcomes.c = "failed";
+  outcomes.a = "failed";
+  sandbox.start([{filename: "c", link: "c"}, {filename: "a", link: "a"}]);
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().items, item => item.link), ["c", "a"]);
+  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["a"]);
+  assert.deepEqual(Array.from(sandbox.current().uncertain, item => item.link), ["c", "b", longLink]);
+  outcomes.a = "started";
+  click({target: {dataset: {queue: "retry"}}});
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().items, item => item.link), ["a"]);
+  assert.deepEqual(Array.from(sandbox.current().uncertain, item => item.link), ["c", "b", longLink]);
+});
+
+test("abort during browser handoff cannot erase the shared uncertain result", async () => {
+  const owner = new AbortController();
+  const f = fixture({triggerDownload() { owner.abort(); throw new Error("after handoff"); }});
+  assert.equal(await f.controller.downloadFileDetailed("x", "x", {batch: {abortController: owner}, quiet: true, skipCheck: true}), "uncertain");
+});
+
+
+test("uncertain feedback belongs to each live non-quiet shared subscriber", async () => {
+  const f = fixture({triggerDownload() { throw new Error("handoff"); }});
+  const owner = new AbortController();
+  const batch = f.controller.downloadFileDetailed("x", "x", {quiet: true});
+  const cancelled = f.controller.downloadFileDetailed("x", "x", {batch: {abortController: owner}});
+  const first = f.controller.downloadFile("x", "x");
+  const second = f.controller.downloadFileDetailed("x", "x");
+  await flush();
+  owner.abort();
+  assert.equal(await cancelled, "cancelled");
+  f.requests[0].resolve(response({ok: true}));
+  assert.equal(await batch, "uncertain");
+  assert.equal(await first, false);
+  assert.equal(await second, "uncertain");
+  assert.deepEqual(f.toasts.map(args => args[0]), [
+    "下载状态不确定，请检查浏览器下载列表后再重试",
+    "下载状态不确定，请检查浏览器下载列表后再重试",
+  ]);
+});
+
+
+test("single uncertain handoff is retained and a later batch failure is visible but not retried", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "../../../static/app.js"), "utf8");
+  const start = source.indexOf("let downloadBatch = null;");
+  const end = source.indexOf("function setupDownloadIntentWarming() {", start);
+  assert.ok(start >= 0 && end > start);
+  let f, click, exists = false;
+  const status = {style: {}}, buttons = {cancel: {}, retry: {}, close: {}};
+  const panel = {style: {}, setAttribute() {}, addEventListener(_event, fn) { click = fn; },
+    querySelector(selector) { return selector === '[role="status"]' ? status : buttons[selector.match(/data-queue="(.*?)"/)[1]]; }};
+  const sandbox = {
+    AbortController, API_BASE: "", DOWNLOAD_CHECK_TIMEOUT: 8000, buildDownloadUrl() {}, triggerDownload() {}, showToast() {},
+    document: {getElementById: () => exists ? panel : null, createElement: () => panel, body: {appendChild() { exists = true; }}},
+    navigator: {onLine: true},
+    VoiceOfMLDownloadController: {createDownloadController(options) {
+      f = fixture({...options, triggerDownload() { throw new Error("possible handoff"); }});
+      return f.controller;
+    }},
+  };
+  vm.runInNewContext(source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch; globalThis.single = downloadFile;", sandbox);
+  assert.equal(await sandbox.single("single.txt", "x", {quiet: true, skipCheck: true}), false);
+  sandbox.start([{filename: "single.txt", link: "x"}, {filename: "other.txt", link: "y"}]);
+  await flush();
+  assert.equal(f.requests.length, 2);
+  f.requests[0].resolve(response({ok: false}, false, 404));
+  f.requests[1].resolve(response({ok: false}, false, 404));
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().blockedFailures, item => item.link), ["x"]);
+  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["y"]);
+  assert.match(status.textContent, /本次失败但此前状态不确定（不自动重试） 1："single.txt"（"x"）/);
+  click({target: {dataset: {queue: "retry"}}});
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().items, item => item.link), ["y"]);
+  assert.equal(f.requests.length, 3);
+  assert.equal(f.requests[2].url, "/api/download/check?link=y");
+  f.requests[2].resolve(response({ok: false}, false, 404));
+  await flush();
+});
+
+
+test("retry workers recheck uncertainty when consuming queued items, unlike explicit batches", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "../../../static/app.js"), "utf8");
+  const start = source.indexOf("let downloadBatch = null;");
+  const end = source.indexOf("function setupDownloadIntentWarming() {", start);
+  assert.ok(start >= 0 && end > start);
+  let f, click, exists = false;
+  const status = {style: {}}, buttons = {cancel: {}, retry: {}, close: {}};
+  const panel = {style: {}, setAttribute() {}, addEventListener(_event, fn) { click = fn; },
+    querySelector(selector) { return selector === '[role="status"]' ? status : buttons[selector.match(/data-queue="(.*?)"/)[1]]; }};
+  const sandbox = {
+    AbortController, API_BASE: "", DOWNLOAD_CHECK_TIMEOUT: 8000, buildDownloadUrl() {}, triggerDownload() {}, showToast() {},
+    document: {getElementById: () => exists ? panel : null, createElement: () => panel, body: {appendChild() { exists = true; }}},
+    navigator: {onLine: true},
+    VoiceOfMLDownloadController: {createDownloadController(options) {
+      f = fixture({...options, triggerDownload() { throw new Error("uncertain"); }});
+      return f.controller;
+    }},
+  };
+  vm.runInNewContext(source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch; globalThis.single = downloadFile;", sandbox);
+  sandbox.start(["a", "b", "x"].map(link => ({filename: link, link})));
+  await flush();
+  f.requests[0].resolve(response({ok: false}, false, 404));
+  f.requests[1].resolve(response({ok: false}, false, 404));
+  await flush();
+  f.requests[2].resolve(response({ok: false}, false, 404));
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["a", "b", "x"]);
+  click({target: {dataset: {queue: "retry"}}});
+  await flush();
+  assert.equal(f.requests.length, 5);
+  assert.equal(sandbox.current().next, 2);
+  assert.equal(await sandbox.single("x", "x", {quiet: true, skipCheck: true}), false);
+  f.requests[3].resolve(response({ok: false}, false, 404));
+  await flush();
+  assert.equal(f.requests.length, 5);
+  assert.deepEqual(Array.from(sandbox.current().skippedUncertain, item => item.link), ["x"]);
+  assert.match(status.textContent, /因状态不确定跳过重试 1："x"（"x"）/);
+  f.requests[4].resolve(response({ok: false}, false, 404));
+  await flush();
+  assert.equal(sandbox.current().done, true);
+  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["a", "b"]);
+  sandbox.start([{filename: "x", link: "x"}]);
+  await flush();
+  assert.equal(f.requests.length, 6);
+  assert.equal(f.requests[5].url, "/api/download/check?link=x");
+  f.requests[5].resolve(response({ok: false}, false, 404));
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().blockedFailures, item => item.link), ["x"]);
+});
+
+
+test("legacy launch scheduler preserves pacing, cancellation and recovery after throws", async () => {
+  let throwNext = false;
+  const f = fixture({triggerDownload(url) { if (throwNext) { throwNext = false; throw new Error("handoff"); } f.launches.push(url); }});
+  assert.equal(await f.controller.scheduleDownloadLaunch("cancelled", "a", () => true), false);
+  assert.equal(await f.controller.scheduleDownloadLaunch("first", "a", () => false), true);
+  let cancelled = false;
+  const delayed = f.controller.scheduleDownloadLaunch("cancelled", "b", () => cancelled);
+  await flush();
+  cancelled = true;
+  f.advance(300);
+  f.fireDelay(300);
+  assert.equal(await delayed, false);
+  throwNext = true;
+  await assert.rejects(f.controller.scheduleDownloadLaunch("throw", "c", () => false), /handoff/);
+  assert.equal(await f.controller.scheduleDownloadLaunch("after", "d", () => false), true);
+  assert.deepEqual(f.launches, ["first|a", "after|d"]);
 });
