@@ -90,14 +90,18 @@ export function createReaderPdfScheduler(readerContext) {
     return pixels;
   }
 
-  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [protectedShell] */
-  function trimPdfSurfaces(protectedShell) {
+  /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell | null} [protectedShell] @param {number} [incomingPixels] */
+  function trimPdfSurfaces(protectedShell, incomingPixels = 0) {
     readerContext.trimPdfManifestPrefetches();
     const shells = [.../** @type {NodeListOf<import('../../../typings/reader-pdf-scheduler-strict').PdfShell>} */ (readerContext.content.querySelectorAll('.reader-page[data-render-state="rendered"]'))];
     const canvasLimit = matchMedia("(max-width: 700px)").matches ? 7 : 11;
     let canvases = shells.filter(shell => shell.querySelector("canvas.ready")).length;
     let images = shells.filter(shell => shell.querySelector("img.ready")).length;
-    let pixels = readerContext.pdfRetainedPixels();
+    // The target canvas may already have a backing store that resizing replaces.
+    // Account for the larger of its current and incoming allocations, not both.
+    const currentCanvas = protectedShell?.querySelector("canvas");
+    const currentPixels = currentCanvas ? readerContext.pdfSurfacePixels(currentCanvas) : 0;
+    let pixels = readerContext.pdfRetainedPixels() + Math.max(0, incomingPixels - currentPixels);
     const retentionPage = Number(readerContext.pageAtMarker()?.dataset.page) || readerContext.documentState.page;
     /** @param {import('../../../typings/reader-pdf-scheduler-strict').PdfShell} shell */
     const distance = shell => {
@@ -109,7 +113,7 @@ export function createReaderPdfScheduler(readerContext) {
     for (const shell of shells) {
       const canvas = /** @type {HTMLCanvasElement | null} */ (shell.querySelector("canvas.ready")), image = /** @type {HTMLImageElement | null} */ (shell.querySelector("img.ready"));
       if (pixels <= readerContext.pdfPixelBudget() && !(canvas && canvases > canvasLimit) && !(image && images > 25)) continue;
-      if (readerContext.isPdfPageVisible(shell) || Number(shell.dataset.page) === retentionPage || readerContext.pdfSelectionIntersects(shell)) continue;
+      if (shell === protectedShell || readerContext.isPdfPageVisible(shell) || Number(shell.dataset.page) === retentionPage || readerContext.pdfSelectionIntersects(shell) || shell.querySelector('.full-search-highlight, .reader-text-hit-box')) continue;
       shell._textEpoch = (shell._textEpoch || 0) + 1;
       if (canvas) {
         pixels -= readerContext.pdfSurfacePixels(canvas);

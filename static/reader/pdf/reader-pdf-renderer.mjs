@@ -391,6 +391,16 @@ export function createReaderPdfRenderer(readerContext) {
             }
             throw new Error("DJVU_CANVAS_LIMIT_EXCEEDED");
           }
+          // Only foreground demand can evict completed neighbors before drawing.
+          // A speculative render can be cancelled; evicting first would make a
+          // previously available page needlessly slow when the user returns.
+          if (Math.max(Number(priority), readerContext.pdfPagePriority(shell)) >= 2)
+            readerContext.trimPdfSurfaces(shell, targetWidth * targetHeight);
+          // Avoid a transient targetWidth × oldHeight backing allocation.
+          if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+            canvas.width = 0;
+            canvas.height = 0;
+          }
           canvas.width = targetWidth;
           canvas.height = targetHeight;
           canvas.style.width = "100%";

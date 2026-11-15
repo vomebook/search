@@ -5,7 +5,9 @@ const CACHE_VERSION = "development"; // Replaced with a content digest by the st
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 /** @type {string[]} */
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
-let cachePruning = Promise.resolve();
+/** @type {Promise<void> | null} */
+let cachePruning = null;
+let cachePruningDirty = false;
 /** @typedef {{ sequence: number, cache: Cache, key: Request | string, copy: Response }} MutableWrite */
 /** @typedef {{ started: number, committed: number, pending: number, writes: Promise<void> | null, queued: MutableWrite | null }} MutableRequests */
 /** @type {Map<string, MutableRequests>} */
@@ -96,13 +98,26 @@ async function prunePreviousGeneration(name) {
 }
 /** @param {Cache} cache @returns {Promise<void>} */
 function pruneHashedAssets(cache) {
-  cachePruning = cachePruning.catch(() => {}).then(async () => {
-    for (const request of await cache.keys()) {
-      const url = new URL(request.url);
-      if (!isRetiredAsset(url.pathname)) continue;
-      await cache.delete(request);
-    }
-  });
+  // All callers use CACHE_NAME, even when caches.open returns different handles.
+  cachePruningDirty = true;
+  if (!cachePruning) {
+    cachePruning = Promise.resolve().then(async () => {
+      try {
+        while (cachePruningDirty) {
+          cachePruningDirty = false;
+          for (const request of await cache.keys()) {
+            const url = new URL(request.url);
+            if (!isRetiredAsset(url.pathname)) continue;
+            await cache.delete(request);
+          }
+        }
+      } finally {
+        // Release in this task: a later microtask must start a new scan, not
+        // join a finished one. Rejections also leave the next call free to retry.
+        cachePruning = null;
+      }
+    });
+  }
   return cachePruning;
 }
 

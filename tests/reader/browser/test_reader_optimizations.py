@@ -44,6 +44,7 @@ class ReaderOptimizationTests(unittest.TestCase):
               window.__headingTools = {set:setToc,sync:syncHeadingLocation,index:()=>navigationState.currentChapterIndex};
               window.__pdfTools = {trim: trimPdfSurfaces, pixels: pdfRetainedPixels, budget: pdfPixelBudget,
                 prefetch: pdfManifestPrefetches, setPage: page => updateDocumentState({page})};
+              window.__pdfRenderContext = readerContext;
               window.__startPdfProbe = () => {
                 pdfTextContentCache.clear(); pdfTextContentCacheBytes = 0;
                 pdfSearchTextCache.clear(); pdfSearchTextCacheBytes = 0;
@@ -87,6 +88,187 @@ class ReaderOptimizationTests(unittest.TestCase):
               };
             ''')
         self.page.route('**/static/reader.js*', instrument)
+
+    def expose_progress(self):
+        def instrument(route):
+            response = route.fetch()
+            route.fulfill(response=response, body=response.text() + '''
+              window.__progressContext = readerContext;
+              window.__progressCounts = {updates:0, percents:0};
+              const originalProgressUpdate = updateProgressTools, originalPercent = readerProgressPercent;
+              updateProgressTools = (...args) => { __progressCounts.updates++; return originalProgressUpdate(...args); };
+              readerProgressPercent = (...args) => { __progressCounts.percents++; return originalPercent(...args); };
+            ''')
+        self.page.route('**/static/reader.js*', instrument)
+
+    def test_progress_independent_updates_skip_unchanged_writes_and_accept_late_toc(self):
+        self.expose_progress()
+        self.serve('progress fixture\n' * 300)
+        self.open(self.reader_url('txt'))
+        result = self.page.evaluate('''() => {
+          const c=__progressContext, counts=__progressCounts;
+          c.updateProgressTools();
+          const observer=new MutationObserver(()=>{});
+          observer.observe(document.querySelector('#history-panel'),{subtree:true,attributes:true,childList:true,characterData:true});
+          let writes=0;
+          const descriptor=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+          Object.defineProperty(c.progressRange,'value',{configurable:true,
+            get(){return descriptor.get.call(this)},set(value){writes++;descriptor.set.call(this,value)}});
+          counts.updates=counts.percents=0;
+          c.updateProgressTools();
+          const unchanged={...counts,writes,mutations:observer.takeRecords().length};
+          observer.disconnect();delete c.progressRange.value;
+          c.viewport.scrollTop=200;c.updateReadingProgressSummary();
+          const summary=c.readingProgressSummary.querySelector('.reader-progress-summary-value').textContent,
+            expected=c.readerProgressPercent().toFixed(1)+'%';
+          c.updateProgressTools();
+          const shared=c.progressPercent.textContent===expected && c.progressRange.getAttribute('aria-valuetext')===expected;
+          c.setToc([{label:'Group',group:true},{label:'First',activate:()=>true},{label:'Last',activate:()=>true}]);
+          c.updateNavigationState({currentChapterIndex:1});c.updateProgressTools();
+          const late={parent:c.progressTools.parentElement.id,summaryHidden:c.readingProgressSummary.hidden,
+            prevDisabled:c.chapterPrev.disabled,nextDisabled:c.chapterNext.disabled,visible:!c.chapterNext.hidden};
+          c.previousProgressState={scrollTop:200};c.updateProgressTools();
+          const undoVisible=!c.progressUndo.hidden;
+          c.setToc([]);c.updateProgressTools();
+          return {unchanged,summary,expected,shared,late,undoVisible,
+            reset:c.progressTools.parentElement.id==='toc-panel' && !c.readingProgressSummary.hidden && c.chapterNext.hidden};
+        }''')
+        self.assertEqual(result['unchanged'], dict(updates=1, percents=1, writes=0, mutations=0))
+        self.assertEqual(result['summary'], result['expected'])
+        self.assertTrue(result['shared'] and result['undoVisible'] and result['reset'], result)
+        self.assertEqual(result['late'], dict(parent='history-panel', summaryHidden=True,
+                                             prevDisabled=True, nextDisabled=False, visible=True))
+
+    def test_marker_frame_publishes_once_and_standalone_sync_still_updates(self):
+        self.expose_progress()
+        self.serve('marker fixture')
+        self.open(self.reader_url('txt'))
+        result = self.page.evaluate('''() => {
+          const c=__progressContext, counts=__progressCounts, raf=window.requestAnimationFrame;
+          if(c.markerFrame) cancelAnimationFrame(c.markerFrame);c.markerFrame=0;
+          const original={pageAtMarker:c.pageAtMarker,refresh:c.refreshNearbyPdfPages,
+            heading:c.syncHeadingLocation,save:c.scheduleSave};
+          let next=2,callback,saves=0;
+          c.pageAtMarker=()=>({dataset:{page:String(next)}});
+          c.refreshNearbyPdfPages=()=>{};c.syncHeadingLocation=()=>{};c.scheduleSave=()=>{saves++};
+          window.requestAnimationFrame=fn=>{callback=fn;return 123};
+          function frame(){counts.updates=counts.percents=0;c.scheduleMarkerSync();c.scheduleMarkerSync();callback();
+            return {...counts,page:c.documentState.page};}
+          try {
+            c.pageNavigationLockUntil=0;
+            const changed=frame(),same=frame();
+            next=3;c.pageNavigationLockUntil=Infinity;const locked=frame();
+            c.pageNavigationLockUntil=0;counts.updates=counts.percents=0;c.syncCurrentPageFromMarker();
+            const standalone={...counts,page:c.documentState.page};
+            counts.updates=counts.percents=0;c.syncCurrentPageFromMarker();const standaloneSame={...counts};
+            next=0;const missing=frame();
+            next=4;c.refreshNearbyPdfPages=()=>{throw Error('fixture refresh failure')};
+            let failure;try{frame()}catch(error){failure=error.message}
+            const failed={...counts,page:c.documentState.page,failure};
+            c.refreshNearbyPdfPages=()=>{};c.progressSeeking=true;const seeking=frame();c.progressSeeking=false;
+            return {changed,same,locked,standalone,standaloneSame,missing,failed,seeking,saves};
+          } finally {
+            window.requestAnimationFrame=raf;c.pageAtMarker=original.pageAtMarker;
+            c.refreshNearbyPdfPages=original.refresh;c.syncHeadingLocation=original.heading;c.scheduleSave=original.save;
+            c.pageNavigationLockUntil=0;c.progressSeeking=false;
+          }
+        }''')
+        for name, page in [('changed', 2), ('same', 2), ('locked', 2), ('standalone', 3), ('missing', 3)]:
+            self.assertEqual(result[name], dict(updates=1, percents=1, page=page), name)
+        self.assertEqual(result['standaloneSame'], dict(updates=0, percents=0))
+        self.assertEqual(result['failed'], dict(updates=1, percents=1, page=4, failure='fixture refresh failure'))
+        self.assertEqual(result['seeking'], dict(updates=1, percents=0, page=4))
+        self.assertEqual(result['saves'], 5)
+
+    def test_marker_scroll_tracks_dynamic_pages_and_pdf_bottom(self):
+        self.expose_progress()
+        self.serve('scroll fixture')
+        self.open(self.reader_url('txt'))
+        self.page.evaluate('''() => {
+          const c=__progressContext;c.content.replaceChildren();c.capability={...c.capability,mode:'pdf'};
+          c.updateDocumentState({page:1,pageCount:3});c.pageNavigationLockUntil=0;
+          for(let page=1;page<=3;page++){
+            const shell=document.createElement('section');shell.className='reader-page';shell.dataset.page=page;
+            shell.dataset.renderState='rendered';shell.style.cssText='height:900px;min-height:0';c.content.append(shell);
+          }
+          c.setToc([{label:'First · 第 1 页',activate:()=>true},{label:'Third · 第 3 页',activate:()=>true}]);
+          const shell=c.content.children[1];c.viewport.scrollTop=c.readerPageScrollTop(shell)+100;
+          c.viewport.dispatchEvent(new Event('scroll'));
+        }''')
+        self.page.wait_for_function("()=>__progressContext.documentState.page===2")
+        self.page.evaluate('''() => {
+          const c=__progressContext,shell=document.createElement('section');shell.className='reader-page';shell.dataset.page=4;
+          shell.dataset.renderState='rendered';shell.style.cssText='height:100px;min-height:0';c.content.append(shell);
+          c.updateDocumentState({pageCount:4});c.viewport.scrollTop=c.viewport.scrollHeight;
+          c.viewport.dispatchEvent(new Event('scroll'));
+        }''')
+        self.page.wait_for_function("()=>__progressContext.documentState.page===4")
+        result=self.page.evaluate('''() => {
+          const c=__progressContext,entry=c.captureProgressEntry();
+          return {page:entry.page,count:entry.pageCount,chapter:c.navigationState.currentChapterIndex,
+            percent:c.progressPercent.textContent,input:c.pageInput.value,offset:entry.pageOffset};
+        }''')
+        self.assertEqual((result['page'],result['count'],result['chapter']), (4,4,1))
+        self.assertEqual((result['percent'],result['input']), ('100.0%','4'))
+        self.assertGreaterEqual(result['offset'],0)
+
+    def test_speculative_render_does_not_preemptively_evict_completed_neighbor(self):
+        self.expose()
+        self.serve('render priority fixture')
+        self.open(self.reader_url('txt'))
+        result=self.page.evaluate('''async()=>{
+          const c=__pdfRenderContext, root=c.content;root.replaceChildren();
+          const shell=document.createElement('section');shell.className='reader-page';
+          shell.dataset.page='50';shell.style.height='800px';root.append(shell);
+          const originals={pdf:c.pdfDocument,mode:c.capability,priority:c.pdfPagePriority,
+            trim:c.trimPdfSurfaces,text:c.renderPdfText,track:c.trackReaderResource,
+            can:c.trimPdfCanvases,acquire:c.acquirePdfRenderSlot,release:c.releasePdfRenderSlot};
+          let trims=0,done;
+          try {
+            c.capability={...c.capability,mode:'pdf'};c.pdfPagePriority=()=>1;
+            c.trimPdfSurfaces=()=>{trims++};c.renderPdfText=async()=>{};c.trackReaderResource=()=>()=>{};
+            c.trimPdfCanvases=()=>{};c.acquirePdfRenderSlot=async()=>{};c.releasePdfRenderSlot=()=>{};
+            c.pdfDocument={getPage:async()=>({getViewport:()=>({width:100,height:100}),
+              render:()=>({promise:new Promise(resolve=>done=resolve),cancel:()=>done()})})};
+            const task=c.renderPdfShell(shell,false,1);
+            await new Promise(resolve=>setTimeout(resolve,0));
+            const speculative=trims;shell._renderCancel();done();await task.catch(()=>{});
+            shell.dataset.renderState='idle';c.pdfPagePriority=()=>3;
+            const demand=c.renderPdfShell(shell,false,3);
+            await new Promise(resolve=>setTimeout(resolve,0));const foreground=trims;done();await demand;
+            return {speculative,foreground};
+          } finally {c.pdfDocument=originals.pdf;c.capability=originals.mode;c.pdfPagePriority=originals.priority;
+            c.trimPdfSurfaces=originals.trim;c.renderPdfText=originals.text;c.trackReaderResource=originals.track;
+            c.trimPdfCanvases=originals.can;c.acquirePdfRenderSlot=originals.acquire;c.releasePdfRenderSlot=originals.release;}
+        }''')
+        self.assertEqual(result,{'speculative':0,'foreground':1})
+
+    def test_pdf_preallocation_reclaims_offscreen_before_new_backing_store(self):
+        self.expose()
+        self.serve('preallocation fixture')
+        self.open(self.reader_url('txt'))
+        result=self.page.evaluate('''() => {
+          const root=document.querySelector('#content');root.replaceChildren();
+          __pdfTools.setPage(1);
+          const make=(page,pixels)=>{const shell=document.createElement('div');
+            shell.className='reader-page';shell.dataset.page=page;shell.dataset.renderState='rendered';
+            shell.style.height='1400px';const canvas=document.createElement('canvas');
+            canvas.className='ready';canvas.width=3000;canvas.height=pixels ? 2000 : 0;
+            canvas.getContext('2d').fillRect(0,0,pixels,1);shell.append(canvas);root.append(shell);return shell;};
+          const current=make(1,6000000),old=make(2,6000000),target=make(3,0);
+          target.dataset.renderState='rendering';
+          const incoming=__pdfTools.budget();
+          __pdfTools.trim(target,incoming);
+          const before={current:current.querySelector('canvas').width,old:old.querySelector('canvas').width,
+            resident:__pdfTools.pixels(),budget:__pdfTools.budget()};
+          target.querySelector('canvas').width=3000;target.querySelector('canvas').height=2000;
+          return {...before,after:__pdfTools.pixels(),oldState:old.dataset.renderState};
+        }''')
+        self.assertEqual(result['current'],3000,result)
+        self.assertEqual(result['old'],0,result)
+        self.assertEqual(result['resident'],6000000,result)
+        self.assertEqual(result['after'],12000000,result)
+        self.assertEqual(result['oldState'],'idle',result)
 
     def test_pdf_pixel_budget_releases_prefetch_and_protects_selection(self):
         self.expose()

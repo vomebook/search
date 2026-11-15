@@ -83,4 +83,5 @@ export interface PdfRendererContext {
   trackReaderResource(cleanup: () => void): () => unknown;
   renderPdfText(page: PdfPage, shell: PdfShell, signal: AbortSignal): Promise<unknown>;
   trimPdfCanvases(shell: PdfShell): void;
+  trimPdfSurfaces(shell: PdfShell, incomingPixels?: number): void;
 }
