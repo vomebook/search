@@ -1,6 +1,8 @@
 const readerWorkerScope = /** @type {ServiceWorkerGlobalScope} */ (/** @type {unknown} */ (self));
 importScripts("/search/static/reader-resources.js");
-const CACHE_NAME = "vomebook-search-v1.0.0";
+const CACHE_PREFIX = "vomebook-search-";
+const CACHE_VERSION = "development"; // Replaced with a content digest by the static build.
+const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 /** @type {string[]} */
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
 let cachePruning = Promise.resolve();
@@ -11,31 +13,53 @@ function isRetiredAsset(pathname) {
     (/\.[0-9a-f]{12}\.(js|mjs|css)$/.test(pathname) || /^\/search\/static\/(?:(?:reader|search)\/[^?]+|[^/]+)\.(js|mjs|css)$/.test(pathname)) &&
     !CURRENT_HASHED_ASSETS.includes(pathname);
 }
-// Activation keeps the previous generation's hashed files under a marker key for
-// one more release: an already-open old page may still lazy-load them after the
-// new worker claims it, and the server no longer has them. They are used only as
-// a fallback when the network cannot serve the retired URL, never repopulated,
-// and the generation before that is deleted.
-const RETAINED_MARKER = "sw-retained-generation";
-/** @param {string} url @returns {string} */
-function retainedKey(url) {
-  const key = new URL(url); key.search = "?" + RETAINED_MARKER; return key.href;
+// Keep the actual previous cache for one release, including immutable assets
+// written by its worker after takeover. Install never changes this pointer.
+const METADATA_CACHE = CACHE_PREFIX + "metadata";
+const ACTIVE_KEY = "/search/.sw-active-generation";
+/** @typedef {{ active: string, previous: string | null }} GenerationState */
+/** @param {unknown} name @returns {name is string} */
+function isGenerationName(name) {
+  return typeof name === "string" && name.startsWith(CACHE_PREFIX) && name !== METADATA_CACHE;
 }
-/** @param {Cache} cache @param {boolean} [resetShell] @param {boolean} [activation] @returns {Promise<void>} */
-function pruneHashedAssets(cache, resetShell = false, activation = false) {
+/** @returns {Promise<GenerationState | null>} */
+async function activeGeneration() {
+  const response = await (await caches.open(METADATA_CACHE)).match(ACTIVE_KEY);
+  if (!response) return null;
+  const state = await response.json();
+  return state && isGenerationName(state.active)
+    ? { active: state.active, previous: isGenerationName(state.previous) ? state.previous : null } : null;
+}
+/** @param {URL} url @returns {boolean} */
+function isImmutableURL(url) {
+  return url.origin === self.location.origin && !url.searchParams.has("sw-retained-generation") && url.pathname.startsWith("/search/static/") &&
+    (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href));
+}
+/** @param {URL} url @returns {Promise<Response | undefined>} */
+async function previousAsset(url) {
+  if (!isImmutableURL(url)) return undefined;
+  try {
+    const state = await activeGeneration();
+    if (!state || state.active !== CACHE_NAME || !state.previous || state.previous === CACHE_NAME ||
+        !(await caches.keys()).includes(state.previous)) return undefined;
+    return await (await caches.open(state.previous)).match(url.href, { ignoreVary: true });
+  } catch (_) { return undefined; }
+}
+/** @param {string} name @returns {Promise<void>} */
+async function prunePreviousGeneration(name) {
+  const cache = await caches.open(name);
+  for (const request of await cache.keys()) {
+    // Shells, data, aliases and the former snapshot-marker entries are never
+    // fallback candidates. Late mutable writes are harmless: reads check again.
+    if (!isImmutableURL(new URL(request.url))) await cache.delete(request);
+  }
+}
+/** @param {Cache} cache @returns {Promise<void>} */
+function pruneHashedAssets(cache) {
   cachePruning = cachePruning.catch(() => {}).then(async () => {
     for (const request of await cache.keys()) {
       const url = new URL(request.url);
-      if (url.search === "?" + RETAINED_MARKER) {
-        if (activation) await cache.delete(request);
-        continue;
-      }
-      if (resetShell && url.pathname === "/search/static/reader.html") { await cache.delete(request); continue; }
       if (!isRetiredAsset(url.pathname)) continue;
-      if (activation && (/\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href))) {
-        const response = await cache.match(request, { ignoreVary: true });
-        if (response) await cache.put(retainedKey(url.href), response);
-      }
       await cache.delete(request);
     }
   });
@@ -86,30 +110,52 @@ const PRECACHE_URLS = [
 const READER_RUNTIME_PATHS = new Set(VoiceOfMLReaderResources.runtimePaths("/search/static/"));
 
 readerWorkerScope.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_URLS.map(revalidatedRequest));
-    }).then(() => readerWorkerScope.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const existed = (await caches.keys()).includes(CACHE_NAME);
+    try {
+      const state = await activeGeneration();
+      // Reinstalling the serving generation must not replace its shell/data.
+      // Rollback to a retained cache still refreshes the complete core atomically.
+      if (!existed || !state || state.active !== CACHE_NAME) {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.addAll(PRECACHE_URLS.map(revalidatedRequest));
+      }
+    } catch (error) {
+      // A failed candidate must not leave a cache that looks like a release.
+      // Preserve an existing generation when reinstalling or rolling back.
+      if (!existed) await caches.delete(CACHE_NAME);
+      throw error;
+    }
+    await readerWorkerScope.skipWaiting();
+  })());
 });
 readerWorkerScope.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-      );
-    }).then(() => caches.open(CACHE_NAME).then(cache => pruneHashedAssets(cache, true, true)).catch(() => {})).then(() => readerWorkerScope.clients.claim())
-  );
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    const state = await activeGeneration();
+    const legacy = CACHE_PREFIX + "v1.0.0";
+    const previous = state ? (state.active === CACHE_NAME ? state.previous : state.active)
+      : names.includes(legacy) ? legacy : null;
+    const previousName = previous && previous !== CACHE_NAME && names.includes(previous) ? previous : null;
+    // A single metadata write replaces stale rollback state before any cleanup.
+    // Failed/unactivated candidates never become a previous generation.
+    await (await caches.open(METADATA_CACHE)).put(ACTIVE_KEY,
+      new Response(JSON.stringify({ active: CACHE_NAME, previous: previousName })));
+    if (previousName) await prunePreviousGeneration(previousName).catch(() => {});
+    const oldNames = names.filter(name => isGenerationName(name) && name !== CACHE_NAME && name !== previousName);
+    await Promise.all(oldNames.map(name => caches.delete(name).catch(() => false)));
+    await readerWorkerScope.clients.claim();
+  })());
 });
 readerWorkerScope.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (url.hostname !== self.location.hostname || (event.request.method || "GET") !== "GET") {
+  if (url.origin !== self.location.origin || (event.request.method || "GET") !== "GET") {
     return;
   }
   // Retired URLs always reach the server first and are never repopulated; only a
   // missing/failed response falls back to the one retained previous generation.
   if (isRetiredAsset(url.pathname)) {
-    const retained = () => caches.open(CACHE_NAME).then(cache => cache.match(retainedKey(url.href), { ignoreVary: true })).catch(() => undefined);
+    const retained = () => previousAsset(url);
     event.respondWith(fetch(event.request).then(response =>
       response.ok ? response : retained().then(cached => cached || response),
       error => retained().then(cached => { if (cached) return cached; throw error; })));
@@ -125,10 +171,20 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   const cacheKey = readerShell ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
   const immutable = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href);
   const cachePromise = caches.open(CACHE_NAME).catch(() => null);
-  // Pinned same-origin assets are identical across classic/module Origin headers.
-  const cachedPromise = cachePromise.then(cache => cache ? cache.match(cacheKey, { ignoreVary: immutable }) : undefined).catch(() => undefined);
   /** @type {Promise<void> | undefined} */
   let cacheWrite;
+  // Pinned same-origin assets are identical across classic/module Origin headers.
+  const cachedPromise = cachePromise.then(async cache => {
+    const cached = cache ? await cache.match(cacheKey, { ignoreVary: immutable }) : undefined;
+    if (cached || !immutable) return cached;
+    const previous = await previousAsset(url);
+    if (cache && previous && previous.ok && previous.status !== 206) {
+      // Promote only requested current assets so the next release can retain
+      // them. The event lifetime covers persistence without delaying delivery.
+      cacheWrite = cache.put(cacheKey, previous.clone()).then(() => pruneHashedAssets(cache)).catch(() => {});
+    }
+    return previous;
+  }).catch(() => undefined);
   const networkPromise = Promise.all([cachePromise, immutable ? cachedPromise : null]).then(([cache, cached]) => cached || fetch(revalidatedRequest(event.request)).then(response => {
     if (cache && response.ok && response.status !== 206) {
       cacheWrite = cache.put(cacheKey, response.clone()).then(() => immutable ? pruneHashedAssets(cache) : undefined).catch(() => {});

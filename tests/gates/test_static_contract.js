@@ -331,7 +331,7 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   for (const value of ["epubSearchIndex", "epubSearchIndexReady", "epubZipPath", "buildEpubSearchIndex", "activateIndexedEpubResult", "runIndexedEpubSearch"]) {
     assert.doesNotMatch(reader, new RegExp(value));
   }
-  assertCode(reader, 'foliate: [loadMediaDocument, renderFoliate]');
+  assertCode(reader, 'foliate: pair(loadMediaDocument, renderFoliate)');
   assert.match(reader, /async function renderFoliate/);
   assert.match(reader, /foliate-view/);
   assert.match(reader, /foliate-continuous/);
@@ -387,14 +387,14 @@ test("reader uses original files and lazy PDF canvas rendering", () => {
   assertCode(reader, 'return loadPdfTaskWithTimeout(pdfjs, options, target)');
   assert.match(reader, /function loadPdfWithTimeout/);
   assertCode(reader, 'trackReaderResource(destroy)');
-  assertCode(reader, 'task.destroy()?.catch?.(() => {})');
+  assertCode(reader, 'Promise.resolve(task.destroy()).catch(() => {})');
   assert.match(app, /function warmReaderIntent/);
   assert.match(reader, /validatePdfPageManifest/);
   assert.doesNotMatch(readerCss, /docx-body|reader-docx-wrapper/);
   assert.match(reader, /pageState\.hidden = true/);
   assert.match(reader, /reader-spreadsheet-sheet/);
   assert.match(readerCss, /spreadsheet-html-frame/);
-  assert.match(reader, /loadPdfOcrManifest\(\)\.then\(\(manifest\)/);
+  assert.match(reader, /loadPdfOcrManifest\(\)\.then\(\s*(?:\/\*\*[\s\S]*?\*\/\s*)?\(manifest\)/);
   assert.match(reader, /manifest\?\.pages\?\.\[page - 1\]/);
   assert.match(reader, /reader-page-state/);
    assert.match(reader, /chapterManifestObserver/);
@@ -548,8 +548,9 @@ test("mobile shell hides sidebars before application startup", () => {
   assert.match(css, /html\.mobile-boot \.left-sidebar/);
   assert.match(app, /document\.documentElement\.classList\.remove\("mobile-boot"\)/);
 });
-test("Service Worker cache name remains fixed", () => {
-  assert.match(sw, /vomebook-search-v1\.0\.0/);
+test("Service Worker cache name combines site namespace and build version", () => {
+  assertCode(sw, 'const CACHE_PREFIX = "vomebook-search-"');
+  assertCode(sw, 'const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION');
 });
 test("Service Worker precaches the search Worker", () => {
   assert.match(sw, /search\/static\/search\/index-worker\.js/);

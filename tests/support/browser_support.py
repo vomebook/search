@@ -17,12 +17,14 @@ class ServerState:
         self.requests = {}
         self.delays = {}
         self.failures = {}
+        self.worker_source = None
 
     def reset(self):
         with self.lock:
             self.requests.clear()
             self.delays.clear()
             self.failures.clear()
+            self.worker_source = None
 
     def count(self, path):
         with self.lock:
@@ -38,10 +40,20 @@ class SearchHandler(http.server.SimpleHTTPRequestHandler):
             self.state.requests[path] = self.state.requests.get(path, 0) + 1
             delay = self.state.delays.get(path, 0)
             failure = self.state.failures.get(path)
+            worker_source = self.state.worker_source if path == '/search/sw.js' else None
         if delay:
             time.sleep(delay)
         if failure:
             self.send_error(failure)
+            return
+        if worker_source is not None:
+            body = worker_source.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/javascript')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         super().do_GET()
 

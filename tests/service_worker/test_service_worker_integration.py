@@ -36,6 +36,18 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.server_state.reset()
         self.context = self.browser.new_context(service_workers="allow")
         self.page = self.context.new_page()
+        self.page.add_init_script("""window.findOwnedServiceWorkerCache = async () => {
+            const prefix = 'vomebook-search-', metadata = prefix + 'metadata';
+            if (!(await caches.has(metadata))) return null;
+            const response = await (await caches.open(metadata)).match('/search/.sw-active-generation');
+            if (!response) return null;
+            const state = await response.json();
+            const name = state && state.active;
+            if (typeof name !== 'string' || !name.startsWith(prefix) || name === metadata ||
+                name === prefix || !(await caches.has(name)))
+                throw new Error('Invalid or missing active search cache: ' + name);
+            return caches.open(name);
+        };""")
         self.page.goto(self.origin + "/search/manifest.json", wait_until="commit")
         self.page.evaluate(
             """async () => {
@@ -59,11 +71,12 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         response = self.page.goto(self.origin + "/search/", wait_until="domcontentloaded")
         self.assertEqual(response.status, 200)
         self.page.evaluate("navigator.serviceWorker.ready")
+        self.page.wait_for_function("navigator.serviceWorker.controller !== null")
         if wait_for_data:
             self.page.wait_for_function("STATE.dataLoaded === true", timeout=30000)
             self.page.wait_for_function(
                 """async () => {
-                    const cache = await caches.open('vomebook-search-v1.0.0');
+                    const cache = await window.findOwnedServiceWorkerCache();
                     const paths = ['/search/data/search_data.json.gz', '/search/data/initial/global.json', '/search/data/sidebar/global.json'];
                     return (await Promise.all(paths.map(path => cache.match(path)))).every(Boolean);
                 }""",
@@ -85,6 +98,101 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
             }"""
         )
 
+    def test_real_upgrade_preserves_previous_generation_and_failed_install_isolation(self):
+        source = self.origin_path('static/sw.js').read_text()
+        old_asset = '/search/static/upgrade-old.111111111111.js'
+        current_asset = '/search/static/upgrade-current.222222222222.js'
+        prefix = 'vomebook-search-'
+        names = {version: prefix + version for version in ('browser-a', 'browser-b', 'browser-c')}
+
+        def serve_worker(version, hashed=False):
+            worker = source.replace('"development"', json.dumps(version))
+            if hashed:
+                worker = worker.replace('const CURRENT_HASHED_ASSETS = []',
+                                        'const CURRENT_HASHED_ASSETS = ' + json.dumps([current_asset]))
+            with self.server_state.lock:
+                self.server_state.worker_source = worker
+
+        def state():
+            return self.page.evaluate('''async () => {
+              const name = 'vomebook-search-metadata';
+              if (!(await caches.has(name))) throw Error('Missing generation metadata');
+              const cache = await caches.open(name);
+              return (await cache.match('/search/.sw-active-generation')).json();
+            }''')
+
+        def update(expected):
+            result = self.page.evaluate('''async () => {
+              const registration = await navigator.serviceWorker.ready;
+              window.__previousController = navigator.serviceWorker.controller;
+              let timer, onUpdate;
+              const settled = new Promise((resolve, reject) => {
+                timer = setTimeout(() => reject(Error('Worker update timed out')), 20000);
+                onUpdate = () => {
+                  const candidate = registration.installing;
+                  const changed = () => {
+                    if (candidate.state === 'redundant' || candidate.state === 'activated') {
+                      candidate.removeEventListener('statechange', changed);
+                      resolve(candidate.state);
+                    }
+                  };
+                  candidate.addEventListener('statechange', changed);
+                  changed();
+                };
+                registration.addEventListener('updatefound', onUpdate, {once:true});
+              });
+              try {
+                await registration.update();
+                return await settled;
+              } finally {
+                clearTimeout(timer);
+                registration.removeEventListener('updatefound', onUpdate);
+              }
+            }''')
+            self.assertEqual(result, expected)
+
+        serve_worker('browser-a')
+        self.prime()
+        self.assertEqual(state(), {'active': names['browser-a'], 'previous': None})
+        self.page.evaluate('''async path => {
+          const cache = await window.findOwnedServiceWorkerCache();
+          await cache.put(path, new Response('old immutable bytes', {headers:{'Content-Type':'text/javascript'}}));
+          await cache.put('/search/data/upgrade-old.json', new Response('old mutable bytes'));
+          await (await caches.open('unrelated-browser-cache')).put('/foreign', new Response('keep'));
+        }''', old_asset)
+
+        serve_worker('browser-b', hashed=True)
+        with self.server_state.lock:
+            self.server_state.failures['/search/static/style.css'] = 503
+        update('redundant')
+        self.assertTrue(self.page.evaluate('navigator.serviceWorker.controller === window.__previousController'))
+        self.assertEqual(state(), {'active': names['browser-a'], 'previous': None})
+        self.assertNotIn(names['browser-b'], self.cache_urls())
+        self.assertEqual(self.page.evaluate('path => fetch(path).then(r => r.text())', old_asset), 'old immutable bytes')
+
+        with self.server_state.lock:
+            self.server_state.failures.pop('/search/static/style.css')
+        update('activated')
+        self.page.wait_for_function('navigator.serviceWorker.controller !== window.__previousController')
+        self.assertEqual(state(), {'active': names['browser-b'], 'previous': names['browser-a']})
+        caches_by_name = self.cache_urls()
+        self.assertIn(self.origin + old_asset, caches_by_name[names['browser-a']])
+        self.assertNotIn(self.origin + '/search/data/upgrade-old.json', caches_by_name[names['browser-a']])
+        self.assertIn('unrelated-browser-cache', caches_by_name)
+        # The server has no such hash: a 404 must fall back to the actual A cache.
+        self.assertEqual(self.page.evaluate('path => fetch(path).then(r => r.text())', old_asset), 'old immutable bytes')
+        self.assertNotIn(self.origin + old_asset, self.cache_urls()[names['browser-b']])
+
+        serve_worker('browser-c', hashed=True)
+        update('activated')
+        self.page.wait_for_function('navigator.serviceWorker.controller !== window.__previousController')
+        self.assertEqual(state(), {'active': names['browser-c'], 'previous': names['browser-b']})
+        caches_by_name = self.cache_urls()
+        self.assertNotIn(names['browser-a'], caches_by_name)
+        self.assertIn(names['browser-b'], caches_by_name)
+        self.assertEqual(caches_by_name['unrelated-browser-cache'], [self.origin + '/foreign'])
+        self.assertEqual(self.page.evaluate('path => fetch(path).then(r => r.status)', old_asset), 404)
+
     def test_registration_scope_and_controller_after_reload(self):
         self.prime()
         registration = self.page.evaluate(
@@ -100,7 +208,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
     def test_hashed_reader_asset_reuses_cache_across_duplicate_origin_vary_headers(self):
         self.prime()
         result = self.page.evaluate('''async () => {
-          const cache = await caches.open('vomebook-search-v1.0.0');
+          const cache = await window.findOwnedServiceWorkerCache();
           const url = new URL('/search/static/reader.123456789abc.js', location.origin).href;
           await cache.put(new Request(url, {headers: {Origin: location.origin, 'X-Reader-Intent': 'warm'}}),
             new Response('window.__cachedReaderExecutions = (window.__cachedReaderExecutions || 0) + 1;',
@@ -121,7 +229,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
     def test_offline_cache_misses_reject_as_network_errors_and_cached_data_survives(self):
         self.prime()
         self.page.evaluate("""async () => {
-            const cache = await caches.open('vomebook-search-v1.0.0');
+            const cache = await window.findOwnedServiceWorkerCache();
             await cache.put('/search/data/offline-available.json', new Response('{"cached":true}', {
                 headers: {'Content-Type': 'application/json'}
             }));
@@ -152,7 +260,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
     def test_existing_cache_serves_immediately_then_persists_background_refresh(self):
         self.prime()
         self.page.evaluate("""async () => {
-            const cache = await caches.open('vomebook-search-v1.0.0');
+            const cache = await window.findOwnedServiceWorkerCache();
             await cache.put('/search/manifest.json?background-test=1', new Response('{"old":true}', {
                 headers: {'Content-Type': 'application/json'}
             }));
@@ -162,7 +270,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         result = self.page.evaluate("fetch('/search/manifest.json?background-test=1', {cache: 'no-store'}).then(response => response.json())")
         self.assertEqual(result, {"old": True})
         self.assertTrue(self.page.evaluate("""async () => {
-            const cache = await caches.open('vomebook-search-v1.0.0');
+            const cache = await window.findOwnedServiceWorkerCache();
             for (let attempt = 0; attempt < 100; attempt++) {
                 const response = await cache.match('/search/manifest.json?background-test=1');
                 if ((await response.json()).name) return true;
@@ -174,11 +282,20 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         result = self.page.evaluate("fetch('/search/manifest.json?background-test=1', {cache: 'no-store'}).then(response => response.json())")
         self.assertIn("name", result)
 
-    def test_fixed_cache_contains_core_without_unused_repository_or_engine_payloads(self):
+    def test_cache_discovery_does_not_create_a_cache_before_install(self):
+        self.assertIsNone(self.page.evaluate("window.findOwnedServiceWorkerCache()"))
+        self.assertEqual(self.cache_urls(), {})
+
+    def test_owned_cache_contains_core_without_unused_repository_or_engine_payloads(self):
         self.prime()
         caches_by_name = self.cache_urls()
-        self.assertEqual(list(caches_by_name), ["vomebook-search-v1.0.0"])
-        urls = {url.split('#', 1)[0] for url in caches_by_name["vomebook-search-v1.0.0"]}
+        self.assertEqual(caches_by_name.pop('vomebook-search-metadata'),
+                         [self.origin + '/search/.sw-active-generation'])
+        self.assertEqual(len(caches_by_name), 1)
+        name, cached_urls = next(iter(caches_by_name.items()))
+        self.assertTrue(name.startswith("vomebook-search-"), name)
+        self.assertNotEqual(name, "vomebook-search-")
+        urls = {url.split('#', 1)[0] for url in cached_urls}
         expected_paths = [
             "/search/",
             "/search/static/app.js",
@@ -197,7 +314,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
     def test_warmed_reader_shell_does_not_wait_for_slow_revalidation(self):
         self.prime()
         self.assertTrue(self.page.evaluate('''async () => {
-          const cache = await caches.open('vomebook-search-v1.0.0');
+          const cache = await window.findOwnedServiceWorkerCache();
           for(let i=0;i<200;i++) {
             if(await cache.match('/search/static/reader.html') && await cache.match('/search/static/reader.js')) return true;
             await new Promise(resolve=>setTimeout(resolve,50));
@@ -220,7 +337,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         # The Reader eagerly imports reader-book-text.js; its validation
         # dependency must be warmed with the shell even before PDF search.
         self.assertTrue(self.page.evaluate('''async () => {
-          const cache = await caches.open('vomebook-search-v1.0.0');
+          const cache = await window.findOwnedServiceWorkerCache();
           const paths = ['/search/static/reader.html', '/search/static/reader.js',
             '/search/static/reader/search/reader-book-text.js',
             '/search/static/reader/search/reader-pdf-book-validate.mjs'];
@@ -254,8 +371,8 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.page.goto(self.origin + '/search/', wait_until='domcontentloaded')
         self.assertTrue(self.page.evaluate('''async()=>{
           for(let i=0;i<200;i++){
-            const cache=await caches.open('vomebook-search-v1.0.0');
-            if(navigator.serviceWorker.controller && await cache.match('/search/static/reader.html'))return true;
+            const cache=navigator.serviceWorker.controller && await window.findOwnedServiceWorkerCache();
+            if(cache && await cache.match('/search/static/reader.html'))return true;
             await new Promise(resolve=>setTimeout(resolve,50));
           }
           return false;
@@ -265,7 +382,7 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
         self.assertTrue(self.page.evaluate('''async()=>{
           const names=['reader/core/reader-security.js','reader/core/reader-store.js','reader/pdf/reader-engine-preload.js'];
           for(let i=0;i<200;i++){
-            const cache=await caches.open('vomebook-search-v1.0.0');
+            const cache=await window.findOwnedServiceWorkerCache();
             const hits=await Promise.all(names.map(n=>cache.match('/search/static/'+n,{ignoreVary:true})));
             if(hits.every(Boolean))return true;
             await new Promise(resolve=>setTimeout(resolve,50));
@@ -282,7 +399,10 @@ class ServiceWorkerIntegrationTest(unittest.TestCase):
                 + "&ext=txt",
                 wait_until="domcontentloaded",
             )
-        urls = self.cache_urls()["vomebook-search-v1.0.0"]
+        urls = self.page.evaluate("""async () => {
+            const cache = await window.findOwnedServiceWorkerCache();
+            return (await cache.keys()).map(request => request.url).sort();
+        }""")
         reader_urls = [url for url in urls if "/search/static/reader.html" in url]
         self.assertEqual(reader_urls, [self.origin + "/search/static/reader.html"])
 
