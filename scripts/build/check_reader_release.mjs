@@ -285,6 +285,7 @@ function crossCheck(githubRoot, hfRoot) {
   "search/history/infrastructure/store.js",
   "search/history/application/controller.js",
   "search/ambient/application/quotation.js",
+  "search/corpus/application/client.js",
   "search/results/snapshots/domain/copy-budget.js", "search/results/snapshots/application/store.js",
     "reader.css",
     "reader/core/reader-request-manager.js",

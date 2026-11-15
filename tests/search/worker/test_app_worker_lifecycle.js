@@ -11,7 +11,7 @@ function section(from, to) {
 }
 function harness() {
   const workers = [], timers = new Map();
-  let timerId = 0;
+  let timerId = 0, now = 1000;
   class Worker {
     constructor() { this.listeners = {}; this.sent = []; this.terminated = 0; workers.push(this); }
     addEventListener(type, fn) { this.listeners[type] = fn; }
@@ -28,7 +28,7 @@ function harness() {
     request(type) { return this.sent.find(message => message.type === type); }
   }
   const context = vm.createContext({
-    Worker, window: { Worker }, URL, DOMException, AbortController,
+    Worker, window: { Worker }, URL, DOMException, AbortController, Date: {now: () => now},
     document: { baseURI: 'https://test.invalid/search/' }, console: { error() {}, warn() {} },
     setTimeout(fn) { const id = ++timerId; timers.set(id, fn); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -58,7 +58,17 @@ function harness() {
     function setExactSearchSectionVisible() {}
     ${section('function ensureLocalDataLoaded(', 'function submitSearchQuery(')}
   `, context);
-  const run = code => vm.runInContext(code, context);
+  // Legacy assertion expressions are translated to the owned client's public
+  // operations and detached diagnostics; no mutable state is installed globally.
+  const run = code => vm.runInContext(code
+    .replace(/corpusWorkerPending\.size/g, 'getCorpusClient().inspect().pending.length')
+    .replace(/corpusWorkerRestartCount/g, 'getCorpusClient().inspect().restartCount')
+    .replace(/corpusWorkerConsecutiveRestarts/g, 'getCorpusClient().inspect().consecutiveRestarts')
+    .replace(/corpusWorkerStartPromise/g, '(getCorpusClient().inspect().starting ? true : null)')
+    .replace(/corpusWorkerEpoch\.bootstrap/g, '(getCorpusClient().inspect().bootstrapping ? true : null)')
+    .replace(/\bcorpusWorker\b/g, 'getCorpusClient().inspect().worker')
+    .replace(/ensureCorpusWorker\(/g, 'getCorpusClient().ensure(')
+    .replace(/postCorpusWorkerRequest\(/g, 'getCorpusClient().post('), context);
   const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
   const ready = async () => {
     const pending = run('ensureCorpusWorker()');
@@ -67,7 +77,7 @@ function harness() {
     await pending;
     return workers.at(-1);
   };
-  return { workers, timers, run, flush, ready };
+  return { workers, timers, run, flush, ready, advance(ms) { now += ms; } };
 }
 
 // Exercise the actual callers, including their promise continuations, without
@@ -286,6 +296,88 @@ for (const ok of [true, false]) {
   }
 }
 
+test('client registration and host boundary preserve raw and composed Worker URLs', async () => {
+  const {APP_DEPENDENCIES, stripBundledScripts} = await import('../../../scripts/build/compose_app.mjs');
+  const modulePath = 'search/corpus/application/client.js';
+  assert.equal(APP_DEPENDENCIES.filter(path => path === modulePath).length, 1);
+  const html = fs.readFileSync('static/index.html', 'utf8');
+  assert.ok(html.indexOf('static/' + modulePath) < html.indexOf('src="static/app.js"'));
+  assert.ok(!stripBundledScripts(html).includes('src="static/' + modulePath + '"'));
+  for (const path of ['static/sw.js', 'static/reader-resources.js', 'scripts/build/check_reader_release.mjs']) {
+    assert.ok(fs.readFileSync(path, 'utf8').includes(modulePath), path);
+  }
+  assert.match(source, /new Worker\("static\/search\/index-worker\.js"\)/);
+  assert.match(source, /getCorpusClient\(\)\.expireRequests\(\)/);
+  assert.doesNotMatch(source, /corpusWorkerPending|corpusWorkerEpoch|corpusWorkerRequestId/);
+  const client = fs.readFileSync('static/' + modulePath, 'utf8');
+  assert.doesNotMatch(client, /\b(?:document|window|STATE|loadData|ensureLocalDataLoaded)\b/);
+});
+
+test('explicit expiry respects original deadlines and detached diagnostics cannot change them', async () => {
+  const h = harness(), worker = await h.ready();
+  const first = h.run("getCorpusClient().post('metadata', {}, 100)");
+  const second = h.run("getCorpusClient().post('folder-tree', {}, 200)");
+  const settled = Promise.allSettled([first, second]);
+  const snapshot = h.run('getCorpusClient().inspect()');
+  assert.deepEqual(Array.from(snapshot.pending, entry => entry.id), [2, 3]);
+  assert.deepEqual(Array.from(snapshot.pending, entry => entry.deadline), [1100, 1200]);
+  snapshot.pending[0].deadline = 0;
+  snapshot.pending.length = 0;
+  snapshot.restartCount = 99;
+  h.advance(99);
+  h.run('getCorpusClient().expireRequests()');
+  assert.equal(h.run('getCorpusClient().inspect().pending.length'), 2);
+  assert.equal(h.run('getCorpusClient().inspect().restartCount'), 0);
+  h.advance(1);
+  h.run('getCorpusClient().expireRequests()');
+  const results = await settled;
+  assert.deepEqual(results.map(result => result.status), ['rejected', 'rejected']);
+  assert.deepEqual(results.map(result => result.reason.code), ['WORKER_TIMEOUT', 'WORKER_TIMEOUT']);
+  assert.equal(worker.terminated, 1);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.run('getCorpusClient().inspect().pending.length'), 0);
+});
+
+test('cancellation consumes an ID and late results cannot settle a subsequent request', async () => {
+  const h = harness(), worker = await h.ready();
+  h.run('const owner = new AbortController();');
+  const cancelled = h.run("getCorpusClient().post('local-search', {}, 100, owner.signal)");
+  const retired = worker.request('local-search');
+  h.run('owner.abort()');
+  await assert.rejects(cancelled, {name: 'AbortError'});
+  const cancel = worker.request('cancel-search');
+  assert.equal(cancel.id, retired.id + 1);
+  assert.equal(cancel.payload.requestId, retired.id);
+  const current = h.run("getCorpusClient().post('metadata', {})");
+  assert.equal(worker.request('metadata').id, cancel.id + 1);
+  worker.respond(retired, {stale: true});
+  assert.equal(h.run('getCorpusClient().inspect().pending.length'), 1);
+  worker.respond(worker.request('metadata'), {current: true});
+  assert.equal((await current).current, true);
+  assert.equal(h.timers.size, 0);
+});
+
+test('response envelope protocol mismatch cannot automatically restart a live Worker', async () => {
+  const h = harness(), worker = await h.ready();
+  const pending = h.run("corpusWorkerRequest('metadata', {})");
+  await h.flush();
+  worker.listeners.message({data: {protocol: 2, type: 'response', id: worker.request('metadata').id, ok: true}});
+  await assert.rejects(pending, {code: 'PROTOCOL_MISMATCH'});
+  assert.equal(h.workers.length, 1);
+  assert.equal(worker.terminated, 0);
+  assert.equal(h.run('getCorpusClient().inspect().restartCount'), 0);
+  assert.equal(h.timers.size, 0);
+});
+
+test('missing Worker support settles with the same bounded recovery budget', async () => {
+  const h = harness();
+  h.run('window.Worker = null;');
+  await assert.rejects(h.run("corpusWorkerRequest('metadata', {})"), {code: 'WORKER_UNAVAILABLE'});
+  assert.equal(h.run('getCorpusClient().inspect().restartCount'), 1);
+  assert.equal(h.workers.length, 0);
+  assert.equal(h.timers.size, 0);
+});
+
 test('concurrent startup waits for a single handshake', async () => {
   const h = harness();
   const first = h.run("corpusWorkerRequest('metadata', {})");
@@ -377,7 +469,8 @@ test('abort during recovery bootstrap cannot cancel other waiters or retry stale
   const current = h.run("corpusWorkerRequest('metadata', {})");
   await h.flush();
   // Exercise timeout termination as well as error-event termination.
-  h.run("[...corpusWorkerPending.values()][0].expire()");
+  h.advance(100);
+  h.run('getCorpusClient().expireRequests()');
   await h.flush();
   const replacement = h.workers[1];
   replacement.respond(replacement.request('handshake'), { protocol: 1 });

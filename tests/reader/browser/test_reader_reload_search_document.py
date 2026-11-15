@@ -444,7 +444,7 @@ class ReaderTrueOfflineCases:
           routeInitialized && searchInputReady && STATE.query === query &&
           STATE.dataLoaded && STATE.useLocalMode && !STATE.isLoading &&
           STATE.total > 0 && STATE._resultBackend === 'local' &&
-          corpusWorker instanceof Worker''', arg=query)
+          getCorpusClient().inspect().worker instanceof Worker''', arg=query)
         self.assertEqual(self.page.locator('#search-input').input_value(), query)
         self.page.locator('#results-list .result-item').first.wait_for(state='visible')
 

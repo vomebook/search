@@ -21,6 +21,8 @@
     "../../typings/search-results.d.ts",
     "../../typings/search-discovery.d.ts",
     "../../typings/search-history-ambient.d.ts",
+    "../../typings/search-corpus.d.ts",
+    "../../static/search/corpus/application/client.js",
     "../../static/search/history/infrastructure/store.js",
     "../../static/search/history/application/controller.js",
     "../../static/search/ambient/application/quotation.js",

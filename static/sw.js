@@ -106,6 +106,7 @@ const PRECACHE_URLS = [
   "/search/static/search/history/infrastructure/store.js",
   "/search/static/search/history/application/controller.js",
   "/search/static/search/ambient/application/quotation.js",
+  "/search/static/search/corpus/application/client.js",
   "/search/static/search/results/snapshots/domain/copy-budget.js",
   "/search/static/search/results/snapshots/application/store.js",
   "/search/static/search/input/domain/ownership.js",
