@@ -47,7 +47,7 @@ test('PDF range dependencies are built before the network consumer and pinned fo
       }
       writeFileSync(join(output,'index.html'),'<html></html>');
       writeFileSync(join(assets,'reader.html'),'<html></html>');
-      writeFileSync(join(output,'sw.js'),'const CURRENT_HASHED_ASSETS = [];');
+      writeFileSync(join(output,'sw.js'),'const CACHE_VERSION = "development"; const CURRENT_HASHED_ASSETS = [];');
       const script=resolve(root,'scripts/build/build_static_assets.mjs');
       const run=spawnSync(process.execPath,[script],{
         cwd:work,env:{...process.env,STATIC_OUTPUT_DIR:output},encoding:'utf8',timeout:15000
