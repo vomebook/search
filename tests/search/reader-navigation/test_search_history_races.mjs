@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import './host_contracts.mjs';
 import '../paging/result_window_contracts.mjs';
 import { installClassicSearchModules } from '../../support/classic_search_modules.js';
 import { APP_DEPENDENCIES, stripBundledScripts } from '../../../scripts/build/compose_app.mjs';
@@ -12,6 +13,12 @@ const source = fs.readFileSync('static/app.js', 'utf8');
 function fixture(names, values = {}) {
   const context = vm.createContext({AbortController, searchTransport:undefined, searchPagePrefetch:undefined, ...values});
   installClassicSearchModules(process.cwd(), context);
+  context.readerHost = {overlay: null};
+  context.readerReturnPosition = context.VoiceOfMLReaderReturn.create({
+    readView: () => ({loading: context.STATE.isLoading, loadedPage: context.STATE._loadedPage,
+      resultCount: context.STATE.results.length, total: context.STATE.total, positionRestore: context.positionRestore}),
+    hasResult: index => !!context.STATE.results[index]
+  });
   for (const name of names) {
     const match = source.match(new RegExp('^function ' + name + '\\([^]*?^}', 'm'));
     assert.ok(match, name);

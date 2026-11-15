@@ -20,7 +20,7 @@ export default [
       globals: { ...globals.browser, ...globals.serviceworker, ...globals.worker,
         module: "readonly", require: "readonly",
         ...Object.fromEntries(["VoiceOfMLReaderSecurity", "VoiceOfMLReader", "VoiceOfMLReaderResources",
-          "VoiceOfMLReaderStore", "VoiceOfMLReaderChapters", "VoiceOfMLReaderVirtual", "VoiceOfMLReaderNavigation",
+          "VoiceOfMLReaderStore", "VoiceOfMLReaderChapters", "VoiceOfMLReaderVirtual", "VoiceOfMLReaderNavigation", "VoiceOfMLReaderHost", "VoiceOfMLReaderReturn",
           "VoiceOfMLDownloadController", "VoiceOfMLSearchSession", "VoiceOfMLReaderRequests", "VoiceOfMLReaderRuntime",
           "VoiceOfMLReaderAdapters", "VoiceOfMLReaderScroll", "DOMPurify", "marked"]
           .map(name => [name, "readonly"])) }

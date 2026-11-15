@@ -422,319 +422,101 @@ function getReaderLink(rec, returnUrl, cacheMetadata = true) {
   return readerUrl;
 }
 
-function syncReaderFolderFilter(rawUrl) {
-  try {
-    var readerUrl = new URL(rawUrl, location.origin);
-    var folderRaw = readerUrl.searchParams.get("folder_url");
-    if (!folderRaw) return readerUrl.href;
-    var folderUrl = new URL(folderRaw, location.origin);
-    var mergedFolderUrl = readerNavigation.mergeSearchParams(folderUrl, currentReaderSearchParams(), {
-      hashRoute: true,
-      keys: READER_RETURN_SEARCH_KEYS
-    });
-    readerUrl.searchParams.set("folder_url", mergedFolderUrl.href);
-    return readerUrl.href;
-  } catch (_) { return rawUrl; }
-}
-
-const READER_RETURN_SEARCH_KEYS = Object.freeze([
-  "q", "min_size", "max_size", "ext", "history", "mirror", "sort",
-  "search_folders", "exact", "local", "sidebar", "filters", "wide"
-]);
-
-function currentReaderSearchParams() {
-  const params = buildSearchURLParams({ includeQuery: false, displaySizes: true });
-  const query = (DOM.searchInput ? DOM.searchInput.value : STATE.query).trim();
-  if (query) params.set("q", query);
-  return params;
-}
-
-function normalizeReaderReturnUrl(rawUrl) {
-  try {
-    const target = new URL(rawUrl || "/search/", location.origin);
-    if (target.origin === location.origin && target.pathname === "/") return new URL("/search/", location.origin).href;
-    return target.href;
-  } catch (_) { return new URL("/search/", location.origin).href; }
-}
-
-var readerOverlay = null;
-var readerOverlayRevision = 0;
-var readerUiState = "base";
-var readerClosing = false;
-const readerNavigation = VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html", {
-  // "返回阅读" on the background-reading bar reopens the kept Reader.
-  resume: (url) => navigateToReader(url),
-  close: () => { if (readerOverlay) handleReaderMessage({ origin: location.origin,
-    source: readerOverlay.contentWindow, data: { type: "voice-reader-close" } }); }
+// Reader host owns overlay and return-position state. Effects resolve live host hooks.
+const readerReturnPosition = VoiceOfMLReaderReturn.create({
+  readView: () => ({ hasContainer: !!DOM.resultsContainer, containerHeight: DOM.resultsContainer?.clientHeight || 0,
+    resultCount: STATE.results.length, total: STATE.total, loading: STATE.isLoading, loadedPage: STATE._loadedPage,
+    positionRestore: positionRestore && { preview: positionRestore.preview, key: positionRestore.key }, routeRevision: routeRenderId }),
+  hasResult: index => !!STATE.results[index], getViewKey: () => getSearchViewKey(),
+  getTop: () => getResultScrollTop(), setTop: top => setResultScrollTop(top),
+  ensureHeights: () => ensureHeightTree(), findIndex: top => findVirtualIndex(top),
+  getOffset: index => getVirtualOffset(index), getTotalHeight: () => getVirtualTotalHeight(),
+  invalidateWindow: () => { VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1; },
+  renderVisible: () => renderVisible(), updateTrack: () => updateScrollTrack(),
+  handoffReady: saved => readerSearchHandoffReady(saved),
+  restoreScroll: (rendered, top) => restoreReaderReturnScroll(rendered, top)
 });
-var readerReturnScrollState = null;
-var readerReturnSnapshot = null;
-var readerReturnRestoreGeneration = 0;
-var readerReturnRestoreActive = false;
+const readerHost = VoiceOfMLReaderHost.create({
+  hashRoute: true, position: readerReturnPosition,
+  createNavigation: options => VoiceOfMLReaderNavigation.createNavigation("/search/static/reader.html", options),
+  buildParams: () => buildSearchURLParams({ includeQuery: false, displaySizes: true }),
+  readQuery: () => DOM.searchInput ? DOM.searchInput.value : STATE.query,
+  currentParams: () => currentReaderSearchParams(),
+  getViewKey: () => getSearchViewKey(), captureScroll: () => captureReaderReturnScroll(),
+  restoreScroll: () => restoreReaderReturnScroll(), saveSnapshot: key => saveSearchViewSnapshot(key),
+  snapshotChanged: (snapshot, key) => {
+    const source = searchSnapshotSources.get(snapshot), current = displayedSearchView;
+    return key === getSearchViewKey() && !!source && !!current && current.key === key &&
+      current.revision === source.revision && searchViewSnapshots.get(key) === snapshot &&
+      (STATE.results.length !== snapshot.results.length || STATE._loadedPage !== snapshot.loadedPage);
+  },
+  restoreSnapshot: key => restoreSearchViewSnapshot(key, false),
+  routeChanged: () => location.hash !== appliedRouteHash,
+  applyRoute: preserve => ROUTER.apply(preserve),
+  closeMobileSidebars: () => {
+    if (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) {
+      STATE.leftSidebarOpen = false;
+      STATE.rightSidebarOpen = false;
+      updateSidebarVisibility();
+      syncStateToURL();
+    }
+  },
+  applyTheme: theme => { STATE.isDark = theme === "dark"; applyTheme(); writeSearchPreference("theme", theme); },
+  navigate: url => navigateToReader(url), handleMessage: event => handleReaderMessage(event),
+  syncFolder: url => syncReaderFolderFilter(url), normalizeReturn: url => normalizeReaderReturnUrl(url),
+  openOverlay: (url, addHistory) => openReaderOverlay(url, addHistory),
+  closeOverlay: (focus, scroll) => closeReaderOverlay(focus, scroll), reconcile: () => reconcileSearchDestination()
+});
+const readerNavigation = readerHost.navigation;
+const READER_RETURN_SEARCH_KEYS = readerHost.keys;
+// Read-only compatibility projections for existing browser diagnostics.
+Object.defineProperties(window, {
+  readerOverlay: { get: () => readerHost.overlay },
+  readerClosing: { get: () => readerHost.closing },
+  readerUiState: { get: () => readerHost.uiState },
+  readerReturnSnapshot: { get: () => readerHost.returnSnapshot }
+});
+function syncReaderFolderFilter(rawUrl) {
+  return readerHost.syncReaderFolderFilter(rawUrl);
+}
+function currentReaderSearchParams() {
+  return readerHost.currentReaderSearchParams();
+}
+function normalizeReaderReturnUrl(rawUrl) {
+  return readerHost.normalizeReaderReturnUrl(rawUrl);
+}
 function captureReaderReturnScroll() {
-  if (!DOM.resultsContainer) return null;
-  var top = getResultScrollTop(), index = 0, offset = top;
-  if (STATE.results.length) {
-    ensureHeightTree();
-    index = findVirtualIndex(top);
-    offset = top - getVirtualOffset(index);
-  }
-  const active = document.activeElement;
-  const focus = active instanceof HTMLElement && active.id ? { id: active.id,
-    start: active instanceof HTMLInputElement ? active.selectionStart : null,
-    end: active instanceof HTMLInputElement ? active.selectionEnd : null,
-    direction: active instanceof HTMLInputElement ? active.selectionDirection : null } : null;
-  return { route: location.href, viewKey: getSearchViewKey(), top: top, index: index, offset: offset, focus };
+  return readerReturnPosition.capture();
 }
 function readerSearchHandoffReady(saved) {
-  // A preview has already restored usable rows and geometry while validation
-  // may still be fetching adjacent pages. Keep that validation running.
-  if (STATE.isLoading || !STATE._loadedPage || !STATE.results.length) return false;
-  if (positionRestore && (!positionRestore.preview || positionRestore.key !== saved.viewKey)) return false;
-  const index = Math.min(saved.index, Math.max(0, STATE.total - 1));
-  return !!STATE.results[index];
+  return readerReturnPosition.ready(saved);
 }
-
 function restoreReaderSearchHandoff() {
-  let saved;
-  try {
-    const handoff = JSON.parse(sessionStorage.getItem("reader-navigation-restore") || "null");
-    sessionStorage.removeItem("reader-navigation-restore");
-    if (!handoff || handoff.returnUrl !== location.href) return;
-    const current = /** @type {{readerUrl?: string; returnScroll?: ReturnType<typeof captureReaderReturnScroll>} | null} */ (readerNavigation.saved());
-    if (!current || current.readerUrl !== handoff.readerUrl) return;
-    const url = readerNavigation.parse(handoff.readerUrl);
-    const token = url.searchParams.get("nav");
-    if (!token || sessionStorage.getItem("reader-return:" + token) !== location.href) return;
-    saved = current.returnScroll;
-    if (!saved || saved.route !== location.href || saved.viewKey !== getSearchViewKey() ||
-        !Number.isInteger(saved.index) || saved.index < 0 || !Number.isFinite(saved.offset) || !Number.isFinite(saved.top)) return;
-  } catch (_) { return; }
-  const route = location.href;
-  let cancelled = false;
-  const cancel = () => { cancelled = true; cleanup(); };
-  const cleanup = () => {
-    for (const type of ["pointerdown", "keydown", "focusin", "input", "compositionstart", "wheel", "touchstart"])
-      document.removeEventListener(type, cancel, true);
-  };
-  for (const type of ["pointerdown", "keydown", "focusin", "input", "compositionstart", "wheel", "touchstart"])
-    document.addEventListener(type, cancel, true);
-  const routeRevision = routeRenderId;
-  const deadline = Date.now() + 30000;
-  const restore = () => {
-    if (cancelled || routeRevision !== routeRenderId || location.href !== route || saved.viewKey !== getSearchViewKey() || Date.now() > deadline) {
-      cleanup(); return;
-    }
-    if (!readerSearchHandoffReady(saved)) { requestAnimationFrame(restore); return; }
-    cleanup();
-    readerReturnScrollState = saved;
-    restoreReaderReturnScroll(false, true);
-    const focus = saved.focus;
-    const element = focus && document.getElementById(focus.id);
-    if (!element || (document.activeElement !== document.body && document.activeElement !== element)) return;
-    element.focus({ preventScroll: true });
-    if (element instanceof HTMLInputElement && Number.isInteger(focus.start) && Number.isInteger(focus.end) &&
-        ["forward", "backward", "none"].includes(focus.direction)) {
-      try { element.setSelectionRange(focus.start, focus.end, focus.direction); } catch (_) {}
-    }
-  };
-  requestAnimationFrame(restore);
+  readerReturnPosition.restoreHandoff(readerNavigation);
 }
-
 function restoreReaderReturnScroll(windowRendered = false, restoreTop = false) {
-  var saved = readerReturnScrollState;
-  if (!saved) return;
-  if (saved.route && saved.route !== location.href) { readerReturnScrollState = null; return; }
-  if (saved.viewKey && saved.viewKey !== getSearchViewKey()) { readerReturnScrollState = null; return; }
-  var generation = ++readerReturnRestoreGeneration;
-  var attempts = 0;
-  function restore() {
-    if (generation !== readerReturnRestoreGeneration || saved.viewKey !== getSearchViewKey() || saved.route !== location.href) return;
-    if (!DOM.resultsContainer || !STATE.results.length) {
-      if (++attempts < 20) requestAnimationFrame(restore);
-      return;
-    }
-    ensureHeightTree();
-    var index = Math.min(saved.index, STATE.results.length - 1);
-    var target = Math.max(0, restoreTop ? saved.top : getVirtualOffset(index) + saved.offset);
-    var max = Math.max(0, getVirtualTotalHeight() - DOM.resultsContainer.clientHeight);
-    readerReturnRestoreActive = true;
-    setResultScrollTop(Math.min(target, max));
-    if (!windowRendered) {
-      VSCROLL.renderStart = -1;
-      VSCROLL.renderEnd = -1;
-    }
-    renderVisible();
-    windowRendered = false;
-    updateScrollTrack();
-    readerReturnRestoreActive = false;
-    if (++attempts < 4 && Math.abs(getResultScrollTop() - target) > 1) requestAnimationFrame(restore);
-    else readerReturnScrollState = null;
-  }
-  restore();
-  if (readerReturnScrollState === saved) requestAnimationFrame(function() { requestAnimationFrame(restore); });
+  readerReturnPosition.restore(windowRendered, restoreTop);
 }
-function closeReaderOverlay(restoreFocus, restoreScroll) {
-  if (!readerOverlay) return false;
-  readerOverlayRevision++;
-  readerClosing = false;
-  readerUiState = "base";
-  readerOverlay = null;
-  const returnFocus = readerNavigation.unmount();
-  if (readerOverlay) return true;
-  if (restoreScroll !== false) {
-    var saved = readerReturnScrollState;
-    var snapshot = readerReturnSnapshot;
-    var source = snapshot && searchSnapshotSources.get(snapshot);
-    var currentView = displayedSearchView;
-    var sameView = snapshot && source && saved && saved.viewKey === getSearchViewKey() &&
-      currentView && currentView.key === saved.viewKey && currentView.revision === source.revision &&
-      searchViewSnapshots.get(saved.viewKey) === snapshot;
-    var changed = sameView && (STATE.results.length !== snapshot.results.length || STATE._loadedPage !== snapshot.loadedPage);
-    if (changed) {
-      readerReturnScrollState = null;
-      restoreSearchViewSnapshot(saved.viewKey, false);
-      readerReturnScrollState = Object.assign({}, saved, { route: location.href });
-    }
-    restoreReaderReturnScroll();
-  }
-  if (restoreScroll !== false) readerReturnSnapshot = null;
-  if (restoreFocus !== false && returnFocus && returnFocus.isConnected) returnFocus.focus();
-  return true;
+function closeReaderOverlay(restoreFocus = true, restoreScroll = true) {
+  return readerHost.closeReaderOverlay(restoreFocus, restoreScroll);
 }
-
-function openReaderOverlay(url, addHistory) {
-  readerOverlayRevision++;
-  if (addHistory !== false && !readerReturnScrollState) {
-    readerReturnScrollState = captureReaderReturnScroll();
-    readerReturnSnapshot = saveSearchViewSnapshot(readerReturnScrollState && readerReturnScrollState.viewKey || getSearchViewKey());
-  }
-  readerOverlay = readerNavigation.mount(url);
-  readerUiState = "base";
-  readerClosing = false;
-  if (addHistory !== false) readerNavigation.remember(url, readerReturnScrollState);
+function openReaderOverlay(url, addHistory = true) {
+  readerHost.openReaderOverlay(url, addHistory);
 }
-
 function reconcileSearchDestination() {
-  // remember() puts a Reader share URL in the parent history entry.
-  // Only a search destination can be reconciled with the underlying view.
-  if (location.pathname !== "/search/" || history.state?.voiceReaderOverlay) return;
-  const overlay = readerOverlay, revision = readerOverlayRevision;
-  // Apply the destination before disposal can synchronously start another search.
-  // Path-only and equivalent search routes retain their active work and geometry.
-  if (location.hash !== appliedRouteHash) ROUTER.apply(true);
-  if (readerOverlay !== overlay || readerOverlayRevision !== revision) return;
-  closeReaderOverlay(true);
+  readerHost.reconcileSearchDestination();
 }
-
 function restoreReaderOverlay(state) {
-  if (!state || !state.voiceReaderOverlay || !state.readerUrl) {
-    reconcileSearchDestination();
-    return;
-  }
-  try {
-    var url = readerNavigation.parse(state.readerUrl);
-    const revision = readerOverlayRevision + (readerOverlay ? 1 : 0);
-    closeReaderOverlay(false, false);
-    if (readerOverlayRevision !== revision) return;
-    openReaderOverlay(url, false);
-  } catch (_) {}
+  readerHost.restoreReaderOverlay(state);
 }
-
 function handleReaderMessage(event) {
-  if (!readerNavigation.accepts(event)) return;
-  var message = event.data || {};
-  if (message.type === "voice-reader-close") {
-    if (readerClosing) return;
-    readerNavigation.persistProgress(message.progress);
-    readerClosing = true;
-    readerUiState = "base";
-    readerNavigation.dismiss();
-    try {
-      var readerUrl = new URL(readerOverlay.src, location.origin);
-      var returnUrl = readerUrl.searchParams.get("return");
-      var target = returnUrl && new URL(returnUrl, location.origin);
-      if (!target || target.origin !== location.origin || target.pathname !== "/search/")
-        target = new URL("/search/", location.origin);
-      // Without this Reader's own overlay entry, history.back() can reach an unrelated page.
-      if (!history.state || !history.state.voiceReaderOverlay) {
-        var returnFocus = readerNavigation.returnFocus;
-        history.replaceState(history.state, "", target.href);
-        reconcileSearchDestination();
-        if (returnFocus && returnFocus.isConnected) returnFocus.focus();
-        return;
-      }
-    } catch (_) {}
-    var overlay = readerOverlay;
-    history.back();
-    // Back may still arrive: keep its Reader entry intact for Forward.
-    setTimeout(function() {
-      if (!readerClosing || readerOverlay !== overlay) return;
-      readerNavigation.showCloseRecovery(target?.href || "/search/");
-    }, 1000);
-    return;
-  }
-  if (message.type === "voice-reader-ui-state") {
-    if (readerClosing) return;
-    if (["base", "panel", "full-search"].includes(message.state)) readerUiState = message.state;
-    return;
-  }
-  if (message.type === "voice-reader-theme") {
-    if (message.theme !== "dark" && message.theme !== "light") return;
-    STATE.isDark = message.theme === "dark";
-    applyTheme();
-    writeSearchPreference("theme", message.theme);
-    return;
-  }
-  if (message.type === "voice-reader-open") {
-    try {
-      readerOverlay = readerNavigation.replace(message.url, readerReturnScrollState);
-    } catch (_) {}
-    return;
-  }
-  if (message.type !== "voice-reader-navigate") return;
-  try {
-    const navigationTarget = new URL(message.url, location.origin);
-    if (navigationTarget.origin !== location.origin || navigationTarget.pathname !== "/search/") return;
-    var mergedTarget = readerNavigation.mergeSearchParams(navigationTarget, currentReaderSearchParams(), {
-      hashRoute: true,
-      keys: READER_RETURN_SEARCH_KEYS
-    });
-    history.replaceState(null, "", mergedTarget.href);
-    reconcileSearchDestination();
-  } catch (_) {}
+  readerHost.handleReaderMessage(event);
 }
-
 function navigateToReader(rawUrl, returnUrl) {
-  var target;
-  try { target = readerNavigation.parse(syncReaderFolderFilter(rawUrl)); }
-  catch (_) { return false; }
-  function open() {
-    var url = readerNavigation.prepare(target.href, normalizeReaderReturnUrl(returnUrl || location.href));
-    openReaderOverlay(url);
-  }
-  if (STATE.isMobile && (STATE.leftSidebarOpen || STATE.rightSidebarOpen)) {
-    STATE.leftSidebarOpen = false;
-    STATE.rightSidebarOpen = false;
-    updateSidebarVisibility();
-    syncStateToURL();
-    open();
-  } else open();
-  return true;
+  return readerHost.navigateToReader(rawUrl, returnUrl);
 }
-
 function restoreReaderFromSession() {
-  if (readerOverlay) return;
-  try {
-    // The persisted JSON is untrusted; the surrounding try/catch preserves the
-    // existing restore behavior for malformed and non-object values.
-    var saved = /** @type {{shareUrl?: string; readerUrl?: string; returnScroll?: unknown} | null} */ (readerNavigation.saved());
-    if (!saved || saved.shareUrl !== location.href || !saved.readerUrl) return;
-    var readerUrl = readerNavigation.parse(saved.readerUrl);
-    readerReturnScrollState = saved.returnScroll || null;
-    history.replaceState({ voiceReaderOverlay: true, readerUrl: readerUrl.href }, "", saved.shareUrl);
-    openReaderOverlay(readerUrl, false);
-  } catch (_) {}
+  readerHost.restoreReaderFromSession();
 }
 
 var warmedReaderAssets = new Set();
@@ -1697,7 +1479,7 @@ function prefetchNextPage() {
 }
 
 function prefetchLocalSearchPage() {
-  if (!STATE.hasMore || document.hidden || readerOverlay) return Promise.resolve();
+  if (!STATE.hasMore || document.hidden || readerHost.overlay) return Promise.resolve();
   const key = getSearchViewKey(), groupKey = "local|" + key;
   let controller = searchPrefetchAbortController;
   if (!controller || controller.signal.aborted || controller.groupKey !== groupKey) {
@@ -2474,7 +2256,7 @@ const ROUTER = {
     if (!sameSearchView) {
       if (routeInitialized) searchInputController.invalidateVisit();
       cancelPendingSearchControls();
-      readerReturnRestoreGeneration++;
+      readerReturnPosition.invalidate();
       if (!cancelActiveSearch()) return;
     }
     const owner = searchId;
@@ -2556,7 +2338,7 @@ function buildSearchURLParams({ includeQuery = true, displaySizes = false } = {}
 }
 
 function syncStateToURL() {
-  if (readerOverlay) return;
+  if (readerHost.overlay) return;
   let hash = STATE.mode === "global" ? "#/" : "#/" + STATE.repo;
   const sp = buildSearchURLParams();
   if (STATE.mode === "global") {
@@ -3134,7 +2916,7 @@ function saveSearchPosition() {
   const view = displayedSearchView;
   const target = view && getReturnPositionTarget(view.key);
   if (target) return target;
-  if (!view || positionRestore || readerOverlay || !view.results.length || !VSCROLL.heights.length) return null;
+  if (!view || positionRestore || readerHost.overlay || !view.results.length || !VSCROLL.heights.length) return null;
   if (STATE.results !== view.results || (STATE.isLoading && view.key !== getSearchViewKey())) return searchPositions.get(view.key) || null;
   const index = Math.min(findVirtualIndex(getResultScrollTop()), view.results.length - 1);
   if (!view.results[index]) return searchPositions.get(view.key) || null;
@@ -3266,7 +3048,7 @@ function tryRestoreSearchPosition(key, options = {}) {
         for (const [page, data] of task.cachedPages || []) {
           if (!task.ready.has(page) && data.generation === lookup.generation && data.total === total) task.ready.set(page, data);
         }
-        if (task.preview && !readerOverlay) {
+        if (task.preview && !readerHost.overlay) {
           const latest = captureReaderReturnScroll(), record = STATE.results[latest.index];
           const anchorId = getResultStableId(record);
           if (anchorId && anchorId !== position.anchorId) {
@@ -3384,7 +3166,7 @@ async function fetchPositionPageWithRecovery(query, page, signal, anchorId, dema
 }
 
 function resumeResultRecovery() {
-  if (document.hidden || readerOverlay) return;
+  if (document.hidden || readerHost.overlay) return;
   if (positionRestore?.failed && isRecoverableSearchError(positionRestore.error)) {
     if (navigator.onLine || JSON.parse(positionRestore.key).useLocalMode) tryRestoreSearchPosition(positionRestore.key);
     return;
@@ -3470,7 +3252,7 @@ function ensureResultWindowPages(start, end) {
   }
   // A restored search window must keep loading visible pages; reader return state
   // is only a temporary scroll target and must not block normal pagination.
-  if (!resultWindow || readerOverlay || VSCROLL.isDraggingThumb) return;
+  if (!resultWindow || readerHost.overlay || VSCROLL.isDraggingThumb) return;
   const size = resultWindow.query.pageSize;
   if (positionRestore) {
     if (positionRestore.preview) for (let page = Math.floor(start / size) + 1; page <= Math.ceil(end / size); page++) loadCachedPreviewPage(resultWindow, page);
@@ -3818,7 +3600,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   VSCROLL.estimatedHeight = snapshot.estimatedHeight || VSCROLL.estimatedHeight;
   VSCROLL.heightCache = new Map(snapshot.heightCache || []);
   (snapshot.heightRecords || []).forEach(function(record) { VSCROLL.heightCache.set(record[0], record[1]); });
-  readerReturnScrollState = restoreScroll && snapshot.scroll ? Object.assign({}, snapshot.scroll, { route: location.href, viewKey: key }) : null;
+  readerReturnPosition.setScroll(restoreScroll && snapshot.scroll ? Object.assign({}, snapshot.scroll, { route: location.href, viewKey: key }) : null);
   resetVirtualScrollState();
   renderResults(false);
   updateStatusBar();
@@ -3996,7 +3778,7 @@ function applyInitialSearchPayload(data, intent = searchIntentId) {
   // A hash navigation can be pending while this asynchronous payload arrives.
   // Keep the usual URL/session sync unless it would overwrite a newer route.
   if (window.location.hash === appliedRouteHash) syncStateToURL();
-  else if (!readerOverlay) persistSearchSession();
+  else if (!readerHost.overlay) persistSearchSession();
   prefetchNextPage();
   scheduleBackgroundLocalDataLoad();
   return true;
@@ -4533,8 +4315,8 @@ function renderResults(animate = false) {
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   pendingResultEntrance = animate;
-  if (readerReturnScrollState && !readerOverlay) {
-    setResultScrollTop(getVirtualOffset(readerReturnScrollState.index) + readerReturnScrollState.offset, true);
+  if (readerReturnPosition.scroll && !readerHost.overlay) {
+    setResultScrollTop(getVirtualOffset(readerReturnPosition.scroll.index) + readerReturnPosition.scroll.offset, true);
     restoreReaderReturnScroll(true);
   } else renderVisible();
 }
@@ -5710,7 +5492,7 @@ function readPagingView() {
     generation: searchRequestId, loadedPage: STATE._loadedPage, page: STATE.page,
     resultCount: STATE.results.length, hasMore: STATE.hasMore, loading: STATE.isLoading,
     suspended: !!snapshotCloneTask || !!positionRestore,
-    inactive: document.hidden || !!readerOverlay, dragging: VSCROLL.isDraggingThumb,
+    inactive: document.hidden || !!readerHost.overlay, dragging: VSCROLL.isDraggingThumb,
     scrollTop: getResultScrollTop(), loadedHeight: getVirtualTotalHeight(),
     viewportHeight: DOM.resultsContainer ? DOM.resultsContainer.clientHeight : 0,
     appendScrollTop: STATE._pagingAppendScrollTop
@@ -5826,7 +5608,7 @@ function setupVirtualScroll() {
   DOM.resultsContainer.addEventListener("scrollend", () => scheduleBottomLoad(), { passive: true });
   DOM.resultsContainer.addEventListener("scroll", () => {
     updateCurrentResultPosition();
-    if (readerReturnScrollState && !readerReturnRestoreActive) { readerReturnRestoreGeneration++; readerReturnScrollState = null; }
+    readerReturnPosition.cancelOnScroll();
     if (!VSCROLL.isDraggingThumb) ensureVirtualViewportCovered();
     scheduleVirtualRender(true);
   }, { passive: true });
@@ -5982,7 +5764,7 @@ function applyTheme() {
     DOM.themeIconLight.style.display = "";
     DOM.themeIconDark.style.display = "none";
   }
-  if (readerOverlay && readerOverlay.contentWindow) readerOverlay.contentWindow.postMessage({ type: "voice-reader-theme-state", theme: STATE.isDark ? "dark" : "light" }, location.origin);
+  if (readerHost.overlay && readerHost.overlay.contentWindow) readerHost.overlay.contentWindow.postMessage({ type: "voice-reader-theme-state", theme: STATE.isDark ? "dark" : "light" }, location.origin);
 }
 
 function toggleMobile() {
@@ -6096,7 +5878,7 @@ function setupKeyboard() {
     DOM.resultsContainer.focus({ preventScroll: true });
   });
   document.addEventListener("keydown", function(e) {
-    if (e.defaultPrevented || e.isComposing || searchComposing || e.keyCode === 229 || readerOverlay) return;
+    if (e.defaultPrevented || e.isComposing || searchComposing || e.keyCode === 229 || readerHost.overlay) return;
     const target = e.target instanceof Element ? e.target : document.activeElement;
     if (e.key === 'Escape' && target.closest('.sidebar')) {
       e.preventDefault();
@@ -6447,10 +6229,10 @@ async function init() {
     // Setting location.hash can emit popstate before the caller returns.
     // Ordinary hash navigation belongs to hashchange; only Reader exits need
     // immediate reconciliation here (including traversals across two entries).
-    if (readerOverlay) reconcileSearchDestination();
+    if (readerHost.overlay) reconcileSearchDestination();
   });
   window.addEventListener("hashchange", function() {
-    if (readerOverlay || appliedRouteHash === window.location.hash) return;
+    if (readerHost.overlay || appliedRouteHash === window.location.hash) return;
     reconcileSearchDestination();
   });
   window.addEventListener("resize", function() {

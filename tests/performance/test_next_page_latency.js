@@ -24,7 +24,7 @@ function createFixture(source, root) {
     VSCROLL:{renderFrame:0,renderAfterScroll:false,isDraggingThumb:false},
     document:{hidden:false}, DOM:{resultsContainer:{clientHeight:600}}, navigator:{onLine:true}, AbortController, DOMException,
     searchPrefetchAbortController:null, searchPagePrefetch:undefined, searchRequestId:1,
-    positionRestore:null, readerOverlay:null, snapshotCloneTask:null,
+    positionRestore:null, readerHost:{overlay:null}, snapshotCloneTask:null,
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
     recentSearchPages:new Map(), searchResponseCache:new Map(),

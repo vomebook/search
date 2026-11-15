@@ -94,6 +94,8 @@ const PRECACHE_URLS = [
   "/search/static/reader-resources.js",
   "/search/static/reader/core/reader-contract.js",
   "/search/static/search/reader-navigation.js",
+  "/search/static/search/reader-host/presentation/return-position.js",
+  "/search/static/search/reader-host/application/host.js",
   "/search/static/search/input/domain/ownership.js",
   "/search/static/search/input/application/controller.js",
   "/search/static/search/sidebar/presentation/filter-list.js",
