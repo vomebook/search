@@ -739,7 +739,10 @@ function restoreReaderFromSession() {
 }
 
 var warmedReaderAssets = new Set();
-var warmedReaderSources = new Set();
+var warmedReaderSources = new Map();
+// Match reader-resolve's metadata freshness without imposing a lifetime quota.
+const READER_WARMUP_TTL = 5 * 60 * 1000;
+const READER_WARMUP_MAX = 8;
 var readerWarmupInFlight = 0;
 let readerWarmupPending = null;
 const readerWarmupRetryAt = new Map();
@@ -758,8 +761,25 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     // that such a listener may have started or leave its timeout unowned.
     if (readerWarmupPending) return;
   }
-  if (warmedReaderSources.size >= 8 || warmedReaderSources.has(key) ||
-      Date.now() < (readerWarmupRetryAt.get(key) || 0)) return;
+  const now = Date.now();
+  for (const [sourceKey, entry] of warmedReaderSources) {
+    if (now >= entry.expiresAt) warmedReaderSources.delete(sourceKey);
+  }
+  const warmed = warmedReaderSources.get(key);
+  if (warmed) {
+    // Reader consumes this handoff. Only infer consumption after a confirmed
+    // write; disabled/quota-limited storage must still deduplicate in memory.
+    let consumed = false;
+    if (readerId && warmed.metadataStored) {
+      try { consumed = !sessionStorage.getItem(`reader-resolve:${readerId}`); } catch (_) {}
+    }
+    warmedReaderSources.delete(key);
+    if (!consumed) {
+      warmedReaderSources.set(key, warmed);
+      return;
+    }
+  }
+  if (now < (readerWarmupRetryAt.get(key) || 0)) return;
   const controller = new AbortController();
   const task = { key, cancel(superseded = false) { finish(false, superseded); } };
   const finish = (success, superseded = false) => {
@@ -768,7 +788,15 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     readerWarmupPending = null;
     readerWarmupInFlight = 0;
     if (success) {
-      warmedReaderSources.add(key);
+      let metadataStored = false;
+      if (readerId) {
+        try { metadataStored = !!sessionStorage.getItem(`reader-resolve:${readerId}`); } catch (_) {}
+      }
+      warmedReaderSources.delete(key);
+      warmedReaderSources.set(key, { expiresAt: Date.now() + READER_WARMUP_TTL, metadataStored });
+      while (warmedReaderSources.size > READER_WARMUP_MAX) {
+        warmedReaderSources.delete(warmedReaderSources.keys().next().value);
+      }
       readerWarmupRetryAt.delete(key);
     } else {
       controller.abort();
