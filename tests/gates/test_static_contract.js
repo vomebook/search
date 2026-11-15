@@ -5,6 +5,7 @@ const { assertCode, readReaderSource } = require("../support/reader_source_contr
 const { test, run } = require("../support/test_harness");
 
 const app = fs.readFileSync("static/app.js", "utf8");
+const catalog = fs.readFileSync("static/search/catalog/application/client.js", "utf8");
 const readerAssetSnapshot = fs.readFileSync("static/search/reader-assets/application/snapshot.js", "utf8");
 const readerAssetTransport = fs.readFileSync("static/search/reader-assets/infrastructure/sidecar.js", "utf8");
 const resultRows = fs.readFileSync("static/search/results/presentation/row.js", "utf8");
@@ -58,8 +59,8 @@ test("main thread has warm-connection keepalive", () => {
   assert.ok(html.indexOf("/api/ping") < html.indexOf('href="static/style.css"'));
 });
 test("startup metadata requests are deduplicated without repository-wide folder prefetch", () => {
-  assert.match(app, /if \(repoApiPending\) return repoApiPending/);
-  assert.match(app, /if \(sidebarInitialPending\.has\(key\)\) return sidebarInitialPending\.get\(key\)/);
+  assert.match(catalog, /if \(repoApiPending\) return repoApiPending/);
+  assert.match(catalog, /if \(sidebarInitialPending\.has\(key\)\) return sidebarInitialPending\.get\(key\)/);
   assert.strictEqual(/fetchFolderContents\(shortName, ""\)/.test(app), false);
 });
 test("local metadata completion refreshes global repository and extension filters", () => {
@@ -71,9 +72,9 @@ test("local metadata completion refreshes global repository and extension filter
   assert.match(app, /initial: repo => loadSidebarInitial\(repo\)/);
 });
 test("filter metadata rejects stale requests and uses static sidebar fallback", () => {
-  assert.match(app, /const extensionApiCache = new Map\(\)/);
-  assert.match(app, /const extensionApiPending = new Map\(\)/);
-  assert.match(app, /if \(extensionApiPending\.has\(key\)\) return extensionApiPending\.get\(key\)/);
+  assert.match(catalog, /const extensionApiCache = new Map\(\)/);
+  assert.match(catalog, /const extensionApiPending = new Map\(\)/);
+  assert.match(catalog, /if \(extensionApiPending\.has\(key\)\) return extensionApiPending\.get\(key\)/);
   assert.match(filters, /let extensionFilterRenderId = 0/);
   assert.match(filters, /if \(renderId !== extensionFilterRenderId\) return/);
   assert.match(filters, /if \(deps\.readView\(\)\.mode !== renderMode \|\| deps\.readView\(\)\.repo !== renderRepo \|\| deps\.readView\(\)\.repoFull !== renderRepoFull\) return/);

@@ -1,3 +1,4 @@
+import './catalog_contracts.mjs';
 import './result_interactions_contracts.mjs';
 import './random_discovery_contracts.mjs';
 import './history_quotation_contracts.mjs';
