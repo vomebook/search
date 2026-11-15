@@ -1,7 +1,8 @@
 // Exercise the repository's content-addressed build with a minimal asset graph.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
+import vm from 'node:vm';
 import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
@@ -42,7 +43,9 @@ test('PDF range dependencies are built before the network consumer and pinned fo
       const files = resources.buildFiles(project);
       for (const file of files) {
         const target=join(assets,file); mkdirSync(dirname(target),{recursive:true});
-        const fixture=[cache,hints,network].includes(file) ? readFileSync(join(root,'static',file)) : Buffer.from('');
+        const fixture=[cache,hints,network,'reader-resources.js','app.js','reader/pdf/pdf-worker-wrapper.mjs',
+          'reader/pdf/reader-engine-preload.js','reader/pdf/reader-djvu-engine-worker.mjs'].includes(file)
+          ? readFileSync(join(root,'static',file)) : Buffer.from('');
         writeFileSync(target,fixture);
       }
       writeFileSync(join(output,'index.html'),'<html></html>');
@@ -53,6 +56,36 @@ test('PDF range dependencies are built before the network consumer and pinned fo
         cwd:work,env:{...process.env,STATIC_OUTPUT_DIR:output},encoding:'utf8',timeout:15000
       });
       assert.ifError(run.error); assert.equal(run.status,0,run.stderr);
+      const built = file => {
+        const directory=dirname(file), name=file.split('/').at(-1), dot=name.lastIndexOf('.');
+        const hashed=readdirSync(join(assets,directory)).find(entry=>entry.startsWith(name.slice(0,dot)+'.') && entry.endsWith(name.slice(dot)));
+        assert.ok(hashed,'built '+file);
+        return {path:(directory==='.'?'':directory+'/')+hashed,text:readFileSync(join(assets,directory,hashed),'utf8')};
+      };
+      const base=project==='github'?'/search/static/':'/static/';
+      const app=built('app.js').text;
+      const expression=app.match(/(?:var|const) engineAssets = ([^;]+);/)[1];
+      assert.ok(expression.includes('djvuSelectedAssets'),'build must preserve runtime architecture choice');
+      const inventory=built('reader-resources.js');
+      const worker=built('reader/pdf/reader-djvu-engine-worker.mjs');
+      assert.ok(worker.text.includes('../../'+inventory.path),'worker imports hashed shared selection');
+      assert.ok(built('reader/pdf/reader-engine-preload.js').text.includes('./'+built('reader/pdf/pdf-worker-wrapper.mjs').path.split('/').at(-1)));
+      for(const simd of [true,false]) {
+        const context={WebAssembly:{validate:()=>simd}};vm.createContext(context);vm.runInContext(inventory.text,context);
+        for(const extension of ['djvu','djv','pdf','epub','txt']) {
+          context.extension=extension;
+          const hrefs=Array.from(vm.runInContext(expression,context));
+          if(extension==='djvu'||extension==='djv') {
+            assert.equal(hrefs.length,1);assert.ok(hrefs[0].endsWith('/'+(simd?'simd128':'scalar')+'/djvu_rs_bg.wasm'));
+            const demanded=worker.text.matchAll(/new URL\('([^']+djvu_rs_bg\.wasm)'/g);
+            assert.ok([...demanded].some(match=>new URL(match[1],'https://site.test'+base+worker.path).pathname===hrefs[0]));
+          } else if(extension==='pdf') {
+            assert.ok(hrefs.includes(base+built('reader/pdf/pdf-worker-wrapper.mjs').path),'intent and Reader use hashed worker URL');
+            assert.ok(hrefs.includes(base+'vendor/wasm/qcms_bg.wasm'),'ICC branch survives build');
+          } else if(extension==='epub') assert.ok(hrefs.includes(base+'foliate-reader/view.js'+(project==='github'?'?reader-v1':'')));
+          else assert.deepEqual(hrefs,[]);
+        }
+      }
       const original=readFileSync(join(root,'static',network),'utf8');
       let rewritten=original;
       for (const dependency of [cache,hints]) {

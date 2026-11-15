@@ -5,21 +5,23 @@ const source = fs.readFileSync('static/app.js', 'utf8');
 const block = source.slice(source.search(/(?:var|const) warmedReaderAssets =/), source.indexOf('function isReadableRecord'));
 const metadataBlock = source.slice(source.indexOf('const readerSessionEntries ='), source.indexOf('function getReaderLink'));
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function fixture() {
+function fixture(simd = true) {
   let now = 100000;
-  const timers = new Map(), calls = [], stored = new Map(), events = {};
+  const timers = new Map(), calls = [], stored = new Map(), events = {}, links = [], listeners = new Map();
   const addEventListener = (name, listener) => {
-    const previous = events[name];
-    events[name] = previous
-      ? (...args) => { previous(...args); listener(...args); }
-      : listener;
+    if (!listeners.has(name)) listeners.set(name, new Set());
+    listeners.get(name).add(listener);
+    events[name] = (...args) => { for (const fn of [...listeners.get(name)]) fn(...args); };
   };
+  const removeEventListener = (name, listener) => listeners.get(name)?.delete(listener);
+  const resourceContext = {WebAssembly:{validate:()=>simd}};
+  vm.runInNewContext(fs.readFileSync('static/reader-resources.js','utf8'),resourceContext);
   const context = {URL, Map, Set, Promise, AbortController, AbortSignal, DOMException, encodeURIComponent,
-    VoiceOfMLReaderResources: require('../../../static/reader-resources.js'),
+    VoiceOfMLReaderResources: resourceContext.VoiceOfMLReaderResources,
     Date: {now: () => now}, API_BASE: 'https://api.test', location:{origin:'https://site.test'},
-    navigator:{onLine:true}, document:{hidden:false,createElement:()=>({addEventListener(){},remove(){}}),head:{appendChild(){}},
-      addEventListener},
-    window:{addEventListener},
+    navigator:{onLine:true}, document:{hidden:false,createElement:()=>({addEventListener(){},remove(){}}),head:{appendChild:link=>links.push(link)},
+      addEventListener,removeEventListener},
+    window:{addEventListener,removeEventListener},
     sessionStorage:{get length(){return stored.size;},key:i=>[...stored.keys()][i],
       getItem:key=>stored.get(key)||null,removeItem:key=>stored.delete(key),
       setItem:(key,value)=>stored.set(key,value)},warmConnection(){},
@@ -29,9 +31,65 @@ function fixture() {
       options.signal?.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')));
     })};
   vm.createContext(context);vm.runInContext(metadataBlock+block+'\nsetupReaderIntentWarming();',context);
-  return {context,calls,stored,events,timers,run:code=>vm.runInContext(code,context),advance:(ms=5001)=>{now+=ms;}};
+  return {context,calls,stored,events,timers,links,run:code=>vm.runInContext(code,context),advance:(ms=5001)=>{now+=ms;}};
 }
 (async()=>{
+  const engineCalls = f => f.calls.filter(call=>call.url.endsWith('.wasm') || call.url.endsWith('pdf-worker-wrapper.mjs'));
+  for (const simd of [true,false]) {
+    const selected=fixture(simd);
+    selected.run(`warmReaderIntent('/reader?ext=djvu');warmReaderIntent('/reader?ext=djv')`);
+    const calls=engineCalls(selected);
+    assert.strictEqual(calls.length,1,'one selected decoder per intent, aliases coalesce');
+    assert.ok(calls[0].url.includes('/'+(simd?'simd128':'scalar')+'/djvu_rs_bg.wasm'));
+    assert.strictEqual(calls[0].options.mode,'cors');
+    assert.strictEqual(calls[0].options.credentials,'same-origin');
+    assert.ok(!selected.links.some(link=>link.href.includes('/djvu-rs-reader/') || link.href.endsWith('.wasm')));
+    calls[0].resolve(new Response(new Uint8Array(813837)));await tick();
+    assert.strictEqual(selected.run('readerAssetWarmups.size'),0,'consume complete body before releasing ownership');
+    selected.run(`warmReaderIntent('/reader?ext=djvu')`);
+    assert.strictEqual(engineCalls(selected).length,1,'successful bytes deduplicate');
+  }
+  for (const event of ['pagehide','offline','visibilitychange','timeout']) {
+    const f=fixture();f.run(`warmReaderIntent('/reader?ext=djvu')`);
+    const old=engineCalls(f)[0];
+    if(event==='timeout')for(const fn of [...f.timers.values()])fn();
+    else {if(event==='visibilitychange')f.context.document.hidden=true;f.events[event]();}
+    assert.ok(old.options.signal.aborted);
+    f.context.document.hidden=false;
+    f.run(`warmReaderIntent('/reader?ext=djvu')`);
+    const next=engineCalls(f)[1];assert.ok(next,'cancelled bytes may immediately retry');
+    await tick();assert.strictEqual(f.run('readerAssetWarmups.size'),1,'old rejection cannot release new owner');
+    next.resolve(new Response('bytes'));await tick();
+    assert.strictEqual(f.run('readerAssetWarmups.size'),0);
+  }
+  for(const response of [new Response('',{status:503}),new Response('x',{headers:{'content-length':1048577}}),new Response(new Uint8Array(1048577))]) {
+    const f=fixture();f.run(`warmReaderIntent('/reader?ext=djvu')`);
+    engineCalls(f)[0].resolve(response);await tick();
+    assert.strictEqual(f.run('readerAssetWarmups.size'),0);
+    f.run(`warmReaderIntent('/reader?ext=djvu')`);assert.strictEqual(engineCalls(f).length,2,'failed or oversized bytes retry');
+    f.events.pagehide();await tick();
+  }
+  const pdf=fixture();pdf.run(`warmReaderIntent('/reader?ext=pdf');warmReaderIntent('/reader?ext=pdf')`);
+  assert.strictEqual(engineCalls(pdf).length,2);
+  assert.ok(engineCalls(pdf).every(call=>call.options.mode==='same-origin' && call.options.credentials==='same-origin'));
+  assert.ok(!pdf.links.some(link=>link.href.endsWith('.wasm') || link.href.endsWith('pdf-worker-wrapper.mjs')));
+  pdf.events.pagehide();await tick();
+  const lean=fixture();lean.context.navigator.connection={saveData:true};lean.run(`warmReaderIntent('/reader?ext=djvu')`);
+  assert.strictEqual(engineCalls(lean).length,0);
+  lean.run(`warmReaderIntent('/reader?ext=pdf')`);
+  assert.strictEqual(engineCalls(lean).length,1,'saveData retains PDF wrapper warming');
+  assert.ok(engineCalls(lean)[0].url.endsWith('pdf-worker-wrapper.mjs'));
+  lean.events.pagehide();await tick();
+  const controlled=fixture();controlled.context.navigator.serviceWorker={controller:{}};
+  controlled.run(`warmReaderIntent('/reader?ext=djvu')`);
+  const wasm=engineCalls(controlled)[0];
+  assert.strictEqual(wasm.options.cache,undefined,'ordinary fetch remains eligible for HTTP/SW cache reuse');
+  const shell=controlled.calls.find(call=>call.url.endsWith('/reader.js'));
+  assert.ok(shell,'controlled shell still populates the existing SW cache path');
+  shell.resolve({ok:true,arrayBuffer:async()=>new ArrayBuffer(0)});await tick();
+  assert.ok(controlled.links.some(link=>link.href===shell.url));
+  controlled.events.pagehide();await tick();
+  console.log('format warming: selected SIMD/scalar bytes, request identity, bounded reads, cancellation, retry, SW routing and deduplication passed');
   const f=fixture();f.run('warmReaderIntent("/reader?id=one&ext=txt");warmReaderIntent("/reader?id=one&ext=txt")');
   const first=f.calls.find(call=>call.url.includes('reader-resolve'));
   assert.strictEqual(first.url,'https://api.test/api/reader-resolve?id=one');
