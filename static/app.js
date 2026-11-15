@@ -68,14 +68,6 @@ let repoExtensionCounts = {};
 let repoList = [];
 let extensionList = [];
 let readerMetadata = { available: false, count: 0, byRepo: {} };
-let corpusWorker = null;
-let corpusWorkerStartPromise = null;
-let corpusWorkerEpoch = null;
-let corpusWorkerRequestId = 0;
-let corpusWorkerRestartCount = 0;
-let corpusWorkerConsecutiveRestarts = 0;
-const CORPUS_WORKER_MAX_CONSECUTIVE_RESTARTS = 1;
-const corpusWorkerPending = new Map();
 const folderTreeCache = new Map();
 
 let keepalivePending = null;
@@ -849,179 +841,19 @@ async function loadData() {
   }
 }
 
-function makeWorkerError(code, message) {
-  return Object.assign(new Error(message || code), {code});
-}
-
-function rejectCorpusWorkerPending(error) {
-  corpusWorkerPending.forEach(function(entry) {
-    clearTimeout(entry.timer);
-    entry.cleanup?.();
-    entry.reject(error);
-  });
-  corpusWorkerPending.clear();
-}
-
-function terminateCorpusWorker(error, worker = corpusWorker) {
-  // A timeout/error from a retired instance must not destroy its replacement.
-  if (worker !== corpusWorker) return;
-  corpusWorker = null;
-  corpusWorkerStartPromise = null;
-  if (worker) worker.terminate();
-  rejectCorpusWorkerPending(error || makeWorkerError("WORKER_TERMINATED", "Search Worker terminated"));
-}
-
-function postCorpusWorkerRequest(type, payload, timeoutMs, signal, worker = corpusWorker) {
-  if (signal?.aborted) return Promise.reject(new DOMException("Cancelled", "AbortError"));
-  if (!worker || worker !== corpusWorker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Search Worker is unavailable"));
-  const id = ++corpusWorkerRequestId;
-  return new Promise(function(resolve, reject) {
-    const expire = function() {
-      if (!corpusWorkerPending.has(id)) return;
-      clearTimeout(timer);
-      cleanup();
-      corpusWorkerPending.delete(id);
-      const error = makeWorkerError("WORKER_TIMEOUT", "Search Worker request timed out");
-      terminateCorpusWorker(error, worker);
-      reject(error);
-    };
-    const duration = timeoutMs || WORKER_REQUEST_TIMEOUT;
-    const timer = setTimeout(expire, duration);
-    const cancel = () => {
-      if (!corpusWorkerPending.has(id)) return;
-      corpusWorkerPending.delete(id); clearTimeout(timer); cleanup();
-      // Cancellation must settle even if structured cloning/posting fails.
-      try {
-        if (worker === corpusWorker) worker.postMessage({protocol: WORKER_PROTOCOL_VERSION, type: "cancel-search", id: ++corpusWorkerRequestId, payload: {requestId: id}});
-      } catch (_) {}
-      reject(new DOMException("Cancelled", "AbortError"));
-    };
-    const cleanup = () => signal?.removeEventListener("abort", cancel);
-    corpusWorkerPending.set(id, { worker, resolve, reject, timer, expire, cleanup, deadline: Date.now() + duration });
-    signal?.addEventListener("abort", cancel, {once: true});
-    try {
-      worker.postMessage({ protocol: WORKER_PROTOCOL_VERSION, type: type, id: id, payload: payload || {} });
-    } catch (error) {
-      corpusWorkerPending.delete(id); clearTimeout(timer); cleanup();
-      reject(error);
-    }
-    if (signal?.aborted) cancel();
+var corpusClient;
+function getCorpusClient() {
+  return corpusClient ||= VoiceOfMLCorpusClient.create({
+    protocol: WORKER_PROTOCOL_VERSION,
+    requestTimeout: WORKER_REQUEST_TIMEOUT,
+    loadTimeout: WORKER_LOAD_TIMEOUT,
+    createWorker: () => window.Worker ? new Worker("static/search/index-worker.js") : null,
+    corpusURL: () => new URL(DATA_URL, document.baseURI).href,
   });
 }
 
-function ensureCorpusWorker() {
-  if (corpusWorkerStartPromise) return corpusWorkerStartPromise;
-  if (corpusWorker) return Promise.resolve(corpusWorker);
-  const epoch = { worker: null, recovery: null, bootstrap: null };
-  corpusWorkerEpoch = epoch;
-  if (!window.Worker) return Promise.reject(makeWorkerError("WORKER_UNAVAILABLE", "Web Workers are unavailable"));
-  let worker;
-  try {
-    worker = new Worker("static/search/index-worker.js");
-  } catch (error) {
-    return Promise.reject(error);
-  }
-  epoch.worker = worker;
-  corpusWorker = worker;
-  worker.addEventListener("message", function(event) {
-    if (worker !== corpusWorker) return;
-    const message = event.data || {};
-    if (message.type !== "response") return;
-    const pending = corpusWorkerPending.get(message.id);
-    if (!pending || pending.worker !== worker) return;
-    corpusWorkerPending.delete(message.id);
-    clearTimeout(pending.timer);
-    pending.cleanup?.();
-    if (message.protocol !== WORKER_PROTOCOL_VERSION) {
-      pending.reject(makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch"));
-      return;
-    }
-    if (!message.ok) pending.reject(makeWorkerError(message.error && message.error.code || "WORKER_ERROR", message.error && message.error.message));
-    else pending.resolve(message.result);
-  });
-  function fail(event) {
-    const error = makeWorkerError("WORKER_ERROR", event && event.message || "Search Worker failed");
-    terminateCorpusWorker(error, worker);
-  }
-  worker.addEventListener("error", fail, { once: true });
-  worker.addEventListener("messageerror", fail, { once: true });
-  // Publish the shared startup promise before posting, including synchronous failures.
-  corpusWorkerStartPromise = Promise.resolve().then(function() {
-    return postCorpusWorkerRequest("handshake", {}, WORKER_REQUEST_TIMEOUT, null, worker);
-  }).then(function(result) {
-    if (!result || result.protocol !== WORKER_PROTOCOL_VERSION) throw makeWorkerError("PROTOCOL_MISMATCH", "Refresh required: app/Worker protocol mismatch");
-    if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
-    corpusWorkerStartPromise = null;
-    return worker;
-  }).catch(function(error) {
-    terminateCorpusWorker(error, worker);
-    throw error;
-  });
-  return corpusWorkerStartPromise;
-}
-
-async function corpusWorkerRequest(type, payload, timeoutMs, signal) {
-  const checkCancelled = () => {
-    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
-  };
-  checkCancelled();
-  const start = ensureCorpusWorker();
-  const epoch = corpusWorkerEpoch;
-  try {
-    const worker = await start;
-    checkCancelled();
-    const metadata = epoch.bootstrap ? await epoch.bootstrap : null;
-    checkCancelled();
-    const result = metadata && type === "load-corpus" && payload?.url === new URL(DATA_URL, document.baseURI).href
-      ? metadata : await postCorpusWorkerRequest(type, payload, timeoutMs, signal, worker);
-    checkCancelled();
-    if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
-    corpusWorkerConsecutiveRestarts = 0;
-    return result;
-  } catch (error) {
-    checkCancelled();
-    if (error?.name === "AbortError" || error?.code === "PROTOCOL_MISMATCH") throw error;
-    // All failed waiters on an epoch join one recovery, including late catch callbacks.
-    if (!epoch.recovery) {
-      if (corpusWorkerConsecutiveRestarts >= CORPUS_WORKER_MAX_CONSECUTIVE_RESTARTS) throw error;
-      corpusWorkerConsecutiveRestarts++;
-      corpusWorkerRestartCount++;
-      epoch.recovery = Promise.resolve().then(async function() {
-        terminateCorpusWorker(error, epoch.worker);
-        const ready = ensureCorpusWorker();
-        const replacement = corpusWorkerEpoch;
-        if (!replacement.bootstrap) {
-          replacement.bootstrap = ready.then(worker => postCorpusWorkerRequest("load-corpus", {
-            url: new URL(DATA_URL, document.baseURI).href,
-          }, WORKER_LOAD_TIMEOUT, null, worker));
-        }
-        const bootstrap = replacement.bootstrap;
-        try {
-          const metadata = await bootstrap;
-          return { worker: replacement.worker, metadata };
-        } finally {
-          // A rejected load must not poison this live instance permanently.
-          // Release only our bootstrap; retain the exhausted automatic retry
-          // budget until a later explicit request actually succeeds.
-          if (replacement.bootstrap === bootstrap) replacement.bootstrap = null;
-        }
-      });
-    }
-    // Bootstrap belongs to the shared replacement; cancelling one waiter must
-    // not cancel it for the remaining callers.
-    const { worker, metadata } = await epoch.recovery.catch(function(recoveryError) {
-      checkCancelled();
-      throw recoveryError;
-    });
-    checkCancelled();
-    if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
-    const result = type === "load-corpus" && payload?.url === new URL(DATA_URL, document.baseURI).href
-      ? metadata : await postCorpusWorkerRequest(type, payload, timeoutMs, signal, worker);
-    checkCancelled();
-    if (worker !== corpusWorker) throw makeWorkerError("WORKER_TERMINATED", "Search Worker terminated");
-    corpusWorkerConsecutiveRestarts = 0;
-    return result;
-  }
+function corpusWorkerRequest(type, payload, timeoutMs, signal) {
+  return getCorpusClient().request(type, payload, timeoutMs, signal);
 }
 
 function toMirrorURL(url) {
@@ -1078,9 +910,8 @@ function fetchSearchPage(cacheKey, url, body, signal, timeoutMs) {
 }
 
 function expireSearchRequests() {
-  const now = Date.now();
   getSearchTransport().expire();
-  corpusWorkerPending.forEach(entry => { if (now >= entry.deadline) entry.expire(); });
+  getCorpusClient().expireRequests();
 }
 
 function noteSearchApiFailure(error) {

@@ -13,6 +13,7 @@ export const APP_DEPENDENCIES = Object.freeze([
   "search/history/infrastructure/store.js",
   "search/history/application/controller.js",
   "search/ambient/application/quotation.js",
+  "search/corpus/application/client.js",
   "search/results/snapshots/domain/copy-budget.js", "search/results/snapshots/application/store.js",
   "search/execution/domain/policy.js", "search/execution/application/controller.js",
   "search/search-session.js", "search/download-controller.js", "search/downloads/application/batch.js", "search/downloads/presentation/queue.js", "search/size-format.js", "search/record-path.js",

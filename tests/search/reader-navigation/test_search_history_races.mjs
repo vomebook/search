@@ -36,7 +36,7 @@ function transportFixture() {
   const names = ['getSearchTransport', 'createSearchPageRequest', 'fetchSearchPage', 'expireSearchRequests'];
   if (source.includes('function normalizeSearchError(')) names.push('normalizeSearchError', 'suspendSearchRequests', 'resumeSearchRequests');
   const c = fixture(names, {DOMException, document:{hidden:false}, APPEND_REQUEST_TIMEOUT:50,
-    Date:{now:()=>now}, corpusWorkerPending:new Map(), scheduleScrollRecovery(){},
+    Date:{now:()=>now}, getCorpusClient:()=>({expireRequests(){}}), scheduleScrollRecovery(){},
     setTimeout(fn, delay){timers.set(++timerId,{fn,delay});return timerId;},
     clearTimeout(id){timers.delete(id);},
     isValidSearchResponse:()=>true,

@@ -97,7 +97,7 @@ class ApiIntegrationTest(unittest.TestCase):
           const count = 4000;
           await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['VoiceOfML/Test'],fd:[['directory']],
             rc:Array.from({length:count},(_,i)=>[0,'alpha guide '+i,'txt',0,1,0])}});
-          const worker = corpusWorker, restarts = corpusWorkerRestartCount;
+          const {worker, restartCount: restarts} = getCorpusClient().inspect();
           const controller = new AbortController();
           const pending = doSearchLocal({q:'alpha',page:1,pageSize:100,signal:controller.signal})
             .then(()=>'completed', error=>error.name);
@@ -106,7 +106,7 @@ class ApiIntegrationTest(unittest.TestCase):
           const cancelled = await pending;
           const current = await doSearchLocal({q:'alpha',page:1,pageSize:100});
           return {cancelled,count:metadata.count,total:current.total,rows:current.results.length,
-            sameWorker:worker===corpusWorker,restarts:corpusWorkerRestartCount-restarts};
+            sameWorker:worker===getCorpusClient().inspect().worker,restarts:getCorpusClient().inspect().restartCount-restarts};
         }''')
         self.assertEqual(observed, {'cancelled':'AbortError', 'count':4000, 'total':4000,
                                     'rows':100, 'sameWorker':True, 'restarts':0})
@@ -143,7 +143,7 @@ class ApiIntegrationTest(unittest.TestCase):
         result = self.page.evaluate('''async () => {
           await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['VoiceOfML/Test'],fd:[[]],
             rc:Array.from({length:40000},(_,i)=>[0,'alpha '+i,'txt',0,1,0])}});
-          const worker=corpusWorker, restarts=corpusWorkerRestartCount, controller=new AbortController();
+          const {worker, restartCount: restarts}=getCorpusClient().inspect(), controller=new AbortController();
           const pending=doSearchLocal({q:'a',page:1,pageSize:100,signal:controller.signal})
             .then(()=> 'completed', error=>error.name);
           const metadata=await corpusWorkerRequest('metadata', {});
@@ -151,7 +151,7 @@ class ApiIntegrationTest(unittest.TestCase):
           const cancelled=await pending;
           const current=await doSearchLocal({q:'a',page:1,pageSize:100});
           return {cancelled,count:metadata.count,total:current.total,rows:current.results.length,
-            sameWorker:worker===corpusWorker,restarts:corpusWorkerRestartCount-restarts};
+            sameWorker:worker===getCorpusClient().inspect().worker,restarts:getCorpusClient().inspect().restartCount-restarts};
         }''')
         self.assertEqual(result, {'cancelled':'AbortError', 'count':40000, 'total':40000, 'rows':100,
                                   'sameWorker':True, 'restarts':0})
@@ -188,13 +188,13 @@ class ApiIntegrationTest(unittest.TestCase):
         observed = self.page.evaluate('''async () => {
           await corpusWorkerRequest('replace-corpus', {data:{v:2,rp:['R'],fd:[[]],
             rc:Array.from({length:8000},(_,i)=>[0,'a'.repeat(150)+i,'txt',0,1,0])}});
-          const worker=corpusWorker, restarts=corpusWorkerRestartCount, controller=new AbortController();
+          const {worker, restartCount: restarts}=getCorpusClient().inspect(), controller=new AbortController();
           const pending=doSearchLocal({q:'a?*'.repeat(60),exact:true,page:1,pageSize:100,signal:controller.signal})
             .then(()=> 'completed', error=>error.name);
           const metadata=await corpusWorkerRequest('metadata', {});
           controller.abort();
-          return {cancelled:await pending,count:metadata.count,same:worker===corpusWorker,
-            restarts:corpusWorkerRestartCount-restarts};
+          return {cancelled:await pending,count:metadata.count,same:worker===getCorpusClient().inspect().worker,
+            restarts:getCorpusClient().inspect().restartCount-restarts};
         }''')
         self.assertEqual(observed, {'cancelled':'AbortError', 'count':8000, 'same':True, 'restarts':0})
 
@@ -214,7 +214,7 @@ class ApiIntegrationTest(unittest.TestCase):
             status=200, content_type='application/gzip', body=body))
         observed = self.page.evaluate('''async () => {
           const before=await corpusWorkerRequest('local-search',{q:'',page:1,pageSize:2});
-          const failed=await postCorpusWorkerRequest('load-corpus',{url:new URL('bad-corpus.json.gz',location.href).href},10000)
+          const failed=await getCorpusClient().post('load-corpus',{url:new URL('bad-corpus.json.gz',location.href).href},10000)
             .then(()=>null,error=>error.code);
           const after=await corpusWorkerRequest('local-search',{q:'',page:1,pageSize:2});
           return {failed,before:before.snapshot_generation,after:after.snapshot_generation,
@@ -515,19 +515,19 @@ class ApiIntegrationTest(unittest.TestCase):
         self.load()
         self.page.wait_for_function("STATE.dataLoaded", timeout=30000)
         observed = self.page.evaluate("""async () => {
-          const old = corpusWorker, before = corpusWorkerRestartCount;
+          const {worker: old, restartCount: before} = getCorpusClient().inspect();
           old.postMessage = () => {};
           const a = corpusWorkerRequest('metadata', {});
           const b = corpusWorkerRequest('folder-tree', {repo:'VoiceOfML/VOMEBOOK'});
           await Promise.resolve();
           old.dispatchEvent(new ErrorEvent('error', {message:'controlled failure'}));
           for (let i=0;i<5;i++) await Promise.resolve();
-          const replacement = corpusWorker;
+          const replacement = getCorpusClient().inspect().worker;
           old.dispatchEvent(new MessageEvent('messageerror'));
           const [metadata, tree] = await Promise.all([a,b]);
           return {count:metadata.count, hasTree:!!tree.tree,
-            same:replacement===corpusWorker, replaced:old!==replacement,
-            restarts:corpusWorkerRestartCount-before, pending:corpusWorkerPending.size};
+            same:replacement===getCorpusClient().inspect().worker, replaced:old!==replacement,
+            restarts:getCorpusClient().inspect().restartCount-before, pending:getCorpusClient().inspect().pending.length};
         }""")
         self.assertGreater(observed.pop('count'), 0)
         self.assertEqual(observed, {'hasTree': True, 'same': True, 'replaced': True,
@@ -537,7 +537,7 @@ class ApiIntegrationTest(unittest.TestCase):
         self.load()
         self.page.wait_for_function("STATE.dataLoaded", timeout=30000)
         observed = self.page.evaluate("""async () => {
-          const NativeWorker = window.Worker, old = corpusWorker;
+          const NativeWorker = window.Worker, old = getCorpusClient().inspect().worker;
           let release, entered;
           const bootstrapEntered = new Promise(resolve => { entered = resolve; });
           const posted = [];
@@ -565,7 +565,7 @@ class ApiIntegrationTest(unittest.TestCase):
             return {cancelled, count:metadata.count,
               bootstraps:posted.filter(type=>type==='load-corpus').length,
               searches:posted.filter(type=>type==='local-search').length,
-              pending:corpusWorkerPending.size};
+              pending:getCorpusClient().inspect().pending.length};
           } finally { window.Worker = NativeWorker; }
         }""")
         self.assertGreater(observed.pop('count'), 0)
@@ -576,15 +576,15 @@ class ApiIntegrationTest(unittest.TestCase):
         self.load()
         self.page.wait_for_function('STATE.dataLoaded', timeout=30000)
         result = self.page.evaluate('''async () => {
-          const first=corpusWorker, before=corpusWorkerRestartCount;
-          terminateCorpusWorker(makeWorkerError('WORKER_TERMINATED','injected'));
+          const {worker: first, restartCount: before}=getCorpusClient().inspect();
+          getCorpusClient().terminate(VoiceOfMLCorpusClient.makeWorkerError('WORKER_TERMINATED','injected'));
           const a=await corpusWorkerRequest('metadata', {});
-          const second=corpusWorker;
-          terminateCorpusWorker(makeWorkerError('WORKER_TERMINATED','injected'));
+          const second=getCorpusClient().inspect().worker;
+          getCorpusClient().terminate(VoiceOfMLCorpusClient.makeWorkerError('WORKER_TERMINATED','injected'));
           const b=await corpusWorkerRequest('metadata', {});
-          return {counts:[a.count,b.count], restarts:corpusWorkerRestartCount-before,
-            workersDistinct:first!==second && second!==corpusWorker,
-            consecutive:corpusWorkerConsecutiveRestarts};
+          return {counts:[a.count,b.count], restarts:getCorpusClient().inspect().restartCount-before,
+            workersDistinct:first!==second && second!==getCorpusClient().inspect().worker,
+            consecutive:getCorpusClient().inspect().consecutiveRestarts};
         }''')
         self.assertGreater(result['counts'][0], 0)
         self.assertEqual(result['counts'][0], result['counts'][1])
@@ -611,7 +611,7 @@ class ApiIntegrationTest(unittest.TestCase):
         self.page.locator("#results-list").get_by_text("worker-failure result").wait_for(timeout=10000)
         self.page.wait_for_function("STATE.useLocalMode === false", timeout=30000)
         self.assertTrue(any(body.get("q") == "worker-failure" for body in self.search_requests))
-        self.assertEqual(self.page.evaluate("corpusWorkerRestartCount"), 1)
+        self.assertEqual(self.page.evaluate("getCorpusClient().inspect().restartCount"), 1)
         self.assertFalse(self.page.evaluate("STATE.dataLoaded"))
 
 

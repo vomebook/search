@@ -11,6 +11,7 @@ const MODULES = ["static/search/execution/domain/policy.js", "static/search/exec
   "static/search/discovery/application/random.js",
   "static/search/history/infrastructure/store.js", "static/search/history/application/controller.js",
   "static/search/ambient/application/quotation.js",
+  "static/search/corpus/application/client.js",
   "static/search/results/snapshots/domain/copy-budget.js", "static/search/results/snapshots/application/store.js",
   "static/search/folder-selection.js", "static/search/domain/height-index.js",
   "static/search/reader-host/presentation/return-position.js", "static/search/reader-host/application/host.js",

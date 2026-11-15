@@ -1644,9 +1644,12 @@ test("folder tree request preserves direct-file and child metadata", async () =>
 test("main thread centralizes lifecycle and never sends or decodes the corpus", () => {
   assert.match(app, /const WORKER_PROTOCOL_VERSION = 1/);
   assert.match(app, /function corpusWorkerRequest/);
-  assert.match(app, /function terminateCorpusWorker/);
-  assert.match(app, /addEventListener\("messageerror"/);
-  assert.match(app, /type: type, id: id, payload:/);
+  const client = fs.readFileSync('static/search/corpus/application/client.js', 'utf8');
+  assert.match(app, /getCorpusClient\(\)\.request\(type, payload, timeoutMs, signal\)/);
+  assert.match(client, /function terminateCorpusWorker/);
+  assert.match(client, /addEventListener\("messageerror"/);
+  assert.match(client, /type: type, id: id, payload:/);
+  assert.strictEqual(/\bRECORDS\b|decodeSearchPayload|init-records|build-fulltext/.test(client), false);
   assert.match(app, /corpusWorkerRequest\("load-corpus"/);
   assert.match(app, /corpusWorkerRequest\("local-search"/);
   assert.match(app, /API_BASE \+ "\/api\/search"/);
