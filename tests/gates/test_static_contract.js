@@ -609,7 +609,11 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.match(workflow, /python -B -m unittest -v tests\.gates\.test_static_shards_runner[\s\S]*python -B scripts\/ci\/run_static_gate_shards\.py --project github[\s\S]*python -B -m unittest -v tests\.gates\.test_ci_ubuntu_mirror/);
   assert.match(workflow, /deploy:\s*\n\s*needs: source-checks/);
   const deployJob = workflow.slice(workflow.indexOf("\n  deploy:\n"));
-  assert.doesNotMatch(deployJob, /node tests\//);
+  assert.deepStrictEqual(Array.from(deployJob.matchAll(/node (tests\/\S+)/g), match => match[1]), [
+    "tests/search/data/test_data_integrity.js", "tests/search/data/test_corpus_oracle.js",
+  ]);
+  assert.match(deployJob, /fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_data_integrity\.js\s+SEARCH_TEST_DATA_DIR=_site\/data node tests\/search\/data\/test_corpus_oracle\.js/);
+  assert.ok(deployJob.indexOf("node tests/search/data/test_corpus_oracle.js") < deployJob.indexOf("uses: actions/upload-pages-artifact"));
   assert.match(workflow, /source-checks:[\s\S]*node tests\/reader\/pdf-v3\/test_dataset_primary_policy\.mjs/);
   assert.match(workflow, /node-version: '26\.11\.1'/);
   assert.match(workflow, /name: Validate source JavaScript syntax[\s\S]*node --check static\/reader\/pdf\/reader-pdf-text\.js/);
@@ -619,7 +623,10 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.ok(workflow.includes('esbuild@0.28.2 "static/$file" $flags --minify'));
   assert.match(workflow, /node scripts\/data\/fetch_reader_assets\.mjs _site\/data\/reader_assets\.json\.gz/);
   assert.match(workflow, /node scripts\/data\/fetch_search_generation\.mjs "\$SEARCH_GENERATION" pages _site\/data/);
-  assert.match(workflow, /SEARCH_GENERATION: \$\{\{ inputs\.search_generation \|\| vars\.SEARCH_DATA_GENERATION \|\| '[a-f0-9]{64}' \}\}/);
+  assert.match(workflow, /SEARCH_GENERATION: \$\{\{ inputs\.search_generation \|\| vars\.SEARCH_DATA_GENERATION \}\}/);
+  assert.ok(workflow.includes('SEARCH_GENERATION="${SEARCH_GENERATION:-$(node -p \'require("./config/search-data.json").generation\')}"'));
+  const baseline = JSON.parse(fs.readFileSync("config/search-data.json", "utf8"));
+  assert.match(baseline.generation, /^[a-f0-9]{64}$/);
   assert.doesNotMatch(workflow, /cp -a data _site\//);
   assert.match(workflow, /python3 scripts\/build\/seo\.py --project pages --corpus _site\/data\/search_data\.json\.gz --output _site/);
   assert.match(workflow, /node scripts\/build\/fetch_foliate_reader\.mjs _site\/static\/foliate-reader/);
@@ -630,6 +637,18 @@ test("deployment workflow builds and uploads minified static artifacts", () => {
   assert.ok(workflow.includes('.buildFiles("github")'));
   assert.match(workflow, /esbuild@0\.28\.2 static\/sw\.js --minify/);
   assert.match(workflow, /uses: actions\/upload-pages-artifact@v5\s*\n\s*with:\s*[\s\S]*?path: '_site'/);
+});
+test("Pages test jobs materialize pinned data before consumers and preserve independent Reader downloads", () => {
+  const readerWorkflow = fs.readFileSync(".github/workflows/reader-refactor.yml", "utf8");
+  for (const [job, next] of [["github-search", "firefox-staged-pdf"], ["firefox-staged-pdf", "huggingface-search"]]) {
+    const source = readerWorkflow.slice(readerWorkflow.indexOf(`\n  ${job}:`), readerWorkflow.indexOf(`\n  ${next}:`));
+    assert.match(source, /run: npm run data:prepare/);
+    assert.ok(source.indexOf("run: npm run data:prepare") < source.indexOf(job === "github-search" ? "name: Check source" : "name: Check staged PDF"));
+  }
+  assert.doesNotMatch(readerWorkflow, /paths-ignore:/);
+  assert.match(readerWorkflow, /node --test tests\/search\/data\/test_search_generation_fetch\.mjs/);
+  assert.equal(JSON.parse(fs.readFileSync("package.json", "utf8")).scripts["data:prepare"], "node scripts/data/prepare_test_data.mjs");
+  assert.match(fs.readFileSync(".gitignore", "utf8"), /^\/data\/$/m);
 });
 test("PDF release gate separates and bounds dependency installation and always runs nine tests", () => {
   const deploy = workflow.slice(workflow.indexOf("\n  deploy:\n"));

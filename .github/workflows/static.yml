@@ -89,11 +89,12 @@ jobs:
           node --check static/sw.js
       - name: Build static site
         env:
-          SEARCH_GENERATION: ${{ inputs.search_generation || vars.SEARCH_DATA_GENERATION || 'dbf3ff87d7e5dd931fc8253fb0e69fffde9d3eade8d30dfd88af6d6d75e7e8aa' }}
+          SEARCH_GENERATION: ${{ inputs.search_generation || vars.SEARCH_DATA_GENERATION }}
           SEARCH_INPUT_GENERATION: ${{ inputs.search_generation }}
           SEARCH_TRANSITION: ${{ inputs.search_transition }}
         run: |
           set -euo pipefail
+          SEARCH_GENERATION="${SEARCH_GENERATION:-$(node -p 'require("./config/search-data.json").generation')}"
           if [[ -n "$SEARCH_TRANSITION" ]]; then
             [[ "$SEARCH_TRANSITION" =~ ^[0-9a-f]{32}$ ]]
             [[ "$SEARCH_INPUT_GENERATION" =~ ^[0-9a-f]{64}$ ]]
@@ -105,6 +106,8 @@ jobs:
           # A failed or incomplete generation never falls back to stale Git data.
           node scripts/data/fetch_search_generation.mjs "$SEARCH_GENERATION" pages _site/data
           node scripts/data/fetch_reader_assets.mjs _site/data/reader_assets.json.gz
+          SEARCH_TEST_DATA_DIR=_site/data node tests/search/data/test_data_integrity.js
+          SEARCH_TEST_DATA_DIR=_site/data node tests/search/data/test_corpus_oracle.js
           node scripts/build/fetch_foliate_reader.mjs _site/static/foliate-reader
           node scripts/build/copy_reader_vendor.mjs _site/static/vendor --foliate-output _site/static/foliate-reader/vendor
           cp -a static/vendor/djvu-rs-reader _site/static/vendor/
