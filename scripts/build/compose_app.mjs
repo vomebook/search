@@ -10,6 +10,7 @@ export const APP_DEPENDENCIES = Object.freeze([
   "search/highlight.js", "search/response-cache.js", "search/file-types.js", "search/response-validation.js", "search/result-identity.js",
   "search/input/domain/ownership.js", "search/input/application/controller.js",
   "search/requests/infrastructure/shared-transport.js", "search/requests/application/prefetch-controller.js",
+  "search/results/window/application/page-loader.js", "search/results/window/presentation/status.js",
   "search/results/domain/paging-policy.js", "search/results/application/paging-controller.js", "search/results/presentation/paging-status.js",
   "search/folder-selection.js", "search/domain/height-index.js", "search/domain/stable-stringify.js", "search/domain/search-view-key.js", "search/domain/search-recovery.js", "search/domain/search-window-page.js", "search/presentation/sidebar-render.js"
 ]);

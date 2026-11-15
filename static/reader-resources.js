@@ -257,6 +257,8 @@
       "search/requests/infrastructure/shared-transport.js",
       "search/requests/application/prefetch-controller.js",
       "search/results/presentation/paging-status.js",
+      "search/results/window/application/page-loader.js",
+      "search/results/window/presentation/status.js",
       "search/domain/height-index.js",
       "search/domain/stable-stringify.js",
       "search/domain/search-view-key.js",

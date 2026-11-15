@@ -48,6 +48,44 @@ interface VoiceOfMLSearchPrefetchDependencies {
   onFailure(error: Error): void;
 }
 declare var VoiceOfMLSearchPrefetch: {create(deps: VoiceOfMLSearchPrefetchDependencies): {prefetch(base: string, template: VoiceOfMLSearchRequestBody): Promise<void>}};
+interface VoiceOfMLWindowRequest extends Promise<VoiceOfMLSearchWindowPageData | null> {
+  demanded: boolean; diskWait: AbortController;
+}
+interface VoiceOfMLResultWindow {
+  key: string; query: VoiceOfMLSearchViewProjection; total: number; generation: string;
+  controller: AbortController; pending: Map<number, VoiceOfMLWindowRequest>; failures: Map<number, unknown>;
+  invalid?: boolean | undefined; prefetched?: Map<number, VoiceOfMLSearchWindowPageData> | undefined;
+  prefetchFailures?: Set<number> | undefined;
+}
+interface VoiceOfMLWindowRecoveryDependencies {
+  fetchPage(query: VoiceOfMLSearchViewProjection, page: number, signal: AbortSignal, anchorId: string | undefined): Promise<VoiceOfMLSearchWindowPageData>;
+  isRecoverable(error: unknown): boolean; isLocal(query: VoiceOfMLSearchViewProjection): boolean | number | undefined;
+  wait(signal: AbortSignal, delay: number, local: boolean | number | undefined): Promise<void>;
+}
+interface VoiceOfMLWindowRequestDependencies {
+  readRecent(key: string, page: number, expected: VoiceOfMLResultWindow, delay: number, signal: AbortSignal): Promise<VoiceOfMLSearchWindowPageData | null>;
+  isCurrent(window: VoiceOfMLResultWindow): boolean;
+  fetchPage(query: VoiceOfMLSearchViewProjection, page: number, signal: AbortSignal, anchorId: string | undefined, demanded: () => boolean): Promise<VoiceOfMLSearchWindowPageData>;
+  validate(data: VoiceOfMLSearchWindowPageData, page: number, size: number, expected: VoiceOfMLResultWindow): void;
+  scheduleRender(): void;
+}
+declare var VoiceOfMLResultWindowLoader: {
+  waitForRecovery(signal: AbortSignal, delay: number, local: boolean | number | undefined): Promise<void>;
+  fetchWithRecovery(deps: VoiceOfMLWindowRecoveryDependencies, query: VoiceOfMLSearchViewProjection, page: number, signal: AbortSignal, anchorId: string | undefined, demanded?: () => boolean): Promise<VoiceOfMLSearchWindowPageData>;
+  requestPage(deps: VoiceOfMLWindowRequestDependencies, window: VoiceOfMLResultWindow, page: number, prefetch?: boolean): Promise<VoiceOfMLSearchWindowPageData | null | undefined>;
+};
+interface VoiceOfMLWindowStatusOptions {
+  window: {invalid?: boolean | undefined; failures: ReadonlyMap<number, unknown>} | null;
+  getHost(): HTMLElement; retry(): void;
+}
+interface VoiceOfMLWindowPlaceholderOptions {
+  index: number; page: number; contentVersion: number; height: number;
+  invalid: boolean | undefined; failed: boolean | undefined;
+}
+declare var VoiceOfMLResultWindowStatus: {
+  update(options: VoiceOfMLWindowStatusOptions): void;
+  createPlaceholder(options: VoiceOfMLWindowPlaceholderOptions): HTMLDivElement;
+};
 declare var VoiceOfMLSearchIdentity: {getResultStableId(result: unknown): string};
 declare var VoiceOfMLSearchFileTypes: {orderedExtensions: string[]; fileIconMap: Record<string, string | object>};
 interface VoiceOfMLFolderSelectionNode {

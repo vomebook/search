@@ -6,7 +6,8 @@ const path = require("path");
 const vm = require("vm");
 
 const MODULES = ["static/search/folder-selection.js", "static/search/domain/height-index.js",
-  "static/search/requests/infrastructure/shared-transport.js", "static/search/requests/application/prefetch-controller.js"];
+  "static/search/requests/infrastructure/shared-transport.js", "static/search/requests/application/prefetch-controller.js",
+  "static/search/results/window/application/page-loader.js", "static/search/results/window/presentation/status.js"];
 const sources = new Map();
 const installed = new WeakMap();
 
