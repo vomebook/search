@@ -80,6 +80,53 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.goto(url)
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
 
+    def test_fetch_proxy_failure_and_manual_retry_for_txt_and_markdown(self):
+        support.route_local_vendor_fallback(self.page)
+        direct, requests = [], []
+        self.page.on("request", lambda request: direct.append(request.url)
+                     if request.url.startswith("https://huggingface.co/") else None)
+        available = False
+
+        def proxy(route):
+            requests.append(route.request.url)
+            route.fulfill(status=200 if available else status,
+                          content_type="text/plain" if extension == "txt" else "text/markdown",
+                          body="# Proxy readable" if available else "unavailable",
+                          headers={"Access-Control-Allow-Origin": "*"})
+
+        self.page.route("**/api/reader-content**", proxy)
+        for extension, selector in (("txt", ".reader-text"), ("md", ".reader-markdown")):
+            for status in (403, 404):
+                with self.subTest(extension=extension, status=status):
+                    requests.clear()
+                    available = False
+                    self.page.goto(self.reader_url(extension), wait_until="domcontentloaded")
+                    self.page.locator('html[data-reader-phase="failed"]').wait_for()
+                    alert = self.page.get_by_role("alert")
+                    self.assertTrue(alert.is_visible())
+                    self.assertIn(f"HTTP {status}", alert.text_content())
+                    self.assertEqual(self.page.locator("#status").text_content(), "无法打开")
+                    self.assertEqual(self.page.locator("#content").get_attribute("data-error-code"), "READER_NETWORK")
+                    self.assertEqual(self.page.locator(selector).count(), 0)
+                    self.assertEqual(self.page.locator(".reader-loading-indicator").count(), 0)
+                    self.assertEqual(len(requests), 1)
+                    source = urllib.parse.parse_qs(urllib.parse.urlsplit(self.page.url).query)["url"]
+                    self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(requests[0]).query)["url"], source)
+                    self.assertEqual(direct, [])
+                    # Network errors use a manual browser reload for retry.
+                    self.assertEqual(self.page.locator("#reader-engine-retry").count(), 0)
+                    failed_url = self.page.url
+                    available = True
+                    self.page.reload(wait_until="domcontentloaded")
+                    self.page.locator('html[data-reader-phase="ready"]').wait_for()
+                    self.assertIn("Proxy readable", self.page.locator(selector).inner_text())
+                    if extension == "md":
+                        self.assertEqual(self.page.locator(selector + " h1").inner_text(), "Proxy readable")
+                    self.assertEqual(self.page.locator(".reader-error, .reader-loading-indicator").count(), 0)
+                    self.assertEqual(self.page.url, failed_url)
+                    self.assertEqual(requests, [requests[0]] * 2)
+                    self.assertEqual(direct, [])
+
     def markdown_link_fixture(self):
         support.route_local_vendor_fallback(self.page)
         # The checked-in Reader source loads these locally in production builds;
@@ -627,10 +674,10 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(content_type="text/javascript", body=store))
         def instrument(route):
             response = route.fetch()
-            body = response.text().replace(
-                "async function createFoliateSection(section, index) {",
-                "async function createFoliateSection(section, index) { (window.__openedSections ||= []).push(index);",
-            )
+            script = response.text()
+            marker = "async function createFoliateSection(section, index, signal, priority) {"
+            self.assertEqual(script.count(marker), 1, "Foliate section instrumentation boundary changed")
+            body = script.replace(marker, marker + " (window.__openedSections ||= []).push(index);")
             route.fulfill(response=response, body=body)
         self.page.route("**/static/reader/formats/reader-foliate-format.mjs*", instrument)
         self.serve(support.epub_with_many_chapters(), "application/epub+zip")
@@ -1618,11 +1665,15 @@ class ReaderRefactorTest(unittest.TestCase):
     def test_media_metadata_stall_recovers_without_reader_reload(self):
         self.assert_media_metadata_stall(True)
 
-    def test_media_original_retry_retains_position_and_paused_state(self):
+    def test_media_proxy_retry_retains_position_and_paused_state(self):
         self.assert_media_retry_position(False)
 
-    def test_media_original_retry_resumes_active_playback(self):
+    def test_media_proxy_retry_resumes_active_playback(self):
         self.assert_media_retry_position(True)
+
+    def media_retry_url(self):
+        # Bucket proxies are accepted by the production media retry validator.
+        return 'https://voiceofml-search.hf.space/api/reader-bucket-resource?path=media/audio/native/' + 'a' * 64 + '/audio.wav'
 
     def assert_media_retry_position(self, playing):
         buffer = io.BytesIO()
@@ -1634,11 +1685,13 @@ class ReaderRefactorTest(unittest.TestCase):
             start = int(route.request.headers.get('range', 'bytes=0-').split('=')[1].split('-')[0])
             route.fulfill(status=206,content_type='audio/wav',body=data[start:],headers={
                 'Accept-Ranges':'bytes','Content-Range':f'bytes {start}-{len(data)-1}/{len(data)}'})
-        self.page.route('**/api/reader-content**',serve_audio)
-        originals = []
-        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav',
-                        lambda route: (originals.append(route.request.url), serve_audio(route)))
-        self.open(self.reader_url('wav'))
+        requests, direct = [], []
+        self.page.route(self.media_retry_url(),
+                        lambda route: (requests.append(route.request.url), serve_audio(route)))
+        self.page.route('https://huggingface.co/datasets/**',
+                        lambda route: (direct.append(route.request.url), route.abort()))
+        self.open(self.reader_url('wav', url=self.media_retry_url(),
+                                  download='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav'))
         self.page.locator('audio').evaluate("m => { m.muted=true; return m.play(); }")
         self.page.wait_for_function("()=>document.querySelector('audio').currentTime>.02")
         self.page.locator('audio').evaluate('m=>m.pause()')
@@ -1650,7 +1703,8 @@ class ReaderRefactorTest(unittest.TestCase):
             self.page.locator('audio').evaluate('m=>m.play()')
         self.page.locator('audio').evaluate("m => m.dispatchEvent(new Event('error'))")
         self.page.wait_for_function("playing=>{const m=document.querySelector('audio');return m.readyState>=1 && (playing ? !m.paused && m.currentTime>=.05 : m.paused && m.currentTime===.05);}",arg=playing)
-        self.assertEqual(len(originals), 1)
+        self.assertEqual(requests, [requests[0]] * 2)
+        self.assertEqual(direct, [])
         self.assertEqual(self.page.locator('audio').evaluate('m=>m.paused'),not playing)
         self.assertEqual(self.page.locator('audio').evaluate('m=>m.playbackRate'),1.25)
 
@@ -1660,17 +1714,30 @@ class ReaderRefactorTest(unittest.TestCase):
             audio.setparams((1, 2, 8000, 80000, 'NONE', 'not compressed'))
             audio.writeframes(b'\0\0' * 80000)
         data = buffer.getvalue()
-        self.page.route('**/api/reader-content**',lambda route:route.fulfill(status=206,
-            content_type='audio/wav',body=data,headers={'Accept-Ranges':'bytes','Content-Range':f'bytes 0-{len(data)-1}/{len(data)}'}))
-        held = []
-        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav',lambda route:held.append(route))
-        self.open(self.reader_url('wav'))
+        requests, held, direct = [], [], []
+        def proxy(route):
+            requests.append(route.request.url)
+            if len(requests) == 1:
+                route.fulfill(status=206, content_type='audio/wav', body=data,
+                              headers={'Accept-Ranges':'bytes','Content-Range':f'bytes 0-{len(data)-1}/{len(data)}'})
+            else:
+                held.append(route)
+                self.page.evaluate('window.__mediaRetryHeld = true')
+        self.page.route(self.media_retry_url(), proxy)
+        self.page.route('https://huggingface.co/datasets/**',
+                        lambda route: (direct.append(route.request.url), route.abort()))
+        self.open(self.reader_url('wav', url=self.media_retry_url(),
+                                  download='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav'))
         self.page.locator('audio').evaluate("m => { m.muted=true; return m.play(); }")
         self.page.wait_for_function("()=>document.querySelector('audio').currentTime>.02")
         self.page.locator('audio').evaluate('m=>m.pause()')
         self.page.locator('audio').evaluate("m => { m.currentTime=.05; }")
         self.page.wait_for_function("()=>!document.querySelector('audio').seeking")
         self.page.locator('audio').evaluate("m => m.dispatchEvent(new Event('error'))")
+        self.page.wait_for_function('() => window.__mediaRetryHeld === true')
+        self.assertEqual(requests, [requests[0]] * 2)
+        self.assertEqual(len(held), 1)
+        self.assertEqual(direct, [])
         self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
         self.page.wait_for_timeout(100)
         entry = self.page.evaluate("async()=>await VoiceOfMLReaderStore.get(new URL(location.href).searchParams.get('url'))")
@@ -1684,7 +1751,10 @@ class ReaderRefactorTest(unittest.TestCase):
 
     def test_disposal_cancels_pending_media_metadata_without_retry(self):
         self.page.add_init_script('''const timer=window.setTimeout.bind(window);
-          window.setTimeout=(callback,delay,...args)=>timer(callback,delay===15000?200:delay,...args);''')
+          window.setTimeout=(callback,delay,...args)=>{
+            if(delay===15000){window.__mediaIdle=()=>callback(...args);return timer(()=>{},delay);}
+            return timer(callback,delay,...args);
+          };''')
         held, originals = [], []
         self.page.route('**/api/reader-content**', lambda route: held.append(route))
         self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav',
@@ -1692,7 +1762,8 @@ class ReaderRefactorTest(unittest.TestCase):
         self.page.goto(self.reader_url('wav'),wait_until='domcontentloaded')
         self.page.locator('audio').wait_for()
         self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
-        self.page.wait_for_timeout(300)
+        self.page.evaluate('() => window.__mediaIdle()')
+        self.page.wait_for_timeout(100)
         self.assertEqual(originals, [])
         self.assertEqual(self.page.locator('html').get_attribute('data-reader-phase'), 'disposed')
         self.assertFalse(self.page.locator('audio').get_attribute('src'))
@@ -1703,72 +1774,101 @@ class ReaderRefactorTest(unittest.TestCase):
     def assert_media_metadata_stall(self, recover):
         self.page.add_init_script('''const timer=window.setTimeout.bind(window);
           window.setTimeout=(callback,delay,...args)=>timer(callback,delay===15000?150:delay,...args);''')
-        held, original_requests = [], []
-        allow = [recover]
-        self.page.route('**/api/reader-content**', lambda route:
-            route.fulfill(content_type='audio/wav',body=support.minimal_wav()) if allow[0] and not recover else held.append(route))
-        def original(route):
-            original_requests.append(route.request.url)
-            if allow[0]:
+        held, requests, direct = [], [], []
+        allow = [False]
+        def proxy(route):
+            requests.append(route.request.url)
+            if allow[0] or (recover and len(requests) == 2):
                 route.fulfill(content_type='audio/wav',body=support.minimal_wav())
             else:
                 held.append(route)
-        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav', original)
-        self.page.goto(self.reader_url('wav'), wait_until='domcontentloaded')
+        self.page.route(self.media_retry_url(), proxy)
+        self.page.route('https://huggingface.co/datasets/**',
+                        lambda route: (direct.append(route.request.url), route.abort()))
+        self.page.goto(self.reader_url('wav', url=self.media_retry_url(),
+                                       download='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav'),
+                       wait_until='domcontentloaded')
         if not recover:
             self.page.locator('#reader-engine-retry').wait_for()
             self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_MEDIA')
-            self.assertEqual(len(original_requests), 1)
+            self.assertEqual(requests, [requests[0]] * 2)
+            self.assertEqual(direct, [])
             allow[0] = True
             self.page.locator('#reader-engine-retry').click()
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('audio').readyState >= 1")
-        self.assertEqual(len(original_requests), 1)
+        self.assertEqual(requests, [requests[0]] * (2 if recover else 3))
+        self.assertEqual(direct, [])
         self.page.evaluate("window.dispatchEvent(new Event('voice-reader-dispose'))")
         self.assertFalse(self.page.locator('audio').get_attribute('src'))
         for route in held:
             try: route.abort()
             except support.PlaywrightError: pass
 
-    def test_bucket_media_failure_retries_download_original_once(self):
-        self.page.route('**/api/reader-bucket-resource**', lambda route: route.fulfill(status=503, body='unavailable'))
-        self.assert_media_failure_retries_original_once(bucket=True)
+    def test_bucket_media_failure_retries_proxy_once(self):
+        self.assert_media_failure_retries_proxy_once(bucket=True)
 
-    def test_media_proxy_failure_retries_original_once(self):
-        self.assert_media_failure_retries_original_once()
+    def test_media_proxy_failure_recovers_on_manual_retry_without_direct_source(self):
+        self.assert_media_failure_retries_proxy_once()
 
-    def assert_media_failure_retries_original_once(self, bucket=False):
+    def assert_media_failure_retries_proxy_once(self, bucket=False):
         buffer = io.BytesIO()
         with wave.open(buffer, 'wb') as audio:
             audio.setparams((1, 2, 8000, 8000, 'NONE', 'not compressed'))
             audio.writeframes(b'\0\0' * 8000)
-        requests = []
-        self.page.route('**/api/reader-content**', lambda route: route.fulfill(status=503, body='unavailable'))
-        def original(route):
+        requests, direct = [], []
+        fail_next = [True]
+        def proxy(route):
             requests.append(route.request.url)
+            if fail_next[0]:
+                fail_next[0] = False
+                route.fulfill(status=503, body='unavailable')
+                return
             data = buffer.getvalue()
             start = int(route.request.headers.get('range', 'bytes=0-').split('=')[1].split('-')[0])
             route.fulfill(status=206, content_type='audio/wav', body=data[start:],
                           headers={'Accept-Ranges': 'bytes', 'Content-Range': f'bytes {start}-{len(data)-1}/{len(data)}'})
-        self.page.route('https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav', original)
+        self.page.route('**/api/reader-bucket-resource**' if bucket else '**/api/reader-content**', proxy)
+        self.page.route('https://huggingface.co/datasets/**',
+                        lambda route: (direct.append(route.request.url), route.abort()))
         options = {}
         if bucket:
             options = dict(url='https://voiceofml-search.hf.space/api/reader-bucket-resource?path=media/audio/native/' + 'a' * 64 + '/audio.wav',
                            download='https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/refactor.wav')
-        self.open(self.reader_url('wav', **options))
+        def open_or_retry(reload=False):
+            if reload:
+                self.page.reload(wait_until='domcontentloaded')
+            else:
+                self.page.goto(self.reader_url('wav', **options), wait_until='domcontentloaded')
+            if not bucket:
+                # /api/reader-content is not a valid automatic media retry source.
+                self.page.locator('#reader-engine-retry').wait_for()
+                self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_MEDIA')
+                self.assertEqual(direct, [])
+                self.assertEqual(len(requests), 3 if reload else 1)
+                self.page.locator('#reader-engine-retry').click()
+            self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready'")
+
+        open_or_retry()
         self.page.wait_for_function("() => document.querySelector('audio').readyState >= 1")
-        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests, [requests[0]] * 2)
+        self.assertEqual(direct, [])
         self.assertEqual(self.page.locator('audio').evaluate('node => node.duration'), 1)
         self.page.evaluate("async () => { const media = document.querySelector('audio'); media.currentTime = 0.5; await VoiceOfMLReaderStore.put({url: new URL(location.href).searchParams.get('url'), mediaTime: 0.5}); }")
-        self.page.reload()
+        fail_next[0] = True
+        open_or_retry(reload=True)
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'ready' && document.querySelector('audio')?.currentTime === 0.5")
-        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests, [requests[0]] * 4)
+        self.assertEqual(direct, [])
         self.page.evaluate("""() => {
           const media=document.querySelector('audio');
           if (!media) throw new Error('restored media disappeared');
           media.dispatchEvent(new Event('error'));
         }""")
         self.page.wait_for_function("() => document.documentElement.dataset.readerPhase === 'failed'")
-        self.assertEqual(len(requests), 2)
+        self.assertEqual(self.page.locator('#content').get_attribute('data-error-code'), 'READER_MEDIA')
+        self.assertTrue(self.page.locator('#reader-engine-retry').is_visible())
+        self.assertEqual(requests, [requests[0]] * 4)
+        self.assertEqual(direct, [])
 
     def test_chapter_links_load_target_without_leaving_reader(self):
         prefix = 'chapters/ebook/epub/' + 'b' * 64 + '/' + 'a' * 16 + '/'

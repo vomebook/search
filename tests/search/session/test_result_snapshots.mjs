@@ -27,7 +27,7 @@ function fixture() {
     requestAnimationFrame(fn){frames.set(++id,fn);return id;}, cancelAnimationFrame(id){frames.delete(id);}});
   for (const file of modules) vm.runInContext(readFileSync(new URL('../../../static/' + file, import.meta.url), 'utf8'), context);
   const store = context.VoiceOfMLResultSnapshots.create({cloneResult:context.VoiceOfMLSnapshotPolicy.cloneResult,
-    materialized(){},applyHeights(){},isCurrent:()=>current,completed(){completed++;}});
+    measurementKey:()=>"layout",materialized(){},applyHeights(){},isCurrent:()=>current,completed(){completed++;}});
   const view = {key:'query',revision:1,results:Array.from({length:5000},(_,i)=>({File:String(i),Folder:['docs']})),
     total:5000,loadedPage:50,pageCache:{}};
   const geometry = {revision:0,measurementKey:'layout',estimatedHeight:100,heightCache:new Map()};
@@ -40,7 +40,7 @@ test('clone prioritizes the neighborhood and cancellation never publishes partia
   const results=f.store.restoreResults(snapshot,'query',100,true,false);
   assert.equal(Object.keys(results).length,600);
   assert.ok(results[0] && results[4000] && results[4299]);assert.equal(100 in results,false);
-  results[4000].Folder.push('changed');assert.deepEqual(snapshot.results[4000].Folder,['docs']);
+  results[4000].Folder.push('changed');assert.deepEqual(Array.from(snapshot.results[4000].Folder),['docs']);
   f.view.results=results;f.view.revision++;
   assert.equal(f.save(),snapshot);assert.equal(f.store.source(snapshot),source);
   f.store.startClone();f.tick(f.frames);f.tick(f.timers);

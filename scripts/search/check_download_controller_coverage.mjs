@@ -42,7 +42,9 @@ const required = [
   "uncertain feedback belongs to each live non-quiet shared subscriber",
   "single uncertain handoff is retained and a later batch failure is visible but not retried",
   "retry workers recheck uncertainty when consuming queued items, unlike explicit batches",
-  "legacy launch scheduler preserves pacing, cancellation and recovery after throws"
+  "legacy launch scheduler preserves pacing, cancellation and recovery after throws",
+  "batch owns two quiet workers, deduplicates in order and cancels queued work",
+  "ledger restore filters records, tolerates storage failure and preserves acknowledgement order"
 ].map(name => ({name}));
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
     !hasPassingTapContracts(text, required)) {

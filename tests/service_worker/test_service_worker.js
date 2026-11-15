@@ -52,7 +52,7 @@ function harness(options) {
     open(name) {
       if (settings.openError) return Promise.reject(settings.openError);
       const values = store(name);
-      return Promise.resolve({
+      const cache = {
         addAll(urls) {
           operations.addAll.push(urls.slice());
           if (settings.addAllError && operations.addAll.length === (settings.addAllFailureCall || 1)) return Promise.reject(settings.addAllError);
@@ -64,18 +64,23 @@ function harness(options) {
           const key = keyOf(request);
           return Promise.resolve(values.get(key) || values.get(key.replace('https://example.test', '')));
         },
-        keys() { return Promise.resolve(Array.from(values.keys(), url => ({url: new URL(url, 'https://example.test').href}))); },
-        delete(request) {
+        keys() {
+          const keys = Array.from(values.keys(), url => ({url: new URL(url, 'https://example.test').href}));
+          return settings.keys ? settings.keys(keys, name) : Promise.resolve(keys);
+        },
+        async delete(request) {
+          if (settings.entryDelete) await settings.entryDelete(request, name);
           if (settings.entryDeleteError) return Promise.reject(settings.entryDeleteError);
           const key = keyOf(request);
           return Promise.resolve(values.delete(key) || values.delete(key.replace('https://example.test', '')));
         },
         put(request, value) {
           operations.put.push(keyOf(request));
-          if (settings.put) return settings.put(request, value);
+          if (settings.put) return settings.put(request, value, values);
           values.set(keyOf(request), value); return Promise.resolve();
         },
-      });
+      };
+      return settings.open ? settings.open(name, cache) : Promise.resolve(cache);
     },
     keys() { return Promise.resolve(Array.from(stores.keys())); },
     delete(name) {
@@ -109,7 +114,7 @@ function harness(options) {
   };
   vm.createContext(context);
   vm.runInContext(settings.source || source, context, { filename: "sw.js" });
-  return { listeners, stores, operations };
+  return { listeners, stores, operations, caches, prune: context.pruneHashedAssets, evaluate: code => vm.runInContext(code, context) };
 }
 
 function lifecycle(listener) {
@@ -128,6 +133,42 @@ function dispatchFetch(instance, url, mode, method) {
 
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+// A turn boundary observes all queued promise work without timing the race.
+function flushPromises() {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
+// Keep the source open so cancelling one tee branch cannot finish until the
+// delivered branch closes. Instrument the real clone, not a mock stream.
+function streamedResponse(label, status = 200) {
+  let controller;
+  const value = new Response(new ReadableStream({
+    start(stream) { controller = stream; stream.enqueue(new TextEncoder().encode(label)); },
+  }), {status});
+  const clones = [];
+  const clone = value.clone.bind(value);
+  value.clone = () => {
+    const copy = clone();
+    const record = {copy, cancelled: false, cancelSettled: false};
+    const cancel = copy.body.cancel.bind(copy.body);
+    copy.body.cancel = reason => {
+      record.cancelled = true;
+      const pending = cancel(reason);
+      pending.then(() => { record.cancelSettled = true; }, () => { record.cancelSettled = true; });
+      return pending;
+    };
+    clones.push(record);
+    return copy;
+  };
+  return {value, clones, close: () => controller.close()};
 }
 
 function manifestsFetch(failPath) {
@@ -264,6 +305,499 @@ for (const [site, workerSource, prefix] of [
   ['Pages', source, '/search/static/'],
   ['HF', hfSource, '/static/'],
 ]) {
+  for (const kind of ['reader', 'data']) {
+    const key = kind === 'reader' ? prefix + 'reader.html'
+      : 'https://example.test' + prefix.replace(/static\/$/, '') + 'data/initial/global.json';
+    const urls = kind === 'reader'
+      ? ['https://example.test' + key + '?url=older', 'https://example.test' + key + '?url=newer'] : [key, key];
+    const mode = kind === 'reader' ? 'navigate' : 'cors';
+    test(`${site} ${kind}: obsolete real response creates no unread clone after newer commit`, async () => {
+      const network = [deferred(), deferred()];
+      const bodies = [streamedResponse('A'), streamedResponse('B')];
+      let started = 0;
+      const instance = harness({source: workerSource,
+        fetch: () => network[started++].promise,
+        put: async (request, value, values) => { values.set(keyOf(request), await value.text()); },
+      });
+      const a = dispatchFetch(instance, urls[0], mode);
+      const b = dispatchFetch(instance, urls[1], mode);
+      await flushPromises();
+      network[1].resolve(bodies[1].value);
+      bodies[1].close();
+      assert.strictEqual(await (await b).text(), 'B');
+      await instance.operations.lifetimes[1];
+      network[0].resolve(bodies[0].value);
+      const delivered = await a;
+      const clonesBeforeClose = bodies[0].clones.length;
+      bodies[0].close();
+      assert.strictEqual(await delivered.text(), 'A');
+      await instance.operations.lifetimes[0];
+      assert.strictEqual(clonesBeforeClose, 0, 'check the committed sequence before Response.clone()');
+      assert.strictEqual(instance.stores.get(cacheName(workerSource)).get(key), 'B');
+      assert.strictEqual(instance.evaluate('mutableRequests.size'), 0);
+    });
+    test(`${site} ${kind}: held put retains only one pending real clone and cancels replaced bodies`, async () => {
+      const count = 24;
+      const network = Array.from({length: count}, deferred);
+      const bodies = Array.from({length: count}, (_, i) => streamedResponse(String(i)));
+      const hold = deferred();
+      const puts = [];
+      let started = 0, active = 0, maxActive = 0;
+      const instance = harness({source: workerSource,
+        fetch: () => network[started++].promise,
+        put: async (request, value, values) => {
+          puts.push(value);
+          maxActive = Math.max(maxActive, ++active);
+          if (puts.length === 1) await hold.promise;
+          values.set(keyOf(request), await value.text());
+          --active;
+        },
+      });
+      const requests = bodies.map((_, i) => dispatchFetch(instance, urls[i % 2], mode));
+      const settled = bodies.map(() => false);
+      instance.operations.lifetimes.forEach((promise, i) => promise.then(() => { settled[i] = true; }));
+      await flushPromises();
+      const readers = [];
+      const retained = [];
+      for (let i = 0; i < count; ++i) {
+        network[i].resolve(bodies[i].value);
+        const reader = (await requests[i]).body.getReader();
+        readers.push(reader);
+        assert.strictEqual(new TextDecoder().decode((await reader.read()).value), String(i), 'client streams before put completion');
+        await flushPromises();
+        retained.push(bodies.flatMap(body => body.clones).filter(record => !record.cancelled).length);
+      }
+      const beforeRelease = {
+        puts: puts.length,
+        settled: settled.slice(),
+        cancelled: bodies.slice(1, -1).map(body => body.clones[0].cancelled),
+        cancellationPending: bodies.slice(1, -1).map(body => !body.clones[0].cancelSettled),
+      };
+      // Release the put before closing the streams: discarded-branch cancellation
+      // is still pending and must not block the drain or start extra puts.
+      hold.resolve();
+      for (const body of bodies) body.close();
+      await Promise.all(readers.map(reader => reader.read()));
+      await Promise.all(instance.operations.lifetimes);
+      assert.ok(retained.every(size => size <= 2), 'one active clone plus at most one pending clone: ' + retained);
+      assert.strictEqual(beforeRelease.puts, 1);
+      assert.ok(beforeRelease.settled.every(done => !done), 'waitUntil keeps the drain alive');
+      assert.ok(beforeRelease.cancelled.every(Boolean), 'each replaced pending branch is cancelled');
+      assert.ok(beforeRelease.cancellationPending.every(Boolean), 'tee cancellation is not awaited');
+      assert.strictEqual(maxActive, 1);
+      assert.strictEqual(puts.length, 2, 'pending coalescence writes only the active and latest eligible response');
+      assert.strictEqual(instance.stores.get(cacheName(workerSource)).get(key), String(count - 1));
+      assert.strictEqual(instance.evaluate('mutableRequests.size'), 0);
+    });
+    test(`${site} ${kind}: newest pending put failure preserves committed A without restoring superseded B`, async () => {
+      const network = Array.from({length: 3}, deferred);
+      const bodies = ['A', 'B', 'C'].map(label => streamedResponse(label));
+      const holdA = deferred();
+      const holdC = deferred();
+      const startedC = deferred();
+      const puts = [];
+      let started = 0, active = 0, maxActive = 0;
+      const instance = harness({source: workerSource,
+        fetch: () => network[started++].promise,
+        put: async (request, value, values) => {
+          puts.push(value);
+          maxActive = Math.max(maxActive, ++active);
+          try {
+            if (puts.length === 1) await holdA.promise;
+            else {
+              startedC.resolve();
+              await holdC.promise;
+            }
+            values.set(keyOf(request), await value.text());
+          } finally { --active; }
+        },
+      });
+      const requests = bodies.map((_, i) => dispatchFetch(instance, urls[i % 2], mode));
+      let lifetimesFinished = false;
+      const lifetimes = Promise.all(instance.operations.lifetimes).then(() => { lifetimesFinished = true; });
+      await flushPromises();
+      const readers = [];
+      const retained = [];
+      for (let i = 0; i < bodies.length; ++i) {
+        network[i].resolve(bodies[i].value);
+        const reader = (await requests[i]).body.getReader();
+        readers.push(reader);
+        assert.strictEqual(new TextDecoder().decode((await reader.read()).value), ['A', 'B', 'C'][i]);
+        await flushPromises();
+        retained.push(bodies.flatMap(body => body.clones).filter(record => !record.cancelled).length);
+      }
+      assert.deepStrictEqual(retained, [1, 2, 2], 'at most one active and one pending clone');
+      assert.strictEqual(puts.length, 1, 'A stays active while C replaces pending B');
+      assert.strictEqual(bodies[1].clones[0].cancelled, true);
+      assert.strictEqual(bodies[1].clones[0].cancelSettled, false, 'B client source remains open');
+      assert.strictEqual(lifetimesFinished, false);
+      bodies[0].close();
+      holdA.resolve();
+      await startedC.promise;
+      const entries = instance.stores.get(cacheName(workerSource));
+      assert.strictEqual(entries.get(key), 'A', 'A successfully commits before C attempts persistence');
+      assert.strictEqual(instance.evaluate('mutableRequests.size'), 1);
+      assert.strictEqual(lifetimesFinished, false, 'waitUntil still owns C');
+      holdC.reject(new Error('quota'));
+      // B and C client branches remain open: cancellation cannot be awaited.
+      await lifetimes;
+      assert.strictEqual(entries.get(key), 'A', 'C failure keeps A; superseded B is not fallback history');
+      assert.deepStrictEqual(puts, [bodies[0].clones[0].copy, bodies[2].clones[0].copy]);
+      assert.strictEqual(maxActive, 1);
+      assert.strictEqual(active, 0);
+      assert.strictEqual(bodies[2].clones[0].cancelled, true, 'failed C clone is discarded');
+      assert.strictEqual(bodies[2].clones[0].cancelSettled, false);
+      assert.strictEqual(instance.evaluate('mutableRequests.size'), 0, 'failure releases the per-key state');
+      bodies[1].close();
+      bodies[2].close();
+      assert.ok((await Promise.all(readers.map(reader => reader.read()))).every(result => result.done));
+    });
+    for (const fail of [false, true]) {
+      test(`${site} ${kind}: real older pending branch ${fail ? 'survives failed' : 'is cancelled after successful'} newer active put`, async () => {
+        const network = [deferred(), deferred()];
+        const bodies = [streamedResponse('A'), streamedResponse('B')];
+        const hold = deferred();
+        const activeFinished = deferred();
+        let started = 0;
+        const puts = [];
+        const instance = harness({source: workerSource,
+          fetch: () => network[started++].promise,
+          put: async (request, value, values) => {
+            puts.push(value);
+            const first = puts.length === 1;
+            try {
+              if (first) await hold.promise;
+              values.set(keyOf(request), await value.text());
+            } finally {
+              if (first) activeFinished.resolve();
+            }
+          },
+        });
+        const a = dispatchFetch(instance, urls[0], mode);
+        const b = dispatchFetch(instance, urls[1], mode);
+        await flushPromises();
+        network[1].resolve(bodies[1].value);
+        const clientB = await b;
+        await flushPromises();
+        network[0].resolve(bodies[0].value);
+        const clientA = await a;
+        await flushPromises();
+        let finished = false;
+        Promise.all(instance.operations.lifetimes).then(() => { finished = true; });
+        bodies[1].close();
+        await clientB.text();
+        if (fail) hold.reject(new Error('quota'));
+        else hold.resolve();
+        // Wait on the real active branch's consumption, then observe the drain.
+        // A's source remains open, so awaiting its tee cancellation would hang.
+        await activeFinished.promise;
+        await flushPromises();
+        const observed = {finished, cancelled: bodies[0].clones[0].cancelled,
+          cancelSettled: bodies[0].clones[0].cancelSettled, puts: puts.length};
+        bodies[0].close();
+        assert.strictEqual(await clientA.text(), 'A');
+        await Promise.all(instance.operations.lifetimes);
+        assert.strictEqual(observed.cancelled, !fail);
+        assert.strictEqual(observed.finished, !fail, 'discarded tee cancellation must not extend waitUntil');
+        assert.strictEqual(observed.cancelSettled, false);
+        assert.strictEqual(observed.puts, fail ? 2 : 1);
+        assert.strictEqual(instance.stores.get(cacheName(workerSource)).get(key), fail ? 'A' : 'B');
+        assert.strictEqual(instance.evaluate('mutableRequests.size'), 0);
+      });
+    }
+    test(`${site} ${kind}: pending candidate survives older arrival and newer failed or noncacheable responses`, async () => {
+      const network = Array.from({length: 6}, deferred);
+      const bodies = [streamedResponse('active'), streamedResponse('older'), streamedResponse('pending'),
+        null, streamedResponse('unavailable', 503), streamedResponse('partial', 206)];
+      const hold = deferred();
+      let started = 0;
+      const puts = [];
+      const instance = harness({source: workerSource,
+        fetch: () => network[started++].promise,
+        put: async (request, value, values) => {
+          puts.push(value);
+          if (puts.length === 1) await hold.promise;
+          values.set(keyOf(request), await value.text());
+        },
+      });
+      const requests = network.map((_, i) => dispatchFetch(instance, urls[i % 2], mode));
+      const failure = assert.rejects(requests[3], /Network unavailable/);
+      await flushPromises();
+      for (const i of [0, 2, 1, 4, 5]) {
+        network[i].resolve(bodies[i].value);
+        assert.strictEqual(await requests[i], bodies[i].value);
+        await flushPromises();
+      }
+      network[3].reject(new Error('offline'));
+      await failure;
+      await Promise.all([3, 4, 5].map(i => instance.operations.lifetimes[i]));
+      const observed = {olderClones: bodies[1].clones.length,
+        cancelled: bodies[2].clones[0].cancelled, puts: puts.length,
+        noncacheableClones: bodies[4].clones.length + bodies[5].clones.length};
+      hold.resolve();
+      bodies.filter(Boolean).forEach(body => body.close());
+      await Promise.all(bodies.filter(Boolean).map(body => body.value.text()));
+      await Promise.all(instance.operations.lifetimes);
+      assert.deepStrictEqual(observed, {olderClones: 0, cancelled: false, puts: 1, noncacheableClones: 0});
+      assert.strictEqual(puts.length, 2);
+      assert.strictEqual(instance.stores.get(cacheName(workerSource)).get(key), 'pending');
+      assert.strictEqual(instance.evaluate('mutableRequests.size'), 0);
+    });
+    for (const outcome of ['committed', 'rejected', '503', '206', 'put-failed', 'still-pending']) {
+      test(`${site} two-request overlapping ${kind}: newer ${outcome} only supersedes older after successful commit`, async () => {
+        const network = [deferred(), deferred()];
+        let started = 0;
+        const instance = harness({ source: workerSource,
+          cacheEntries: [[key, response('seed')]],
+          fetch: () => network[started++].promise,
+          put(request, value, values) {
+            if (outcome === 'put-failed' && value.body === 'B') return Promise.reject(new Error('quota'));
+            values.set(keyOf(request), value);
+            return Promise.resolve();
+          },
+        });
+        const a = dispatchFetch(instance, urls[0], mode);
+        const b = dispatchFetch(instance, urls[1], mode);
+        await flushPromises();
+        assert.strictEqual(started, 2);
+        const entries = instance.stores.get(cacheName(workerSource));
+        if (outcome !== 'still-pending') {
+          if (outcome === 'rejected') network[1].reject(new Error('offline'));
+          else network[1].resolve(response('B', {status: outcome === '503' ? 503 : outcome === '206' ? 206 : 200,
+            ok: outcome !== '503'}));
+          await b;
+          await instance.operations.lifetimes[1];
+          assert.strictEqual(entries.get(key).body, outcome === 'committed' ? 'B' : 'seed');
+          assert.strictEqual(instance.evaluate('mutableRequests.size'), 1, 'older network still owns the ordering state');
+        }
+        network[0].resolve(response('A'));
+        await a;
+        await instance.operations.lifetimes[0];
+        assert.strictEqual(entries.get(key).body, outcome === 'committed' ? 'B' : 'A',
+          'in this two-request case, only a successful later commit may suppress A');
+        if (outcome === 'still-pending') {
+          network[1].resolve(response('B'));
+          await b;
+          await instance.operations.lifetimes[1];
+          assert.strictEqual(entries.get(key).body, 'B');
+        }
+        assert.strictEqual(instance.evaluate('mutableRequests.size'), 0, 'settled requests release their key');
+        assert.deepStrictEqual([...entries.keys()], [key], 'Reader queries share exactly one shell key');
+        assert.strictEqual(instance.operations.put.length,
+          outcome === 'put-failed' || outcome === 'still-pending' ? 2 : 1);
+        // A fresh request after the overlap must still refresh this key.
+        network.push(deferred());
+        const c = dispatchFetch(instance, urls[1], mode);
+        await flushPromises();
+        network[2].resolve(response('C'));
+        await c;
+        await instance.operations.lifetimes[2];
+        assert.strictEqual(entries.get(key).body, 'C');
+      });
+    }
+    for (const first of ['A', 'B']) {
+      for (const fail of [false, true]) {
+        test(`${site} overlapping ${kind}: delayed ${first} put ${fail ? 'fails' : 'commits'} before queued write`, async () => {
+          const network = [deferred(), deferred()];
+          const write = deferred();
+          let started = 0;
+          const writes = [];
+          const instance = harness({source: workerSource,
+            fetch: () => network[started++].promise,
+            put(request, value, values) {
+              writes.push(value.body);
+              const pending = value.body === first ? write.promise : Promise.resolve();
+              return pending.then(() => { values.set(keyOf(request), value); });
+            },
+          });
+          const a = dispatchFetch(instance, urls[0], mode);
+          const b = dispatchFetch(instance, urls[1], mode);
+          await flushPromises();
+          assert.strictEqual(started, 2);
+          network[first === 'A' ? 0 : 1].resolve(response(first));
+          await flushPromises();
+          assert.deepStrictEqual(writes, [first]);
+          network[first === 'A' ? 1 : 0].resolve(response(first === 'A' ? 'B' : 'A'));
+          let delivered = false;
+          Promise.all([a, b]).then(() => { delivered = true; });
+          const settled = [false, false];
+          instance.operations.lifetimes.forEach((promise, index) => promise.then(() => { settled[index] = true; }));
+          await flushPromises();
+          assert.ok(delivered, 'both cache-miss responses stream while persistence is blocked');
+          // Release even on the unfixed worker so red runs leave no pending work.
+          const beforeRelease = writes.slice();
+          const lifetimesBeforeRelease = settled.slice();
+          if (fail) write.reject(new Error('quota'));
+          else write.resolve();
+          await Promise.all(instance.operations.lifetimes);
+          assert.strictEqual(instance.evaluate('mutableRequests.size'), 0, 'settled writes release their key');
+          assert.deepStrictEqual(beforeRelease, [first], 'same-key puts must never overlap');
+          assert.deepStrictEqual(lifetimesBeforeRelease, [false, false], 'waitUntil owns queued and active writes');
+          assert.deepStrictEqual(writes, first === 'B' && !fail ? ['B'] : [first, first === 'A' ? 'B' : 'A']);
+          assert.strictEqual(instance.stores.get(cacheName(workerSource)).get(key).body,
+            first === 'B' && fail ? 'A' : 'B');
+        });
+      }
+    }
+  }
+  test(`${site} request order precedes cache open and independent keys keep streaming and committing`, async () => {
+    const open = deferred();
+    const oldNetwork = deferred();
+    const otherWrite = deferred();
+    const key = prefix + 'reader.html';
+    const otherKey = 'https://example.test' + prefix.replace(/static\/$/, '') + 'data/independent.json';
+    let opens = 0;
+    const instance = harness({source: workerSource,
+      open: (name, cache) => ++opens === 1 ? open.promise.then(() => cache) : Promise.resolve(cache),
+      fetch: request => keyOf(request).endsWith('?older') ? oldNetwork.promise : Promise.resolve(response('B')),
+      put: (request, value, values) => (keyOf(request) === otherKey ? otherWrite.promise : Promise.resolve())
+        .then(() => { values.set(keyOf(request), value); }),
+    });
+    const a = dispatchFetch(instance, 'https://example.test' + key + '?older', 'navigate');
+    const other = dispatchFetch(instance, otherKey);
+    const b = dispatchFetch(instance, 'https://example.test' + key + '?newer', 'navigate');
+    await flushPromises();
+    assert.strictEqual((await other).body, 'B', 'independent response streams during its pending put');
+    assert.strictEqual((await b).body, 'B');
+    await instance.operations.lifetimes[2];
+    assert.strictEqual(instance.stores.get(cacheName(workerSource)).get(key).body, 'B',
+      'a blocked put for another key does not block this commit');
+    assert.strictEqual(instance.evaluate('mutableRequests.size'), 2);
+    open.resolve();
+    await flushPromises();
+    oldNetwork.resolve(response('A'));
+    assert.strictEqual((await a).body, 'B', 'Reader serves the cache populated while its open was delayed');
+    await instance.operations.lifetimes[0];
+    assert.strictEqual(instance.stores.get(cacheName(workerSource)).get(key).body, 'B', 'order is assigned before cache open');
+    assert.strictEqual(instance.evaluate('mutableRequests.size'), 1);
+    otherWrite.resolve();
+    await instance.operations.lifetimes[1];
+    assert.strictEqual(instance.evaluate('mutableRequests.size'), 0);
+  });
+  test(`${site} all failure paths release mutable request state`, async () => {
+    for (const options of [
+      {openError: new Error('storage unavailable')},
+      {fetch: () => Promise.reject(new Error('offline'))},
+      {fetch: () => Promise.resolve(response('bad', {ok: false, status: 503}))},
+      {fetch: () => Promise.resolve(response('partial', {status: 206}))},
+      {put: () => Promise.reject(new Error('quota'))},
+    ]) {
+      const instance = harness({source: workerSource, ...options});
+      await dispatchFetch(instance, 'https://example.test' + prefix + 'reader.html').catch(() => {});
+      await Promise.all(instance.operations.lifetimes);
+      assert.strictEqual(instance.evaluate('mutableRequests.size'), 0);
+    }
+  });
+  test(`${site} immutable bursts share scans across cache handles and keep every event alive through late deletion`, async () => {
+    const current = prefix + 'app.111111111111.js';
+    const retired = 'https://example.test' + prefix + 'old.222222222222.js';
+    const late = 'https://example.test' + prefix + 'reader/late.333333333333.mjs';
+    const configured = workerSource.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([current]));
+    const keysGate = deferred(), deleteGate = deferred(), lateDeleteGate = deferred();
+    let scans = 0, deletes = 0, finished = 0;
+    const instance = harness({source: configured, cacheEntries: [[retired, response('old')]],
+      keys: async keys => { scans += 1; if (scans === 1) await keysGate.promise; return keys; },
+      entryDelete: async request => {
+        deletes += 1;
+        await (request.url === late ? lateDeleteGate : deleteGate).promise;
+      },
+    });
+    const fetchBurst = async start => {
+      const responses = Array.from({length: 24}, (_, i) => dispatchFetch(instance, 'https://example.test' + current + '?burst=' + (start + i)));
+      for (const lifetime of instance.operations.lifetimes.slice(start)) lifetime.then(() => { finished += 1; });
+      assert.ok((await Promise.all(responses)).every(result => result.ok), 'delivery must not wait for pruning');
+      await tick();
+    };
+    // Every fetch opens a distinct Cache handle backed by the same named store.
+    await fetchBurst(0);
+    assert.strictEqual(scans, 1, 'in-flight keys must be shared by the burst');
+    assert.strictEqual(finished, 0);
+    keysGate.resolve();
+    await tick();
+    assert.strictEqual(deletes, 1);
+    instance.stores.get(cacheName(configured)).set(late, response('late retired write'));
+    await fetchBurst(24);
+    assert.strictEqual(scans, 1, 'calls during delete must join the running scan');
+    assert.strictEqual(finished, 0);
+    deleteGate.resolve();
+    await tick();
+    assert.strictEqual(scans, 2, 'one dirty follow-up covers both bursts');
+    assert.strictEqual(deletes, 2, 'follow-up must find the write absent from the first snapshot');
+    assert.strictEqual(finished, 0, 'every waitUntil includes the follow-up deletion');
+    lateDeleteGate.resolve();
+    await Promise.all(instance.operations.lifetimes);
+    assert.strictEqual(finished, 48);
+    assert.strictEqual(scans, 2, '48 puts must not enqueue 48 full scans');
+    assert.ok(!instance.stores.get(cacheName(configured)).has(retired));
+    assert.ok(!instance.stores.get(cacheName(configured)).has(late));
+    assert.strictEqual(instance.stores.get(cacheName(configured)).size, 48, 'current immutable entries survive');
+  });
+  test(`${site} pruning coalesces synchronous calls and accepts writes at scan-completion microtasks`, async () => {
+    const current = prefix + 'app.111111111111.js';
+    const retired = 'https://example.test' + prefix + 'old.222222222222.js';
+    const configured = workerSource.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([current]));
+    const gate = deferred();
+    let scans = 0, latePromise;
+    const instance = harness({source: configured,
+      keys: keys => { scans += 1; return scans === 1 ? gate.promise : Promise.resolve(keys); },
+    });
+    const name = cacheName(configured);
+    const first = await instance.caches.open(name), second = await instance.caches.open(name);
+    assert.notStrictEqual(first, second);
+    const pending = Array.from({length: 32}, (_, i) => instance.prune(i % 2 ? first : second));
+    assert.ok(pending.every(promise => promise === pending[0]), 'all callers share the same completion promise');
+    await tick();
+    assert.strictEqual(scans, 1);
+    // Queue at the end of iteration: this runs after the final dirty check,
+    // but before the outer Promise has adopted the completed async task.
+    gate.resolve({ [Symbol.iterator]() { return { next() {
+      queueMicrotask(() => {
+        instance.stores.get(name).set(retired, response('completion-time write'));
+        latePromise = instance.prune(second);
+      });
+      return {done: true};
+    } }; } });
+    await Promise.all(pending);
+    await latePromise;
+    assert.strictEqual(scans, 2, 'completion-time request must start another scan');
+    assert.notStrictEqual(latePromise, pending[0]);
+    assert.ok(!instance.stores.get(name).has(retired));
+    // Calls from a settled promise must also be able to start fresh work.
+    await latePromise.then(() => {
+      instance.stores.get(name).set(retired, response('settled-time write'));
+      return instance.prune(first);
+    });
+    assert.strictEqual(scans, 3);
+    assert.ok(!instance.stores.get(name).has(retired));
+  });
+  for (const failure of ['keys', 'delete']) {
+    test(`${site} shared pruning recovers after delayed ${failure} failure`, async () => {
+      const current = prefix + 'app.111111111111.js';
+      const retired = 'https://example.test' + prefix + 'old.222222222222.js';
+      const configured = workerSource.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([current]));
+      const gate = deferred();
+      let fail = true, scans = 0;
+      const instance = harness({source: configured, cacheEntries: [[retired, response('old')]],
+        keys: async keys => { scans += 1; if (fail && failure === 'keys') await gate.promise; return keys; },
+        entryDelete: async () => { if (fail && failure === 'delete') await gate.promise; },
+      });
+      const name = cacheName(configured);
+      const first = await instance.caches.open(name), second = await instance.caches.open(name);
+      const initial = instance.prune(first);
+      await tick();
+      const joined = instance.prune(second);
+      assert.strictEqual(joined, initial);
+      const rejected = [initial, joined].map(promise => assert.rejects(promise, /storage busy/));
+      gate.reject(new Error('storage busy'));
+      await Promise.all(rejected);
+      assert.strictEqual(scans, 1);
+      assert.ok(instance.stores.get(name).has(retired));
+      fail = false;
+      await instance.prune(second);
+      assert.strictEqual(scans, 2);
+      assert.ok(!instance.stores.get(name).has(retired), 'failure must not poison later cleanup');
+    });
+  }
   test(`${site} previous Ruffle cache retains retired assets and promotes current assets for one release`, async () => {
     const files = ['ruffle.js', 'core.ruffle.0123456789abcdefabcd.js', '0123456789abcdefabcd.wasm'];
     const paths = release => files.map(file => prefix + 'vendor/ruffle/release-' + release + '/' + file);

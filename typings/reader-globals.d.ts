@@ -256,6 +256,8 @@ interface ReaderResourcesApi {
   shellAssets(base: string): string[];
   pdfSupportAssets(base: string): string[];
   djvuDecoderAssets(base: string): string[];
+  djvuSelectedAssets(base: string): string[];
+  djvuSupportsSIMD(): boolean;
   ruffleAssets(base: string): string[];
   engineAssets(extension: string, base: string, foliateSuffix?: string, workerWrapper?: string): string[];
 }

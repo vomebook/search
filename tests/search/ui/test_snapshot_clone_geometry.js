@@ -25,7 +25,8 @@ function fixture(source, root) {
   vm.createContext(c);
   installClassicSearchModules(root, c);
   c.resultSnapshots = c.VoiceOfMLResultSnapshots.create({cloneResult: record => c.cloneSearchResult(record),
-    materialized: (task, index) => c.materializedSnapshotRow(task, index),
+    measurementKey: () => c.getHeightMeasurementKey(),
+    materialized: (task, index, key) => c.materializedSnapshotRow(task, index, key),
     applyHeights: task => c.applySnapshotCloneHeights(task), isCurrent: () => true, completed() {}});
   Object.assign(c, c.VoiceOfMLVirtualHeights.create(c.VSCROLL, {
     results:()=>c.STATE.results, hasWindow:()=>false, cloning:()=>!!c.resultSnapshots.cloneTask,

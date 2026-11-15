@@ -5,23 +5,28 @@ function create(VSCROLL, scroll, deps) {
 const { elements: DOM, getResultScrollTop, getVirtualOffset, findVirtualIndex,
   ensureResultTemplateCache, createResultRow } = deps;
 const RESULT_SCROLL_SEGMENT_HEIGHT = VoiceOfMLVirtualResults.segmentHeight;
-/** @param {number} topH @param {number} endH @param {number} totalH @param {number} logicalTop */
-function layoutResultScrollSegment(topH, endH, totalH, logicalTop) {
-  const viewport = DOM.resultsContainer.clientHeight;
+/** @param {number} totalH @param {number} logicalTop @param {number} viewport */
+function getResultScrollOrigin(totalH, logicalTop, viewport) {
   const limit = RESULT_SCROLL_SEGMENT_HEIGHT;
   const maxOrigin = Math.max(0, totalH - limit);
   const physical = logicalTop - scroll.origin;
   if (scroll.origin > maxOrigin || physical < limit / 4 || physical + viewport > limit * 3 / 4) {
-    scroll.origin = Math.max(0, Math.min(maxOrigin, logicalTop - limit / 2));
+    return Math.max(0, Math.min(maxOrigin, logicalTop - limit / 2));
   }
+  return scroll.origin;
+}
+/** @param {number} topH @param {number} endH @param {number} totalH @param {number} logicalTop @param {number} [viewport] */
+function layoutResultScrollSegment(topH, endH, totalH, logicalTop, viewport = DOM.resultsContainer.clientHeight) {
+  const limit = RESULT_SCROLL_SEGMENT_HEIGHT;
+  scroll.origin = getResultScrollOrigin(totalH, logicalTop, viewport);
   const top = /** @type {HTMLElement | null} */ (DOM.resultsList.querySelector('.virtual-spacer-top'));
   const bottom = /** @type {HTMLElement | null} */ (DOM.resultsList.querySelector('.virtual-spacer-bottom'));
   if (top) top.style.height = Math.max(0, topH - scroll.origin) + 'px';
   if (bottom) bottom.style.height = Math.max(0, Math.min(totalH, scroll.origin + limit) - endH) + 'px';
 }
 
-/** @param {(VoiceOfMLResultRecord | null | undefined)[]} items @param {number} start @param {number} end @param {number} topH @param {number} bottomH */
-function reconcileVirtualRows(items, start, end, topH, bottomH) {
+/** @param {(VoiceOfMLResultRecord | null | undefined)[]} items @param {number} start @param {number} end @param {number} topH @param {number} bottomH @param {number} [viewport] */
+function reconcileVirtualRows(items, start, end, topH, bottomH, viewport = DOM.resultsContainer.clientHeight) {
   const focused = /** @type {HTMLElement} */ (document.activeElement);
   const focusedRow = DOM.resultsList.contains(focused) ? /** @type {HTMLElement} */ (focused.closest('.result-item')) : null;
   const focusedRecord = focusedRow && deps.recordForRow(focusedRow);
@@ -44,7 +49,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
     DOM.resultsList.append(bottomSpacer);
   }
   const endH = getVirtualOffset(end);
-  layoutResultScrollSegment(topH, endH, endH + bottomH, logicalTop);
+  layoutResultScrollSegment(topH, endH, endH + bottomH, logicalTop, viewport);
 
   /** @type {Map<number, HTMLElement>} */
   const existing = new Map();
@@ -79,7 +84,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
     scroll.target = null;
   }
 }
-return { layoutResultScrollSegment, reconcileVirtualRows };
+return { getResultScrollOrigin, layoutResultScrollSegment, reconcileVirtualRows };
 }
 globalThis.VoiceOfMLVirtualRows = { create };
 })();

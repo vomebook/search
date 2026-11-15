@@ -2228,22 +2228,81 @@ class ReaderPerformanceTest(unittest.TestCase):
         for extension, elapsed, byte_count, request_count in results:
             print(f"    {extension:<5s} {elapsed:>7.1f}ms  {byte_count / 1024:>8.1f}KiB  {request_count:>2d} responses")
 
-    def test_image_proxy_failure_falls_back_to_direct_source(self):
-        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/fallback.png"
-        requests = []
-        self.page.route(source, lambda route: (requests.append("source"), route.fulfill(status=200, content_type="image/png", body=PNG_BYTES)))
+    def test_image_proxy_failure_recovers_on_manual_retry_without_direct_source(self):
+        source = "https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/retry.png"
+        direct_requests, errors = [], []
+        self.page.on("pageerror", lambda error: errors.append(str(error)))
         self.page.route(
-            "https://voiceofml-search.hf.space/api/reader-content**",
-            lambda route: (requests.append("proxy"), route.fulfill(status=404, body=b"")),
+            re.compile(r"https://(?:huggingface\.co|hf-mirror\.com)/datasets/"),
+            lambda route: (direct_requests.append(route.request.url), route.fulfill(
+                status=200, content_type="image/png", body=PNG_BYTES)),
         )
-        self.page.goto(
-            f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=png&title=Fallback",
-            wait_until="domcontentloaded",
-        )
-        self.page.wait_for_function("() => document.querySelector('#status').textContent === '图片'")
-        self.assertEqual(requests, ["proxy", "source"])
+        self.page.add_init_script("""(() => {
+          const NativeImage = window.Image;
+          window.Image = function(...args) {
+            const image = new NativeImage(...args);
+            window.__readerImage = image;
+            return image;
+          };
+        })()""")
+        proxy_requests = []
+        proxy_available = False
 
-    def test_fetch_formats_fall_back_when_proxy_request_rejects(self):
+        def serve_proxy(route):
+            proxy_requests.append(route.request.url)
+            if proxy_available:
+                route.fulfill(status=200, content_type="image/png", body=PNG_BYTES)
+            elif failure == "network":
+                route.abort()
+            else:
+                route.fulfill(status=failure, body=b"")
+
+        self.page.route("https://voiceofml-search.hf.space/api/reader-content**", serve_proxy)
+        for failure in (404, 503, "network"):
+            with self.subTest(failure=failure):
+                proxy_requests.clear()
+                proxy_available = False
+                self.page.goto(
+                    f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext=png&title=Retry",
+                    wait_until="domcontentloaded",
+                )
+                self.page.locator('html[data-reader-phase="failed"]').wait_for()
+                alert = self.page.get_by_role("alert")
+                self.assertTrue(alert.is_visible())
+                self.assertIn("image load failed", alert.text_content())
+                self.assertEqual(self.page.locator("#status").text_content(), "无法打开")
+                self.assertEqual(self.page.locator("#content").get_attribute("data-error-code"), "READER_PARSE")
+                self.assertEqual(self.page.locator(".reader-loading-indicator").count(), 0)
+                self.assertEqual(self.page.locator(".reader-image").count(), 0)
+                self.assertEqual(self.page.evaluate("""() => [window.__readerImage.onload,
+                  window.__readerImage.onerror, window.__readerImage.getAttribute('src')]"""),
+                                 [None, None, None])
+                self.assertEqual(len(proxy_requests), 1)
+                self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(proxy_requests[0]).query)["url"], [source])
+                self.assertEqual(direct_requests, [])
+
+                # Image errors have no automatic retry or in-page retry button.
+                # A manual browser reload must recover through the same proxy.
+                self.assertEqual(self.page.locator("#reader-engine-retry").count(), 0)
+                failed_url = self.page.url
+                proxy_available = True
+                self.page.reload(wait_until="domcontentloaded")
+                self.page.locator('html[data-reader-phase="ready"]').wait_for()
+                image = self.page.locator(".reader-image")
+                self.assertTrue(image.is_visible())
+                self.assertTrue(image.evaluate("image => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0"))
+                self.assertEqual(image.evaluate("image => image.src"), proxy_requests[0])
+                self.assertEqual(image.evaluate("image => [image.onload, image.onerror]"), [None, None])
+                self.assertEqual(self.page.locator("#status").text_content(), "图片")
+                self.assertEqual(self.page.locator(".reader-error, .reader-loading-indicator").count(), 0)
+                self.assertEqual(self.page.url, failed_url)
+                self.assertEqual(proxy_requests, [proxy_requests[0]] * 2)
+                self.page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:false}))")
+                self.assertEqual(self.page.locator("html").get_attribute("data-reader-phase"), "disposed")
+                self.assertEqual(direct_requests, [])
+                self.assertEqual(errors, [])
+
+    def test_fetch_formats_keep_proxy_failure_until_manual_retry(self):
         cases = [
             ("txt", "已加载", ".reader-text"),
             ("md", "已加载", ".reader-markdown"),
@@ -2253,10 +2312,15 @@ class ReaderPerformanceTest(unittest.TestCase):
                 context = self.browser.new_context(viewport={"width": 1440, "height": 900})
                 page = context.new_page()
                 page.route("**/static/reader/core/reader-store.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=STORE_SCRIPT))
-                page.route("**/static/vendor/marked.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=MARKED_SCRIPT))
-                page.route("**/static/vendor/purify.min.*.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=PURIFY_SCRIPT))
-                page.route("**/static/vendor/epub.min.06eae1574510.js", lambda route: route.fulfill(status=200, content_type="text/javascript", body=EPUB_SCRIPT))
-                page.route("https://voiceofml-search.hf.space/api/reader-content**", lambda route: route.fulfill(status=403, body="forbidden", headers={"Access-Control-Allow-Origin": "*"}))
+                route_local_vendor_fallback(page)
+                proxy_requests = []
+                available = False
+                def proxy(route):
+                    proxy_requests.append(route.request.url)
+                    route.fulfill(status=200 if available else 403,
+                                  body="Proxy readable" if available else "forbidden",
+                                  headers={"Access-Control-Allow-Origin": "*"})
+                page.route("https://voiceofml-search.hf.space/api/reader-content**", proxy)
                 source = f"https://huggingface.co/datasets/VoiceOfML/Test/resolve/main/fallback.{extension}"
                 direct_requests = []
                 page.route(source, lambda route: (direct_requests.append(route.request.url), route.fulfill(status=200, content_type="application/octet-stream", body=b"Fallback readable")))
@@ -2264,12 +2328,21 @@ class ReaderPerformanceTest(unittest.TestCase):
                     f"{self.origin}/search/static/reader.html?url={urllib.parse.quote(source, safe='')}&ext={extension}&title=Fallback",
                     wait_until="domcontentloaded",
                 )
+                page.locator('html[data-reader-phase="failed"]').wait_for()
+                self.assertIn("HTTP 403", page.get_by_role("alert").text_content())
+                self.assertEqual(page.locator("#content").get_attribute("data-error-code"), "READER_NETWORK")
+                self.assertEqual(page.locator(selector).count(), 0)
+                self.assertEqual(len(proxy_requests), 1)
+                self.assertEqual(direct_requests, [])
+                available = True
+                page.reload(wait_until="domcontentloaded")
                 page.wait_for_function(
                     "expected => document.querySelector('#status').textContent === expected",
                     arg=ready_status,
                 )
-                page.locator(selector).wait_for(state="attached")
-                self.assertEqual(direct_requests, [source])
+                self.assertIn("Proxy readable", page.locator(selector).inner_text())
+                self.assertEqual(proxy_requests, [proxy_requests[0]] * 2)
+                self.assertEqual(direct_requests, [])
                 context.close()
 
     def scroll_document(self):

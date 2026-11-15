@@ -253,11 +253,11 @@ class StaticGateTests(unittest.TestCase):
         contract = self.root / paths[2]
         original = contract.read_text()
         names = ["retry policy keeps bounded delay and never retries rate-limited or aborted work",
-                 "proxy fallback respects response ownership, cancellation and bucket routing",
+                 "proxy-only fetching respects response ownership, cancellation and bucket routing",
                  "preloads are single-owner and fall back on failure or mismatched identity",
                  "document preparation preserves failure and byte-limit ownership",
                  "script load releases timers, handlers and resources on success, error and close",
-                 "image fallback is not used for budget failures or closed readers"]
+                 "image load stays on the proxy when the dataset host is unreachable"]
         for name in names:
             anchor = 'test("' + name + '"'
             self.assertEqual(original.count(anchor), 1)
@@ -294,7 +294,8 @@ class StaticGateTests(unittest.TestCase):
 
     def test_download_controller_coverage_gate_fails_closed(self):
         paths = ["static/search/download-controller.js", "scripts/search/check_download_controller_coverage.mjs",
-                 "scripts/check_tap_contracts.mjs", "tests/search/download/test_download_controller_contract.js", "static/app.js"]
+                 "scripts/check_tap_contracts.mjs", "tests/search/download/test_download_controller_contract.js", "static/app.js",
+                 "static/search/downloads/application/batch.js", "static/search/downloads/presentation/queue.js"]
         for relative in paths:
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -329,13 +330,15 @@ class StaticGateTests(unittest.TestCase):
             "single uncertain handoff is retained and a later batch failure is visible but not retried",
             "retry workers recheck uncertainty when consuming queued items, unlike explicit batches",
             "legacy launch scheduler preserves pacing, cancellation and recovery after throws",
+            "batch owns two quiet workers, deduplicates in order and cancels queued work",
+            "ledger restore filters records, tolerates storage failure and preserves acknowledgement order",
         ]
         gate_source = (self.root / paths[1]).read_text()
         required_block = gate_source.split("const required = [", 1)[1].split("].map(name", 1)[0]
         gate_names = re.findall(r'^  "([^"\n]+)"[,]?$', required_block, re.M)
-        self.assertEqual(len(names), 24)
-        self.assertEqual(len(all_names), 24)
-        self.assertEqual(len(gate_names), 24)
+        self.assertEqual(len(names), 26)
+        self.assertEqual(len(all_names), 26)
+        self.assertEqual(len(gate_names), 26)
         self.assertEqual(len(set(all_names)), len(all_names))
         self.assertEqual(len(set(names)), len(names))
         self.assertEqual(set(gate_names), set(names))
@@ -425,11 +428,20 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         gate = self.root / paths[1]
         source = gate.read_text()
-        self.assertEqual(source.count("const minimum = [100, 94.20, 97.22];"), 1)
-        gate.write_text(source.replace("const minimum = [100, 94.20, 97.22];",
-                                       "const minimum = [100, 94.99, 97.22];"))
-        self.assert_check(self.run_check("node", paths[1]), False,
-                          "above each minimum")
+        minimum = "const minimum = [100, 98.65, 97.22];"
+        self.assertEqual(source.count(minimum), 1)
+        for raised in ("const minimum = [100, 98.66, 97.22];",
+                       "const minimum = [100, 98.65, 97.23];"):
+            gate.write_text(source.replace(minimum, raised))
+            self.assert_check(self.run_check("node", paths[1]), False, "above each minimum")
+        gate.write_text(source)
+        # Remove real cleanup coverage while retaining every required test name.
+        contract = self.root / paths[2]
+        original = contract.read_text()
+        start = original.index("    // A queued completion or a retained close callback")
+        end = original.index("    await turn();", start)
+        contract.write_text(original[:start] + original[end:])
+        self.assert_check(self.run_check("node", paths[1]), False, "above each minimum")
 
     def test_document_loader_strict_type_contract_rejects_bad_inputs(self):
         source = self.root / "static/loader-usage.mjs"
@@ -968,6 +980,7 @@ class StaticGateTests(unittest.TestCase):
         paths = ["static/search/presentation/sidebar-render.js", "scripts/search/check_sidebar_markup_coverage.mjs",
                  "tests/search/baselines/test_sidebar_markup_baseline.mjs", "tests/search/baselines/test_sidebar_markup_differential.mjs",
                  "tests/search/baselines/test_sidebar_markup_module.mjs", "tests/search/baselines/sidebar-original-render.js.fixture",
+                 "static/search/sidebar/presentation/directory.js",
                  "static/app.js", "scripts/check_tap_contracts.mjs"]
         for path in paths:
             target = self.root / path
@@ -2670,18 +2683,21 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
         message = 'Reader media requires named contracts and exactly one source row'
-        self.assert_check(self.run_check(*check, timeout=120), True, '# pass 15')
+        self.assert_check(self.run_check(*check, timeout=120), True, '# pass 16')
         source = self.root / paths[4]
         original = source.read_text()
         name = 'resource cleanup rejects pending metadata and removes listeners'
         anchor = "test('" + name + "'"
-        self.assertEqual(original.count(anchor), 1)
-        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
-            source.write_text(original.replace(anchor, replacement))
-            self.assert_check(self.run_check(*check), False, message)
+        for contract_name in (name, 'stalled proxy retries the proxy instead of the blocked dataset host'):
+            contract_anchor = "test('" + contract_name + "'"
+            self.assertEqual(original.count(contract_anchor), 1)
+            for replacement in ("test('renamed contract'", "test.skip('" + contract_name + "'",
+                                "test.todo('" + contract_name + "'"):
+                source.write_text(original.replace(contract_anchor, replacement))
+                self.assert_check(self.run_check(*check), False, message)
         for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
                       "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");',
-                      'console.log("pass 15");', 'console.log("end of coverage report");'):
+                      'console.log("pass 16");', 'console.log("end of coverage report");'):
             source.write_text(original + '\n' + extra + '\n')
             self.assert_check(self.run_check(*check), False, message)
         source.write_text(original.replace(anchor + ', async () => {',
@@ -2692,9 +2708,18 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(original)
         gate = self.root / paths[1]
         gate_original = gate.read_text()
-        self.assertEqual(gate_original.count('[100, 90.77, 100]'), 1)
-        for minimum in ('[100.01, 90.77, 100]', '[100, 90.78, 100]', '[100, 90.77, 100.01]'):
-            gate.write_text(gate_original.replace('[100, 90.77, 100]', minimum))
+        # Losing unknown-duration retry restoration must fail even with all 16 contracts passing.
+        unknown_duration = '    {restorationReady:true,time:4,duration:Infinity,expected:4},\n'
+        self.assertEqual(original.count(unknown_duration), 1)
+        source.write_text(original.replace(unknown_duration, ''))
+        regression = self.run_check(*check)
+        self.assert_check(regression, False, message)
+        self.assertIn('# pass 16', regression.stdout)
+        self.assertIn('branch coverage', regression.stdout)
+        source.write_text(original)
+        self.assertEqual(gate_original.count('[100, 100, 100]'), 1)
+        for minimum in ('[100.01, 100, 100]', '[100, 100.01, 100]', '[100, 100, 100.01]'):
+            gate.write_text(gate_original.replace('[100, 100, 100]', minimum))
             self.assert_check(self.run_check(*check), False, message)
         self.assertEqual(gate_original.count('reader-media-format\\.mjs'), 1)
         gate.write_text(gate_original.replace('reader-media-format\\.mjs', 'missing-media-format\\.mjs'))

@@ -4,12 +4,12 @@ interface SearchSnapshotScroll { index: number; offset: number; viewKey?: string
 interface SearchSnapshotView {
   key: string; revision: number; results: unknown[]; total: number; loadedPage: number;
   pageCache: Record<string, unknown>; resultBackend?: string | null;
-  window?: {generation?: string | undefined; pages: Iterable<number>; count: number} | null;
+  window?: {generation?: string | undefined; pages: Iterable<number>; count: number; invalid?: boolean} | null;
 }
 interface SearchResultSnapshot {
   version: number; key: string; results: unknown[]; total: number; page: number; loadedPage: number;
   pageCache: Record<string, unknown>; resultBackend?: string | null | undefined; hasMore: boolean;
-  window: {generation?: string | undefined; pages: number[]; count: number} | null;
+  window: {generation?: string | undefined; pages: number[]; count: number; invalid?: boolean} | null;
   estimatedHeight: number; heightCache: SearchSnapshotHeightEntry[]; heightRecords?: SearchSnapshotHeightEntry[];
   scroll: SearchSnapshotScroll; savedAt: number; bytes?: number;
 }
@@ -30,7 +30,8 @@ interface SearchSnapshotBudget {
 }
 interface SearchSnapshotHost {
   cloneResult(result: unknown): unknown;
-  materialized(task: SearchSnapshotCloneTask, index: number): void;
+  measurementKey(): string;
+  materialized(task: SearchSnapshotCloneTask, index: number, measurementKey: string): void;
   applyHeights(task: SearchSnapshotCloneTask): void;
   isCurrent(task: SearchSnapshotCloneTask): boolean;
   completed(): void;
@@ -44,7 +45,7 @@ interface SearchSnapshotStore {
   save(view: SearchSnapshotView, position: SearchSnapshotScroll | null, geometry: SearchSnapshotGeometry): SearchResultSnapshot | null;
   trim(): void; copyPageCache(cache: Record<string, unknown>): Record<string, unknown>;
   cancelClone(): void;
-  materializeRange(task: SearchSnapshotCloneTask, start: number, end: number, deferHeights?: boolean): void;
+  materializeRange(task: SearchSnapshotCloneTask, start: number, end: number, deferHeights?: boolean, measurementKey?: string | null): void;
   restoreResults(snapshot: SearchResultSnapshot, key: string, pageSize: number, restoreScroll: boolean, preserveRestore: boolean): unknown[];
   startClone(): void;
 }

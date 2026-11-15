@@ -5,7 +5,49 @@ const CACHE_VERSION = "development"; // Replaced with a content digest by the st
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 /** @type {string[]} */
 const CURRENT_HASHED_ASSETS = []; // Filled by the static build.
-let cachePruning = Promise.resolve();
+/** @type {Promise<void> | null} */
+let cachePruning = null;
+let cachePruningDirty = false;
+/** @typedef {{ sequence: number, cache: Cache, key: Request | string, copy: Response }} MutableWrite */
+/** @typedef {{ started: number, committed: number, pending: number, writes: Promise<void> | null, queued: MutableWrite | null }} MutableRequests */
+/** @type {Map<string, MutableRequests>} */
+const mutableRequests = new Map();
+/** @param {Response} response */
+function discardMutableCopy(response) {
+  // Tee cancellation can wait for the client branch. Never await it here.
+  try { if (response.body && typeof response.body.cancel === "function") void response.body.cancel().catch(() => {}); } catch (_) {}
+}
+/** @param {MutableRequests} state @param {number} sequence @param {Cache} cache @param {Request | string} key @param {Response} response @returns {Promise<void>} */
+function writeMutable(state, sequence, cache, key, response) {
+  // Do not create an unread tee for an already obsolete response. While a put
+  // is active, coalesce only eligible responses into the newest pending slot.
+  if (sequence <= state.committed || (state.queued && sequence <= state.queued.sequence)) return state.writes || Promise.resolve();
+  if (state.queued) {
+    discardMutableCopy(state.queued.copy);
+    state.queued = null;
+  }
+  state.queued = { sequence, cache, key, copy: response.clone() };
+  if (!state.writes) state.writes = Promise.resolve().then(async () => {
+    while (state.queued) {
+      const write = state.queued;
+      state.queued = null;
+      if (write.sequence <= state.committed) {
+        discardMutableCopy(write.copy);
+        continue;
+      }
+      try {
+        await write.cache.put(write.key, write.copy);
+        state.committed = write.sequence;
+      } catch (_) {
+        discardMutableCopy(write.copy);
+      }
+    }
+    // Clear synchronously with observing an empty slot: an arriving response
+    // must either join this drain or start another, never land between them.
+    state.writes = null;
+  });
+  return state.writes;
+}
 /** @param {string} pathname @returns {boolean} */
 function isRetiredAsset(pathname) {
   if (CURRENT_HASHED_ASSETS.length && (isDjvuDecoderAsset(pathname) || isRuffleAsset(pathname))) return !CURRENT_HASHED_ASSETS.includes(pathname);
@@ -56,13 +98,26 @@ async function prunePreviousGeneration(name) {
 }
 /** @param {Cache} cache @returns {Promise<void>} */
 function pruneHashedAssets(cache) {
-  cachePruning = cachePruning.catch(() => {}).then(async () => {
-    for (const request of await cache.keys()) {
-      const url = new URL(request.url);
-      if (!isRetiredAsset(url.pathname)) continue;
-      await cache.delete(request);
-    }
-  });
+  // All callers use CACHE_NAME, even when caches.open returns different handles.
+  cachePruningDirty = true;
+  if (!cachePruning) {
+    cachePruning = Promise.resolve().then(async () => {
+      try {
+        while (cachePruningDirty) {
+          cachePruningDirty = false;
+          for (const request of await cache.keys()) {
+            const url = new URL(request.url);
+            if (!isRetiredAsset(url.pathname)) continue;
+            await cache.delete(request);
+          }
+        }
+      } finally {
+        // Release in this task: a later microtask must start a new scan, not
+        // join a finished one. Rejections also leave the next call free to retry.
+        cachePruning = null;
+      }
+    });
+  }
   return cachePruning;
 }
 
@@ -219,6 +274,14 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   const networkFirst = !readerShell && (searchNavigation || generatedData || READER_RUNTIME_PATHS.has(url.pathname));
   const cacheKey = readerShell ? "/search/static/reader.html" : searchNavigation ? "/search/" : event.request;
   const immutable = /\.[0-9a-f]{12}\.(?:js|mjs|css)$/.test(url.pathname) || isDjvuDecoderAsset(url.href) || isRuffleAsset(url.href);
+  // Assign order before any asynchronous work, using the actual normalized key.
+  const mutableKey = new URL(typeof cacheKey === "string" ? cacheKey : cacheKey.url, self.location.origin).href;
+  const mutable = immutable ? null : mutableRequests.get(mutableKey) || { started: 0, committed: 0, pending: 0, writes: null, queued: null };
+  const sequence = mutable ? ++mutable.started : 0;
+  if (mutable) {
+    ++mutable.pending;
+    mutableRequests.set(mutableKey, mutable);
+  }
   const cachePromise = caches.open(CACHE_NAME).catch(() => null);
   /** @type {Promise<void> | undefined} */
   let cacheWrite;
@@ -236,13 +299,17 @@ readerWorkerScope.addEventListener("fetch", (event) => {
   }).catch(() => undefined);
   const networkPromise = Promise.all([cachePromise, immutable ? cachedPromise : null]).then(([cache, cached]) => cached || fetch(revalidatedRequest(event.request)).then(response => {
     if (cache && response.ok && response.status !== 206) {
-      cacheWrite = cache.put(cacheKey, response.clone()).then(() => immutable ? pruneHashedAssets(cache) : undefined).catch(() => {});
+      cacheWrite = mutable ? writeMutable(mutable, sequence, cache, cacheKey, response)
+        : cache.put(cacheKey, response.clone()).then(() => pruneHashedAssets(cache)).catch(() => {});
     }
     return response;
   }));
   // A cached response can finish immediately; keep revalidation and the entire
   // cache write alive independently, without delaying streaming cache misses.
-  event.waitUntil(networkPromise.then(() => cacheWrite).catch(() => {}));
+  event.waitUntil(networkPromise.then(() => cacheWrite).catch(() => {}).finally(() => {
+    // Each request owns its queued write; retain ordering until all have settled.
+    if (mutable && --mutable.pending === 0) mutableRequests.delete(mutableKey);
+  }));
   const responsePromise = networkFirst
     ? networkPromise.then(response => response.ok ? response : cachedPromise.then(cached => cached || response)).catch(() => cachedPromise)
     : cachedPromise.then(cached => cached || networkPromise.catch(() => cached));

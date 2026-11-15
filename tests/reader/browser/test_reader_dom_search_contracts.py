@@ -122,5 +122,8 @@ class ReaderDomSearchContracts(unittest.TestCase):
     def test_heading_labels_and_excluded_text(self):
         self.run_contract('headingsAndExcludedNodes')
 
+    def test_large_heading_order_snapshot_and_fallback(self):
+        self.run_contract('largeHeadingOrder')
+
     def test_occurrence_selection_and_stale_navigation(self):
         self.run_contract('occurrenceSelection')

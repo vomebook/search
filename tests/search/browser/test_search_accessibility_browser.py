@@ -322,6 +322,64 @@ class SearchAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('document.activeElement.id'), 'results-container')
         self.assertFalse(self.page.locator('#main-content').evaluate('node=>node.inert'))
 
+    def test_history_invalid_storage_does_not_block_real_search_submission(self):
+        cases = [({}, []), (True, []), ('old query', []),
+                 ([None, '  Keep  spacing  ', 7, False, {'q': 'bad'},
+                   '中文 "quoted"', ['nested'], '  Keep  spacing  '],
+                  ['  Keep  spacing  ', '中文 "quoted"', '  Keep  spacing  '])]
+        field = self.page.locator('#search-input')
+        for index, (stored, retained) in enumerate(cases):
+            with self.subTest(stored=stored):
+                field.blur()
+                self.page.evaluate('''({stored,total})=>{
+                  sessionStorage.setItem('voml_search_history', JSON.stringify(stored));
+                  window.pagingTotal=total;
+                }''', dict(stored=stored, total=7 + index))
+                field.focus()
+                query = 'paging-history-' + str(index) + '  中文 "quoted"'
+                field.fill(query)
+                # Let typing submit and record history through the real debounce;
+                # Enter cancels that timer and does not record history on HF.
+                self.page.wait_for_function('''({query,total})=>!STATE.isLoading
+                  && STATE.query===query && STATE.total===total && STATE._loadedPage===1''',
+                    arg=dict(query=query, total=7 + index))
+                self.assertEqual(self.page.evaluate('''()=>{
+                  const url=new URL(location.href);
+                  return new URLSearchParams(url.hash.includes('?')
+                    ? url.hash.split('?')[1] : url.search).get('q');
+                }'''), query)
+                self.assertEqual(self.page.evaluate('STATE.results.filter(Boolean).map(row=>row.File)'),
+                                 ['paging-' + str(i) for i in range(7 + index)])
+                self.assertTrue(self.page.locator('.result-item[data-index="0"]').is_visible())
+                self.assertEqual(self.page.evaluate(
+                    "JSON.parse(sessionStorage.getItem('voml_search_history'))"), [query] + retained)
+                self.assertEqual(self.fixture.errors, [])
+
+    def test_history_read_preserves_strings_bounds_entries_and_handles_storage_errors(self):
+        valid = ['', '  ', '  Keep  spacing  ', '中文 "quoted"', 'duplicate', 'duplicate']
+        maximum = 20  # Public history retention contract; the store owns its private limit.
+        valid += ['older-' + str(i) for i in range(maximum)]
+        stored = [None, 42, True, {}, ['nested']] + valid
+        self.page.evaluate("value=>sessionStorage.setItem('voml_search_history', JSON.stringify(value))", stored)
+        self.assertEqual(self.page.evaluate('getHistory()'), valid[:maximum])
+        self.assertEqual(self.page.evaluate("JSON.parse(sessionStorage.getItem('voml_search_history'))"), stored)
+        for raw in ('{broken', 'null', '42'):
+            with self.subTest(raw=raw):
+                self.page.evaluate("raw=>sessionStorage.setItem('voml_search_history', raw)", raw)
+                self.assertEqual(self.page.evaluate('getHistory()'), [])
+        self.page.evaluate("sessionStorage.removeItem('voml_search_history')")
+        self.assertEqual(self.page.evaluate('getHistory()'), [])
+        self.assertEqual(self.page.evaluate('''()=>{
+          const original=Storage.prototype.getItem;
+          try {
+            Storage.prototype.getItem=function(key){
+              if(key==='voml_search_history') throw new DOMException('Blocked', 'SecurityError');
+              return original.call(this,key);
+            };
+            return getHistory();
+          } finally { Storage.prototype.getItem=original; }
+        }'''), [])
+
     def test_history_native_buttons_keep_focus_delete_clear_and_escape(self):
         self.page.evaluate("saveHistory(['first query','second query'])")
         field = self.page.locator('#search-input')

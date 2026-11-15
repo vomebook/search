@@ -929,7 +929,7 @@ test("snapshot identity survives Worker restarts but changes with content and se
   assert.deepStrictEqual(old.ids, current.ids);
   await second.worker.request('replace-corpus', {data: compact(records)});
   assert.strictEqual(old.snapshot_generation, (await second.worker.request('local-search', {})).snapshot_generation);
-  const changed = makeWorker(source.replace('worker-search-v6', 'worker-search-v7'));
+  const changed = makeWorker(source.replace('worker-search-v7', 'worker-search-v8'));
   await changed.request('replace-corpus', {data: compact(records)});
   assert.notStrictEqual(old.snapshot_generation, (await changed.request('local-search', {})).snapshot_generation);
   const resized = records.map(record => Object.assign({}, record, {Size: 1}));
@@ -1091,6 +1091,140 @@ test("ASCII separator queries retain literal and fuzzy matches without changing 
   assert.deepStrictEqual(await namesWithCorpus(literal,{q:'alpha.guied',exact:true}),[]);
   assert.deepStrictEqual(await namesWithCorpus(fuzzy,{q:'alpha*guide',exact:false,searchFolders:false}),['alpha guide','alpha guide']);
   assert.deepStrictEqual(await namesWithCorpus(fuzzy,{q:'alpha-guied guide',exact:false}),[]);
+});
+
+test("mixed repository literal and fuzzy filename terms intersect per term", async () => {
+  const record = {...records[0], Repo:"VoiceOfML/Archive", File:"alpha guide", Folder:[]};
+  const {worker} = await loaded([record]);
+  for (const q of ["archive guide", "guied", "archive guied", "guied archive"]) {
+    const result = await worker.request("local-search", {q, exact:false});
+    assert.strictEqual(result.total, 1, q);
+    assert.deepStrictEqual(result.records, [record], q);
+  }
+  assert.strictEqual((await worker.request("local-search", {q:"archive guied", exact:true})).total, 0);
+});
+
+test("mixed literal and fuzzy terms preserve field flags and record filters", async () => {
+  const input = [
+    {...records[0], Repo:"VoiceOfML/Archive", File:"alpha guide", Folder:[]},
+    {...records[0], Repo:"Repo/B", File:"archivist guide", Folder:[]},
+    {...records[0], Repo:"Repo/B", File:"guide", Folder:["archive"]},
+    {...records[0], Repo:"Repo/B", File:"guide", Extension:"archive", Folder:[]},
+    {...records[0], Repo:"VoiceOfML/Archive", File:"alpha", Folder:["guide"]},
+    {...records[0], Repo:"VoiceOfML/Archive", File:"unrelated", Folder:[]},
+    {...records[0], Repo:"Repo/B", File:"guide", Folder:[]},
+  ];
+  for (const warm of [false, true]) {
+    const {worker} = await loaded(input);
+    if (warm) vm.runInContext('buildFulltext()', worker.context);
+    for (const q of ["archiv guied", "guied archiv", "archiv guied archiv"]) {
+      for (const [filters, expected] of [
+        [{}, [0, 1, 2, 3, 4]],
+        [{searchFolders:false}, [0, 1, 3]],
+        [{repos:["VoiceOfML/Archive", "VoiceOfML/Archive"]}, [0, 4]],
+        [{repos:["missing"]}, []],
+        [{extensions:["archive"]}, [3]],
+        [{folders:["archive"], folderMatchMode:"exact"}, [2]],
+        [{folderSelfs:["guide"], folderMatchMode:"mixed"}, [4]],
+        [{minSize:101}, []],
+        [{exact:true}, []],
+      ]) {
+        const result = await worker.request("local-search", {q, exact:false, ...filters});
+        assert.strictEqual(result.total, expected.length, JSON.stringify({q, warm, filters}));
+        assert.deepStrictEqual(result.records.map(record => input.findIndex(item =>
+          JSON.stringify(item) === JSON.stringify(record))).sort((a, b) => a - b), expected, JSON.stringify({q, warm, filters}));
+      }
+    }
+    // A CJK term has several index tokens, but its literal match is one branch.
+    await worker.request("replace-corpus", {data:compact([
+      {...input[0], Repo:"VoiceOfML/手机资料"},
+      {...input[1], File:"手机 guide"},
+    ])});
+    assert.strictEqual((await worker.request("local-search", {q:"手机资料 guied"})).total, 1);
+  }
+});
+
+test("mixed terms keep complete candidates, ranking ties, pages and anchors", async () => {
+  const input = Array.from({length:220}, (_, i) => ({...records[0], Repo:"Repo/A", File:"guide " + i, Folder:[]}));
+  input.push(
+    {...records[0], Repo:"VoiceOfML/Archive", File:"alpha guide", Folder:[], Size:20},
+    {...records[0], Repo:"VoiceOfML/Archive", File:"beta guide", Folder:[], Size:30},
+    {...records[0], Repo:"VoiceOfML/Archive", File:"archive guied", Folder:[], Size:10},
+    {...records[0], Repo:"VoiceOfML/Archive", File:"alpha guide", Folder:["other"], Size:20},
+  );
+  const {worker} = await loaded(input);
+  for (const q of ["archive guied", "guied archive"]) {
+    for (const [sort, indices] of [
+      ["relevance", [222, 220, 221, 223]],
+      ["name", [220, 223, 222, 221]],
+      ["size", [221, 220, 223, 222]],
+    ]) {
+      const params = {q, exact:false, repos:["VoiceOfML/Archive"], sort};
+      // An exact guied posting suppresses fuzzy expansion as before.
+      const exactToken = await worker.request("local-search", params);
+      assert.deepStrictEqual(exactToken.records, [input[222]]);
+      await worker.request("replace-corpus", {data:compact(input.map((record, i) =>
+        i === 222 ? {...record, File:"archive guide"} : record))});
+      const full = await worker.request("local-search", params);
+      assert.strictEqual(full.total, 4, q + " " + sort);
+      assert.deepStrictEqual(full.records.map(record => record.File), indices.map(i => i === 222 ? "archive guide" : input[i].File));
+      const page = await worker.request("local-search", {...params, page:2, pageSize:2,
+        anchorId:"VoiceOfML/Archive\0other/alpha guide.txt"});
+      assert.deepStrictEqual(page.ids, full.ids.slice(2, 4));
+      assert.strictEqual(page.total, 4);
+      assert.strictEqual(page.anchor_index, indices.indexOf(223));
+      await worker.request("replace-corpus", {data:compact(input)});
+    }
+  }
+});
+
+test("repeated normalized missing tokens scan fuzzy vocabulary only once", async () => {
+  const input = [
+    {...records[0], File:"guide", Folder:[]},
+    {...records[0], File:"other", Folder:["guide"]},
+    ...Array.from({length:64}, (_, i) => ({...records[0], File:`unrelated${i}`, Folder:[]})),
+  ];
+  const {worker} = await loaded(input);
+  vm.runInContext(`buildFulltext();
+    globalThis.fuzzyChecks = 0;
+    globalThis.originalCouldBeFuzzy = couldBeFuzzy;
+    couldBeFuzzy = (...args) => { fuzzyChecks++; return originalCouldBeFuzzy(...args); };`, worker.context);
+  for (const searchFolders of [true, false]) {
+    const vocabularySize = vm.runInContext(searchFolders ? 'vocabSorted.length' : 'vocabSortedFilesOnly.length', worker.context);
+    for (const sort of ["relevance", "name", "size"]) {
+      const params = {exact:false, searchFolders, sort};
+      vm.runInContext('searchOrderCache.clear(); fuzzyChecks = 0;', worker.context);
+      const single = await worker.request("local-search", {...params, q:"guied"});
+      assert.strictEqual(single.total, searchFolders ? 2 : 1);
+      assert.strictEqual(vm.runInContext('fuzzyChecks', worker.context), vocabularySize);
+      vm.runInContext('searchOrderCache.clear(); fuzzyChecks = 0;', worker.context);
+      const q = Array.from({length:30}, (_, i) => i % 2 ? "GUIED" : "guied").join("\t ");
+      const repeated = await worker.request("local-search", {...params, q});
+      assert.deepStrictEqual(repeated, single);
+      assert.strictEqual(vm.runInContext('fuzzyChecks', worker.context), vocabularySize,
+        "30 repeated normalized terms must perform one complete vocabulary scan");
+    }
+  }
+});
+
+test("deduplicated terms retain the original multi-term fuzzy expansion", async () => {
+  const input = [
+    {...records[0], File:"xguiedx", Folder:[]},
+    {...records[0], File:"guide", Folder:[]},
+    {...records[0], File:"other", Folder:["guide"]},
+  ];
+  const {worker} = await loaded(input);
+  for (const searchFolders of [true, false]) {
+    const params = {exact:false, searchFolders};
+    const single = await worker.request("local-search", {...params, q:"guied"});
+    assert.deepStrictEqual(single.records, [input[0]], "single-term literal hit suppresses missing-token expansion");
+    for (const count of [2, 30]) {
+      const q = Array.from({length:count}, (_, i) => i % 2 ? "GUIED" : "guied").join(" ");
+      const repeated = await worker.request("local-search", {...params, q});
+      assert.deepStrictEqual(repeated.records, searchFolders ? input : input.slice(0, 2));
+      assert.strictEqual(repeated.total, searchFolders ? 3 : 2);
+    }
+  }
 });
 
 test("normal multi-token search intersects candidates", async () => {

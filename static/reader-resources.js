@@ -224,6 +224,21 @@
   // Extracted unchanged from the checksum-pinned PDF.js archive above.
   /** @param {string} base */
   const pdfSupportAssets = (base) => [base + "vendor/wasm/qcms_bg.wasm"];
+  // This is the decoder worker's exact SIMD probe. Warming must select the
+  // same variant at runtime, never the architecture of the static build host.
+  function djvuSupportsSIMD() {
+    return typeof WebAssembly !== "undefined" && WebAssembly.validate(new Uint8Array([
+      0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,22,1,20,0,253,12,
+      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11
+    ]));
+  }
+  /** @param {string} base */
+  const djvuSelectedAssets = (base) => {
+    const offset = djvuSupportsSIMD() ? 2 : 0;
+    // Only fetch bytes with the worker's fetch identity. Module preload maps
+    // are document-owned; do not speculate on cross-worker glue reuse.
+    return djvuDecoderAssets(base).slice(offset + 1, offset + 2);
+  };
   /** @param {string} base */
   const djvuDecoderAssets = (base) => ["scalar/djvu_rs.js", "scalar/djvu_rs_bg.wasm",
     "simd128/djvu_rs.js", "simd128/djvu_rs_bg.wasm"].map(file =>
@@ -234,8 +249,10 @@
       return [
         vendorUrl("pdf", base),
         workerWrapper,
-        vendorUrl("pdfWorker", base)
+        vendorUrl("pdfWorker", base),
+        ...pdfSupportAssets(base)
       ];
+    if (["djvu", "djv"].includes(extension)) return djvuSelectedAssets(base);
     // view.js statically imports these leaf modules; warm them with it so they
     // are not discovered one round trip later. Format modules follow makeBook.
     /** @param {...string} files */
@@ -321,6 +338,8 @@
     shellAssets,
     pdfSupportAssets,
     djvuDecoderAssets,
+    djvuSupportsSIMD,
+    djvuSelectedAssets,
     engineAssets,
     buildFiles,
     bundleArguments

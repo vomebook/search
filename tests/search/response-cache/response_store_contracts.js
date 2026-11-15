@@ -9,7 +9,7 @@ for (const {name, root} of searchTestProjects()) {
 function responseFixture() {
   let id = 0;
   const frames = new Map(), timers = new Map(), metadata = [];
-  const context = vm.createContext({clock:0, view:"query",
+  const context = vm.createContext({clock:0, view:"query", canUseInitialSearchPayload:()=>false,
     requestAnimationFrame(fn) { const key = ++id; frames.set(key, fn); return key; },
     cancelAnimationFrame(key) { frames.delete(key); },
     setTimeout(fn, delay) { assert.equal(delay, 0); const key = ++id; timers.set(key, fn); return key; },
@@ -26,7 +26,7 @@ function responseFixture() {
     });`, context);
   const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
   for (const name of ["cloneSearchData", "getCachedSearchResponse", "setCachedSearchResponse", "cancelPendingSearchCacheWrites"]) {
-    const match = source.match(new RegExp("^function " + name + "\\([^\\n]*\\} *$", "m"));
+    const match = source.match(new RegExp("^function " + name + "\\([^]*?^\\}", "m"));
     assert(match, name + " remains a host wrapper");
     vm.runInContext(match[0], context);
   }
@@ -95,7 +95,22 @@ test(name + " pending reads precede committed memory, replace in insertion order
   assert.equal(f.store.cache.has("new"), false);
 });
 
-test(name + " response store keeps wrapper > TTL and underlying >= TTL with LRU promotion", () => {
+test(name + " deferred writes preserve acquisition age and cannot revive expired responses", () => {
+  const f = responseFixture(), c = f.context;
+  c.setCachedSearchResponse("pending", page("pending"), true);
+  c.clock = 99; assert(c.getCachedSearchResponse("pending"));
+  c.clock = 100; assert.equal(c.getCachedSearchResponse("pending"), null);
+  f.frame(); f.timer(); assert.equal(f.store.cache.has("pending"), false);
+  c.clock = 200; c.setCachedSearchResponse("delayed", page("delayed"), true);
+  c.clock = 250; f.frame(); f.timer();
+  assert.equal(f.store.cache.get("delayed").time, 200);
+  c.clock = 300; assert.equal(c.getCachedSearchResponse("delayed"), null);
+  c.setCachedSearchResponse("expired", page("expired"), true);
+  c.clock = 400; f.frame(); f.timer();
+  assert.equal(f.store.cache.has("expired"), false);
+});
+
+test(name + " response store keeps acquisition TTL and underlying TTL with LRU promotion", () => {
   const f = responseFixture(), c = f.context;
   for (const key of ["a", "b", "c"]) c.setCachedSearchResponse(key, page(key));
   c.getCachedSearchResponse("a"); c.setCachedSearchResponse("d", page("d"));
@@ -105,7 +120,7 @@ test(name + " response store keeps wrapper > TTL and underlying >= TTL with LRU 
   // Give the cache a fresh insertion timestamp and an older response timestamp
   // to exercise the wrapper boundary independently of the underlying cache.
   f.store.cache.set("boundary", {time:0, data:page("boundary")});
-  assert(c.getCachedSearchResponse("boundary"));
+  assert.equal(c.getCachedSearchResponse("boundary"), null);
   c.clock = 101; assert.equal(c.getCachedSearchResponse("boundary"), null);
   assert.equal(f.store.cache.has("boundary"), false);
 });

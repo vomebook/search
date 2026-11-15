@@ -225,6 +225,40 @@ test("check failures report legacy messages and permit a retry", async () => {
   }
 });
 
+for (const status of [200, 502]) {
+  test(`null JSON at HTTP ${status} reports a friendly failure without handoff and permits retry`, async () => {
+    const {controller: c, requests, launches, toasts, timers} = fixture();
+    const button = makeButton("下载", "previous");
+    const failed = c.downloadFile("book.txt", "book", {button});
+    await flush();
+    const checked = c.checkDownload("book");
+    assert.equal(requests.length, 1);
+    requests[0].resolve(response(null, status === 200, status));
+    const expected = status === 200 ? "下载检查失败，请重试" : "下载检查失败（HTTP 502），请重试";
+    assert.deepEqual(await settledWithin(Promise.all([failed, checked])), [false, expected]);
+    assert.deepEqual(toasts, [["正在准备下载…"], [expected, 3500]]);
+    assert.deepEqual(launches, []);
+    assert.equal(button.textContent, "下载");
+    assert.equal(button.getAttribute("aria-busy"), "previous");
+    assert.equal(c.downloadChecks.has("book"), false);
+    assert.equal(c.pendingDownloads.size, 0);
+    assert.equal(c.activeDownloadChecks, 0);
+    assert.equal(timers.size, 0);
+
+    const retry = c.downloadFile("book.txt", "book", {button});
+    await flush();
+    assert.equal(requests.length, 2);
+    requests[1].resolve(response({ok: true}));
+    assert.equal(await settledWithin(retry), true);
+    assert.deepEqual(launches, ["book.txt|book"]);
+    assert.equal(button.textContent, "下载");
+    assert.equal(button.getAttribute("aria-busy"), "previous");
+    assert.equal(c.pendingDownloads.size, 0);
+    assert.equal(c.activeDownloadChecks, 0);
+    assert.equal(timers.size, 0);
+  });
+}
+
 test("truthy rejection messages retain their original non-string values", async () => {
   const {controller: c, requests, toasts, launches} = fixture();
   const marker = {reason: "synthetic"};

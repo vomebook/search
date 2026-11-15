@@ -85,12 +85,9 @@ export function createReaderPdfEngine(readerContext) {
 
   /** @param {PdfModule} pdfjs @param {(url: string) => PdfOptions} options @param {string} target @param {string} proxy @param {(url: string) => Initial} takeInitial */
   function loadPdfWithTimeout(pdfjs, options, target = readerContext.sourceUrl, proxy = readerContext.contentUrl, takeInitial = (_url) => null) {
-    return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy))).catch((error) => {
-      readerContext.assertReaderActive();
-      if (error && (/** @type {{name?: string}} */ (error)).name === "AbortError") throw error;
-      if (readerContext.retryableReaderProxyError(error)) throw error;
-      return readerContext.loadPdfTaskWithTimeout(pdfjs, options, target);
-    });
+    // Keep a failed proxy on the proxied URL. Falling through to target opens
+    // huggingface.co directly, which does not connect on this network.
+    return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy)));
   }
 
   function preloadPdfEngine() {

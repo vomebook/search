@@ -132,7 +132,7 @@ def refs_for_helper(root, path):
         if not file.is_file() or file.suffix not in {'.js', '.mjs'}:
             continue
         text = uncomment(file.read_text(encoding='utf-8'))
-        if re.search(r'(?:require\(\s*|from\s+)[\"\'][^\"\']*/' + re.escape(stem) + r'(?:\.(?:js|mjs))?[\"\']', text):
+        if re.search(r'(?:require\(\s*|from\s+|import\s+)[\"\'][^\"\']*/' + re.escape(stem) + r'(?:\.(?:js|mjs))?[\"\']', text):
             importers.append(file.relative_to(root).as_posix())
     return '\n'.join(importers)
 

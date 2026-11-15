@@ -45,28 +45,50 @@ test("retry policy keeps bounded delay and never retries rate-limited or aborted
     calls++; throw Object.assign(new Error("rate limited"), {status: 429, code: "READER_PDF_RATE_LIMIT"});
   }), {code: "READER_PDF_RATE_LIMIT"});
   assert.equal(calls, 1); assert.deepEqual(h.waits, []);
+  for (const failure of [null, undefined, new DOMException("caller closed", "AbortError")]) {
+    calls = 0; h.waits.length = 0;
+    await assert.rejects(h.loader.retryReaderProxy(async () => {calls++; throw failure;}), error => error === failure);
+    assert.equal(calls, 1); assert.deepEqual(h.waits, []);
+  }
+  for (const rejectWait of [false, true]) {
+    const closing = fixture(); calls = 0;
+    closing.context.waitForReader = async delay => {
+      closing.waits.push(delay); closing.close();
+      if (rejectWait) throw closing.context.readerAbortError();
+    };
+    await assert.rejects(closing.loader.retryReaderProxy(async () => {
+      calls++; throw new TypeError("failed to fetch");
+    }), {name: "AbortError"});
+    assert.equal(calls, 1, "closing during backoff must prevent a second request");
+    assert.deepEqual(closing.waits, [350]);
+  }
   calls = 0; h.close();
   await assert.rejects(h.loader.retryReaderProxy(async () => {calls++;}), {name: "AbortError"});
   assert.equal(calls, 0);
 });
 
-test("proxy fallback respects response ownership, cancellation and bucket routing", {timeout: 10000}, async () => {
+test("proxy-only fetching respects response ownership, cancellation and bucket routing", {timeout: 10000}, async () => {
   const h = fixture();
   const init = {headers: {Range: "bytes=0-3"}};
   assert.equal(await (await h.loader.fetchReaderUrl("/api/reader-bucket-resource?path=x", init)).text(), "content");
   assert.equal(h.requests.length, 1); assert.equal(h.requests[0].url, "/api/reader-bucket-resource?path=x");
   assert.equal(h.requests[0].init, init);
-  h.requests.length = 0;
   let cancelled = 0;
-  h.context.readerRequestManager.request = async (url, timeout, options) => {
-    h.requests.push({url, timeout, init: options});
-    if (h.requests.length === 1) return new Response(new ReadableStream({cancel() {cancelled++;}}), {status: 404});
-    return new Response("direct");
-  };
-  const response = await h.loader.fetchReaderUrl("https://books.test/raw", init);
-  assert.equal(await response.text(), "direct"); assert.equal(cancelled, 1);
-  assert.equal(h.requests.length, 2); assert.match(h.requests[0].url, /reader-content/);
-  assert.equal(h.requests[1].url, "https://books.test/raw"); assert.equal(h.requests[1].init, init);
+  for (const status of [403, 404]) {
+    h.requests.length = 0; cancelled = 0;
+    h.context.readerRequestManager.request = async (url, timeout, options) => {
+      h.requests.push({url, timeout, init: options});
+      if (url === "https://books.test/raw") return new Response("direct");
+      return new Response(new ReadableStream({cancel() {cancelled++;}}), {status});
+    };
+    await assert.rejects(h.loader.fetchReaderUrl("https://books.test/raw", init), {status, message: `HTTP ${status}`});
+    assert.equal(cancelled, 1);
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.requests[0].url, h.context.readerContentUrl("https://books.test/raw"));
+    assert.equal(h.requests[0].init, init);
+    assert.equal(h.requests[0].timeout, h.context.READER_PROXY_TIMEOUT_MS);
+    assert.deepEqual(h.waits, []);
+  }
 
   h.requests.length = 0; cancelled = 0;
   h.context.readerRequestManager.request = async (url, timeout, options) => {
@@ -75,6 +97,14 @@ test("proxy fallback respects response ownership, cancellation and bucket routin
   };
   await assert.rejects(h.loader.fetchReaderUrl("https://books.test/raw"), {status: 503});
   assert.equal(h.requests.length, 3); assert.equal(cancelled, 3); assert.deepEqual(h.waits, [350, 700]);
+  assert.ok(h.requests.every(({url}) => url === h.context.readerContentUrl("https://books.test/raw")));
+
+  h.requests.length = 0; h.waits.length = 0;
+  const networkError = new TypeError("failed to fetch");
+  h.context.readerRequestManager.request = async url => {h.requests.push({url}); throw networkError;};
+  await assert.rejects(h.loader.fetchReaderUrl("https://books.test/raw"), error => error === networkError);
+  assert.deepEqual(h.requests.map(({url}) => url), Array(3).fill(h.context.readerContentUrl("https://books.test/raw")));
+  assert.deepEqual(h.waits, [350, 700]);
 
   const owner = new AbortController(); h.requests.length = 0;
   h.context.readerRequestManager.request = async url => {
@@ -109,6 +139,14 @@ test("preloads are single-owner and fall back on failure or mismatched identity"
     assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
     window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: "https://books.test/wrong", manifest: Promise.resolve(new Response("wrong"))};
     assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
+    h.context.chapterManifestUrl = undefined;
+    window.__VOICE_READER_CHAPTER_PRELOAD__ = {manifestUrl: source,
+      manifest: Promise.resolve(new Response("unavailable", {status: 503}))};
+    const beforeFallback = h.requests.length;
+    assert.equal(await (await h.loader.loadChapterManifestDocument()).text(), "content");
+    assert.equal(window.__VOICE_READER_CHAPTER_PRELOAD__.manifest, null);
+    assert.equal(h.requests.length, beforeFallback + 1);
+    assert.equal(h.requests.at(-1).url, h.context.readerContentUrl(source));
     window.__VOICE_PDF_PRELOAD__ = {manifestUrl: source, manifest: Promise.reject(new Error("preload failed"))};
     assert.equal(await (await h.loader.fetchReaderResponse()).text(), "content");
   } finally {globalThis.window = oldWindow; globalThis.location = oldLocation;}
@@ -167,28 +205,66 @@ test("script load releases timers, handlers and resources on success, error and 
     const closed = h.loader.loadScript("/closing.js"); [...h.resources][0]();
     await assert.rejects(closed, {name: "AbortError"});
     assert.equal(latest.removed, true); assert.equal(timers.size, 0); assert.equal(h.resources.size, 0);
+    // A queued completion or a retained close callback may arrive after another
+    // outcome has already won. Cleanup must run once and leave later work alone.
+    for (const winner of ["load", "error", "timeout", "close"]) {
+      const racing = fixture();
+      let releases = 0;
+      const track = racing.context.trackReaderResource;
+      racing.context.trackReaderResource = cleanup => {
+        const release = track(cleanup);
+        return () => {releases++; release();};
+      };
+      const pending = racing.loader.loadScript(`/race-${winner}.js`);
+      const script = latest;
+      let removals = 0;
+      script.remove = () => {removals++; script.removed = true;};
+      const callbacks = {load: script.onload, error: script.onerror,
+        timeout: timers.get(timer), close: [...racing.resources][0]};
+      callbacks[winner]();
+      if (winner === "load") await pending;
+      else await assert.rejects(pending, winner === "close" ? {name: "AbortError"} : {code: "READER_ENGINE_NETWORK"});
+      assert.equal(releases, 1); assert.equal(removals, winner === "load" ? 0 : 1);
+      assert.equal(script.onload, null); assert.equal(script.onerror, null);
+      assert.equal(timers.size, 0); assert.equal(racing.resources.size, 0);
+
+      const next = racing.loader.loadScript("/next-engine.js");
+      const nextScript = latest, nextTimer = timer;
+      for (const callback of Object.values(callbacks)) callback();
+      assert.equal(releases, 1, "late callbacks must not release the same resource twice");
+      assert.equal(removals, winner === "load" ? 0 : 1, "late failure must not remove a loaded script");
+      assert.equal(timers.has(nextTimer), true); assert.equal(timers.size, 1);
+      assert.equal(racing.resources.size, 1); assert.equal(nextScript.removed, false);
+      nextScript.onload(); await next;
+      assert.equal(releases, 2); assert.equal(timers.size, 0); assert.equal(racing.resources.size, 0);
+    }
     await turn();
   } finally {globalThis.document = oldDocument; globalThis.setTimeout = oldSet; globalThis.clearTimeout = oldClear;}
 });
 
-test("image fallback is not used for budget failures or closed readers", {timeout: 10000}, async () => {
+test("image load stays on the proxy when the dataset host is unreachable", {timeout: 10000}, async () => {
   const oldImage = globalThis.Image;
   globalThis.Image = class {};
   try {
     const h = fixture(), calls = [];
+    h.context.sourceUrl = "https://huggingface.co/datasets/VoiceOfML/VOMEBOOK/resolve/main/page.webp";
     h.context.imageLoader = {load: async (image, url, signal, deadline) => {
       calls.push({image, url, signal, deadline});
-      if (calls.length === 1) throw new Error("proxy unsupported");
+      if (url === h.context.sourceUrl) throw new Error("direct dataset request");
       return image;
     }};
     const image = await h.loader.loadImageDocument();
-    assert.equal(image.alt, "book"); assert.equal(calls.length, 2);
-    assert.equal(calls[1].url, h.context.sourceUrl); assert.equal(calls[0].deadline, calls[1].deadline);
-    let limitCalls = 0;
-    h.context.imageLoader.load = async () => {limitCalls++; throw Object.assign(new Error("limit"), {code:"READER_RESOURCE_LIMIT"});};
+    assert.equal(image.alt, "book"); assert.equal(calls.length, 1);
+    assert.notEqual(calls[0].url, h.context.sourceUrl);
+    assert.equal(calls[0].url, h.context.readerContentUrl(h.context.sourceUrl));
+    const networkError = new TypeError("failed to fetch");
+    calls.length = 0;
+    h.context.imageLoader.load = async (image, url) => {calls.push(url); throw networkError;};
+    await assert.rejects(h.loader.loadImageDocument(), error => error === networkError);
+    assert.deepEqual(calls, [h.context.readerContentUrl(h.context.sourceUrl)]);
+    h.context.imageLoader.load = async () => {throw Object.assign(new Error("limit"), {code:"READER_RESOURCE_LIMIT"});};
     await assert.rejects(h.loader.loadImageDocument(), {code:"READER_RESOURCE_LIMIT"});
-    assert.equal(limitCalls, 1, "resource-limit errors cannot start a direct fallback");
-    h.close(); h.context.imageLoader.load = async () => {throw new Error("failed");};
+    h.close();
     await assert.rejects(h.loader.loadImageDocument(), {name:"AbortError"});
   } finally {globalThis.Image = oldImage;}
 });

@@ -16,11 +16,10 @@ async function until(predicate) {
   assert.fail('IndexedDB checkpoint was not reached');
 }
 
-function fixture() {
-  const factory = new IDBFactory();
+function fixture(factory = new IDBFactory()) {
   const timers = new Map();
   let nextTimer = 0;
-  const h = {opens: 0, closes: 0, writes: [], terminals: [], openHook: null, transactionHook: null, openError: null};
+  const h = {now: 100, opens: 0, closes: 0, writes: [], operations: [], terminals: [], openHook: null, transactionHook: null, openError: null};
   const location = {href: 'https://example.test/search/?q=first'};
   const history = {
     state: {foreign: {value: 7}}, replacements: [],
@@ -51,8 +50,13 @@ function fixture() {
               const store = objectStore(name);
               if (!instrumented.has(store)) {
                 instrumented.add(store);
-                const put = store.put.bind(store);
-                store.put = (value, key) => { h.writes.push(value.url); return put(value, key); };
+                const get = store.get.bind(store), put = store.put.bind(store);
+                store.get = key => { h.operations.push({type: 'get', key, tx}); return get(key); };
+                store.put = (value, key) => {
+                  h.operations.push({type: 'put', key, tx});
+                  h.writes.push(value.url);
+                  return put(value, key);
+                };
               }
               return store;
             };
@@ -65,6 +69,7 @@ function fixture() {
   };
   const context = vm.createContext({
     indexedDB, window: Object.assign(new EventTarget(), {indexedDB}), location, history, URL,
+    Date: {now: () => h.now},
     setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); }
   });
@@ -114,7 +119,7 @@ function holdOpen(h) {
   return {ready: () => !!release, release: () => { h.openHook = null; release(); }};
 }
 
-function holdTerminal(h, {abortThrows = false, failPut = false, requestError = false, preventError = false} = {}) {
+function holdTerminal(h, {abortThrows = false, failPut = false, failGet = false, getError = false, requestError = false, preventError = false} = {}) {
   let release;
   let captured = false;
   let aborts = 0;
@@ -146,6 +151,11 @@ function holdTerminal(h, {abortThrows = false, failPut = false, requestError = f
         };
         if (key === 'objectStore') return name => {
           const store = target.objectStore(name);
+          if (failGet) store.get = () => { throw new Error('injected synchronous get failure'); };
+          if (getError) {
+            const get = store.get.bind(store);
+            store.get = key => { const request = get(key); target.abort(); return request; };
+          }
           if (failPut) store.put = () => { throw new Error('injected synchronous put failure'); };
           if (requestError) store.put = (value, entry) => store.add(value, entry);
           return store;
@@ -171,6 +181,67 @@ test('save captures its URL before the database opens', options, async () => {
   assert.equal((await h.saved()).url, before);
   assert.deepEqual(h.writes, [before]);
 });
+
+test('independent tabs keep the newer committed search when an older capture opens late', options, async () => {
+  const factory = new IDBFactory();
+  const a = fixture(factory), b = fixture(factory), held = holdOpen(a);
+  a.now = 100;
+  a.location.href = 'https://example.test/search/?q=older';
+  const older = a.session.persistSearchSession();
+  await until(held.ready);
+  b.now = 200;
+  b.location.href = 'https://example.test/search/?q=newer';
+  await b.session.persistSearchSession();
+  const newer = {version: 1, url: b.location.href, updatedAt: 200};
+  assert.deepEqual(await b.saved(), newer, 'tab B commits while tab A is still opening');
+  // Both tabs share the advancing system clock, even while A's open is held.
+  a.now = 200;
+  held.release();
+  await older;
+  assert.deepEqual(await a.saved(), newer, 'late tab A must not overwrite the newer committed search');
+  assert.deepEqual(a.writes, [], 'stale save performs no put');
+  assert.deepEqual(a.operations.map(op => op.type), ['get']);
+  assert.deepEqual(b.operations.map(op => op.type), ['get', 'put']);
+  assert.equal(b.operations[0].tx, b.operations[1].tx, 'comparison and put share one transaction');
+  assert.equal(b.operations[0].tx.mode, 'readwrite');
+  assert.ok([...a.operations, ...b.operations].every(op => op.key === 'last-search'));
+
+  a.now = 300;
+  a.location.href = 'https://example.test/search/?q=latest';
+  await a.session.persistSearchSession();
+  assert.deepEqual(await b.saved(), {version: 1, url: a.location.href, updatedAt: 300});
+  assert.deepEqual(a.writes, [a.location.href], 'skipping an older save does not block the next save');
+  assert.deepEqual(a.terminals, ['complete', 'complete']);
+  assert.equal(a.closes, 2);
+  assert.equal(a.timers.size, 0);
+});
+
+for (const freshContext of [false, true]) {
+  test(`clock rollback allows the next save in a ${freshContext ? 'fresh' : 'same'} context`, options, async () => {
+    const factory = new IDBFactory(), a = fixture(factory);
+    a.now = 200;
+    await a.session.persistSearchSession();
+    assert.equal((await a.saved()).updatedAt, 200);
+
+    const b = freshContext ? fixture(factory) : a;
+    b.now = 100;
+    b.location.href = 'https://example.test/search/?q=after-clock-rollback';
+    await b.session.persistSearchSession();
+    assert.deepEqual(await a.saved(), {version: 1, url: b.location.href, updatedAt: 100},
+      'a future stored timestamp must not suppress a genuinely later save');
+    const [read, write] = b.operations.slice(-2);
+    assert.equal(read.type, 'get');
+    assert.equal(write.type, 'put');
+    assert.equal(read.tx, write.tx);
+    assert.equal(read.tx.mode, 'readwrite');
+
+    b.now = 101;
+    b.location.href = 'https://example.test/search/?q=next-after-rollback';
+    await b.session.persistSearchSession();
+    assert.deepEqual(await a.saved(), {version: 1, url: b.location.href, updatedAt: 101});
+    assert.equal(b.timers.size, 0);
+  });
+}
 
 test('delayed open serializes adapters and coalesces pending saves to the newest URL', options, async () => {
   const h = fixture(), held = holdOpen(h);
@@ -213,17 +284,26 @@ test('timed out opens stay bounded, close late connections and resume only after
 
 for (const fault of [
   {name: 'timeout with throwing abort', abortThrows: true},
+  {name: 'synchronous get failure', failGet: true},
+  {name: 'get request error', getError: true},
   {name: 'synchronous put failure', failPut: true},
   {name: 'request error', requestError: true},
   {name: 'cancelled request error with throwing abort', requestError: true, abortThrows: true, preventError: true}
 ]) {
   test(`${fault.name} cannot release a writer before native complete or abort delivery`, options, async () => {
     const h = fixture();
-    if (fault.requestError) await h.session.persistSearchSession();
+    await h.session.persistSearchSession();
+    const original = await h.saved();
+    h.location.href = 'https://example.test/search/?q=failed-attempt';
+    h.now = 200;
     const opens = h.opens;
     const held = holdTerminal(h, fault);
     const first = h.session.persistSearchSession();
     await until(held.ready);
+    if (fault.failGet || fault.getError || fault.failPut || fault.requestError) {
+      assert.deepEqual(await h.saved(), original, 'failed transaction preserves the committed snapshot');
+    }
+    h.now = 300;
     h.location.href = 'https://example.test/search/?q=newer';
     const pending = h.session.persistSearchSession();
     h.expire();
@@ -235,7 +315,26 @@ for (const fault of [
     const terminalCount = h.terminals.length;
     held.release();
     await until(() => h.terminals.length > terminalCount);
-    assert.equal((await h.saved()).url, h.location.href);
+    assert.deepEqual(await h.saved(), {version: 1, url: h.location.href, updatedAt: 300});
+    assert.equal(h.timers.size, 0);
+    assert.equal(h.closes, opens + 2);
+  });
+}
+
+for (const updatedAt of [undefined, null, '500', NaN, Infinity, -Infinity, 99, 100]) {
+  test(`save replaces an older, equal or unusable timestamp: ${String(updatedAt)}`, options, async () => {
+    const h = fixture();
+    h.transactionHook = tx => {
+      h.transactionHook = null;
+      const store = tx.objectStore('session'), put = store.put.bind(store);
+      store.put = (value, key) => put({...value, updatedAt}, key);
+      return tx;
+    };
+    await h.session.persistSearchSession();
+    h.location.href = 'https://example.test/search/?q=replacement';
+    await h.session.persistSearchSession();
+    assert.deepEqual(await h.saved(), {version: 1, url: h.location.href, updatedAt: 100});
+    assert.equal(h.writes.length, 2);
   });
 }
 

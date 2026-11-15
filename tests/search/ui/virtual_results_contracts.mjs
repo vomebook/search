@@ -130,14 +130,14 @@ test('scroll RAF coalesces intent, freezes drag measurements and reset cancels s
 test('render reuses rows and restores the same focused control after content invalidation', () => {
   const f = fixture(), {c, list, events, document} = f;
   c.renderVisible(); const row = list.querySelector('.result-item[data-index="2"]');
-  document.activeElement = row.children[0]; c.VSCROLL.renderStart = -1; c.renderVisible();
+  document.activeElement = row.children[0]; c.VSCROLL.renderStart = -1; c.VSCROLL.renderEnd = -1; c.renderVisible();
   assert.equal(list.querySelector('.result-item[data-index="2"]'), row);
   assert.equal(events.filter(e => e[0] === 'measure').length, 26);
-  c.VSCROLL.contentVersion++; c.VSCROLL.renderStart = -1; c.renderVisible();
+  c.VSCROLL.contentVersion++; c.VSCROLL.renderStart = -1; c.VSCROLL.renderEnd = -1; c.renderVisible();
   const replacement = list.querySelector('.result-item[data-index="2"]');
   assert.notEqual(replacement, row); assert.equal(document.activeElement, replacement.children[0]);
   assert.equal(replacement.attrs['aria-posinset'], '3'); assert.equal(replacement.attrs['aria-setsize'], '100');
-  c.STATE.results[2] = {File: 'different'}; c.VSCROLL.renderStart = -1; c.renderVisible();
+  c.STATE.results[2] = {File: 'different'}; c.VSCROLL.renderStart = -1; c.VSCROLL.renderEnd = -1; c.renderVisible();
   assert.equal(document.activeElement, f.container); assert.equal(c.keyboardResultIndex, -1);
 });
 
