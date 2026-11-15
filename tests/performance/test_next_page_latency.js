@@ -4,6 +4,7 @@ const vm = require("vm");
 const assert = require("assert");
 const {test, run} = require("../support/test_harness");
 const {searchTestProjects} = require("../support/search_test_projects");
+const {installClassicSearchModules} = require("../support/classic_search_modules");
 
 function install(source, context, names) {
   for (const name of names) {
@@ -22,7 +23,7 @@ function createFixture(source, root) {
       _resultBackend:"api",filterFolderSelfs:[],filterFolderSubtrees:[],useLocalMode:false},
     VSCROLL:{renderFrame:0,renderAfterScroll:false,isDraggingThumb:false},
     document:{hidden:false}, DOM:{resultsContainer:{clientHeight:600}}, navigator:{onLine:true}, AbortController, DOMException,
-    searchPrefetchAbortController:null, searchRequestId:1,
+    searchPrefetchAbortController:null, searchPagePrefetch:undefined, searchRequestId:1,
     positionRestore:null, readerOverlay:null, snapshotCloneTask:null,
     APPEND_REQUEST_TIMEOUT:5000, RECENT_SEARCH_PAGE_TTL:604800000,
     searchPageMetadata:new WeakMap([[first,{generation:"stable",total:801}]]),
@@ -54,6 +55,7 @@ function createFixture(source, root) {
     renderVisible(){clock += 8; return true;}, updateScrollTrack(){}, updateScrollThumb(){},
   };
   vm.createContext(context);
+  installClassicSearchModules(root, context);
   for (const file of ["domain/paging-policy.js", "application/paging-controller.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "static/search/results", file), "utf8"), context);
   }
