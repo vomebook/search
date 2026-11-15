@@ -47,6 +47,123 @@ class SearchPositionTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('pagingRequests.slice(0,2)'), [1, 2])
         self.assertGreaterEqual(self.page.evaluate('STATE.results.length'), 200)
 
+    def check_corrupt_viewport_reload(self, after_anchor):
+        # Leave the app first so pagehide cannot overwrite the corrupt disk entry.
+        self.page.goto(self.fixture.origin + '/search/manifest.json')
+        persisted = self.page.evaluate('''({key, afterAnchor}) => new Promise((resolve,reject) => {
+          const request=indexedDB.open('voice-search-positions',4);
+          request.onerror=()=>reject(request.error);
+          request.onsuccess=()=>{
+            const db=request.result,tx=db.transaction(['positions','viewports'],'readwrite');
+            const positions=tx.objectStore('positions'),viewports=tx.objectStore('viewports');
+            let position,corrupted;
+            positions.get(key).onsuccess=event=>{
+              position=event.target.result;
+              viewports.get(key).onsuccess=event=>{
+                const viewport=event.target.result;
+                const anchor=viewport.records.find(tuple=>tuple[0]===position.index);
+                if(!anchor) {tx.abort();return;}
+                viewport.records=afterAnchor?[anchor,null]:[null];
+                corrupted=viewport.records;viewports.put(viewport);
+              };
+            };
+            tx.oncomplete=()=>{db.close();resolve({position,corrupted});};
+            tx.onabort=()=>{db.close();reject(tx.error||new Error('Missing genuine anchor'));};
+          };
+        })''', {'key': self.saved['key'], 'afterAnchor': after_anchor})
+        self.assertEqual(persisted['position']['anchorId'], self.saved['anchorId'])
+        self.assertEqual(persisted['corrupted'][-1], None)
+        self.page.evaluate("history.replaceState(null,'','/search/#/?q=paging-original&local=0')")
+        self.page.reload(wait_until='domcontentloaded')
+        # Accept either position restoration or a fresh search, but never a blank
+        # startup or an unhandled rejection. Surface errors without a long timeout.
+        self.page.wait_for_function('''() => window.viewportReloadErrors?.length ||
+          (STATE.query==='paging-original' && !STATE.isLoading && !positionRestore &&
+           STATE.results.some(record=>record?.File==='paging-125'||record?.File==='paging-0'))''')
+        self.assertEqual(self.page.evaluate('window.viewportReloadErrors'), [])
+        self.assertEqual(self.fixture.errors, [])
+        self.assertGreater(self.page.locator('.result-item').count(), 0)
+        self.assertTrue(self.page.evaluate("STATE.results.some(record=>record?.File==='paging-125'||record?.File==='paging-0')"))
+
+    def install_viewport_error_capture(self):
+        self.page.add_init_script('''window.viewportReloadErrors=[];
+          window.addEventListener('error',event=>viewportReloadErrors.push(event.message));
+          window.addEventListener('unhandledrejection',event=>viewportReloadErrors.push(String(event.reason)));''')
+
+    def test_reload_rejects_null_viewport_tuple(self):
+        self.install_viewport_error_capture()
+        self.check_corrupt_viewport_reload(after_anchor=False)
+
+    def test_reload_rejects_malformed_tuple_after_valid_anchor(self):
+        self.install_viewport_error_capture()
+        self.check_corrupt_viewport_reload(after_anchor=True)
+
+    def test_viewport_writer_roundtrip_preserves_size_strings(self):
+        result = self.page.evaluate('''async () => {
+          const position=searchPositions.get(getSearchViewKey());
+          const sizes=['','unknown','1234'];
+          const results=displayedSearchView.results.slice();
+          sizes.forEach((Size,offset)=>{
+            const index=position.index+offset;
+            results[index]={...results[index],Size};
+          });
+          saveSearchViewport(position,{...displayedSearchView,results});
+          // Read the writer's committed IndexedDB entry, not a handcrafted preview.
+          const viewport=await new Promise((resolve,reject)=>{
+            const tx=searchPositionDB.transaction('viewports');
+            const request=tx.objectStore('viewports').get(position.key);
+            let value;request.onsuccess=()=>{value=request.result};
+            tx.oncomplete=()=>resolve(value);tx.onabort=()=>reject(tx.error);
+          });
+          return {valid:validSearchViewport(viewport,position),
+            sizes:sizes.map((_,offset)=>viewport.records.find(tuple=>tuple[0]===position.index+offset)[1].Size)};
+        }''')
+        self.assertEqual(result, {'valid': True, 'sizes': ['', 'unknown', '1234']})
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_viewport_validation_checks_all_records_and_height_bounds(self):
+        checks = self.page.evaluate('''() => {
+          const position=searchPositions.get(getSearchViewKey());
+          const viewport=structuredClone(searchViewportSnapshots.get(position.key));
+          const anchor=viewport.records.find(tuple=>tuple[0]===position.index);
+          const valid={...viewport,records:[anchor]};
+          const failures=[];
+          const check=(name,value,expected)=>{
+            try {if(validSearchViewport(value,position)!==expected)failures.push(name);}
+            catch(error){failures.push(name+': '+error.message);}
+          };
+          check('normal',viewport,true);
+          for(const height of [undefined,null,0,60,60.5])
+            check('default/valid estimate '+height,{...valid,estimatedHeight:height},true);
+          const badTuples=[null,{},'tuple',[],[position.index],
+            [position.index,null,60],[position.index,[],60],[position.index,'record',60],
+            [-1,anchor[1],60],[0.5,anchor[1],60],[viewport.total,anchor[1],60],
+            [Infinity,anchor[1],60],[NaN,anchor[1],60],
+            [position.index,anchor[1],60], // Duplicate indexes could replace the anchor.
+            [position.index+1,{...anchor[1],File:null},60],
+            [position.index+1,{...anchor[1],Repo:123},60],
+            [position.index+1,{...anchor[1],Extension:{}},60],
+            [position.index+1,{...anchor[1],Folder:'bad'},60],
+            [position.index+1,{...anchor[1],Folder:[null]},60],
+            [position.index+1,{...anchor[1],Folder:Array(1)},60],
+            [position.index+1,{...anchor[1],Size:NaN},60],
+            [position.index+1,{...anchor[1],Size:-Infinity},60],
+            [position.index+1,{...anchor[1],Size:Infinity},60],
+            [position.index+1,{...anchor[1],Size:-1},60]];
+          for(const height of [undefined,null,0,-1,NaN,Infinity,'60',1e20])
+            badTuples.push([position.index+1,anchor[1],height]);
+          badTuples.forEach((tuple,i)=>check('tuple '+i,{...valid,records:[anchor,tuple]},false));
+          check('sparse records',{...valid,records:[anchor,,]},false);
+          for(const total of [NaN,Infinity,2**32,position.index,-1,1.5])
+            check('total '+total,{...valid,total},false);
+          for(const height of [-1,NaN,Infinity,'60',1e20])
+            check('estimate '+height,{...valid,estimatedHeight:height},false);
+          check('nonfinite timestamp',{...valid,savedAt:Infinity},false);
+          check('too many tuples',{...valid,records:Array(81).fill(anchor)},false);
+          return failures;
+        }''')
+        self.assertEqual(checks, [])
+
     def test_old_database_is_reset_without_importing_legacy_positions(self):
         self.page.goto(self.fixture.origin + '/search/manifest.json')
         self.page.evaluate('''async saved => {

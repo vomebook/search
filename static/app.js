@@ -1100,7 +1100,10 @@ var EXT_FILTER_STORAGE_KEY = "voml_ext_filter:global";
 
 function getHistory() {
   try {
-    return JSON.parse(sessionStorage.getItem(HISTORY_KEY)) || [];
+    var list = JSON.parse(sessionStorage.getItem(HISTORY_KEY));
+    return Array.isArray(list)
+      ? list.filter(function(item) { return typeof item === "string"; }).slice(0, HISTORY_MAX)
+      : [];
   } catch (e) { return []; }
 }
 
@@ -3134,10 +3137,32 @@ async function readSearchViewport(key) {
 }
 
 function validSearchViewport(viewport, position) {
-  return !!position && !!viewport && viewport.key === position.key
-    && viewport.savedAt >= Date.now() - SEARCH_POSITION_TTL && Number.isInteger(viewport.total) && viewport.total > position.index
-    && Array.isArray(viewport.records) && viewport.records.length <= 80
-    && viewport.records.some(([index, record]) => index === position.index && getResultStableId(record) === position.anchorId);
+  // Persisted previews are untrusted: validate every tuple before any consumer
+  // destructures it, even when an earlier tuple already matches the anchor.
+  const validHeight = height => Number.isFinite(height) && height > 0 && height <= 1000000;
+  if (!position || !viewport || viewport.key !== position.key
+      || !Number.isFinite(viewport.savedAt) || viewport.savedAt < Date.now() - SEARCH_POSITION_TTL
+      || !Number.isInteger(viewport.total) || viewport.total <= position.index || viewport.total > 0x7ffffffe
+      || !Number.isInteger(position.index) || position.index < 0
+      || !Array.isArray(viewport.records) || !viewport.records.length || viewport.records.length > 80
+      // Missing/zero estimates retain the existing default-height fallback.
+      || (viewport.estimatedHeight != null && viewport.estimatedHeight !== 0 && !validHeight(viewport.estimatedHeight))) return false;
+  const indexes = new Set();
+  let anchor = false;
+  for (const tuple of viewport.records) {
+    if (!Array.isArray(tuple) || tuple.length !== 3) return false;
+    const [index, record, height] = tuple;
+    if (!Number.isInteger(index) || index < 0 || index >= viewport.total || indexes.has(index)
+        || !record || typeof record !== "object" || Array.isArray(record) || typeof record.File !== "string"
+        || (record.Repo != null && typeof record.Repo !== "string")
+        || (record.Extension != null && typeof record.Extension !== "string")
+        || (record.Folder != null && (!Array.isArray(record.Folder) || Array.from(record.Folder).some(folder => typeof folder !== "string")))
+        || (record.Size != null && typeof record.Size !== "string" && (!Number.isFinite(record.Size) || record.Size < 0))
+        || !validHeight(height)) return false;
+    indexes.add(index);
+    if (index === position.index && getResultStableId(record) === position.anchorId) anchor = true;
+  }
+  return anchor;
 }
 
 function showSavedSearchViewport(viewport, position, task) {
@@ -3790,6 +3815,11 @@ function captureSearchSnapshotHeights() {
 
 function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const view = displayedSearchView;
+  if ((view && view.key === key && view.window?.invalid) || searchViewSnapshots.get(key)?.window?.invalid) {
+    // Keep the saved position for validation; stale rows must not replace it.
+    searchViewSnapshots.delete(key);
+    return null;
+  }
   // Browsing from the top must not overwrite the snapshot offered by Return.
   if (getReturnPositionTarget(key)) return searchViewSnapshots.get(key) || null;
   if (!DOM.resultsContainer || !view || positionRestore || key !== view.key || view.loadedPage < 1) return null;
@@ -3936,6 +3966,10 @@ function startSnapshotClone() {
 
 function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
   const snapshot = searchViewSnapshots.get(key);
+  if (snapshot?.window?.invalid) {
+    searchViewSnapshots.delete(key);
+    return restoreScroll && tryRestoreSearchPosition(key);
+  }
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
   searchIntentId++;
   if (!cancelActiveSearch()) return false;
