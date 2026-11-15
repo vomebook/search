@@ -3356,26 +3356,16 @@ function restartResultWindow() {
 }
 
 function updateResultWindowStatus() {
-  let status = document.getElementById("search-window-status");
-  if (!status && resultWindow && (resultWindow.invalid || resultWindow.failures.size)) {
-    status = document.createElement("div");
-    status.id = "search-window-status";
-    status.setAttribute("role", "status");
-    status.innerHTML = '<span></span> <button type="button" class="text-btn-sm"></button>';
-    status.querySelector("button").onclick = () => {
+  VoiceOfMLResultWindowStatus.update({
+    window: resultWindow, getHost: () => DOM.resultsContainer.parentElement,
+    retry: () => {
       if (!resultWindow) return;
       if (resultWindow.invalid) return restartResultWindow();
       const pages = [...resultWindow.failures.keys()];
       resultWindow.failures.clear(); updateResultWindowStatus();
       pages.forEach(page => loadResultWindowPage(page));
-    };
-    DOM.resultsContainer.parentElement.appendChild(status);
-  }
-  if (status) {
-    status.hidden = !resultWindow || (!resultWindow.invalid && !resultWindow.failures.size);
-    status.querySelector("span").textContent = resultWindow?.invalid ? "搜索数据已更新" : "部分结果暂时无法加载";
-    status.querySelector("button").textContent = resultWindow?.invalid ? "重新定位" : "重试加载";
-  }
+    },
+  });
 }
 
 function isRecoverableSearchError(error) {
@@ -3383,38 +3373,16 @@ function isRecoverableSearchError(error) {
 }
 
 function waitForSearchRecovery(signal, delay, local) {
-  return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
-    let elapsed = false;
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      document.removeEventListener("visibilitychange", ready);
-      window.removeEventListener("online", ready);
-      window.removeEventListener("pageshow", ready);
-    };
-    const abort = () => { cleanup(); reject(new DOMException("Cancelled", "AbortError")); };
-    const ready = () => {
-      if (elapsed && !document.hidden && (local || navigator.onLine)) { cleanup(); resolve(); }
-    };
-    const timer = setTimeout(() => { elapsed = true; ready(); }, delay);
-    signal.addEventListener("abort", abort, { once: true });
-    document.addEventListener("visibilitychange", ready);
-    window.addEventListener("online", ready);
-    window.addEventListener("pageshow", ready);
-    if (signal.aborted) abort();
-  }));
+  return VoiceOfMLResultWindowLoader.waitForRecovery(signal, delay, local);
 }
 
 async function fetchPositionPageWithRecovery(query, page, signal, anchorId, demanded = () => true) {
-  for (let attempt = 0; ; attempt++) {
-    if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
-    try { return await fetchPositionPage(query, page, signal, anchorId); }
-    catch (error) {
-      if (signal.aborted || attempt >= 2 || !demanded() || !isRecoverableSearchError(error)) throw error;
-      const local = query.useLocalMode || query.folders.self.length || query.folders.subtree.length || !apiAvailable;
-      await waitForSearchRecovery(signal, (attempt + 1) * 750, local);
-    }
-  }
+  return VoiceOfMLResultWindowLoader.fetchWithRecovery({
+    fetchPage: (query, page, signal, anchorId) => fetchPositionPage(query, page, signal, anchorId),
+    isRecoverable: error => isRecoverableSearchError(error),
+    isLocal: query => query.useLocalMode || query.folders.self.length || query.folders.subtree.length || !apiAvailable,
+    wait: (signal, delay, local) => waitForSearchRecovery(signal, delay, local),
+  }, query, page, signal, anchorId, demanded);
 }
 
 function resumeResultRecovery() {
@@ -3437,35 +3405,13 @@ function resumeResultRecovery() {
 }
 
 function requestResultWindowPage(window, page, prefetch = false) {
-  if (window.prefetched?.has(page)) return Promise.resolve(window.prefetched.get(page));
-  if (window.pending.has(page)) {
-    const request = window.pending.get(page);
-    if (!prefetch && !request.demanded) { request.demanded = true; request.diskWait?.abort(); }
-    return request;
-  }
-  if (prefetch && window.prefetchFailures?.has(page)) return Promise.resolve(null);
-  if (window.pending.size >= 3 || window.failures.has(page) || window.invalid) return Promise.resolve(null);
-  const diskWait = new AbortController();
-  const releaseDisk = () => diskWait.abort();
-  window.controller.signal.addEventListener("abort", releaseDisk, { once: true });
-  if (window.controller.signal.aborted) releaseDisk();
-  const request = (async () => {
-    const cached = await readRecentSearchPage(window.key, page, window, prefetch ? 150 : 25, diskWait.signal);
-    if (!resultWindowCurrent(window)) return null;
-    return cached || fetchPositionPageWithRecovery(window.query, page, window.controller.signal, undefined, () => request.demanded);
-  })().then(data => {
-    if (!data) return null;
-    validatePositionWindowPage(data, page, window.query.pageSize, window);
-    return data;
-  }).finally(() => {
-    window.controller.signal.removeEventListener("abort", releaseDisk);
-    window.pending.delete(page);
-    if (resultWindowCurrent(window)) scheduleVirtualRender();
-  });
-  window.pending.set(page, request);
-  request.demanded = !prefetch;
-  request.diskWait = diskWait;
-  return request;
+  return VoiceOfMLResultWindowLoader.requestPage({
+    readRecent: (key, page, expected, delay, signal) => readRecentSearchPage(key, page, expected, delay, signal),
+    isCurrent: window => resultWindowCurrent(window),
+    fetchPage: (query, page, signal, anchorId, demanded) => fetchPositionPageWithRecovery(query, page, signal, anchorId, demanded),
+    validate: (data, page, size, expected) => validatePositionWindowPage(data, page, size, expected),
+    scheduleRender: () => scheduleVirtualRender(),
+  }, window, page, prefetch);
 }
 
 async function loadResultWindowPage(page, prefetch = false) {
@@ -3557,21 +3503,11 @@ function ensureResultWindowPages(start, end) {
 
 function createResultWindowPlaceholder(index) {
   const page = Math.floor(index / STATE.pageSize) + 1;
-  const row = document.createElement("div");
-  row.className = "result-item result-window-placeholder";
-  row.dataset.index = String(index);
-  row.dataset.contentVersion = String(VSCROLL.contentVersion);
-  row.style.height = (VSCROLL.heights[index] || VSCROLL.estimatedHeight) + "px";
-  if (resultWindow?.invalid || resultWindow?.failures.has(page)) {
-    const button = document.createElement("button");
-    button.className = "text-btn-sm"; button.dataset.windowPage = String(page);
-    button.textContent = resultWindow.invalid ? "数据已更新，点击重新定位" : "加载失败，点击重试";
-    row.appendChild(button);
-  } else {
-    row.setAttribute("aria-label", "正在加载结果");
-    row.innerHTML = '<div class="window-placeholder-lines" aria-hidden="true"><i></i><i></i></div>';
-  }
-  return row;
+  return VoiceOfMLResultWindowStatus.createPlaceholder({
+    index, page, contentVersion: VSCROLL.contentVersion,
+    height: VSCROLL.heights[index] || VSCROLL.estimatedHeight,
+    invalid: resultWindow?.invalid, failed: resultWindow?.failures.has(page),
+  });
 }
 
 async function fetchPositionPage(query, page, signal, anchorId) {

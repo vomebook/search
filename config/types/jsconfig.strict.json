@@ -83,6 +83,8 @@
     "../../static/search/requests/infrastructure/shared-transport.js",
     "../../static/search/requests/application/prefetch-controller.js",
     "../../static/search/results/presentation/paging-status.js",
+    "../../static/search/results/window/application/page-loader.js",
+    "../../static/search/results/window/presentation/status.js",
     "../../static/search/domain/height-index.js",
     "../../static/search/domain/stable-stringify.js",
     "../../static/search/domain/search-view-key.js",

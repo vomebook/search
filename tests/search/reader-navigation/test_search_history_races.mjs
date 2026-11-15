@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import '../paging/result_window_contracts.mjs';
 import { installClassicSearchModules } from '../../support/classic_search_modules.js';
 import { APP_DEPENDENCIES, stripBundledScripts } from '../../../scripts/build/compose_app.mjs';
 
