@@ -282,9 +282,10 @@ for (const {name:project,root} of searchTestProjects()) {
           searchId:1,renderSearchPage(){},syncStateToURL(){},updateStatusBar(){},updatePagingStatus(){},
           finishPagingAttempt(){},console:{error(){}},
           applySearchPage(data){c.applied=data; c.STATE._loadedPage=data.page; c.STATE.hasMore=false; return true;}});
-        install(source,c,["prefetchNextPage","prefetchLocalSearchPage","doSearchFallbackLocal"]);
+        Object.assign(c, {searchExecution:undefined, searchIntentId:1});
+        install(source,c,["prefetchNextPage","prefetchLocalSearchPage","getSearchExecution"]);
         const task=c.prefetchNextPage(); c.prefetchNextPage(); assert.strictEqual(f.calls.length,1);
-        c.doSearchFallbackLocal({page:2},true,1); assert.strictEqual(f.calls.length,1);
+        c.getSearchExecution().local({page:2},true,1); assert.strictEqual(f.calls.length,1);
         if (outcome === "cancel") {c.searchId++; c.searchPrefetchAbortController.abort();}
         if (outcome === "failure") f.calls[0].reject(Error("held-worker-failure"));
         else f.calls[0].resolve({...f.data(2),generation:outcome === "changed-generation" ? "changed" : "stable"});
@@ -292,7 +293,7 @@ for (const {name:project,root} of searchTestProjects()) {
         if (outcome === "cancel" || outcome === "failure") assert.strictEqual(c.applied,undefined);
         else assert.strictEqual(c.applied.generation,outcome === "changed-generation" ? "changed" : "stable");
         if (outcome === "failure") {
-          c.searchId=2; c.doSearchFallbackLocal({page:2},true,2);
+          c.searchId=2; c.getSearchExecution().local({page:2},true,2);
           assert.strictEqual(f.calls.length,2);
           f.calls[1].resolve(f.data(2)); await f.flush();
           assert.strictEqual(c.applied.generation,"stable");

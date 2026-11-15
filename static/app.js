@@ -3339,9 +3339,7 @@ function ensureLocalDataLoaded(triggerSearchAfterLoad, background) {
   });
 }
 
-function showSearchBackendUnavailable(waiting) {
-  STATE.isLoading = waiting;
-  setSearchVisualLoading(waiting);
+function clearUnavailableSearchResults() {
   STATE.results = [];
   STATE.total = 0;
   STATE._loadedPage = 0;
@@ -3354,6 +3352,9 @@ function showSearchBackendUnavailable(waiting) {
   resetVirtualScrollState();
   DOM.resultsList.innerHTML = "";
   DOM.emptyState.style.display = "none";
+}
+
+function renderSearchBackendUnavailable(waiting) {
   const status = document.createElement("div");
   status.setAttribute("role", "status");
   status.textContent = waiting ? "正在加载搜索数据…" : "搜索数据加载失败，请重试";
@@ -3491,7 +3492,6 @@ function doSearch(append, fromStart = false, restorePosition = false) {
   const id = ++searchId;
   const intent = searchIntentId;
   const params = buildLocalSearchParams(STATE.page);
-  const folderMatchMode = params.folderMatchMode;
   if (append && STATE._pageCache[STATE.page]) {
     if (deferSearchAppend()) return;
     consumeCachedAppendPage();
@@ -3521,184 +3521,46 @@ function doSearch(append, fromStart = false, restorePosition = false) {
       clearResultsSkeleton();
     }
   }
-  const continueInitialViaApi = !!(append && STATE._initialActive && !STATE.dataLoaded && apiAvailable && folderMatchMode !== "mixed");
-  const continueApi = append && STATE._resultBackend === "api";
-  const shouldUseLocalSearch = (append && STATE._resultBackend === "local") ||
-    (!continueApi && !continueInitialViaApi && (STATE.useLocalMode || folderMatchMode === "mixed"));
-  if (shouldUseLocalSearch) {
-    if (!STATE.dataLoaded) {
-      if (!append) showSearchBackendUnavailable(true);
-      ensureLocalDataLoaded(false, true).then(ok => {
-        if (id !== searchId || intent !== searchIntentId) return;
-        STATE.isLoading = false;
-        if (ok) doSearch(append);
-        else if (!append && folderMatchMode !== "mixed" && apiAvailable) {
-          STATE.useLocalMode = false;
-          if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
-          doSearch();
-        } else if (!append) showSearchBackendUnavailable(false);
-        else finishPagingAttempt(false, new Error("LOCAL_UNAVAILABLE"));
-      });
-      return;
-    } else {
-      if (STATE._resultBackend !== "local") {
-        cancelSearchPrefetch();
-        STATE._pageCache = {};
-      }
-      STATE._resultBackend = "local";
-      doSearchFallbackLocal({...params, signal: searchAbortController.signal}, append, id);
-      return;
-    }
-  }
-  if (apiAvailable) {
-    STATE._resultBackend = "api";
-    if (append && STATE._pendingPage === STATE.page) {
-      STATE.isLoading = false;
-      return;
-    }
-    STATE._pendingPage = STATE.page;
-    if (!searchAbortController) searchAbortController = new AbortController();
-    params.signal = searchAbortController.signal;
-    const requestId = searchRequestId;
-    let pagingSucceeded = false;
-    let pagingError = null;
-    doSearchAPI(params, append, requestId).then(function(applied) {
-      if (!applied) return;
-      if (id !== searchId || intent !== searchIntentId) return;
-      if (STATE._deferredAppendWhileDragging) return;
-      STATE.page = STATE._loadedPage;
-      pagingSucceeded = true;
-      renderSearchPage(append);
-      prefetchNextPage();
-      warmConnection();
-      syncStateToURL();
-    }).catch(function(err) {
-      if (id !== searchId || intent !== searchIntentId) return;
-      pagingError = err.name === "AbortError" ? null : err;
-      if (err.message === "API_TIMEOUT") {
-        console.warn("API timeout");
-        return handleApiSearchFailure(append, id, intent);
-      }
-      if (err.name === "AbortError") {
-        if (id === searchId) {
-          STATE.isLoading = false;
-          if (append) STATE.page = Math.max(1, STATE._loadedPage);
-          if (!append) setSearchVisualLoading(false);
-        }
-        return;
-      }
-      console.warn("API search failed:", err);
-      return handleApiSearchFailure(append, id, intent);
-    }).finally(function() {
-      if (id === searchId && intent === searchIntentId) {
-        STATE._pendingPage = 0;
-        STATE.isLoading = false;
-        STATE.resultsSkeletonActive = false;
-        if (!append) setSearchVisualLoading(false);
-        else updateStatusBar();
-        if (append && !STATE._deferredAppendWhileDragging && (pagingSucceeded || pagingError)) finishPagingAttempt(pagingSucceeded, pagingError);
-        else updatePagingStatus();
-      }
-    });
-    return;
-  }
-  if (continueApi) {
-    STATE.isLoading = false;
-    STATE.page = STATE._loadedPage;
-    finishPagingAttempt(false, new Error("API_UNAVAILABLE"));
-    return;
-  }
-  if (!STATE.dataLoaded) {
-    if (!append) showSearchBackendUnavailable(true);
-    ensureLocalDataLoaded(false, true).then(ok => {
-      if (id !== searchId || intent !== searchIntentId) return;
-      STATE.isLoading = false;
-      if (ok) doSearch(append);
-      else if (!append) showSearchBackendUnavailable(false);
-      else {
-        STATE.page = Math.max(1, STATE._loadedPage);
-        finishPagingAttempt(false, new Error("LOCAL_UNAVAILABLE"));
-      }
-    });
-    return;
-  }
-  STATE._resultBackend = "local";
-  doSearchFallbackLocal({...params, signal: searchAbortController.signal}, append, id);
+  getSearchExecution().execute(params, append, id, intent);
 }
 
-function handleApiSearchFailure(append, id, intent = searchIntentId) {
-  if (id !== searchId || intent !== searchIntentId) return Promise.resolve();
-  if (append) {
-    STATE.page = Math.max(1, STATE._loadedPage);
-    showToast("加载更多失败，请重试");
-    return Promise.resolve();
-  }
-  showToast("在线搜索失败，正在切换本地搜索...");
-  showSearchBackendUnavailable(true);
-  return ensureLocalDataLoaded(false, true).then(function(ok) {
-    if (id !== searchId || intent !== searchIntentId) return;
-    if (!ok) { showSearchBackendUnavailable(false); return; }
-    STATE.useLocalMode = true;
-    if (DOM.localModeToggle) DOM.localModeToggle.checked = true;
-    syncStateToURL();
-    doSearch();
-  });
-}
-
-function doSearchFallbackLocal(params, append, id) {
-  (async function() {
-    let pagingSucceeded = false;
-    let pagingError = null;
-    if (id !== searchId) return;
-    try {
+// Only execution fields and bounded effects cross this boundary. The host
+// retains synchronous cancellation, route/position preparation and rendering.
+var searchExecution;
+function getSearchExecution() {
+  return searchExecution ||= VoiceOfMLSearchExecution.create({
+    readView: () => ({ searchId, intent: searchIntentId, requestId: searchRequestId,
+      page: STATE.page, _loadedPage: STATE._loadedPage, _pendingPage: STATE._pendingPage,
+      _resultBackend: STATE._resultBackend, _initialActive: STATE._initialActive,
+      _deferredAppendWhileDragging: STATE._deferredAppendWhileDragging,
+      dataLoaded: STATE.dataLoaded, useLocalMode: STATE.useLocalMode,
+      resultCount: STATE.results.length, apiAvailable }),
+    update: patch => { Object.assign(STATE, patch); },
+    signal: create => {
+      if (create && !searchAbortController) searchAbortController = new AbortController();
+      return searchAbortController.signal;
+    },
+    setLocalMode: enabled => {
+      STATE.useLocalMode = enabled;
+      if (DOM.localModeToggle) DOM.localModeToggle.checked = enabled;
+    },
+    clearPrefetch: () => { cancelSearchPrefetch(); STATE._pageCache = {}; },
+    pendingLocal: (page, append) => {
       const controller = searchPrefetchAbortController;
-      const pending = append && controller?.groupKey === "local|" + getSearchViewKey()
-        && !controller.signal.aborted && controller.active.get(params.page);
-      const data = await (pending || doSearchLocal(params));
-      if (id !== searchId) return;
-      if (append && !data.results.length && STATE.results.length < data.total) throw new Error("EMPTY_LOCAL_PAGE");
-      if (!applySearchPage(data, append)) return;
-      STATE.page = STATE._loadedPage;
-      pagingSucceeded = true;
-      renderSearchPage(append);
-      prefetchNextPage();
-      syncStateToURL();
-    } catch (err) {
-      console.error("Local Worker search failed:", err);
-      if (id !== searchId) return;
-      if (err.name === "AbortError") return;
-      pagingError = err;
-      if (append) {
-        STATE.page = Math.max(1, STATE._loadedPage);
-        return;
-      }
-      STATE.dataLoaded = false;
-      if (params.folderMatchMode === "mixed") {
-        showSearchBackendUnavailable(false);
-        showToast("本地目录筛选不可用，请重试");
-      } else if (apiAvailable) {
-        STATE.useLocalMode = false;
-        if (DOM.localModeToggle) DOM.localModeToggle.checked = false;
-        syncStateToURL();
-        showToast("本地搜索不可用，正在切换在线搜索...");
-        STATE.isLoading = false;
-        if (append) STATE.page = STATE._loadedPage + 1;
-        doSearch(append);
-      } else {
-        showSearchBackendUnavailable(false);
-        showToast("本地搜索不可用");
-      }
-    } finally {
-      if (id === searchId) {
-        STATE.isLoading = false;
-        STATE.resultsSkeletonActive = false;
-        if (!append) setSearchVisualLoading(false);
-        else updateStatusBar();
-        if (append && (pagingSucceeded || pagingError)) finishPagingAttempt(pagingSucceeded, pagingError);
-        else updatePagingStatus();
-      }
-    }
-  })();
+      return append && controller?.groupKey === "local|" + getSearchViewKey()
+        && !controller.signal.aborted && controller.active.get(page);
+    },
+    loadLocal: () => ensureLocalDataLoaded(false, true),
+    searchLocal: params => doSearchLocal(params),
+    searchAPI: (params, append, requestId) => doSearchAPI(params, append, requestId),
+    retry: append => doSearch(append), applyPage: (data, append) => applySearchPage(data, append),
+    clearUnavailableResults: () => clearUnavailableSearchResults(),
+    renderUnavailable: waiting => renderSearchBackendUnavailable(waiting),
+    renderPage: append => renderSearchPage(append), visualLoading: value => setSearchVisualLoading(value),
+    prefetch: () => prefetchNextPage(), warmConnection: () => warmConnection(), syncURL: () => syncStateToURL(),
+    notify: message => showToast(message), updateStatus: () => updateStatusBar(),
+    finishPaging: (ok, error) => finishPagingAttempt(ok, error), updatePaging: () => updatePagingStatus(),
+  });
 }
 
 function renderSearchPage(append) {
