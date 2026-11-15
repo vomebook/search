@@ -429,10 +429,44 @@ export function createReaderBindings(readerContext) {
   }
 
   function bindReaderUiHistory() {
-    // System back always leaves the Reader, exactly like its Back button. Do not
-    // add a guard entry or re-push one from popstate: entries created without a
-    // user activation make Chromium skip this document on the next back gesture,
-    // landing on an older repository/book instead of the page that opened it.
+    if (window !== window.top) return;
+    const readerUrl = location.href;
+    let loadingSearch = false;
+    const restoreSearchDocument = (event) => {
+      if (!event.isTrusted || loadingSearch || readerContext.readerLifecycle.disposed) return;
+      // Reloading an overlay URL creates a standalone Reader document which can
+      // still own the preceding same-document search entries. Back changes the
+      // URL/state first; load THAT document without another traversal or rewrite.
+      if (!["/search/", "/search/index.html"].includes(location.pathname)) return;
+      loadingSearch = true;
+      try {
+        sessionStorage.removeItem("reader-navigation-restore");
+        const saved = JSON.parse(sessionStorage.getItem("reader-navigation-current") || "null");
+        if (saved?.shareUrl === readerUrl && saved.readerUrl) {
+          const source = new URL(saved.readerUrl, location.origin);
+          const returnUrl = source.searchParams.get("return");
+          const token = source.searchParams.get("nav");
+          if (source.origin === location.origin && returnUrl === location.href && token &&
+              sessionStorage.getItem(`reader-return:${token}`) === returnUrl) {
+            // The host saves focus/scroll before mounting. The app consumes this
+            // handoff after loading results; it is not a history-entry identity.
+            sessionStorage.setItem("reader-navigation-restore", JSON.stringify({
+              readerUrl: saved.readerUrl, returnUrl
+            }));
+          }
+        }
+      } catch (_) {}
+      location.reload();
+    };
+    const resume = (event) => { if (event.persisted) loadingSearch = false; };
+    window.addEventListener("popstate", restoreSearchDocument);
+    window.addEventListener("pageshow", resume);
+    // A failed book load stops book work but leaves this document's error UI
+    // alive. Keep browser navigation until the document/runtime is disposed.
+    readerContext.readerRuntime.track(() => {
+      window.removeEventListener("popstate", restoreSearchDocument);
+      window.removeEventListener("pageshow", resume);
+    });
   }
 
   function bindPanelBookmarkAndLifecycleControls() {

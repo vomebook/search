@@ -1,4 +1,5 @@
 """Focused browser regressions for resumed and stalled result pagination."""
+import os
 import unittest
 
 from tests.support.browser_support import local_server
@@ -6,6 +7,9 @@ from playwright.sync_api import sync_playwright
 
 
 FETCH_SCRIPT = r"""(() => {
+  // This fixture serves an online API through fetch interception. A loopback-only
+  // test namespace can report offline despite those responses being available.
+  Object.defineProperty(navigator, 'onLine', {configurable: true, get: () => true});
   const nativeFetch = window.fetch.bind(window);
   window.pagingMode = 'stall';
   window.pagingTotal = 301;
@@ -39,7 +43,9 @@ class PagingRecoveryTests(unittest.TestCase):
         cls.server = local_server()
         cls.origin, cls.server_state = cls.server.__enter__()
         cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(headless=True, args=['--no-sandbox'])
+        engine = os.environ.get('SEARCH_POSITION_BROWSER', 'chromium')
+        cls.browser = getattr(cls.playwright, engine).launch(
+            headless=True, **({'args': ['--no-sandbox']} if engine == 'chromium' else {}))
 
     @classmethod
     def tearDownClass(cls):
@@ -48,7 +54,7 @@ class PagingRecoveryTests(unittest.TestCase):
         cls.server.__exit__(None, None, None)
 
     def setUp(self):
-        self.context = self.browser.new_context(viewport={'width': 1280, 'height': 800})
+        self.context = self.browser.new_context(service_workers='block', viewport={'width': 1280, 'height': 800})
         self.page = self.context.new_page()
         self.errors = []
         self.page.on('pageerror', lambda error: self.errors.append(str(error)))
