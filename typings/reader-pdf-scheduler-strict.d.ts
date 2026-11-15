@@ -36,7 +36,7 @@ export interface SchedulerContext {
   setPdfPageLoadingState(state: Element, page: string | undefined): void;
   domSearch: { pruneMarks(): void };
   canPrefetchPdfImages(): boolean; pdfManifestPrefetchConcurrency(): number; pdfManifestPrefetchMaxPages(): number;
-  queuePdfManifestPrefetch(delay?: number): void; trimPdfSurfaces(shell?: PdfShell | null): void;
+  queuePdfManifestPrefetch(delay?: number): void; trimPdfSurfaces(shell?: PdfShell | null, incomingPixels?: number): void;
   pdfPagePriority(shell: PdfShell | null): number; normalizePdfPriority(priority: boolean | number): number;
   readerAbortError(): Error; drainPdfTextWaiters(): void;
   isReaderGenerationCurrent(kind: string, generation: number): boolean; nextReaderGeneration(kind: string): number;
