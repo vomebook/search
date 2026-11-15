@@ -256,7 +256,7 @@ class PositionControlTests(unittest.TestCase):
           DOM.searchFoldersToggle.dispatchEvent(new Event('change',{bubbles:true}));
         }''')
         self.wait_position(0)
-        self.page.evaluate('searchViewSnapshots.clear();positionCalls=[]')
+        self.page.evaluate('resultSnapshots.snapshots.clear();positionCalls=[]')
         self.page.evaluate('''()=>{
           DOM.searchFoldersToggle.checked=true;
           DOM.searchFoldersToggle.dispatchEvent(new Event('change',{bubbles:true}));
@@ -280,7 +280,7 @@ class PositionControlTests(unittest.TestCase):
         self.wait_position(95000)
         self.page.locator('#sort-select').select_option('name')
         self.wait_position(0)
-        self.page.evaluate('searchViewSnapshots.clear();blockPosition=true')
+        self.page.evaluate('resultSnapshots.snapshots.clear();blockPosition=true')
         self.page.locator('#sort-select').select_option('relevance')
         self.page.wait_for_function('!!window.releasePosition')
         self.page.locator('#search-input').fill('paging-latest')
@@ -296,7 +296,7 @@ class PositionControlTests(unittest.TestCase):
         self.page.locator('#sort-select').select_option('name')
         self.wait_position(0)
         self.page.evaluate('''()=>{
-          searchViewSnapshots.clear();positionCalls=[];blockPosition=true;
+          resultSnapshots.snapshots.clear();positionCalls=[];blockPosition=true;
           readSearchViewport=async()=>null;
           scheduleFilterSearch();
         }''')

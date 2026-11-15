@@ -101,8 +101,11 @@ for (const {name: project, root} of searchTestProjects()) {
       return Reflect.get(target,key,receiver);
     }});
     const context={STATE:{results,_pageCache:{},total:100500},searchPageMetadata:new WeakMap(),
-      searchSnapshotResultBudgets:new WeakMap(),checkSearchPageAppend:()=>true};
+      checkSearchPageAppend:()=>true};
     vm.createContext(context);
+    for (const file of ['domain/copy-budget.js','application/store.js'])
+      vm.runInContext(fs.readFileSync(path.join(root,'static/search/results/snapshots',file),'utf8'),context);
+    context.resultSnapshots=context.VoiceOfMLResultSnapshots.create({cloneResult:r=>r});
     vm.runInContext(source.match(/^function appendSearchResults\([^]*?^}/m)[0],context);
     vm.runInContext(source.match(/^function extendSearchSnapshotBudget\([^]*?^}/m)[0],context);
     context.page=Array.from({length:500},(_,i)=>({File:String(100000+i)}));
@@ -121,7 +124,7 @@ for (const {name: project, root} of searchTestProjects()) {
       const metadata = new WeakMap([[old[0],{generation:"A",total:2}], [next[0],{generation:"B",total:2}]]);
       const context = {STATE:{results:old,total:2,_loadedPage:1,_pageCache:{2:next},_resultBackend:"api"},
         VSCROLL:{isDraggingThumb:true}, searchPageMetadata:metadata, searchResponseCache:new Map(),
-        searchViewSnapshots:new Map(), getSearchViewKey:()=>"query", captureReaderReturnScroll:()=>({index:0,offset:12}),
+        resultSnapshots:{remove(){}}, getSearchViewKey:()=>"query", captureReaderReturnScroll:()=>({index:0,offset:12}),
         getResultStableId:r=>r.File, getReturnPositionTarget:()=>null, setReturnPositionTarget(){},
         rememberSearchPageMetadata(){}, tryRestoreSearchPosition(key,options){context.recovery={key,options};}};
       vm.createContext(context);

@@ -8,6 +8,7 @@ export const APP_DEPENDENCIES = Object.freeze([
   "reader-resources.js", "reader/core/reader-contract.js", "search/reader-navigation.js",
   "search/reader-host/presentation/return-position.js", "search/reader-host/application/host.js",
   "search/positions/domain/policy.js", "search/positions/infrastructure/indexed-db.js", "search/positions/application/persistence.js",
+  "search/results/snapshots/domain/copy-budget.js", "search/results/snapshots/application/store.js",
   "search/search-session.js", "search/download-controller.js", "search/size-format.js", "search/record-path.js",
   "search/highlight.js", "search/response-cache.js", "search/file-types.js", "search/response-validation.js", "search/result-identity.js",
   "search/input/domain/ownership.js", "search/input/application/controller.js",

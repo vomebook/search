@@ -5,8 +5,9 @@ const assert = require("assert");
 const { TextEncoder } = require("util");
 const { test, run } = require("../support/test_harness");
 const { searchTestProjects } = require("../support/search_test_projects");
+const { installClassicSearchModules } = require("../support/classic_search_modules");
 
-function fixture(source) {
+function fixture(source, root) {
   const encoded = [];
   const c = {
     TextEncoder: class extends TextEncoder {
@@ -14,9 +15,7 @@ function fixture(source) {
     },
     STATE: { results: [], total: 0, _pageCache: {}, _loadedPage: 1 },
     DOM: { resultsContainer: {} }, VSCROLL: { heightCache: new Map(), estimatedHeight: 100 },
-    searchSnapshotResultBudgets: new WeakMap(), searchSnapshotHeightValues: new WeakMap(),
-    searchSnapshotCloneSources: new WeakMap(), snapshotCloneTask: null,
-    searchSnapshotSources: new WeakMap(), searchViewSnapshots: new Map(), searchPageMetadata: new WeakMap(),
+    searchPageMetadata: new WeakMap(),
     SEARCH_VIEW_SNAPSHOT_BYTES_MAX: 8 * 1024 * 1024, SEARCH_VIEW_SNAPSHOT_MAX: 8,
     SEARCH_VIEW_SNAPSHOT_VERSION: 1, measuredHeightRevision: 0, positionRestore: null,
     getReturnPositionTarget: () => null, getHeightMeasurementKey: () => "layout",
@@ -24,8 +23,11 @@ function fixture(source) {
     getResultStableId: () => { throw Error("snapshot scanned result IDs"); },
   };
   vm.createContext(c);
+  installClassicSearchModules(root, c);
+  c.resultSnapshots = c.VoiceOfMLResultSnapshots.create({cloneResult: record => c.cloneSearchResult(record),
+    materialized() {}, applyHeights() {}, isCurrent: () => true, completed() {}});
   for (const name of ["cloneSearchResult", "cloneSearchPageCache", "trimSearchViewSnapshots",
-    "getSearchSnapshotResultsBytes", "extendSearchSnapshotBudget", "captureSearchSnapshotHeights",
+    "getSearchSnapshotResultsBytes", "extendSearchSnapshotBudget",
     "saveSearchViewSnapshot", "appendSearchResults"]) {
     const match = source.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
     assert(match, name);
@@ -43,17 +45,17 @@ function fixture(source) {
 for (const { name: project, root } of searchTestProjects()) {
   const source = fs.readFileSync(path.join(root, "static/app.js"), "utf8");
   test(project + " snapshot bytes equal UTF-8 JSON across page boundaries and sparse holes", () => {
-    const {c} = fixture(source);
+    const {c} = fixture(source, root);
     for (const length of [0,1,99,100,101,201]) {
       const records = Array.from({length}, (_, i) => ({File:"\u6587\u5316-"+i,Folder:["\ud83d\udcd6"]}));
       assert.strictEqual(c.getSearchSnapshotResultsBytes(records), new TextEncoder().encode(JSON.stringify(records)).length);
       delete records[1]; delete records[100];
-      c.searchSnapshotResultBudgets.delete(records);
+      c.resultSnapshots.budget.invalidate(records);
       assert.strictEqual(c.getSearchSnapshotResultsBytes(records, true), new TextEncoder().encode(JSON.stringify(records)).length);
     }
   });
   test(project + " oversized snapshots skip cloning and remember rejection across height changes and appends", () => {
-    const {c,encoded,view} = fixture(source);
+    const {c,encoded,view} = fixture(source, root);
     view([{File:"x".repeat(c.SEARCH_VIEW_SNAPSHOT_BYTES_MAX)}]);
     c.cloneSearchResult = () => { throw Error("oversized results cloned"); };
     assert.strictEqual(c.saveSearchViewSnapshot(), null);
@@ -65,10 +67,10 @@ for (const { name: project, root } of searchTestProjects()) {
     c.displayedSearchView.revision++;
     assert.strictEqual(c.saveSearchViewSnapshot(), null);
     assert.strictEqual(encoded.length, calls);
-    assert.strictEqual(c.searchViewSnapshots.size, 0);
+    assert.strictEqual(c.resultSnapshots.snapshots.size, 0);
   });
   test(project + " appended page alone updates byte accounting and snapshots remain independent", () => {
-    const {c,encoded,view} = fixture(source);
+    const {c,encoded,view} = fixture(source, root);
     const current = view(Array.from({length:100},(_,i)=>({File:"book-"+i,Folder:["docs"]})));
     const first = c.saveSearchViewSnapshot();
     encoded.length=0;
@@ -86,7 +88,7 @@ for (const { name: project, root } of searchTestProjects()) {
     assert.deepStrictEqual(Array.from(second.results[0].Folder),["docs"]);
   });
   test(project + " height-only snapshots reuse results and unchanged measured entries without result scans", () => {
-    const {c,encoded,view} = fixture(source);
+    const {c,encoded,view} = fixture(source, root);
     view(Array.from({length:10000},(_,i)=>({File:"book-"+i})));
     c.VSCROLL.heightCache.set("a",{height:100,measurementKey:"layout"});
     c.VSCROLL.heightCache.set("b",{height:110,measurementKey:"layout"});
@@ -103,12 +105,12 @@ for (const { name: project, root } of searchTestProjects()) {
     assert(second.bytes >= new TextEncoder().encode(JSON.stringify(second)).length);
   });
   test(project + " a filled sparse page invalidates old accounting without losing placeholders", () => {
-    const {c,view} = fixture(source);
+    const {c,view} = fixture(source, root);
     const records = new Array(1000); records[950]={File:"old"};
     const current=view(records); current.window={pages:new Set([10]),count:1,generation:"g"};
     const first=c.saveSearchViewSnapshot();
     records[50]={File:"\u6587\u5316",Folder:["new"]};
-    c.searchSnapshotResultBudgets.delete(records); current.revision++;
+    c.resultSnapshots.budget.invalidate(records); current.revision++;
     const second=c.saveSearchViewSnapshot();
     assert.strictEqual(c.getSearchSnapshotResultsBytes(records,true),new TextEncoder().encode(JSON.stringify(records)).length);
     assert.strictEqual(50 in first.results,false);

@@ -7,6 +7,7 @@ import test from 'node:test';
 import './host_contracts.mjs';
 import '../paging/result_window_contracts.mjs';
 import '../session/test_positions_persistence.mjs';
+import '../session/test_result_snapshots.mjs';
 import { installClassicSearchModules } from '../../support/classic_search_modules.js';
 import { APP_DEPENDENCIES, stripBundledScripts } from '../../../scripts/build/compose_app.mjs';
 

@@ -21,7 +21,7 @@ export default [
         module: "readonly", require: "readonly",
         ...Object.fromEntries(["VoiceOfMLReaderSecurity", "VoiceOfMLReader", "VoiceOfMLReaderResources",
           "VoiceOfMLReaderStore", "VoiceOfMLReaderChapters", "VoiceOfMLReaderVirtual", "VoiceOfMLReaderNavigation", "VoiceOfMLReaderHost", "VoiceOfMLReaderReturn",
-          "VoiceOfMLDownloadController", "VoiceOfMLSearchSession", "VoiceOfMLPositionPolicy", "VoiceOfMLPositionStorage", "VoiceOfMLSearchPositions", "VoiceOfMLSearchWindowPage", "VoiceOfMLReaderRequests", "VoiceOfMLReaderRuntime",
+          "VoiceOfMLDownloadController", "VoiceOfMLSearchSession", "VoiceOfMLPositionPolicy", "VoiceOfMLPositionStorage", "VoiceOfMLSearchPositions", "VoiceOfMLSnapshotPolicy", "VoiceOfMLResultSnapshots", "VoiceOfMLSearchWindowPage", "VoiceOfMLReaderRequests", "VoiceOfMLReaderRuntime",
           "VoiceOfMLReaderAdapters", "VoiceOfMLReaderScroll", "DOMPurify", "marked"]
           .map(name => [name, "readonly"])) }
     },

@@ -14,7 +14,7 @@ function fixture(source, root) {
     STATE:{results}, VSCROLL:{heights:new Array(5000), heightTree:[], heightsDirty:true,
       sparseHeights:true, heightBase:100, estimatedHeight:100, heightCache:new Map(),
       measuredRowKeys:[], templateCache:new Map(), renderStart:3990, renderEnd:4025},
-    searchPageMetadata:new WeakMap(), snapshotCloneTask:task, selectedIndices:{},
+    searchPageMetadata:new WeakMap(), selectedIndices:{},
     top:400011, refreshes:0, writes:0, scheduleVirtualRender:()=>{},
     getResultStableId:record=>record.Id, getHeightMeasurementKey:()=>'layout',
     getRecordLink:record=>'link-'+record.Id,
@@ -24,8 +24,11 @@ function fixture(source, root) {
   c.refreshVirtualAfterAppend=update=>{assert.strictEqual(update,false);c.refreshes++;c.ensureHeightTree();};
   vm.createContext(c);
   installClassicSearchModules(root, c);
+  c.resultSnapshots = c.VoiceOfMLResultSnapshots.create({cloneResult: record => c.cloneSearchResult(record),
+    materialized: (task, index) => c.materializedSnapshotRow(task, index),
+    applyHeights: task => c.applySnapshotCloneHeights(task), isCurrent: () => true, completed() {}});
   for(const name of ['cloneSearchResult','ensureHeightTree','getVirtualTotalHeight',
-    'getVirtualOffset','findVirtualIndex','materializeSnapshotRange','applySnapshotCloneHeights','getSelectedFiles']) {
+    'getVirtualOffset','findVirtualIndex','materializeSnapshotRange','materializedSnapshotRow','applySnapshotCloneHeights','getSelectedFiles']) {
     const match=source.match(new RegExp('^function '+name+'\\([^]*?^}', 'm'));
     assert(match,name);vm.runInContext(match[0],c);
   }
@@ -59,7 +62,9 @@ for(const {name:project,root} of searchTestProjects()) {
     assert.strictEqual(c.top,oracleOffset(4000)+49);assert.strictEqual(c.findVirtualIndex(c.top),4000);
   });
   test(project+' file actions materialize complete selections and compensate cached heights once',()=>{
-    const {c,cache,oracleOffset}=fixture(source, root);
+    const {c,task,cache,oracleOffset}=fixture(source, root);
+    // Use the real store-owned task for actions that consult the active clone.
+    c.STATE.results=c.resultSnapshots.restoreResults({...task.snapshot, scroll:{index:4000}},'query',100,true,false);
     cache(150,132);cache(200,160);c.selectedIndices={150:true,200:true};
     const files=c.getSelectedFiles();
     assert.deepStrictEqual(Array.from(files,f=>[f.filename,f.link]),[['book-150.txt','link-150'],['book-200.txt','link-200']]);
