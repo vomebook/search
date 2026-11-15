@@ -128,6 +128,7 @@
     "reader/core/reader-contract.js",
     "search/reader-navigation.js",
   "search/reader-host/presentation/return-position.js", "search/reader-host/application/host.js",
+  "search/positions/domain/policy.js", "search/positions/infrastructure/indexed-db.js", "search/positions/application/persistence.js",
     "reader/core/reader-store.js",
     "reader/core/reader-request-manager.js",
     "reader/formats/reader-chapter-repository.js",

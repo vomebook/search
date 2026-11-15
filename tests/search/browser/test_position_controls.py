@@ -56,7 +56,7 @@ class PositionControlTests(unittest.TestCase):
     def store_position(self, clear_viewport=False):
         self.page.evaluate('''async clearViewport=>{
           returnPositionTarget=null;saveSearchPosition();
-          const tx=searchPositionDB.transaction(['positions','viewports'],'readwrite');
+          const tx=positionStorage.database.transaction(['positions','viewports'],'readwrite');
           if(clearViewport) tx.objectStore('viewports').clear();
           await new Promise(resolve=>tx.oncomplete=resolve);
         }''', clear_viewport)
@@ -169,7 +169,7 @@ class PositionControlTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('getResultScrollTop()'), 0)
         self.assertTrue(self.page.locator('#load-info #return-to-position-btn').is_visible())
         self.page.evaluate('saveSearchPosition()')
-        self.assertEqual(self.page.evaluate('searchPositions.get(getSearchViewKey()).index'), 95000)
+        self.assertEqual(self.page.evaluate('positionPersistence.positions.get(getSearchViewKey()).index'), 95000)
         self.page.locator('#return-to-position-btn').click()
         self.wait_position(95000)
         self.page.evaluate('doSearch()')

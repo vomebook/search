@@ -109,9 +109,9 @@ class SegmentedScrollTests(unittest.TestCase):
     def test_deep_position_recovery_fetches_neighborhood_and_last_page(self):
         self.page.evaluate('''()=>{
           const key=getSearchViewKey();
-          searchPositions.set(key,{version:1,key,index:88050,offset:11,loadedPage:882,
+          positionPersistence.positions.set(key,{version:1,key,index:88050,offset:11,loadedPage:882,
             savedAt:Date.now(),anchorId:'VoiceOfML/Test\\0row-88050.txt'});
-          searchViewSnapshots.clear();searchViewportSnapshots.clear();
+          searchViewSnapshots.clear();positionPersistence.viewports.clear();
           window.segmentPages=[];
           fetchPositionPage=async(query,page)=>{
             segmentPages.push(page);

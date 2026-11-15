@@ -272,6 +272,7 @@ function crossCheck(githubRoot, hfRoot) {
     "search/presentation/sidebar-render.js",
     "search/reader-navigation.js",
   "search/reader-host/presentation/return-position.js", "search/reader-host/application/host.js",
+  "search/positions/domain/policy.js", "search/positions/infrastructure/indexed-db.js", "search/positions/application/persistence.js",
     "reader.css",
     "reader/core/reader-request-manager.js",
     "reader/formats/reader-chapter-repository.js",

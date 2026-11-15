@@ -5,7 +5,9 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const MODULES = ["static/search/folder-selection.js", "static/search/domain/height-index.js",
+const MODULES = ["static/search/search-session.js", "static/search/domain/search-window-page.js",
+  "static/search/positions/domain/policy.js", "static/search/positions/infrastructure/indexed-db.js", "static/search/positions/application/persistence.js",
+  "static/search/folder-selection.js", "static/search/domain/height-index.js",
   "static/search/reader-host/presentation/return-position.js", "static/search/reader-host/application/host.js",
   "static/search/requests/infrastructure/shared-transport.js", "static/search/requests/application/prefetch-controller.js",
   "static/search/results/window/application/page-loader.js", "static/search/results/window/presentation/status.js"];

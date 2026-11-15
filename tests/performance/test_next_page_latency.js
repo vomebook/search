@@ -30,9 +30,20 @@ function createFixture(source, root) {
     recentSearchPages:new Map(), searchResponseCache:new Map(),
     pendingSearchCacheWrites:new Map(), searchResponseCacheIdentities:new WeakMap(),
     searchCacheWriteFrame:0, searchCacheWriteTimer:null, SEARCH_CACHE_TTL:60000,
-    searchPositionDB:{objectStoreNames:{contains:()=>true},transaction:()=>({objectStore:()=>({
-      get(){const request = {}; reads.push(request); return request;}
-    })})},
+    searchPositionDB:{close(){}, objectStoreNames:{contains:()=>true}, transaction(name){
+      const tx = {objectStore:()=>({
+        getAll:()=>({result:[]}),
+        get(){
+          const request = {};
+          Object.defineProperty(request, 'onsuccess', {set(callback){
+            this.complete = () => {callback(); tx.oncomplete?.();};
+          }, get(){return this.complete;}});
+          reads.push(request); return request;
+        }
+      })};
+      if (name === 'positions') queueMicrotask(()=>tx.oncomplete?.());
+      return tx;
+    }},
     setTimeout(fn, delay){const id = ++timerId; timers.set(id,{fn,at:clock + delay}); return id;},
     clearTimeout(id){timers.delete(id);},
     requestAnimationFrame(fn){frames.push(fn); return frames.length;},
@@ -56,6 +67,17 @@ function createFixture(source, root) {
   };
   vm.createContext(context);
   installClassicSearchModules(root, context);
+  context.indexedDB = {open(){
+    const request = {result:context.searchPositionDB};
+    Object.defineProperty(request, 'onsuccess', {set(callback){callback();}});
+    return request;
+  }};
+  const storage = context.positionStorage = context.VoiceOfMLPositionStorage.create();
+  context.positionPersistence = context.VoiceOfMLSearchPositions.create({
+    storage, cloneResult:record=>record, metadata:record=>context.searchPageMetadata.get(record)
+  });
+  context.positionPersistence.init();
+  context.recentSearchPages = context.positionPersistence.recentPages;
   for (const file of ["domain/paging-policy.js", "application/paging-controller.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "static/search/results", file), "utf8"), context);
   }
@@ -220,7 +242,7 @@ for (const {name:project,root} of searchTestProjects()) {
     }
   });
   test(project + " ready next page honors 5 percent without draining the buffer",async()=>{
-    const f=fixture(source); f.context.searchPositionDB=null; f.start(); await f.flush();
+    const f=fixture(source); f.context.positionStorage.close(); f.start(); await f.flush();
     f.setScroll(299); f.calls[0].resolve(f.data(2)); await f.advance(0);
     assert.deepStrictEqual(f.appended,[]);
     f.setScroll(400); f.context.scheduleBottomLoad(0,2); await f.advance(0);
