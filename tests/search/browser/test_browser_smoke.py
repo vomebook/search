@@ -255,7 +255,7 @@ class BrowserBehaviorTest(unittest.TestCase):
                 held.pop(0).fulfill(status=200, content_type="application/json", body=json.dumps(tree))
             self.page.wait_for_timeout(100)
         self.assertNotIn("加载中", self.page.locator("#filter-folder-tree").inner_text())
-        self.page.wait_for_function("!folderTreeRenderQueue.length")
+        self.page.wait_for_function("!sidebarFolderTree.pending()")
         paths = self.page.locator("#filter-folder-tree .filter-folder-item").evaluate_all("rows => rows.map(r => r.dataset.path)")
         self.assertIn("甲", paths)
         self.assertEqual(self.page_errors, [])
@@ -984,7 +984,7 @@ class BrowserBehaviorTest(unittest.TestCase):
         # Initial local-corpus enrichment can re-render the filter tree after
         # the route is ready. Let it settle before installing this test tree.
         self.page.evaluate("() => ensureLocalDataLoaded(false, true)")
-        self.page.wait_for_function("() => STATE.mode === 'repo' && filterRenderToken > 0 && filterRenderDone === filterRenderToken")
+        self.page.wait_for_function("() => STATE.mode === 'repo' && getSidebarFilters().status().token > 0 && getSidebarFilters().status().done === getSidebarFilters().status().token")
         self.page.evaluate("""() => {
             STATE.folderTree = [{name:'根', path:'', count:2, isRoot:true,
                 showSelfToggle:true, hasDirectFiles:true, hasChildren:true,

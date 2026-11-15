@@ -1176,16 +1176,14 @@ test("main-thread root select-all represents and persists direct root files with
   const context = vm.createContext({ Set, STATE:{folderTree:[]},
     updateFilterCancelButtons(){}, scheduleFilterSearch(){}, showToast(){throw Error("unexpected limit");} });
   vm.runInContext(fs.readFileSync("static/search/folder-selection.js", "utf8"), context);
-  const hostStart = app.indexOf("let folderSelectionMemo = null;"), hostEnd = app.indexOf("// Split covering ancestors");
-  assert(hostStart >= 0 && hostEnd > hostStart);
-  vm.runInContext(app.slice(hostStart, hostEnd), context);
+  const treeSource = fs.readFileSync("static/search/sidebar/presentation/folder-tree.js", "utf8");
+  require('../../support/sidebar_fixture').installSidebarTree(process.cwd(), context);
   context.folderSelectionState = context.VoiceOfMLSearchFolderSelection.folderSelectionState;
   const root = { path: "", isRoot: true, hasDirectFiles: true, children: [{ path: "child", hasDirectFiles: true }] };
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set()).full, false);
   assert.strictEqual(context.folderSelectionState(root, new Set(["child"]), new Set([""])).full, true);
-  assert.match(app, /if \(node\.hasDirectFiles\) selfSet\.add\(node\.path\)/);
-  for (const name of ["mergeFolderFilters", "normalizeFolderSelection", "splitFolderSelection",
-    "setNodeSubtreeSelection", "persistFolderSelection"]) {
+  assert.match(treeSource, /if \(node\.hasDirectFiles\) selfSet\.add\(node\.path\)/);
+  for (const name of ["mergeFolderFilters"]) {
     const fn = app.match(new RegExp("^function " + name + "\\([^]*?^}", "m"));
     assert(fn, name); vm.runInContext(fn[0], context);
   }
@@ -1196,8 +1194,8 @@ test("main-thread root select-all represents and persists direct root files with
   assert.deepStrictEqual(Array.from(context.STATE.filterFolderSelfs), [""]);
   assert.deepStrictEqual(Array.from(context.STATE.filterFolderSubtrees), ["child"]);
   assert.deepStrictEqual(Array.from(context.STATE.filterFolders), ["", "child"]);
-  assert.match(app, /function getFolderSelfSet\(\) \{\s*return new Set\(STATE\.filterFolderSelfs \|\| \[\]\);/);
-  assert.match(app, /if \(node\.hasDirectFiles\) selfPaths\.push\(node\.path\)/);
+  assert.match(treeSource, /function getFolderSelfSet\(\) \{\s*return new Set\(deps\.readView\(\)\.selfs \|\| \[\]\);/);
+  assert.match(treeSource, /if \(node\.hasDirectFiles\) selfPaths\.push\(node\.path\)/);
 });
 
 test("root folder selection includes direct files alongside child directories", async () => {

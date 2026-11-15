@@ -2984,7 +2984,21 @@ class StaticGateTests(unittest.TestCase):
         required = {"static/search/search-session.js", "static/search/reader-navigation.js", "static/search/download-controller.js", "static/search/result-identity.js", "static/search/record-path.js",
                     "static/search/folder-selection.js", "static/search/domain/height-index.js", "static/search/domain/stable-stringify.js", "static/search/domain/search-view-key.js", "static/search/domain/search-recovery.js", "static/search/domain/search-window-page.js", "static/search/presentation/sidebar-render.js", "static/search/response-validation.js", "static/search/response-cache.js", "static/search/file-types.js",
                     "static/search/highlight.js", "static/search/size-format.js"}
-        self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
+        required.update({
+            "static/search/input/domain/ownership.js",
+            "static/search/input/application/controller.js",
+            "static/search/results/domain/paging-policy.js",
+            "static/search/results/application/paging-controller.js",
+            "static/search/results/presentation/paging-status.js",
+            "static/search/requests/infrastructure/shared-transport.js",
+            "static/search/requests/application/prefetch-controller.js",
+            "static/search/results/window/application/page-loader.js",
+            "static/search/results/window/presentation/status.js",
+            "static/search/sidebar/presentation/filter-list.js",
+            "static/search/sidebar/presentation/folder-tree.js",
+            "static/search/sidebar/application/filters.js",
+        })
+        self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts", "typings/search-sidebar.d.ts"}, required)
         self.assertIn("tsc --project config/types/jsconfig.search-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
         source = self.root / "static/exact-usage.js"
         config = self.root / "jsconfig.json"

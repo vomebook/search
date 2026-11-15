@@ -265,6 +265,9 @@
       "search/domain/search-recovery.js",
       "search/domain/search-window-page.js",
       "search/presentation/sidebar-render.js",
+      "search/sidebar/presentation/filter-list.js",
+      "search/sidebar/presentation/folder-tree.js",
+      "search/sidebar/application/filters.js",
       "style.css",
       ...(project === "github" ? ["search/index-worker.js"] : []),
       "app.js"

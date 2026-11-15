@@ -91,6 +91,9 @@
     "../../static/search/domain/search-recovery.js",
     "../../static/search/domain/search-window-page.js",
     "../../static/search/presentation/sidebar-render.js",
+    "../../static/search/sidebar/presentation/filter-list.js",
+    "../../static/search/sidebar/presentation/folder-tree.js",
+    "../../static/search/sidebar/application/filters.js",
     "../../static/reader/pdf/reader-engine-preload.js",
     "../../static/reader/formats/reader-chapter-repository.js",
     "../../static/reader/formats/reader-section-virtualizer.js",
@@ -105,6 +108,7 @@
     "../../static/reader/pdf/reader-djvu-range.mjs",
     "../../static/reader/pdf/reader-djvu-engine-worker.mjs",
     "../../typings/reader-globals.d.ts",
+    "../../typings/search-sidebar.d.ts",
     "../../tests/reader/core/test_reader_runtime_types.ts"
   ]
 }

@@ -9,8 +9,13 @@ const {searchTestProjects}=require('../../support/search_test_projects');
 // project's own module under the original names so the host functions use it too.
 const folderSelectionNames=['folderPathCovered','createFolderSelectionLookup','folderSelectionState','applyFolderSelectionToNode'];
 const folderSelectionSources=new Map();
+const projectRoots=new Map();
 function install(source,c,names) {
   for(const name of names) {
+    if (['normalizeFolderSelection','persistFolderSelection'].includes(name)) {
+      require('../../support/sidebar_fixture').installSidebarTree(projectRoots.get(source), c);
+      continue;
+    }
     if(folderSelectionNames.includes(name)) {
       if(!c.VoiceOfMLSearchFolderSelection) vm.runInContext(folderSelectionSources.get(source),c);
       assert.strictEqual(typeof c.VoiceOfMLSearchFolderSelection[name],'function',name);
@@ -23,6 +28,7 @@ function install(source,c,names) {
 
 for(const {name:project,root} of searchTestProjects()) {
   const source=fs.readFileSync(path.join(root,'static/app.js'),'utf8');
+  projectRoots.set(source,root);
   folderSelectionSources.set(source,fs.readFileSync(path.join(root,'static/search/folder-selection.js'),'utf8'));
   function keysFixture() {
     const c={STATE:{mode:'global',repoFull:'',query:'book',filterMinSize:null,filterMaxSize:null,

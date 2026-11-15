@@ -25,7 +25,7 @@ class SidebarKeyboardTests(unittest.TestCase):
         # The fixture's first result page can finish before startup metadata.
         # A still-pending fetchExtensions() writes to the shared cache when it
         # resolves, so settle it before installing a synthetic inventory.
-        self.page.wait_for_function('filterRenderDone === filterRenderToken && extensionApiPending.size === 0')
+        self.page.wait_for_function('getSidebarFilters().status().done === getSidebarFilters().status().token && extensionApiPending.size === 0')
 
     def test_deep_sidebar_toggles_skip_full_result_snapshots(self):
         result = self.page.evaluate('''async () => {
@@ -368,7 +368,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           root.querySelector('input').click();
           root.querySelector('.tree-toggle').click();
           const immediate=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
-          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,10));
+          while(sidebarFolderTree.pending()) await new Promise(r=>setTimeout(r,10));
           const expanded=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           const child=DOM.filterFolderTree.querySelector('[data-path="root/0"] input');
           const inherited=child.checked; child.click();
@@ -390,16 +390,22 @@ class SidebarKeyboardTests(unittest.TestCase):
           STATE.filterFolderSubtrees=[];STATE.filterFolderSelfs=[];STATE.filterFolders=[];
           // Force the first batch beyond its time budget, as can happen on a
           // busy runner, to exercise the asynchronous continuation explicitly.
-          const append=appendFilterTreeNode;let deferred;
-          appendFilterTreeNode=(...args)=>{append(...args);const end=performance.now()+6;while(performance.now()<end) {}};
-          try {renderFilterFolderTree();renderFilterFolderTree();deferred=folderTreeRenderQueue.length>0;}
-          finally {appendFilterTreeNode=append;}
-          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,0));
+          const append=Element.prototype.appendChild;let deferred;
+          Element.prototype.appendChild=function(node) {
+            const result=append.call(this,node);
+            if(node.classList?.contains('filter-folder-item')) {
+              const end=performance.now()+6;while(performance.now()<end) {}
+            }
+            return result;
+          };
+          try {renderFilterFolderTree();renderFilterFolderTree();deferred=sidebarFolderTree.pending()>0;}
+          finally {Element.prototype.appendChild=append;}
+          while(sidebarFolderTree.pending()) await new Promise(r=>setTimeout(r,0));
           const rows=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           DOM.filterFolderTree.querySelector('.folder-self-toggle').click();
           const selected=STATE.filterFolderSelfs.includes('a');
           DOM.filterFolderTree.querySelector('[data-path="a/b"] .tree-toggle').click();
-          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,0));
+          while(sidebarFolderTree.pending()) await new Promise(r=>setTimeout(r,0));
           return {deferred,rows,selected,final:DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length,
             childChecked:DOM.filterFolderTree.querySelector('[data-path="a/b/c"] input').checked};
         }''')
@@ -413,9 +419,9 @@ class SidebarKeyboardTests(unittest.TestCase):
           renderFilterFolderTree();const toggle=DOM.filterFolderTree.querySelector('.tree-toggle');
           toggle.click();const partial=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           toggle.click();await new Promise(r=>setTimeout(r,30));
-          const stopped=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length===partial && !folderTreeRenderQueue.length;
+          const stopped=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length===partial && !sidebarFolderTree.pending();
           STATE.filterFolderSubtrees=['root'];refreshFilterFolderSelectionState();toggle.click();
-          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,10));
+          while(sidebarFolderTree.pending()) await new Promise(r=>setTimeout(r,10));
           const final=DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length;
           const late=DOM.filterFolderTree.querySelector('[data-path="root/999"] input').checked;
           STATE.folderTree=[{name:'new',path:'new',count:1,hasDirectFiles:true,children:[]}];renderFilterFolderTree();
@@ -431,8 +437,8 @@ class SidebarKeyboardTests(unittest.TestCase):
               ({name:String(i),path:'root/b/'+i,count:1,hasDirectFiles:true,children:[]}))}]}];
           STATE.folderTreeCollapsed={root:true,'root/b':false};renderFilterFolderTree();
           const toggle=DOM.filterFolderTree.querySelector('.tree-toggle');toggle.click();toggle.click();
-          const stopped=!folderTreeRenderQueue.length;toggle.click();
-          while(folderTreeRenderQueue.length) await new Promise(r=>setTimeout(r,10));
+          const stopped=!sidebarFolderTree.pending();toggle.click();
+          while(sidebarFolderTree.pending()) await new Promise(r=>setTimeout(r,10));
           return {stopped,complete:DOM.filterFolderTree.querySelectorAll('.filter-folder-item').length===502,
             open:STATE.folderTreeCollapsed['root/b']===false};
         }''')
@@ -973,9 +979,9 @@ class SidebarKeyboardTests(unittest.TestCase):
           const children=document.createElement('div');children.innerHTML='<div>child</div>';
           const toggle=document.createElement('button');toggle.innerHTML='<span class="tree-toggle-glyph"></span>';
           document.body.append(toggle,children);
-          toggleFolderChildrenAnimated(children,toggle,true);
-          toggleFolderChildrenAnimated(children,toggle,false);
-          toggleFolderChildrenAnimated(children,toggle,true);
+          sidebarFolderTree.animate(children,toggle,true);
+          sidebarFolderTree.animate(children,toggle,false);
+          sidebarFolderTree.animate(children,toggle,true);
           children.dispatchEvent(new TransitionEvent('transitionend',{propertyName:'opacity'}));
           const pending=!!children._transitionCleanup;
           children.dispatchEvent(new TransitionEvent('transitionend',{propertyName:'height'}));
@@ -983,7 +989,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           const clean=()=>!children._transitionTimer && !children._transitionCleanup &&
             ['height','opacity','transform','overflow','transition'].every(key=>children.style[key]==='');
           const afterEvent=clean();
-          toggleFolderChildrenAnimated(children,toggle,false);
+          sidebarFolderTree.animate(children,toggle,false);
           await new Promise(resolve=>setTimeout(resolve,350));
           const collapsed=children.style.display==='none' && !toggle.classList.contains('expanded');
           const afterTimeout=clean();children.remove();toggle.remove();
