@@ -67,6 +67,37 @@ if (!document.hidden && navigator.onLine) {
              aria-label="搜索文件" aria-controls="results-list search-history-dropdown"
              placeholder="搜索 VoiceOfML 数据仓库..."
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <script>
+      (() => {
+        const input = document.getElementById("search-input");
+        const handoff = { dirty: false, composing: false, owner: null, dispose };
+        function capture(renew) {
+          handoff.dirty = true;
+          if (renew || !handoff.owner) handoff.owner = {
+            href: location.href, key: window.navigation?.currentEntry?.key, cancelled: false
+          };
+        }
+        function onInput(event) {
+          const compositionInput = event.isComposing || event.inputType === "insertCompositionText" || event.inputType === "insertFromComposition";
+          capture(!handoff.composing && !compositionInput);
+        }
+        function onStart() { capture(true); handoff.composing = true; }
+        function onEnd() { handoff.composing = false; }
+        function cancel() { if (handoff.owner) handoff.owner.cancelled = true; }
+        function dispose() {
+          input.removeEventListener("input", onInput);
+          input.removeEventListener("compositionstart", onStart);
+          input.removeEventListener("compositionend", onEnd);
+          for (const type of ["popstate", "hashchange", "pagehide"]) window.removeEventListener(type, cancel, true);
+          delete input._earlySearchInput;
+        }
+        input._earlySearchInput = handoff;
+        input.addEventListener("input", onInput);
+        input.addEventListener("compositionstart", onStart);
+        input.addEventListener("compositionend", onEnd);
+        for (const type of ["popstate", "hashchange", "pagehide"]) window.addEventListener(type, cancel, true);
+      })();
+      </script>
        <kbd class="search-kbd" id="search-kbd">/</kbd>
       <div id="search-history-dropdown" class="search-history-dropdown" role="region" aria-label="搜索历史" style="display:none"></div>
     </div>

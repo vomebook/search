@@ -2208,6 +2208,7 @@ const {
 } = VoiceOfMLSearchSession.createSearchSession({
   canPersist: () => location.pathname === "/search/" && location.hash.indexOf("#/") === 0,
   canRestore: target => {
+    if (initialSearchDraft) return false;
     if (!target) return location.pathname === "/search/" && !location.search && !location.hash;
     return target.origin === location.origin
       && target.pathname === "/search/"
@@ -4391,6 +4392,18 @@ function setupSearchInput() {
         (searchCompositionViewKey !== null && searchCompositionViewKey !== getSearchViewKey())) return;
     debouncedSearch();
   });
+  const input = /** @type {HTMLInputElement & {_earlySearchInput?: {
+    dirty: boolean, composing: boolean, owner: typeof initialSearchDraftOwner, dispose: () => void
+  }}} */ (DOM.searchInput);
+  const early = input._earlySearchInput;
+  if (early) {
+    initialSearchDraft = early.dirty;
+    initialSearchDraftOwner = early.owner;
+    searchComposing = early.composing;
+    searchCompositionGeneration = searchInputGeneration;
+    searchCompositionViewKey = null;
+    early.dispose();
+  }
 }
 
 function debouncedSearch() {
