@@ -255,6 +255,8 @@ function crossCheck(githubRoot, hfRoot) {
     "search/response-validation.js",
     "search/result-identity.js",
     "search/folder-selection.js",
+    "search/input/domain/ownership.js",
+    "search/input/application/controller.js",
     "search/domain/height-index.js",
     "search/domain/stable-stringify.js",
     "search/domain/search-view-key.js",
