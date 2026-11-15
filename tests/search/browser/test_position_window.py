@@ -192,6 +192,68 @@ class PositionWindowTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
         self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
 
+    def test_snapshot_save_without_displayed_view_preserves_cached_position(self):
+        self.assertTrue(self.page.evaluate('''() => {
+          const snapshot=saveSearchViewSnapshot(), position=searchPositions.get(originalWindowKey);
+          const view=displayedSearchView, savedPosition=JSON.stringify(position);
+          displayedSearchView=null;
+          try {
+            return saveSearchViewSnapshot()===null && !!snapshot && !!position &&
+              searchViewSnapshots.get(originalWindowKey)===snapshot &&
+              searchPositions.get(originalWindowKey)===position && JSON.stringify(position)===savedPosition;
+          } finally { displayedSearchView=view; }
+        }'''))
+
+    def invalidate_window_generation(self):
+        self.page.evaluate("saveSearchPosition();windowGeneration='two';windowAnchor=35050;loadResultWindowPage(251,true)")
+        self.page.wait_for_function('resultWindow?.invalid === true')
+        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'one')
+        self.assertFalse(self.page.evaluate('!!STATE.results[25050]'))
+
+    def test_invalid_window_snapshot_round_trip_revalidates_generation(self):
+        self.page.evaluate('searchViewSnapshots.delete(originalWindowKey)')
+        self.invalidate_window_generation()
+        self.page.evaluate('saveSearchViewSnapshot()')
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.assertEqual(self.page.evaluate('searchPositions.get(originalWindowKey).index'), 49850)
+        self.page.evaluate("windowCalls=[];STATE.query='paging-original';doSearch(false,false,true)")
+        self.assertTrue(self.page.evaluate("!!positionRestore || resultWindow?.generation === 'two'"),
+                        'Returning must validate the invalid window instead of silently restoring generation one')
+        self.wait_anchor(35050)
+        self.assertIn(1, self.page.evaluate('windowCalls'))
+        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertFalse(self.page.evaluate('!!resultWindow.invalid'))
+        self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
+
+    def test_invalid_window_cannot_reuse_cached_snapshot(self):
+        self.assertTrue(self.page.evaluate('!!saveSearchViewSnapshot()'))
+        self.invalidate_window_generation()
+        result = self.page.evaluate('''() => {
+          const saved=saveSearchViewSnapshot();
+          const position=searchPositions.get(originalWindowKey);
+          return {rejected:saved===null,cached:searchViewSnapshots.has(originalWindowKey),
+            index:position.index,anchorId:position.anchorId};
+        }''')
+        self.assertEqual(result, dict(rejected=True, cached=False, index=49850,
+                                     anchorId='VoiceOfML/Test\0paging-49850.txt'))
+
+    def test_restore_rejects_snapshot_marked_invalid_and_recovers_position(self):
+        self.page.evaluate('window.invalidSnapshot=saveSearchViewSnapshot()')
+        self.invalidate_window_generation()
+        self.page.evaluate('invalidSnapshot.window.invalid=resultWindow.invalid')
+        self.page.evaluate("STATE.query='paging-other';doSearch()")
+        self.page.wait_for_function('!STATE.isLoading')
+        self.page.evaluate('searchViewSnapshots.set(originalWindowKey,invalidSnapshot)')
+        self.assertFalse(self.page.evaluate('restoreSearchViewSnapshot(originalWindowKey,false)'),
+                         'A restore without position recovery must refuse an invalid snapshot')
+        self.assertFalse(self.page.evaluate('searchViewSnapshots.has(originalWindowKey)'))
+        self.page.evaluate("searchViewSnapshots.set(originalWindowKey,invalidSnapshot);windowCalls=[];STATE.query='paging-original';doSearch(false,false,true)")
+        self.wait_anchor(35050)
+        self.assertIn(1, self.page.evaluate('windowCalls'))
+        self.assertEqual(self.page.evaluate('resultWindow.generation'), 'two')
+        self.assertEqual(self.page.evaluate('STATE.results[35050].File'), 'paging-49850')
+
     def test_late_gap_response_cannot_replace_a_new_query(self):
         self.page.evaluate('windowStall=251')
         self.jump(25050)
