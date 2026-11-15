@@ -156,23 +156,28 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (hit) return hit;
     return ephemeral?.page === page ? ephemeral.value : null;
   }
+  /** @param {{width: number, height: number} | undefined} geometry
+   * @returns {{bytes: number | undefined, geometryKey: string | undefined}} */
+  function estimateGeometry(geometry) {
+    const {width, height} = geometry || {};
+    if (typeof width !== 'number' || typeof height !== 'number' ||
+        !Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0)
+      return {bytes: undefined, geometryKey: undefined};
+    const bytes = width * height * 4;
+    return Number.isSafeInteger(bytes) ? {bytes, geometryKey: `${width}x${height}`} :
+      {bytes: undefined, geometryKey: undefined};
+  }
   /** @param {number} page @param {number} [priority] @param {{signal?: AbortSignal | undefined, geometry?: {width: number, height: number} | undefined}} [options]
    * @returns {Promise<DjvuPage>} */
   function request(page, priority = 0, options = {}) {
-    const { signal } = options;
+    const signal = options.signal;
     if (closed || signal?.aborted) return Promise.reject(signal?.reason || abort());
     if (!validPage(page)) return Promise.reject(new Error("DJVU_PAGE_INVALID"));
     const hit = cachedPage(page);
     if (hit) return Promise.resolve(hit);
     const task = pageTask(page,priority);
-    const {width, height} = options.geometry || {};
-    let bytes, geometryKey;
-    if (typeof width === 'number' && typeof height === 'number' &&
-        Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0) {
-      const estimate = width * height * 4;
-      if (Number.isSafeInteger(estimate)) { bytes = estimate; geometryKey = `${width}x${height}`; }
-    }
-    const promise = pageClient(task,signal,Number(priority) || 0,bytes,geometryKey);
+    const {bytes, geometryKey} = estimateGeometry(options.geometry);
+    const promise = pageClient(task,signal,Number(priority),bytes,geometryKey);
     next(); return promise;
   }
   /** @template T @param {Set<DjvuClient<T>>} clients @returns {Promise<T>} */
