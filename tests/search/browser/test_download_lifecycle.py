@@ -232,27 +232,42 @@ class DownloadLifecycleTests(unittest.TestCase):
         self.assertEqual(self.page.url, before)
 
     def test_quote_animation_pauses_and_resumes_without_catchup(self):
+        self.page.clock.install()
         self.page.evaluate('''() => {
           window.quoteHidden=false;
           Object.defineProperty(document,'hidden',{configurable:true,get:()=>quoteHidden});
-          hitokotoState.lastAt=Date.now();
-          typewriter(DOM.hitokoto,'你好🌟世界再见',30);
+          window.quoteTimers=new Map();window.quoteText='你好🌟世界再见';
+          const nativeFetch=window.fetch, nativeSet=window.setTimeout, nativeClear=window.clearTimeout;
+          window.fetch=(url,options)=>String(url).includes('vomebook-hitokoto')
+            ? Promise.resolve(new Response(JSON.stringify({hitokoto:quoteText}))) : nativeFetch(url,options);
+          window.setTimeout=(fn,delay,...args)=>{
+            const id=nativeSet(()=>{quoteTimers.delete(id);fn(...args)},delay);
+            if (delay===60 || delay===30000) quoteTimers.set(id,delay);
+            return id;
+          };
+          window.clearTimeout=id=>{quoteTimers.delete(id);nativeClear(id)};
+          document.dispatchEvent(new Event('visibilitychange'));
         }''')
+        self.page.clock.run_for(30000)
+        self.page.clock.run_for(60)
         self.page.wait_for_function('DOM.hitokoto.textContent.length > 0')
         paused = self.page.evaluate('''() => {
           quoteHidden=true;document.dispatchEvent(new Event('visibilitychange'));
           return DOM.hitokoto.textContent;
         }''')
-        self.page.wait_for_timeout(200)
+        self.page.clock.run_for(200)
         self.assertEqual(self.page.evaluate('DOM.hitokoto.textContent'), paused)
-        self.assertTrue(self.page.evaluate('hitokotoState.timer === null && hitokotoState.animation.timer === null'))
+        self.assertTrue(self.page.evaluate('quoteTimers.size === 0'))
         self.page.evaluate("quoteHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
-        self.page.wait_for_function("DOM.hitokoto.textContent === '你好🌟世界再见'")
+        self.page.clock.run_for(600)
+        self.assertEqual(self.page.evaluate('DOM.hitokoto.textContent'), '你好🌟世界再见')
         self.page.emulate_media(reduced_motion='reduce')
-        self.page.evaluate("typewriter(DOM.hitokoto,'完整显示')")
+        self.page.evaluate("quoteText='完整显示'")
+        self.page.clock.run_for(30000)
         self.assertEqual(self.page.evaluate('DOM.hitokoto.textContent'), '完整显示')
 
     def test_quote_aborts_hidden_request_and_ignores_stale_response(self):
+        self.page.clock.install()
         self.page.emulate_media(reduced_motion='reduce')
         self.page.evaluate('''() => {
           window.quoteHidden=false;window.quoteRequests=[];
@@ -260,11 +275,15 @@ class DownloadLifecycleTests(unittest.TestCase):
           const native=window.fetch;
           window.fetch=(url,options)=>String(url).includes('vomebook-hitokoto')
             ? new Promise(resolve=>quoteRequests.push({signal:options.signal,resolve})) : native(url,options);
-          fetchHitokoto();fetchHitokoto();
-          quoteHidden=true;document.dispatchEvent(new Event('visibilitychange'));
+          document.dispatchEvent(new Event('visibilitychange'));
+          document.dispatchEvent(new Event('visibilitychange'));
         }''')
+        self.page.clock.run_for(30000)
+        self.page.wait_for_function('quoteRequests.length === 1')
+        self.page.evaluate("quoteHidden=true;document.dispatchEvent(new Event('visibilitychange'))")
         self.assertTrue(self.page.evaluate('quoteRequests.length === 1 && quoteRequests[0].signal.aborted'))
-        self.page.evaluate("hitokotoState.lastAt=0;quoteHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
+        self.page.evaluate("quoteHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
+        self.page.clock.run_for(1)
         self.page.wait_for_function('quoteRequests.length === 2')
         self.page.evaluate("quoteRequests[1].resolve(new Response('{\"hitokoto\":\"新句子\"}'))")
         self.page.wait_for_function("DOM.hitokoto.textContent === '新句子'")
