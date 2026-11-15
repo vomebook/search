@@ -87,7 +87,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
     def hold_initial_and_search(self):
         self.page.evaluate('''() => {
           cancelSearchPrefetch();
-          searchResponseCache.clear(); initialPayloadCache.clear(); searchViewSnapshots.clear();
+          searchResponseCache.clear(); initialPayloadCache.clear(); resultSnapshots.snapshots.clear();
           STATE.query = ''; STATE.page = 1;
           if (typeof readInitialSearchPayload === 'function') readInitialSearchPayload = () => null;
           window.initialFlights = []; window.searchFlights = [];
@@ -178,7 +178,7 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
         self.hold_initial_and_search()
         self.evaluate_bounded('''async () => {
           initialFlights[0].resolve(payload('seed')); await oldInitial;
-          searchViewSnapshots.clear(); initialPayloadCache.clear(); searchResponseCache.clear();
+          resultSnapshots.snapshots.clear(); initialPayloadCache.clear(); searchResponseCache.clear();
           displayedSearchView = null;
           getReturnPositionTarget = () => ({index:0});
           readSearchViewport = () => new Promise(resolve => { window.releaseViewport = resolve; });

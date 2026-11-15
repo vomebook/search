@@ -83,7 +83,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate("ROUTER.navigate('global')")
         self.page.wait_for_function("STATE.mode==='global' && !STATE.isLoading")
         self.page.evaluate('''() => {
-          searchViewSnapshots.clear(); searchResponseCache.clear();
+          resultSnapshots.snapshots.clear(); searchResponseCache.clear();
           STATE.useLocalMode=false; apiAvailable=true;
           STATE.filterExtensions=[]; STATE.query='paging-original'; DOM.searchInput.value=STATE.query;
           scheduleFilterSearch();
@@ -94,7 +94,7 @@ class SearchPositionTests(unittest.TestCase):
     def test_history_click_recovers_evicted_position(self):
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear(); addHistoryItem('paging-original'); DOM.searchInput.focus(); renderDropdown()")
+        self.page.evaluate("resultSnapshots.snapshots.clear(); addHistoryItem('paging-original'); DOM.searchInput.focus(); renderDropdown()")
         self.page.locator('.history-item[data-query="paging-original"]').click()
         self.assert_position()
 
@@ -102,7 +102,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate('''() => {
-          searchViewSnapshots.clear();
+          resultSnapshots.snapshots.clear();
           const fetchPage=fetchPositionPage;
           fetchPositionPage=async (...args)=>{
             const data=await fetchPage(...args);
@@ -122,7 +122,7 @@ class SearchPositionTests(unittest.TestCase):
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate('''() => {
-          searchViewSnapshots.clear(); window.positionFail=true;
+          resultSnapshots.snapshots.clear(); window.positionFail=true;
           const fetchPage=fetchPositionPage;
           fetchPositionPage=(...args)=>window.positionFail?Promise.reject(new Error('offline')):fetchPage(...args);
           STATE.query='paging-original'; doSearch(false,false,true);
@@ -146,7 +146,7 @@ class SearchPositionTests(unittest.TestCase):
         }'''))
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear(); STATE.query=''; doSearch(false,false,true)")
+        self.page.evaluate("resultSnapshots.snapshots.clear(); STATE.query=''; doSearch(false,false,true)")
         self.page.wait_for_function('!positionRestore && !STATE.isLoading')
         self.page.wait_for_function('''saved=>{
           const index=findVirtualIndex(DOM.resultsContainer.scrollTop);
@@ -171,10 +171,10 @@ class SearchPositionTests(unittest.TestCase):
 
     def test_oversized_snapshot_does_not_evict_smaller_views(self):
         kept = self.page.evaluate('''() => {
-          searchViewSnapshots.clear();
-          searchViewSnapshots.set('small', {bytes: 1024});
-          searchViewSnapshots.set('large', {bytes: SEARCH_VIEW_SNAPSHOT_BYTES_MAX+1});
-          trimSearchViewSnapshots(); return [...searchViewSnapshots.keys()];
+          resultSnapshots.snapshots.clear();
+          resultSnapshots.snapshots.set('small', {bytes: 1024});
+          resultSnapshots.snapshots.set('large', {bytes: SEARCH_VIEW_SNAPSHOT_BYTES_MAX+1});
+          trimSearchViewSnapshots(); return [...resultSnapshots.snapshots.keys()];
         }''')
         self.assertEqual(kept, ['small'])
 
@@ -183,7 +183,7 @@ class SearchPositionTests(unittest.TestCase):
           cancelSearchPrefetch();searchAbortController?.abort();cancelPositionRestore();setReturnPositionTarget();
           STATE.results=Array.from({length:5000},(_,i)=>({Repo:'VoiceOfML/Test',File:'deep-'+i,Extension:'txt',Folder:['docs'],Size:1}));
           STATE.total=5000;STATE.page=STATE._loadedPage=50;STATE.hasMore=false;STATE.isLoading=false;STATE._pageCache={};
-          searchViewSnapshots.clear();VSCROLL.heightCache.clear();resetVirtualScrollState();renderResults();
+          resultSnapshots.snapshots.clear();VSCROLL.heightCache.clear();resetVirtualScrollState();renderResults();
           setResultScrollTop(getVirtualOffset(4000)+11);
           await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
           window.deepSnapshot=saveSearchViewSnapshot();window.deepKey=getSearchViewKey();
@@ -194,7 +194,7 @@ class SearchPositionTests(unittest.TestCase):
         result = self.page.evaluate('''async () => {
           restoreSearchViewSnapshot(deepKey);
           const initial=Object.keys(STATE.results).length,index=findVirtualIndex(getResultScrollTop());
-          const pending=!!snapshotCloneTask;
+          const pending=!!resultSnapshots.cloneTask;
           const saved=saveSearchViewSnapshot()===deepSnapshot;
           setResultScrollTop(getVirtualOffset(1000)+11);renderVisible();
           const jumped=!!STATE.results[1000] && !!DOM.resultsList.querySelector('.result-item[data-index="1000"]');
@@ -202,7 +202,7 @@ class SearchPositionTests(unittest.TestCase):
           const selected=Object.keys(selectedIndices).length;
           selectedIndices={4999:true};const files=getSelectedFiles();
           const download=files.length===1 && files[0].filename==='deep-4999.txt';
-          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          while(resultSnapshots.cloneTask) await new Promise(r=>setTimeout(r,10));
           const complete=STATE.results.every((r,i)=>r?.File==='deep-'+i) && Object.keys(STATE.results).length===5000;
           STATE.results[0].Folder.push('changed');
           return {bounded:initial<1000,pending,index,saved,jumped,selected,download,complete,
@@ -217,8 +217,8 @@ class SearchPositionTests(unittest.TestCase):
           restoreSearchViewSnapshot(deepKey);const old=STATE.results;
           STATE.query='paging-latest';doSearch(false,true);const oldCount=Object.keys(old).length;
           await new Promise(r=>setTimeout(r,100));
-          return {cancelled:!snapshotCloneTask,stable:Object.keys(old).length===oldCount,
-            complete:searchViewSnapshots.get(deepKey).results.length===5000 && Object.keys(searchViewSnapshots.get(deepKey).results).length===5000,
+          return {cancelled:!resultSnapshots.cloneTask,stable:Object.keys(old).length===oldCount,
+            complete:resultSnapshots.snapshots.get(deepKey).results.length===5000 && Object.keys(resultSnapshots.snapshots.get(deepKey).results).length===5000,
             latest:STATE.query==='paging-latest' && STATE.results!==old};
         }''')
         self.assertEqual(result, dict(cancelled=True,stable=True,complete=True,latest=True))
@@ -233,7 +233,7 @@ class SearchPositionTests(unittest.TestCase):
           const initialIndex=findVirtualIndex(getResultScrollTop()),initialVelocity=VSCROLL.scrollVelocity;
           const normalRows=3*Math.max(10,Math.floor(DOM.resultsContainer.clientHeight/VSCROLL.estimatedHeight))+
             Math.ceil(DOM.resultsContainer.clientHeight/VSCROLL.estimatedHeight)+1;
-          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          while(resultSnapshots.cloneTask) await new Promise(r=>setTimeout(r,10));
           await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
           const finalIndex=findVirtualIndex(getResultScrollTop()),offset=getResultScrollTop()-getVirtualOffset(finalIndex);
           DOM.resultsContainer.scrollTop+=4000;renderVisible();
@@ -263,7 +263,7 @@ class SearchPositionTests(unittest.TestCase):
           await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
           deepSnapshot=saveSearchViewSnapshot();const offset=deepSnapshot.scroll.offset;
           restoreSearchViewSnapshot(deepKey);const initiallyMissing=!STATE.results[150] && !STATE.results[350];
-          while(snapshotCloneTask) await new Promise(r=>setTimeout(r,10));
+          while(resultSnapshots.cloneTask) await new Promise(r=>setTimeout(r,10));
           await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
           const index=findVirtualIndex(getResultScrollTop());
           return {initiallyMissing,index,offset,actualOffset:getResultScrollTop()-getVirtualOffset(index),
@@ -286,7 +286,7 @@ class SearchPositionTests(unittest.TestCase):
             for(let i=0;i<20;i++) saveSearchViewSnapshot();
             const tx=positionStorage.database.transaction('positions');
             await new Promise(resolve=>{tx.oncomplete=resolve});
-            return {same:searchViewSnapshots.get(getSearchViewKey()).results===results,scans};
+            return {same:resultSnapshots.snapshots.get(getSearchViewKey()).results===results,scans};
           } finally {IDBIndex.prototype.openCursor=cursor;}
         }''')
         self.assertEqual(result, {'same': True, 'scans': 0})
@@ -294,7 +294,7 @@ class SearchPositionTests(unittest.TestCase):
     def begin_rebuild(self, script):
         self.page.evaluate("STATE.query='paging-other'; doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate('searchViewSnapshots.clear()')
+        self.page.evaluate('resultSnapshots.snapshots.clear()')
         self.page.evaluate(script)
         self.page.evaluate("STATE.query='paging-original'; doSearch(false,false,true)")
 

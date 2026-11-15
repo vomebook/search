@@ -445,9 +445,9 @@ const readerHost = VoiceOfMLReaderHost.create({
   getViewKey: () => getSearchViewKey(), captureScroll: () => captureReaderReturnScroll(),
   restoreScroll: () => restoreReaderReturnScroll(), saveSnapshot: key => saveSearchViewSnapshot(key),
   snapshotChanged: (snapshot, key) => {
-    const source = searchSnapshotSources.get(snapshot), current = displayedSearchView;
+    const source = resultSnapshots.source(snapshot), current = displayedSearchView;
     return key === getSearchViewKey() && !!source && !!current && current.key === key &&
-      current.revision === source.revision && searchViewSnapshots.get(key) === snapshot &&
+      current.revision === source.revision && resultSnapshots.snapshots.get(key) === snapshot &&
       (STATE.results.length !== snapshot.results.length || STATE._loadedPage !== snapshot.loadedPage);
   },
   restoreSnapshot: key => restoreSearchViewSnapshot(key, false),
@@ -797,12 +797,12 @@ function renderDownloadBatch() {
 
 function getSelectedFiles() {
   const files = Object.keys(selectedIndices).map(Number).flatMap(index => {
-    if (snapshotCloneTask) materializeSnapshotRange(snapshotCloneTask, index, index + 1, true);
+    if (resultSnapshots.cloneTask) materializeSnapshotRange(resultSnapshots.cloneTask, index, index + 1, true);
     const record = STATE.results[index];
     if (!record) return [];
     return [{ filename: record.File + (record.Extension ? "." + record.Extension : ""), link: getRecordLink(record) }];
   });
-  if (snapshotCloneTask) applySnapshotCloneHeights(snapshotCloneTask);
+  if (resultSnapshots.cloneTask) applySnapshotCloneHeights(resultSnapshots.cloneTask);
   return files;
 }
 
@@ -1374,7 +1374,7 @@ function checkSearchPageAppend(data) {
   // append assigns its API backend; keep recovery on that same backend.
   const backend = STATE._resultBackend || "api";
   searchResponseCache.clear();
-  searchViewSnapshots.delete(key);
+  resultSnapshots.remove(key);
   STATE._pageCache = {};
   tryRestoreSearchPosition(key, { position, viewport: null, backend });
   if (returnTarget) setReturnPositionTarget(returnTarget);
@@ -2473,10 +2473,18 @@ function stableSearchStringify(value) {
   return VoiceOfMLSearchCanonical.stableStringify(value, () => stableSearchStringify);
 }
 
-const SEARCH_VIEW_SNAPSHOT_VERSION = 1;
-const searchViewSnapshots = new Map();
-const SEARCH_VIEW_SNAPSHOT_MAX = 20;
-const SEARCH_VIEW_SNAPSHOT_BYTES_MAX = 8 * 1024 * 1024;
+const SEARCH_VIEW_SNAPSHOT_VERSION = VoiceOfMLSnapshotPolicy.VERSION;
+const SEARCH_VIEW_SNAPSHOT_BYTES_MAX = VoiceOfMLSnapshotPolicy.BYTES_MAX;
+const resultSnapshots = VoiceOfMLResultSnapshots.create({
+  cloneResult: record => cloneSearchResult(record),
+  materialized: (task, index) => materializedSnapshotRow(task, index),
+  applyHeights: task => applySnapshotCloneHeights(task),
+  isCurrent: task => STATE.results === task.results && getSearchViewKey() === task.key,
+  completed: () => {
+    displayedSearchView = null; rememberDisplayedSearchView();
+    scheduleVirtualRender(); prefetchNextPage(); scheduleBottomLoad();
+  }
+});
 const positionStorage = VoiceOfMLPositionStorage.create();
 const positionPersistence = VoiceOfMLSearchPositions.create({
   storage: positionStorage, cloneResult: record => cloneSearchResult(record),
@@ -2638,11 +2646,6 @@ function setupSearchPositionControls() {
 }
 let displayedViewRevision = 0;
 let measuredHeightRevision = 0;
-const searchSnapshotSources = new WeakMap();
-const searchSnapshotResultBudgets = new WeakMap();
-const searchSnapshotHeightValues = new WeakMap();
-const searchSnapshotCloneSources = new WeakMap();
-let snapshotCloneTask = null;
 const resultRowRecords = new WeakMap();
 const searchPageMetadata = new WeakMap();
 
@@ -2665,7 +2668,7 @@ async function loadCachedPreviewPage(window, page) {
     if (!entry) { (window.missingPages ||= new Set()).add(page); return; }
     const start = (page - 1) * window.query.pageSize;
     if (start + entry.results.length > STATE.results.length) return;
-    searchSnapshotResultBudgets.delete(STATE.results);
+    resultSnapshots.budget.invalidate(STATE.results);
     entry.results.forEach((record, offset) => {
       const index = start + offset;
       if (STATE.results[index]) return;
@@ -2705,12 +2708,12 @@ function showSavedSearchViewport(viewport, position, task) {
   const snapshot = { version: SEARCH_VIEW_SNAPSHOT_VERSION, key: position.key, results, total: viewport.total,
     page: position.loadedPage, loadedPage: position.loadedPage, pageCache: {}, hasMore: results.length < viewport.total,
     window: { preview: true, generation: viewport.generation, pages: [], count: Object.keys(results).length }, estimatedHeight: viewport.estimatedHeight,
-    heightCache: viewport.records.map(([, record, height]) => [getResultStableId(record), {height, measurementKey: viewport.measurementKey}]),
+    heightCache: viewport.records.map(([, record, height]) => /** @type {SearchSnapshotHeightEntry} */ ([getResultStableId(record), {height, measurementKey: viewport.measurementKey}])),
     scroll: {index: position.index, offset: position.offset, viewKey: position.key}, savedAt: Date.now() };
   task.preview = true;
-  searchViewSnapshots.set(position.key, snapshot);
+  resultSnapshots.put(position.key, snapshot);
   restoreSearchViewSnapshot(position.key, true, true);
-  searchViewSnapshots.delete(position.key);
+  resultSnapshots.remove(position.key);
   showPositionRestoreStatus("已恢复上次画面，正在核对结果…");
 }
 
@@ -2733,7 +2736,7 @@ function rememberDisplayedSearchView() {
     resultBackend: STATE._resultBackend,
     total: STATE.total, loadedPage: STATE._loadedPage, pageCache: STATE._pageCache,
     length: STATE.results.length, window: resultWindow, revision: unchanged ? previous.revision : ++displayedViewRevision };
-  if (STATE.results.length <= STATE.pageSize && !searchSnapshotResultBudgets.has(STATE.results)) {
+  if (STATE.results.length <= STATE.pageSize && !resultSnapshots.budget.has(STATE.results)) {
     getSearchSnapshotResultsBytes(STATE.results, !!resultWindow);
   }
 }
@@ -2876,7 +2879,7 @@ function tryRestoreSearchPosition(key, options = {}) {
         showPositionRestoreStatus("");
         if (task.preview && found === position.index) applyValidatedSearchViewport(snapshot);
         else {
-          searchViewSnapshots.set(key, snapshot);
+          resultSnapshots.put(key, snapshot);
           restoreSearchViewSnapshot(key);
         }
         trimSearchViewSnapshots();
@@ -2930,7 +2933,7 @@ function resultWindowCurrent(window) {
 function restartResultWindow() {
   const key = getSearchViewKey();
   saveSearchPosition();
-  searchViewSnapshots.delete(key);
+  resultSnapshots.remove(key);
   cancelPositionRestore();
   tryRestoreSearchPosition(key);
 }
@@ -3007,7 +3010,7 @@ async function loadResultWindowPage(page, prefetch = false) {
       return true;
     }
     const results = STATE.results;
-    searchSnapshotResultBudgets.delete(results);
+    resultSnapshots.budget.invalidate(results);
     data.results.forEach((record, offset) => {
       const index = (page - 1) * window.query.pageSize + offset;
       results[index] = record; VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
@@ -3046,8 +3049,8 @@ async function loadResultWindowPage(page, prefetch = false) {
 }
 
 function ensureResultWindowPages(start, end) {
-  if (snapshotCloneTask) {
-    materializeSnapshotRange(snapshotCloneTask, start, end);
+  if (resultSnapshots.cloneTask) {
+    materializeSnapshotRange(resultSnapshots.cloneTask, start, end);
     return;
   }
   // A restored search window must keep loading visible pages; reader return state
@@ -3121,14 +3124,7 @@ async function fetchPositionPage(query, page, signal, anchorId) {
 }
 
 function trimSearchViewSnapshots() {
-  let bytes = 0;
-  for (const [key, snapshot] of Array.from(searchViewSnapshots).reverse()) {
-    // Reserve room for position-only updates without serializing the results again.
-    if (!snapshot.bytes) snapshot.bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength + 256;
-    if (bytes + snapshot.bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) searchViewSnapshots.delete(key);
-    else bytes += snapshot.bytes;
-  }
-  while (searchViewSnapshots.size > SEARCH_VIEW_SNAPSHOT_MAX) searchViewSnapshots.delete(searchViewSnapshots.keys().next().value);
+  resultSnapshots.trim();
 }
 let searchViewKeyMemo = null;
 
@@ -3151,166 +3147,65 @@ function getResultStableId(result) {
   return VoiceOfMLSearchIdentity.getResultStableId(result);
 }
 function cloneSearchResult(result) {
-  const copy = result && typeof result === "object"
-    ? Object.assign({}, result, Array.isArray(result.Folder) ? { Folder: result.Folder.slice() } : {})
-    : result;
-  if (copy && searchPageMetadata.has(result)) searchPageMetadata.set(copy, searchPageMetadata.get(result));
+  const copy = VoiceOfMLSnapshotPolicy.cloneResult(result);
+  if (copy && searchPageMetadata.has(result)) searchPageMetadata.set(/** @type {object} */ (copy), searchPageMetadata.get(result));
   return copy;
 }
 function cloneSearchPageCache(cache) {
-  const copy = {};
-  Object.keys(cache || {}).forEach(function(page) {
-    copy[page] = Array.isArray(cache[page]) ? cache[page].map(cloneSearchResult) : cache[page];
-  });
-  return copy;
+  return resultSnapshots.copyPageCache(cache);
 }
 
 function getSearchSnapshotResultsBytes(results, sparse = false) {
-  const cached = searchSnapshotResultBudgets.get(results);
-  if (cached?.length === results.length) return cached.bytes;
-  const encoder = new TextEncoder();
-  let bytes = 2;
-  if (sparse) {
-    const keys = Object.keys(results);
-    bytes += Math.max(0, results.length - 1) + (results.length - keys.length) * 4;
-    for (const key of keys) {
-      if (bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) break;
-      bytes += encoder.encode(JSON.stringify(results[key]) ?? "null").byteLength;
-    }
-  } else {
-    for (let start = 0; start < results.length && bytes <= SEARCH_VIEW_SNAPSHOT_BYTES_MAX; start += 100) {
-      bytes += encoder.encode(JSON.stringify(results.slice(start, start + 100))).byteLength - 2 + (start ? 1 : 0);
-    }
-  }
-  // An over-budget lower bound suffices until replacement or sparse-page mutation.
-  searchSnapshotResultBudgets.set(results, { length: results.length, bytes });
-  return bytes;
+  return resultSnapshots.budget.measure(results, sparse);
 }
 
 function extendSearchSnapshotBudget(results, page) {
-  const budget = searchSnapshotResultBudgets.get(results);
-  if (!budget) return;
-  if (budget.length !== results.length - page.length) {
-    searchSnapshotResultBudgets.delete(results);
-    return;
-  }
-  if (page.length && budget.bytes <= SEARCH_VIEW_SNAPSHOT_BYTES_MAX) {
-    budget.bytes += new TextEncoder().encode(JSON.stringify(page)).byteLength - 2 + (budget.length ? 1 : 0);
-  }
-  budget.length = results.length;
-}
-
-function captureSearchSnapshotHeights() {
-  const entries = [];
-  let bytes = 2;
-  const encoder = new TextEncoder();
-  for (const [id, value] of VSCROLL.heightCache) {
-    let cached = searchSnapshotHeightValues.get(value);
-    if (!cached || cached.id !== id) {
-      const entry = Object.freeze([id, Object.freeze({ ...value })]);
-      cached = { id, entry, bytes: encoder.encode(JSON.stringify(entry)).byteLength };
-      searchSnapshotHeightValues.set(value, cached);
-    }
-    bytes += cached.bytes + (entries.length ? 1 : 0);
-    if (bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) return { entries: [], bytes };
-    entries.push(cached.entry);
-  }
-  return { entries, bytes };
+  resultSnapshots.budget.extend(results, page);
 }
 
 function saveSearchViewSnapshot(key = displayedSearchView?.key) {
   const view = displayedSearchView;
   // Browsing from the top must not overwrite the snapshot offered by Return.
-  if (getReturnPositionTarget(key)) return searchViewSnapshots.get(key) || null;
+  if (getReturnPositionTarget(key)) return resultSnapshots.snapshots.get(key) || null;
   if (!DOM.resultsContainer || !view || positionRestore || key !== view.key || view.loadedPage < 1) return null;
   const position = saveSearchPosition();
-  const restoringSnapshot = searchSnapshotCloneSources.get(view.results);
-  if (restoringSnapshot?.key === key) {
-    const snapshot = restoringSnapshot;
-    if (position) snapshot.scroll = { ...position, viewKey: key };
-    snapshot.savedAt = Date.now();
-    return snapshot;
-  }
-  const existing = searchViewSnapshots.get(key);
-  const source = existing && searchSnapshotSources.get(existing);
-  const signature = `${view.revision}:${measuredHeightRevision}:${getHeightMeasurementKey()}`;
-  if (source?.signature === signature) {
-    if (position) existing.scroll = { ...position, viewKey: key };
-    existing.savedAt = Date.now();
-    searchViewSnapshots.delete(key);
-    searchViewSnapshots.set(key, existing);
-    return existing;
-  }
-  const resultsBytes = getSearchSnapshotResultsBytes(view.results, !!view.window);
-  if (resultsBytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) {
-    searchViewSnapshots.delete(key);
-    return null;
-  }
-  const heights = captureSearchSnapshotHeights();
-  const snapshot = {
-    version: SEARCH_VIEW_SNAPSHOT_VERSION,
-    key,
-    results: [],
-    total: view.total,
-    page: view.loadedPage,
-    loadedPage: view.loadedPage,
-    pageCache: cloneSearchPageCache(view.pageCache),
-    resultBackend: view.resultBackend,
-    hasMore: view.results.length < view.total,
-    window: view.window ? { generation: view.window.generation, pages: [...view.window.pages], count: view.window.count } : null,
-    estimatedHeight: VSCROLL.estimatedHeight,
-    heightCache: [],
-    heightRecords: [],
-    scroll: position ? { ...position, viewKey: key } : { index: 0, offset: 0, viewKey: key },
-    savedAt: Date.now(),
-  };
-  snapshot.bytes = resultsBytes + heights.bytes + new TextEncoder().encode(JSON.stringify(snapshot)).byteLength + 256;
-  searchViewSnapshots.delete(key);
-  if (snapshot.bytes > SEARCH_VIEW_SNAPSHOT_BYTES_MAX) return null;
-  snapshot.results = source?.revision === view.revision ? existing.results : view.results.map(cloneSearchResult);
-  snapshot.heightCache = heights.entries;
-  searchViewSnapshots.set(key, snapshot);
-  searchSnapshotSources.set(snapshot, { signature, revision: view.revision, resultsBytes });
-  trimSearchViewSnapshots();
-  return snapshot;
+  return resultSnapshots.save(view, position, {
+    revision: measuredHeightRevision, measurementKey: getHeightMeasurementKey(),
+    estimatedHeight: VSCROLL.estimatedHeight, heightCache: VSCROLL.heightCache
+  });
 }
 function activateSearchView(key = getSearchViewKey()) {
   if (VSCROLL.viewKey === key) return;
   VSCROLL.viewKey = key;
-  const snapshot = searchViewSnapshots.get(key);
+  const snapshot = resultSnapshots.snapshots.get(key);
   VSCROLL.heightCache = new Map(snapshot?.heightCache || []);
 }
 function cancelSnapshotClone() {
-  const task = snapshotCloneTask;
-  snapshotCloneTask = null;
-  if (!task) return;
-  clearTimeout(task.timer);
-  if (task.frame) cancelAnimationFrame(task.frame);
+  resultSnapshots.cancelClone();
 }
 
 function materializeSnapshotRange(task, start, end, deferHeights = false) {
-  for (let index = Math.max(0, start); index < Math.min(end, task.results.length); index++) {
-    if (index in task.results || !(index in task.snapshot.results)) continue;
-    task.results[index] = cloneSearchResult(task.snapshot.results[index]);
-    if (STATE.results !== task.results) continue;
-    VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
-    if (index >= VSCROLL.renderStart && index < VSCROLL.renderEnd) {
-      VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1; scheduleVirtualRender();
-    }
-    const cached = VSCROLL.heightCache.get(getResultStableId(task.results[index]));
-    if (cached?.measurementKey === getHeightMeasurementKey() && VSCROLL.heights[index] !== cached.height) {
-      if (!task.heightAnchor) {
-        const top = getResultScrollTop(), anchorIndex = findVirtualIndex(top);
-        task.heightAnchor = { index: anchorIndex, offset: top - getVirtualOffset(anchorIndex) };
-      }
-      const previous = VSCROLL.heights[index] || VSCROLL.heightBase || VSCROLL.estimatedHeight;
-      VSCROLL.heights[index] = cached.height;
-      if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
-        VoiceOfMLSearchHeightIndex.fenwickAdd(VSCROLL.heightTree, index + 1, cached.height - previous);
-      } else VSCROLL.heightsDirty = true;
-    }
+  resultSnapshots.materializeRange(task, start, end, deferHeights);
+}
+
+function materializedSnapshotRow(task, index) {
+  if (STATE.results !== task.results) return;
+  VSCROLL.templateCache.delete(index); VSCROLL.measuredRowKeys[index] = null;
+  if (index >= VSCROLL.renderStart && index < VSCROLL.renderEnd) {
+    VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1; scheduleVirtualRender();
   }
-  if (!deferHeights) applySnapshotCloneHeights(task);
+  const cached = VSCROLL.heightCache.get(getResultStableId(task.results[index]));
+  if (cached?.measurementKey === getHeightMeasurementKey() && VSCROLL.heights[index] !== cached.height) {
+    if (!task.heightAnchor) {
+      const top = getResultScrollTop(), anchorIndex = findVirtualIndex(top);
+      task.heightAnchor = { index: anchorIndex, offset: top - getVirtualOffset(anchorIndex) };
+    }
+    const previous = VSCROLL.heights[index] || VSCROLL.heightBase || VSCROLL.estimatedHeight;
+    VSCROLL.heights[index] = cached.height;
+    if (!VSCROLL.heightsDirty && VSCROLL.heightTree.length === VSCROLL.heights.length + 1) {
+      VoiceOfMLSearchHeightIndex.fenwickAdd(VSCROLL.heightTree, index + 1, cached.height - previous);
+    } else VSCROLL.heightsDirty = true;
+  }
 }
 
 function applySnapshotCloneHeights(task) {
@@ -3325,47 +3220,8 @@ function applySnapshotCloneHeights(task) {
   VSCROLL.lastScrollTop = getResultScrollTop();
 }
 
-function prepareSnapshotClone(snapshot, key, restoreScroll) {
-  // Clone the anchor neighborhood before paint; keep the complete source immutable.
-  const task = { snapshot, key, results: new Array(snapshot.results.length), cursor: 0,
-    keys: snapshot.window ? Object.keys(snapshot.results) : null, timer: null, frame: 0 };
-  snapshotCloneTask = task;
-  searchSnapshotCloneSources.set(task.results, snapshot);
-  const size = STATE.pageSize, index = restoreScroll ? snapshot.scroll?.index || 0 : 0;
-  materializeSnapshotRange(task, 0, size);
-  materializeSnapshotRange(task, Math.max(0, Math.floor(index / size) - 2) * size,
-    (Math.floor(index / size) + 3) * size);
-  return task.results;
-}
-
-function startSnapshotClone() {
-  const task = snapshotCloneTask;
-  if (!task) return;
-  const step = () => {
-    task.timer = null;
-    if (snapshotCloneTask !== task || STATE.results !== task.results || getSearchViewKey() !== task.key) {
-      if (snapshotCloneTask === task) cancelSnapshotClone();
-      return;
-    }
-    const count = task.keys ? task.keys.length : task.results.length, started = performance.now();
-    for (let batch = 0; task.cursor < count && batch < 256 && performance.now() - started < 4; batch++) {
-      const index = task.keys ? Number(task.keys[task.cursor++]) : task.cursor++;
-      materializeSnapshotRange(task, index, index + 1, true);
-    }
-    applySnapshotCloneHeights(task);
-    if (task.cursor < count) { task.timer = setTimeout(step, 0); return; }
-    snapshotCloneTask = null;
-    searchSnapshotCloneSources.delete(task.results);
-    const source = searchSnapshotSources.get(task.snapshot);
-    if (source) searchSnapshotResultBudgets.set(task.results, { length: task.results.length, bytes: source.resultsBytes });
-    displayedSearchView = null; rememberDisplayedSearchView();
-    scheduleVirtualRender(); prefetchNextPage(); scheduleBottomLoad();
-  };
-  task.frame = requestAnimationFrame(() => { task.frame = 0; task.timer = setTimeout(step, 0); });
-}
-
 function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = false) {
-  const snapshot = searchViewSnapshots.get(key);
+  const snapshot = resultSnapshots.snapshots.get(key);
   if (!snapshot || snapshot.version !== SEARCH_VIEW_SNAPSHOT_VERSION || snapshot.loadedPage < 1) return restoreScroll && tryRestoreSearchPosition(key);
   searchIntentId++;
   if (!cancelActiveSearch()) return false;
@@ -3373,11 +3229,7 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   if (!preserveRestore) cancelPositionRestore();
   if (owner !== searchId) return false;
   cancelPendingSearchControls();
-  const materialized = snapshot.window?.count ?? snapshot.results.length;
-  STATE.results = materialized > 2000 && !preserveRestore
-    ? prepareSnapshotClone(snapshot, key, restoreScroll) : snapshot.results.map(cloneSearchResult);
-  const source = searchSnapshotSources.get(snapshot);
-  if (source && !snapshotCloneTask) searchSnapshotResultBudgets.set(STATE.results, { length: STATE.results.length, bytes: source.resultsBytes });
+  STATE.results = resultSnapshots.restoreResults(snapshot, key, STATE.pageSize, restoreScroll, preserveRestore);
   STATE.total = snapshot.total;
   STATE.page = snapshot.page;
   STATE._loadedPage = snapshot.loadedPage;
@@ -3400,13 +3252,13 @@ function restoreSearchViewSnapshot(key, restoreScroll = true, preserveRestore = 
   VSCROLL.estimatedHeight = snapshot.estimatedHeight || VSCROLL.estimatedHeight;
   VSCROLL.heightCache = new Map(snapshot.heightCache || []);
   (snapshot.heightRecords || []).forEach(function(record) { VSCROLL.heightCache.set(record[0], record[1]); });
-  readerReturnPosition.setScroll(restoreScroll && snapshot.scroll ? Object.assign({}, snapshot.scroll, { route: location.href, viewKey: key }) : null);
+  readerReturnPosition.setScroll(restoreScroll && snapshot.scroll ? /** @type {ReaderReturnPosition} */ (Object.assign({}, snapshot.scroll, { route: location.href, viewKey: key })) : null);
   resetVirtualScrollState();
   renderResults(false);
   updateStatusBar();
   updateLoadInfo();
   syncStateToURL();
-  startSnapshotClone();
+  resultSnapshots.startClone();
   return true;
 }
 
@@ -3617,7 +3469,7 @@ async function searchWithInitialFallback() {
   if (owner !== searchId || intent !== searchIntentId) return false;
   const key = getSearchViewKey(), entry = positionEntryId;
   prepareReturnPosition(key);
-  if (searchViewSnapshots.has(key)) {
+  if (resultSnapshots.snapshots.has(key)) {
     setReturnPositionTarget();
     return restoreSearchViewSnapshot(key);
   }
@@ -4485,7 +4337,7 @@ function resetVirtualScrollState() {
   VSCROLL.renderStart = 0;
   VSCROLL.renderEnd = 0;
   VSCROLL.heights = [];
-  VSCROLL.sparseHeights = !!resultWindow || !!snapshotCloneTask;
+  VSCROLL.sparseHeights = !!resultWindow || !!resultSnapshots.cloneTask;
   VSCROLL.heightBase = VSCROLL.estimatedHeight || 60;
   VSCROLL.heightTree = [];
   VSCROLL.heightsDirty = true;
@@ -4509,7 +4361,7 @@ function ensureVirtualHeights(len) {
   if (VSCROLL.sparseHeights) {
     VSCROLL.heights.length = len; VSCROLL.measuredRowKeys.length = len;
     const measurementKey = getHeightMeasurementKey();
-    const keys = resultWindow || snapshotCloneTask ? Object.keys(STATE.results)
+    const keys = resultWindow || resultSnapshots.cloneTask ? Object.keys(STATE.results)
       : Array.from({length: len - oldLen}, (_, offset) => oldLen + offset);
     for (const key of keys) if (Number(key) >= oldLen) {
       const cached = VSCROLL.heightCache.get(getResultStableId(STATE.results[key]));
@@ -5291,7 +5143,7 @@ function readPagingView() {
   return {
     generation: searchRequestId, loadedPage: STATE._loadedPage, page: STATE.page,
     resultCount: STATE.results.length, hasMore: STATE.hasMore, loading: STATE.isLoading,
-    suspended: !!snapshotCloneTask || !!positionRestore,
+    suspended: !!resultSnapshots.cloneTask || !!positionRestore,
     inactive: document.hidden || !!readerHost.overlay, dragging: VSCROLL.isDraggingThumb,
     scrollTop: getResultScrollTop(), loadedHeight: getVirtualTotalHeight(),
     viewportHeight: DOM.resultsContainer ? DOM.resultsContainer.clientHeight : 0,
@@ -5900,7 +5752,7 @@ async function init() {
     if (e.shiftKey && lastSelectedIndex >= 0) {
       var lo = Math.min(lastSelectedIndex, idx);
       var hi = Math.max(lastSelectedIndex, idx);
-      for (var si = lo; si <= hi; si++) if (STATE.results[si] || snapshotCloneTask?.snapshot.results[si]) selectedIndices[si] = true;
+      for (var si = lo; si <= hi; si++) if (STATE.results[si] || resultSnapshots.cloneTask?.snapshot.results[si]) selectedIndices[si] = true;
     } else if (cb.checked) {
       selectedIndices[idx] = true;
     } else {
@@ -5925,7 +5777,7 @@ async function init() {
     updateSelectionUI();
   });
   if (DOM.multiSelectAll) DOM.multiSelectAll.addEventListener("click", function() {
-    const records = snapshotCloneTask?.snapshot.results || STATE.results;
+    const records = resultSnapshots.cloneTask?.snapshot.results || STATE.results;
     var allSelected = records.length > 0 && records.every(function(record, index) { return !record || selectedIndices[index]; });
     if (allSelected) selectedIndices = {};
     else for (var si = 0; si < records.length; si++) if (records[si]) selectedIndices[si] = true;

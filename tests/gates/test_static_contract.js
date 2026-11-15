@@ -241,7 +241,8 @@ test("virtual results use bounded buffering", () => {
 test("Reader return and search snapshot state is preserved", () => {
   for (const value of [
     "SEARCH_VIEW_SNAPSHOT_VERSION",
-    "SEARCH_VIEW_SNAPSHOT_MAX",
+    "const SEARCH_VIEW_SNAPSHOT_VERSION = VoiceOfMLSnapshotPolicy.VERSION",
+    "const resultSnapshots = VoiceOfMLResultSnapshots.create(",
     "function getSearchViewKey",
     "function saveSearchViewSnapshot",
     "function restoreSearchViewSnapshot",
@@ -251,6 +252,13 @@ test("Reader return and search snapshot state is preserved", () => {
     "heightCache: new Map()",
     "readerReturnPosition.cancelOnScroll()",
   ]) assert.ok(app.includes(value), value);
+  const policy = fs.readFileSync("static/search/results/snapshots/domain/copy-budget.js", "utf8");
+  const snapshots = fs.readFileSync("static/search/results/snapshots/application/store.js", "utf8");
+  assert.match(policy, /VERSION = 1, MAX = 20, BYTES_MAX = 8 \* 1024 \* 1024/);
+  assert.match(snapshots, /snapshots\.size > policy\.MAX/);
+  assert.match(snapshots, /bytes \+ snapshot\.bytes > policy\.BYTES_MAX/);
+  assert.match(app, /return resultSnapshots\.save\(view, position,/);
+  assert.match(app, /STATE\.results = resultSnapshots\.restoreResults\(/);
   const host = fs.readFileSync("static/search/reader-host/application/host.js", "utf8");
   const position = fs.readFileSync("static/search/reader-host/presentation/return-position.js", "utf8");
   assertCode(host, "navigation.remember(url, /** @type {object} */ (position.scroll))");

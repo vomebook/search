@@ -51,7 +51,7 @@ class RecentSearchPageTests(unittest.TestCase):
     def begin_restore(self):
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();positionPersistence.viewports.clear();positionPersistence.recentPages.clear();windowCalls=[];windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("resultSnapshots.snapshots.clear();positionPersistence.viewports.clear();positionPersistence.recentPages.clear();windowCalls=[];windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.page.wait_for_function('positionRestore?.preview && !!window.releaseWindow')
 
     def wait_cached(self, index):

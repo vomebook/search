@@ -19,7 +19,7 @@ class PositionWindowTests(unittest.TestCase):
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
         self.page.evaluate('''() => {
-          searchViewSnapshots.clear();
+          resultSnapshots.snapshots.clear();
           window.windowCalls=[];window.windowFailures=new Set();window.windowGeneration='one';
           window.windowAnchor=49850;window.windowTotal=50001;window.windowStall=0;
           window.originalWindowKey=[...positionPersistence.positions.keys()].find(key=>JSON.parse(key).query==='paging-original');
@@ -162,7 +162,7 @@ class PositionWindowTests(unittest.TestCase):
     def test_restore_retries_lookup_and_missing_neighbor_without_repeating_ready_pages(self):
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();windowCalls=[];windowFailures.add(1);STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("resultSnapshots.snapshots.clear();windowCalls=[];windowFailures.add(1);STATE.query='paging-original';doSearch(false,false,true)")
         self.page.wait_for_function('windowCalls.includes(1)')
         self.page.evaluate('windowFailures.delete(1);windowFailures.add(499)')
         self.page.wait_for_function('windowCalls.includes(499)')
@@ -260,7 +260,7 @@ class PositionWindowTests(unittest.TestCase):
         self.persist_viewport()
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();positionPersistence.viewports.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("resultSnapshots.snapshots.clear();positionPersistence.viewports.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.assert_cached_viewport()
         self.page.evaluate("window.cachedRow=DOM.resultsList.querySelector('[data-index=\"49850\"]');releaseWindow()")
         self.wait_anchor(49850)
@@ -301,7 +301,7 @@ class PositionWindowTests(unittest.TestCase):
         self.persist_viewport()
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();windowFailures.add(1);STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("resultSnapshots.snapshots.clear();windowFailures.add(1);STATE.query='paging-original';doSearch(false,false,true)")
         self.page.get_by_text('重试恢复', exact=True).wait_for()
         self.assertEqual(self.page.evaluate('findVirtualIndex(getResultScrollTop())'), 49850)
         self.assertEqual(self.page.evaluate('getComputedStyle(DOM.resultsContainer).visibility'), 'visible')
@@ -325,7 +325,7 @@ class PositionWindowTests(unittest.TestCase):
         self.assertLessEqual(self.page.evaluate('positionPersistence.viewports.get(originalWindowKey).records.length'), 80)
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();positionPersistence.positions.get(originalWindowKey).anchorId='different';windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("resultSnapshots.snapshots.clear();positionPersistence.positions.get(originalWindowKey).anchorId='different';windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.page.wait_for_function('!!window.releaseWindow')
         self.assertFalse(self.page.evaluate('!!positionRestore.preview'))
         self.page.evaluate('releaseWindow()')
@@ -346,7 +346,7 @@ class PositionWindowTests(unittest.TestCase):
         }'''))
         self.page.evaluate("STATE.query='paging-other';doSearch()")
         self.page.wait_for_function('!STATE.isLoading')
-        self.page.evaluate("searchViewSnapshots.clear();positionPersistence.viewports.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
+        self.page.evaluate("resultSnapshots.snapshots.clear();positionPersistence.viewports.clear();windowStall=1;STATE.query='paging-original';doSearch(false,false,true)")
         self.assert_cached_viewport()
         self.page.evaluate('releaseWindow()')
         self.wait_anchor(49850)

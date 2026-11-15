@@ -111,7 +111,7 @@ class SegmentedScrollTests(unittest.TestCase):
           const key=getSearchViewKey();
           positionPersistence.positions.set(key,{version:1,key,index:88050,offset:11,loadedPage:882,
             savedAt:Date.now(),anchorId:'VoiceOfML/Test\\0row-88050.txt'});
-          searchViewSnapshots.clear();positionPersistence.viewports.clear();
+          resultSnapshots.snapshots.clear();positionPersistence.viewports.clear();
           window.segmentPages=[];
           fetchPositionPage=async(query,page)=>{
             segmentPages.push(page);

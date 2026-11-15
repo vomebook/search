@@ -7,6 +7,7 @@ const vm = require("vm");
 
 const MODULES = ["static/search/search-session.js", "static/search/domain/search-window-page.js",
   "static/search/positions/domain/policy.js", "static/search/positions/infrastructure/indexed-db.js", "static/search/positions/application/persistence.js",
+  "static/search/results/snapshots/domain/copy-budget.js", "static/search/results/snapshots/application/store.js",
   "static/search/folder-selection.js", "static/search/domain/height-index.js",
   "static/search/reader-host/presentation/return-position.js", "static/search/reader-host/application/host.js",
   "static/search/requests/infrastructure/shared-transport.js", "static/search/requests/application/prefetch-controller.js",

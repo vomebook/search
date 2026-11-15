@@ -68,7 +68,7 @@ class ReaderHostHistoryRaceTests(unittest.TestCase):
         self.page.evaluate('''() => {
           // Force B through asynchronous viewport restoration, while A still has
           // a live prefetch consumer. No test-only session save is involved.
-          searchViewSnapshots.clear();
+          resultSnapshots.snapshots.clear();
           const oldRead = readSearchViewport;
           readSearchViewport = key => JSON.parse(key).query === 'paging-B'
             ? new Promise(resolve => { window.releaseBViewport = () => resolve(null); }) : oldRead(key);
