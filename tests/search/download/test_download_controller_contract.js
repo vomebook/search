@@ -45,6 +45,48 @@ function fixture(overrides = {}) {
 
 const response = (data, ok = true, status = 200) => ({ok, status, json: async () => data});
 const flush = () => new Promise(resolve => setImmediate(resolve));
+const makeButton = (label = "下载", busy = null) => {
+  const attrs = new Map(busy === null ? [] : [["aria-busy", busy]]);
+  return {textContent: label, attrs, getAttribute(k) { return attrs.get(k) ?? null; },
+    setAttribute(k, v) { attrs.set(k, v); }, removeAttribute(k) { attrs.delete(k); }};
+};
+// Minimal DOM/storage used by the three app batch contracts. Rows and buttons
+// are separate nodes so rendering and acknowledgement assertions inspect the UI.
+function batchDomFixture() {
+  const node = () => ({style: {}, dataset: {}, children: [], textContent: "",
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; }});
+  const status = node(), uncertainList = node();
+  const buttons = {cancel: node(), retry: node(), close: node()};
+  let exists = false, listener;
+  const panel = {...node(), remove() { exists = false; }, setAttribute() {},
+    addEventListener(name, callback) { assert.equal(name, "click"); listener = callback; },
+    querySelector(selector) {
+      if (selector === '[role="status"]') return status;
+      if (selector === '[data-uncertain-list]') return uncertainList;
+      const action = /^\[data-queue="(cancel|retry|close)"\]$/.exec(selector);
+      assert.ok(action, `unexpected selector: ${selector}`);
+      return buttons[action[1]];
+    }};
+  const stored = new Map();
+  return {status, uncertainList, buttons, panel,
+    click(event) { listener(event); },
+    document: {getElementById(id) { assert.equal(id, "download-queue"); return exists ? panel : null; },
+      createElement(tag) { return tag === "section" ? panel : node(); },
+      body: {appendChild(child) { assert.equal(child, panel); exists = true; }}},
+    sessionStorage: {getItem(key) { return stored.get(key) ?? null; },
+      setItem(key, value) { stored.set(key, String(value)); }},
+  };
+}
+
+async function settledWithin(promise) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("download subscribers did not settle")), 1000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
 
 test("shared checks preserve independent cancellation, cached success and expiration", async () => {
   const {controller: c, requests, timers, advance} = fixture();
@@ -131,6 +173,49 @@ test("check failures report legacy messages and permit a retry", async () => {
   const applicationFailure = c.checkDownload("not-ok");
   requests[4].resolve(response({ok: false}, true));
   assert.equal(await applicationFailure, "下载检查失败，请重试");
+
+  // Both shared checks and download subscribers must settle, without caching
+  // failure or blocking a third check behind the two occupied slots.
+  for (const stage of ["fetch", "json"]) {
+    for (const reason of [null, undefined, new Error("offline"), new DOMException("abort", "AbortError")]) {
+      const f = fixture();
+      const a = makeButton("A"), b = makeButton("B");
+      const first = f.controller.downloadFileDetailed("bad", "bad", {button: a});
+      const second = f.controller.downloadFileDetailed("bad", "bad", {button: b});
+      await flush();
+      const checkA = f.controller.checkDownload("bad");
+      const checkB = f.controller.checkDownload("bad");
+      const occupied = f.controller.checkDownload("occupied");
+      const queued = f.controller.checkDownload("queued");
+      assert.equal(f.requests.length, 2);
+      assert.equal(f.controller.downloadCheckQueue.length, 1);
+      if (stage === "fetch") f.requests[0].reject(reason);
+      else f.requests[0].resolve({ok: true, status: 200, json: () => Promise.reject(reason)});
+      const expected = reason?.name === "AbortError" ? "下载检查超时，请重试"
+        : stage === "json" ? "下载检查失败，请重试" : reason?.message || "下载失败，请稍后重试";
+      assert.deepEqual(await settledWithin(Promise.all([first, second, checkA, checkB])),
+        ["failed", "failed", expected, expected]);
+      assert.equal(f.requests.length, 3);
+      assert.equal(f.requests[2].url, "check:queued");
+      assert.equal(f.controller.downloadChecks.has("bad"), false);
+      assert.equal(f.controller.pendingDownloads.size, 0);
+      assert.deepEqual(f.launches, []);
+      assert.deepEqual(f.toasts.map(args => args[0]), ["正在准备下载…", "正在准备下载…", expected, expected]);
+      assert.equal(a.textContent, "A");
+      assert.equal(b.textContent, "B");
+      assert.equal(a.getAttribute("aria-busy"), null);
+      assert.equal(b.getAttribute("aria-busy"), null);
+      f.requests[1].resolve(response({ok: true}));
+      f.requests[2].resolve(response({ok: true}));
+      assert.deepEqual(await settledWithin(Promise.all([occupied, queued])), [true, true]);
+      const retry = f.controller.checkDownload("bad");
+      f.requests[3].resolve(response({ok: true}));
+      assert.equal(await settledWithin(retry), true);
+      assert.equal(f.controller.activeDownloadChecks, 0);
+      assert.equal(f.controller.downloadCheckQueue.length, 0);
+      assert.equal(f.timers.size, 0);
+    }
+  }
 });
 
 test("truthy rejection messages retain their original non-string values", async () => {
@@ -192,6 +277,26 @@ test("generic signal option is ignored but batch abort owns cancellation", async
   requests[1].resolve(response({ok: true}));
   await flush();
   assert.deepEqual(launches, ["book.txt|book"]);
+
+  for (const reason of [null, undefined]) {
+    const f = fixture();
+    const owner = new AbortController();
+    const button = makeButton();
+    const first = f.controller.downloadFileDetailed("x", "x", {button, batch: {abortController: owner}});
+    const second = f.controller.downloadFileDetailed("x", "x");
+    await flush();
+    owner.abort();
+    assert.equal(await settledWithin(first), "cancelled");
+    assert.equal(button.textContent, "下载");
+    assert.equal(button.getAttribute("aria-busy"), null);
+    assert.equal(f.requests[0].signal.aborted, false);
+    f.requests[0].reject(reason);
+    assert.equal(await settledWithin(second), "failed");
+    assert.deepEqual(f.toasts.map(args => args[0]), ["正在准备下载…", "正在准备下载…", "下载失败，请稍后重试"]);
+    assert.equal(f.controller.pendingDownloads.size, 0);
+    assert.equal(f.controller.activeDownloadChecks, 0);
+    assert.equal(f.timers.size, 0);
+  }
 });
 
 test("a stalled response body times out, releases its slot and retries without caching failure", async () => {
@@ -246,7 +351,7 @@ test("successful check cache retains at most 64 entries in insertion order", asy
 test("shared downloads retain other owners and restore button feedback", async () => {
   const {controller: c, requests, launches, toasts} = fixture();
   const attrs = new Map();
-  const button = {textContent: "下载", setAttribute(k, v) { attrs.set(k, v); }, removeAttribute(k) { attrs.delete(k); }};
+  const button = {textContent: "下载", getAttribute(k) { return attrs.get(k) ?? null; }, setAttribute(k, v) { attrs.set(k, v); }, removeAttribute(k) { attrs.delete(k); }};
   const batch = {cancelled: false, abortController: new AbortController()};
   const first = c.downloadFile("book.txt", "shared", {batch, button});
   const second = c.downloadFile("book.txt", "shared", {quiet: true});
@@ -264,12 +369,76 @@ test("shared downloads retain other owners and restore button feedback", async (
   assert.equal(attrs.has("aria-busy"), false);
   assert.equal(c.pendingDownloads.size, 0);
   assert.equal(toasts[0][0], "正在准备下载…");
+  assert.deepEqual(toasts.map(args => args[0]), ["正在准备下载…"]);
+
+  for (const quietFirst of [true, false]) {
+    for (const success of [true, false]) {
+      const f = fixture();
+      const a = makeButton("A"), b = makeButton("B", "previous");
+      const first = f.controller.downloadFile("x", "x", {quiet: quietFirst, button: a});
+      await flush(); // Join after the first caller's check has actually started.
+      const second = f.controller.downloadFile("x", "x", {quiet: !quietFirst, button: b});
+      assert.equal(a.textContent, "准备中…");
+      assert.equal(b.textContent, "准备中…");
+      assert.equal(a.getAttribute("aria-busy"), "true");
+      assert.equal(b.getAttribute("aria-busy"), "true");
+      assert.equal(f.requests.length, 1);
+      assert.deepEqual(f.toasts.map(args => args[0]), ["正在准备下载…"]);
+      f.requests[0].resolve(success ? response({ok: true}) : response({error: "missing"}, false, 404));
+      assert.deepEqual(await settledWithin(Promise.all([first, second])), [success, success]);
+      assert.deepEqual(f.toasts.map(args => args[0]), ["正在准备下载…", success ? "已发起下载，请在浏览器下载列表查看" : "missing"]);
+      assert.equal(a.textContent, "A");
+      assert.equal(b.textContent, "B");
+      assert.equal(a.getAttribute("aria-busy"), null);
+      assert.equal(b.getAttribute("aria-busy"), "previous");
+      assert.equal(f.launches.length, success ? 1 : 0);
+    }
+  }
+
+  // Cancelling either subscription must retain the other owner of the same
+  // button. Restore each property only while it still holds our busy value.
+  for (const cancelFirst of [true, false]) {
+    for (const external of ["none", "label", "busy", "both"]) {
+      const f = fixture();
+      const button = makeButton("original", "previous");
+      const owner = new AbortController();
+      const cancelledOptions = {button, batch: {abortController: owner}};
+      const first = f.controller.downloadFile("x", "x", cancelFirst ? cancelledOptions : {button});
+      const second = f.controller.downloadFile("x", "x", cancelFirst ? {button} : cancelledOptions);
+      await flush();
+      owner.abort();
+      assert.equal(await settledWithin(cancelFirst ? first : second), false);
+      assert.equal(button.textContent, "准备中…");
+      assert.equal(button.getAttribute("aria-busy"), "true");
+      assert.equal(f.requests[0].signal.aborted, false);
+      if (external === "label" || external === "both") button.textContent = "outside";
+      if (external === "busy" || external === "both") button.setAttribute("aria-busy", "outside");
+      f.requests[0].resolve(response({ok: true}));
+      assert.equal(await settledWithin(cancelFirst ? second : first), true);
+      assert.equal(button.textContent, external === "label" || external === "both" ? "outside" : "original");
+      assert.equal(button.getAttribute("aria-busy"), external === "busy" || external === "both" ? "outside" : "previous");
+      assert.deepEqual(f.toasts.map(args => args[0]), ["正在准备下载…", "正在准备下载…", "已发起下载，请在浏览器下载列表查看"]);
+      assert.deepEqual(f.launches, ["x|x"]);
+    }
+  }
+
+  // A joining caller owns the entry before preparation feedback can cancel
+  // the original subscriber synchronously.
+  const owner = new AbortController();
+  const reentrant = fixture({showToast() { owner.abort(); }});
+  const original = reentrant.controller.downloadFile("x", "x", {quiet: true, batch: {abortController: owner}});
+  await flush();
+  const joined = reentrant.controller.downloadFile("x", "x");
+  assert.equal(await original, false);
+  assert.equal(reentrant.requests[0].signal.aborted, false);
+  reentrant.requests[0].resolve(response({ok: true}));
+  assert.equal(await joined, true);
 });
 
 test("download failures restore controls and emit the appropriate feedback", async () => {
   const {controller: c, requests, launches, toasts} = fixture();
   const attrs = new Map();
-  const button = {textContent: "下载", setAttribute(k, v) { attrs.set(k, v); }, removeAttribute(k) { attrs.delete(k); }};
+  const button = {textContent: "下载", getAttribute(k) { return attrs.get(k) ?? null; }, setAttribute(k, v) { attrs.set(k, v); }, removeAttribute(k) { attrs.delete(k); }};
   const failed = c.downloadFile("missing.txt", "missing", {button});
   await flush();
   requests[0].resolve(response({error: "不存在"}, false, 404));
@@ -303,6 +472,13 @@ test("a throwing success toast does not turn a shared launched download into fai
   fireDelay(300);
   assert.equal(await next, true);
   assert.deepEqual(launches, ["book.txt|shared", "next.txt|next"]);
+  const feedback = fixture({showToast() { throw new Error("feedback unavailable"); }});
+  assert.equal(await feedback.controller.downloadFile("x", "x", {skipCheck: true}), true);
+  const failed = feedback.controller.downloadFileDetailed("bad", "bad");
+  await flush();
+  feedback.requests[0].reject(null);
+  assert.equal(await settledWithin(failed), "failed");
+  assert.deepEqual(feedback.launches, ["x|x"]);
 });
 
 test("a throwing triggerDownload still reports failure", async () => {
@@ -377,21 +553,16 @@ test("batch retries only definite failures and reports uncertainty", async () =>
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
   assert.ok(start >= 0 && end > start);
   const outcomes = {a: "started", b: "failed", c: "uncertain", d: "cancelled"};
-  const status = {style: {}}, buttons = {cancel: {}, retry: {}, close: {}};
-  let click, panelCreated = false;
-  const panel = {
-    style: {}, remove() { panelCreated = false; },
-    setAttribute() {}, addEventListener(_name, fn) { click = fn; },
-    querySelector(selector) {
-      if (selector === '[role="status"]') return status;
-      return buttons[selector.match(/data-queue="(.*?)"/)[1]];
-    },
-  };
+  const dom = batchDomFixture();
+  const {status, buttons, panel, uncertainList, click} = dom;
   const sandbox = {
-    AbortController, document: {getElementById: () => panelCreated ? panel : null, createElement: () => panel, body: {appendChild() { panelCreated = true; }} },
+    AbortController, document: dom.document, sessionStorage: dom.sessionStorage,
     downloadFileDetailed: async (_name, link) => outcomes[link], showToast() {},
   };
-  vm.runInNewContext("let downloadBatch = null; const uncertainDownloads = [];\n" + source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch;", sandbox);
+  const stateStart = source.indexOf("let downloadBatch = null;");
+  const stateEnd = source.indexOf("const downloadController =", stateStart);
+  assert.ok(stateStart >= 0 && stateEnd > stateStart && stateEnd < start);
+  vm.runInNewContext(source.slice(stateStart, stateEnd) + source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch;", sandbox);
   sandbox.start(Object.keys(outcomes).map(link => ({filename: link, link})));
   await flush();
   const batch = sandbox.current();
@@ -403,6 +574,10 @@ test("batch retries only definite failures and reports uncertainty", async () =>
   assert.match(status.textContent, /检查后再手动重试/);
   assert.equal(buttons.retry.hidden, false);
   assert.match(status.textContent, /"c"（"c"）/);
+  assert.equal(uncertainList.children.length, 1);
+  assert.equal(uncertainList.children[0].children[0].textContent, '"c"（"c"） ');
+  assert.equal(uncertainList.children[0].children[1].dataset.acknowledgeLink, "c");
+  assert.equal(uncertainList.children[0].children[1].disabled, false);
   outcomes.b = "uncertain";
   click({target: {dataset: {queue: "retry"}}});
   await flush();
@@ -439,6 +614,13 @@ test("batch retries only definite failures and reports uncertainty", async () =>
   await flush();
   assert.deepEqual(Array.from(sandbox.current().items, item => item.link), ["a"]);
   assert.deepEqual(Array.from(sandbox.current().uncertain, item => item.link), ["c", "b", longLink]);
+  const acknowledge = uncertainList.children[0].children[1];
+  assert.equal(acknowledge.textContent, "已检查下载列表，清除此项记录");
+  click({target: acknowledge});
+  assert.deepEqual(Array.from(sandbox.current().uncertain, item => item.link), ["b", longLink]);
+  assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")).map(item => item.link), ["b", longLink]);
+  assert.equal(uncertainList.children.length, 2);
+  assert.equal(uncertainList.children[0].children[1].dataset.acknowledgeLink, "b");
 });
 
 test("abort during browser handoff cannot erase the shared uncertain result", async () => {
@@ -463,9 +645,32 @@ test("uncertain feedback belongs to each live non-quiet shared subscriber", asyn
   assert.equal(await first, false);
   assert.equal(await second, "uncertain");
   assert.deepEqual(f.toasts.map(args => args[0]), [
+    "正在准备下载…", "正在准备下载…", "正在准备下载…",
     "下载状态不确定，请检查浏览器下载列表后再重试",
     "下载状态不确定，请检查浏览器下载列表后再重试",
   ]);
+
+  for (const quietFirst of [true, false]) {
+    let recorded = 0;
+    const f = fixture({triggerDownload() { throw new Error("handoff"); }, onUncertain() { recorded++; }});
+    const button = makeButton("original", "previous");
+    const owner = new AbortController();
+    const first = f.controller.downloadFileDetailed("x", "x", {quiet: quietFirst, button});
+    await flush();
+    const cancelled = f.controller.downloadFileDetailed("x", "x", {button, batch: {abortController: owner}});
+    const second = f.controller.downloadFileDetailed("x", "x", {quiet: !quietFirst, button});
+    owner.abort();
+    assert.equal(await cancelled, "cancelled");
+    assert.equal(button.textContent, "准备中…");
+    assert.equal(button.getAttribute("aria-busy"), "true");
+    assert.equal(f.requests[0].signal.aborted, false);
+    f.requests[0].resolve(response({ok: true}));
+    assert.deepEqual(await settledWithin(Promise.all([first, second])), ["uncertain", "uncertain"]);
+    assert.equal(recorded, 1);
+    assert.equal(button.textContent, "original");
+    assert.equal(button.getAttribute("aria-busy"), "previous");
+    assert.deepEqual(f.toasts.map(args => args[0]), ["正在准备下载…", "正在准备下载…", "下载状态不确定，请检查浏览器下载列表后再重试"]);
+  }
 });
 
 
@@ -474,13 +679,12 @@ test("single uncertain handoff is retained and a later batch failure is visible 
   const start = source.indexOf("let downloadBatch = null;");
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
   assert.ok(start >= 0 && end > start);
-  let f, click, exists = false;
-  const status = {style: {}}, buttons = {cancel: {}, retry: {}, close: {}};
-  const panel = {style: {}, setAttribute() {}, addEventListener(_event, fn) { click = fn; },
-    querySelector(selector) { return selector === '[role="status"]' ? status : buttons[selector.match(/data-queue="(.*?)"/)[1]]; }};
+  let f;
+  const dom = batchDomFixture();
+  const {status, buttons, uncertainList, click} = dom;
   const sandbox = {
     AbortController, API_BASE: "", DOWNLOAD_CHECK_TIMEOUT: 8000, buildDownloadUrl() {}, triggerDownload() {}, showToast() {},
-    document: {getElementById: () => exists ? panel : null, createElement: () => panel, body: {appendChild() { exists = true; }}},
+    document: dom.document, sessionStorage: dom.sessionStorage,
     navigator: {onLine: true},
     VoiceOfMLDownloadController: {createDownloadController(options) {
       f = fixture({...options, triggerDownload() { throw new Error("possible handoff"); }});
@@ -489,6 +693,7 @@ test("single uncertain handoff is retained and a later batch failure is visible 
   };
   vm.runInNewContext(source.slice(start, end) + "\nglobalThis.start = startDownloadBatch; globalThis.current = () => downloadBatch; globalThis.single = downloadFile;", sandbox);
   assert.equal(await sandbox.single("single.txt", "x", {quiet: true, skipCheck: true}), false);
+  assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), [{filename: "single.txt", link: "x"}]);
   sandbox.start([{filename: "single.txt", link: "x"}, {filename: "other.txt", link: "y"}]);
   await flush();
   assert.equal(f.requests.length, 2);
@@ -505,6 +710,30 @@ test("single uncertain handoff is retained and a later batch failure is visible 
   assert.equal(f.requests[2].url, "/api/download/check?link=y");
   f.requests[2].resolve(response({ok: false}, false, 404));
   await flush();
+  // Reproduce a blocked failure, then explicitly acknowledge it through its
+  // rendered button. Only that acknowledgement makes it eligible for retry.
+  sandbox.start([{filename: "single.txt", link: "x"}]);
+  await flush();
+  assert.equal(uncertainList.children[0].children[1].disabled, true);
+  click({target: uncertainList.children[0].children[1]});
+  assert.deepEqual(Array.from(sandbox.current().uncertain, item => item.link), ["x"]);
+  f.requests[3].resolve(response({ok: false}, false, 404));
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().blockedFailures, item => item.link), ["x"]);
+  assert.equal(buttons.retry.hidden, true);
+  assert.equal(uncertainList.children[0].children[1].disabled, false);
+  click({target: uncertainList.children[0].children[1]});
+  assert.deepEqual(Array.from(sandbox.current().blockedFailures), []);
+  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["x"]);
+  assert.equal(buttons.retry.hidden, false);
+  assert.equal(uncertainList.children.length, 0);
+  assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), []);
+  click({target: {dataset: {queue: "retry"}}});
+  await flush();
+  assert.equal(f.requests[4].url, "/api/download/check?link=x");
+  f.requests[4].resolve(response({ok: false}, false, 404));
+  await flush();
+  assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["x"]);
 });
 
 
@@ -513,13 +742,12 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
   const start = source.indexOf("let downloadBatch = null;");
   const end = source.indexOf("function setupDownloadIntentWarming() {", start);
   assert.ok(start >= 0 && end > start);
-  let f, click, exists = false;
-  const status = {style: {}}, buttons = {cancel: {}, retry: {}, close: {}};
-  const panel = {style: {}, setAttribute() {}, addEventListener(_event, fn) { click = fn; },
-    querySelector(selector) { return selector === '[role="status"]' ? status : buttons[selector.match(/data-queue="(.*?)"/)[1]]; }};
+  let f;
+  const dom = batchDomFixture();
+  const {status, uncertainList, click} = dom;
   const sandbox = {
     AbortController, API_BASE: "", DOWNLOAD_CHECK_TIMEOUT: 8000, buildDownloadUrl() {}, triggerDownload() {}, showToast() {},
-    document: {getElementById: () => exists ? panel : null, createElement: () => panel, body: {appendChild() { exists = true; }}},
+    document: dom.document, sessionStorage: dom.sessionStorage,
     navigator: {onLine: true},
     VoiceOfMLDownloadController: {createDownloadController(options) {
       f = fixture({...options, triggerDownload() { throw new Error("uncertain"); }});
@@ -549,6 +777,10 @@ test("retry workers recheck uncertainty when consuming queued items, unlike expl
   await flush();
   assert.equal(sandbox.current().done, true);
   assert.deepEqual(Array.from(sandbox.current().failed, item => item.link), ["a", "b"]);
+  assert.equal(uncertainList.children.length, 1);
+  assert.equal(uncertainList.children[0].children[1].dataset.acknowledgeLink, "x");
+  assert.equal(uncertainList.children[0].children[1].disabled, false);
+  assert.deepEqual(JSON.parse(dom.sessionStorage.getItem("uncertain-downloads")), [{filename: "x", link: "x"}]);
   sandbox.start([{filename: "x", link: "x"}]);
   await flush();
   assert.equal(f.requests.length, 6);

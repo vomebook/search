@@ -8,7 +8,7 @@
     // The pending entry is initialized with null before its promise is attached;
     // it is published to subscribers only after assignment in the same turn.
     /** @typedef {"started" | "failed" | "uncertain" | "cancelled"} DownloadResult */
-    /** @typedef {{users: number, controller: AbortController, promise: Promise<DownloadResult> | null, handoff: boolean}} PendingDownloadEntry */
+    /** @typedef {{users: number, controller: AbortController, promise: Promise<DownloadResult> | null, handoff: boolean, failure: unknown}} PendingDownloadEntry */
     /** @typedef {{link: string, entry: DownloadCheckEntry, resolve: (value: DownloadCheckResult) => void}} DownloadQueueItem */
     /** @typedef {{button?: HTMLElement, quiet?: boolean, skipCheck?: boolean, batch?: {cancelled?: boolean, abortController?: AbortController}}} DownloadOptions */
     /** @param {Parameters<DownloadControllerApi["createDownloadController"]>[0]} options
@@ -29,6 +29,8 @@
       const downloadCheckQueue = [];
       /** @type {Map<string, PendingDownloadEntry>} */
       const pendingDownloads = new Map();
+      /** @type {WeakMap<HTMLElement, {users: number, label: string | null, busy: string | null}>} */
+      const busyButtons = new WeakMap();
       let activeDownloadChecks = 0;
       let downloadLaunchTail = Promise.resolve();
       let lastDownloadLaunch = 0;
@@ -117,7 +119,8 @@
           resolve(true);
         } catch (error) {
           if (downloadChecks.get(link) === entry) downloadChecks.delete(link);
-          resolve(/** @type {{name?: unknown, message?: unknown}} */ (error).name === "AbortError" ? "下载检查超时，请重试" : /** @type {{message?: unknown}} */ (error).message || "下载失败，请稍后重试");
+          const failure = /** @type {{name?: unknown, message?: unknown} | null | undefined} */ (error);
+          resolve(failure?.name === "AbortError" ? "下载检查超时，请重试" : failure?.message || "下载失败，请稍后重试");
         } finally {
           clearTimeout(timer);
           activeDownloadChecks--;
@@ -187,22 +190,50 @@
         const signal = options.batch?.abortController?.signal;
         if (signal?.aborted) return Promise.resolve("cancelled");
         /** @param {PendingDownloadEntry} entry */
-        const join = entry => subscribe(entry, signal, () => {
-          if (pendingDownloads.get(link) === entry) pendingDownloads.delete(link);
-          entry.controller.abort();
-        }, () => !entry.handoff).then(result => {
-          if (result === "uncertain" && !options.quiet) {
-            try { showToast("下载状态不确定，请检查浏览器下载列表后再重试", 3500); } catch (_) { /* best effort */ }
+        const join = entry => {
+          const button = options.button;
+          if (button) {
+            let state = busyButtons.get(button);
+            if (!state) {
+              state = {users: 0, label: button.textContent, busy: button.getAttribute("aria-busy")};
+              busyButtons.set(button, state);
+              button.textContent = "准备中…";
+              button.setAttribute("aria-busy", "true");
+            }
+            state.users++;
           }
-          return result === false ? /** @type {const} */ ("cancelled") : result;
-        });
+          // Own the subscription before invoking feedback, which may reenter or abort.
+          const result = subscribe(entry, signal, () => {
+            if (pendingDownloads.get(link) === entry) pendingDownloads.delete(link);
+            entry.controller.abort();
+          }, () => !entry.handoff).then(result => {
+            if (!options.quiet) {
+              try {
+                if (result === "uncertain") showToast("下载状态不确定，请检查浏览器下载列表后再重试", 3500);
+                else if (result === "started") showToast("已发起下载，请在浏览器下载列表查看");
+                else if (result === "failed") showToast(entry.failure, 3500);
+              } catch (_) { /* best effort */ }
+            }
+            return result === false ? /** @type {const} */ ("cancelled") : result;
+          }).finally(() => {
+            if (!button) return;
+            const state = /** @type {{users: number, label: string | null, busy: string | null}} */ (busyButtons.get(button));
+            if (--state.users) return;
+            busyButtons.delete(button);
+            if (button.textContent === "准备中…") button.textContent = state.label;
+            if (button.getAttribute("aria-busy") === "true") {
+              if (state.busy === null) button.removeAttribute("aria-busy");
+              else button.setAttribute("aria-busy", state.busy);
+            }
+          });
+          if (!options.quiet) {
+            try { showToast("正在准备下载…"); } catch (_) { /* best effort */ }
+          }
+          return result;
+        };
         if (pendingDownloads.has(link)) return join(/** @type {PendingDownloadEntry} */ (pendingDownloads.get(link)));
-        const button = options.button;
-        const label = button && button.textContent;
-        if (button) { button.textContent = "准备中…"; button.setAttribute("aria-busy", "true"); }
-        if (!options.quiet) showToast("正在准备下载…");
         /** @type {PendingDownloadEntry} */
-        const entry = { users: 0, controller: new AbortController(), promise: null, handoff: false };
+        const entry = { users: 0, controller: new AbortController(), promise: null, handoff: false, failure: "下载失败，请稍后重试" };
         const cancelled = () => entry.controller.signal.aborted;
         entry.promise = Promise.resolve().then(async () => {
           try {
@@ -212,24 +243,14 @@
               : await checkDownload(link, false, entry.controller.signal);
             if (cancelled()) return "cancelled";
             if (checked !== true) {
-              if (!options.quiet) showToast(checked || "下载检查失败，请重试", 3500);
+              entry.failure = checked || "下载检查失败，请重试";
               return "failed";
             }
-            const result = await scheduleDetailedLaunch(filename, link, cancelled, () => { entry.handoff = true; });
-            if (result === "started" && !options.quiet) {
-              // Feedback must not undo a browser handoff that already succeeded.
-              try { showToast("已发起下载，请在浏览器下载列表查看"); } catch (_) { /* best effort */ }
-            }
-            return result;
+            return await scheduleDetailedLaunch(filename, link, cancelled, () => { entry.handoff = true; });
           } catch (_) {
-            if (!options.quiet) showToast("下载失败，请稍后重试", 3500);
             return "failed";
           } finally {
             if (pendingDownloads.get(link) === entry) pendingDownloads.delete(link);
-            if (button && button.textContent === "准备中…") {
-              button.textContent = /** @type {string | null} */ (label);
-              button.removeAttribute("aria-busy");
-            }
           }
         });
         pendingDownloads.set(link, entry);

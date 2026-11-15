@@ -1,5 +1,6 @@
 """Download handoff/queue and decorative activity lifecycle in Chromium."""
 import unittest
+from unittest import mock
 from tests.search.browser import test_paging_recovery as paging
 
 
@@ -14,7 +15,16 @@ class DownloadLifecycleTests(unittest.TestCase):
 
     def setUp(self):
         self.fixture = paging.PagingRecoveryTests()
-        self.fixture.setUp()
+        new_context = self.fixture.browser.new_context
+
+        def online_context(*args, **kwargs):
+            context = new_context(*args, **kwargs)
+            # Synthetic paging requires prefetch even in an isolated network namespace.
+            context.add_init_script("Object.defineProperty(navigator, 'onLine', {configurable: true, get: () => true});")
+            return context
+
+        with mock.patch.object(self.fixture.browser, 'new_context', side_effect=online_context):
+            self.fixture.setUp()
         self.page = self.fixture.page
 
     def tearDown(self):
@@ -61,6 +71,36 @@ class DownloadLifecycleTests(unittest.TestCase):
           return {cancelled,aborted,started,calls,launches};
         }''')
         self.assertEqual(result, dict(cancelled=False, aborted=False, started=True, calls=1, launches=1))
+
+        for quiet_first in (True, False):
+            for success in (True, False):
+                with self.subTest(quiet_first=quiet_first, success=success):
+                    result = self.page.evaluate('''async ({quietFirst, success}) => {
+                      const native=window.fetch; let calls=0, launches=0, release, transport;
+                      window.fetch=(url, options)=>String(url).includes('/api/download/check')
+                        ? (calls++, transport=options.signal, new Promise(resolve=>release=()=>resolve(
+                            new Response(success ? '{"ok":true}' : '{"error":"missing"}', {status:success ? 200 : 404}))))
+                        : native(url, options);
+                      window.triggerDownload=()=>launches++;
+                      const button=document.createElement('button');button.textContent='original';
+                      button.setAttribute('aria-busy','previous');document.body.append(button);
+                      const owner=new AbortController(), link='shared-'+quietFirst+'-'+success;
+                      const first=downloadFile('book.txt',link,{button,quiet:quietFirst});
+                      await Promise.resolve();
+                      const cancelled=downloadFile('book.txt',link,{button,batch:{abortController:owner}});
+                      const second=downloadFile('book.txt',link,{button,quiet:!quietFirst});
+                      const preparing=button.textContent, preparingToast=document.querySelector('#toast').textContent;
+                      owner.abort();const cancelledResult=await cancelled;
+                      const retained=button.textContent, busy=button.getAttribute('aria-busy'), aborted=transport.aborted;
+                      release();const results=await Promise.all([first,second]);
+                      const label=button.textContent, restoredBusy=button.getAttribute('aria-busy');button.remove();
+                      return {calls,launches,preparing,preparingToast,cancelledResult,retained,busy,aborted,results,
+                        label,restoredBusy,toast:document.querySelector('#toast').textContent};
+                    }''', dict(quietFirst=quiet_first, success=success))
+                    self.assertEqual(result, dict(calls=1, launches=int(success), preparing='准备中…',
+                        preparingToast='正在准备下载…', cancelledResult=False, retained='准备中…', busy='true',
+                        aborted=False, results=[success, success], label='original', restoredBusy='previous',
+                        toast='已发起下载，请在浏览器下载列表查看' if success else 'missing'))
 
     def test_check_cancellation_is_per_subscriber_and_retry_survives_late_body(self):
         result = self.page.evaluate('''async () => {
@@ -231,3 +271,8 @@ class DownloadLifecycleTests(unittest.TestCase):
         self.page.evaluate("quoteRequests[0].resolve(new Response('{\"hitokoto\":\"迟到旧句子\"}'))")
         self.page.wait_for_timeout(50)
         self.assertEqual(self.page.evaluate('DOM.hitokoto.textContent'), '新句子')
+
+
+def load_tests(loader, tests, _pattern):
+    tests.addTests(loader.loadTestsFromName('tests.search.browser.test_download_uncertain'))
+    return tests
