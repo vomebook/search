@@ -16,6 +16,10 @@
   if (pdf) {
     support.push(workerWrapper);
     if (!navigator.connection?.saveData) support.push(...VoiceOfMLReaderResources.pdfSupportAssets(base));
+  } else if (!navigator.connection?.saveData) {
+    support.push(...assets.filter(href => href.endsWith(".wasm")));
+  }
+  if (support.length) {
     const controller = new AbortController();
     const dispose = () => controller.abort();
     const timer = setTimeout(dispose, 8000);
@@ -25,7 +29,7 @@
     // crossorigin link preload has a different Vary: Origin cache identity on
     // HF, so warm these bytes with the same-origin fetch identity instead.
     Promise.allSettled(support.map(href => fetch(href, {
-      mode:"same-origin", credentials:"same-origin", signal:controller.signal
+      mode:pdf ? "same-origin" : "cors", credentials:"same-origin", signal:controller.signal
     }).then(response => {
       if (!response.ok) { response.body?.cancel().catch(() => {}); return; }
       return VoiceOfMLReaderSecurity.readBytes(response, 1024 * 1024);
@@ -38,7 +42,7 @@
   // Fetch/compile bytes only. The Reader still owns engine execution, source
   // validation and rendering; no book body is speculatively downloaded here.
   for (const href of assets) {
-    if (support.includes(href)) continue;
+    if (support.includes(href) || href.endsWith(".wasm")) continue;
     const link = document.createElement("link");
     link.rel = /\.mjs(?:\?|$)/.test(href) || href.includes("/foliate-reader/") ? "modulepreload" : "preload";
     if (link.rel === "preload") link.as = "script";

@@ -56,12 +56,13 @@ class DjvuEngineBootstrapTests(unittest.TestCase):
 
     def test_scalar_decoder_branch_retains_pages_and_text(self):
         state=install(self.page,self.origin,prefix=PREFIX)
-        def scalar_worker(route):
+        def scalar_resources(route):
             response=route.fetch();source=response.text()
-            needle='const simd = WebAssembly.validate(SIMD128_PROBE);'
+            needle='function djvuSupportsSIMD() {'
             self.assertIn(needle,source)
-            route.fulfill(response=response,body=source.replace(needle,'const simd = false;',1))
-        self.page.route('**/static/reader/pdf/reader-djvu-engine-worker.mjs*',scalar_worker)
+            route.fulfill(response=response,body=source.replace(needle,needle+' return false;',1))
+        # The same capability selection must govern both prewarm and decoder.
+        self.page.route('**/static/reader-resources.js*',scalar_resources)
         self.page.goto(state['url'],wait_until='domcontentloaded')
         self.page.locator('.reader-page[data-page="1"] canvas.ready').wait_for(timeout=30000)
         self.page.wait_for_function('''()=>document.querySelector('.reader-page[data-page="1"]')?.dataset.textReady==='1' ''',timeout=30000)

@@ -739,6 +739,52 @@ function restoreReaderFromSession() {
 }
 
 var warmedReaderAssets = new Set();
+const readerAssetWarmups = new Map();
+function warmReaderEngineBytes(href, mode) {
+  const controller = new AbortController();
+  const cancel = () => {
+    if (readerAssetWarmups.get(href) !== controller) return;
+    readerAssetWarmups.delete(href);
+    warmedReaderAssets.delete(href);
+    controller.abort();
+  };
+  const hidden = () => { if (document.hidden) cancel(); };
+  readerAssetWarmups.set(href, controller);
+  const timer = setTimeout(cancel, 8000);
+  window.addEventListener("pagehide", cancel);
+  window.addEventListener("offline", cancel);
+  document.addEventListener("visibilitychange", hidden);
+  (async () => {
+    try {
+      const response = await fetch(href, { mode, credentials: "same-origin", priority: "low", signal: controller.signal });
+      if (!response.ok || Number(response.headers.get("content-length")) > 1024 * 1024) {
+        await response.body?.cancel();
+        throw new Error("Reader engine warmup response");
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Reader engine warmup body");
+      let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 1024 * 1024 || controller.signal.aborted) {
+            await reader.cancel();
+            throw new Error("Reader engine warmup limit");
+          }
+        }
+      } finally { reader.releaseLock(); }
+    } catch (_) { cancel(); }
+    finally {
+      clearTimeout(timer);
+      window.removeEventListener("pagehide", cancel);
+      window.removeEventListener("offline", cancel);
+      document.removeEventListener("visibilitychange", hidden);
+      if (readerAssetWarmups.get(href) === controller) readerAssetWarmups.delete(href);
+    }
+  })();
+}
 var warmedReaderSources = new Map();
 // Match reader-resolve's metadata freshness without imposing a lifetime quota.
 const READER_WARMUP_TTL = 5 * 60 * 1000;
@@ -851,6 +897,13 @@ function warmReaderIntent(rawUrl, urgent = false) {
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
+    // ICC XHR and the PDF worker entry omit Origin; DjVu's WASM uses
+    // ordinary fetch. Preserve both identities, including HF Vary: Origin.
+    if (href.endsWith(".wasm") || /\/pdf-worker-wrapper(?:\.[a-f0-9]+)?\.mjs$/.test(href)) {
+      if (href.endsWith(".wasm") && navigator.connection?.saveData) { warmedReaderAssets.delete(href); return; }
+      warmReaderEngineBytes(href, href.includes("/djvu-rs-reader/") ? "cors" : "same-origin");
+      return;
+    }
     var shellFile = href.endsWith("/reader.html");
     // Under SW control, store shell files in its cache first. A repeated link
     // preload is deduplicated after a pre-control warm, leaving classic shell
