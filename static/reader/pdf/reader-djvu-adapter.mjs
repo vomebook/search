@@ -91,7 +91,7 @@ function textContent({text,zones},geometry,pageHeight) {
   return {items,styles:{djvu:{fontFamily:'sans-serif',ascent:.8}},readerTextZones:positions};
 }
 /** @param {DjvuMapPage | undefined} map @param {DjvuGeometry | null} native
- * @returns {{pixels: number[], dpi: number, rotation: number}} */
+ * @returns {{pixels: [number, number], dpi: number, rotation: number}} */
 function renderIdentity(map,native) {
   if (map) return {pixels:mappedPixels(map),dpi:map.djvu.dpi,rotation:map.rotation};
   if (native) return {pixels:[native.width,native.height],dpi:native.dpi,rotation:native.rotation};
@@ -198,7 +198,9 @@ export async function openDjvuDocument({ workerUrl, bytes, pageMap, signal, cach
         render({canvasContext, readerPriority=0}) {
           let cancelled=false;
           const cancellation=new AbortController();
-          const promise=scheduler.request(number,readerPriority,{signal:cancellation.signal}).then(page=>{
+          const pixels=renderIdentity(map,native).pixels;
+          const promise=scheduler.request(number,readerPriority,{signal:cancellation.signal,
+            geometry:{width:pixels[0],height:pixels[1]}}).then(page=>{
             if (cancelled || closed) throw new DOMException('DjVu render cancelled','AbortError');
             validateRenderedPage(page,geometry,map,native);
             // Publish only after the whole original page is decoded; browser

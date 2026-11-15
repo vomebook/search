@@ -6,8 +6,9 @@
 /** @typedef {Awaited<ReturnType<DjvuDecoder['text']>>} DjvuText */
 /** @typedef {Awaited<ReturnType<DjvuDecoder['outline']>>} DjvuOutline */
 /** @template T @typedef {{resolve(value: T): void, reject(reason?: unknown): void,
- * signal?: AbortSignal | undefined, cancel?: (() => void) | undefined}} DjvuClient */
-/** @typedef {{priority: number, seq: number}} DjvuTaskBase */
+ * signal?: AbortSignal | undefined, cancel?: (() => void) | undefined, priority?: number | undefined,
+ * bytes?: number | undefined, geometryKey?: string | undefined}} DjvuClient */
+/** @typedef {{priority: number, seq: number, settled?: boolean}} DjvuTaskBase */
 /** @typedef {DjvuTaskBase & {kind: 'page', page: number, clients: Set<DjvuClient<DjvuPage>>}} PageTask */
 /** @typedef {DjvuTaskBase & {kind: 'outline', page: 'outline', clients: Set<DjvuClient<DjvuOutline>>}} OutlineTask */
 /** @typedef {DjvuTaskBase & {kind: 'geometry', page: string, number: number, clients: Set<DjvuClient<DjvuGeometry>>}} GeometryTask */
@@ -72,14 +73,35 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     } else if (task.clients.size) ephemeral = { page: task.page, value };
     resolveClients(task.clients, value);
   }
+  // Only demand may evict ahead of decoding. Geometry is supplied by the
+  // adapter without scheduling an additional worker operation. Evictions are
+  // deliberately not restored after failure/cancellation: retaining rollback
+  // references would defeat the peak-memory saving.
+  /** @param {PageTask} task */
+  function reserve(task) {
+    const demand = [...task.clients].filter(client => (client.priority || 0) >= 2);
+    // Unknown demand or conflicting live estimates are not reliable enough
+    // to justify dropping completed pages, regardless of client priority.
+    if (!demand.length || demand.some(client => client.bytes === undefined)) return;
+    const known = [...task.clients].filter(client => client.geometryKey !== undefined);
+    if (known.some(client => client.geometryKey !== known[0]?.geometryKey)) return;
+    const bytes = demand[0]?.bytes;
+    if (bytes === undefined) return;
+    while (retained > Math.max(0, maxBytes - bytes)) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      drop(oldest);
+    }
+  }
   /** @template T @param {DjvuTask} task @param {() => Promise<T>} decode @param {(value: T) => void} finish */
   function run(task, decode, finish) {
     Promise.resolve().then(() => {
       if (closed) throw abort();
       return decode();
     }).then(value => {
+      task.settled = true;
       if (!closed) finish(value);
-    }).catch(error => { if (!closed) rejectClients(task, error); }).finally(() => {
+    }).catch(error => { task.settled = true; if (!closed) rejectClients(task, error); }).finally(() => {
       active = null;
       ephemeral = null;
       next();
@@ -90,14 +112,17 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     const task = [...pending.values()].sort((a, b) => b.priority - a.priority || a.seq - b.seq)[0];
     if (!task) return;
     pending.delete(task.page); active = task;
-    if (task.kind === 'page') run(task, () => decoder.page(task.page), value => finishPage(task, value));
+    if (task.kind === 'page') run(task, () => {
+      if (!task.clients.size) throw abort();
+      reserve(task); return decoder.page(task.page);
+    }, value => finishPage(task, value));
     else if (task.kind === 'outline') run(task, () => decoder.outline(), value => resolveClients(task.clients, value));
     else if (task.kind === 'geometry') run(task, () => decoder.geometry(task.number), value => resolveClients(task.clients, value));
     else run(task, () => decoder.text(task.number), value => resolveClients(task.clients, value));
   }
   /** @param {number} page @param {number} priority @returns {PageTask} */
   function pageTask(page, priority) {
-    let task = active?.page === page ? active : pending.get(page);
+    let task = active?.page === page && !active.settled ? active : pending.get(page);
     if (!task) {
       task = { kind:'page', page, priority: Number(priority) || 0, seq: sequence++, clients: new Set() };
       pending.set(page, task);
@@ -105,14 +130,16 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (task.kind !== 'page') throw new Error('DJVU_SCHEDULER_PROTOCOL');
     return task;
   }
-  /** @param {PageTask} task @param {AbortSignal | undefined} signal @returns {Promise<DjvuPage>} */
-  function pageClient(task, signal) {
+  /** @param {PageTask} task @param {AbortSignal | undefined} signal @param {number} priority
+   * @param {number | undefined} bytes @param {string | undefined} geometryKey @returns {Promise<DjvuPage>} */
+  function pageClient(task, signal, priority, bytes, geometryKey) {
     return new Promise((resolve, reject) => {
       /** @type {DjvuClient<DjvuPage>} */
-      const client = { resolve, reject, signal };
+      const client = { resolve, reject, signal, priority, bytes, geometryKey };
       client.cancel = () => {
         if (client.cancel) signal?.removeEventListener("abort", client.cancel);
         task.clients.delete(client);
+        task.priority = task.clients.size ? Math.max(...[...task.clients].map(other => other.priority || 0)) : 0;
         reject(signal?.reason || abort());
         if (!task.clients.size && pending.get(task.page) === task) pending.delete(task.page);
       };
@@ -129,7 +156,7 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (hit) return hit;
     return ephemeral?.page === page ? ephemeral.value : null;
   }
-  /** @param {number} page @param {number} [priority] @param {{signal?: AbortSignal | undefined}} [options]
+  /** @param {number} page @param {number} [priority] @param {{signal?: AbortSignal | undefined, geometry?: {width: number, height: number} | undefined}} [options]
    * @returns {Promise<DjvuPage>} */
   function request(page, priority = 0, options = {}) {
     const { signal } = options;
@@ -137,7 +164,15 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
     if (!validPage(page)) return Promise.reject(new Error("DJVU_PAGE_INVALID"));
     const hit = cachedPage(page);
     if (hit) return Promise.resolve(hit);
-    const promise = pageClient(pageTask(page,priority),signal);
+    const task = pageTask(page,priority);
+    const {width, height} = options.geometry || {};
+    let bytes, geometryKey;
+    if (typeof width === 'number' && typeof height === 'number' &&
+        Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0) {
+      const estimate = width * height * 4;
+      if (Number.isSafeInteger(estimate)) { bytes = estimate; geometryKey = `${width}x${height}`; }
+    }
+    const promise = pageClient(task,signal,Number(priority) || 0,bytes,geometryKey);
     next(); return promise;
   }
   /** @template T @param {Set<DjvuClient<T>>} clients @returns {Promise<T>} */
@@ -148,7 +183,7 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
   function requestOutline() {
     if (closed) return Promise.reject(abort());
     const key = 'outline';
-    let task = active?.kind === 'outline' ? active : pending.get(key);
+    let task = active?.kind === 'outline' && !active.settled ? active : pending.get(key);
     if (!task) {
       task = { kind:'outline', page:key, priority:-1, seq:sequence++, clients:new Set() };
       pending.set(key,task);
@@ -160,7 +195,7 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
   /** @param {number} number @param {number} priority @returns {Promise<DjvuGeometry>} */
   function requestGeometry(number, priority) {
     const key = `geometry:${number}`;
-    let task = active?.page === key ? active : pending.get(key);
+    let task = active?.page === key && !active.settled ? active : pending.get(key);
     if (!task) {
       task = {kind:'geometry', page:key, number, priority:Number(priority) || 0, seq:sequence++, clients:new Set()};
       pending.set(key,task);
@@ -172,7 +207,7 @@ export function createDjvuScheduler(decoder, { maxBytes = 64 * 1024 * 1024, maxP
   /** @param {number} number @param {number} priority @returns {Promise<DjvuText>} */
   function requestText(number, priority) {
     const key = `text:${number}`;
-    let task = active?.page === key ? active : pending.get(key);
+    let task = active?.page === key && !active.settled ? active : pending.get(key);
     if (!task) {
       task = {kind:'text', page:key, number, priority:Number(priority) || 0, seq:sequence++, clients:new Set()};
       pending.set(key,task);
