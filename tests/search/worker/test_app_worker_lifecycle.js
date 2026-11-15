@@ -37,7 +37,7 @@ function harness() {
     const DATA_URL = 'data/search_data.json.gz';
     ${section('let extensionCounts =', 'let keepalivePending =')}
     ${section('async function loadData()', 'function toMirrorURL(')}
-    let localDataPromise = null, searchIntentId = 1, routeRenderId = 1;
+    let localDataPromise = null, searchId = 0, searchIntentId = 1, routeRenderId = 1;
     const STATE = { dataLoaded: false, filterExtensions: [], mode: 'all', useLocalMode: true, results: [] };
     const DOM = { emptyState: { style: {} }, localModeToggle: { checked: true } };
     let key = 'same', searches = 0, renders = 0, toasts = 0, syncs = 0;
@@ -73,11 +73,12 @@ function harness() {
 function callerHarness() {
   const h = harness();
   h.run(`
-    let searchId = 0, searchRequestId = 0, searchAbortController = null;
+    let searchRequestId = 0, searchAbortController = null;
     let resultWindow = null, filterSearchTimer = null, scrollLoadTimer = null;
     let selectedIndices = {}, lastSelectedIndex = -1, apiAvailable = true;
     let finishLoad, finishApi, failApi, loadCalls = 0, pagingFailures = 0, filterSearches = 0;
     let toggleChange, restoring = false;
+    const backendStates = [];
     STATE.page = 1; STATE._pageCache = {}; STATE._loadedPage = 0;
     DOM.resultsList = { innerHTML: '' };
     DOM.localModeToggle.addEventListener = (_type, listener) => { toggleChange = listener; };
@@ -88,18 +89,28 @@ function callerHarness() {
     function canUseInitialSearchPayload() { return false; }
     function cancelSearchPrefetch() {}
     function clearResultsSkeleton() {}
-    function prepareFilterChange() {}
-    function doFilterSearch() { filterSearches++; }
+    function prepareFilterChange() { filterSearches++; }
+    ${section('function doFilterSearch(', 'function sizeInputToBytes(')}
     function finishPagingAttempt() { pagingFailures++; }
     function doSearchAPI() { return new Promise((resolve, reject) => { finishApi = resolve; failApi = reject; }); }
     function renderSearchPage() { renders++; }
     function prefetchNextPage() {}
     function warmConnection() {}
     ensureLocalDataLoaded = () => { loadCalls++; return new Promise(resolve => { finishLoad = resolve; }); };
+    showSearchBackendUnavailable = waiting => { backendStates.push(waiting); STATE.isLoading = waiting; };
+    ${section('function cancelActiveSearch()', 'function prefetchSearchPages(')}
     ${section('function doSearch(append,', 'function doSearchFallbackLocal(')}
     ${section('  DOM.localModeToggle.addEventListener("change",', '  DOM.sortSelect.addEventListener(')}
     const startSearch = doSearch;
     doSearch = () => { searches++; };
+    // Enter through the real toggle -> doFilterSearch -> doSearch chain. Observe
+    // only subsequent async searches, without starting unrelated network work.
+    function runToggle() {
+      const observeSearch = doSearch;
+      doSearch = startSearch;
+      try { toggleChange(); }
+      finally { doSearch = observeSearch; }
+    }
   `);
   return h;
 }
@@ -110,7 +121,8 @@ for (const ok of [true, false]) {
       const h = callerHarness();
       h.run('startSearch(false); const originalId = searchId;');
       assert.equal(h.run('loadCalls'), 1);
-      if (stale) h.run('restoring = true; startSearch(false);');
+      // Isolate intent ownership: request identity and view deliberately stay fixed.
+      if (stale) h.run('searchIntentId++;');
       h.run(`finishLoad(${ok});`);
       await h.flush();
       assert.equal(h.run('searchId'), h.run('originalId'));
@@ -122,18 +134,28 @@ for (const ok of [true, false]) {
     test(`local-mode toggle completion respects intent on success and failure (ok=${ok}, stale=${stale})`, async () => {
       const h = callerHarness();
       const intent = h.run('searchIntentId');
-      h.run('toggleChange(); const originalId = searchId; STATE.isLoading = true;');
+      h.run(`searchAbortController = new AbortController();
+        const previousController = searchAbortController;
+        runToggle(); const originalId = searchId;`);
       assert.equal(h.run('searchIntentId'), intent + 1);
-      if (stale) h.run('restoring = true; startSearch(false);');
+      assert.equal(h.run('previousController.signal.aborted'), true);
+      assert.equal(h.run('searchAbortController.signal.aborted'), false);
+      assert.equal(h.run('filterSearches'), 1);
+      assert.equal(h.run('loadCalls'), 1);
+      assert.equal(h.run('STATE.isLoading'), true);
+      if (stale) h.run('searchIntentId++;');
       const syncs = h.run('syncs');
       h.run(`finishLoad(${ok});`);
       await h.flush();
       assert.equal(h.run('searchId'), h.run('originalId'));
       assert.equal(h.run('key'), 'same');
-      assert.equal(h.run('filterSearches'), !stale && ok ? 1 : 0);
-      assert.equal(h.run('searches'), !stale && !ok ? 1 : 0);
+      assert.equal(h.run('filterSearches'), 1, 'completion must not re-enter the toggle/filter path');
+      assert.equal(h.run('searches'), stale ? 0 : 1);
       assert.equal(h.run('syncs'), syncs);
-      assert.equal(h.run('STATE.isLoading'), true);
+      assert.equal(h.run('STATE.isLoading'), stale);
+      assert.equal(h.run('STATE.useLocalMode'), stale || ok);
+      assert.equal(h.run('DOM.localModeToggle.checked'), stale || ok);
+      assert.deepEqual(Array.from(h.run('backendStates')), [true]);
     });
   }
 }
@@ -146,7 +168,7 @@ for (const stale of [true, false]) {
       failApi(new Error('API_TIMEOUT'));`);
     await h.flush();
     assert.equal(h.run('loadCalls'), 1);
-    if (stale) h.run('restoring = true; startSearch(false);');
+    if (stale) h.run('searchIntentId++;');
     h.run('finishLoad(true);');
     await h.flush();
     assert.equal(h.run('searchId'), h.run('originalId'));
@@ -161,12 +183,70 @@ for (const stale of [true, false]) {
 test('API failure arriving after an intent change never starts local fallback', async () => {
   const h = callerHarness();
   h.run(`STATE.useLocalMode = false; startSearch(false);
-    restoring = true; startSearch(false); failApi(new Error('API_TIMEOUT'));`);
+    searchIntentId++; failApi(new Error('API_TIMEOUT'));`);
   await h.flush();
   assert.equal(h.run('loadCalls + searches + toasts + syncs'), 0);
   assert.equal(h.run('STATE.isLoading'), true);
   assert.equal(h.run('STATE.useLocalMode'), false);
 });
+
+for (const backend of ['local', 'api']) {
+  test(`restoration preempts a pending ${backend} caller without settling its replacement`, async () => {
+    const h = callerHarness();
+    h.run(`STATE.useLocalMode = ${backend === 'local'};
+      startSearch(false); const originalId = searchId;
+      const originalRequest = searchRequestId, originalIntent = searchIntentId;
+      const originalController = searchAbortController;
+      restoring = true; startSearch(false);
+      const replacementId = searchId, replacementController = searchAbortController;`);
+    assert.equal(h.run('searchId'), h.run('originalId + 1'));
+    assert.equal(h.run('searchRequestId'), h.run('originalRequest + 1'));
+    assert.equal(h.run('searchIntentId'), h.run('originalIntent + 1'));
+    assert.equal(h.run('originalController.signal.aborted'), true);
+    assert.equal(h.run('replacementController.signal.aborted'), false);
+    assert.equal(h.run('key'), 'same');
+    const effects = h.run('searches + renders + toasts + syncs');
+    h.run(backend === 'local' ? 'finishLoad(false);' : "failApi(new Error('API_TIMEOUT'));");
+    await h.flush();
+    assert.equal(h.run('searchId'), h.run('replacementId'));
+    assert.equal(h.run('searchAbortController === replacementController'), true);
+    assert.equal(h.run('replacementController.signal.aborted'), false);
+    assert.equal(h.run('searches + renders + toasts + syncs'), effects);
+    assert.equal(h.run('STATE.isLoading'), true);
+    assert.equal(h.run('STATE.useLocalMode'), backend === 'local');
+    assert.equal(h.run('loadCalls'), backend === 'local' ? 1 : 0);
+  });
+}
+
+for (const ok of [true, false]) {
+  for (const change of ['request', 'view']) {
+    test(`shared local-load completion respects ${change} ownership independently of intent (${ok})`, async () => {
+      const h = harness();
+      h.run(`let finishLoad, loads = 0;
+        loadData = () => { loads++; return new Promise(resolve => { finishLoad = resolve; }); };
+        const originalIntent = searchIntentId;`);
+      const stale = h.run('ensureLocalDataLoaded(true, false)');
+      h.run(change === 'request' ? 'searchId++;' : "key = 'new-view';");
+      // Only the stale caller requested a follow-up search. The current caller
+      // still owns rendering and foreground failure cleanup.
+      const current = h.run('ensureLocalDataLoaded(false, false)');
+      assert.equal(h.run('searchIntentId'), h.run('originalIntent'));
+      const toasts = h.run('toasts');
+      h.run(`finishLoad(${ok});`);
+      assert.deepEqual(await Promise.all([stale, current]), [ok, ok]);
+      assert.equal(h.run('loads'), 1);
+      assert.equal(h.run('searches'), 0);
+      assert.equal(h.run('renders'), ok ? 2 : 0);
+      assert.equal(h.run('toasts'), toasts);
+      assert.equal(h.run('syncs'), 0);
+      assert.equal(h.run('STATE.useLocalMode'), true);
+      assert.equal(h.run('DOM.localModeToggle.checked'), true);
+      assert.equal(h.run('STATE.dataLoaded'), ok);
+      assert.equal(h.run('localDataPromise'), null);
+      if (!ok) assert.equal(h.run('STATE.isLoading'), false);
+    });
+  }
+}
 
 test('concurrent startup waits for a single handshake', async () => {
   const h = harness();
@@ -422,10 +502,14 @@ for (const ok of [true, false]) {
     h.run(`finishLoad(${ok});`);
     assert.deepEqual(await Promise.all([stale, current]), [ok, ok]);
     assert.equal(h.run('loads'), 1);
-    assert.equal(h.run('searches'), 1);
+    // Acquisition reports failure to callers; doSearch now owns backend fallback.
+    assert.equal(h.run('searches'), ok ? 1 : 0);
+    assert.equal(h.run('renders'), ok ? 2 : 0, 'only the current caller may render filters');
     assert.equal(h.run('STATE.dataLoaded'), ok);
     assert.equal(h.run('localDataPromise'), null);
-    assert.equal(h.run('syncs'), ok ? 0 : 1);
+    assert.equal(h.run('syncs'), 0);
+    assert.equal(h.run('STATE.useLocalMode'), true);
+    assert.equal(h.run('DOM.localModeToggle.checked'), true);
   });
   test(`obsolete local-load completion has no caller UI/search effects (${ok})`, async () => {
     const h = harness();

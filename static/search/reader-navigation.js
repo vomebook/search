@@ -44,6 +44,7 @@
     }
     /** @type {HTMLIFrameElement | null} */
     let frame = null;
+    let revision = 0;
     /** @type {HTMLElement | null} */
     let returnFocus = null;
     /** @type {{element: Element; inert: boolean; ariaHidden: string | null}[]} */
@@ -276,6 +277,7 @@
     }
     /** @param {URL} url */
     function mount(url) {
+      revision++;
       const key = bookKey(url.href);
       if (parked && key && parked.key === key) {
         // The same book: show the Reader that kept reading, at its reading position.
@@ -330,7 +332,7 @@
       status.textContent = "正在打开阅读器...";
       opening.append(back, status);
       const reveal = () => {
-        if (frame !== next || !opening) return;
+        if (frame !== next || !opening || titleDismissed) return;
         next.classList.remove("reader-overlay-pending");
         opening?.remove();
         opening = null;
@@ -359,9 +361,44 @@
       shade(next);
       return next;
     }
+    /** @param {string} raw */
+    function showCloseRecovery(raw) {
+      if (!frame || !titleDismissed) return;
+      const searchPath = readerPath.slice(0, -"static/reader.html".length) || "/";
+      let target = new URL(searchPath, location.origin);
+      try {
+        const candidate = new URL(raw, location.origin);
+        if (candidate.origin === location.origin && !candidate.username && !candidate.password &&
+            (searchPath === "/" ? candidate.pathname.split("/").filter(Boolean).length <= 1 : candidate.pathname === searchPath))
+          target = candidate;
+      } catch (_) {}
+      if (!opening) {
+        opening = document.createElement("div");
+        opening.className = "reader-overlay-opening";
+        document.body.append(opening);
+      }
+      const status = document.createElement("span");
+      status.setAttribute("role", "status");
+      status.textContent = "仍在等待返回搜索，可直接打开搜索页。";
+      const link = document.createElement("a");
+      link.textContent = "直接打开搜索页";
+      link.href = target.href;
+      link.addEventListener("click", () => {
+        // Native navigation is an explicit recovery choice, not cancellation
+        // of the outstanding Back. Reuse the validated focus/scroll handoff.
+        try {
+          sessionStorage.setItem("reader-navigation-restore", JSON.stringify({
+            readerUrl: frame?.src, returnUrl: target.href
+          }));
+        } catch (_) {}
+      });
+      opening.replaceChildren(status, link);
+      opening.style.removeProperty("opacity");
+      opening.style.removeProperty("pointer-events");
+      link.focus();
+    }
     function dismiss() {
-      // Visually return immediately; history and resource cleanup still own
-      // the actual close, including the stalled-history fallback.
+      // Visually return immediately; popstate still owns the actual close.
       titleDismissed = true;
       restoreTitle();
       for (const target of [frame, opening]) if (target) {
@@ -372,10 +409,12 @@
     // `keepSpeech` parks a Reader that is reading aloud instead of disposing it.
     function unmount(keepSpeech = true) {
       if (!frame) return null;
+      revision++;
       titleDismissed = true;
       restoreTitle();
-      if (keepSpeech && opening === null && speech(frame)?.active) park(frame);
-      else dispose(frame);
+      const target = frame;
+      const keep = keepSpeech && !target.classList.contains("reader-overlay-pending") && speech(target)?.active;
+      // Release ownership before lifecycle callbacks can synchronously reenter.
       frame = null;
       opening?.remove();
       opening = null;
@@ -389,6 +428,8 @@
       document.body.classList.remove("reader-overlay-open");
       const focus = returnFocus;
       returnFocus = null;
+      if (keep) park(target);
+      else dispose(target);
       return focus;
     }
     /** @param {string} raw @param {object} returnScroll @returns {HTMLIFrameElement | null} */
@@ -399,7 +440,9 @@
         if (!next.searchParams.get(key) && current.searchParams.get(key))
           next.searchParams.set(key, /** @type {string} */ (current.searchParams.get(key)));
       remember(next, returnScroll, true);
+      const expected = revision + 1;
       const focus = unmount(bookKey(next.href) !== bookKey(current.href));
+      if (revision !== expected) return frame;
       mount(next);
       returnFocus = focus;
       return frame;
@@ -474,6 +517,7 @@
       remember,
       mount,
       dismiss,
+      showCloseRecovery,
       unmount,
       persistProgress,
       replace,

@@ -68,6 +68,11 @@ class HistoryShellTests(unittest.TestCase):
         # Substitute fixture pins only in private copies of the actual scripts and lock.
         (self.work / 'scripts').mkdir()
         (self.work / '.github/quality-baselines').mkdir(parents=True)
+        shutil.copyfile(ROOT / 'scripts/verify_hf_source_revision.py',
+                        self.work / 'scripts/verify_hf_source_revision.py')
+        self.source_lock = self.work / '.github/hf-source-revision.json'
+        self.source_lock.write_text(json.dumps({'repository': 'VoiceOfML/Search',
+                                               'revision': self.revision}))
         lock = json.loads((ROOT / '.github/quality-baselines/hf-source.json').read_text())
         lock['revision'] = self.baseline
         lock['files'] = {name: hashlib.sha256(content).hexdigest() for name, content in data.items()}
@@ -210,8 +215,9 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
         result = self.checkout()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.output.read_text(), '')
-        self.assertEqual(self.calls(), ['ls-remote', 'clone'])
-        shutil.rmtree(self.work / 'huggingface-search')
+        self.assertEqual(self.calls(), ['ls-remote'])
+        self.assertIn('HF source admission failed', result.stderr)
+        self.assertFalse((self.work / 'huggingface-search').exists())
         self.log.write_text('')
         self.env['FAKE_REV'] = self.revision
         self.env['GITHUB_OUTPUT'] = '/dev/full'
@@ -219,6 +225,63 @@ if [[ "${BAD_HASH:-0}" == 1 ]]; then printf x >> "$output"; fi
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('No space left', result.stderr)
         self.assertEqual(self.calls(), ['ls-remote', 'clone', 'lfs pull', 'lfs fsck'])
+
+    def test_unapproved_valid_descendant_stops_before_checkout_lfs_or_execution(self):
+        # This capture has valid ancestry and would pass the existing bridge.
+        self.git('merge-base', '--is-ancestor', self.anchor, self.revision)
+        lock = json.loads(self.source_lock.read_text())
+        lock['revision'] = self.anchor
+        self.source_lock.write_text(json.dumps(lock))
+        script = shell('Checkout Hugging Face Search Space')
+        script += 'printf "source execution\\n" >> "$CALL_LOG"\n'
+
+        def assert_rejected(result):
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('HF source admission failed', result.stderr)
+            self.assertEqual(self.calls(), ['ls-remote'])
+            self.assertEqual(self.output.read_text(), '')
+            self.assertFalse((self.work / 'huggingface-search').exists())
+
+        assert_rejected(self.checkout(script))
+        command = 'python3 -I -B scripts/verify_hf_source_revision.py "$revision"'
+        # Removing, bypassing, or delaying admission must break the contract.
+        checkout = 'GIT_LFS_SKIP_SMUDGE=1 git -C huggingface-search checkout --detach "$revision"'
+        mutations = (
+            script.replace(command, 'true'),
+            script.replace(command, command + ' || true'),
+            script.replace(command + '\n', '').replace(checkout, checkout + '\n' + command),
+        )
+        for mutated in mutations:
+            with self.subTest(mutated=mutated):
+                self.assertNotEqual(mutated, script)
+                self.log.write_text('')
+                self.output.write_text('')
+                shutil.rmtree(self.work / 'huggingface-search', ignore_errors=True)
+                result = self.checkout(mutated)
+                self.assertIn('clone', self.calls())
+                if mutated != mutations[-1]:
+                    # The descendant really passes history/LFS and reaches execution
+                    # when admission is removed or its failure is ignored.
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(self.calls(), ['ls-remote', 'clone', 'lfs pull',
+                                                    'lfs fsck', 'source execution'])
+                with self.assertRaises(AssertionError):
+                    assert_rejected(result)
+
+    def test_missing_or_malformed_source_lock_stops_before_clone(self):
+        for data in (None, '{', '[]', '{}'):
+            with self.subTest(data=data):
+                if data is None:
+                    self.source_lock.unlink()
+                else:
+                    self.source_lock.write_text(data)
+                self.log.write_text('')
+                result = self.checkout()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('HF source admission failed', result.stderr)
+                self.assertEqual(self.calls(), ['ls-remote'])
+                self.assertEqual(self.output.read_text(), '')
+                self.assertFalse((self.work / 'huggingface-search').exists())
 
     def test_baseline_short_circuit_cannot_pass_observable_contract(self):
         self.assert_checkout_success(self.checkout())

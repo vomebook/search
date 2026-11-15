@@ -1,8 +1,8 @@
 import {spawnSync} from 'node:child_process';
 import {hasPassingTapContracts} from '../check_tap_contracts.mjs';
 
-// Node 26/V8 scope: this single file under the synthetic URL/session contracts.
-// This is a baseline, not a claim that iframe/speech behavior is covered.
+// Node 26/V8 scope: this file under synthetic URL/session and shell contracts.
+// Native browser traversal, rendering and speech still require browser tests.
 const minimum = [31.96, 81.82, 27.27];
 const result = spawnSync(process.execPath, [
   '--test', '--test-reporter=tap', '--experimental-test-coverage',
@@ -29,7 +29,11 @@ const required = [
   'remember still updates history when storage fails and saved rejects malformed JSON',
   'clear removes only the matching session and selected return token',
   'messages are rejected when no reader iframe is active',
-  'pathname and search parameter prototype overrides retain their original effects'
+  'pathname and search parameter prototype overrides retain their original effects',
+  'replacement revision preserves a Reader opened synchronously during disposal',
+  'ordinary replacement carries handoff and focus while releasing background ownership',
+  'close recovery validates both search routes without changing history or private handoff',
+  'recovery survives late shell load and records handoff only on native link activation'
 ].map(name => ({name}));
 if (result.status !== 0 || rows.length !== 1 || rows[0].some((value, index) => value < minimum[index]) ||
     !hasPassingTapContracts(text, required)) {

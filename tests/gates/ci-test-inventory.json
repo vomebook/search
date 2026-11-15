@@ -769,6 +769,30 @@
     "tests/support/test_search_test_projects.js": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/session/test_search_session_contract.js": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/reader-navigation/test_search_history_races.mjs": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/search/browser/test_session_transaction_browser.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_reload_search_document.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/browser/test_reader_host_history_races.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/gates/test_hf_source_revision.py": {
+      "kind": "direct",
+      "source": ".github/workflows/reader-refactor.yml"
     }
   }
 }

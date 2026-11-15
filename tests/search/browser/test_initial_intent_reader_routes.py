@@ -285,6 +285,12 @@ class InitialIntentReaderRouteTests(unittest.TestCase):
           handleReaderMessage({origin:location.origin,source:readerOverlay.contentWindow,
             data:{type:'voice-reader-close'}});
         }''')
+        recovery = self.page.get_by_role('link', name='直接打开搜索页')
+        recovery.wait_for(state='visible', timeout=5000)
+        self.assertTrue(self.page.evaluate('!!readerOverlay && history.state.voiceReaderOverlay'))
+        self.assertEqual(self.page.evaluate('STATE.query'), 'paging-B')
+        self.assertEqual(self.page.evaluate('routeApplications'), 0)
+        with self.page.expect_navigation(wait_until='domcontentloaded'):
+            recovery.click()
         self.page.wait_for_function("!readerOverlay && STATE.query === 'paging-A' && !STATE.isLoading", timeout=5000)
         self.assertEqual(self.page.locator('#search-input').input_value(), 'paging-A')
-        self.assertEqual(self.page.evaluate('routeApplications'), 1)

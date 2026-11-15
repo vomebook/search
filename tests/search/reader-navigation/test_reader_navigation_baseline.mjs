@@ -1,5 +1,6 @@
 // Synthetic contracts for the existing search-host navigation module. These
-// cover URL and session behavior, not iframe, speech, or whole-file coverage.
+// cover URL/session rules and DOM ownership with a synthetic shell. Real browser
+// traversal, layout, speech and native navigation remain browser-test contracts.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +12,7 @@ const source = fs.readFileSync(filename, 'utf8');
 const origin = 'https://search.example';
 const readerPath = '/search/static/reader.html';
 
-function fixture() {
+function fixture(readerDestination = readerPath, document = {readyState: 'loading', addEventListener() {}}) {
   const data = new Map();
   const calls = [];
   const storage = {
@@ -19,8 +20,7 @@ function fixture() {
     setItem(key, value) { data.set(key, String(value)); },
     removeItem(key) { data.delete(key); }
   };
-  const root = {addEventListener() {}};
-  const document = {readyState: 'loading', addEventListener() {}};
+  const root = new EventTarget();
   const crypto = {randomUUID: () => 'fixed-token'};
   const history = {
     pushState(...args) { calls.push(['push', ...args]); },
@@ -28,14 +28,180 @@ function fixture() {
   };
   // Supply location and storage through the global as in browsers. Unrelated
   // DOM and asynchronous Reader services remain intentionally unstubbed.
-  const context = vm.createContext({self: root, document, sessionStorage: storage,
+  const context = vm.createContext({self: root, window: root, document, sessionStorage: storage,
     localStorage: storage, location: new URL(origin + '/search/#/'), URL, URLSearchParams,
-    crypto, history, console});
+    crypto, history, console, HTMLElement: ShellElement, Event});
   vm.runInContext(source, context, {filename});
-  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerPath), data, storage, crypto, calls, context};
+  return {nav: root.VoiceOfMLReaderNavigation.createNavigation(readerDestination), data, storage, crypto, calls, context};
 }
 
 const json = value => JSON.parse(JSON.stringify(value));
+
+// Deliberately small DOM double: events run synchronously so dispose reentry is
+// observable. It does not simulate layout, iframe loading or browser history.
+class ShellElement extends EventTarget {
+  constructor(document, tagName) {
+    super();
+    this.document = document;
+    this.tagName = tagName;
+    this.children = [];
+    this.attributes = new Map();
+    this.styles = new Map();
+    this.style = {
+      setProperty: (key, value) => this.styles.set(key, value),
+      removeProperty: key => this.styles.delete(key)
+    };
+    const classes = new Set();
+    this.classList = {
+      add: value => classes.add(value), remove: value => classes.delete(value),
+      contains: value => classes.has(value)
+    };
+    if (tagName === 'iframe') {
+      this.contentWindow = new EventTarget();
+      this.contentWindow.postMessage = () => {};
+      this.contentDocument = {title: 'VoiceOfML Reader', URL: 'about:blank'};
+    }
+  }
+  append(...children) {
+    for (const child of children) { child.parent = this; this.children.push(child); }
+  }
+  replaceChildren(...children) {
+    for (const child of [...this.children]) child.remove();
+    this.append(...children);
+  }
+  remove() {
+    if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this);
+    this.parent = null;
+  }
+  focus() { this.document.activeElement = this; }
+  setAttribute(key, value) { this.attributes.set(key, value); }
+  getAttribute(key) { return this.attributes.get(key) ?? null; }
+  hasAttribute(key) { return this.attributes.has(key); }
+  removeAttribute(key) { this.attributes.delete(key); }
+}
+
+function shellFixture(destination = readerPath) {
+  const document = {readyState: 'loading', title: 'Search', addEventListener() {}};
+  document.createElement = tag => new ShellElement(document, tag);
+  document.body = document.createElement('body');
+  const input = document.createElement('input');
+  document.body.append(input);
+  input.focus();
+  const state = fixture(destination, document);
+  return {...state, document, input,
+    shell: () => document.body.children.find(child => child.className === 'reader-overlay-opening')};
+}
+
+test('replacement revision preserves a Reader opened synchronously during disposal', () => {
+  const {nav, document, input} = shellFixture();
+  const first = nav.mount(new URL(origin + readerPath + '?id=first&nav=token&return=%2Fsearch%2F'));
+  assert.equal(nav.returnFocus, input);
+  assert.equal(nav.backgroundReader, null);
+  let newest;
+  first.contentWindow.addEventListener('voice-reader-dispose', () => {
+    newest = nav.mount(new URL(origin + readerPath + '?id=newest'));
+  });
+  const result = nav.replace(readerPath + '?id=stale', {top: 50});
+  assert.equal(result, newest, 'outer replacement must yield to the reentrant mount');
+  assert.equal(first.parent, null);
+  assert.equal(first.src, 'about:blank');
+  assert.equal(document.body.children.filter(child => child.tagName === 'iframe').length, 1);
+  assert.equal(nav.accepts({origin, source: newest.contentWindow}), true);
+  assert.equal(nav.accepts({origin: 'https://other.example', source: newest.contentWindow}), false);
+  assert.equal(nav.accepts({origin, source: {frameElement: newest}}), true);
+  assert.equal(nav.accepts({origin, source: null}), false);
+  assert.equal(nav.accepts({origin, source: {get frameElement() { throw new Error('cross-origin'); }}}), false);
+  assert.equal(nav.accepts({origin, source: first.contentWindow}), false);
+  nav.unmount(false);
+  assert.equal(nav.returnFocus, null);
+  assert.equal(nav.unmount(), null);
+});
+
+test('ordinary replacement carries handoff and focus while releasing background ownership', () => {
+  const {nav, document, input, data} = shellFixture();
+  const hidden = document.createElement('aside');
+  hidden.setAttribute('inert', '');
+  hidden.setAttribute('aria-hidden', 'false');
+  document.body.append(hidden);
+  const first = nav.mount(new URL(origin + readerPath + '?id=first&nav=token&return=%2Fsearch%2F'));
+  const next = nav.replace(readerPath + '?id=next', {top: 50});
+  assert.notEqual(next, first);
+  assert.equal(new URL(next.src).searchParams.get('nav'), 'token');
+  assert.equal(new URL(next.src).searchParams.get('return'), '/search/');
+  assert.equal(JSON.parse(data.get('reader-navigation-current')).readerUrl, next.src);
+  assert.equal(nav.returnFocus, input);
+  assert.equal(nav.unmount(false), input);
+  assert.equal(input.hasAttribute('inert'), false);
+  assert.equal(input.hasAttribute('aria-hidden'), false);
+  assert.equal(hidden.hasAttribute('inert'), true);
+  assert.equal(hidden.getAttribute('aria-hidden'), 'false');
+});
+
+test('close recovery validates both search routes without changing history or private handoff', () => {
+  for (const destination of [readerPath, '/static/reader.html']) {
+    const {nav, document, input, shell, data, calls} = shellFixture(destination);
+    const search = destination === readerPath ? '/search/' : '/';
+    nav.showCloseRecovery(search);
+    assert.equal(shell(), undefined, 'no recovery without an active Reader');
+    const url = nav.prepare(destination + '?id=book&title=Book', origin + search);
+    nav.mount(url);
+    nav.remember(url, {top: 50});
+    const saved = data.get('reader-navigation-current');
+    nav.showCloseRecovery(search);
+    assert.equal(shell().children.some(child => child.tagName === 'a'), false, 'no recovery before close');
+    nav.dismiss();
+    assert.equal(document.title, 'Search');
+    const valid = destination === readerPath ? '/search/#/Repo?q=book' : '/Repo?q=book';
+    for (const [raw, expected] of [
+      [valid, valid], ['https://other.example/', search], ['javascript:alert(1)', search],
+      ['/static/reader.html', search], ['/elsewhere/page', search], ['http://[', search],
+      ['https://user:password@search.example' + search, search]
+    ]) {
+      nav.showCloseRecovery(raw);
+      const link = shell().children.find(child => child.tagName === 'a');
+      assert.equal(link.href, origin + expected);
+      assert.equal(shell().parent, document.body);
+      assert.equal(shell().hasAttribute('inert'), false);
+      assert.equal(shell().styles.has('opacity'), false);
+      assert.equal(shell().styles.has('pointer-events'), false);
+      assert.equal(document.activeElement, link);
+      assert.equal(input.hasAttribute('inert'), true);
+    }
+    assert.equal(calls.length, 1, 'recovery must not push or replace history');
+    assert.equal(data.get('reader-navigation-current'), saved);
+    assert.equal(data.has('reader-navigation-restore'), false, 'handoff waits for explicit activation');
+    assert.equal(nav.returnFocus, input);
+    nav.unmount(false);
+    assert.equal(shell(), undefined);
+  }
+});
+
+test('recovery survives late shell load and records handoff only on native link activation', () => {
+  const {nav, document, shell, data, calls, storage} = shellFixture();
+  const target = origin + '/search/#/?q=book';
+  const url = nav.prepare(readerPath + '?id=book', target);
+  const frame = nav.mount(url);
+  frame.contentDocument.URL = frame.src;
+  frame.dispatchEvent(new Event('load'));
+  assert.equal(shell(), undefined);
+  nav.dismiss();
+  nav.showCloseRecovery(target);
+  const recovery = shell();
+  const link = recovery.children.find(child => child.tagName === 'a');
+  frame.dispatchEvent(new Event('load'));
+  assert.equal(shell(), recovery);
+  assert.equal(document.activeElement, link);
+  const click = new Event('click', {cancelable: true});
+  link.dispatchEvent(click);
+  assert.equal(click.defaultPrevented, false, 'native href remains the navigation action');
+  assert.deepEqual(JSON.parse(data.get('reader-navigation-restore')), {readerUrl: url.href, returnUrl: target});
+  storage.setItem = () => { throw new Error('quota'); };
+  assert.doesNotThrow(() => link.dispatchEvent(new Event('click')));
+  assert.deepEqual(calls, []);
+  assert.equal(nav.unmount(false).tagName, 'input');
+  nav.showCloseRecovery(target);
+  assert.equal(shell(), undefined);
+});
 
 test('parse accepts only the same-origin reader pathname', () => {
   const {nav} = fixture();
