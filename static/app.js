@@ -739,7 +739,56 @@ function restoreReaderFromSession() {
 }
 
 var warmedReaderAssets = new Set();
-var warmedReaderSources = new Set();
+const readerAssetWarmups = new Map();
+function warmReaderEngineBytes(href, mode) {
+  const controller = new AbortController();
+  const cancel = () => {
+    if (readerAssetWarmups.get(href) !== controller) return;
+    readerAssetWarmups.delete(href);
+    warmedReaderAssets.delete(href);
+    controller.abort();
+  };
+  const hidden = () => { if (document.hidden) cancel(); };
+  readerAssetWarmups.set(href, controller);
+  const timer = setTimeout(cancel, 8000);
+  window.addEventListener("pagehide", cancel);
+  window.addEventListener("offline", cancel);
+  document.addEventListener("visibilitychange", hidden);
+  (async () => {
+    try {
+      const response = await fetch(href, { mode, credentials: "same-origin", priority: "low", signal: controller.signal });
+      if (!response.ok || Number(response.headers.get("content-length")) > 1024 * 1024) {
+        await response.body?.cancel();
+        throw new Error("Reader engine warmup response");
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Reader engine warmup body");
+      let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 1024 * 1024 || controller.signal.aborted) {
+            await reader.cancel();
+            throw new Error("Reader engine warmup limit");
+          }
+        }
+      } finally { reader.releaseLock(); }
+    } catch (_) { cancel(); }
+    finally {
+      clearTimeout(timer);
+      window.removeEventListener("pagehide", cancel);
+      window.removeEventListener("offline", cancel);
+      document.removeEventListener("visibilitychange", hidden);
+      if (readerAssetWarmups.get(href) === controller) readerAssetWarmups.delete(href);
+    }
+  })();
+}
+var warmedReaderSources = new Map();
+// Match reader-resolve's metadata freshness without imposing a lifetime quota.
+const READER_WARMUP_TTL = 5 * 60 * 1000;
+const READER_WARMUP_MAX = 8;
 var readerWarmupInFlight = 0;
 let readerWarmupPending = null;
 const readerWarmupRetryAt = new Map();
@@ -758,8 +807,25 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     // that such a listener may have started or leave its timeout unowned.
     if (readerWarmupPending) return;
   }
-  if (warmedReaderSources.size >= 8 || warmedReaderSources.has(key) ||
-      Date.now() < (readerWarmupRetryAt.get(key) || 0)) return;
+  const now = Date.now();
+  for (const [sourceKey, entry] of warmedReaderSources) {
+    if (now >= entry.expiresAt) warmedReaderSources.delete(sourceKey);
+  }
+  const warmed = warmedReaderSources.get(key);
+  if (warmed) {
+    // Reader consumes this handoff. Only infer consumption after a confirmed
+    // write; disabled/quota-limited storage must still deduplicate in memory.
+    let consumed = false;
+    if (readerId && warmed.metadataStored) {
+      try { consumed = !sessionStorage.getItem(`reader-resolve:${readerId}`); } catch (_) {}
+    }
+    warmedReaderSources.delete(key);
+    if (!consumed) {
+      warmedReaderSources.set(key, warmed);
+      return;
+    }
+  }
+  if (now < (readerWarmupRetryAt.get(key) || 0)) return;
   const controller = new AbortController();
   const task = { key, cancel(superseded = false) { finish(false, superseded); } };
   const finish = (success, superseded = false) => {
@@ -768,7 +834,15 @@ function startReaderSourceWarmup(base, readerId, sourceUrl, urgent = false) {
     readerWarmupPending = null;
     readerWarmupInFlight = 0;
     if (success) {
-      warmedReaderSources.add(key);
+      let metadataStored = false;
+      if (readerId) {
+        try { metadataStored = !!sessionStorage.getItem(`reader-resolve:${readerId}`); } catch (_) {}
+      }
+      warmedReaderSources.delete(key);
+      warmedReaderSources.set(key, { expiresAt: Date.now() + READER_WARMUP_TTL, metadataStored });
+      while (warmedReaderSources.size > READER_WARMUP_MAX) {
+        warmedReaderSources.delete(warmedReaderSources.keys().next().value);
+      }
       readerWarmupRetryAt.delete(key);
     } else {
       controller.abort();
@@ -823,6 +897,13 @@ function warmReaderIntent(rawUrl, urgent = false) {
   shellAssets.concat(engineAssets).forEach(function(href) {
     if (warmedReaderAssets.has(href)) return;
     warmedReaderAssets.add(href);
+    // ICC XHR and the PDF worker entry omit Origin; DjVu's WASM uses
+    // ordinary fetch. Preserve both identities, including HF Vary: Origin.
+    if (href.endsWith(".wasm") || /\/pdf-worker-wrapper(?:\.[a-f0-9]+)?\.mjs$/.test(href)) {
+      if (href.endsWith(".wasm") && navigator.connection?.saveData) { warmedReaderAssets.delete(href); return; }
+      warmReaderEngineBytes(href, href.includes("/djvu-rs-reader/") ? "cors" : "same-origin");
+      return;
+    }
     var shellFile = href.endsWith("/reader.html");
     // Under SW control, store shell files in its cache first. A repeated link
     // preload is deduplicated after a pre-control warm, leaving classic shell
@@ -3900,7 +3981,7 @@ function cancelSnapshotClone() {
   if (task.frame) cancelAnimationFrame(task.frame);
 }
 
-function materializeSnapshotRange(task, start, end, deferHeights = false) {
+function materializeSnapshotRange(task, start, end, deferHeights = false, measurementKey = null) {
   for (let index = Math.max(0, start); index < Math.min(end, task.results.length); index++) {
     if (index in task.results || !(index in task.snapshot.results)) continue;
     task.results[index] = cloneSearchResult(task.snapshot.results[index]);
@@ -3910,7 +3991,7 @@ function materializeSnapshotRange(task, start, end, deferHeights = false) {
       VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1; scheduleVirtualRender();
     }
     const cached = VSCROLL.heightCache.get(getResultStableId(task.results[index]));
-    if (cached?.measurementKey === getHeightMeasurementKey() && VSCROLL.heights[index] !== cached.height) {
+    if (cached?.measurementKey === (measurementKey ??= getHeightMeasurementKey()) && VSCROLL.heights[index] !== cached.height) {
       if (!task.heightAnchor) {
         const top = getResultScrollTop(), anchorIndex = findVirtualIndex(top);
         task.heightAnchor = { index: anchorIndex, offset: top - getVirtualOffset(anchorIndex) };
@@ -3960,9 +4041,10 @@ function startSnapshotClone() {
       return;
     }
     const count = task.keys ? task.keys.length : task.results.length, started = performance.now();
+    const measurementKey = getHeightMeasurementKey();
     for (let batch = 0; task.cursor < count && batch < 256 && performance.now() - started < 4; batch++) {
       const index = task.keys ? Number(task.keys[task.cursor++]) : task.cursor++;
-      materializeSnapshotRange(task, index, index + 1, true);
+      materializeSnapshotRange(task, index, index + 1, true, measurementKey);
     }
     applySnapshotCloneHeights(task);
     if (task.cursor < count) { task.timer = setTimeout(step, 0); return; }
@@ -4862,32 +4944,77 @@ function buildResultHTML(rec, idx) {
   );
 }
 
+let refreshedReaderAssets = null;
+function readerActionForRefresh(record, assets = readerAssets) {
+  const fields = assets !== readerAssets && VoiceOfMLReader.assetFields(
+    assets && assets[(record.Repo || "") + "\0" + buildRecordRelativePath(record)],
+    API_BASE + "/api/reader-bucket-resource", String(record.Extension || record.extension || ""));
+  const readerRecord = assets === readerAssets
+    ? applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record))
+    : (fields ? Object.assign({}, record, fields, { DownloadLink: getRecordLink(record) }) : record);
+  const actionRecord = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(record) ? record : null);
+  const label = actionRecord ? (["audio", "video", "swf"].includes(
+    VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读") : "";
+  return { record: actionRecord, label };
+}
+
 function refreshResultReaderActions() {
-  VSCROLL.templateCache.clear();
-  for (const row of DOM.resultsList.querySelectorAll(".result-item[data-index]")) {
-    const index = Number(row.dataset.index), record = STATE.results[index];
+  const visible = new Map(Array.from(DOM.resultsList.querySelectorAll(".result-item[data-index]"),
+    row => [Number(row.dataset.index), row]));
+  // Templates retain the actual old button even when their row is offscreen.
+  const rows = new Map(VSCROLL.templateCache);
+  for (const [index, row] of visible) rows.set(index, row);
+  let layoutChanged = false, heightsInvalidated = false;
+  const invalidateHeight = (index, record) => {
+    VSCROLL.measuredRowKeys[index] = null;
+    VSCROLL.heightCache.delete(getResultStableId(record));
+    heightsInvalidated = true;
+    if (visible.has(index)) layoutChanged = true;
+  };
+  for (const [index, row] of rows) {
+    const record = STATE.results[index];
     if (!record) continue;
-    const readerRecord = applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record));
-    const readerReady = isReadableRecord(readerRecord);
+    const action = readerActionForRefresh(record);
     let button = row.querySelector('[data-action="read"]');
-    if (!readerReady && !isDefaultReadableRecord(record)) {
-      if (button) { button.remove(); VSCROLL.measuredRowKeys[index] = null; }
+    if ((button ? button.textContent : "") !== action.label) invalidateHeight(index, record);
+    if (!visible.has(index)) continue;
+    if (!action.record) {
+      if (button) {
+        const focused = document.activeElement === button;
+        button.remove();
+        if (focused) row.focus({ preventScroll: true });
+      }
       continue;
     }
-    const actionRecord = readerReady ? readerRecord : record;
     if (!button) {
       button = document.createElement("button"); button.className = "result-action-btn"; button.dataset.action = "read";
       row.querySelector(".result-actions").appendChild(button);
-      VSCROLL.measuredRowKeys[index] = null;
     }
-    button.dataset.readerUrl = getReaderLink(actionRecord);
-    const label = ["audio", "video", "swf"].includes(VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读";
-    if (button.textContent !== label) { button.textContent = label; VSCROLL.measuredRowKeys[index] = null; }
-    button.setAttribute('aria-label', label + '：' + record.File + (record.Extension ? '.' + record.Extension : ''));
+    const url = getReaderLink(action.record, undefined, false);
+    if (button.dataset.readerUrl !== url) button.dataset.readerUrl = url;
+    if (button.textContent !== action.label) button.textContent = action.label;
+    const ariaLabel = action.label + '：' + record.File + (record.Extension ? '.' + record.Extension : '');
+    if (button.getAttribute('aria-label') !== ariaLabel) button.setAttribute('aria-label', ariaLabel);
   }
-  VSCROLL.measuredWindowKey = "";
-  VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
-  scheduleVirtualRender();
+  // A measured row may outlive the bounded template cache. Compare catalog
+  // snapshots for those rows as well, retaining old heights as anchor estimates.
+  if (refreshedReaderAssets !== readerAssets) {
+    for (const key of Object.keys(VSCROLL.measuredRowKeys)) {
+      const index = Number(key), record = STATE.results[index];
+      if (!record || rows.has(index) || !VSCROLL.measuredRowKeys[index]) continue;
+      if (readerActionForRefresh(record, refreshedReaderAssets).label !== readerActionForRefresh(record).label)
+        invalidateHeight(index, record);
+    }
+  }
+  refreshedReaderAssets = readerAssets;
+  // Do not bump contentVersion: existing rows, focus and selection stay intact.
+  VSCROLL.templateCache.clear();
+  if (heightsInvalidated) measuredHeightRevision++;
+  if (layoutChanged) {
+    VSCROLL.measuredWindowKey = "";
+    VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+    scheduleVirtualRender();
+  }
 }
 
 function getResultsHTMLCacheKey() {
@@ -4978,21 +5105,26 @@ function setResultScrollTop(value, restoreWindow = false) {
   updateCurrentResultPosition();
 }
 
-function layoutResultScrollSegment(topH, endH, totalH, logicalTop) {
-  const viewport = DOM.resultsContainer.clientHeight;
+function getResultScrollOrigin(totalH, logicalTop, viewport) {
   const limit = RESULT_SCROLL_SEGMENT_HEIGHT;
   const maxOrigin = Math.max(0, totalH - limit);
   const physical = logicalTop - resultScrollOrigin;
   if (resultScrollOrigin > maxOrigin || physical < limit / 4 || physical + viewport > limit * 3 / 4) {
-    resultScrollOrigin = Math.max(0, Math.min(maxOrigin, logicalTop - limit / 2));
+    return Math.max(0, Math.min(maxOrigin, logicalTop - limit / 2));
   }
+  return resultScrollOrigin;
+}
+
+function layoutResultScrollSegment(topH, endH, totalH, logicalTop, viewport = DOM.resultsContainer.clientHeight) {
+  const limit = RESULT_SCROLL_SEGMENT_HEIGHT;
+  resultScrollOrigin = getResultScrollOrigin(totalH, logicalTop, viewport);
   const top = DOM.resultsList.querySelector('.virtual-spacer-top');
   const bottom = DOM.resultsList.querySelector('.virtual-spacer-bottom');
   if (top) top.style.height = Math.max(0, topH - resultScrollOrigin) + 'px';
   if (bottom) bottom.style.height = Math.max(0, Math.min(totalH, resultScrollOrigin + limit) - endH) + 'px';
 }
 
-function reconcileVirtualRows(items, start, end, topH, bottomH) {
+function reconcileVirtualRows(items, start, end, topH, bottomH, viewport = DOM.resultsContainer.clientHeight) {
   const focused = document.activeElement;
   const focusedRow = DOM.resultsList.contains(focused) ? /** @type {HTMLElement} */ (focused.closest('.result-item')) : null;
   const focusedRecord = focusedRow && resultRowRecords.get(focusedRow);
@@ -5015,7 +5147,7 @@ function reconcileVirtualRows(items, start, end, topH, bottomH) {
     DOM.resultsList.append(bottomSpacer);
   }
   const endH = getVirtualOffset(end);
-  layoutResultScrollSegment(topH, endH, endH + bottomH, logicalTop);
+  layoutResultScrollSegment(topH, endH, endH + bottomH, logicalTop, viewport);
 
   const existing = new Map();
   DOM.resultsList.querySelectorAll(".result-item[data-index]").forEach((row) => {
@@ -5096,17 +5228,13 @@ function renderVisible() {
   VSCROLL.scrollDirection = scrollingDown ? 1 : -1;
   VSCROLL.lastScrollTop = scrollTop;
   const totalH = getVirtualOffset(len);
-  const segmentLimit = RESULT_SCROLL_SEGMENT_HEIGHT;
-  const physicalTop = scrollTop - resultScrollOrigin;
-  const maxOrigin = Math.max(0, totalH - segmentLimit);
-  const segmentNeedsRecenter = resultScrollOrigin > maxOrigin
-    || physicalTop < segmentLimit / 4
-    || physicalTop + viewH > segmentLimit * 3 / 4;
+  const segmentNeedsRecenter = getResultScrollOrigin(totalH, scrollTop, viewH) !== resultScrollOrigin;
+  const needsLayout = segmentNeedsRecenter || resultScrollTarget !== null;
   const safeStart = findVirtualIndex(Math.max(0, scrollTop - baseOverscanPx * 0.35));
   const safeEnd = Math.min(len, findVirtualIndex(scrollTop + viewH + baseOverscanPx * 0.35) + 1);
   ensureResultWindowPages(safeStart, safeEnd);
   updateCurrentResultPosition();
-  if (!pendingResultEntrance && !segmentNeedsRecenter
+  if (!pendingResultEntrance && !needsLayout
       && VSCROLL.renderStart <= safeStart && VSCROLL.renderEnd >= safeEnd) return false;
   const beforePx = VSCROLL.isDraggingThumb
     ? viewH * 0.35
@@ -5119,7 +5247,7 @@ function renderVisible() {
   if (end - start < 10 && len > 10) end = Math.min(start + 30, len);
   if (pendingResultEntrance && start === 0) end = Math.min(len, Math.max(end, 30));
   ensureResultWindowPages(start, end);
-  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !segmentNeedsRecenter) return false;
+  if (start === VSCROLL.renderStart && end === VSCROLL.renderEnd && !needsLayout) return false;
   VSCROLL.renderStart = start;
   VSCROLL.renderEnd = end;
   const topH = getVirtualOffset(start);
@@ -5127,7 +5255,7 @@ function renderVisible() {
   const bottomH = Math.max(0, totalH - endH);
   const anchorIndex = findVirtualIndex(scrollTop);
   const anchor = { index: anchorIndex, offset: scrollTop - getVirtualOffset(anchorIndex) };
-  reconcileVirtualRows(items, start, end, topH, bottomH);
+  reconcileVirtualRows(items, start, end, topH, bottomH, viewH);
   if (DOM.multiSelectToggle && DOM.multiSelectToggle.checked) updateVisibleSelection();
   // Correct the rendered window before paint, using one content anchor.
   // A deferred measurement can otherwise run against another window/query.

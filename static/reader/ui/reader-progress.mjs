@@ -87,8 +87,11 @@ export function createReaderProgress(readerContext) {
       tocPanel = /** @type {HTMLElement} */ (document.querySelector("#toc-panel")),
       tocList = tocPanel.querySelector(".panel-list"),
       noToc = readerContext.loadingStatus.hidden && !readerContext.navigationState.tocEntries.length && !readerContext.mediaElement;
-    readerContext.progressTools.classList.toggle("reader-no-toc", noToc);
-    /** @type {HTMLElement} */ (tocPanel.querySelector(".panel-view-header strong")).textContent = noToc ? "阅读状态" : "目录";
+    if (readerContext.progressTools.classList.contains("reader-no-toc") !== noToc)
+      readerContext.progressTools.classList.toggle("reader-no-toc", noToc);
+    const title = /** @type {HTMLElement} */ (tocPanel.querySelector(".panel-view-header strong")),
+      label = noToc ? "阅读状态" : "目录";
+    if (title.textContent !== label) title.textContent = label;
     if (
       noToc &&
       (readerContext.progressTools.parentElement !== tocPanel || readerContext.progressTools.nextElementSibling !== tocList)
@@ -212,7 +215,8 @@ export function createReaderProgress(readerContext) {
     return /** @type {HTMLElement} */ (pages[Math.min(low, pages.length - 1)]);
   }
 
-  function syncCurrentPageFromMarker() {
+  /** @param {boolean} [updateProgress] */
+  function syncCurrentPageFromMarker(updateProgress = true) {
     if (performance.now() < readerContext.pageNavigationLockUntil) return;
     const page = readerContext.pageAtMarker();
     if (!page) return;
@@ -221,7 +225,7 @@ export function createReaderProgress(readerContext) {
     readerContext.updateDocumentState({ page: next });
     if (document.activeElement !== readerContext.pageInput) readerContext.pageInput.value = String(next);
     readerContext.updateTocCurrentMark();
-    readerContext.updateProgressTools();
+    if (updateProgress) readerContext.updateProgressTools();
   }
 
   function scheduleMarkerSync() {
@@ -229,10 +233,15 @@ export function createReaderProgress(readerContext) {
     readerContext.markerFrame = requestAnimationFrame(() => {
       readerContext.markerFrame = 0;
       if (readerContext.readerAbortController.signal.aborted) return;
-      readerContext.syncCurrentPageFromMarker();
-      readerContext.refreshNearbyPdfPages();
-      readerContext.syncHeadingLocation();
-      readerContext.updateProgressTools();
+      // Publish once, after both page and heading state have been synchronized.
+      // The standalone entry point still publishes immediately.
+      syncCurrentPageFromMarker(false);
+      try {
+        readerContext.refreshNearbyPdfPages();
+        readerContext.syncHeadingLocation();
+      } finally {
+        readerContext.updateProgressTools();
+      }
       readerContext.scheduleSave();
     });
   }
@@ -295,30 +304,35 @@ export function createReaderProgress(readerContext) {
     await readerContext.restoreInitialPosition(entry, generation);
   }
 
-  function updateReadingProgressSummary() {
+  /** @param {number} [percent] */
+  function updateReadingProgressSummary(percent) {
     const noToc = !readerContext.navigationState.tocEntries.length && !readerContext.mediaElement;
-    readerContext.readingProgressSummary.hidden = !noToc;
-    if (noToc)
-      (/** @type {HTMLElement} */ (readerContext.readingProgressSummary.querySelector(".reader-progress-summary-value"))).textContent =
-        `${readerContext.readerProgressPercent().toFixed(1)}%`;
+    if (readerContext.readingProgressSummary.hidden !== !noToc) readerContext.readingProgressSummary.hidden = !noToc;
+    if (noToc) {
+      const value = /** @type {HTMLElement} */ (readerContext.readingProgressSummary.querySelector(".reader-progress-summary-value")),
+        label = `${(percent ?? readerContext.readerProgressPercent()).toFixed(1)}%`;
+      if (value.textContent !== label) value.textContent = label;
+    }
   }
 
   function updateProgressTools() {
     if (readerContext.progressSeeking) return;
-    const percent = readerContext.readerProgressPercent();
-    readerContext.progressRange.value = String(percent);
-    readerContext.progressPercent.textContent = `${percent.toFixed(1)}%`;
-    if (readerContext.progressRange.getAttribute("aria-valuetext") !== readerContext.progressPercent.textContent)
-      readerContext.progressRange.setAttribute("aria-valuetext", readerContext.progressPercent.textContent);
+    const percent = readerContext.readerProgressPercent(),
+      value = String(percent), label = `${percent.toFixed(1)}%`;
+    if (readerContext.progressRange.value !== value) readerContext.progressRange.value = value;
+    if (readerContext.progressPercent.textContent !== label) readerContext.progressPercent.textContent = label;
+    if (readerContext.progressRange.getAttribute("aria-valuetext") !== label)
+      readerContext.progressRange.setAttribute("aria-valuetext", label);
     const hasChapters = readerContext.navigationState.tocEntries.some((entry) => !entry.group),
       hasPreviousChapter = readerContext.adjacentTocIndex(-1) >= 0,
       hasNextChapter = readerContext.adjacentTocIndex(1) >= 0;
-    readerContext.chapterPrev.hidden = !hasChapters;
-    readerContext.chapterNext.hidden = !hasChapters;
-    readerContext.chapterPrev.disabled = !hasPreviousChapter;
-    readerContext.chapterNext.disabled = !hasNextChapter;
-    readerContext.progressUndo.hidden = !readerContext.previousProgressState;
-    readerContext.updateReadingProgressSummary();
+    if (readerContext.chapterPrev.hidden !== !hasChapters) readerContext.chapterPrev.hidden = !hasChapters;
+    if (readerContext.chapterNext.hidden !== !hasChapters) readerContext.chapterNext.hidden = !hasChapters;
+    if (readerContext.chapterPrev.disabled !== !hasPreviousChapter) readerContext.chapterPrev.disabled = !hasPreviousChapter;
+    if (readerContext.chapterNext.disabled !== !hasNextChapter) readerContext.chapterNext.disabled = !hasNextChapter;
+    if (readerContext.progressUndo.hidden !== !readerContext.previousProgressState)
+      readerContext.progressUndo.hidden = !readerContext.previousProgressState;
+    updateReadingProgressSummary(percent);
     readerContext.placeReadingProgress();
   }
 

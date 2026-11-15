@@ -64,8 +64,12 @@ function harness(options) {
           const key = keyOf(request);
           return Promise.resolve(values.get(key) || values.get(key.replace('https://example.test', '')));
         },
-        keys() { return Promise.resolve(Array.from(values.keys(), url => ({url: new URL(url, 'https://example.test').href}))); },
-        delete(request) {
+        keys() {
+          const keys = Array.from(values.keys(), url => ({url: new URL(url, 'https://example.test').href}));
+          return settings.keys ? settings.keys(keys, name) : Promise.resolve(keys);
+        },
+        async delete(request) {
+          if (settings.entryDelete) await settings.entryDelete(request, name);
           if (settings.entryDeleteError) return Promise.reject(settings.entryDeleteError);
           const key = keyOf(request);
           return Promise.resolve(values.delete(key) || values.delete(key.replace('https://example.test', '')));
@@ -110,7 +114,7 @@ function harness(options) {
   };
   vm.createContext(context);
   vm.runInContext(settings.source || source, context, { filename: "sw.js" });
-  return { listeners, stores, operations, evaluate: code => vm.runInContext(code, context) };
+  return { listeners, stores, operations, caches, prune: context.pruneHashedAssets, evaluate: code => vm.runInContext(code, context) };
 }
 
 function lifecycle(listener) {
@@ -684,6 +688,116 @@ for (const [site, workerSource, prefix] of [
       assert.strictEqual(instance.evaluate('mutableRequests.size'), 0);
     }
   });
+  test(`${site} immutable bursts share scans across cache handles and keep every event alive through late deletion`, async () => {
+    const current = prefix + 'app.111111111111.js';
+    const retired = 'https://example.test' + prefix + 'old.222222222222.js';
+    const late = 'https://example.test' + prefix + 'reader/late.333333333333.mjs';
+    const configured = workerSource.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([current]));
+    const keysGate = deferred(), deleteGate = deferred(), lateDeleteGate = deferred();
+    let scans = 0, deletes = 0, finished = 0;
+    const instance = harness({source: configured, cacheEntries: [[retired, response('old')]],
+      keys: async keys => { scans += 1; if (scans === 1) await keysGate.promise; return keys; },
+      entryDelete: async request => {
+        deletes += 1;
+        await (request.url === late ? lateDeleteGate : deleteGate).promise;
+      },
+    });
+    const fetchBurst = async start => {
+      const responses = Array.from({length: 24}, (_, i) => dispatchFetch(instance, 'https://example.test' + current + '?burst=' + (start + i)));
+      for (const lifetime of instance.operations.lifetimes.slice(start)) lifetime.then(() => { finished += 1; });
+      assert.ok((await Promise.all(responses)).every(result => result.ok), 'delivery must not wait for pruning');
+      await tick();
+    };
+    // Every fetch opens a distinct Cache handle backed by the same named store.
+    await fetchBurst(0);
+    assert.strictEqual(scans, 1, 'in-flight keys must be shared by the burst');
+    assert.strictEqual(finished, 0);
+    keysGate.resolve();
+    await tick();
+    assert.strictEqual(deletes, 1);
+    instance.stores.get(cacheName(configured)).set(late, response('late retired write'));
+    await fetchBurst(24);
+    assert.strictEqual(scans, 1, 'calls during delete must join the running scan');
+    assert.strictEqual(finished, 0);
+    deleteGate.resolve();
+    await tick();
+    assert.strictEqual(scans, 2, 'one dirty follow-up covers both bursts');
+    assert.strictEqual(deletes, 2, 'follow-up must find the write absent from the first snapshot');
+    assert.strictEqual(finished, 0, 'every waitUntil includes the follow-up deletion');
+    lateDeleteGate.resolve();
+    await Promise.all(instance.operations.lifetimes);
+    assert.strictEqual(finished, 48);
+    assert.strictEqual(scans, 2, '48 puts must not enqueue 48 full scans');
+    assert.ok(!instance.stores.get(cacheName(configured)).has(retired));
+    assert.ok(!instance.stores.get(cacheName(configured)).has(late));
+    assert.strictEqual(instance.stores.get(cacheName(configured)).size, 48, 'current immutable entries survive');
+  });
+  test(`${site} pruning coalesces synchronous calls and accepts writes at scan-completion microtasks`, async () => {
+    const current = prefix + 'app.111111111111.js';
+    const retired = 'https://example.test' + prefix + 'old.222222222222.js';
+    const configured = workerSource.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([current]));
+    const gate = deferred();
+    let scans = 0, latePromise;
+    const instance = harness({source: configured,
+      keys: keys => { scans += 1; return scans === 1 ? gate.promise : Promise.resolve(keys); },
+    });
+    const name = cacheName(configured);
+    const first = await instance.caches.open(name), second = await instance.caches.open(name);
+    assert.notStrictEqual(first, second);
+    const pending = Array.from({length: 32}, (_, i) => instance.prune(i % 2 ? first : second));
+    assert.ok(pending.every(promise => promise === pending[0]), 'all callers share the same completion promise');
+    await tick();
+    assert.strictEqual(scans, 1);
+    // Queue at the end of iteration: this runs after the final dirty check,
+    // but before the outer Promise has adopted the completed async task.
+    gate.resolve({ [Symbol.iterator]() { return { next() {
+      queueMicrotask(() => {
+        instance.stores.get(name).set(retired, response('completion-time write'));
+        latePromise = instance.prune(second);
+      });
+      return {done: true};
+    } }; } });
+    await Promise.all(pending);
+    await latePromise;
+    assert.strictEqual(scans, 2, 'completion-time request must start another scan');
+    assert.notStrictEqual(latePromise, pending[0]);
+    assert.ok(!instance.stores.get(name).has(retired));
+    // Calls from a settled promise must also be able to start fresh work.
+    await latePromise.then(() => {
+      instance.stores.get(name).set(retired, response('settled-time write'));
+      return instance.prune(first);
+    });
+    assert.strictEqual(scans, 3);
+    assert.ok(!instance.stores.get(name).has(retired));
+  });
+  for (const failure of ['keys', 'delete']) {
+    test(`${site} shared pruning recovers after delayed ${failure} failure`, async () => {
+      const current = prefix + 'app.111111111111.js';
+      const retired = 'https://example.test' + prefix + 'old.222222222222.js';
+      const configured = workerSource.replace('const CURRENT_HASHED_ASSETS = []', 'const CURRENT_HASHED_ASSETS = ' + JSON.stringify([current]));
+      const gate = deferred();
+      let fail = true, scans = 0;
+      const instance = harness({source: configured, cacheEntries: [[retired, response('old')]],
+        keys: async keys => { scans += 1; if (fail && failure === 'keys') await gate.promise; return keys; },
+        entryDelete: async () => { if (fail && failure === 'delete') await gate.promise; },
+      });
+      const name = cacheName(configured);
+      const first = await instance.caches.open(name), second = await instance.caches.open(name);
+      const initial = instance.prune(first);
+      await tick();
+      const joined = instance.prune(second);
+      assert.strictEqual(joined, initial);
+      const rejected = [initial, joined].map(promise => assert.rejects(promise, /storage busy/));
+      gate.reject(new Error('storage busy'));
+      await Promise.all(rejected);
+      assert.strictEqual(scans, 1);
+      assert.ok(instance.stores.get(name).has(retired));
+      fail = false;
+      await instance.prune(second);
+      assert.strictEqual(scans, 2);
+      assert.ok(!instance.stores.get(name).has(retired), 'failure must not poison later cleanup');
+    });
+  }
   test(`${site} previous Ruffle cache retains retired assets and promotes current assets for one release`, async () => {
     const files = ['ruffle.js', 'core.ruffle.0123456789abcdefabcd.js', '0123456789abcdefabcd.wasm'];
     const paths = release => files.map(file => prefix + 'vendor/ruffle/release-' + release + '/' + file);

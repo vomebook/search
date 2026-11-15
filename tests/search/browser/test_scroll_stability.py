@@ -100,6 +100,44 @@ class ScrollStabilityTests(unittest.TestCase):
                                       invalidated=True,highlighted=True,count=60,ids=list(range(60))))
         self.assertEqual(self.fixture.errors, [])
 
+    def test_short_same_window_has_no_dom_writes_and_restores_reader_position(self):
+        result = self.page.evaluate('''async () => {
+          cancelSearchPrefetch();STATE.results=STATE.results.slice(0,100);
+          STATE.total=100;STATE.hasMore=false;resetVirtualScrollState();renderResults();await scrollFrames();
+          const rows=[...DOM.resultsList.querySelectorAll('.result-item')];
+          const observer=new MutationObserver(()=>{});
+          observer.observe(DOM.resultsList,{attributes:true,childList:true,subtree:true});
+          const updates=[];
+          for(let i=0;i<8;i++) {DOM.resultsContainer.scrollTop=i*2;updates.push(renderVisible());}
+          const writes=observer.takeRecords().length;observer.disconnect();
+          const stable=rows.every(row=>row.isConnected);
+          setResultScrollTop(getVirtualOffset(4)+11);renderVisible();
+          const saved=captureReaderReturnScroll();
+          setResultScrollTop(0);renderVisible();
+          readerReturnScrollState=saved;restoreReaderReturnScroll();await scrollFrames();
+          return {writes,stable,updates,index:findVirtualIndex(getResultScrollTop()),
+            offset:getResultScrollTop()-getVirtualOffset(4)};
+        }''')
+        self.assertEqual(result['writes'], 0)
+        self.assertTrue(result['stable'])
+        self.assertEqual(result['updates'], [False] * 8)
+        self.assertEqual(result['index'], 4)
+        self.assertAlmostEqual(result['offset'], 11, delta=1)
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_resize_remeasures_same_window_with_a_fresh_layout_key(self):
+        before = self.page.evaluate('''() => {
+          cancelSearchPrefetch();
+          window.beforeMeasureKey=getHeightMeasurementKey();
+          rowStyle.textContent='.result-item {height:80px!important;min-height:0!important;box-sizing:border-box}';
+          return beforeMeasureKey;
+        }''')
+        self.page.set_viewport_size({'width': 1100, 'height': 800})
+        self.page.wait_for_function('''getHeightMeasurementKey()!==beforeMeasureKey &&
+          VSCROLL.measuredRowKeys[0]===getHeightMeasurementKey() && VSCROLL.heights[0]===80''')
+        self.assertNotEqual(self.page.evaluate('getHeightMeasurementKey()'), before)
+        self.assertEqual(self.fixture.errors, [])
+
     def test_far_append_preserves_rows_without_render_then_new_page_is_accessible(self):
         result = self.page.evaluate('''async () => {
           cancelSearchPrefetch();STATE.total=1100;STATE._loadedPage=10;
@@ -257,3 +295,192 @@ class ScrollStabilityTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('lastPageRequests.includes(996)'))
         self.assertFalse(self.page.evaluate('lastPageRequests.includes(500)'))
         self.assertEqual(self.fixture.errors, [])
+
+class ReaderActionRefreshTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        paging.PagingRecoveryTests.setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        paging.PagingRecoveryTests.tearDownClass()
+
+    def setUp(self):
+        self.fixture = paging.PagingRecoveryTests()
+        self.fixture.setUp()
+        self.page = self.fixture.page
+        self.page.route('**/static/reader.html?**', lambda route: route.fulfill(
+            content_type='text/html', body='<body>reader</body>'))
+        self.page.evaluate('''() => {
+          readerAssets = {};
+          refreshResultReaderActions();
+          if (VSCROLL.renderFrame) cancelAnimationFrame(VSCROLL.renderFrame);
+          VSCROLL.renderFrame = 0;
+          renderVisible();
+        }''')
+
+    def tearDown(self):
+        try:
+            self.assertEqual(self.fixture.errors, [])
+        finally:
+            self.fixture.tearDown()
+
+    def test_identical_refresh_has_zero_dom_storage_and_render_work(self):
+        result = self.page.evaluate('''() => {
+          const row=DOM.resultsList.querySelector('.result-item[data-index]');
+          const button=row.querySelector('[data-action="read"]');
+          button.focus({preventScroll:true});
+          const checkbox=row.querySelector('input');checkbox.checked=true;
+          const title=row.querySelector('.result-title');
+          const range=document.createRange();range.selectNodeContents(title);
+          const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+          const before={start:VSCROLL.renderStart,end:VSCROLL.renderEnd,
+            measured:VSCROLL.measuredWindowKey,version:VSCROLL.contentVersion,
+            top:getResultScrollTop(),text:selection.toString(),revision:measuredHeightRevision};
+          let storage=0,renders=0,measures=0;
+          const native={set:Storage.prototype.setItem,remove:Storage.prototype.removeItem,
+            schedule:scheduleVirtualRender,measure:measureHeights};
+          const observer=new MutationObserver(()=>{});
+          observer.observe(DOM.resultsList,{subtree:true,childList:true,attributes:true,characterData:true});
+          Storage.prototype.setItem=function(...args){storage++;return native.set.apply(this,args)};
+          Storage.prototype.removeItem=function(...args){storage++;return native.remove.apply(this,args)};
+          scheduleVirtualRender=()=>{renders++};measureHeights=()=>{measures++};
+          try {
+            for(let i=0;i<5;i++) refreshResultReaderActions();
+            return {writes:observer.takeRecords().length,storage,renders,measures,
+              retained:row.isConnected && row.querySelector('[data-action="read"]')===button,
+              focus:document.activeElement===button,selected:checkbox.checked,
+              state:JSON.stringify(before)===JSON.stringify({start:VSCROLL.renderStart,end:VSCROLL.renderEnd,
+                measured:VSCROLL.measuredWindowKey,version:VSCROLL.contentVersion,
+                top:getResultScrollTop(),text:selection.toString(),revision:measuredHeightRevision})};
+          } finally {
+            observer.disconnect();Storage.prototype.setItem=native.set;Storage.prototype.removeItem=native.remove;
+            scheduleVirtualRender=native.schedule;measureHeights=native.measure;
+          }
+        }''')
+        self.assertEqual(result, dict(writes=0, storage=0, renders=0, measures=0,
+                                     retained=True, focus=True, selected=True, state=True))
+
+    def test_url_only_change_keeps_geometry_and_click_writes_fresh_metadata(self):
+        result = self.page.evaluate(r'''() => {
+          const row=DOM.resultsList.querySelector('.result-item[data-index]');
+          const index=Number(row.dataset.index),record=STATE.results[index];
+          const button=row.querySelector('[data-action="read"]'),url=button.dataset.readerUrl;
+          const id=getResultStableId(record),cache=VSCROLL.heightCache.get(id);
+          const measured=VSCROLL.measuredRowKeys[index],windowKey=VSCROLL.measuredWindowKey;
+          const start=VSCROLL.renderStart,end=VSCROLL.renderEnd;
+          const key=(record.Repo||'')+'\0'+buildRecordRelativePath(record);
+          readerAssets={[key]:{s:2,m:'h',p:'objects/00/'+'0'.repeat(64)+'/profile/document.html'}};
+          button.focus({preventScroll:true});
+          let writes=0,renders=0;
+          const native={set:Storage.prototype.setItem,schedule:scheduleVirtualRender};
+          Storage.prototype.setItem=function(...args){writes++;return native.set.apply(this,args)};
+          scheduleVirtualRender=()=>{renders++};
+          try {
+            refreshResultReaderActions();
+            const expected=getReaderLink(applyReaderAsset(record,record.Repo||'',buildRecordRelativePath(record),getRecordLink(record)),undefined,false);
+            const metadataId=new URL(expected,location.origin).searchParams.get('id');
+            const zeroWrites=writes===0;
+            const geometry=VSCROLL.heightCache.get(id)===cache && VSCROLL.measuredRowKeys[index]===measured &&
+              VSCROLL.measuredWindowKey===windowKey && VSCROLL.renderStart===start && VSCROLL.renderEnd===end;
+            const retained=document.activeElement===button && row.querySelector('[data-action="read"]')===button;
+            const updated=button.dataset.readerUrl===expected && expected!==url;
+            const freshTemplate=createResultRow(record,index).querySelector('[data-action="read"]').dataset.readerUrl===expected;
+            button.click();
+            const metadata=JSON.parse(sessionStorage.getItem('reader-source:'+metadataId));
+            return {zeroWrites,geometry,retained,updated,freshTemplate,renders,
+              clicked:!!readerOverlay && new URL(readerOverlay.src).searchParams.get('id')===metadataId,
+              source:metadata.url,expectedSource:applyReaderAsset(record,record.Repo||'',buildRecordRelativePath(record),getRecordLink(record)).ReaderLink,
+              original:metadata.download===getRecordLink(record),clickWrites:writes>0};
+          } finally {Storage.prototype.setItem=native.set;scheduleVirtualRender=native.schedule;}
+        }''')
+        self.assertEqual(result.pop('source'), result.pop('expectedSource'))
+        self.assertEqual(result.pop('renders'), 0)
+        self.assertTrue(all(result.values()), result)
+
+    def test_layout_change_remeasures_and_preserves_scrolled_anchor(self):
+        self.page.evaluate(r'''() => {
+          const style=document.createElement('style');
+          style.textContent='.result-item[data-index="0"]:has([data-action="read"]) {min-height:400px !important}';
+          document.head.append(style);
+          STATE.results[0]={Repo:'VoiceOfML/Test',File:'f3-anchor',Extension:'f3unsupported',Folder:[],Size:1};
+          VSCROLL.templateCache.clear();
+          DOM.resultsList.querySelector('[data-index="0"]').replaceWith(createResultRow(STATE.results[0],0));
+          VSCROLL.measuredRowKeys[0]=null;VSCROLL.measuredWindowKey='';
+          VSCROLL.renderStart=-1;VSCROLL.renderEnd=-1;renderVisible();
+          setResultScrollTop(getVirtualOffset(5)+7);renderVisible();
+        }''')
+        result = self.page.evaluate(r'''() => {
+          const top=getResultScrollTop(),index=findVirtualIndex(top),offset=top-getVirtualOffset(index);
+          const row=DOM.resultsList.querySelector('[data-index="'+index+'"]');
+          const button=row.querySelector('[data-action="read"]');button.focus({preventScroll:true});
+          const checkbox=row.querySelector('input');checkbox.checked=true;
+          const before=VSCROLL.heights[0];
+          readerAssets={[getResultStableId(STATE.results[0])]:{
+            s:2,m:'h',p:'objects/00/'+'0'.repeat(64)+'/profile/document.html'}};
+          refreshResultReaderActions();renderVisible();
+          return {index,sameIndex:findVirtualIndex(getResultScrollTop())===index,
+            offsetError:Math.abs(getResultScrollTop()-getVirtualOffset(index)-offset),
+            remeasured:VSCROLL.heights[0]>before+100,
+            cache:VSCROLL.heightCache.get(getResultStableId(STATE.results[0])).height===VSCROLL.heights[0],
+            retained:row.isConnected && document.activeElement===button && checkbox.checked};
+        }''')
+        self.assertGreater(result['index'], 0)
+        self.assertTrue(result['sameIndex'], result)
+        self.assertLessEqual(result['offsetError'], 1, result)
+        for key in ('remeasured', 'cache', 'retained'):
+            self.assertTrue(result[key], result)
+
+    def test_add_remove_and_label_changes_invalidate_only_affected_heights(self):
+        result = self.page.evaluate(r'''() => {
+          // Controlled unsupported records make removal observable without changing
+          // native TXT fallback behavior. Two offscreen rows exercise both cache paths.
+          const indexes=[0,1,90,91];
+          for (const index of indexes) STATE.results[index]={Repo:'VoiceOfML/Test',File:'f3-'+index,
+            Extension:'f3unsupported',Folder:[],Size:1};
+          VSCROLL.templateCache.clear();
+          for (const index of [0,1]) {
+            const old=DOM.resultsList.querySelector('[data-index="'+index+'"]');
+            old.replaceWith(createResultRow(STATE.results[index],index));
+          }
+          createResultRow(STATE.results[90],90);
+          const key=getHeightMeasurementKey(),cache=new Map();
+          for (const index of [...indexes,2]) {
+            VSCROLL.measuredRowKeys[index]=key;
+            const value={height:VSCROLL.heights[index]||60,measurementKey:key};
+            VSCROLL.heightCache.set(getResultStableId(STATE.results[index]),value);cache.set(index,value);
+          }
+          const asset={s:2,m:'h',p:'objects/00/'+'0'.repeat(64)+'/profile/document.html'};
+          readerAssets=Object.fromEntries([0,90,91].map(i=>[getResultStableId(STATE.results[i]),asset]));
+          const row=DOM.resultsList.querySelector('[data-index="0"]'),checkbox=row.querySelector('input');
+          checkbox.checked=true;
+          const top=getResultScrollTop();
+          let renders=0,writes=0;
+          const native={schedule:scheduleVirtualRender,set:Storage.prototype.setItem};
+          scheduleVirtualRender=()=>{renders++};
+          Storage.prototype.setItem=function(...args){writes++;return native.set.apply(this,args)};
+          try {
+            refreshResultReaderActions();
+            const invalidated=[0,90,91].every(i=>VSCROLL.measuredRowKeys[i]===null && !VSCROLL.heightCache.has(getResultStableId(STATE.results[i])));
+            const untouched=[1,2].every(i=>VSCROLL.measuredRowKeys[i]===key && VSCROLL.heightCache.get(getResultStableId(STATE.results[i]))===cache.get(i));
+            const added=!!row.querySelector('[data-action="read"]');
+            const offscreen=createResultRow(STATE.results[90],90).querySelector('[data-action="read"]');
+            const button=row.querySelector('[data-action="read"]');button.focus({preventScroll:true});
+            // A mode/label change retains the existing button and invalidates height.
+            const digest='a'.repeat(64);
+            readerAssets={...readerAssets,[getResultStableId(STATE.results[0])]:{
+              s:2,m:'a',b:'vomebook/reader-assets-v2',p:'media/audio/aac/'+digest+'/audio.mp3'}};
+            VSCROLL.measuredRowKeys[0]=key;VSCROLL.heightCache.set(getResultStableId(STATE.results[0]),cache.get(0));
+            refreshResultReaderActions();
+            const label=button.textContent==='在线播放' && document.activeElement===button &&
+              VSCROLL.measuredRowKeys[0]===null && !VSCROLL.heightCache.has(getResultStableId(STATE.results[0]));
+            readerAssets={};refreshResultReaderActions();
+            const removed=!row.querySelector('[data-action="read"]') && document.activeElement===row;
+            const stale=!createResultRow(STATE.results[90],90).querySelector('[data-action="read"]');
+            return {invalidated,untouched,added,offscreen:!!offscreen,label,removed,stale,
+              selected:checkbox.checked,anchor:getResultScrollTop()===top,writes,renders};
+          } finally {scheduleVirtualRender=native.schedule;Storage.prototype.setItem=native.set;}
+        }''')
+        self.assertEqual(result.pop('writes'), 0)
+        self.assertEqual(result.pop('renders'), 3)
+        self.assertTrue(all(result.values()), result)

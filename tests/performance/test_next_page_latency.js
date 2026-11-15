@@ -237,6 +237,58 @@ for (const {name:project,root} of searchTestProjects()) {
     f.context.VSCROLL.isDraggingThumb=true;
     f.context.scheduleVirtualRender(true); assert.deepStrictEqual(f.appended,[2]);
   });
+  test(project + " short unchanged windows skip row work while pagination starts before paint",()=>{
+    const f=fixture(source), c=f.context, demanded=[];
+    Object.assign(c,{resultWindow:null,pendingResultEntrance:false,resultScrollOrigin:0,resultScrollTarget:null,
+      RESULT_SCROLL_SEGMENT_HEIGHT:1000000,performance:{now:()=>16},
+      DOM:{resultsContainer:{clientHeight:600}},ensureVirtualHeights(){},ensureHeightTree(){},
+      getVirtualOffset:index=>index*60,findVirtualIndex:top=>Math.min(99,Math.floor(top/60)),
+      ensureResultWindowPages:(start,end)=>demanded.push([start,end]),updateCurrentResultPosition(){},
+      reconcileVirtualRows(){assert.fail('unchanged window reconciled');},
+      measureHeights(){assert.fail('unchanged window measured');}});
+    c.STATE.results.length=100;
+    Object.assign(c.VSCROLL,{estimatedHeight:60,lastScrollTop:400,lastScrollTime:0,
+      scrollVelocity:0,renderStart:0,renderEnd:40});
+    install(source,c,["getResultScrollOrigin","renderVisible"]);
+    f.setScroll(400);
+    c.scheduleVirtualRender(true);c.scheduleVirtualRender(true);
+    assert.deepStrictEqual(f.appended,[2]);assert.strictEqual(f.frames.length,1);
+    f.frames[0]();
+    assert.deepStrictEqual(demanded,[[3,21]]);
+    assert.strictEqual(c.VSCROLL.renderEnd,40);
+    assert.strictEqual(c.renderVisible(),false);
+    assert.strictEqual(demanded.length,2);
+  });
+  test(project + " snapshot range reuses a measurement key only within the current batch",()=>{
+    const results=new Array(4), records=Array.from({length:4},(_,i)=>({Id:String(i)}));
+    let layout='wide',reads=0;
+    const c=vm.createContext({STATE:{results},VSCROLL:{templateCache:new Map(),measuredRowKeys:[],
+      renderStart:-1,renderEnd:-1,heights:new Array(4),heightsDirty:true,heightBase:60,
+      heightCache:new Map(records.map(r=>[r.Id,{height:80,measurementKey:'wide'}]))},
+      getHeightMeasurementKey:()=>{reads++;return layout;},getResultStableId:r=>r.Id,
+      cloneSearchResult:r=>({...r}),getResultScrollTop:()=>0,findVirtualIndex:()=>0,getVirtualOffset:()=>0});
+    install(source,c,['materializeSnapshotRange']);
+    const task={results,snapshot:{results:records}};
+    c.materializeSnapshotRange(task,0,2,true);
+    assert.strictEqual(reads,1);assert.strictEqual(c.VSCROLL.heights[0],80);
+    assert.strictEqual(c.VSCROLL.heights[1],80);
+    layout='narrow';
+    c.VSCROLL.heightCache.set('3',{height:120,measurementKey:'narrow'});
+    c.materializeSnapshotRange(task,2,4,true);
+    assert.strictEqual(reads,2);assert.strictEqual(c.VSCROLL.heights[2],undefined);
+    assert.strictEqual(c.VSCROLL.heights[3],120);
+  });
+  test(project + " segment origins clamp at both ends and recenter in either direction",()=>{
+    const c=vm.createContext({RESULT_SCROLL_SEGMENT_HEIGHT:1000000,resultScrollOrigin:0});
+    install(source,c,["getResultScrollOrigin"]);
+    assert.strictEqual(c.getResultScrollOrigin(16000,100,600),0);
+    assert.strictEqual(c.getResultScrollOrigin(16000000,760000,600),260000);
+    c.resultScrollOrigin=260000;
+    assert.strictEqual(c.getResultScrollOrigin(16000000,500000,600),0);
+    c.resultScrollOrigin=15000000;
+    assert.strictEqual(c.getResultScrollOrigin(16000000,15999400,600),15000000);
+    assert.strictEqual(c.getResultScrollOrigin(16000,100,600),0);
+  });
   if (project === "github-Search") {
     for (const outcome of ["success","cancel","changed-generation","failure"]) {
       test("local lookahead joins demand and handles " + outcome,async()=>{

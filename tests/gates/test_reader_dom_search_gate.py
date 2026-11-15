@@ -21,7 +21,7 @@ class ReaderDomSearchGateTests(unittest.TestCase):
         markers = [f'DOM_SEARCH_CONTRACT_COMPLETED chromium {contract} {digest}' for contract in GATE.CONTRACTS.values()]
         stdout = '\n'.join(markers) + '\n'
         stderr = '\n'.join(tests + ['', '----------------------------------------------------------------------',
-                                     'Ran 7 tests in 0.123s', '', 'OK']) + '\n'
+                                     'Ran 8 tests in 0.123s', '', 'OK']) + '\n'
         self.assertTrue(GATE.valid_output(stdout, stderr, 'chromium', digest))
         changes = [
             (stdout.replace(markers[0] + '\n', ''), stderr),
@@ -33,8 +33,8 @@ class ReaderDomSearchGateTests(unittest.TestCase):
             (stdout, stderr.replace(tests[0], tests[0].replace(' ... ok', " ... skipped 'fixture'"))),
             (stdout, stderr.replace(tests[0], tests[0].replace(' ... ok', ' ... FAIL'))),
             (stdout, stderr + tests[0] + '\n'),
-            (stdout, stderr.replace('Ran 7 tests', 'Ran 6 tests')),
-            (stdout, stderr + 'Ran 7 tests in 0.123s\n'),
+            (stdout, stderr.replace('Ran 8 tests', 'Ran 7 tests')),
+            (stdout, stderr + 'Ran 8 tests in 0.123s\n'),
             (stdout, stderr.replace('\nOK\n', '\nOK (skipped=1)\n')),
             (stdout, stderr.replace('\nOK\n', '\nOK (expected failures=1)\n')),
             (stdout, stderr.replace('\nOK\n', '\nOK (unexpected successes=1)\n')),

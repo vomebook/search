@@ -261,7 +261,19 @@ export function createReaderChapterFormat(readerContext) {
           readerContext.assertReaderActive();
           signal.throwIfAborted();
           const doc = readerContext.parseChapterDocument(new TextDecoder().decode(bytes));
-          for (const element of doc.querySelectorAll("*")) {
+          const elements = doc.querySelectorAll("*");
+          let rewritten = 0, deadline = performance.now() + 8;
+          /** @param {number} count @param {number} total */
+          const yieldIfNeeded = async (count, total) => {
+            if (count % 256 || count >= total || performance.now() < deadline) return;
+            signal.throwIfAborted();
+            readerContext.assertReaderActive();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            signal.throwIfAborted();
+            readerContext.assertReaderActive();
+            deadline = performance.now() + 8;
+          };
+          for (const element of elements) {
             for (const name of ["src", "href", "poster", "xlink:href"])
               if (element.hasAttribute(name)) {
                 const value = element.getAttribute(name) || "";
@@ -272,19 +284,37 @@ export function createReaderChapterFormat(readerContext) {
                 else if (!(name === "href" && value.startsWith("#"))) element.removeAttribute(name);
               }
             if (element.hasAttribute("srcset")) element.removeAttribute("srcset");
+            if (++rewritten % 256 === 0 && rewritten < elements.length && performance.now() >= deadline)
+              await yieldIfNeeded(rewritten, elements.length);
           }
+          signal.throwIfAborted();
+          readerContext.assertReaderActive();
           const article = /** @type {HTMLElement & {_chapterSearchHead?: Node | null}} */ (document.createElement("article"));
           article.className = "reader-markdown reader-epub-chapter";
           article.dataset.chapter = String(chapter.index);
           if (doc.body?.id) article.id = doc.body.id;
-          article.innerHTML = doc.body ? doc.body.innerHTML : "";
-          for (const image of article.querySelectorAll("img")) {
+          // The parser has already normalized and sanitized this HTML document.
+          // Import nodes directly rather than serializing and parsing the body again.
+          const children = doc.body?.childNodes;
+          let imported = 0;
+          if (children) for (const child of children) {
+            article.appendChild(document.importNode(child, true));
+            if (++imported % 256 === 0 && imported < children.length && performance.now() >= deadline)
+              await yieldIfNeeded(imported, children.length);
+          }
+          const images = article.querySelectorAll("img");
+          let prepared = 0;
+          for (const image of images) {
             image.loading = priority === "high" ? "eager" : "lazy";
             image.fetchPriority = priority;
             image.decoding = "async";
+            if (++prepared % 256 === 0 && prepared < images.length && performance.now() >= deadline)
+              await yieldIfNeeded(prepared, images.length);
           }
           // The generated text index includes head text (e.g. the chapter title).
           article._chapterSearchHead = doc.head ? document.importNode(doc.head, true) : null;
+          signal.throwIfAborted();
+          readerContext.assertReaderActive();
           insertChapter(article);
           loaded.add(chapter.index);
           retainedBytes.set(chapter.index, bytes.byteLength);

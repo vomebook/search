@@ -17,6 +17,7 @@ CONTRACTS = {
     'test_synchronous_mutation_invalidates_snapshot': 'synchronousSnapshotInvalidation',
     'test_cancelled_search_cannot_publish_final_results': 'cancellation',
     'test_heading_labels_and_excluded_text': 'headingsAndExcludedNodes',
+    'test_large_heading_order_snapshot_and_fallback': 'largeHeadingOrder',
     'test_occurrence_selection_and_stale_navigation': 'occurrenceSelection',
 }
 
@@ -35,7 +36,7 @@ def valid_output(stdout, stderr, browser, digest):
     found = [line for line in lines if line.startswith('test_')]
     if len(found) != len(expected_tests) or set(found) != expected_tests:
         return False
-    summaries = [line for line in lines if re.fullmatch(r'Ran 7 tests in \d+(?:\.\d+)?s', line)]
+    summaries = [line for line in lines if re.fullmatch(r'Ran 8 tests in \d+(?:\.\d+)?s', line)]
     allowed = expected_tests | {'', '-' * 70, 'OK'} | set(summaries)
     return (len(summaries) == 1 and lines.count('OK') == 1 and all(line in allowed for line in lines))
 
@@ -49,7 +50,7 @@ def run_browser(browser, digest):
     sys.stderr.write(result.stderr)
     if result.returncode or not valid_output(result.stdout, result.stderr, browser, digest):
         raise SystemExit(f'DOM-search browser contracts incomplete: {browser}')
-    print(f'DOM-search browser contracts: {browser} 7/7, zero skipped, source SHA-256 {digest}', flush=True)
+    print(f'DOM-search browser contracts: {browser} 8/8, zero skipped, source SHA-256 {digest}', flush=True)
 
 
 def main():
