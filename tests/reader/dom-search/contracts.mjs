@@ -69,6 +69,10 @@ export async function crossNodeAndStaleNavigation() {
     const stale = await f.search.search(f.root, '', 'needle', f.generation, false);
     f.search.clearMarks(); p.textContent = 'replacement';
     ensure(!await stale[0].activate(f.navigation) && !f.root.querySelector('mark'), 'mutated target');
+    p.replaceChildren(document.createTextNode('前𐐀'), document.createTextNode('界后'));
+    const unicode = await f.search.search(f.root, '', '𐐨界', f.generation, false);
+    ensure(unicode.length === 1 && p.querySelectorAll('mark').length === 2 &&
+      unicode[0].snippet.text.includes('𐐀界'), 'cross-node unicode case folding');
   } finally { f.finish(); }
 }
 
@@ -133,6 +137,36 @@ export async function headingsAndExcludedNodes() {
     ensure(result.length === 3 && result[0].location.startsWith('正文 ') &&
       result[1].location === 'First label' && result[2].location === 'Second label', 'heading labels and excluded nodes');
     ensure(document.createTreeWalker(f.root, NodeFilter.SHOW_TEXT).nextNode(), 'text remains in DOM');
+  } finally { f.finish(); }
+}
+
+export async function largeHeadingOrder() {
+  const f = fixture();
+  try {
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < 300; i++) {
+      const heading = document.createElement('h2');
+      heading.textContent = `heading ${i}`;
+      const paragraph = document.createElement('p');
+      paragraph.append('prefix ', document.createTextNode('nee'), document.createTextNode('dle'));
+      fragment.append(heading, paragraph);
+      f.entries.push({target: heading, label: `label ${i}`});
+    }
+    f.root.append(fragment);
+    const first = await f.search.search(f.root, '', 'needle', f.generation, true);
+    ensure(first.length === 50 && first.every((result, i) => result.location === `label ${i}`) &&
+      f.publications.at(-1).value.total === 300, 'large heading order');
+    f.search.clearMarks();
+    const hot = await f.search.search(f.root, '', 'needle', f.generation, true);
+    ensure(hot.every((result, i) => result.location === `label ${i}`), 'large heading hot snapshot');
+    f.search.clearMarks();
+    // Out-of-order entries must still take the legacy fallback, including
+    // headings that have the same text offset (no intervening text nodes).
+    const a = document.createElement('i'), b = document.createElement('i');
+    f.root.prepend(a, b);
+    f.entries.unshift({target: b, label: 'b'}, {target: a, label: 'a'});
+    const unordered = await f.search.search(f.root, '', 'needle', f.generation, false);
+    ensure(unordered.length === 100 && unordered[0].location === 'label 0', 'unordered heading fallback');
   } finally { f.finish(); }
 }
 
