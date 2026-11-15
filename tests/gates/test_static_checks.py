@@ -425,11 +425,20 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         gate = self.root / paths[1]
         source = gate.read_text()
-        self.assertEqual(source.count("const minimum = [100, 94.20, 97.22];"), 1)
-        gate.write_text(source.replace("const minimum = [100, 94.20, 97.22];",
-                                       "const minimum = [100, 97.99, 97.22];"))
-        self.assert_check(self.run_check("node", paths[1]), False,
-                          "above each minimum")
+        minimum = "const minimum = [100, 98.65, 97.22];"
+        self.assertEqual(source.count(minimum), 1)
+        for raised in ("const minimum = [100, 98.66, 97.22];",
+                       "const minimum = [100, 98.65, 97.23];"):
+            gate.write_text(source.replace(minimum, raised))
+            self.assert_check(self.run_check("node", paths[1]), False, "above each minimum")
+        gate.write_text(source)
+        # Remove real cleanup coverage while retaining every required test name.
+        contract = self.root / paths[2]
+        original = contract.read_text()
+        start = original.index("    // A queued completion or a retained close callback")
+        end = original.index("    await turn();", start)
+        contract.write_text(original[:start] + original[end:])
+        self.assert_check(self.run_check("node", paths[1]), False, "above each minimum")
 
     def test_document_loader_strict_type_contract_rejects_bad_inputs(self):
         source = self.root / "static/loader-usage.mjs"
@@ -2695,10 +2704,18 @@ class StaticGateTests(unittest.TestCase):
         source.write_text(original)
         gate = self.root / paths[1]
         gate_original = gate.read_text()
-        self.assertEqual(gate_original.count('[100, 90.77, 100]'), 1)
-        # Each injected minimum must exceed measured coverage, including improved branches.
-        for minimum in ('[100.01, 90.77, 100]', '[100, 100.01, 100]', '[100, 90.77, 100.01]'):
-            gate.write_text(gate_original.replace('[100, 90.77, 100]', minimum))
+        # Losing unknown-duration retry restoration must fail even with all 16 contracts passing.
+        unknown_duration = '    {restorationReady:true,time:4,duration:Infinity,expected:4},\n'
+        self.assertEqual(original.count(unknown_duration), 1)
+        source.write_text(original.replace(unknown_duration, ''))
+        regression = self.run_check(*check)
+        self.assert_check(regression, False, message)
+        self.assertIn('# pass 16', regression.stdout)
+        self.assertIn('branch coverage', regression.stdout)
+        source.write_text(original)
+        self.assertEqual(gate_original.count('[100, 100, 100]'), 1)
+        for minimum in ('[100.01, 100, 100]', '[100, 100.01, 100]', '[100, 100, 100.01]'):
+            gate.write_text(gate_original.replace('[100, 100, 100]', minimum))
             self.assert_check(self.run_check(*check), False, message)
         self.assertEqual(gate_original.count('reader-media-format\\.mjs'), 1)
         gate.write_text(gate_original.replace('reader-media-format\\.mjs', 'missing-media-format\\.mjs'))

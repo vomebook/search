@@ -45,6 +45,23 @@ test("retry policy keeps bounded delay and never retries rate-limited or aborted
     calls++; throw Object.assign(new Error("rate limited"), {status: 429, code: "READER_PDF_RATE_LIMIT"});
   }), {code: "READER_PDF_RATE_LIMIT"});
   assert.equal(calls, 1); assert.deepEqual(h.waits, []);
+  for (const failure of [null, undefined, new DOMException("caller closed", "AbortError")]) {
+    calls = 0; h.waits.length = 0;
+    await assert.rejects(h.loader.retryReaderProxy(async () => {calls++; throw failure;}), error => error === failure);
+    assert.equal(calls, 1); assert.deepEqual(h.waits, []);
+  }
+  for (const rejectWait of [false, true]) {
+    const closing = fixture(); calls = 0;
+    closing.context.waitForReader = async delay => {
+      closing.waits.push(delay); closing.close();
+      if (rejectWait) throw closing.context.readerAbortError();
+    };
+    await assert.rejects(closing.loader.retryReaderProxy(async () => {
+      calls++; throw new TypeError("failed to fetch");
+    }), {name: "AbortError"});
+    assert.equal(calls, 1, "closing during backoff must prevent a second request");
+    assert.deepEqual(closing.waits, [350]);
+  }
   calls = 0; h.close();
   await assert.rejects(h.loader.retryReaderProxy(async () => {calls++;}), {name: "AbortError"});
   assert.equal(calls, 0);
@@ -188,6 +205,39 @@ test("script load releases timers, handlers and resources on success, error and 
     const closed = h.loader.loadScript("/closing.js"); [...h.resources][0]();
     await assert.rejects(closed, {name: "AbortError"});
     assert.equal(latest.removed, true); assert.equal(timers.size, 0); assert.equal(h.resources.size, 0);
+    // A queued completion or a retained close callback may arrive after another
+    // outcome has already won. Cleanup must run once and leave later work alone.
+    for (const winner of ["load", "error", "timeout", "close"]) {
+      const racing = fixture();
+      let releases = 0;
+      const track = racing.context.trackReaderResource;
+      racing.context.trackReaderResource = cleanup => {
+        const release = track(cleanup);
+        return () => {releases++; release();};
+      };
+      const pending = racing.loader.loadScript(`/race-${winner}.js`);
+      const script = latest;
+      let removals = 0;
+      script.remove = () => {removals++; script.removed = true;};
+      const callbacks = {load: script.onload, error: script.onerror,
+        timeout: timers.get(timer), close: [...racing.resources][0]};
+      callbacks[winner]();
+      if (winner === "load") await pending;
+      else await assert.rejects(pending, winner === "close" ? {name: "AbortError"} : {code: "READER_ENGINE_NETWORK"});
+      assert.equal(releases, 1); assert.equal(removals, winner === "load" ? 0 : 1);
+      assert.equal(script.onload, null); assert.equal(script.onerror, null);
+      assert.equal(timers.size, 0); assert.equal(racing.resources.size, 0);
+
+      const next = racing.loader.loadScript("/next-engine.js");
+      const nextScript = latest, nextTimer = timer;
+      for (const callback of Object.values(callbacks)) callback();
+      assert.equal(releases, 1, "late callbacks must not release the same resource twice");
+      assert.equal(removals, winner === "load" ? 0 : 1, "late failure must not remove a loaded script");
+      assert.equal(timers.has(nextTimer), true); assert.equal(timers.size, 1);
+      assert.equal(racing.resources.size, 1); assert.equal(nextScript.removed, false);
+      nextScript.onload(); await next;
+      assert.equal(releases, 2); assert.equal(timers.size, 0); assert.equal(racing.resources.size, 0);
+    }
     await turn();
   } finally {globalThis.document = oldDocument; globalThis.setTimeout = oldSet; globalThis.clearTimeout = oldClear;}
 });
