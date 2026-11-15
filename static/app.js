@@ -14,7 +14,7 @@ const WORKER_REQUEST_TIMEOUT = 10000;
 const WORKER_LOAD_TIMEOUT = 60000;
 const APPEND_REQUEST_TIMEOUT = 5000;
 const DOWNLOAD_CHECK_TIMEOUT = 8000;
-const pendingSearchPages = new Map();
+const pendingSearchPages = getSearchTransport().pending;
 // Detached compatibility projection for browser diagnostics; the controller owns recovery.
 let pagingFailures = 0;
 
@@ -1503,78 +1503,25 @@ function isValidSearchResponse(data, expectedPage, expectedPageSize) {
   return VoiceOfMLSearchValidation.isValidSearchResponse(data, expectedPage, expectedPageSize);
 }
 
-// One entry owns its network request, deadline and cancellation subscriptions.
-function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
-  const controller = new AbortController();
-  const entry = { controller, deadline: Date.now() + timeoutMs, listeners: new Map(), nextListenerId: 0 };
-  const stopped = new Promise((resolve, reject) => {
-    entry.expire = () => {
-      reject(new Error("API_TIMEOUT"));
-      controller.abort();
-    };
-    controller.signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true });
+var searchTransport;
+function getSearchTransport() {
+  return searchTransport ||= VoiceOfMLSearchTransport.create({
+    fetch: (url, options) => fetch(url, options),
+    validate: (data, page, size) => isValidSearchResponse(data, page, size),
   });
-  const timer = setTimeout(entry.expire, timeoutMs);
-  const request = fetch(url, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body), signal: controller.signal,
-  }).then(async response => {
-    if (!response.ok) throw Object.assign(new Error("HTTP " + response.status), { status: response.status });
-    const data = await response.json();
-    if (!isValidSearchResponse(data, body.page, body.page_size)) throw new Error("INVALID_API_RESPONSE");
-    return data;
-  });
-  entry.promise = Promise.race([request, stopped]).finally(() => {
-    clearTimeout(timer);
-    entry.listeners.forEach(({ owner, cancel }) => { if (owner) owner.removeEventListener("abort", cancel); });
-    entry.listeners.clear();
-    if (pendingSearchPages.get(cacheKey) === entry) pendingSearchPages.delete(cacheKey);
-  });
-  pendingSearchPages.set(cacheKey, entry);
-  return entry;
 }
 
-// Prefetch and foreground pagination join the same entry for each search/page.
+function createSearchPageRequest(cacheKey, url, body, timeoutMs) {
+  return getSearchTransport().createRequest(cacheKey, url, body, timeoutMs);
+}
+
 function fetchSearchPage(cacheKey, url, body, signal, timeoutMs) {
-  if (signal && signal.aborted) return Promise.reject(new DOMException("Cancelled", "AbortError"));
-  let entry = pendingSearchPages.get(cacheKey);
-  if (entry && Date.now() >= entry.deadline) entry.expire();
-  if (!entry || entry.controller.signal.aborted) entry = createSearchPageRequest(cacheKey, url, body, timeoutMs);
-  if (!signal) {
-    // A caller without an abort signal still owns the shared request.
-    entry.listeners.set(++entry.nextListenerId, { owner: null, cancel: null });
-    return entry.promise;
-  }
-  const listenerId = ++entry.nextListenerId;
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => {
-      signal.removeEventListener("abort", cancel);
-      entry.listeners.delete(listenerId);
-    };
-    const cancel = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new DOMException("Cancelled", "AbortError"));
-      if (!entry.listeners.size && !entry.controller.signal.aborted) entry.controller.abort();
-    };
-    entry.listeners.set(listenerId, { owner: signal, cancel });
-    signal.addEventListener("abort", cancel, { once: true });
-    if (signal.aborted) cancel();
-    entry.promise.then(data => {
-      if (settled) return;
-      settled = true; cleanup(); resolve(data);
-    }, error => {
-      if (settled) return;
-      settled = true; cleanup(); reject(error);
-    });
-  });
+  return getSearchTransport().fetchPage(cacheKey, url, body, signal, timeoutMs);
 }
 
 function expireSearchRequests() {
   const now = Date.now();
-  pendingSearchPages.forEach(entry => { if (now >= entry.deadline) entry.expire(); });
+  getSearchTransport().expire();
   corpusWorkerPending.forEach(entry => { if (now >= entry.deadline) entry.expire(); });
 }
 
@@ -1702,65 +1649,37 @@ function cancelActiveSearch() {
   return id === searchId;
 }
 
+var searchPagePrefetch;
 function prefetchSearchPages(base, template) {
-  const key = getSearchViewKey(), groupKey = base + "|" + stableSearchStringify(template);
-  let controller = searchPrefetchAbortController;
-  if (!controller || controller.signal.aborted || controller.groupKey !== groupKey) {
-    controller?.abort();
-    controller = new AbortController();
-    controller.groupKey = groupKey;
-    controller.active = new Map();
-    controller.attempted = new Set();
-    controller.cacheWaits = new Map();
-    searchPrefetchAbortController = controller;
-  }
-  const current = () => searchPrefetchAbortController === controller && !controller.signal.aborted && key === getSearchViewKey();
-  const pump = () => {
-    if (!current() || document.hidden || !navigator.onLine) return;
-    const promoted = controller.cacheWaits.get(STATE._loadedPage + 1);
-    if (promoted && !promoted.urgent) promoted.controller.abort();
-    const last = Math.min(Math.ceil(STATE.total / STATE.pageSize), STATE._loadedPage + 3);
-    for (const page of controller.attempted) if (page <= STATE._loadedPage) controller.attempted.delete(page);
-    for (let page = STATE._loadedPage + 1; page <= last && controller.active.size < 2; page++) {
-      if (STATE._pageCache[page] || controller.attempted.has(page)) continue;
-      controller.attempted.add(page);
-      const body = Object.assign({}, template, {page});
-      const cacheKey = base + "|" + stableSearchStringify(body);
-      const metadata = searchPageMetadata.get(STATE.results[0]);
-      const expected = metadata?.generation ? {generation: metadata.generation, total: STATE.total, query: {pageSize: STATE.pageSize}} : null;
-      const task = (async () => {
-        let data = getCachedSearchResponse(cacheKey);
-        if (data && expected && (data.generation !== expected.generation || data.total !== expected.total)) {
-          searchResponseCache.delete(cacheKey); data = null;
-        }
-        if (!data && expected) {
-          const wait = { controller: new AbortController(), urgent: page === STATE._loadedPage + 1 };
-          controller.cacheWaits.set(page, wait);
-          try { data = await readRecentSearchPage(key, page, expected, wait.urgent ? 25 : 150, wait.controller.signal); }
-          finally { controller.cacheWaits.delete(page); }
-        }
-        if (!current()) return;
-        if (!data) data = await fetchSearchPage(cacheKey, base, body, controller.signal, APPEND_REQUEST_TIMEOUT);
-        if (!current()) return;
-        validatePositionWindowPage(data, page, body.page_size, expected);
-        noteApiSuccess();
-        rememberSearchPageMetadata(data);
-        if (page > STATE._loadedPage) STATE._pageCache[page] = data.results;
-        scheduleBottomLoad(0, page);
-        setCachedSearchResponse(cacheKey, data, true);
-      })().catch(error => {
-        if (!current()) return;
-        if (error.message === "RESTORE_PAGE_CHANGED") {
-          // A changed generation is a healthy API response. Foreground demand
-          // still chooses the backend, including a now-ready local Worker.
-          noteApiSuccess();
-        } else noteSearchApiFailure(error);
-      }).finally(() => { controller.active.delete(page); pump(); });
-      controller.active.set(page, task);
-    }
-  };
-  pump();
-  return controller.active.get(STATE._loadedPage + 1) || Promise.resolve();
+  const prefetch = searchPagePrefetch ||= VoiceOfMLSearchPrefetch.create({
+    readView: () => ({ key: getSearchViewKey(), loadedPage: STATE._loadedPage,
+      total: STATE.total, pageSize: STATE.pageSize,
+      generation: searchPageMetadata.get(STATE.results[0])?.generation,
+      inactive: document.hidden || !navigator.onLine }),
+    getGroup: () => searchPrefetchAbortController,
+    setGroup: controller => { searchPrefetchAbortController = controller; },
+    hasPage: page => !!STATE._pageCache[page],
+    stringify: body => stableSearchStringify(body),
+    getCached: key => getCachedSearchResponse(key),
+    evictCached: key => { searchResponseCache.delete(key); },
+    readRecent: (...args) => readRecentSearchPage(...args),
+    fetchPage: (key, url, body, signal) => fetchSearchPage(key, url, body, signal, APPEND_REQUEST_TIMEOUT),
+    validate: (...args) => validatePositionWindowPage(...args),
+    acceptPage: (page, data) => {
+      noteApiSuccess();
+      rememberSearchPageMetadata(data);
+      if (page > STATE._loadedPage) STATE._pageCache[page] = data.results;
+    },
+    scheduleReady: page => scheduleBottomLoad(0, page),
+    writeCached: (key, data) => setCachedSearchResponse(key, data, true),
+    onFailure: error => {
+      // Generation changes are healthy API responses; foreground demand still
+      // chooses the backend, including a now-ready local Worker.
+      if (error.message === "RESTORE_PAGE_CHANGED") noteApiSuccess();
+      else noteSearchApiFailure(error);
+    },
+  });
+  return prefetch.prefetch(base, template);
 }
 
 function prefetchNextPage() {

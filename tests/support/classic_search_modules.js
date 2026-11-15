@@ -5,7 +5,8 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const MODULES = ["static/search/folder-selection.js", "static/search/domain/height-index.js"];
+const MODULES = ["static/search/folder-selection.js", "static/search/domain/height-index.js",
+  "static/search/requests/infrastructure/shared-transport.js", "static/search/requests/application/prefetch-controller.js"];
 const sources = new Map();
 const installed = new WeakMap();
 
@@ -19,10 +20,11 @@ function installClassicSearchModules(root, context) {
   if (!done) installed.set(context, done = new Set());
   for (const name of MODULES) {
     if (done.has(name)) continue;
-    let source = sources.get(name);
+    const sourcePath = path.join(root, name);
+    let source = sources.get(sourcePath);
     if (source === undefined) {
-      source = fs.readFileSync(path.join(root, name), "utf8");
-      sources.set(name, source);
+      source = fs.readFileSync(sourcePath, "utf8");
+      sources.set(sourcePath, source);
     }
     vm.runInContext(source, context, {filename: name});
     done.add(name);

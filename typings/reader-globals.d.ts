@@ -11,6 +11,43 @@ declare function escapeHTML(text: unknown): string | undefined;
 declare function getHighlightRegex(query: string): RegExp | null;
 declare function highlightText(text: unknown, query: string | null | undefined): string | undefined;
 declare var VoiceOfMLSearchValidation: {isValidSearchResponse(data: unknown, expectedPage: number, expectedPageSize: number): unknown};
+interface VoiceOfMLSearchRequestBody {page: number; page_size: number; [key: string]: unknown}
+interface VoiceOfMLSearchRequestEntry {
+  controller: AbortController; deadline: number; nextListenerId: number;
+  listeners: Map<number, {owner: AbortSignal | null; cancel: (() => void) | null}>;
+  promise: Promise<unknown>; expire(): void; resume?(): void; suspended?: boolean;
+}
+interface VoiceOfMLSearchTransportDependencies {
+  fetch(url: string, options: RequestInit): Promise<Response>;
+  validate(data: unknown, page: number, size: number): unknown;
+}
+interface VoiceOfMLSearchTransport {
+  pending: Map<string, VoiceOfMLSearchRequestEntry>;
+  createRequest(key: string, url: string, body: VoiceOfMLSearchRequestBody, timeout: number): VoiceOfMLSearchRequestEntry;
+  fetchPage(key: string, url: string, body: VoiceOfMLSearchRequestBody, signal: AbortSignal | null | undefined, timeout: number): Promise<unknown>;
+  expire(): void;
+}
+declare var VoiceOfMLSearchTransport: {create(deps: VoiceOfMLSearchTransportDependencies): VoiceOfMLSearchTransport};
+interface VoiceOfMLSearchPrefetchGroup extends AbortController {
+  groupKey: string; active: Map<number, Promise<void>>; attempted: Set<number>;
+  cacheWaits: Map<number, {controller: AbortController; urgent: boolean}>;
+}
+interface VoiceOfMLSearchPrefetchExpected {generation: string; total: number; query: {pageSize: number}}
+interface VoiceOfMLSearchPrefetchDependencies {
+  readView(): {key: string; loadedPage: number; total: number; pageSize: number; generation: string | undefined; inactive: boolean};
+  getGroup(): VoiceOfMLSearchPrefetchGroup | null;
+  setGroup(group: VoiceOfMLSearchPrefetchGroup): void;
+  hasPage(page: number): boolean; stringify(body: VoiceOfMLSearchRequestBody): string;
+  getCached(key: string): VoiceOfMLSearchWindowPageData | null;
+  evictCached(key: string): void;
+  readRecent(key: string, page: number, expected: VoiceOfMLSearchPrefetchExpected, wait: number, signal: AbortSignal): Promise<VoiceOfMLSearchWindowPageData | null>;
+  fetchPage(key: string, url: string, body: VoiceOfMLSearchRequestBody, signal: AbortSignal): Promise<VoiceOfMLSearchWindowPageData>;
+  validate(data: VoiceOfMLSearchWindowPageData, page: number, size: number, expected: VoiceOfMLSearchPrefetchExpected | null): void;
+  acceptPage(page: number, data: VoiceOfMLSearchWindowPageData): void;
+  scheduleReady(page: number): void; writeCached(key: string, data: VoiceOfMLSearchWindowPageData): void;
+  onFailure(error: Error): void;
+}
+declare var VoiceOfMLSearchPrefetch: {create(deps: VoiceOfMLSearchPrefetchDependencies): {prefetch(base: string, template: VoiceOfMLSearchRequestBody): Promise<void>}};
 declare var VoiceOfMLSearchIdentity: {getResultStableId(result: unknown): string};
 declare var VoiceOfMLSearchFileTypes: {orderedExtensions: string[]; fileIconMap: Record<string, string | object>};
 interface VoiceOfMLFolderSelectionNode {
