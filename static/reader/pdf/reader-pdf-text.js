@@ -1,5 +1,6 @@
 // PDF.js already emits word spaces. Adding a space after every item breaks
 // Chinese words and words split across fonts. Keep the source's explicit spaces.
+/** @param {import('../../../typings/reader-pdf-part-strict').PdfTextItem[]} items */
 export function pdfTextContent(items) {
   return items.filter((item) => typeof item.str === "string")
     .map((item) => item.str + (item.hasEOL ? "\n" : "")).join("");
@@ -8,9 +9,11 @@ export function pdfTextContent(items) {
 // Embedded OCR often spaces individual Han characters, including vertical text.
 // Keep punctuation and Latin word boundaries, and map hits back to source offsets.
 const hanWordSpacing = /(?<=\p{Script=Han})\s+(?=\p{Script=Han})/gu;
+/** @param {string} raw */
 export function normalizePdfSearchText(raw) {
   return raw.replace(hanWordSpacing, "");
 }
+/** @param {{offsets: Uint32Array | null}} mapping @param {number} index */
 export function pdfSourceOffset(mapping, index) {
   const offsets = mapping.offsets;
   if (!offsets) return index;
@@ -22,6 +25,7 @@ export function pdfSourceOffset(mapping, index) {
   }
   return index + (low ? offsets[(low - 1) * 2 + 1] : 0);
 }
+/** @param {string} raw */
 export function pdfSearchText(raw) {
   const offsets = [], chunks = [];
   let start = 0, removed = 0;
@@ -37,6 +41,7 @@ export function pdfSearchText(raw) {
   return { text: chunks.join(""), offsets: new Uint32Array(offsets) };
 }
 
+/** @param {HTMLElement} layer @param {string} text @returns {import('../../../typings/reader-pdf-part-strict').VerticalRun} */
 function textRun(layer, text) {
   const run = layer.ownerDocument.createElement("span");
   run.className = "reader-pdf-text-run";
@@ -44,15 +49,20 @@ function textRun(layer, text) {
   return run;
 }
 
+/** @type {WeakMap<Document, CanvasRenderingContext2D | null>} */
 const measurements = new WeakMap();
+/** @param {number} value */
 function normalizeBox(value) {
   return Math.max(0, Math.min(1, Number(value) || 0));
 }
+/** @param {CanvasRenderingContext2D | null} context @param {string} text @param {string} family @param {number} targetWidth */
 function measureRunScale(context, text, family, targetWidth) {
+  if (!context) return 1;
   context.font = `100px ${family}`;
   const measured = context.measureText(text).width / 100;
   return measured > 0 && targetWidth > 0 ? targetWidth / measured : 1;
 }
+/** @param {HTMLElement} layer @param {string} text @param {number} x @param {number} y @param {number} height @param {number} width @param {string} family */
 function positionedRun(layer, text, x, y, height, width, family, angle = 0, vertical = false) {
   const box = layer.ownerDocument.createElement("span");
   box.className = "reader-pdf-text-position reader-pdf-text-block";
@@ -84,6 +94,7 @@ function positionedRun(layer, text, x, y, height, width, family, angle = 0, vert
   return box;
 }
 
+/** @param {HTMLElement} layer @param {import('../../../typings/reader-pdf-part-strict').PdfTextItem[]} items @param {import('../../../typings/reader-pdf-part-strict').PdfTextViewport} viewport @param {Record<string, import('../../../typings/reader-pdf-part-strict').PdfTextStyle>} styles */
 export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
   const fragment = layer.ownerDocument.createDocumentFragment();
   const w = Math.max(1, viewport.width), h = Math.max(1, viewport.height);
@@ -99,7 +110,7 @@ export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
         const scale = viewport.scale || 1;
         const height = Math.hypot(t[2], t[3]) * scale || 12;
         const angle = v ? Math.atan2(v[1] * t[0] + v[3] * t[1], v[0] * t[0] + v[2] * t[1]) : 0;
-        const ascent = height * (Number.isFinite(style.ascent) ? style.ascent : 0.8);
+        const ascent = height * (Number.isFinite(style.ascent) ? /** @type {number} */ (style.ascent) : 0.8);
         const x = vertical ? point[0] - height / 2 : point[0] + ascent * Math.sin(angle);
         const y = vertical ? point[1] : point[1] - ascent * Math.cos(angle);
         fragment.appendChild(positionedRun(layer, item.str, x / w, y / h, height / w,
@@ -118,9 +129,10 @@ export function populatePdfTextLayer(layer, items, viewport, styles = {}) {
   scaleVerticalRuns(layer);
 }
 
+/** @param {HTMLElement} layer @param {import('../../../typings/reader-pdf-part-strict').OcrBlock[]} blocks @param {{writing_mode?: 'vertical-rl' | 'vertical-lr' | 'horizontal-tb'}} layout */
 export function populateOcrTextLayer(layer, blocks, layout = {}) {
   const fragment = layer.ownerDocument.createDocumentFragment();
-  const ratio = layer.parentElement.getBoundingClientRect();
+  const ratio = /** @type {HTMLElement} */ (layer.parentElement).getBoundingClientRect();
   const vertical = layout?.writing_mode === "vertical-rl" || layout?.writing_mode === "vertical-lr";
   let positioned = 0;
   const fallback = [];
@@ -148,7 +160,7 @@ export function populateOcrTextLayer(layer, blocks, layout = {}) {
     const box = layer.ownerDocument.createElement("div");
     box.className = "reader-pdf-text-fallback";
     if (vertical) {
-      box.style.writingMode = layout.writing_mode;
+      box.style.writingMode = /** @type {string} */ (layout.writing_mode);
       box.style.textOrientation = "upright";
     }
     box.appendChild(textRun(layer, fallback.join("\n")));
@@ -157,9 +169,10 @@ export function populateOcrTextLayer(layer, blocks, layout = {}) {
   layer.replaceChildren(fragment);
 }
 
+/** @param {HTMLElement} layer @param {import('../../../typings/reader-pdf-part-strict').IndependentTextPayload} payload */
 export function populateIndependentTextLayer(layer, payload) {
   const fragment = layer.ownerDocument.createDocumentFragment();
-  const text = payload.text, bounds = layer.parentElement.getBoundingClientRect();
+  const text = payload.text, bounds = /** @type {HTMLElement} */ (layer.parentElement).getBoundingClientRect();
   const ratio = bounds.height / Math.max(1, bounds.width);
   let previous = 0;
   const ordered = payload.regions.every(region => {
@@ -173,6 +186,7 @@ export function populateIndependentTextLayer(layer, payload) {
   // behavior rather than silently changing text or selection.
   const chars = ordered ? null : Array.from(text);
   let point = 0, unit = 0, end = 0;
+  /** @param {number} target */
   const advance = target => {
     while (point < target && unit < text.length) {
       const high = text.charCodeAt(unit++);
@@ -198,7 +212,7 @@ export function populateIndependentTextLayer(layer, payload) {
     const width = vertical ? down : across;
     const positioned = positionedRun(layer, region.text, q[0][0],
       q[0][1], Math.max(height, .0001), width, "sans-serif", angle, vertical);
-    const run = positioned.querySelector(".reader-pdf-text-run");
+    const run = /** @type {HTMLSpanElement} */ (positioned.querySelector(".reader-pdf-text-run"));
     run.dir = ["rtl", "ltr"].includes(region.direction) ? region.direction : "auto";
     run.style.unicodeBidi = "plaintext";
     run.dataset.regionId = region.id;
@@ -218,23 +232,26 @@ export function populateIndependentTextLayer(layer, payload) {
   scaleVerticalRuns(layer);
 }
 
+/** @param {HTMLElement} layer */
 function scaleVerticalRuns(layer) {
+  /** @type {Array<[import('../../../typings/reader-pdf-part-strict').VerticalRun, number]>} */
   const scales = [];
-  for (const run of layer.querySelectorAll('.reader-pdf-text-run')) {
-    if (!(run._readerVerticalAdvance > 0)) continue;
+  for (const run of /** @type {NodeListOf<import('../../../typings/reader-pdf-part-strict').VerticalRun>} */ (layer.querySelectorAll('.reader-pdf-text-run'))) {
+    if (!(/** @type {number} */ (run._readerVerticalAdvance) > 0)) continue;
     const height = run.offsetHeight;
     if (!height) continue;
-    const em = parseFloat(layer.ownerDocument.defaultView.getComputedStyle(run).fontSize);
-    scales.push([run, run._readerVerticalAdvance * em / height]);
+    const em = parseFloat(/** @type {Window} */ (layer.ownerDocument.defaultView).getComputedStyle(run).fontSize);
+    scales.push([run, /** @type {number} */ (run._readerVerticalAdvance) * em / height]);
   }
   for (const [run, scale] of scales) run.style.transform = `scaleY(${scale})`;
 }
 
+/** @param {Document} doc @param {number} x @param {number} y */
 export function independentTextCaret(doc, x, y) {
   const position = doc.caretPositionFromPoint?.(x, y);
   const range = position ? null : doc.caretRangeFromPoint?.(x, y);
-  const node = position?.offsetNode || range?.startContainer;
-  let offset = position?.offset ?? range?.startOffset;
+  const node = /** @type {Text | undefined} */ (position?.offsetNode || range?.startContainer);
+  let offset = /** @type {number} */ (position?.offset ?? range?.startOffset);
   if (node?.nodeType !== 3 || !node.parentElement?.closest(
       '.reader-pdf-text[data-text-generation] .reader-pdf-text-run[data-region-id]')) return null;
   if (offset > 0 && offset < node.length && /[\uDC00-\uDFFF]/.test(node.data[offset]) &&

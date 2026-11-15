@@ -1,15 +1,18 @@
+/** @param {import('../../../typings/reader-pdf-text-runtime-strict').Context} readerContext */
 export function createReaderPdfTextRuntime(readerContext) {
+  /** @returns {import('../../../typings/reader-pdf-text-runtime-strict').OcrSource | null} */
   function pdfOcrSource() {
-    return VoiceOfMLReader.pdfPageSource(readerContext.ocrManifestUrl, location.href,
-      "https://voiceofml-search.hf.space", "ocr-manifest.json");
+    return /** @type {import('../../../typings/reader-pdf-text-runtime-strict').OcrSource | null} */ (VoiceOfMLReader.pdfPageSource(readerContext.ocrManifestUrl, location.href, "https://voiceofml-search.hf.space", "ocr-manifest.json"));
   }
 
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').V3Resource} ref */
   function v3ResourceUrl(ref) {
-    if (ref?.kind === 'dataset-source') return readerContext.datasetPrimaryUrl(ref);
-    readerContext.validateResource(ref);
+    if (ref?.kind === 'dataset-source') return readerContext.datasetPrimaryUrl(/** @type {import('../../../typings/reader-v3-strict').DatasetPrimary} */ (ref));
+    readerContext.validateResource(/** @type {import('../../../typings/reader-v3-strict').Resource} */ (ref));
     return new URL(readerContext.readerDownloadApiUrl(`/api/reader-bucket-resource?path=${encodeURIComponent(ref.path)}`), location.href).href;
   }
 
+  /** @param {string} sourceSha @param {number} pageCount */
   function createPdfV3Repository(sourceSha, pageCount) {
     return readerContext.createV3Repository({ sourceSha, pageCount, signal: readerContext.readerAbortController.signal,
       resourceUrl: readerContext.v3ResourceUrl,
@@ -18,6 +21,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     });
   }
 
+  /** @param {string} url @param {number} [limit] @param {string} [digest] @param {number} [size] @param {RequestPriority} [priority] @returns {Promise<unknown>} */
   async function readPdfOcrJson(url, limit = VoiceOfMLReaderSecurity.LIMITS.chapterBytes, digest = "", size = 0, priority = "auto") {
     const response = await readerContext.fetchReaderUrl(url, { priority });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -44,15 +48,17 @@ export function createReaderPdfTextRuntime(readerContext) {
       if (!readerContext.pdfOcrSource()) throw new Error("PDF_OCR_SOURCE_INVALID");
       readerContext.pdfOcrManifestPromise = readerContext.readPdfOcrJson(readerContext.ocrManifestUrl, VoiceOfMLReaderSecurity.LIMITS.manifestBytes, "", 0, "high").then((manifest) => {
         readerContext.assertReaderActive();
-        if (manifest.page_count !== readerContext.documentState.pageCount) throw new Error("PDF_OCR_PAGE_COUNT_MISMATCH");
-        readerContext.pdfOcrManifest = VoiceOfMLReaderSecurity.validatePdfOcrManifest(manifest);
-        return readerContext.pdfOcrManifest;
+        const validated = VoiceOfMLReaderSecurity.validatePdfOcrManifest(manifest);
+        if (validated.page_count !== readerContext.documentState.pageCount) throw new Error("PDF_OCR_PAGE_COUNT_MISMATCH");
+        readerContext.pdfOcrManifest = validated;
+        return validated;
       });
     }
     try { return await readerContext.pdfOcrManifestPromise; }
     catch (error) { readerContext.pdfOcrManifestPromise = null; throw error; }
   }
 
+  /** @param {number} page @param {RequestPriority} [priority] */
   function loadPdfOcrPage(page, priority = "high") {
     const cached = readerContext.cachedPdfOcrPage(page);
     if (cached) return Promise.resolve(cached);
@@ -61,10 +67,15 @@ export function createReaderPdfTextRuntime(readerContext) {
     const task = Promise.resolve().then(() => {
       // OCR is published as its own manifest. The image page manifest may be
       // intentionally lean and contain only page_count.
-      return readerContext.loadPdfOcrManifest().then((manifest) => {
+      return readerContext.loadPdfOcrManifest().then(/** @returns {Promise<import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload>} */ (manifest) => {
         if (manifest?.text_layer) {
+          const ref = manifest.text_layer;
+          if (typeof ref !== 'object' || !('path' in ref) || typeof ref.path !== 'string' ||
+              !('bucket' in ref) || typeof ref.bucket !== 'string' || !('role' in ref) || typeof ref.role !== 'string' ||
+              !('sha256' in ref) || typeof ref.sha256 !== 'string' || !('bytes' in ref) || typeof ref.bytes !== 'number')
+            throw new Error("PDF_OCR_MANIFEST_INVALID");
           readerContext.pdfTextLayerRepository ||= readerContext.createPdfV3Repository(manifest.source_sha256, manifest.page_count);
-            return readerContext.pdfTextLayerRepository.textPage(manifest.text_layer, page).then(payload => {
+          return readerContext.pdfTextLayerRepository.textPage(/** @type {import('../../../typings/reader-v3-strict').Resource} */ (ref), page).then(payload => {
             if (readerContext.pdfV3Map) {
               const geometry = readerContext.pdfV3Map.pages[page - 1];
               if (Math.abs((payload.geometry.width / payload.geometry.height) / (geometry.width / geometry.height) - 1) > .01)
@@ -75,11 +86,16 @@ export function createReaderPdfTextRuntime(readerContext) {
         }
         const entry = manifest?.pages?.[page - 1];
         if (!entry || entry.p !== page) throw new Error("PDF_OCR_PAGE_MISSING");
-        return readerContext.readPdfOcrJson(readerContext.pdfOcrSource().assetUrl(entry.o),
+        // Legacy manifests may omit integrity metadata for book search, not page fetches.
+        if (typeof entry.os !== 'string' || !/^[0-9a-f]{64}$/.test(entry.os) ||
+            typeof entry.ob !== 'number' || !Number.isSafeInteger(entry.ob) || entry.ob < 1)
+          throw new Error("PDF_OCR_MANIFEST_INVALID");
+        return readerContext.readPdfOcrJson((/** @type {import('../../../typings/reader-pdf-text-runtime-strict').OcrSource} */ (readerContext.pdfOcrSource())).assetUrl(entry.o),
           VoiceOfMLReaderSecurity.LIMITS.chapterBytes, entry.os, entry.ob, priority).then((payload) => {
             VoiceOfMLReaderSecurity.validatePdfOcrPage(payload, page);
-            readerContext.cachePdfOcrPage(page, payload);
-            return payload;
+            const validated = /** @type {import('../../../typings/reader-pdf-text-runtime-strict').OcrPage} */ (payload);
+            readerContext.cachePdfOcrPage(page, validated);
+            return validated;
           });
       });
     }).finally(() => readerContext.pdfOcrPagePromises.delete(page));
@@ -87,6 +103,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     return task;
   }
 
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').TextContent} content */
   function estimatePdfTextContentBytes(content) {
     let bytes = 0;
     for (const item of content?.items || [])
@@ -98,6 +115,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     return Math.max(128, bytes);
   }
 
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').PdfDocument | null} pdf @param {number} page @param {import('../../../typings/reader-pdf-text-runtime-strict').TextContent} content */
   function recordNativePdfTextEvidence(pdf, page, content) {
     // Do not fetch extra pages to decide this: only successful, already
     // extracted pages count. A blank cover alone says nothing about the book.
@@ -126,6 +144,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     }
   }
 
+  /** @param {number} page @param {import('../../../typings/reader-pdf-text-runtime-strict').TextContent} content */
   function cachePdfTextContent(page, content) {
     const bytes = readerContext.estimatePdfTextContentBytes(content);
     if (bytes > readerContext.PDF_TEXT_CONTENT_CACHE_BYTES) return;
@@ -135,13 +154,14 @@ export function createReaderPdfTextRuntime(readerContext) {
     readerContext.pdfTextContentCache.set(page, { content, bytes });
     readerContext.pdfTextContentCacheBytes += bytes;
     while (readerContext.pdfTextContentCacheBytes > readerContext.PDF_TEXT_CONTENT_CACHE_BYTES) {
-      const oldest = readerContext.pdfTextContentCache.keys().next().value;
-      const removed = readerContext.pdfTextContentCache.get(oldest);
+      const oldest = /** @type {number} */ (readerContext.pdfTextContentCache.keys().next().value);
+      const removed = /** @type {{content: import('../../../typings/reader-pdf-text-runtime-strict').TextContent; bytes: number}} */ (readerContext.pdfTextContentCache.get(oldest));
       readerContext.pdfTextContentCacheBytes -= removed.bytes;
       readerContext.pdfTextContentCache.delete(oldest);
     }
   }
 
+  /** @param {number} page */
   function cachedPdfTextContent(page) {
     const record = readerContext.pdfTextContentCache.get(page);
     if (!record) return null;
@@ -150,6 +170,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     return record.content;
   }
 
+  /** @param {number} page @param {import('../../../typings/reader-pdf-text-runtime-strict').PdfPage} pdfPage @param {number | null} [generation] */
   function loadPdfTextContent(page, pdfPage, generation = null) {
     readerContext.assertReaderActive();
     const sourcePdf = readerContext.pdfDocument;
@@ -185,6 +206,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     return task;
   }
 
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload} payload */
   function estimatePdfOcrPageBytes(payload) {
     if (payload?.kind === "pdf-text-layer") return Math.max(128, JSON.stringify(payload).length * 2);
     return Math.max(128, (payload?.blocks || []).reduce(
@@ -192,6 +214,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     ));
   }
 
+  /** @param {number} page @param {import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload} payload */
   function cachePdfOcrPage(page, payload) {
     const bytes = readerContext.estimatePdfOcrPageBytes(payload);
     if (bytes > readerContext.PDF_OCR_PAGE_CACHE_BYTES) return;
@@ -201,13 +224,14 @@ export function createReaderPdfTextRuntime(readerContext) {
     readerContext.pdfOcrPageCache.set(page, { payload, bytes });
     readerContext.pdfOcrPageCacheBytes += bytes;
     while (readerContext.pdfOcrPageCacheBytes > readerContext.PDF_OCR_PAGE_CACHE_BYTES) {
-      const oldest = readerContext.pdfOcrPageCache.keys().next().value;
-      const removed = readerContext.pdfOcrPageCache.get(oldest);
+      const oldest = /** @type {number} */ (readerContext.pdfOcrPageCache.keys().next().value);
+      const removed = /** @type {{payload: import('../../../typings/reader-pdf-text-runtime-strict').OcrPayload; bytes: number}} */ (readerContext.pdfOcrPageCache.get(oldest));
       readerContext.pdfOcrPageCacheBytes -= removed.bytes;
       readerContext.pdfOcrPageCache.delete(oldest);
     }
   }
 
+  /** @param {number} page */
   function cachedPdfOcrPage(page) {
     const record = readerContext.pdfOcrPageCache.get(page);
     if (!record) return null;
@@ -216,6 +240,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     return record.payload;
   }
 
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell */
   async function renderPdfOcrText(shell) {
     if ((shell.dataset.textReady === "1" && shell.dataset.nativeTextFallback !== "1") || !readerContext.ocrManifestUrl) return;
     if (shell._ocrPromise) return shell._ocrPromise;
@@ -260,6 +285,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     return task;
   }
 
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').PdfPage} page @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell} shell @param {AbortSignal | null} [signal] */
   async function renderPdfText(page, shell, signal = null) {
     if (readerContext.ocrManifestUrl) {
       await readerContext.renderPdfOcrText(shell);
@@ -318,6 +344,7 @@ export function createReaderPdfTextRuntime(readerContext) {
     }
   }
 
+  /** @param {import('../../../typings/reader-pdf-text-runtime-strict').Shell | null} shell */
   function highlightPdfText(shell, query = readerContext.searchState.query) {
     if (!shell || readerContext.readerAbortController.signal.aborted || !query) return;
     const layer = shell.querySelector(".reader-pdf-text");

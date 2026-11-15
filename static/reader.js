@@ -755,8 +755,8 @@ readerBindings.mountInitialLoadingFeedback();
 const status = /** @type {HTMLSpanElement} */ (document.querySelector("#status"));
 const loadingStatus = /** @type {HTMLDivElement} */ (document.querySelector("#loading-status"));
 
-const downloadButton = document.querySelector("#download");
-const downloadFeedback = document.querySelector("#download-feedback");
+const downloadButton = /** @type {HTMLAnchorElement} */ (document.querySelector("#download"));
+const downloadFeedback = /** @type {HTMLElement} */ (document.querySelector("#download-feedback"));
 let readerSourcePromise = null;
 let readerRestorationPromise = null;
 let readerRestorationEntry = null;
@@ -886,12 +886,12 @@ let swfPlayer = null;
 
 readerBindings.initializeGenerations();
 
-const viewport = document.querySelector("#viewport");
-const zoomInput = document.querySelector("#zoom");
-const pageInput = document.querySelector("#page-number");
-const readerPath = document.querySelector("#reader-path");
-const bookmarkRibbon = document.querySelector("#bookmark-ribbon");
-const bookmarkPopover = document.querySelector("#bookmark-popover");
+const viewport = /** @type {HTMLElement} */ (document.querySelector("#viewport"));
+const zoomInput = /** @type {HTMLInputElement} */ (document.querySelector("#zoom"));
+const pageInput = /** @type {HTMLInputElement} */ (document.querySelector("#page-number"));
+const readerPath = /** @type {HTMLButtonElement} */ (document.querySelector("#reader-path"));
+const bookmarkRibbon = /** @type {HTMLButtonElement} */ (document.querySelector("#bookmark-ribbon"));
+const bookmarkPopover = /** @type {HTMLDivElement} */ (document.querySelector("#bookmark-popover"));
 readerBindings.labelToolbarControls();
 
 // A demanded TOC/search destination lands on the viewport's top edge. Measuring the
@@ -1052,8 +1052,8 @@ const THEME_SUN_ICON =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>';
 const THEME_MOON_ICON =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-const readerThemeToggle = document.querySelector("#theme-toggle");
-const pageInvertToggle = document.querySelector("#page-invert-toggle");
+const readerThemeToggle = /** @type {HTMLElement} */ (document.querySelector("#theme-toggle"));
+const pageInvertToggle = /** @type {HTMLElement} */ (document.querySelector("#page-invert-toggle"));
 let pageInverted = false;
 readerBindings.restoreAndBindPageInversion();
 let themeAnimationTimer = 0;
@@ -1091,11 +1091,12 @@ const progressTools = document.createElement("div");
 readerBindings.mountProgressControls();
 const readingProgressSummary = document.createElement("div");
 readerBindings.mountProgressSummary();
-const progressRange = progressTools.querySelector(".reader-progress-range"),
-  progressPercent = progressTools.querySelector(".reader-progress-percent"),
-  progressUndo = progressTools.querySelector(".reader-progress-undo"),
-  chapterPrev = progressTools.querySelector(".reader-chapter-prev"),
-  chapterNext = progressTools.querySelector(".reader-chapter-next");
+// These controls are created by mountProgressControls immediately above.
+const progressRange = /** @type {HTMLInputElement} */ (progressTools.querySelector(".reader-progress-range")),
+  progressPercent = /** @type {HTMLElement} */ (progressTools.querySelector(".reader-progress-percent")),
+  progressUndo = /** @type {HTMLButtonElement} */ (progressTools.querySelector(".reader-progress-undo")),
+  chapterPrev = /** @type {HTMLButtonElement} */ (progressTools.querySelector(".reader-chapter-prev")),
+  chapterNext = /** @type {HTMLButtonElement} */ (progressTools.querySelector(".reader-chapter-next"));
 let previousProgressState = null,
   progressSeeking = false,
   epubSeekFrame = 0,
@@ -1108,7 +1109,7 @@ const domSearch = createReaderDomSearch({
   yieldTask: waitForReader, getTocEntries: () => navigationState.tocEntries,
   unwrapRoot: foliateSectionRoot,
   publishPage: (page, loader, partial) => {
-    fullSearchSession.pageLoader = loader;
+    fullSearchSession.pageLoader = async offset => loader(offset);
     fullSearchSession.page = page;
     if (partial) {
       updateSearchState({ results: page.results, index: -1 });
@@ -1135,8 +1136,8 @@ const fullSearchController = createReaderSearchController({
     pdfClient: () => pdfBookSearchClient,
     chapterResult: result => ({ ...result,
       activate: generation => navigateChapterSearchResult(result, generation) }),
-    activate: (result, generation) => result.cfi
-      ? navigateFoliateSearchResult(result, generation) : result.activate(generation)
+    activate: (result, generation) => "activate" in result
+      ? result.activate(generation) : navigateFoliateSearchResult(result, generation)
   },
   navigation: {
     begin: beginReaderNavigation,

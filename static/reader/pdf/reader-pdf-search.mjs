@@ -1,3 +1,5 @@
+/// <reference path="../../../typings/reader-pdf-search-strict.d.ts" />
+
 // One shared, bounded per-query checkpoint budget. Checkpoints are hints only:
 // if extracted text is replaced or the budget fills, retain the complete scan.
 const PDF_SEARCH_CHECKPOINT_STRIDE = 2048;
@@ -5,13 +7,20 @@ const PDF_SEARCH_CHECKPOINT_MAX = 4096;
 const PDF_SEARCH_CHECKPOINT_PAGE_BYTES = 512 * 1024;
 const PDF_SEARCH_CHECKPOINT_BYTES = 4 * 1024 * 1024;
 
+/** @param {ReaderPdfSearch.Context} readerContext */
 export function createReaderPdfSearch(readerContext) {
+  /** @param {ReaderPdfSearch.Manifest} manifest */
   async function ensurePdfBookSearchClient(manifest) {
     let textUrl = "";
     let partitioned = null;
     if (manifest?.text_layer) {
+      const ref = manifest.text_layer;
+      if (typeof ref !== 'object' || !('path' in ref) || typeof ref.path !== 'string' ||
+          !('bucket' in ref) || typeof ref.bucket !== 'string' || !('role' in ref) || typeof ref.role !== 'string' ||
+          !('sha256' in ref) || typeof ref.sha256 !== 'string' || !('bytes' in ref) || typeof ref.bytes !== 'number')
+        throw new Error("PDF_OCR_MANIFEST_INVALID");
       readerContext.pdfTextLayerRepository ||= readerContext.createPdfV3Repository(manifest.source_sha256, manifest.page_count);
-      const index = await readerContext.pdfTextLayerRepository.textIndex(manifest.text_layer);
+      const index = await readerContext.pdfTextLayerRepository.textIndex(/** @type {ReaderPdfSearch.Resource} */ (ref));
       manifest = { ...manifest, book_text: index.book_text };
       textUrl = readerContext.v3ResourceUrl(index.book_text);
       if (index.search_partitions) partitioned = {generation: index.generation,
@@ -44,9 +53,9 @@ export function createReaderPdfSearch(readerContext) {
 
   async function prefetchPdfBookSearch() {
     if (readerContext.readerAbortController.signal.aborted || readerContext.pdfBookSearchPrefetchPromise || !readerContext.ocrManifestUrl ||
-        !["pdf", "pdf-pages"].includes(readerContext.capability.mode) || navigator.connection?.saveData) return;
+        !["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) || navigator.connection?.saveData) return;
     const connection = navigator.connection;
-    if (["slow-2g", "2g"].includes(connection?.effectiveType)) return;
+    if (["slow-2g", "2g"].includes(/** @type {string} */ (connection?.effectiveType))) return;
     readerContext.pdfBookSearchPrefetchPromise = (async () => {
       const manifest = await readerContext.loadPdfOcrManifest();
       const bytes = Number(manifest?.book_text?.bytes);
@@ -58,7 +67,7 @@ export function createReaderPdfSearch(readerContext) {
 
   function schedulePdfBookSearchPrefetch() {
     if (readerContext.pdfBookSearchPrefetchTimer || readerContext.pdfBookSearchPrefetchPromise || !readerContext.ocrManifestUrl ||
-        !["pdf", "pdf-pages"].includes(readerContext.capability.mode) || navigator.connection?.saveData) return;
+        !["pdf", "pdf-pages"].includes(/** @type {string} */ (readerContext.capability.mode)) || navigator.connection?.saveData) return;
     readerContext.pdfBookSearchPrefetchTimer = setTimeout(() => {
       readerContext.pdfBookSearchPrefetchTimer = 0;
       const idle = window.requestIdleCallback || ((callback) => setTimeout(callback, 0));
@@ -66,16 +75,19 @@ export function createReaderPdfSearch(readerContext) {
     }, readerContext.PDF_BOOK_SEARCH_PREFETCH_DELAY);
   }
 
+  /** @param {string} query @param {number} generation */
   async function searchConcentratedPdf(query, generation) {
     const manifest = await readerContext.loadPdfOcrManifest();
     const client = await readerContext.ensurePdfBookSearchClient(manifest);
+    /** @type {(ReaderPdfSearch.Hit & ReaderPdfSearch.Result)[]} */
     let firstPageResults = [];
+    /** @param {ReaderPdfSearch.Page<ReaderPdfSearch.Hit>} page */
     const attach = (page) => {
       const results = page.results.map((hit, position) => {
         const previous = page.offset === 0 ? firstPageResults[position] : null;
         if (previous?.page === hit.page && previous.start === hit.start && previous.length === hit.length)
           return previous;
-        return { ...hit, location: `第 ${hit.page} 页`, activate: async nav => {
+        return { ...hit, location: `第 ${hit.page} 页`, activate: async (/** @type {number} */ nav) => {
           if (!await readerContext.goToPage(hit.page, nav) || !readerContext.isReaderGenerationCurrent("navigation", nav))
             return false;
           readerContext.content.querySelectorAll(".reader-text-hit-box").forEach(node => node.remove());
@@ -83,7 +95,7 @@ export function createReaderPdfSearch(readerContext) {
           if (shell && (hit.boxes.length || hit.textGeneration)) {
             let boxes = hit.boxes;
             if (hit.textGeneration) {
-              const layer = await readerContext.pdfTextLayerRepository.textPage(manifest.text_layer, hit.page);
+              const layer = await (/** @type {ReaderPdfSearch.Repository} */ (readerContext.pdfTextLayerRepository)).textPage(/** @type {ReaderPdfSearch.Resource | undefined} */ (manifest.text_layer), hit.page);
               if (!readerContext.isReaderGenerationCurrent("navigation", nav)) return false;
               if (layer.generation !== hit.textGeneration) throw new Error("PDF_V3_GENERATION_CHANGED");
               boxes = readerContext.hitBoxes({text: layer.text, text_spans: layer.regions.map(region => ({
@@ -117,21 +129,24 @@ export function createReaderPdfSearch(readerContext) {
     readerContext.fullSearchSession.pageLoader = async offset => attach(await client.page(offset));
     const page = await client.search(query, partial => {
       if (!readerContext.isReaderGenerationCurrent("search", generation)) return;
-      readerContext.fullSearchSession.page = attach(partial);
-      readerContext.updateSearchState({ results: readerContext.fullSearchSession.page.results, index: -1 });
+      const partialPage = attach(partial);
+      readerContext.fullSearchSession.page = partialPage;
+      readerContext.updateSearchState({ results: partialPage.results, index: -1 });
       readerContext.renderFullSearchResults();
       readerContext.fullSearchStatus.textContent = partial.total
         ? `${partial.total} 个结果（正在搜索… ${partial.scanned} / ${partial.pages} 页）`
         : `正在搜索正文… ${partial.scanned} / ${partial.pages} 页`;
     });
     if (!readerContext.isReaderGenerationCurrent("search", generation)) return [];
-    readerContext.fullSearchSession.page = attach(page);
-    return readerContext.fullSearchSession.page.results;
+    const resultPage = attach(page);
+    readerContext.fullSearchSession.page = resultPage;
+    return resultPage.results;
   }
 
+  /** @param {ReaderPdfSearch.Group[]} groups @param {number} total @param {RegExp} pattern @param {ReaderPdfSearch.Result[]} firstPage */
   function makePdfSearchPageLoader(groups, total, pattern, firstPage) {
     const pdf = readerContext.pdfDocument;
-    return async (requestedOffset, generation = readerContext.readerRuntime.currentGeneration("search")) => {
+    return async (/** @type {number} */ requestedOffset, generation = readerContext.readerRuntime.currentGeneration("search")) => {
       const pageSize = 50, results = [];
       const offset = readerContext.fullSearchPageOffset(total, requestedOffset, pageSize);
       if (!offset) return { total, offset, pageSize, results: firstPage.slice() };
@@ -141,18 +156,18 @@ export function createReaderPdfSearch(readerContext) {
           skipped += group.count;
           continue;
         }
-        const text = await readerContext.loadPdfSearchText(pdf, group.page, generation);
+        const text = await readerContext.loadPdfSearchText(/** @type {ReaderPdfSearch.PdfDocument} */ (pdf), group.page, generation);
         let examined = 0, start = 0, accelerated = false;
         if (group.checkpoints?.length && text === group.checkpointText) {
           const requestedInPage = offset - skipped;
           let low = 0, high = group.checkpoints.length;
           while (low < high) {
             const middle = (low + high) >> 1;
-            if (group.checkpoints[middle].ordinal <= requestedInPage) low = middle + 1;
+            if (/** @type {{ordinal: number, start: number}} */ (group.checkpoints[middle]).ordinal <= requestedInPage) low = middle + 1;
             else high = middle;
           }
           if (low) {
-            const checkpoint = group.checkpoints[low - 1];
+            const checkpoint = /** @type {{ordinal: number, start: number}} */ (group.checkpoints[low - 1]);
             skipped += checkpoint.ordinal;
             start = checkpoint.start;
             accelerated = true;
@@ -175,7 +190,7 @@ export function createReaderPdfSearch(readerContext) {
           results.push({
             location: `第 ${group.page} 页`,
             snippet: readerContext.fullSearchSnippet(text, start + match.index, match[0].length),
-            activate: (navigationGeneration) => readerContext.goToPage(group.page, navigationGeneration)
+            activate: (/** @type {number} */ navigationGeneration) => readerContext.goToPage(group.page, navigationGeneration)
           });
           if (results.length === pageSize) break;
         }
@@ -185,11 +200,12 @@ export function createReaderPdfSearch(readerContext) {
     };
   }
 
+  /** @param {number} generation @param {ReaderPdfSearch.Group[]} groups @param {number} total @param {RegExp} pattern @param {ReaderPdfSearch.Result[]} firstPage @param {number} scanned @param {number} pages */
   function publishPdfSearchProgress(generation, groups, total, pattern, firstPage, scanned, pages) {
     if (!readerContext.isReaderGenerationCurrent("search", generation)) return false;
     readerContext.fullSearchSession.pageLoader = readerContext.makePdfSearchPageLoader(groups, total, pattern, firstPage);
     readerContext.fullSearchSession.page = { total, offset: 0, pageSize: 50, results: firstPage.slice() };
-    readerContext.updateSearchState({ results: readerContext.fullSearchSession.page.results, index: -1 });
+    readerContext.updateSearchState({ results: firstPage.slice(), index: -1 });
     readerContext.renderFullSearchResults();
     readerContext.fullSearchStatus.textContent = total
       ? `${total} 个结果（正在搜索… ${scanned} / ${pages} 页）`
@@ -197,6 +213,7 @@ export function createReaderPdfSearch(readerContext) {
     return true;
   }
 
+  /** @param {ReaderPdfSearch.PdfDocument} pdf */
   async function getPdfPersistentTextStore(pdf) {
     const version = readerContext.pdfFetchPolicy?.identity;
     if (!version || readerContext.ocrManifestUrl || readerContext.readerAbortController.signal.aborted) return null;
@@ -204,13 +221,15 @@ export function createReaderPdfSearch(readerContext) {
       readerContext.pdfPersistentTextStore?.dispose();
       readerContext.pdfPersistentTextStore = null;
       readerContext.pdfPersistentTextVersion = version;
-      const pending = (async () => {
-        let timer;
+      /** @type {Promise<ReaderPdfSearch.Store | null> | undefined} */
+      let pending;
+      pending = (async () => {
+        /** @type {ReturnType<typeof setTimeout> | undefined} */ let timer;
         const module = await readerContext.awaitReader(Promise.race([import("/search/static/reader/pdf/reader-pdf-text-store.mjs"),
           new Promise(resolve => {timer=setTimeout(()=>resolve(null),1000);})])).finally(()=>clearTimeout(timer));
         if (!module) return null;
         const key = await module.pdfTextStoreKey({source:readerContext.sourceUrl,version,pageCount:pdf.numPages,
-          engine:VoiceOfMLReaderResources.vendors.pdf.sha256});
+          engine:(/** @type {ReaderPdfSearch.ResourceGlobals} */ (/** @type {unknown} */ (globalThis))).VoiceOfMLReaderResources.vendors.pdf.sha256});
         if (!key || readerContext.readerAbortController.signal.aborted || readerContext.pdfFetchPolicy?.identity !== version || readerContext.pdfPersistentTextOpening !== pending) return null;
         return readerContext.pdfPersistentTextStore = module.createPdfTextStore(key,{signal:readerContext.readerAbortController.signal});
       })().catch(() => null);
@@ -219,6 +238,7 @@ export function createReaderPdfSearch(readerContext) {
     return readerContext.pdfPersistentTextStore || readerContext.pdfPersistentTextOpening;
   }
 
+  /** @param {number} page @param {string} text */
   function cachePdfSearchText(page, text) {
     const bytes = text.length * 2;
     if (bytes > readerContext.PDF_SEARCH_TEXT_CACHE_BYTES) return;
@@ -230,12 +250,13 @@ export function createReaderPdfSearch(readerContext) {
     readerContext.pdfSearchTextCache.set(page, text);
     readerContext.pdfSearchTextCacheBytes += bytes;
     while (readerContext.pdfSearchTextCacheBytes > readerContext.PDF_SEARCH_TEXT_CACHE_BYTES) {
-      const oldest = readerContext.pdfSearchTextCache.keys().next().value;
-      readerContext.pdfSearchTextCacheBytes -= readerContext.pdfSearchTextCache.get(oldest).length * 2;
+      const oldest = /** @type {number} */ (readerContext.pdfSearchTextCache.keys().next().value);
+      readerContext.pdfSearchTextCacheBytes -= (/** @type {string} */ (readerContext.pdfSearchTextCache.get(oldest))).length * 2;
       readerContext.pdfSearchTextCache.delete(oldest);
     }
   }
 
+  /** @param {ReaderPdfSearch.PdfDocument} pdf @param {number} page @param {number} generation */
   async function loadPdfSearchText(pdf, page, generation) {
     if (!readerContext.isReaderGenerationCurrent("search", generation))
       throw new DOMException("Search cancelled", "AbortError");
@@ -265,13 +286,17 @@ export function createReaderPdfSearch(readerContext) {
     return text;
   }
 
+  /** @param {string} query @param {number} generation */
   async function fullSearchPdfMatches(query, generation) {
-    const pdf = readerContext.pdfDocument, groups = [], firstPage = [],
+    /** @type {ReaderPdfSearch.Group[]} */ const groups = [];
+    /** @type {ReaderPdfSearch.Result[]} */ const firstPage = [];
+    const pdf = readerContext.pdfDocument,
       pattern = new RegExp(readerContext.fullSearchEscape(readerContext.normalizePdfSearchText(query)), "giu");
     if (!pdf) return [];
     // The preview's PDF.js count is provisional: do not publish or persist a
     // partial page-one search as if it covered the complete document.
     if (pdf._pdfInfo?.readerPageCountPending) throw new Error("正在检查文档，请稍后搜索全文");
+    /** @type {Map<number, Promise<{text?: string, error?: unknown}>>} */
     const pending = new Map();
     let nextPage = 1;
     const fill = () => {
@@ -285,11 +310,11 @@ export function createReaderPdfSearch(readerContext) {
     let total = 0, hasText = false, checkpointCount = 0, checkpointBytes = 0;
     for (let page = 1; page <= pdf.numPages; page++) {
       if (!readerContext.isReaderGenerationCurrent("search", generation)) return [];
-      const result = await pending.get(page);
+      const result = /** @type {{text?: string, error?: unknown}} */ (await pending.get(page));
       pending.delete(page);
       if (!readerContext.isReaderGenerationCurrent("search", generation)) return [];
       if (result.error) throw result.error;
-      const text = result.text;
+      const text = /** @type {string} */ (result.text);
       fill();
       hasText ||= !!text.trim();
       let count = 0;
@@ -306,7 +331,7 @@ export function createReaderPdfSearch(readerContext) {
         if (firstPage.length < 50) firstPage.push({
           location: `第 ${page} 页`,
           snippet: readerContext.fullSearchSnippet(text, match.index, match[0].length),
-          activate: (navigationGeneration) => readerContext.goToPage(page, navigationGeneration)
+          activate: (/** @type {number} */ navigationGeneration) => readerContext.goToPage(page, navigationGeneration)
         });
         if (count % 2048 === 0) {
           await readerContext.waitForReader();
@@ -340,7 +365,7 @@ export function createReaderPdfSearch(readerContext) {
         {code:verified ? "READER_NO_SEARCHABLE_TEXT" : "READER_TEXT_UNCONFIRMED"});
     }
     readerContext.publishPdfSearchProgress(generation, groups, total, pattern, firstPage, pdf.numPages, pdf.numPages);
-    return readerContext.fullSearchSession.page.results;
+    return firstPage;
   }
 
   return {

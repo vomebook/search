@@ -1,4 +1,59 @@
+/**
+ * @typedef {{[key: string]: unknown}} ReaderMetadata
+ * @typedef {{url: URL, prefix: string, bucket: boolean, bucketPath: string}} AssetFamily
+ * @typedef {object} ReaderSourceContext
+ * @property {ReaderMetadata | null} resolvedReaderData
+ * @property {string} downloadUrl
+ * @property {Promise<unknown>} readerSourcePromise
+ * @property {{title: string}} documentState
+ * @property {{disposed: boolean}} readerLifecycle
+ * @property {(message: string, duration?: number) => void} showDownloadFeedback
+ * @property {(path: string) => string} readerDownloadApiUrl
+ * @property {(filename: string, link: string) => string} readerDownloadUrl
+ * @property {(dispose: () => void) => () => void} trackReaderResource
+ * @property {<T>(promise: Promise<T>) => Promise<T>} awaitReader
+ * @property {() => void} assertReaderActive
+ * @property {(ms: number) => Promise<void>} waitForReader
+ * @property {{requestBuffered: (url: string, timeout: number, limit: number) => Promise<Response>}} readerRequestManager
+ * @property {number} READER_PROXY_TIMEOUT_MS
+ * @property {string} ocrManifestUrl
+ * @property {URLSearchParams} params
+ * @property {{update: (key: string, value: {metadata: ReaderMetadata | null}) => void}} readerRuntime
+ * @property {string} sourceName
+ * @property {string} extension
+ * @property {(state: {title: string}) => void} updateDocumentState
+ * @property {() => boolean} isReaderOverlayFrame
+ * @property {(data: ReaderMetadata | null) => void} applyReaderPathMetadata
+ * @property {string} readerPathLabel
+ * @property {URL | null} folderNavigationTarget
+ * @property {string} folderReturnUrl
+ * @property {HTMLButtonElement} readerPath
+ * @property {(raw: string) => AssetFamily | null} readerAssetObjectFamily
+ * @param {ReaderSourceContext} readerContext
+ */
 export function createReaderSource(readerContext) {
+  /** @param {unknown} value @returns {value is Record<string, unknown>} */
+  function isRecord(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+
+  /** @param {unknown} value @returns {ReaderMetadata} */
+  function parseMetadata(value) {
+    if (!isRecord(value)) throw new Error("Invalid reader metadata");
+    return value;
+  }
+
+  /** @param {unknown} error @param {string} key @returns {string | undefined} */
+  function errorField(error, key) {
+    if ((typeof error !== "object" || error === null) && typeof error !== "function") return undefined;
+    try {
+      const value = /** @type {Record<string, unknown>} */ (error)[key];
+      return typeof value === "string" ? value : undefined;
+    } catch (_) {
+      return undefined;
+    }
+  }
+  /** @param {string} url */
   function readerContentUrl(url) {
     try {
       const parsed = new URL(url, "https://voiceofml-search.hf.space");
@@ -15,10 +70,12 @@ export function createReaderSource(readerContext) {
     return `https://voiceofml-search.hf.space/api/reader-content?url=${encodeURIComponent(url)}`;
   }
 
+  /** @param {string} path */
   function readerDownloadApiUrl(path) {
     return `https://voiceofml-search.hf.space${path}`;
   }
 
+  /** @param {string} fallback */
   function readerOriginalFilename(fallback) {
     // Do not infer a filename from the display title: the indexed stem can
     // itself end in the same suffix and can contain meaningful spaces/case.
@@ -27,10 +84,12 @@ export function createReaderSource(readerContext) {
       ? name : fallback;
   }
 
+  /** @param {string} filename @param {string} link */
   function readerDownloadUrl(filename, link) {
     return readerContext.readerDownloadApiUrl(`/api/download?file=${encodeURIComponent(readerOriginalFilename(filename || "file"))}&link=${encodeURIComponent(link || "")}`);
   }
 
+  /** @param {Event & {currentTarget: HTMLButtonElement}} event */
   async function startReaderDownload(event) {
     event.preventDefault();
     const button = event.currentTarget;
@@ -47,8 +106,10 @@ export function createReaderSource(readerContext) {
       const checkUrl = readerContext.readerDownloadApiUrl(`/api/download/check?link=${encodeURIComponent(readerContext.downloadUrl)}`);
       timer = setTimeout(() => controller.abort(), 8000);
       const response = await fetch(checkUrl, { signal: controller.signal, cache: "no-store" });
+      /** @type {unknown} */
       const result = await response.json().catch(() => null);
-      if (!response.ok || result?.ok !== true) throw new Error(result?.error || "下载检查失败，请重试");
+      if (!response.ok || !isRecord(result) || result.ok !== true)
+        throw new Error(isRecord(result) && typeof result.error === "string" && result.error || "下载检查失败，请重试");
       if (readerContext.readerLifecycle.disposed) return;
       const frame = document.createElement("iframe");
       frame.hidden = true;
@@ -59,7 +120,7 @@ export function createReaderSource(readerContext) {
       readerContext.showDownloadFeedback("已发起下载");
     } catch (error) {
       if (!readerContext.readerLifecycle.disposed) {
-        readerContext.showDownloadFeedback(error?.name === "AbortError" ? "下载检查超时，请重试" : (error.message || "下载失败，请重试"));
+        readerContext.showDownloadFeedback(errorField(error, "name") === "AbortError" ? "下载检查超时，请重试" : (errorField(error, "message") || "下载失败，请重试"));
       }
     } finally {
       clearTimeout(timer);
@@ -67,16 +128,18 @@ export function createReaderSource(readerContext) {
     }
   }
 
+  /** @param {string} url */
   function normalizeSourceUrl(url) {
     return url.startsWith("/api/reader-bucket-resource?")
       ? new URL(url, "https://voiceofml-search.hf.space").href
       : url;
   }
 
+  /** @param {string} id */
   async function resolveReaderId(id) {
     const endpoint = `https://voiceofml-search.hf.space/api/reader-resolve?id=${encodeURIComponent(id)}`;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const early = window.__VOICE_READER_RESOLVE__;
+      const early = /** @type {{id: string, promise: Promise<{ok: boolean, status: number, data: unknown}>, dispose: () => void} | null | undefined} */ (window.__VOICE_READER_RESOLVE__);
       if (!attempt && early?.id === id) {
         window.__VOICE_READER_RESOLVE__ = null;
         const untrack = readerContext.trackReaderResource(early.dispose);
@@ -84,11 +147,12 @@ export function createReaderSource(readerContext) {
         try { result = await readerContext.awaitReader(early.promise); }
         catch (error) {
           readerContext.assertReaderActive();
-          if (!["TimeoutError", "TypeError"].includes(error?.name)) throw error;
+          const name = errorField(error, "name");
+          if (name !== "TimeoutError" && name !== "TypeError") throw error;
           continue;
         }
         finally { untrack(); early.dispose(); }
-        if (result.ok) return result.data;
+        if (result.ok) return parseMetadata(result.data);
         if (![408, 429, 500, 502, 503, 504].includes(result.status))
           throw new Error(`HTTP ${result.status}`);
         await readerContext.waitForReader(350);
@@ -96,7 +160,11 @@ export function createReaderSource(readerContext) {
       }
       const response = await readerContext.readerRequestManager.requestBuffered(
         endpoint, readerContext.READER_PROXY_TIMEOUT_MS, VoiceOfMLReaderSecurity.LIMITS.manifestBytes);
-      if (response.ok) return response.json();
+      if (response.ok) {
+        /** @type {unknown} */
+        const data = await response.json();
+        return parseMetadata(data);
+      }
       await response.body?.cancel();
       if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt)
         throw new Error(`HTTP ${response.status}`);
@@ -105,10 +173,12 @@ export function createReaderSource(readerContext) {
     throw new Error("Reader ID resolution failed");
   }
 
-  function applyReaderMetadata(data) {
+  /** @param {unknown} input */
+  function applyReaderMetadata(input) {
+    const data = input == null ? null : parseMetadata(input);
     if (data) readerContext.resolvedReaderData = { ...(readerContext.resolvedReaderData || {}), ...data };
     if (data?.ReaderOcrManifest || data?.ocr_manifest) {
-      readerContext.ocrManifestUrl = data.ReaderOcrManifest || data.ocr_manifest;
+      readerContext.ocrManifestUrl = /** @type {string} */ (data.ReaderOcrManifest || data.ocr_manifest);
       readerContext.params.set("ocr_manifest", readerContext.ocrManifestUrl);
     }
     readerContext.readerRuntime.update("source", { metadata: readerContext.resolvedReaderData });
@@ -135,6 +205,7 @@ export function createReaderSource(readerContext) {
     readerContext.applyReaderPathMetadata(readerContext.resolvedReaderData);
   }
 
+  /** @param {string | null | undefined} rawUrl */
   function normalizeReaderReturnUrl(rawUrl) {
     try {
       const target = new URL(rawUrl || "/search/", location.origin);
@@ -146,7 +217,9 @@ export function createReaderSource(readerContext) {
     }
   }
 
-  function applyReaderPathMetadata(data) {
+  /** @param {unknown} input */
+  function applyReaderPathMetadata(input) {
+    const data = input == null ? null : parseMetadata(input);
     const folder = Array.isArray(data?.folder) ? data.folder.join("/") : String(data?.folder || "");
     const value = String(
       data?.path || [data?.repo, folder].filter(Boolean).join("/") || readerContext.readerPathLabel
@@ -182,7 +255,7 @@ export function createReaderSource(readerContext) {
         query.set("path", folder);
       }
       readerContext.folderNavigationTarget.hash =
-        "#/" + encodeURIComponent(data.repo) + (query.size ? "?" + query.toString() : "");
+        "#/" + encodeURIComponent(String(data.repo)) + (query.size ? "?" + query.toString() : "");
     }
     readerContext.readerPath.textContent = value;
     readerContext.readerPath.hidden = !value;
@@ -191,13 +264,14 @@ export function createReaderSource(readerContext) {
     const panelPath = /** @type {HTMLButtonElement | null} */ (document.querySelector("#reader-panel-path"));
     if (panelPath) {
       const folderLabel = value || "不可用";
-      panelPath.querySelector(".reader-panel-folder").textContent = `所在目录：${folderLabel}`;
+      /** @type {Element} */ (panelPath.querySelector(".reader-panel-folder")).textContent = `所在目录：${folderLabel}`;
       panelPath.disabled = !value || !readerContext.folderNavigationTarget;
       panelPath.setAttribute("aria-label", `${panelPath.disabled ? "所在目录" : "打开所在目录"}：${folderLabel}`);
       panelPath.title = value;
     }
   }
 
+  /** @param {string} raw */
   function validSource(raw) {
     try {
       const url = new URL(raw);
@@ -230,6 +304,7 @@ export function createReaderSource(readerContext) {
     }
   }
 
+  /** @param {string} raw @param {string} [base] */
   function readerAssetObjectFamily(raw, base = location.href) {
     try {
       const url = new URL(raw, base);
@@ -246,6 +321,7 @@ export function createReaderSource(readerContext) {
     }
   }
 
+  /** @param {string} raw */
   function trustedReaderAssetManifestUrl(raw) {
     const family = readerContext.readerAssetObjectFamily(raw);
     return family && /\/chapter-manifest\.json$/i.test(family.bucketPath || "")
@@ -253,6 +329,7 @@ export function createReaderSource(readerContext) {
       : null;
   }
 
+  /** @param {string} raw @param {string} base */
   function trustedChapterUrl(raw, base) {
     const manifest = readerContext.readerAssetObjectFamily(base);
     if (!manifest || !/\/chapter-manifest\.json$/i.test(manifest.bucketPath || ""))
@@ -270,6 +347,7 @@ export function createReaderSource(readerContext) {
     }
   }
 
+  /** @param {string} raw @param {string} base @param {string} manifestBase */
   function trustedChapterReferenceUrl(raw, base, manifestBase) {
     const family = readerContext.readerAssetObjectFamily(manifestBase);
     const current = readerContext.readerAssetObjectFamily(base);
@@ -287,6 +365,7 @@ export function createReaderSource(readerContext) {
     }
   }
 
+  /** @param {string} raw @param {string} base @param {string} attribute @param {string} manifestBase */
   function trustedChapterResourceUrl(raw, base, attribute, manifestBase) {
     const value = String(raw || "").trim();
     if (!value || /^(?:data:|mailto:|tel:|javascript:)/i.test(value)) return null;

@@ -1,4 +1,4 @@
-(function (root) {
+(/** @param {import('../../../typings/reader-contract-strict').ContractRoot} root */ function (root) {
   "use strict";
   function preloadPdfOpeningResources() {
     // Classic-script and module consumers share the same in-flight preload.
@@ -9,7 +9,7 @@
       let source = params.get("url") || "";
       if (!source && id) {
         for (const key of [`reader-source:${id}`, `reader-resolve:${id}`]) {
-          const value = JSON.parse(sessionStorage.getItem(key) || "null");
+          const value = /** @type {import('../../../typings/reader-contract-strict').StoredSource | null} */ (JSON.parse(sessionStorage.getItem(key) || "null"));
           if (value?.url) {
             source = value.url;
             break;
@@ -39,6 +39,7 @@
         controller.abort();
         root.removeEventListener?.("pagehide", onPageHide);
       };
+      /** @param {PageTransitionEvent} event */
       const onPageHide = (event) => {
         if (!event.persisted) dispose();
       };
@@ -74,7 +75,7 @@
       let source = params.get("chapter_manifest") || params.get("url") || "";
       if (!source && id) {
         for (const key of [`reader-source:${id}`, `reader-resolve:${id}`]) {
-          const value = JSON.parse(sessionStorage.getItem(key) || "null");
+          const value = /** @type {import('../../../typings/reader-contract-strict').StoredSource | null} */ (JSON.parse(sessionStorage.getItem(key) || "null"));
           if (value?.url) { source = value.chapter_manifest || value.url; break; }
         }
       }
@@ -88,6 +89,7 @@
       if (!security) return;
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 10000);
       let disposed = false;
+      /** @param {PageTransitionEvent} event */
       const onPageHide = event => { if (!event.persisted) dispose(); };
       const dispose = () => {
         if (disposed) return;
@@ -116,6 +118,7 @@
     PENDING: 3,
     FAILED: 4
   });
+  /** @type {Readonly<Record<string, string>>} */
   const modes = Object.freeze({
     pdf: "pdf",
     "pdf-pages": "pdf-pages",
@@ -158,6 +161,7 @@
     swf: "swf"
   });
   const articleExtensions = Object.freeze([...Object.keys(modes), "djvu"]);
+  /** @type {Readonly<Record<string, {toc: boolean, search: boolean, zoom: boolean, bookmarks: boolean, pagination: boolean, media: boolean}>>} */
   const features = Object.freeze({
     pdf: { toc: true, search: true, zoom: true, bookmarks: true, pagination: true, media: false },
     "pdf-pages": {
@@ -251,6 +255,7 @@
     }
   });
 
+  /** @param {string | null | undefined} extension */
   function capability(extension) {
     const normalized = String(extension || "").toLowerCase();
     // Native DjVu reuses the paginated document UI but never PDF.js.
@@ -261,11 +266,12 @@
       readerMode: mode ? ReaderMode.ORIGINAL : ReaderMode.UNSUPPORTED,
       article: !!mode,
       features: Object.freeze({
-        ...(features[mode] || features.unsupported)
+        ...(mode && features[mode] || features.unsupported)
       })
     });
   }
 
+  /** @param {unknown} value @param {number} minimum @param {number} maximum @param {number} fallback */
   function clampNumber(value, minimum, maximum, fallback) {
     const numeric = Math.round(Number(value));
     return Number.isFinite(numeric) ? Math.min(maximum, Math.max(minimum, numeric)) : fallback;
@@ -282,6 +288,7 @@
   const v2ObjectPathPattern = new RegExp(`^${assetRoot}${assetVersion}(?:${assetPages}|${assetOcr})$`);
   const staticBucketPathPattern = new RegExp(`^(?:${assetRoot}(?:[0-9a-f]{16}/)?(?:[a-z0-9-]+/)?(?:document\\.(?:html|txt|md|webp|jpg|jpeg|png|gif|bmp|swf)|audio\\.(?:mp3|wav|m4a|flac|mpga)|video\\.(?:mp4|mov))|documents/(?:text|web|spreadsheet|office|pdf)/[a-z0-9_-]+/[0-9a-f]{64}/document\\.(?:txt|md|html|pdf|vcf|ini)|media/(?:audio|video|swf)/[a-z0-9_-]+/[0-9a-f]{64}/(?:audio\\.[a-z0-9]+|video\\.[a-z0-9]+|document\\.swf)|pages/image/(?:jpg|jpeg|png|bmp|tif|tiff|webp|gif)/[0-9a-f]{64}/(?:document\\.webp|page-manifest\\.json|pages/page-[0-9]{6}\\.webp)|derived/[A-Za-z0-9._-]+/[a-z0-9]{32}/document\\.pdf|chapters/ebook/(?:epub|mobi|azw3|fb2|chm)/[0-9a-f]{64}/[0-9a-f]{16}/(?:chapter-manifest\\.json|epub-search-index\\.json\\.gz))$`);
   const versionedBucketPathPattern = new RegExp(`^${assetRoot}[0-9a-f]{16}/(?:${assetPages}|${assetOcr})$`);
+  /** @type {Readonly<Record<string, string>>} */
   const assetModes = Object.freeze({
     p: "pdf",
     e: "epub",
@@ -294,19 +301,21 @@
     f: "swf"
   });
 
+  /** @param {string} path @param {boolean} [versioned] @param {string} [bucket] */
   function isBucketPath(path, versioned = false, bucket = "vomebook/pdf-pages-v2") {
-     if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path) || v2ChapterPathPattern.test(path) || v2ObjectPathPattern.test(path);
-     if (bucket !== "vomebook/pdf-pages-v2") return false;
+    if (bucket === "vomebook/reader-assets-v2") return staticBucketPathPattern.test(path) || v2ChapterPathPattern.test(path) || v2ObjectPathPattern.test(path);
+    if (bucket !== "vomebook/pdf-pages-v2") return false;
     return /^objects\/([0-9a-f]{2})\/\1[0-9a-f]{62}\/[0-9a-f]{16}\/document\.djvu$/.test(path) ||
       /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/document\.pdf$/.test(path) ||
       (versioned ? versionedBucketPathPattern : bucketPathPattern).test(path) ||
       v3BucketPathPattern.test(path) ||
       staticBucketPathPattern.test(path) ||
-       false;
+      false;
   }
 
   // One parser for opening preload, manifest validation and page navigation.
   // Bucket paths require a 16-hex version segment.
+  /** @param {string} raw @param {string} base @param {string} bucketOrigin @param {string} [filename] @param {string} [bucketName] @returns {import('../../../typings/reader-contract-strict').PageSource | null} */
   function pdfPageSource(raw, base, bucketOrigin, filename = "page-manifest.json", bucketName = "vomebook/pdf-pages-v2") {
     try {
       const url = new URL(raw, base);
@@ -331,6 +340,7 @@
       if (!["page-manifest.json", "ocr-manifest.json", "reading-manifest.json"].includes(filename) ||
           !path.endsWith(`/${filename}`)) return null;
       const rootPath = path.slice(0, -filename.length - 1);
+      /** @type {import('../../../typings/reader-contract-strict').PageSource} */
       const source = {
         root: rootPath,
         assetUrl(relativePath) {
@@ -357,10 +367,12 @@
     }
   }
 
+  /** @param {string} raw @param {string} base @param {string} bucketOrigin */
   function imagePageSource(raw, base, bucketOrigin) {
     return pdfPageSource(raw, base, bucketOrigin, "page-manifest.json", "vomebook/reader-assets-v2");
   }
 
+  /** @param {import('../../../typings/reader-contract-strict').Asset | null | undefined} asset @param {string} bucketBase @param {string} [originalExtension] @returns {import('../../../typings/reader-contract-strict').AssetFields | null} */
   function assetFields(asset, bucketBase, originalExtension = "") {
     const path = String(asset?.p || "");
     const ocrPath = String(asset?.o || "");
@@ -375,8 +387,8 @@
     if (asset?.s === 2 && asset.m === "p" && !asset.c && path.endsWith("/page-manifest.json") &&
         originalExtension && originalExtension.toLowerCase().replace(/^\./, "") !== "djvu") {
       const fields = ocrUrl ? { ReaderOcrManifest: ocrUrl, ReaderOcrMode: String(asset.om || "") } : {};
-      if (["vomebook/reader-assets-v2", "vomebook/pdf-pages-v2"].includes(asset.pdb) &&
-          isBucketPath(String(asset.pd || ""), true, asset.pdb) && asset.pd.endsWith("/document.pdf"))
+      if (typeof asset.pd === "string" && ["vomebook/reader-assets-v2", "vomebook/pdf-pages-v2"].includes(/** @type {string} */ (asset.pdb)) &&
+          isBucketPath(asset.pd, true, asset.pdb) && asset.pd.endsWith("/document.pdf"))
         Object.assign(fields, { ReaderLink: `${bucketBase}?path=${encodeURIComponent(asset.pd)}`, ReaderExtension: "pdf" });
       return Object.keys(fields).length ? fields : null;
     }
@@ -388,10 +400,10 @@
       !asset ||
       asset.s !== 2 ||
       path.endsWith(".djvu") ||
-      !Object.prototype.hasOwnProperty.call(assetModes, asset.m) ||
+      !Object.prototype.hasOwnProperty.call(assetModes, /** @type {string} */ (asset.m)) ||
        !bucket ||
         (asset?.b && bucketName !== "vomebook/pdf-pages-v2" && bucketName !== "vomebook/reader-assets-v2") ||
-      (asset?.cb && !chapterBucket)
+       (asset?.cb && !chapterBucket)
     )
       return null;
     const nativeExtension =
@@ -405,21 +417,22 @@
             ? "image"
             : asset.m === "i" && path.endsWith("page-manifest.json")
               ? "image-pages"
-              : assetModes[asset.m];
+              : assetModes[/** @type {string} */ (asset.m)];
     return {
-      ReaderLink: `${bucketBase}?path=${encodeURIComponent(chapterBucket ? asset.c : path)}`,
+      ReaderLink: `${bucketBase}?path=${encodeURIComponent(/** @type {string} */ (chapterBucket ? asset.c : path))}`,
       ReaderExtension: asset.c ? "epub-chapters" : extension,
       ReaderChapterManifest: asset.c
         ? `${bucketBase}?path=${encodeURIComponent(asset.c)}`
         : "",
       ReaderOcrManifest: ocrUrl,
       ReaderOcrMode: String(asset.om || ""),
-      ReaderPdfDocument: asset.pd && ["vomebook/reader-assets-v2", "vomebook/pdf-pages-v2"].includes(asset.pdb) &&
+      ReaderPdfDocument: typeof asset.pd === "string" && ["vomebook/reader-assets-v2", "vomebook/pdf-pages-v2"].includes(/** @type {string} */ (asset.pdb)) &&
         isBucketPath(asset.pd, true, asset.pdb) && asset.pd.endsWith("/document.pdf")
         ? `${bucketBase}?path=${encodeURIComponent(asset.pd)}` : ""
     };
   }
 
+  /** @param {import('../../../typings/reader-contract-strict').ReaderRecord | null | undefined} record @param {string} [basePath] */
   function readerUrl(record, basePath) {
     const source = record && (record.ReaderLink || record.readerLink || record.Link || record.link);
     const readerExtension =
@@ -440,9 +453,9 @@
         : { url: source, title, ext: readerExtension || "" }
     );
     if (!shortId && (record.DownloadLink || record.downloadLink))
-      params.set("download", record.DownloadLink || record.downloadLink);
+      params.set("download", /** @type {string} */ (record.DownloadLink || record.downloadLink));
     if (!shortId && (record.ReaderOcrManifest || record.readerOcrManifest))
-      params.set("ocr_manifest", record.ReaderOcrManifest || record.readerOcrManifest);
+      params.set("ocr_manifest", /** @type {string} */ (record.ReaderOcrManifest || record.readerOcrManifest));
     if (!shortId && record.ReaderPdfDocument) params.set("pdf_document", record.ReaderPdfDocument);
     if (
       !shortId &&
@@ -453,24 +466,25 @@
     )
       params.set(
         "chapter_manifest",
-        record.ReaderChapterManifest ||
+        /** @type {string} */ (record.ReaderChapterManifest ||
           record.readerChapterManifest ||
           record.ChapterManifest ||
-          record.chapterManifest
+          record.chapterManifest)
       );
     if (!shortId && (record.ReturnUrl || record.returnUrl))
-      params.set("return", record.ReturnUrl || record.returnUrl);
+      params.set("return", /** @type {string} */ (record.ReturnUrl || record.returnUrl));
     const repo = String(record.Repo || record.repo || "")
       .split("/")
       .pop();
     const folder = Array.isArray(record.Folder || record.folder)
-      ? (record.Folder || record.folder).join("/")
+      ? /** @type {string[]} */ (record.Folder || record.folder).join("/")
       : "";
     if (!shortId && repo) params.set("path", repo + (folder ? "/" + folder : ""));
     if (!shortId && (record.FolderUrl || record.folderUrl))
-      params.set("folder_url", record.FolderUrl || record.folderUrl);
+      params.set("folder_url", /** @type {string} */ (record.FolderUrl || record.folderUrl));
     return (basePath || "/search/static/reader.html") + "?" + params.toString();
   }
+  /** @param {string} value */
   function canonicalSourceUrl(value) {
     // Normalize path bytes, not decoded URLs: %2F must remain distinct from /,
     // and %2528 must never become %28. Query/fragment delimiters stay intact.
@@ -480,7 +494,7 @@
       // still take the established normalization and URI-error path below.
       if (!/%(?![0-9A-F]{2})|%(?:2[DE]|3[0-9]|4[1-9A-F]|5[0-9AF]|6[1-9A-F]|7[0-9AE])|[^A-Za-z0-9._~/%-]/.test(path))
         return prefix + path;
-      return prefix + path.replace(/%[0-9a-fA-F]{2}|[^A-Za-z0-9._~/-]/gu, (token) => {
+      return prefix + path.replace(/%[0-9a-fA-F]{2}|[^A-Za-z0-9._~/-]/gu, /** @param {string} token */ (token) => {
         if (/^%[0-9a-f]{2}$/i.test(token)) {
           const char = String.fromCharCode(parseInt(token.slice(1), 16));
           return /^[A-Za-z0-9._~-]$/.test(char) ? char : token.toUpperCase();
@@ -491,6 +505,7 @@
     });
   }
   const FNV32_MASK = 0xffffffffn;
+  /** @param {string} value */
   function shortSourceId(value) {
     // Two 32-bit halves avoid per-byte BigInt multiplication while preserving
     // the exact FNV-1a 64-bit wraparound and the established stable IDs.

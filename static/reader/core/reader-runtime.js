@@ -3,9 +3,16 @@
 
   const FEATURE_MATRIX = root.VoiceOfMLReader.features;
 
+  /** @typedef {(detail: unknown, type: string) => void} EventListener */
+  /** @typedef {{mode?: string, features?: object, [key: string]: unknown}} Capability */
+  /** @typedef {ReaderRuntimeState} RuntimeState */
+  /** @typedef {(() => void) | {dispose?: () => void}} Disposable */
+
   function createEventBus() {
+    /** @type {Map<string, Set<EventListener>>} */
     const listeners = new Map();
     let disposed = false;
+    /** @param {string} type @param {EventListener} listener */
     function on(type, listener) {
       if (disposed) return () => {};
       const set = listeners.get(type) || new Set();
@@ -16,6 +23,7 @@
         if (!set.size) listeners.delete(type);
       };
     }
+    /** @param {string} type @param {unknown} detail */
     function emit(type, detail) {
       if (disposed) return;
       for (const listener of [...(listeners.get(type) || []), ...(listeners.get("*") || [])])
@@ -35,8 +43,10 @@
     });
   }
 
+  /** @param {{events?: ReturnType<typeof createEventBus>, initialState?: Partial<RuntimeState>}} [options] */
   function createReaderRuntime(options = {}) {
     const events = options.events || createEventBus();
+    /** @type {RuntimeState} */
     const state = {
       lifecycle: { phase: "startup", stage: "startup", disposed: false, errorCode: "" },
       source: { id: "", url: "", contentUrl: "", downloadUrl: "", extension: "", metadata: null },
@@ -55,9 +65,13 @@
       capability: null,
       ...(options.initialState || {})
     };
+    /** @type {Map<string, number>} */
     const generations = new Map();
+    /** @type {Set<Disposable>} */
     const disposables = new Set();
+    /** @type {Set<ReturnType<typeof setTimeout>>} */
     const timers = new Set();
+    /** @type {Set<number>} */
     const frames = new Set();
 
     function snapshot() {
@@ -69,24 +83,26 @@
         search: Object.freeze({ ...state.search }),
         panel: Object.freeze({ ...state.panel }),
         formats: Object.freeze(
-          Object.fromEntries(
+          /** @type {ReaderRuntimeFormatsSnapshot} */ (Object.fromEntries(
             Object.entries(state.formats).map(([name, value]) => [
               name,
-              Object.freeze({ ...value })
+              Object.freeze({ .../** @type {object} */ (value) })
             ])
-          )
+          ))
         ),
         capability: state.capability
       });
     }
+    /** @template {ReaderRuntimeUpdateDomain} K @param {K} domain @param {Partial<RuntimeState[K]>} patch */
     function update(domain, patch) {
       if (state.lifecycle.disposed && domain !== "lifecycle") return false;
-      Object.assign(state[domain], patch);
+      Object.assign(/** @type {object} */ (state[domain]), patch);
       const current = snapshot();
       events.emit(`state:${domain}`, current);
       events.emit("state", current);
       return true;
     }
+    /** @param {string} format @param {Record<string, unknown>} patch */
     function updateFormat(format, patch) {
       if (state.lifecycle.disposed || !state.formats[format]) return false;
       Object.assign(state.formats[format], patch);
@@ -94,42 +110,51 @@
       events.emit("state", snapshot());
       return true;
     }
+    /** @param {string} phase */
     function setPhase(phase) {
       if (state.lifecycle.disposed && phase !== "disposed") return false;
       state.lifecycle.phase = phase;
       events.emit("phase", { phase, state: snapshot() });
       return true;
     }
+    /** @param {string} stage */
     function setStage(stage) {
       if (!setPhase(stage)) return false;
       state.lifecycle.stage = stage;
       events.emit("stage", { stage, state: snapshot() });
       return true;
     }
+    /** @param {string} code */
     function fail(code) {
       state.lifecycle.errorCode = code;
       setPhase("failed");
       events.emit("error", { code, state: snapshot() });
     }
+    /** @param {string} name */
     function nextGeneration(name) {
       const value = (generations.get(name) || 0) + 1;
       generations.set(name, value);
       events.emit("generation", { name, value });
       return value;
     }
+    /** @param {string} name */
     function currentGeneration(name) {
       return generations.get(name) || 0;
     }
+    /** @param {string} name @param {number} value */
     function isCurrent(name, value) {
       return !state.lifecycle.disposed && generations.get(name) === value;
     }
+    /** @template {Disposable | null | undefined} T @param {T} disposable @returns {T} */
     function track(disposable) {
       if (disposable) disposables.add(disposable);
       return disposable;
     }
+    /** @param {Disposable} disposable */
     function untrack(disposable) {
       disposables.delete(disposable);
     }
+    /** @param {() => void} callback @param {number} [delay] */
     function schedule(callback, delay = 0) {
       const handle = setTimeout(() => {
         timers.delete(handle);
@@ -138,11 +163,13 @@
       timers.add(handle);
       return handle;
     }
+    /** @param {ReturnType<typeof setTimeout>} handle */
     function cancel(handle) {
       if (!timers.has(handle)) return;
       clearTimeout(handle);
       timers.delete(handle);
     }
+    /** @param {() => void} callback */
     function frame(callback) {
       const handle = requestAnimationFrame(() => {
         frames.delete(handle);
@@ -151,11 +178,13 @@
       frames.add(handle);
       return handle;
     }
+    /** @param {number} handle */
     function cancelFrame(handle) {
       if (!frames.has(handle)) return;
       cancelAnimationFrame(handle);
       frames.delete(handle);
     }
+    /** @param {Capability | null | undefined} capability */
     function negotiate(capability) {
       const mode = capability?.mode || "unsupported";
       const value = Object.freeze({
@@ -211,9 +240,11 @@
     });
   }
 
-  root.VoiceOfMLReaderRuntime = Object.freeze({
+  /** @satisfies {ReaderRuntimeApi} */
+  const runtimeApi = Object.freeze({
     FEATURE_MATRIX,
     createEventBus,
     createReaderRuntime
   });
+  root.VoiceOfMLReaderRuntime = runtimeApi;
 })(typeof self !== "undefined" ? self : globalThis);

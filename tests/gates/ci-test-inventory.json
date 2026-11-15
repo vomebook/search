@@ -218,6 +218,10 @@
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
+    "tests/reader/chapters/test_chapter_format_validation.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
     "tests/reader/chapters/test_reader_chapter_preload.js": {
       "kind": "script",
       "source": "scripts/reader/check_reader_core_coverage.mjs"
@@ -233,6 +237,22 @@
     "tests/reader/chapters/test_reader_feynman_toc_reviewed.mjs": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
+    },
+    "tests/reader/core/test_pdf_text_context.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/core/test_reader_contract_pdf_document.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/core/test_reader_format_controller_boundary.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
+    },
+    "tests/reader/core/test_reader_source_boundary.mjs": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
     },
     "tests/reader/core/test_reader_architecture.js": {
       "kind": "direct",
@@ -449,6 +469,10 @@
     "tests/reader/pdf-v3/test_reader_v3_untrusted.mjs": {
       "kind": "script",
       "source": "scripts/reader/check_reader_v3_coverage.mjs"
+    },
+    "tests/reader/security/test_reader_security_boundary.js": {
+      "kind": "script",
+      "source": "scripts/reader/check_reader_core_coverage.mjs"
     },
     "tests/reader/security/test_reader_css_sanitizer.mjs": {
       "kind": "direct",

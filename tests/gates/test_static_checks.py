@@ -38,6 +38,12 @@ class StaticGateTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="static-gate-", dir=temp_root)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        # Fixtures place reader-globals both at the root and under typings/.
+        for directory in (self.root, self.root / "typings"):
+            directory.mkdir(parents=True, exist_ok=True)
+            for name in ("reader-security-strict.d.ts", "reader-store-strict.d.ts",
+                         "reader-contract-strict.d.ts", "reader-toc-strict.d.ts"):
+                shutil.copyfile(ROOT / "typings" / name, directory / name)
         for filename in ("eslint.config.mjs", "ruff.toml"):
             shutil.copyfile(ROOT / filename, self.root / filename)
         # Node's module resolver follows this symlink to the already installed,
@@ -123,15 +129,13 @@ class StaticGateTests(unittest.TestCase):
     def test_strict_javascript_gate_rejects_implicit_any(self):
         config = load_type_config("jsconfig.strict.json")
         self.assertTrue(config["compilerOptions"]["strict"])
+        # Preserve the real module and declaration graph, including transitive imports.
+        for directory in ("static", "typings"):
+            shutil.copytree(ROOT / directory, self.root / directory, dirs_exist_ok=True)
         for relative in config["files"]:
             source = self.root / relative
             source.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, source)
-        # Strictly checked modules may import vendored declarations, never vendored sources.
-        for declaration in (ROOT / "static/vendor/djvu-rs-reader").rglob("*.d.ts"):
-            target = self.root / declaration.relative_to(ROOT)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(declaration, target)
         (self.root / "jsconfig.strict.json").write_text(json.dumps(config))
         check = ["node", ROOT / "node_modules/typescript/bin/tsc", "--project", "jsconfig.strict.json"]
         self.assert_check(self.run_check(*check), True, "")
@@ -1855,12 +1859,29 @@ class StaticGateTests(unittest.TestCase):
                  "tests/reader/layout/test_reader_section_virtualizer.js", "tests/reader/chapters/test_reader_chapter_repository.js",
                  "tests/reader/chapters/test_reader_chapter_scheduler.js", "tests/reader/chapters/test_reader_chapter_preload.js",
                  "tests/reader/layout/test_reader_scroll_anchor.js"]
-        for path in [*paths, "scripts/check_tap_contracts.mjs"]:
+        boundary_paths = ["static/reader/pdf/reader-djvu-loader.mjs",
+                          "static/reader/formats/reader-chapter-format.mjs",
+                          "static/reader/formats/reader-format-controller.mjs",
+                          "static/reader/core/reader-source.mjs", "static/reader/core/reader-lifecycle.mjs", "static/reader/pdf/reader-pdf-text.js",
+                          "tests/reader/chapters/test_chapter_format_validation.mjs",
+                          "tests/reader/core/test_pdf_text_context.js",
+                          "tests/reader/core/test_reader_contract_pdf_document.js",
+                          "tests/reader/core/test_reader_format_controller_boundary.mjs",
+                          "tests/reader/core/test_reader_source_boundary.mjs",
+                          "tests/reader/security/test_reader_security_boundary.js"]
+        for path in [*paths, *boundary_paths, "scripts/check_tap_contracts.mjs"]:
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
         check = ["node", paths[5]]
         self.assert_check(self.run_check(*check), True, "reader-chapter-repository.js")
+        boundary = self.root / "tests/reader/core/test_reader_format_controller_boundary.mjs"
+        boundary_source = boundary.read_text()
+        anchor = 'test("resolution ignores non-string extensions and preserves the existing extension"'
+        self.assertEqual(boundary_source.count(anchor), 1)
+        boundary.write_text(boundary_source.replace(anchor, anchor.replace('test(', 'test.skip(')))
+        self.assert_check(self.run_check(*check), False, "Reader boundary gate requires all named tests to pass")
+        boundary.write_text(boundary_source)
         gate = self.root / paths[5]
         original_gate = gate.read_text()
         first = 'tests/reader/chapters/test_reader_chapter_repository.js'
@@ -2381,6 +2402,22 @@ class StaticGateTests(unittest.TestCase):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / path, target)
+        # Cover the binary-search miss and LRU eviction without changing gate counts.
+        fixture_test = self.root / paths[9]
+        content = fixture_test.read_text()
+        anchor = "  assert.deepEqual(await repository().textPage(json(indexRef), 1), layer);"
+        self.assertEqual(content.count(anchor), 1)
+        fixture_test.write_text(content.replace(anchor, anchor + """
+  const { partitionFor } = await import('../../../static/reader/pdf/reader-v3.mjs');
+  assert.equal(partitionFor([{start: 2, end: 2}], 1), null);
+  const calls = [];
+  const lru = createV3Repository({pageCount: 1, sourceSha: s, resourceUrl: r => r.path,
+    readJson: (url, ref) => { calls.push(ref.sha256); return {url}; }});
+  const refs = Array.from({length: 5}, (_, i) => ({...indexRef, sha256: String(i).repeat(64)}));
+  for (const r of refs) await lru.read(r);
+  await lru.read(refs[0]);
+  assert.equal(calls.filter(sha => sha === refs[0].sha256).length, 2);
+"""))
         coverage, mutation = ['node', paths[6]], ['node', paths[7]]
         self.assert_check(self.run_check(*coverage), True, '# pass 14')
         self.assert_check(self.run_check(*mutation), True, '"total":7,"killed":7,"survived":0,"errors":0')
@@ -3348,14 +3385,15 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         for flag in ("allowJs", "checkJs", "noEmit", "strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"):
             self.assertIs(options.get(flag), True, flag)
         required = {"static/reader/core/reader-diagnostics.mjs", "static/reader/core/reader-document-loader.mjs",
-                    "static/reader/core/reader-lifecycle.mjs",
+                    "static/reader/core/reader-lifecycle.mjs", "static/reader/core/reader-runtime.js",
                     "static/reader/core/reader-request-manager.js", "static/reader/formats/reader-format-adapters.js",
                     "static/reader/formats/reader-image-loader.mjs", "static/reader/formats/reader-media-format.mjs", "static/reader/formats/reader-text-format.mjs", "static/reader/search/reader-pdf-book-search.mjs", "static/reader/search/reader-pdf-book-url.mjs", "static/reader/search/reader-pdf-search-stream.mjs", "static/reader/search/reader-pdf-search-decode.mjs", "static/reader/search/reader-pdf-partition-shape.mjs", "static/reader/search/reader-pdf-partition-config.mjs", "static/reader/search/reader-pdf-partition-policy.mjs", "static/reader/search/reader-pdf-partition-page.mjs", "static/reader/search/reader-pdf-partition-requests.mjs", "static/reader/search/reader-pdf-book-compact.mjs", "static/reader/search/reader-pdf-book-validate.mjs", "static/reader/formats/reader-chapter-repository.js",
                     "static/reader/ui/reader-document-styles.mjs", "static/reader/pdf/reader-engine-preload.js",
                     "static/reader/pdf/pdf-first-page-worker-adapter.mjs", "static/reader/pdf/reader-djvu-worker.mjs", "static/reader/pdf/reader-djvu-scheduler.mjs", "static/reader/pdf/reader-djvu-adapter.mjs", "static/reader/pdf/reader-djvu-identity.mjs", "static/reader/pdf/reader-djvu-range.mjs", "static/reader/pdf/reader-djvu-loader.mjs", "static/reader/search/reader-chapter-search-proxy-url.mjs", "static/reader/search/reader-chapter-search-index.mjs", "static/reader/pdf/reader-pdf-range-cache.mjs",
                     "static/reader/pdf/reader-pdf-range-hints.mjs", "static/reader/pdf/reader-pdf-text-store.mjs",
                     "static/reader/formats/reader-section-virtualizer.js", "static/reader/ui/reader-scroll-anchor.js"}
-        self.assertEqual(set(original["files"]) - {"typings/reader-globals.d.ts"}, required)
+        fixture = {"typings/reader-globals.d.ts", "tests/reader/core/test_reader_runtime_types.ts"}
+        self.assertEqual(set(original["files"]), required | fixture)
         self.assertTrue(required <= set(load_type_config("jsconfig.strict.json")["files"]))
         self.assertIn("tsc --project config/types/jsconfig.reader-exact.json", json.loads((ROOT / "package.json").read_text())["scripts"]["types"])
         source = self.root / "static/exact-usage.js"
@@ -3378,7 +3416,7 @@ lifecycle.trackReaderResource(() => {}); lifecycle.isReaderGenerationCurrent("se
         self.assert_check(self.run_check(*check), True, "")
         local_config = self.root / "jsconfig.reader-exact.json"
         local_config.write_text(json.dumps(original))
-        for name in original["files"]:
+        for name in [*original["files"], "typings/reader-security-strict.d.ts", "typings/reader-store-strict.d.ts"]:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
@@ -4134,6 +4172,10 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
                'static/reader/search/reader-chapter-search-proxy-url.mjs',
                'static/reader/search/reader-chapter-search-index.mjs',
                'static/reader/search/workers/reader-chapter-search-worker.mjs']
+        shutil.copytree(ROOT / 'static/reader/search', self.root / 'static/reader/search', dirs_exist_ok=True)
+        (self.root / 'static/reader/core').mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / 'static/reader/core/reader-security.js', self.root / 'static/reader/core/reader-security.js')
+        shutil.copytree(ROOT / 'typings', self.root / 'typings', dirs_exist_ok=True)
         project=load_type_config('jsconfig.chapter-worker-strict.json')
         self.assertTrue(project['compilerOptions']['strict'])
         self.assertEqual(project['compilerOptions']['lib'],['esnext','webworker'])
@@ -4155,7 +4197,7 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
         choices=''.join(f'if (value === {n}) return {n}; ' for n in range(11))
         local.write_text(original+f'\nfunction overlyComplex(value) {{ {choices} return 0; }}\n')
         self.assert_check(self.run_check(*lint),False,'complexity')
-        if (ROOT / 'quality/baselines/strict-inventory-debt.json').exists():
+        if (ROOT / 'pyrightconfig.json').exists():
             self.assertIn('isSearchIndexProxyURL(url, self.location.origin)',original)
             self.assertIn('credentials: "same-origin"',original)
             self.assertNotIn('credentials: "omit"',original)
@@ -4635,7 +4677,7 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, target)
         shutil.copytree(ROOT / "static/vendor/djvu-rs-reader", self.root / "static/vendor/djvu-rs-reader")
-        shutil.copytree(ROOT / "typings", self.root / "typings")
+        shutil.copytree(ROOT / "typings", self.root / "typings", dirs_exist_ok=True)
         # Exercise both the actual relocated CI config and the root jsconfig.json
         # facade used by editors; neither may silently omit entry-point errors.
         (self.root / "config/types").mkdir(parents=True)
@@ -4692,7 +4734,7 @@ for (const [project, base] of [['github','/search/static/'], ['hf','/static/']])
             cwd=ROOT, text=True, timeout=30).splitlines())
         (self.root / "config/types").mkdir(parents=True)
         shutil.copyfile(config_path, self.root / "config/types/jsconfig.service-worker-strict.json")
-        shutil.copytree(ROOT / "typings", self.root / "typings")
+        shutil.copytree(ROOT / "typings", self.root / "typings", dirs_exist_ok=True)
         worker = self.root / "static/sw.js"
         original = (ROOT / "static/sw.js").read_text()
         worker.write_text(original)

@@ -1,4 +1,6 @@
+/** @param {import('../../../typings/reader-controller-strict').ReaderFormatControllerContext} readerContext */
 export function createReaderFormatController(readerContext) {
+  /** @param {string} mode */
   function disposeFormatResources(mode) {
     if (mode === "epub-chapters") {
       readerContext.chapterManifestCleanup?.();
@@ -28,7 +30,7 @@ export function createReaderFormatController(readerContext) {
       readerContext.pdfShellWindow?.dispose();
       readerContext.pdfFirstPagePreload?.removeAttribute("src");
       readerContext.pdfFirstPagePreload = null;
-      for (const canvas of readerContext.content.querySelectorAll(".reader-page canvas")) {
+      for (const canvas of /** @type {NodeListOf<HTMLCanvasElement>} */ (readerContext.content.querySelectorAll(".reader-page canvas"))) {
         canvas.width = 0;
         canvas.height = 0;
       }
@@ -45,7 +47,7 @@ export function createReaderFormatController(readerContext) {
       readerContext.foliateSectionSettler = null;
       try {
         const closing = readerContext.epubRendition?.close?.();
-        closing?.catch?.(() => {});
+        if (closing) closing.catch?.(() => {});
       } catch (_) {}
       readerContext.epubRendition = null;
       readerContext.epubBook = null;
@@ -64,33 +66,31 @@ export function createReaderFormatController(readerContext) {
   }
 
   function registerReaderFormatAdapters() {
+    /** @template T @param {() => T | PromiseLike<T>} open @param {(value: Awaited<T>) => unknown} render */
+    function pair(open, render) {
+      return { open, render: /** @param {unknown} value */ (value) => render(/** @type {Awaited<T>} */ (value)) };
+    }
     const formats = {
-      "pdf-pages": [
-        () => {
-          return readerContext.fetchReaderResponse();
-        },
-        readerContext.renderPdfPages
-      ],
-      "image-pages": [
-        () => readerContext.fetchReaderResponse(),
-        readerContext.renderImagePages
-      ],
-      pdf: [() => {
+      "pdf-pages": pair(() => readerContext.fetchReaderResponse(), readerContext.renderPdfPages),
+      "image-pages": pair(() => readerContext.fetchReaderResponse(), readerContext.renderImagePages),
+      pdf: pair(() => {
         if (readerContext.extension !== "djvu") return readerContext.loadPdfDocument();
         readerContext.releasePdfWorker?.();
-        return import("/search/static/reader/pdf/reader-djvu-loader.mjs").then(module => module.openNativeDjvu(readerContext));
-      }, readerContext.renderPdf],
-      image: [readerContext.loadImageDocument, readerContext.renderImageDocument],
-      text: [readerContext.loadTextDocument, readerContext.renderTextDocument],
-      markdown: [readerContext.loadMarkdownDocument, readerContext.renderMarkdownDocument],
-      html: [readerContext.loadHtmlDocument, readerContext.renderHtml],
-      "epub-chapters": [readerContext.loadChapterManifestDocument, readerContext.renderChapterManifest],
-      audio: [readerContext.loadMediaDocument, () => readerContext.renderMedia("audio")],
-      video: [readerContext.loadMediaDocument, () => readerContext.renderMedia("video")],
-      swf: [readerContext.loadSwfDocument, readerContext.renderSwf],
-      foliate: [readerContext.loadMediaDocument, readerContext.renderFoliate]
+        // Keep the loader separate: its worker URL is relative to the loader module.
+        const loaderUrl = "/search/static/reader/pdf/reader-djvu-loader.mjs";
+        return import(loaderUrl).then(/** @param {typeof import('../pdf/reader-djvu-loader.mjs')} module */ module => module.openNativeDjvu(readerContext));
+      }, readerContext.renderPdf),
+      image: pair(readerContext.loadImageDocument, readerContext.renderImageDocument),
+      text: pair(readerContext.loadTextDocument, readerContext.renderTextDocument),
+      markdown: pair(readerContext.loadMarkdownDocument, readerContext.renderMarkdownDocument),
+      html: pair(readerContext.loadHtmlDocument, readerContext.renderHtml),
+      "epub-chapters": pair(readerContext.loadChapterManifestDocument, readerContext.renderChapterManifest),
+      audio: pair(readerContext.loadMediaDocument, () => readerContext.renderMedia("audio")),
+      video: pair(readerContext.loadMediaDocument, () => readerContext.renderMedia("video")),
+      swf: pair(readerContext.loadSwfDocument, readerContext.renderSwf),
+      foliate: pair(readerContext.loadMediaDocument, readerContext.renderFoliate)
     };
-    for (const [mode, [open, render]] of Object.entries(formats))
+    for (const [mode, {open, render}] of Object.entries(formats))
       readerContext.formatAdapters.register(mode, {
         open,
         render,
@@ -113,19 +113,20 @@ export function createReaderFormatController(readerContext) {
       }
     }
     readerContext.assertReaderActive();
-    if (String(resolved.original_extension || '').toLowerCase().replace(/^\./,'') === 'djvu' &&
-        String(resolved.extension || '').toLowerCase() === 'pdf-pages') {
+    if (!resolved) throw new Error("Invalid reader metadata");
+    if (typeof resolved.original_extension === "string" && resolved.original_extension.toLowerCase().replace(/^\./,'') === 'djvu' &&
+        typeof resolved.extension === "string" && resolved.extension.toLowerCase() === 'pdf-pages') {
       // Links saved before the direct reader may still resolve to an old page
       // stream. Use their original download URL, never the legacy page images.
-      if (!readerContext.validSource(resolved.download) || !/\.djvu$/i.test(new URL(resolved.download).pathname))
+      if (typeof resolved.download !== "string" || !readerContext.validSource(resolved.download) || !/\.djvu$/i.test(new URL(resolved.download).pathname))
         throw new Error('DJVU_ORIGINAL_SOURCE_REQUIRED');
       resolved = {...resolved,url:resolved.download,extension:'djvu'};
     }
-    readerContext.sourceUrl = readerContext.normalizeSourceUrl(resolved.url || "");
+    readerContext.sourceUrl = readerContext.normalizeSourceUrl(typeof resolved.url === "string" ? resolved.url : "");
     readerContext.contentUrl = readerContext.readerContentUrl(readerContext.sourceUrl);
-    readerContext.downloadUrl = resolved.download || readerContext.sourceUrl;
-    readerContext.chapterManifestUrl = resolved.chapter_manifest || "";
-    if (resolved.extension) readerContext.extension = String(resolved.extension).toLowerCase();
+    readerContext.downloadUrl = typeof resolved.download === "string" && resolved.download || readerContext.sourceUrl;
+    readerContext.chapterManifestUrl = typeof resolved.chapter_manifest === "string" ? resolved.chapter_manifest : "";
+    if (typeof resolved.extension === "string" && resolved.extension) readerContext.extension = resolved.extension.toLowerCase();
     if (
       readerContext.extension === "pdf" &&
       readerContext.sourceUrl.includes("/api/reader-bucket-resource?") &&
@@ -155,14 +156,15 @@ export function createReaderFormatController(readerContext) {
       readerContext.extension = "epub";
       readerContext.readerRuntime.update("source", { extension: readerContext.extension });
       readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability(readerContext.extension));
-      readerContext.content.dataset.mode = readerContext.capability.mode;
+      readerContext.content.dataset.mode = readerContext.capability.mode || "unsupported";
       /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = true;
     }
     readerContext.syncCapabilityControls();
     readerContext.downloadButton.href = readerContext.readerDownloadUrl(readerContext.documentState.title, readerContext.downloadUrl);
     if (
       (!readerContext.validSource(readerContext.sourceUrl) && !readerContext.validSource(readerContext.chapterManifestUrl) && !readerContext.readerId) ||
-      readerContext.capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED
+      readerContext.capability.readerMode === VoiceOfMLReader.ReaderMode.UNSUPPORTED ||
+      !readerContext.capability.mode
     )
       return readerContext.fail("此文件暂不支持在线阅读，请下载原文件。", "READER_UNSUPPORTED");
     readerContext.formatAdapters.activate(readerContext.capability.mode);
@@ -189,12 +191,17 @@ export function createReaderFormatController(readerContext) {
       readerContext.readerRestorationPromise = restorationPromise;
       const prepareResources = new Set(readerContext.readerResources);
       try {
-        const prepared = await readerContext.awaitReader(readerContext.formatAdapters.active.open());
+        const active = readerContext.formatAdapters.active;
+        if (!active) throw new Error("READER_ADAPTER_MISSING");
+        const prepared = await readerContext.awaitReader(active.open());
         readerContext.assertReaderActive();
-        await readerContext.formatAdapters.active.render(prepared);
+        const renderer = readerContext.formatAdapters.active;
+        if (!renderer) throw new Error("READER_ADAPTER_MISSING");
+        await renderer.render(prepared);
       } catch (error) {
         readerContext.assertReaderActive();
-        const originalExtension = String(readerContext.resolvedReaderData?.original_extension || "").toLowerCase();
+        const original = readerContext.resolvedReaderData?.original_extension;
+        const originalExtension = typeof original === "string" ? original.toLowerCase() : "";
         if (readerContext.capability.mode !== "image-pages" || !readerContext.validSource(readerContext.downloadUrl) ||
             !["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(originalExtension)) throw error;
         for (const cleanup of [...readerContext.readerResources]) {
@@ -208,6 +215,7 @@ export function createReaderFormatController(readerContext) {
         readerContext.capability = readerContext.readerRuntime.negotiate(VoiceOfMLReader.capability(readerContext.extension));
         readerContext.readerRuntime.update("source", { extension: readerContext.extension });
         readerContext.updateDocumentState({ page: 1, pageCount: 0 });
+        if (!readerContext.capability.mode) throw new Error("READER_ADAPTER_MISSING");
         readerContext.formatAdapters.activate(readerContext.capability.mode);
         readerContext.syncCapabilityControls();
         await readerContext.renderImageDocument(await readerContext.loadImageDocument(readerContext.downloadUrl));
@@ -236,19 +244,20 @@ export function createReaderFormatController(readerContext) {
       if (readerContext.fullSearchInput.value.trim()) readerContext.runFullSearch();
       readerContext.scheduleSave();
     } catch (error) {
-      if (readerContext.readerAbortController.signal.aborted || error?.name === "AbortError") return;
+      const detail = error !== null && (typeof error === "object" || typeof error === "function") ? error : null;
+      if (readerContext.readerAbortController.signal.aborted || (detail && "name" in detail && detail.name === "AbortError")) return;
       console.error(error);
-      readerContext.fail(
-        error?.code === "READER_PDF_RATE_LIMIT" ? "请求过于频繁，请稍后重试加载。" :
-          error && error.message ? error.message : "原文件加载失败",
-        readerContext.classifyReaderError(error, readerContext.capability.mode === "foliate" ? "READER_CORRUPT" : "READER_PARSE")
-      );
+      const message = detail && "code" in detail && detail.code === "READER_PDF_RATE_LIMIT" ? "请求过于频繁，请稍后重试加载。" :
+        detail && "message" in detail && typeof detail.message === "string" && detail.message ? detail.message : "原文件加载失败";
+      const fallback = readerContext.capability.mode === "foliate" ? "READER_CORRUPT" : "READER_PARSE";
+      const code = readerContext.classifyReaderError(error, fallback);
+      readerContext.fail(message, typeof code === "string" ? code : fallback);
     }
   }
 
   function syncCapabilityControls() {
     readerContext.content.dataset.mode = readerContext.capability.mode || "unsupported";
-    readerContext.pageInvertToggle.hidden = !["pdf", "pdf-pages"].includes(readerContext.capability.mode);
+    readerContext.pageInvertToggle.hidden = readerContext.capability.mode !== "pdf" && readerContext.capability.mode !== "pdf-pages";
     /** @type {HTMLElement} */ (document.querySelector(".page-controls")).hidden = !readerContext.capability.features.pagination;
     /** @type {HTMLElement} */ (document.querySelector(".zoom-controls")).hidden = !readerContext.capability.features.zoom;
     readerContext.mediaTab.hidden = !readerContext.capability.features.media;
@@ -258,7 +267,7 @@ export function createReaderFormatController(readerContext) {
       /** @type {HTMLElement} */ (document.querySelector("#history")).focus({ preventScroll: true });
     readerContext.fullSearchButton.hidden = !readerContext.capability.features.search || (noNativeText && !searchOpen);
     readerContext.bookmarkRibbon.hidden = !readerContext.capability.features.bookmarks;
-    readerContext.readingProgressSummary.querySelector(".reader-progress-bookmark").hidden =
+    /** @type {HTMLElement} */ (readerContext.readingProgressSummary.querySelector(".reader-progress-bookmark")).hidden =
       !readerContext.capability.features.bookmarks;
     if (readerContext.panelState.selected === "full-search" && readerContext.fullSearchButton.hidden)
       readerContext.closeFullSearchView();

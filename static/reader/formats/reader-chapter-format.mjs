@@ -19,27 +19,67 @@ const REVIEWED_TOC_CORRECTIONS = new Map([
 ]);
 const REVIEWED_MOBI_SOURCE = "chapters/ebook/mobi/046c991cc6fb1b05e4c95e24fea7dd34112a9ba239ff4e2f22d68221bb8fd6aa/6df0c142735b1a1a/chapter-manifest.json";
 
+/** @param {import("../../../typings/reader-chapter-format-strict").ChapterManifest} manifest
+ * @param {Uint8Array<ArrayBuffer>} bytes @param {string} manifestUrl */
 export function applyReviewedTocCorrections(manifest, bytes, manifestUrl) {
   const url = new URL(manifestUrl, location.href);
   const path = url.searchParams.get("path") || decodeURIComponent(url.pathname);
   if (!path.endsWith(REVIEWED_MOBI_SOURCE) || !globalThis.crypto?.subtle || !Array.isArray(manifest.toc)) return manifest;
+  const tocEntries = manifest.toc;
   return crypto.subtle.digest("SHA-256", bytes).then((digest) => {
     const hex = [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, "0")).join("");
     const corrections = REVIEWED_TOC_CORRECTIONS.get(hex);
     if (!corrections) return manifest;
     for (const [index, title, chapter, fragment, target, , titleIndex] of corrections) {
-      const entry = manifest.toc[index], titlePage = manifest.toc[titleIndex];
+      const entry = tocEntries[index], titlePage = tocEntries[titleIndex];
       if (!entry || entry.title !== title || entry.chapter !== chapter || entry.fragment !== fragment ||
           !titlePage || titlePage.title !== "书名页" || titlePage.chapter !== target ||
           !manifest.chapters[target - 1]) return manifest;
     }
-    const toc = manifest.toc.map(entry => ({ ...entry }));
-    for (const [index, , , , chapter, fragment] of corrections) Object.assign(toc[index], { chapter, fragment });
+    const toc = tocEntries.map(entry => ({ ...entry }));
+    for (const [index, , , , chapter, fragment] of corrections) Object.assign(/** @type {import("../../../typings/reader-chapter-format-strict").TocItem} */ (toc[index]), { chapter, fragment });
     return { ...manifest, toc };
   }).catch(() => manifest);
 }
 
+/** @param {unknown} value @returns {value is {path: string, bytes: number, sha256: string, [key: string]: unknown}} */
+export function isChapterSearchIndex(value) {
+  if (!value || typeof value !== "object") return false;
+  return "path" in value && value.path === "epub-search-index.json.gz" &&
+    "bytes" in value && typeof value.bytes === "number" && Number.isSafeInteger(value.bytes) && value.bytes > 0 &&
+    "sha256" in value && typeof value.sha256 === "string" && /^[0-9a-f]{64}$/.test(value.sha256);
+}
+
+/** @param {unknown} value */
+export function chapterOptionalText(value) {
+  return typeof value === "string" ? value : "";
+}
+
+/** Match the validator's bytes/size precedence without poisoning the prefetch sum.
+ * @param {unknown} chapter */
+export function chapterPrefetchSize(chapter) {
+  try {
+    const raw = chapter && typeof chapter === "object"
+      ? (("bytes" in chapter ? chapter.bytes : undefined) ?? ("size" in chapter ? chapter.size : undefined) ?? 0)
+      : (typeof chapter === "number" || typeof chapter === "string" ? chapter : 0);
+    const size = Number(raw);
+    return Number.isFinite(size) && size >= 0 ? size : 0;
+  } catch (_) { return 0; }
+}
+
+/** @param {unknown} entry @returns {entry is import("../../../typings/reader-chapter-format-strict").TocEntry} */
+function isChapterTocEntry(entry) {
+  return typeof entry === "object" && entry !== null &&
+    "label" in entry && typeof entry.label === "string" &&
+    "chapterIndex" in entry && typeof entry.chapterIndex === "number" &&
+    "fragment" in entry && typeof entry.fragment === "string" &&
+    "depth" in entry && typeof entry.depth === "number" &&
+    "activate" in entry && typeof entry.activate === "function";
+}
+
+/** @param {import("../../../typings/reader-chapter-format-strict").ChapterFormatContext} readerContext */
 export function createReaderChapterFormat(readerContext) {
+  /** @param {Response | Promise<Response>} prepared */
   async function renderChapterManifest(prepared) {
     const response = await prepared;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -59,17 +99,17 @@ export function createReaderChapterFormat(readerContext) {
     const chapterPrefetchCount = 6;
     const chapterPrefetchMaxCount = 10, chapterPrefetchBytes = 128 * 1024;
     let chapterFocusIndex = 1, chapterWindowFrame = 0, chapterWindowReady = false;
-    let navigationTargetChapter = 0, navigationProtectionCleanup = null;
+    let navigationTargetChapter = 0;
+    /** @type {(() => void) | null} */
+    let navigationProtectionCleanup = null;
     let chapterNavigating = 0;
+    /** @type {IntersectionObserver | null} */
     let chapterPreviousObserver = null;
     const chapterBudget = VoiceOfMLReaderSecurity.createByteBudget();
     if (!manifestBase) throw new Error("EPUB_INVALID_MANIFEST_PATH");
     const searchIndex = manifest.search_index;
     readerContext.chapterSearchConfiguration =
-      searchIndex?.path === "epub-search-index.json.gz" &&
-      Number.isSafeInteger(searchIndex.bytes) &&
-      searchIndex.bytes > 0 &&
-      /^[0-9a-f]{64}$/.test(searchIndex.sha256 || "")
+      isChapterSearchIndex(searchIndex)
         ? {
           chapters: manifest.chapters,
           index: {
@@ -86,18 +126,23 @@ export function createReaderChapterFormat(readerContext) {
           }
           }
         : null;
+    /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter */
     const chapterUrl = (chapter) => readerContext.trustedChapterUrl(chapter.path, manifestBase);
+    /** @param {number} index */
     const chapterAt = (index) => chapterByIndex.get(index) || null;
+    /** @param {number} index @param {string} selector */
     const nextChapterNode = (index, selector) => {
-      for (const node of frame.querySelectorAll(selector))
-        if (Number(node.dataset.chapter) > index) return node;
+      for (const node of frame.querySelectorAll(/** @type {string} */ (selector)))
+        if (Number(/** @type {HTMLElement} */ (node).dataset.chapter) > index) return node;
       return null;
     };
+    /** @param {string} raw @param {string} base @param {string} attribute */
     const resourceUrl = (raw, base, attribute) => {
       const value = String(raw || "").trim();
       if (!value || value.startsWith("#")) return null;
       return readerContext.trustedChapterResourceUrl(value, base, attribute, manifestBase);
     };
+    /** @param {HTMLElement} article */
     const insertChapter = (article) => {
       const existing = frame.querySelector(
         `.reader-epub-chapter[data-chapter="${article.dataset.chapter}"]`
@@ -107,18 +152,19 @@ export function createReaderChapterFormat(readerContext) {
       const marker = frame.querySelector(`.reader-chapter-sentinel[data-chapter="${article.dataset.chapter}"]`);
       const insert = () => {
         if (marker) {
-          readerContext.chapterManifestObserver.unobserve(marker);
-          chapterPreviousObserver.unobserve(marker);
+          /** @type {IntersectionObserver} */ (readerContext.chapterManifestObserver).unobserve(marker);
+          /** @type {IntersectionObserver} */ (chapterPreviousObserver).unobserve(marker);
           marker.replaceWith(article);
         } else frame.insertBefore(article, next || null);
       };
       const preservePosition = chapterWindowReady || !readerContext.isReaderGenerationCurrent("navigation", openingGeneration);
       if (preservePosition) readerContext.foliateScrollAnchors.preserve(insert);
       else insert();
-      readerContext.chapterManifestObserver.observe(article);
+      /** @type {IntersectionObserver} */ (readerContext.chapterManifestObserver).observe(article);
       if (preservePosition) readerContext.foliateScrollAnchors.observe(article);
       return article;
     };
+    /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {boolean} [previous] */
     const ensureSentinel = (chapter, previous = false) => {
       if (readerContext.readerAbortController.signal.aborted || loaded.has(chapter.index)) return null;
       const selector = `.reader-chapter-sentinel[data-chapter="${chapter.index}"]`;
@@ -143,18 +189,21 @@ export function createReaderChapterFormat(readerContext) {
       if (chapterWindowReady || !readerContext.isReaderGenerationCurrent("navigation", openingGeneration))
         readerContext.foliateScrollAnchors.preserve(insert);
       else insert();
-      (previous ? chapterPreviousObserver : readerContext.chapterManifestObserver).observe(marker);
+      /** @type {IntersectionObserver} */ (previous ? chapterPreviousObserver : readerContext.chapterManifestObserver).observe(marker);
       return marker;
     };
+    /** @param {Element} article @param {string} fragment */
     const chapterTarget = (article, fragment) =>
       !fragment || article.id === fragment ? article :
         article.querySelector(`[id="${CSS.escape(fragment)}"], [name="${CSS.escape(fragment)}"]`);
+    /** @param {string | null} value */
     const normalizeTocLabel = value => String(value || "").replace(/\s+/gu, "").toLowerCase();
     // Old merged CHM bundles can lose the TOC fragment while retaining the
     // original, functioning book-internal link. Accept only a unique exact
     // label that points to an existing generated page in the same chapter.
+    /** @param {HTMLElement} article @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter */
     const repairMergedChmToc = (article, chapter) => {
-      const missing = readerContext.navigationState.tocEntries.filter(entry =>
+      const missing = readerContext.navigationState.tocEntries.filter(isChapterTocEntry).filter(entry =>
         entry.chapterIndex === chapter.index && !entry.fragment && normalizeTocLabel(entry.label));
       if (!missing.length) return;
       const wanted = new Set(missing.map(entry => normalizeTocLabel(entry.label)));
@@ -166,7 +215,7 @@ export function createReaderChapterFormat(readerContext) {
       for (const link of article.querySelectorAll('a[href^="#chm-page-"]')) {
         const label = normalizeTocLabel(link.textContent);
         if (!wanted.has(label)) continue;
-        const fragment = link.getAttribute("href").slice(1);
+        const fragment = /** @type {string} */ (link.getAttribute("href")).slice(1);
         if (!/^chm-page-\d+$/.test(fragment)) continue;
         if (!targets.has(label)) targets.set(label, new Set());
         targets.get(label).add(fragment);
@@ -179,24 +228,24 @@ export function createReaderChapterFormat(readerContext) {
       }
     };
     const mergedChmToc = manifest.chapters.some(chapter =>
-      chapter.source_path === "chm-fallback.html");
+      "source_path" in chapter && chapter.source_path === "chm-fallback.html");
     const setChapterToc = () => {
       const entries = (manifest.toc ?? manifest.chapters.map((item) => ({
-          title: item.title || `章节 ${item.index}`, chapter: item.index, depth: 0, fragment: ""
+          title: ("title" in item && chapterOptionalText(item.title)) || `章节 ${item.index}`, chapter: item.index, depth: 0, fragment: ""
         }))).map((item) => ({
           label: item.title,
           chapterIndex: item.chapter,
           fragment: item.fragment,
           depth: item.depth,
-          activate: (generation) => activateChapter(manifest.chapters[item.chapter - 1], generation, item.fragment)
+          activate: (/** @type {number} */ generation) => activateChapter(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (manifest.chapters[item.chapter - 1]), generation, item.fragment)
         }));
       readerContext.setToc(entries);
-      for (const entry of readerContext.navigationState.tocEntries)
-        entry.activate = generation => activateChapter(chapterAt(entry.chapterIndex), generation, entry);
+      for (const entry of readerContext.navigationState.tocEntries.filter(isChapterTocEntry))
+        entry.activate = generation => activateChapter(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (chapterAt(entry.chapterIndex)), generation, entry);
     };
     const chapterScheduler = VoiceOfMLReaderChapters.createChapterScheduler({
       create: async (index, signal, priority) => {
-        const chapter = chapterAt(index);
+        const chapter = /** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (chapterAt(index));
         readerContext.assertReaderActive();
         const url = chapterUrl(chapter);
         if (!url) throw new Error("EPUB_INVALID_PATH");
@@ -241,7 +290,7 @@ export function createReaderChapterFormat(readerContext) {
           retainedBytes.set(chapter.index, bytes.byteLength);
           inserted = true;
           if (mergedChmToc) repairMergedChmToc(article, chapter);
-          for (const entry of readerContext.navigationState.tocEntries)
+          for (const entry of readerContext.navigationState.tocEntries.filter(isChapterTocEntry))
             if (entry.chapterIndex === chapter.index)
               entry.target = chapterTarget(article, entry.fragment);
           const next = chapterAt(chapter.index + 1);
@@ -255,6 +304,7 @@ export function createReaderChapterFormat(readerContext) {
         }
       }
     });
+    /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {boolean} [demand] @param {boolean} [exclusive] */
     const fetchChapter = (chapter, demand = true, exclusive = false) => {
       readerContext.assertReaderActive();
       if (loaded.has(chapter.index)) return Promise.resolve();
@@ -269,7 +319,7 @@ export function createReaderChapterFormat(readerContext) {
         throw error;
       });
     };
-    /** @param {string | {fragment?: string}} destination */
+    /** @param {import("../../../typings/reader-chapter-format-strict").Chapter} chapter @param {number} generation @param {string | {fragment?: string}} destination */
     const activateChapter = async (chapter, generation, destination = "") => {
       chapterFocusIndex = chapter.index;
       navigationProtectionCleanup?.();
@@ -284,7 +334,7 @@ export function createReaderChapterFormat(readerContext) {
         try {
           id = decodeURIComponent(id);
         } catch (_) {}
-        const anchor = chapterTarget(node, id);
+        const anchor = chapterTarget(/** @type {Element} */ (node), id);
         if (!anchor) throw new Error("EPUB_MISSING_ANCHOR");
         readerContext.foliateScrollAnchors.invalidate();
         // Measure the anchor instead of using scrollIntoView: the demanded landing line is
@@ -325,7 +375,7 @@ export function createReaderChapterFormat(readerContext) {
       const link = /** @type {Element} */ (event.target).closest?.("a[href]");
       const article = /** @type {HTMLElement | null | undefined} */ (link?.closest(".reader-epub-chapter"));
       if (
-        !article ||
+        !link || !article ||
         event.button !== 0 ||
         event.ctrlKey ||
         event.metaKey ||
@@ -334,7 +384,7 @@ export function createReaderChapterFormat(readerContext) {
       )
         return;
       const current = chapterAt(Number(article.dataset.chapter));
-      const destination = readerContext.trustedChapterReferenceUrl(link.getAttribute("href"), chapterUrl(current), manifestBase);
+      const destination = readerContext.trustedChapterReferenceUrl(link.getAttribute("href"), chapterUrl(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (current)), manifestBase);
       const target = destination ? new URL(destination.url) : null;
       const fragment = destination?.fragment || "";
       const chapter = target && manifest.chapters.find((item) => chapterUrl(item) === target.href);
@@ -378,16 +428,16 @@ export function createReaderChapterFormat(readerContext) {
       },
       virtualize: (article, index, height) => {
         loaded.delete(index);
-        const marker = /** @type {HTMLButtonElement} */ (ensureSentinel(chapterAt(index)));
+        const marker = /** @type {HTMLButtonElement} */ (ensureSentinel(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (chapterAt(index))));
         const style = getComputedStyle(article);
         marker.classList.add("reader-chapter-placeholder");
         marker.style.height = `${height}px`;
         marker.style.marginTop = style.marginTop;
         marker.style.marginBottom = style.marginBottom;
         marker.setAttribute("aria-hidden", "true");
-        readerContext.chapterManifestObserver.unobserve(article);
+        /** @type {IntersectionObserver} */ (readerContext.chapterManifestObserver).unobserve(article);
         readerContext.foliateScrollAnchors.unobserve(article);
-        for (const entry of readerContext.navigationState.tocEntries)
+        for (const entry of readerContext.navigationState.tocEntries.filter(isChapterTocEntry))
           if (entry.chapterIndex === index) entry.target = null;
         for (const image of article.querySelectorAll("img")) image.removeAttribute("src");
         article.replaceWith(marker);
@@ -411,7 +461,7 @@ export function createReaderChapterFormat(readerContext) {
       const indices = [];
       let bytes = 0;
       for (const chapter of nearby) {
-        bytes += chapter.bytes;
+        bytes += chapterPrefetchSize(chapter);
         if (chapter.index > chapterFocusIndex + chapterPrefetchCount && bytes > chapterPrefetchBytes) break;
         if (!loaded.has(chapter.index)) indices.push(chapter.index);
       }
@@ -429,7 +479,7 @@ export function createReaderChapterFormat(readerContext) {
       if (current && !chapterNavigating) chapterFocusIndex = Number(current.dataset.chapter);
       if (!chapterNavigating && current?.classList.contains("reader-chapter-sentinel") &&
           current.getBoundingClientRect().top < view.bottom)
-        fetchChapter(chapterAt(chapterFocusIndex)).catch(() => {});
+        fetchChapter(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (chapterAt(chapterFocusIndex))).catch(() => {});
       if (!chapterNavigating) chapterScheduler.prefetch(chapterPrefetchIndices());
       readerContext.foliateScrollAnchors.whenIdle(trimChapterWindow);
     }
@@ -476,7 +526,7 @@ export function createReaderChapterFormat(readerContext) {
       loaded.clear();
     };
     readerContext.trackReaderResource(readerContext.chapterManifestCleanup);
-    readerContext.chapterManifestLoader = async (index) => {
+    const chapterManifestLoader = async (/** @type {number} */ index) => {
       const chapter = chapterAt(index);
       if (!chapter) return null;
       chapterFocusIndex = index;
@@ -485,17 +535,19 @@ export function createReaderChapterFormat(readerContext) {
       finally { chapterNavigating--; }
       return frame.querySelector(`.reader-epub-chapter[data-chapter="${index}"]`);
     };
-    readerContext.chapterManifestLoader.count = manifest.chapters.length;
+    chapterManifestLoader.count = manifest.chapters.length;
+    readerContext.chapterManifestLoader = chapterManifestLoader;
     setChapterToc();
     await readerContext.getInitialReaderRestoration();
     const savedChapter = Number(readerContext.readerRestorationEntry?.chapterIndex) - 1;
     const initialChapter = Number.isInteger(savedChapter)
       ? Math.max(0, Math.min(manifest.chapters.length - 1, savedChapter))
       : 0;
-    chapterFocusIndex = manifest.chapters[initialChapter].index;
-    if (initialChapter > 0) ensureSentinel(manifest.chapters[initialChapter - 1], true);
+    const initial = /** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (manifest.chapters[initialChapter]);
+    chapterFocusIndex = initial.index;
+    if (initialChapter > 0) ensureSentinel(/** @type {import("../../../typings/reader-chapter-format-strict").Chapter} */ (manifest.chapters[initialChapter - 1]), true);
     try {
-      const firstChapter = fetchChapter(manifest.chapters[initialChapter]);
+      const firstChapter = fetchChapter(initial);
       chapterScheduler.prefetch(chapterPrefetchIndices());
       await firstChapter;
     } catch (error) {
@@ -523,13 +575,14 @@ export function createReaderChapterFormat(readerContext) {
       chapters[chapters.length - 1];
     return chapter
       ? {
-          chapterIndex: Number(chapter.dataset.chapter),
+          chapterIndex: Number(/** @type {HTMLElement} */ (chapter).dataset.chapter),
           chapterManifest: readerContext.chapterManifestUrl || readerContext.sourceUrl,
           chapterOffset: marker - chapter.getBoundingClientRect().top
         }
       : null;
   }
 
+  /** @param {import("../../../typings/reader-chapter-format-strict").ChapterPosition} entry @param {number} generation */
   async function restoreChapterPosition(entry, generation) {
     if (
       /-epub-chapters-v5\//.test(readerContext.chapterManifestUrl || readerContext.sourceUrl) &&

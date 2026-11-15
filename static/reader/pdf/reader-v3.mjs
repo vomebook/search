@@ -1,20 +1,36 @@
 // Transport is supplied by the Reader's cancellation/deadline-owned request manager.
+/** @typedef {import('../../../typings/reader-v3-strict').Resource} Resource */
+/** @typedef {import('../../../typings/reader-v3-strict').DatasetPrimary} DatasetPrimary */
+/** @typedef {import('../../../typings/reader-v3-strict').Partition} Partition */
+/** @typedef {import('../../../typings/reader-v3-strict').TextEntry} TextEntry */
+/** @typedef {import('../../../typings/reader-v3-strict').TextLayer} TextLayer */
+/** @typedef {import('../../../typings/reader-v3-strict').TextIndex} TextIndex */
+/** @typedef {import('../../../typings/reader-v3-strict').TextPartition} TextPartition */
+/** @typedef {import('../../../typings/reader-v3-strict').ReadingManifest} ReadingManifest */
+/** @typedef {import('../../../typings/reader-v3-strict').PageMap} PageMap */
+/** @param {unknown} value */
 const sha = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+/** @param {number} value */
 const positive = value => Number.isFinite(value) && value > 0;
+/** @param {number} value */
 const integer = value => Number.isSafeInteger(value) && value > 0;
-const invalid = () => { throw new Error("PDF_V3_INVALID"); };
+/** @returns {never} */
+function invalid() { throw new Error("PDF_V3_INVALID"); }
 const modes = new Set(["auto", "horizontal-ltr", "horizontal-rtl", "vertical-rl", "vertical-lr"]);
 const pathPattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/(?:reading-manifest\.json|page-map\.json\.gz|text-layer-manifest\.json|text-review-manifest\.json|text\/(?:page-[0-9]{6}\.json\.gz|book-text\.json\.gz|search-[0-9]{6}-[0-9]{6}\.json\.gz|partition-[0-9]{6}-[0-9]{6}-manifest\.json)|preview\/(?:page-[0-9]{6}\.(?:png|webp|jpeg|svg|jxl)|partition-[0-9]{6}-[0-9]{6}-manifest\.json))$/;
 const sharedPagePattern = /^objects\/[0-9a-f]{2}\/[0-9a-f]{64}\/[0-9a-f]{16}\/pages\/page-[0-9]{6}\.(?:jxl|png)$/;
+/** @param {unknown} path */
 export const isV3Path = path => typeof path === "string" && (pathPattern.test(path) || sharedPagePattern.test(path));
+/** @param {Resource} ref @param {string} [source] */
 export function validateResource(ref, source = "") {
   if (!ref || typeof ref.path !== "string" || !["vomebook/pdf-pages-v2", "vomebook/reader-assets-v2"].includes(ref.bucket) ||
       ref.role !== "runtime" || !sha(ref.sha256) || !integer(ref.bytes) ||
-      !globalThis.VoiceOfMLReader.isBucketPath(ref.path, true, ref.bucket)) invalid();
+      !(/** @type {typeof globalThis & {VoiceOfMLReader: {isBucketPath(path: string, runtime: boolean, bucket: string): boolean}}} */ (globalThis)).VoiceOfMLReader.isBucketPath(ref.path, true, ref.bucket)) invalid();
   if (isV3Path(ref.path) && (ref.bucket !== "vomebook/pdf-pages-v2" ||
       (source && !ref.path.startsWith(`objects/${source.slice(0, 2)}/${source}/`)))) invalid();
   return ref;
 }
+/** @param {DatasetPrimary} ref @param {string} [sourceKey] @param {string} [sourceSha] @param {string} [expectedKind] */
 export function validateDatasetPrimary(ref, sourceKey, sourceSha, expectedKind) {
   const keys = ["kind", "repo", "path", "revision", "sha256", "bytes", "role"];
   if (!ref || typeof ref !== "object" || Array.isArray(ref) ||
@@ -33,15 +49,18 @@ export function validateDatasetPrimary(ref, sourceKey, sourceSha, expectedKind) 
       (expectedKind !== undefined && !ref.path.toLowerCase().endsWith("." + expectedKind))) invalid();
   return ref;
 }
+/** @param {DatasetPrimary} ref */
 export function datasetPrimaryUrl(ref) {
   validateDatasetPrimary(ref);
   return `https://huggingface.co/datasets/${ref.repo}/resolve/${ref.revision}/` +
     ref.path.split("/").map(encodeURIComponent).join("/");
 }
+/** @param {unknown} b */
 function validBox(b) {
   return Array.isArray(b) && b.length === 4 && b.every(v => Number.isFinite(v) && v >= 0 && v <= 1) &&
     b[0] < b[2] && b[1] < b[3];
 }
+/** @param {unknown} quad */
 function validQuad(quad) {
   if (!Array.isArray(quad) || quad.length !== 4 || quad.some(point =>
       !Array.isArray(point) || point.length !== 2 || point.some(v => !Number.isFinite(v) || v < 0 || v > 1))) return false;
@@ -49,6 +68,7 @@ function validQuad(quad) {
   for (let i = 0; i < 4; i++) area += quad[i][0] * quad[(i + 1) % 4][1] - quad[(i + 1) % 4][0] * quad[i][1];
   return Math.abs(area) > 2e-9;
 }
+/** @param {TextLayer} layer @param {TextEntry} entry @param {string} source */
 export function validateTextLayer(layer, entry, source) {
   if (!entry || !layer || layer.version !== 1 || layer.kind !== "pdf-text-layer" || layer.source_sha256 !== source ||
       layer.page !== entry.page || !sha(layer.generation) || layer.generation !== entry.generation ||
@@ -67,6 +87,7 @@ export function validateTextLayer(layer, entry, source) {
   // Regions are ordered and non-overlapping in code points. Keep one forward
   // UTF-16 cursor instead of allocating an array for every point on the page.
   let end = 0, unit = 0;
+  /** @param {number} target */
   const advance = target => {
     while (end < target && unit < text.length) {
       const high = text.charCodeAt(unit++);
@@ -91,6 +112,7 @@ export function validateTextLayer(layer, entry, source) {
   }
   return layer;
 }
+/** @param {Partition[]} partitions @param {number} page */
 export function partitionFor(partitions, page) {
   let low = 0, high = partitions.length;
   while (low < high) {
@@ -101,6 +123,7 @@ export function partitionFor(partitions, page) {
   const part = partitions[low - 1];
   return part && page <= part.end ? part : null;
 }
+/** @param {Partition[]} values @param {number} count @param {boolean} complete @param {string} source */
 function partitions(values, count, complete, source) {
   if (!Array.isArray(values)) invalid();
   let end = 0;
@@ -112,17 +135,27 @@ function partitions(values, count, complete, source) {
   }
   if (complete && end !== count) invalid();
 }
+/** @param {import('../../../typings/reader-v3-strict').RepositoryOptions} options */
 export function createV3Repository({ readJson, resourceUrl, signal, pageCount, sourceSha }) {
-  const cache = new Map(), pending = new Map();
-  let bytes = 0, disposed = false, index = null, textPending = null, indexKey = "";
+  /** @type {Map<string, {value: unknown, size: number}>} */
+  const cache = new Map();
+  /** @type {Map<string, Promise<unknown>>} */
+  const pending = new Map();
+  /** @type {TextIndex | null} */
+  let index = null;
+  /** @type {Promise<TextIndex> | null} */
+  let textPending = null;
+  let bytes = 0, disposed = false, indexKey = "";
   const active = () => { if (disposed || signal?.aborted) throw new DOMException("Reader closed", "AbortError"); };
+  /** @param {Resource} ref @param {string} [source] */
   async function read(ref, source = sourceSha) {
     active();
     validateResource(ref, source);
     const key = ref.bucket + ":" + ref.path + ":" + ref.sha256;
     const cached = cache.get(key);
     if (cached) { cache.delete(key); cache.set(key, cached); return cached.value; }
-    if (pending.has(key)) return pending.get(key);
+    const existing = pending.get(key);
+    if (existing) return existing;
     if (pending.size >= 8) throw new Error("PDF_V3_BUSY");
     const task = Promise.resolve().then(() => readJson(resourceUrl(ref), ref)).then(value => {
       active();
@@ -131,7 +164,10 @@ export function createV3Repository({ readJson, resourceUrl, signal, pageCount, s
         cache.set(key, { value, size }); bytes += size;
         while (cache.size > 4 || bytes > 2 * 1024 * 1024) {
           const oldest = cache.keys().next().value;
-          bytes -= cache.get(oldest).size; cache.delete(oldest);
+          if (oldest === undefined) break;
+          const evicted = cache.get(oldest);
+          if (evicted) bytes -= evicted.size;
+          cache.delete(oldest);
         }
       }
       return value;
@@ -139,13 +175,15 @@ export function createV3Repository({ readJson, resourceUrl, signal, pageCount, s
     pending.set(key, task);
     return task;
   }
+  /** @param {Resource} ref */
   async function textIndex(ref) {
     active(); validateResource(ref, sourceSha);
     const key = ref.bucket + ":" + ref.path + ":" + ref.sha256;
     if (indexKey && indexKey !== key) throw new Error("PDF_V3_GENERATION_CHANGED");
     indexKey = key;
     if (index) return index;
-    if (!textPending) textPending = read(ref).then(value => {
+    if (!textPending) textPending = read(ref).then(payload => {
+      const value = /** @type {TextIndex} */ (payload);
       if (!value || value.version !== 1 || value.kind !== "pdf-text-layer-index" || value.complete !== true ||
           value.source_sha256 !== sourceSha || value.page_count !== pageCount || !sha(value.generation) ||
           !["raw", "effective"].includes(value.revision) || value.offset_unit !== "unicode-codepoint") invalid();
@@ -166,10 +204,12 @@ export function createV3Repository({ readJson, resourceUrl, signal, pageCount, s
   return {
     read,
     textIndex,
+    /** @param {Resource} ref @param {number} page */
     async textPage(ref, page) {
       if (!integer(page) || page > pageCount) invalid();
       const root = await textIndex(ref), part = partitionFor(root.partitions, page);
-      const value = await read(part.resource);
+      if (!part) invalid();
+      const value = /** @type {TextPartition} */ (await read(part.resource));
       if (!value || value.version !== 1 || value.kind !== "pdf-text-partition" || value.source_sha256 !== sourceSha ||
           value.generation !== root.generation || value.start !== part.start || value.end !== part.end ||
           !Array.isArray(value.pages) || value.pages.length !== part.end - part.start + 1 ||
@@ -177,11 +217,12 @@ export function createV3Repository({ readJson, resourceUrl, signal, pageCount, s
       const entry = value.pages[page - part.start];
       validateResource(entry.resource, sourceSha);
       if (!entry.resource.path.endsWith(`/text/page-${String(page).padStart(6, "0")}.json.gz`)) invalid();
-      return validateTextLayer(await read(entry.resource), entry, sourceSha);
+      return validateTextLayer(/** @type {TextLayer} */ (await read(entry.resource)), entry, sourceSha);
     },
     dispose() { disposed = true; cache.clear(); bytes = 0; index = null; }
   };
 }
+/** @param {ReadingManifest} manifest @param {number} maxPages */
 export function validateReadingManifest(manifest, maxPages) {
   if (!manifest || manifest.version !== 3 || manifest.kind !== "pdf-reading" ||
       !sha(manifest.source_sha256) || !sha(manifest.generation) || !integer(manifest.page_count) ||
@@ -190,10 +231,10 @@ export function validateReadingManifest(manifest, maxPages) {
       typeof manifest.preview?.complete !== "boolean" || manifest.preview.page_count !== manifest.page_count) invalid();
   const primary = manifest.primary.resource;
   const dataset = primary?.kind === "dataset-source";
-  if (dataset) validateDatasetPrimary(primary, manifest.source_key, manifest.source_sha256, manifest.primary.kind);
-  else validateResource(primary);
+  if (dataset) validateDatasetPrimary(/** @type {DatasetPrimary} */ (primary), manifest.source_key, manifest.source_sha256, manifest.primary.kind);
+  else validateResource(/** @type {Resource} */ (primary));
   if (manifest.primary.kind === "djvu" && (manifest.page_count > 10000 ||
-      (!dataset && (primary.bucket !== "vomebook/pdf-pages-v2" || primary.sha256 !== manifest.source_sha256 ||
+      (!dataset && ((/** @type {Resource} */ (primary)).bucket !== "vomebook/pdf-pages-v2" || primary.sha256 !== manifest.source_sha256 ||
         primary.bytes > 512 * 1024 * 1024 ||
         !primary.path.startsWith(`objects/${manifest.source_sha256.slice(0, 2)}/${manifest.source_sha256}/`) ||
         !primary.path.endsWith("/document.djvu"))))) invalid();
@@ -217,6 +258,7 @@ export function validateReadingManifest(manifest, maxPages) {
       manifest.components.text !== (manifest.text_layer ? "ready" : "pending")) invalid();
   return manifest;
 }
+/** @param {PageMap} map @param {ReadingManifest} manifest */
 export function validatePageMap(map, manifest) {
   if (!map || map.version !== 1 || map.kind !== "pdf-page-map" || map.source_sha256 !== manifest.source_sha256 ||
       !Array.isArray(map.pages) || map.pages.length !== manifest.page_count || map.pages.some((p, i) =>

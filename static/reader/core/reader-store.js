@@ -1,5 +1,11 @@
 (function (root) {
   "use strict";
+  /** @typedef {import('../../../typings/reader-store-strict').StoreHistoryInput} StoreHistoryInput */
+  /** @typedef {import('../../../typings/reader-store-strict').HistoryEntry} HistoryEntry */
+  /** @typedef {import('../../../typings/reader-store-strict').BookmarkInput} BookmarkInput */
+  /** @typedef {import('../../../typings/reader-store-strict').BookmarkEntry} BookmarkEntry */
+  /** @typedef {import('../../../typings/reader-store-strict').StoreChange} StoreChange */
+  /** @typedef {import('../../../typings/reader-store-strict').StoreMessage} StoreMessage */
   const DB_NAME = "voiceofml-reader";
   const STORE_NAME = "entries";
   const BOOKMARK_STORE_NAME = "bookmarks";
@@ -9,7 +15,9 @@
   const script = /** @type {HTMLScriptElement | null | undefined} */ (root.document?.currentScript);
   const STORE_VERSION = script?.dataset.readerStoreVersion ||
     /reader-store\.([0-9a-f]{12})\.js(?:\?|$)/.exec(script?.src || "")?.[1] || "";
+  /** @type {Promise<IDBDatabase> | null} */
   let databasePromise = null;
+  /** @type {Set<(change: StoreMessage) => void>} */
   const subscribers = new Set();
   const storeChannel =
     typeof root.BroadcastChannel === "function"
@@ -19,8 +27,13 @@
   if (storeChannel)
     storeChannel.onmessage = (event) => {
       if (disposed) return;
-      for (const listener of subscribers) listener({ ...event.data, remote: true });
+      /** @type {unknown} */
+      const data = event.data;
+      // The channel historically forwards any payload; this assertion only permits
+      // the existing object spread, it does not validate or filter the payload.
+      for (const listener of subscribers) listener({ .../** @type {object} */ (data), remote: true });
     };
+  /** @param {StoreChange} change */
   function notify(change) {
     if (disposed) return;
     try {
@@ -28,6 +41,7 @@
     } catch (_) {}
     for (const listener of subscribers) listener({ ...change, remote: false });
   }
+  /** @param {(change: StoreMessage) => void} listener */
   function subscribe(listener) {
     if (typeof listener !== "function")
       throw new TypeError("Reader store subscriber must be a function");
@@ -44,6 +58,7 @@
     } catch (_) {}
   }
 
+  /** @param {IDBDatabase} database */
   function validateLayout(database) {
     if (!database.objectStoreNames.contains(STORE_NAME) || !database.objectStoreNames.contains(BOOKMARK_STORE_NAME))
       throw new Error("Unsupported Reader database layout");
@@ -64,7 +79,7 @@
 
   function openDatabase() {
     if (databasePromise) return databasePromise;
-    const opening = new Promise((resolve, reject) => {
+    const opening = /** @type {Promise<IDBDatabase>} */ (new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = () => {
         const database = request.result;
@@ -123,11 +138,12 @@
         if (databasePromise === opening) databasePromise = null;
         reject(request.error);
       };
-    });
+    }));
     databasePromise = opening;
     return databasePromise;
   }
 
+  /** @param {StoreHistoryInput | null} entry @returns {HistoryEntry | null} */
   function normalizeHistoryEntry(entry) {
     if (!entry || typeof entry.url !== "string" || !entry.url)
       return null;
@@ -139,6 +155,7 @@
       lastReadAt: Number.isFinite(Number(entry.lastReadAt)) ? Number(entry.lastReadAt) : Date.now()
     };
   }
+  /** @param {BookmarkInput | null} entry @returns {BookmarkEntry | null} */
   function normalizeBookmarkEntry(entry) {
     if (
       !entry ||
@@ -155,6 +172,7 @@
       createdAt: Number.isFinite(Number(entry.createdAt)) ? Number(entry.createdAt) : Date.now()
     };
   }
+  /** @param {string} url @returns {Promise<HistoryEntry | null>} */
   async function get(url) {
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
@@ -172,12 +190,13 @@
     });
   }
 
-  async function put(entry) {
-    const supplied = entry;
-    entry = normalizeHistoryEntry(entry);
+  /** @param {StoreHistoryInput} supplied */
+  async function put(supplied) {
+    const entry = normalizeHistoryEntry(supplied);
     if (!entry) throw new TypeError("Invalid reader history entry");
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
+      /** @type {Error | null} */
       let abortReason = null;
       const tx = database.transaction(STORE_NAME, "readwrite");
       const store = tx.objectStore(STORE_NAME);
@@ -224,6 +243,14 @@
     }));
   }
 
+  /**
+   * @template T, U
+   * @param {string} storeName
+   * @param {string} indexName
+   * @param {(value: U) => T | null} normalize
+   * @param {{query?: IDBValidKey | IDBKeyRange | null, direction?: IDBCursorDirection, limit?: number}} [options]
+   * @returns {Promise<T[]>}
+   */
   async function listEntries(
     storeName,
     indexName,
@@ -232,6 +259,7 @@
   ) {
     const database = await openDatabase();
     return new Promise((resolve, reject) => {
+      /** @type {T[]} */
       const entries = [];
       const tx = database.transaction(storeName, "readonly"),
         store = tx.objectStore(storeName);
@@ -241,7 +269,7 @@
         if (!cursor || entries.length >= limit) return resolve(entries);
         const value = cursor.value;
         const entry = value && (value.schemaVersion == null || value.schemaVersion === SCHEMA_VERSION)
-          ? normalize(value) : null;
+          ? normalize(/** @type {U} */ (value)) : null;
         if (entry) {
           entries.push(entry);
         }
@@ -266,6 +294,7 @@
     }));
   }
 
+  /** @param {string} url */
   async function remove(url) {
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
@@ -300,9 +329,9 @@
       tx.onabort = () => reject(tx.error || new Error("Reader history clear aborted"));
     }));
   }
-  async function putBookmark(entry) {
-    const supplied = entry;
-    entry = normalizeBookmarkEntry(entry);
+  /** @param {BookmarkInput} supplied */
+  async function putBookmark(supplied) {
+    const entry = normalizeBookmarkEntry(supplied);
     if (!entry) throw new TypeError("Invalid reader bookmark entry");
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
@@ -332,6 +361,7 @@
       tx.onabort = () => reject(tx.error);
     }));
   }
+  /** @param {string} url */
   async function listBookmarks(url) {
     const entries = await listEntries(BOOKMARK_STORE_NAME, "url", normalizeBookmarkEntry, {
       query: IDBKeyRange.only(url)
@@ -343,6 +373,7 @@
       direction: "prev"
     });
   }
+  /** @param {string} id */
   async function removeBookmark(id) {
     const database = await openDatabase();
     await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
@@ -362,7 +393,8 @@
       tx.onabort = () => reject(tx.error || new Error("Reader bookmark cannot be removed safely"));
     }));
   }
-  root.VoiceOfMLReaderStore = Object.freeze({
+  /** @satisfies {import('../../../typings/reader-store-strict').ReaderStoreStrictApi} */
+  const api = Object.freeze({
     DB_NAME,
     DB_VERSION,
     MAX_ENTRIES,
@@ -381,4 +413,5 @@
     subscribe,
     dispose
   });
+  root.VoiceOfMLReaderStore = api;
 })(typeof self !== "undefined" ? self : window);

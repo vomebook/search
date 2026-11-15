@@ -1,14 +1,20 @@
+/// <reference path="../../../typings/reader-search-backends-strict.d.ts" />
+
+/** @param {ReaderSearchBackends.Context} readerContext */
 export function createReaderSearchBackends(readerContext) {
+  /** @param {ReaderSearchBackends.SearchPatch} patch */
   function updateSearchState(patch) {
     return readerContext.readerRuntime.update("search", patch);
   }
 
+  /** @param {number} generation @param {ReaderSearchBackends.Result[]} results */
   function publishSearchResults(generation, results) {
     return readerContext.isReaderGenerationCurrent("search", generation) && readerContext.updateSearchState({ results });
   }
 
+  /** @param {HTMLElement} view */
   function clearSearchHighlights(view) {
-    for (const mark of view.querySelectorAll("mark.search-match")) mark.replaceWith(mark.textContent);
+    for (const mark of view.querySelectorAll("mark.search-match")) mark.replaceWith(/** @type {string} */ (mark.textContent));
     view.normalize();
   }
 
@@ -23,6 +29,7 @@ export function createReaderSearchBackends(readerContext) {
     return readerContext.chapterSearchModulePromise;
   }
 
+  /** @param {string} query @param {number} generation */
   async function searchChapterBook(query, generation) {
     if (!readerContext.chapterSearchConfiguration) throw new Error("本书暂无完整全文搜索索引");
     const module = await readerContext.chapterSearchModule();
@@ -44,6 +51,7 @@ export function createReaderSearchBackends(readerContext) {
     if (readerContext.isReaderGenerationCurrent("search", generation)) readerContext.applyChapterSearchPage(page);
   }
 
+  /** @param {ReaderSearchBackends.ChapterResult} result @param {number} generation */
   async function navigateChapterSearchResult(result, generation) {
     const article = await readerContext.chapterManifestLoader?.(result.chapterIndex);
     if (!article || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
@@ -72,14 +80,14 @@ export function createReaderSearchBackends(readerContext) {
       heading.className = "reader-chapter-search-heading";
       heading.textContent = headText;
       article.prepend(heading);
-      parts.unshift({ node: heading.firstChild, start, end: Math.min(start + result.length, headText.length) });
+      parts.unshift({ node: /** @type {Text} */ (heading.firstChild), start, end: Math.min(start + result.length, headText.length) });
     }
     const [mark] = readerContext.highlightTextParts(parts);
     readerContext.foliateScrollAnchors.invalidate();
     (mark || article).scrollIntoView({ block: "center" });
     readerContext.foliateScrollAnchors.remember();
     const tocIndex = readerContext.navigationState.tocEntries.findIndex(
-      (entry) => entry.chapterIndex === result.chapterIndex
+      (entry) => typeof entry === "object" && entry !== null && "chapterIndex" in entry && entry.chapterIndex === result.chapterIndex
     );
     if (tocIndex >= 0) {
       readerContext.updateNavigationState({ currentChapterIndex: tocIndex });
@@ -90,12 +98,18 @@ export function createReaderSearchBackends(readerContext) {
     return true;
   }
 
+  /** @param {string} query @param {number} generation */
   async function fullSearchFoliateMatches(query, generation) {
     if (!readerContext.epubRendition?.search) return [];
-    const groups = [], firstPage = [];
+    /** @type {{index: number, count: number, label: string}[]} */
+    const groups = [];
+    /** @type {ReaderSearchBackends.FoliateResult[]} */
+    const firstPage = [];
     // Cache only visited pages for this query; never retain every match in the book.
+    /** @type {Map<number, ReaderSearchBackends.Page<ReaderSearchBackends.FoliateResult>>} */
     const cachedPages = new Map();
     let total = 0;
+    /** @param {ReaderSearchBackends.FoliateItem} item @param {string} label @param {number} occurrence */
     const toResult = (item, label, occurrence) => {
       const excerpt = item.excerpt || { pre: "", match: query, post: "" };
       return {
@@ -121,13 +135,14 @@ export function createReaderSearchBackends(readerContext) {
         cachedPages.set(offset, cached);
         return cached;
       }
+      /** @type {ReaderSearchBackends.FoliateResult[]} */
       const results = [];
       let passed = 0;
       for (const group of groups) {
         if (passed + group.count <= offset) { passed += group.count; continue; }
         const sectionOffset = Math.max(0, offset - passed);
         const limit = Math.min(pageSize - results.length, group.count - sectionOffset);
-        for await (const batch of readerContext.epubRendition.search({
+        for await (const batch of /** @type {ReaderSearchBackends.Rendition} */ (readerContext.epubRendition).search({
           query, index: group.index, offset: sectionOffset, limit, lean: true,
           current: () => readerContext.isReaderGenerationCurrent("search", pageGeneration)
         }))
@@ -139,7 +154,7 @@ export function createReaderSearchBackends(readerContext) {
       const page = { total, offset, pageSize, results };
       if (readerContext.isReaderGenerationCurrent("search", pageGeneration) && JSON.stringify(page).length <= 128 * 1024) {
         cachedPages.set(offset, page);
-        if (cachedPages.size > 4) cachedPages.delete(cachedPages.keys().next().value);
+        if (cachedPages.size > 4) cachedPages.delete(/** @type {number} */ (cachedPages.keys().next().value));
       }
       return page;
     };
@@ -165,6 +180,7 @@ export function createReaderSearchBackends(readerContext) {
     return firstPage;
   }
 
+  /** @param {ReaderSearchBackends.FoliateResult} result @param {number} generation */
   async function navigateFoliateSearchResult(result, generation) {
     const resolved = await readerContext.epubRendition?.resolveNavigation?.(result.cfi);
     if (!resolved || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
@@ -209,7 +225,7 @@ export function createReaderSearchBackends(readerContext) {
         (readerContext.viewport.clientHeight - targetRect.height) / 2
     );
     const tocIndex = readerContext.navigationState.tocEntries.findIndex(
-      (entry) => entry.sectionIndex === visibleIndex
+      (entry) => typeof entry === "object" && entry !== null && "sectionIndex" in entry && entry.sectionIndex === visibleIndex
     );
     if (tocIndex >= 0) {
       readerContext.updateNavigationState({ currentChapterIndex: tocIndex });
@@ -221,17 +237,18 @@ export function createReaderSearchBackends(readerContext) {
     return true;
   }
 
+  /** @param {string} query @param {number} generation */
   async function searchReaderText(query, generation) {
     if (readerContext.capability.mode === "pdf" && !readerContext.ocrManifestUrl) {
       await readerContext.fullSearchPdfMatches(query, generation);
     }
-    else if (["pdf", "pdf-pages"].includes(readerContext.capability.mode)) {
+    else if (readerContext.capability.mode === "pdf" || readerContext.capability.mode === "pdf-pages") {
       readerContext.publishSearchResults(generation, await readerContext.searchConcentratedPdf(query, generation));
     }
     else if (readerContext.capability.mode === "foliate")
       readerContext.publishSearchResults(generation, await readerContext.fullSearchFoliateMatches(query, generation));
     else if (readerContext.capability.mode === "epub-chapters") await readerContext.searchChapterBook(query, generation);
-    else if (["text", "markdown"].includes(readerContext.capability.mode))
+    else if (readerContext.capability.mode === "text" || readerContext.capability.mode === "markdown")
       readerContext.publishSearchResults(
         generation,
         await readerContext.fullSearchDomMatches(readerContext.content, "阅读位置", query, generation, true)

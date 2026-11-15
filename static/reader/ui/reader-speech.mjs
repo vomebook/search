@@ -12,10 +12,12 @@ const HANDOFF_KEY = "reader-speech-handoff";
 const RESUME_PREFIX = "reader-speech-resume:";
 const HIGHLIGHT_STYLE = "::highlight(ccrd-speech){background:rgba(138,180,248,.38);color:inherit;text-decoration:underline}";
 
+/** @param {Node | null | undefined} root @returns {Text[]} */
 function textNodes(root) {
+  /** @type {Text[]} */
   const nodes = [];
   if (!root) return nodes;
-  const doc = root.ownerDocument || root;
+  const doc = root.ownerDocument || /** @type {Document} */ (root);
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       for (let parent = node.parentNode; parent && parent !== root; parent = parent.parentNode) {
@@ -24,10 +26,11 @@ function textNodes(root) {
       return NodeFilter.FILTER_ACCEPT;
     }
   });
-  for (let node; (node = walker.nextNode());) nodes.push(node);
+  for (let node; (node = walker.nextNode());) nodes.push(/** @type {Text} */ (node));
   return nodes;
 }
 
+/** @param {() => unknown} check @param {number} timeout */
 function until(check, timeout) {
   const deadline = performance.now() + timeout;
   return /** @type {Promise<void>} */ (new Promise((resolve) => {
@@ -36,14 +39,17 @@ function until(check, timeout) {
   }));
 }
 
+/** @param {Node | null | undefined} root */
 function rootText(root) { return textNodes(root).map((node) => node.data).join(""); }
 
 // PDF/OCR line breaks are layout, not sentences. Keep the length (and thus
 // every offset) identical: a break not after sentence punctuation becomes a space.
+/** @param {string} text */
 function spokenPageText(text) {
-  return text.replace(/\n(?!\n)/g, (match, offset) => /[。！？!?；;：:…”」』）)\n]\s*$/u.test(text.slice(Math.max(0, offset - 2), offset)) ? "\n" : " ");
+  return text.replace(/\n(?!\n)/g, (/** @type {string} */ match, /** @type {number} */ offset) => /[。！？!?；;：:…”」』）)\n]\s*$/u.test(text.slice(Math.max(0, offset - 2), offset)) ? "\n" : " ");
 }
 
+/** @param {Document} doc @param {number} x @param {number} y @param {ShadowRoot[]} roots */
 function caretIn(doc, x, y, roots) {
   try {
     const point = doc.caretPositionFromPoint?.(x, y, roots?.length ? { shadowRoots: roots } : undefined);
@@ -53,18 +59,25 @@ function caretIn(doc, x, y, roots) {
   return range ? { node: range.startContainer, offset: range.startOffset } : null;
 }
 
+/** @param {Document | ShadowRoot | Element} root */
 function ensureStyle(root) {
-  const target = root?.nodeType === 11 ? root : root?.ownerDocument?.head || root?.head;
+  const target = root?.nodeType === 11 ? root : root?.ownerDocument?.head || /** @type {Document} */ (root)?.head;
   if (!target || target.querySelector?.("style[data-speech-highlight]")) return;
-  const style = (root.ownerDocument || root).createElement("style");
+  const doc = root.ownerDocument || /** @type {Document} */ (root);
+  const style = doc.createElement("style");
   style.dataset.speechHighlight = ""; style.textContent = HIGHLIGHT_STYLE;
   target.append(style);
 }
 
+/** @param {import('../../../typings/reader-speech-strict').SpeechContext} readerContext */
 export function createReaderSpeech(readerContext) {
-  let adapter = null, installed = false, cleanup = [];
+  /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter | null} */
+  let adapter = null;
+  let installed = false;
+  /** @type {Array<() => void>} */
+  const cleanup = [];
 
-  const speech = () => globalThis.CCRDSpeech;
+  const speech = () => (/** @type {typeof globalThis & {CCRDSpeech?: import('../../../typings/reader-speech-strict').SpeechPlayer}} */ (globalThis)).CCRDSpeech;
   const mode = () => readerContext.capability?.mode || "";
   const documentId = () => "reader:" + (readerContext.sourceUrl || readerContext.contentUrl || location.search);
   const readerSpeechTitle = () => document.querySelector("#title")?.textContent?.trim() || document.title || "朗读";
@@ -83,6 +96,7 @@ export function createReaderSpeech(readerContext) {
     return false;
   }
 
+  /** @returns {import('../../../typings/reader-speech-strict').SpeechSource | null} */
   function source() {
     const current = mode();
     if (current === "text" || current === "markdown") {
@@ -96,7 +110,9 @@ export function createReaderSpeech(readerContext) {
     }
     if (current === "foliate") {
       const sections = foliateSections();
+      /** @param {number} index */
       const article = (index) => readerContext.content.querySelector(`.foliate-continuous article[data-section="${index}"]:not(.foliate-section-placeholder)`);
+      /** @param {number} index */
       const body = (index) => { const node = article(index); const root = node && readerContext.foliateSectionRoot(node); return root?.querySelector(".reader-section-body") || root || null; };
       return {
         units: sections.length, first: 0, root: body,
@@ -111,6 +127,7 @@ export function createReaderSpeech(readerContext) {
     }
     if (current === "epub-chapters") {
       const chapters = chapterList();
+      /** @param {number} index */
       const root = (index) => readerContext.content.querySelector(`.reader-epub-chapter[data-chapter="${chapters[index]?.index}"]`);
       return {
         units: chapters.length, first: 0, root,
@@ -119,7 +136,8 @@ export function createReaderSpeech(readerContext) {
       };
     }
     if (current === "pdf" || current === "pdf-pages") {
-      const shell = (page) => readerContext.content.querySelector(`.reader-page[data-page="${page}"]`);
+      /** @param {number} page */
+      const shell = (page) => /** @type {HTMLElement | null} */ (readerContext.content.querySelector(`.reader-page[data-page="${page}"]`));
       const ocr = current === "pdf-pages" && (readerContext.ocrManifestUrl || readerContext.pdfOcrManifest);
       return {
         units: pageCount() + 1, first: 1,
@@ -139,7 +157,7 @@ export function createReaderSpeech(readerContext) {
           }
           if (!readerContext.pdfDocument) return "";
           const items = await readerContext.loadPdfTextContent(page, await readerContext.pdfDocument.getPage(page), null);
-          return spokenPageText(readerContext.pdfTextContent(items?.items || items || []));
+          return spokenPageText(readerContext.pdfTextContent(Array.isArray(items) ? items : items?.items || []));
         },
         locate: (page) => readerContext.goToPage(page),
         page: true
@@ -150,12 +168,13 @@ export function createReaderSpeech(readerContext) {
 
   // Scroll the sentence itself (not its parent block: a TXT block holds 32 KiB)
   // to a third of the way down its nearest scroller, crossing shadow roots and frames.
+  /** @param {Range} range @param {ScrollBehavior} behavior */
   function scrollToRange(range, behavior) {
     const rect = range.getBoundingClientRect();
     if (!rect.height) return;
-    const doc = range.startContainer.ownerDocument;
-    for (let el = range.startContainer.parentElement; el; el = el.parentElement || el.getRootNode?.().host || null) {
-      const overflow = el.ownerDocument.defaultView.getComputedStyle(el).overflowY;
+    const doc = /** @type {Document} */ (range.startContainer.ownerDocument);
+    for (let el = /** @type {Element | null} */ (range.startContainer.parentElement); el; el = el.parentElement || /** @type {ShadowRoot | undefined} */ (el.getRootNode?.())?.host || null) {
+      const overflow = /** @type {Window} */ (el.ownerDocument.defaultView).getComputedStyle(el).overflowY;
       if (/auto|scroll/.test(overflow) && el.scrollHeight > el.clientHeight + 1) {
         const box = el.getBoundingClientRect();
         el.scrollBy({ top: rect.top - box.top - box.height / 3, behavior });
@@ -164,7 +183,7 @@ export function createReaderSpeech(readerContext) {
     }
     const scroller = doc.scrollingElement;
     if (doc !== document && scroller && scroller.scrollHeight > scroller.clientHeight + 1) {
-      doc.defaultView.scrollBy({ top: rect.top - doc.defaultView.innerHeight / 3, behavior });
+      /** @type {Window} */ (doc.defaultView).scrollBy({ top: rect.top - /** @type {Window} */ (doc.defaultView).innerHeight / 3, behavior });
       return;
     }
     const frame = doc.defaultView?.frameElement;
@@ -173,7 +192,9 @@ export function createReaderSpeech(readerContext) {
   }
 
   // ---- Adapter ---------------------------------------------------------------
+  /** @param {import('../../../typings/reader-speech-strict').SpeechSource} sourceInfo @param {number} base */
   function createAdapter(sourceInfo, base) {
+    /** @type {import('../../../typings/reader-speech-strict').Part[]} */
     const parts = [];
     let text = "", next = base, done = base >= sourceInfo.units, chain = Promise.resolve();
     function loadNext() {
@@ -190,6 +211,7 @@ export function createReaderSpeech(readerContext) {
         if (next >= sourceInfo.units) done = true;
       });
     }
+    /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter} */
     const self = {
       base, source: sourceInfo,
       get text() { return text; },
@@ -245,7 +267,7 @@ export function createReaderSpeech(readerContext) {
         let offset = 0, begun = false;
         for (const node of nodes) {
           if (!begun && local < offset + node.length) { range.setStart(node, local - offset); begun = true; }
-          if (begun && limit <= offset + node.length) { range.setEnd(node, limit - offset); ensureStyle(root.getRootNode?.() || root); return range; }
+          if (begun && limit <= offset + node.length) { range.setEnd(node, limit - offset); ensureStyle(/** @type {Document | ShadowRoot | Element} */ (root.getRootNode?.() || root)); return range; }
           offset += node.length;
         }
         return null;
@@ -347,14 +369,14 @@ export function createReaderSpeech(readerContext) {
     const current = mode();
     let unit = info.first;
     if (current === "foliate") {
-      const article = [...readerContext.content.querySelectorAll(".foliate-continuous article[data-section]")]
+      const article = [...readerContext.content.querySelectorAll(/** @type {string} */ (".foliate-continuous article[data-section]"))]
         .find((node) => node.getBoundingClientRect().bottom > box.top + 8);
-      unit = article ? Number(article.dataset.section) : 0;
+      unit = article ? Number(/** @type {HTMLElement} */ (article).dataset.section) : 0;
     } else if (current === "epub-chapters") {
       const chapters = chapterList();
       const article = [...readerContext.content.querySelectorAll(".reader-epub-chapter[data-chapter]")]
         .find((node) => node.getBoundingClientRect().bottom > box.top + 8);
-      unit = article ? Math.max(0, chapters.findIndex((chapter) => String(chapter.index) === article.dataset.chapter)) : 0;
+      unit = article ? Math.max(0, chapters.findIndex((chapter) => String(chapter.index) === /** @type {HTMLElement} */ (article).dataset.chapter)) : 0;
     } else if (info.page) {
       unit = Math.max(1, Number(readerContext.pageAtMarker?.()) || Number(readerContext.documentState?.page) || 1);
     }
@@ -366,6 +388,7 @@ export function createReaderSpeech(readerContext) {
     const shift = info.frame ? info.frame.getBoundingClientRect().top : 0;
     const limit = box.top + 4 - shift;
     const doc = root.ownerDocument || document, range = doc.createRange();
+    /** @param {Text} node @param {number} index */
     const bottom = (node, index) => {
       range.setStart(node, index); range.setEnd(node, Math.min(node.length, index + 1));
       const rect = [...range.getClientRects()].find((item) => item.height) || range.getBoundingClientRect();
@@ -394,7 +417,7 @@ export function createReaderSpeech(readerContext) {
     if (!adapter || !position) return 0;
     let target = adapter;
     if (target.source.units > 1 && (position.unit < target.base || !target.covers(position.unit) && position.unit - target.base > 2)) {
-      target = rebase(position.unit);
+      target = /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter} */ (rebase(position.unit));
     }
     await target.ensureUnit(position.unit);
     target.following = true; // Reading starts where the reader looks: follow it.
@@ -402,6 +425,7 @@ export function createReaderSpeech(readerContext) {
   }
 
   // ---- Publication to the shared player --------------------------------------
+  /** @param {import('../../../typings/reader-speech-strict').SpeechAdapter} next */
   function publish(next) {
     adapter = next;
     speech()?.previewLoaded({
@@ -413,13 +437,14 @@ export function createReaderSpeech(readerContext) {
 
   // ---- Leaving a standalone Reader while reading aloud -----------------------
   // Unit-local position: adapter offsets depend on the unit the window started at.
+  /** @type {{pending: true} | import('../../../typings/reader-speech-strict').Position | null} */
   let resume = (() => {
     try {
       if (!String(window.name).startsWith(RESUME_PREFIX)) return null;
-      const value = JSON.parse(window.name.slice(RESUME_PREFIX.length));
+      const value = /** @type {{pending?: boolean; unit?: number; offset?: number} | null} */ (JSON.parse(window.name.slice(RESUME_PREFIX.length)));
       window.name = "";
       if (value?.pending === true) return { pending: true };
-      return Number.isInteger(value?.unit) && Number.isInteger(value?.offset) ? value : null;
+      return Number.isInteger(value?.unit) && Number.isInteger(value?.offset) ? /** @type {import('../../../typings/reader-speech-strict').Position} */ (value) : null;
     } catch (_) { return null; }
   })();
 
@@ -430,10 +455,10 @@ export function createReaderSpeech(readerContext) {
       const owner = state?.adapter;
       // The Reader's disposal may stop the player first; `interrupted` keeps that case.
       if (!(state?.playing || state?.interrupted) || typeof owner?.partAt !== "function" || !Number.isInteger(state.position)) return;
-      const part = owner.partAt(state.position);
+      const part = owner.partAt(/** @type {number} */ (state.position));
       if (!part) return;
       const value = JSON.stringify({ readerUrl: location.href, unit: part.unit,
-        offset: Math.max(0, Math.min(part.raw.length, state.position - part.start)), at: Date.now() });
+        offset: Math.max(0, Math.min(part.raw.length, /** @type {number} */ (state.position) - part.start)), at: Date.now() });
       sessionStorage.setItem(HANDOFF_KEY, value);
       // A Reader opened as the first page later reaches a search document that
       // was never loaded in this tab; sessionStorage is still shared there, but
@@ -442,10 +467,11 @@ export function createReaderSpeech(readerContext) {
     } catch (_) { /* Optional: without storage, leaving stops reading as before. */ }
   }
 
+  /** @param {{pending: true} | import('../../../typings/reader-speech-strict').Position} target */
   async function resumeAt(target) {
     const info = adapter?.source;
-    if (!info) return;
-    if (target.pending) {
+    if (!adapter || !info) return;
+    if ('pending' in target && target.pending) {
       let offset = 0;
       try { offset = await adapter.locateTop(); } catch (_) {}
       if (adapter?.source !== info) return;
@@ -453,15 +479,17 @@ export function createReaderSpeech(readerContext) {
       speech()?.readFrom(offset);
       return;
     }
+    if ('pending' in target) return;
     if (target.unit < info.first || target.unit >= info.units) return;
     let owner = adapter;
-    if (info.units > 1 && (target.unit < owner.base || !owner.covers(target.unit) && target.unit - owner.base > 2)) owner = rebase(target.unit);
+    if (info.units > 1 && (target.unit < owner.base || !owner.covers(target.unit) && target.unit - owner.base > 2)) owner = /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter} */ (rebase(target.unit));
     await owner.ensureUnit(target.unit);
     if (owner !== adapter) return;
     owner.following = true;
     speech()?.readFrom(owner.offsetOf(target));
   }
 
+  /** @param {number} unit */
   function rebase(unit) {
     const info = source();
     if (!info) return null;
@@ -479,18 +507,19 @@ export function createReaderSpeech(readerContext) {
     if (position && !adapter.covers(position.unit)) rebase(Math.max(adapter.source.first, position.unit - 1));
   }
 
+  /** @param {Node} node @param {number} offset */
   async function readAt(node, offset) {
     let global = adapter?.offsetFromNode(node, offset);
     if (global === null || global === undefined) {
       // A unit outside the loaded window: start a window there.
-      const info = adapter?.source || source();
+      const info = /** @type {import('../../../typings/reader-speech-strict').SpeechSource} */ (adapter?.source || source());
       let unit = null;
       for (let index = info.first; index < info.units && unit === null; index++) {
         const root = info.root(index);
         if (root && (root.contains(node) || root.getRootNode?.()?.contains?.(node))) unit = index;
       }
       if (unit === null) return;
-      const next = rebase(unit);
+      const next = /** @type {import('../../../typings/reader-speech-strict').SpeechAdapter} */ (rebase(unit));
       await next.ensure(1);
       global = next.offsetFromNode(node, offset);
       if (global === null || global === undefined) return;
@@ -499,11 +528,12 @@ export function createReaderSpeech(readerContext) {
     speech()?.readFrom(global);
   }
 
+  /** @param {MouseEvent} event */
   function onDoubleClick(event) {
     if (!adapter || !speech()) return;
-    const doc = event.target?.ownerDocument || document;
+    const doc = /** @type {Node | null} */ (event.target)?.ownerDocument || document;
     const path = event.composedPath?.() || [];
-    const shadow = path.map((node) => node?.getRootNode?.()).find((root) => root?.nodeType === 11);
+    const shadow = /** @type {ShadowRoot | undefined} */ (path.map((node) => /** @type {Node} */ (node)?.getRootNode?.()).find((root) => root?.nodeType === 11));
     const caret = caretIn(doc, event.clientX, event.clientY, shadow ? [shadow] : []);
     if (caret?.node?.nodeType === Node.TEXT_NODE) readAt(caret.node, caret.offset);
   }
@@ -511,9 +541,17 @@ export function createReaderSpeech(readerContext) {
   // ---- Lifecycle ---------------------------------------------------------------
   // Formats whose text may be absent (scanned PDF, comic books, empty files)
   // only get the button once text is found at/near the reading position.
-  const probeText = new Map(), probeSeen = new Map();
-  let generation = 0, probing = null, reprobe = false, offerSource = null;
+  /** @type {Map<number, Promise<string>>} */
+  const probeText = new Map();
+  /** @type {Map<number, Promise<boolean>>} */
+  const probeSeen = new Map();
+  let generation = 0, reprobe = false;
+  /** @type {Promise<void> | null} */
+  let probing = null;
+  /** @type {import('../../../typings/reader-speech-strict').SpeechSource | null} */
+  let offerSource = null;
 
+  /** @param {import('../../../typings/reader-speech-strict').SpeechSource} info @returns {import('../../../typings/reader-speech-strict').SpeechSource} */
   function withProbeCache(info) {
     const load = info.load;
     return { ...info, load: (unit) => {
@@ -523,6 +561,7 @@ export function createReaderSpeech(readerContext) {
     } };
   }
 
+  /** @param {import('../../../typings/reader-speech-strict').SpeechSource} info */
   function needsProbe(info) {
     const current = mode();
     if (current === "epub-chapters") return false;
@@ -530,6 +569,7 @@ export function createReaderSpeech(readerContext) {
     return true;
   }
 
+  /** @param {import('../../../typings/reader-speech-strict').SpeechSource} info @param {number} owner */
   async function probe(info, owner) {
     const from = info.units > 1 ? (topPosition()?.unit ?? info.first) : info.first;
     for (let unit = Math.max(info.first, from - 1); unit < Math.min(info.units, from + 12); unit++) {
@@ -548,6 +588,7 @@ export function createReaderSpeech(readerContext) {
     return null;
   }
 
+  /** @param {import('../../../typings/reader-speech-strict').SpeechSource} info */
   function offer(info) {
     if (adapter) return;
     // A page's text (or the position) changed during a probe: probe once more.
@@ -584,13 +625,14 @@ export function createReaderSpeech(readerContext) {
     const info = withProbeCache(raw);
     if (needsProbe(info)) { offerSource = info; offer(info); }
     else publish(createAdapter(info, info.units > 1 ? Math.max(info.first, (topPosition()?.unit ?? info.first) - 1) : info.first));
+    /** @param {EventTarget | null | undefined} target @param {string} type @param {EventListener} handler @param {AddEventListenerOptions} [options] */
     const listen = (target, type, handler, options) => {
       if (!target) return;
       target.addEventListener(type, handler, options);
       cleanup.push(() => target.removeEventListener(type, handler, options));
     };
-    listen(readerContext.viewport, "dblclick", onDoubleClick);
-    if (info.frame?.contentDocument) { listen(info.frame.contentDocument, "dblclick", onDoubleClick); ensureStyle(info.frame.contentDocument); }
+    listen(readerContext.viewport, "dblclick", /** @type {EventListener} */ (onDoubleClick));
+    if (info.frame?.contentDocument) { listen(info.frame.contentDocument, "dblclick", /** @type {EventListener} */ (onDoubleClick)); ensureStyle(info.frame.contentDocument); }
     if (info.ready && offerSource && typeof MutationObserver === "function") {
       // Pages are probed as the renderer extracts their text, never ahead of it.
       const observer = new MutationObserver(() => {
@@ -609,9 +651,10 @@ export function createReaderSpeech(readerContext) {
     // of our own smooth scrolls. Scroll events alone (layout shifts, lazy pages,
     // our own follow) never do. The player panel's buttons are excluded.
     const keys = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown", " ", "Spacebar"]);
+    /** @param {Event} event */
     const onIntent = (event) => {
-      if (!adapter || event.target?.closest?.("#speech-panel, .reader-actions")) return;
-      if (event.type === "keydown" && !keys.has(event.key)) return;
+      if (!adapter || /** @type {Element | null} */ (event.target)?.closest?.("#speech-panel, .reader-actions")) return;
+      if (event.type === "keydown" && !keys.has(/** @type {KeyboardEvent} */ (event).key)) return;
       adapter.autoUntil = 0;
       adapter.userScrolled();
     };
@@ -644,9 +687,10 @@ export function createReaderSpeech(readerContext) {
     // ← records it before navigating; pagehide covers browser back and other exits.
     window.addEventListener("pagehide", handoff, { capture: true });
     document.querySelector("#back")?.addEventListener("click", handoff, { capture: true });
-    readerContext.readerRuntime.events.on("phase", ({ phase }) => {
-      if (phase === "ready") attach();
-      else if (phase === "disposed") { speech()?.stop?.(); detach(); }
+    readerContext.readerRuntime.events.on("phase", (detail) => {
+      if (!detail || typeof detail !== "object" || !("phase" in detail)) return;
+      if (detail.phase === "ready") attach();
+      else if (detail.phase === "disposed") { speech()?.stop?.(); detach(); }
     });
   }
 

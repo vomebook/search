@@ -1,21 +1,31 @@
+/// <reference path="../../../typings/reader-search-controller-strict.d.ts" />
+
 // Shared search presentation and task ownership; format matching stays in Reader.
+/** @param {ReaderSearchController.Options} options */
 export function createReaderSearchController({
   document, runtime, signal, nextGeneration, isCurrent, updateSearch,
   backend, navigation, panel
 }) {
-  const search = runtime.state.search;
+  const search = /** @type {{query: string, results: ReaderSearchController.Result[], index: number}} */ (runtime.state.search);
+  /** @type {ReaderSearchController.State} */
   const state = {
     page: null, failedPage: null, complete: false,
     pdfInProgress: false, chapterInProgress: false, pageLoader: null
   };
-  let inputTimer = 0, disposed = false, confirmedNoText = false;
+  /** @type {ReturnType<typeof setTimeout> | 0} */
+  let inputTimer = 0;
+  let disposed = false, confirmedNoText = false;
   let searchViewActive = false;
-  let renderedResults = [], renderedOffset = -1;
+  /** @type {ReaderSearchController.Result[]} */
+  let renderedResults = [];
+  let renderedOffset = -1;
+  /** @type {(() => void)[]} */
   const listeners = [];
   const active = () => !disposed && !signal.aborted;
+  /** @param {number} generation */
   const current = generation => active() && isCurrent(generation);
   const busy = () => state.pdfInProgress || state.chapterInProgress;
-  const pagedMode = () => ["epub-chapters", "pdf", "pdf-pages", "foliate"].includes(backend.mode());
+  const pagedMode = () => (/** @type {(string | null)[]} */ (["epub-chapters", "pdf", "pdf-pages", "foliate"])).includes(backend.mode());
 
   const view = document.createElement("section");
   view.id = "full-search-view";
@@ -26,18 +36,18 @@ export function createReaderSearchController({
   view.hidden = true;
   view.innerHTML =
     '<div class="full-search-bar"><input id="full-search-input" class="full-search-input" type="search" placeholder="搜索正文" aria-label="搜索正文"><button id="full-search-clear" class="icon-button" type="button" aria-label="清除全文搜索" title="清除">×</button></div><div id="full-search-status" class="full-search-status" role="status">输入关键词搜索正文</div><div class="full-search-nav"><button id="full-search-prev" type="button" disabled>上一个</button><button id="full-search-next" type="button" disabled>下一个</button></div><div id="full-search-results" class="full-search-results"></div>';
-  document.querySelector("#history-panel").insertBefore(view, document.querySelector(".reader-panel-tabs"));
-  const button = document.querySelector("#full-search-toggle");
+  /** @type {HTMLElement} */ (document.querySelector("#history-panel")).insertBefore(view, document.querySelector(".reader-panel-tabs"));
+  const button = /** @type {HTMLButtonElement} */ (document.querySelector("#full-search-toggle"));
   button.textContent = "全文搜索";
   button.setAttribute("aria-label", "全文搜索");
   button.setAttribute("aria-controls", view.id);
   button.setAttribute("aria-expanded", "false");
-  const input = view.querySelector("#full-search-input");
-  const status = view.querySelector("#full-search-status");
+  const input = /** @type {HTMLInputElement} */ (view.querySelector("#full-search-input"));
+  const status = /** @type {HTMLElement} */ (view.querySelector("#full-search-status"));
   status.setAttribute("aria-atomic", "true");
   input.setAttribute("aria-describedby", status.id);
-  const results = view.querySelector("#full-search-results");
-  const clear = view.querySelector("#full-search-clear");
+  const results = /** @type {HTMLElement} */ (view.querySelector("#full-search-results"));
+  const clear = /** @type {HTMLButtonElement} */ (view.querySelector("#full-search-clear"));
   clear.hidden = true;
   const pagination = document.createElement("div");
   pagination.className = "full-search-pagination";
@@ -60,6 +70,7 @@ export function createReaderSearchController({
   retry.hidden = true;
   cancel.after(retry);
 
+  /** @param {EventTarget} target @param {string} type @param {EventListener} callback */
   function listen(target, type, callback) {
     target.addEventListener(type, callback);
     listeners.push(() => target.removeEventListener(type, callback));
@@ -68,6 +79,7 @@ export function createReaderSearchController({
     clearTimeout(inputTimer);
     inputTimer = 0;
   }
+  /** @param {boolean} open */
   function updateButton(open) {
     button.textContent = open ? "关闭全文搜索" : "全文搜索";
     button.setAttribute("aria-label", button.textContent);
@@ -78,7 +90,7 @@ export function createReaderSearchController({
   }
   function updateNavigation() {
     view.querySelectorAll(".full-search-nav button").forEach(node => {
-      node.disabled = !search.results.length;
+      /** @type {HTMLButtonElement} */ (node).disabled = !search.results.length;
     });
   }
   function updatePagination() {
@@ -86,15 +98,16 @@ export function createReaderSearchController({
     pagination.hidden = !page || !page.total;
     if (!page) return;
     const pages = Math.ceil(page.total / page.pageSize);
-    const pageInput = pagination.querySelector("#full-search-page");
+    const pageInput = /** @type {HTMLInputElement} */ (pagination.querySelector("#full-search-page"));
     pageInput.value = String(Math.floor(page.offset / page.pageSize) + 1);
     pageInput.max = String(Math.max(1, pages));
     pageInput.style.setProperty("--page-width", `${pageInput.max.length}ch`);
-    pagination.querySelector("#full-search-pages").textContent = `/ ${pages}`;
-    pagination.querySelector("#full-search-page-prev").disabled = busy() || page.offset === 0;
-    pagination.querySelector("#full-search-page-next").disabled = busy() || page.offset + page.pageSize >= page.total;
+    /** @type {HTMLElement} */ (pagination.querySelector("#full-search-pages")).textContent = `/ ${pages}`;
+    /** @type {HTMLButtonElement} */ (pagination.querySelector("#full-search-page-prev")).disabled = busy() || page.offset === 0;
+    /** @type {HTMLButtonElement} */ (pagination.querySelector("#full-search-page-next")).disabled = busy() || page.offset + page.pageSize >= page.total;
     pageInput.disabled = busy();
   }
+  /** @param {ReaderSearchController.Snippet} snippet */
   function snippetDom(snippet) {
     const node = document.createElement("span");
     node.className = "full-search-snippet";
@@ -162,7 +175,7 @@ export function createReaderSearchController({
     updateButton(false);
     const hiding = confirmedNoText || button.hidden;
     if ((restoreFocus || (hiding && closingButtonFocused)) && panel.isOpen())
-      (hiding ? document.querySelector("#history") : button).focus({ preventScroll: true });
+      (hiding ? /** @type {HTMLElement} */ (document.querySelector("#history")) : button).focus({ preventScroll: true });
     if (confirmedNoText) button.hidden = true;
   }
   function resetAvailability() {
@@ -180,7 +193,7 @@ export function createReaderSearchController({
     retry.hidden = true;
     retry.textContent = "重试搜索";
     cancel.hidden = !pagedMode() || !query;
-    state.pdfInProgress = ["pdf", "pdf-pages", "foliate"].includes(backend.mode()) && !!query;
+    state.pdfInProgress = (/** @type {(string | null)[]} */ (["pdf", "pdf-pages", "foliate"])).includes(backend.mode()) && !!query;
     state.chapterInProgress = backend.mode() === "epub-chapters" && !!query;
     if (!query) {
       backend.chapterClient()?.cancel();
@@ -198,8 +211,9 @@ export function createReaderSearchController({
       status.textContent = total ? `${total}${!state.page && total === 100 ? "+" : ""} 个结果` : "未找到正文匹配";
     } catch (error) {
       if (current(generation)) {
-        const noText = error?.code === "READER_NO_SEARCHABLE_TEXT";
-        status.textContent = noText ? "此文件没有可搜索文字" : (error.message || "正文搜索不可用");
+        const failure = /** @type {{code?: string, message?: string} | null | undefined} */ (error);
+        const noText = failure?.code === "READER_NO_SEARCHABLE_TEXT";
+        status.textContent = noText ? "此文件没有可搜索文字" : (failure?.message || "正文搜索不可用");
         retry.hidden = noText || !pagedMode();
         if (noText) {
           confirmedNoText = true;
@@ -215,32 +229,36 @@ export function createReaderSearchController({
       }
     }
   }
+  /** @param {ReaderSearchController.Page<ReaderSearchController.ChapterResult>} page */
   function applyChapterPage(page) {
     state.page = page;
     updateSearch({ results: page.results.map(backend.chapterResult), index: -1 });
   }
+  /** @param {number} offset @param {boolean | null} [selectLast] */
   async function loadPage(offset, selectLast = null) {
     if (!active() || busy() || !state.page || (!backend.chapterClient() && !state.pageLoader)) return;
     state.failedPage = null;
     const generation = nextGeneration();
     navigation.begin();
-    if (!["foliate", "epub-chapters"].includes(backend.mode())) cancel.hidden = false;
+    if (!(/** @type {(string | null)[]} */ (["foliate", "epub-chapters"])).includes(backend.mode())) cancel.hidden = false;
     retry.hidden = true;
     status.textContent = `${state.page.total} 个结果`;
     try {
       const loader = state.pageLoader;
-      const page = await (loader ? loader(offset, generation) : backend.chapterClient().page(offset));
+      const client = loader ? null : backend.chapterClient();
+      if (!loader && !client) return;
+      const page = loader ? await loader(offset, generation) : await /** @type {NonNullable<typeof client>} */ (client).page(offset);
       if (!current(generation)) return;
       if (loader) {
         state.page = page;
-        updateSearch({ results: page.results, index: -1 });
-      } else applyChapterPage(page);
+        updateSearch({ results: /** @type {ReaderSearchController.Result[]} */ (page.results), index: -1 });
+      } else applyChapterPage(/** @type {ReaderSearchController.Page<ReaderSearchController.ChapterResult>} */ (page));
       render();
       status.textContent = `${page.total} 个结果`;
       if (selectLast !== null) await activate(selectLast ? page.results.length - 1 : 0, false);
     } catch (error) {
       if (current(generation)) {
-        status.textContent = error.message || "搜索结果加载失败";
+        status.textContent = /** @type {{message?: string} | null} */ (error)?.message || "搜索结果加载失败";
         state.failedPage = { offset, selectLast, query: search.query };
         retry.textContent = "重试本页";
         retry.hidden = false;
@@ -249,6 +267,7 @@ export function createReaderSearchController({
       if (current(generation)) cancel.hidden = true;
     }
   }
+  /** @param {number} index @param {boolean} [closePanel] */
   async function activate(index, closePanel = true) {
     if (!active()) return;
     const result = search.results[index];
@@ -272,14 +291,16 @@ export function createReaderSearchController({
       if (closePanel && panelSerial === panel.serial() && current(searchGeneration)) panel.close();
       else if (!closePanel) results.children[index]?.scrollIntoView({ block: "nearest" });
     } catch (error) {
-      if (error?.name !== "AbortError" && navigation.current(generation) && ownsResult()) {
+      const failure = /** @type {{name?: string, message?: string} | null | undefined} */ (error);
+      if (failure?.name !== "AbortError" && navigation.current(generation) && ownsResult()) {
         updateSearch({ index: previousIndex });
         status.textContent = backend.mode() === "epub-chapters"
-          ? error.message || "搜索结果定位失败，请重试" : "搜索结果定位失败，请重试";
+          ? failure?.message || "搜索结果定位失败，请重试" : "搜索结果定位失败，请重试";
       }
       navigation.reportError(error, generation);
     }
   }
+  /** @param {number} step */
   function move(step) {
     const page = state.page;
     if (page?.total) {
@@ -310,7 +331,8 @@ export function createReaderSearchController({
     inputTimer = setTimeout(run, 180);
   }
 
-  listeners.push(runtime.events.on("state:panel", ({ panel: state }) => {
+  listeners.push(runtime.events.on("state:panel", event => {
+    const { panel: state } = /** @type {{panel: {open: boolean, selected: string}}} */ (event);
     const activeView = state.open && state.selected === "full-search";
     if (searchViewActive && !activeView && confirmedNoText) button.hidden = true;
     searchViewActive = activeView;
@@ -333,21 +355,26 @@ export function createReaderSearchController({
     retry.textContent = "重试搜索";
     status.textContent = "搜索已取消";
   });
-  listen(pagination.querySelector("#full-search-page-prev"), "click", () => loadPage(state.page.offset - state.page.pageSize));
-  listen(pagination.querySelector("#full-search-page-next"), "click", () => loadPage(state.page.offset + state.page.pageSize));
-  listen(pagination.querySelector("#full-search-page"), "change", event => {
-    if (!state.page || !Number.isFinite(event.target.valueAsNumber)) return;
-    const page = Math.max(1, Math.min(Math.ceil(state.page.total / state.page.pageSize), Math.floor(event.target.valueAsNumber)));
+  listen(/** @type {Element} */ (pagination.querySelector("#full-search-page-prev")), "click", () => {
+    if (state.page) return loadPage(state.page.offset - state.page.pageSize);
+  });
+  listen(/** @type {Element} */ (pagination.querySelector("#full-search-page-next")), "click", () => {
+    if (state.page) return loadPage(state.page.offset + state.page.pageSize);
+  });
+  listen(/** @type {Element} */ (pagination.querySelector("#full-search-page")), "change", event => {
+    const target = /** @type {HTMLInputElement} */ (event.target);
+    if (!state.page || !Number.isFinite(target.valueAsNumber)) return;
+    const page = Math.max(1, Math.min(Math.ceil(state.page.total / state.page.pageSize), Math.floor(target.valueAsNumber)));
     const offset = (page - 1) * state.page.pageSize;
     if (offset !== state.page.offset) loadPage(offset);
   });
   listen(button, "click", toggle);
-  listen(input, "input", event => { updateClear(); if (!event.isComposing) queue(); });
+  listen(input, "input", event => { updateClear(); if (!/** @type {InputEvent} */ (event).isComposing) queue(); });
   listen(input, "focus", panel.focus);
   listen(input, "compositionend", queue);
   listen(clear, "click", () => { input.value = ""; updateClear(); run(); input.focus(); });
-  listen(view.querySelector("#full-search-prev"), "click", () => move(-1));
-  listen(view.querySelector("#full-search-next"), "click", () => move(1));
+  listen(/** @type {Element} */ (view.querySelector("#full-search-prev")), "click", () => move(-1));
+  listen(/** @type {Element} */ (view.querySelector("#full-search-next")), "click", () => move(1));
 
   function dispose() {
     if (disposed) return;

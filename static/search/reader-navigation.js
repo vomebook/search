@@ -38,7 +38,7 @@
             !/^reader-store(?:\.[0-9a-f]{12})?\.js$/.test(readerStoreUrl.pathname.slice(prefix.length))) return;
       } catch (_) { return; }
       const { closeTime, ...snapshot } = progress;
-      const entry = { ...snapshot, lastReadAt: Number.isFinite(closeTime) ? closeTime : Date.now() };
+      const entry = { ...snapshot, url: progress.url, lastReadAt: Number.isFinite(closeTime) ? closeTime : Date.now() };
       const version = /^reader-store\.([0-9a-f]{12})\.js$/.exec(/** @type {string} */ (readerStoreUrl.pathname.split("/").pop()))?.[1];
       progressStore(readerStoreUrl.href, version).then(store => /** @type {ReaderStoreApi} */ (store).put(entry)).catch(error => console.warn("Reader progress was not saved", error));
     }

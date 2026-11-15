@@ -1,11 +1,23 @@
+/** @typedef {import("../../../typings/reader-pdf-engine-strict").EngineContext} EngineContext */
+/** @typedef {import("../../../typings/reader-pdf-engine-strict").PdfModule} PdfModule */
+/** @typedef {import("../../../typings/reader-pdf-engine-strict").PdfOptions} PdfOptions */
+/** @typedef {import("../../../typings/reader-pdf-engine-strict").Initial} Initial */
+/** @typedef {import("../../../typings/reader-pdf-engine-strict").PdfTask} PdfTask */
+/** @param {EngineContext} readerContext */
 export function createReaderPdfEngine(readerContext) {
-  let pdfModulePreload = null, pdfWorkerPreloadOwner = null;
+  /** @type {Promise<PdfModule> | null} */
+  let pdfModulePreload = null;
+  /** @type {AbortController | null} */
+  let pdfWorkerPreloadOwner = null;
 
+  /** @param {PdfModule} pdfjs @param {(url: string) => PdfOptions} options @param {string} url @param {Initial} initial */
   function loadPdfTaskWithTimeout(pdfjs, options, url, initial = null) {
     readerContext.assertReaderActive();
-    let task = null, documentReady = false;
+    /** @type {PdfTask | null} */
+    let task = null;
+    let documentReady = false;
     const owner = new AbortController();
-    return new Promise((resolve, reject) => {
+    return new Promise(/** @type {(resolve: (document: import("../../../typings/reader-pdf-engine-strict").PdfDocument) => void, reject: (error: unknown) => void) => void} */ ((resolve, reject) => {
       let timeout = 0,
         destroyed = false;
       const destroy = () => {
@@ -14,7 +26,7 @@ export function createReaderPdfEngine(readerContext) {
         owner.abort(readerContext.readerAbortError());
         clearTimeout(timeout);
         try {
-          task?.destroy()?.catch?.(() => {});
+          if (task) Promise.resolve(task.destroy()).catch(() => {});
         } catch (_) {}
         reject(readerContext.readerAbortError());
       };
@@ -46,7 +58,7 @@ export function createReaderPdfEngine(readerContext) {
         }
       }).then(opened => {
         task = opened;
-        if (destroyed) {task.destroy()?.catch?.(() => {});throw readerContext.readerAbortError();}
+        if (destroyed) {Promise.resolve(task.destroy()).catch(() => {});throw readerContext.readerAbortError();}
         return task.promise;
       }).then(
         (document) => {
@@ -68,13 +80,14 @@ export function createReaderPdfEngine(readerContext) {
           destroy();
         }
       );
-    });
+    }));
   }
 
+  /** @param {PdfModule} pdfjs @param {(url: string) => PdfOptions} options @param {string} target @param {string} proxy @param {(url: string) => Initial} takeInitial */
   function loadPdfWithTimeout(pdfjs, options, target = readerContext.sourceUrl, proxy = readerContext.contentUrl, takeInitial = (_url) => null) {
     return readerContext.retryReaderProxy(() => readerContext.loadPdfTaskWithTimeout(pdfjs, options, proxy, takeInitial(proxy))).catch((error) => {
       readerContext.assertReaderActive();
-      if (error && error.name === "AbortError") throw error;
+      if (error && (/** @type {{name?: string}} */ (error)).name === "AbortError") throw error;
       if (readerContext.retryableReaderProxyError(error)) throw error;
       return readerContext.loadPdfTaskWithTimeout(pdfjs, options, target);
     });
@@ -90,6 +103,7 @@ export function createReaderPdfEngine(readerContext) {
     return readerContext.pdfEnginePreload;
   }
 
+  /** @param {PdfModule} pdfjs @param {boolean} firstPage @param {AbortSignal | null} signal */
   async function preparePdfWorker(pdfjs, firstPage = false, signal = null) {
     for (let attempt = 0; attempt < 3; attempt++) {
       readerContext.assertReaderActive();
@@ -100,11 +114,12 @@ export function createReaderPdfEngine(readerContext) {
       } catch (error) {
         readerContext.assertReaderActive();
         if (signal?.aborted) throw readerContext.readerAbortError();
-        if (error?.code !== "READER_ENGINE_NETWORK" || attempt === 2) throw error;
+        if ((/** @type {{code?: string} | null | undefined} */ (error))?.code !== "READER_ENGINE_NETWORK" || attempt === 2) throw error;
       }
     }
   }
 
+  /** @param {PdfModule} pdfjs @param {number} attempt @param {boolean} firstPage @param {AbortSignal | null} signal */
   async function preparePdfWorkerAttempt(pdfjs, attempt, firstPage = false, signal = null) {
     readerContext.assertReaderActive();
     if (signal?.aborted) throw readerContext.readerAbortError();
@@ -118,7 +133,9 @@ export function createReaderPdfEngine(readerContext) {
     // cancellation can also release a stalled handshake. Restore the global
     // constructor immediately; PDF.js still owns initialization and fallback.
     const NativeWorker = globalThis.Worker;
-    let nativeWorker = null, worker;
+    /** @type {Worker | null} */
+    let nativeWorker = null;
+    let worker;
     if (typeof NativeWorker === "function") {
       globalThis.Worker = new Proxy(NativeWorker, {
         construct(target, args) {
@@ -132,7 +149,9 @@ export function createReaderPdfEngine(readerContext) {
     finally { if (typeof NativeWorker === "function") globalThis.Worker = NativeWorker; }
     worker.readerFirstPageWorker = firstPage && attempt === 0;
     readerContext.pdfWorker = worker;
-    let timer, destroyed = false;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    let destroyed = false;
     const destroy = () => {
       if (destroyed) return;
       destroyed = true;
@@ -180,7 +199,7 @@ export function createReaderPdfEngine(readerContext) {
       try {
         const pdfjs = await readerContext.awaitReader(
           Promise.race([
-            import(url),
+            /** @type {Promise<PdfModule>} */ (/** @type {unknown} */ (import(url))),
             new Promise((_, reject) => {
               timer = setTimeout(
                 () => reject(new DOMException("PDF engine timeout", "TimeoutError")),
@@ -194,9 +213,9 @@ export function createReaderPdfEngine(readerContext) {
       } catch (error) {
         readerContext.assertReaderActive();
         const networkFailure =
-          error?.name === "TimeoutError" ||
+          (/** @type {{name?: string} | null | undefined} */ (error))?.name === "TimeoutError" ||
           /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(
-            error?.message || ""
+            (/** @type {{message?: string} | null | undefined} */ (error))?.message || ""
           );
         if (!networkFailure) throw error;
         if (attempt === 2)
@@ -233,6 +252,7 @@ export function createReaderPdfEngine(readerContext) {
     }).catch(() => {});
     // This is the first demand, not extra speculation or a larger/full download.
     // Keep it owned while engine preparation is pending and consume it only once.
+    /** @type {Initial} */
     let initial = readerContext.preparePdfInitialRange({url:proxyUrl, rangeChunkSize:262144}, {
       signal:AbortSignal.any([owner.signal, readerContext.readerAbortController.signal]),
       readBytes:VoiceOfMLReaderSecurity.readBytes, limit:VoiceOfMLReaderSecurity.LIMITS.pdfDocumentBytes,
@@ -242,6 +262,7 @@ export function createReaderPdfEngine(readerContext) {
     });
     initial.catch(() => {});
     let initialHandedOff = false, rangeTransportAvailable = false;
+    /** @param {string} url @returns {Initial} */
     const takeInitial = url => {
       if (url !== proxyUrl) return null;
       const pending = initial;
@@ -255,7 +276,7 @@ export function createReaderPdfEngine(readerContext) {
     // or restoration is slow. An intentionally superseded preload is not an
     // engine failure; the selected first-page Worker still has to initialize.
     const workerFailure = new Promise((_, reject) => workerPreload.catch(error => {
-      if (!workerPreloadOwner?.signal.aborted || error?.name !== "AbortError") reject(error);
+      if (!workerPreloadOwner?.signal.aborted || (/** @type {{name?: string} | null | undefined} */ (error))?.name !== "AbortError") reject(error);
     }));
     const selectingEngine = (pdfModulePreload || workerPreload).then(async pdfjs => {
       readerContext.assertReaderActive();
@@ -265,12 +286,14 @@ export function createReaderPdfEngine(readerContext) {
         readerContext.extension === "pdf" && restoration && !readerContext.ocrManifestUrl &&
         !readerContext.pdfV3Manifest;
       if (eligible) {
+        /** @template T @param {Promise<T>} promise @returns {Promise<T | null>} */
         const optional = promise => {
+          /** @type {ReturnType<typeof setTimeout> | undefined} */
           let timer;
-          return readerContext.awaitReader(new Promise((resolve, reject) => {
+          return readerContext.awaitReader(new Promise(/** @type {(resolve: (value: T | null) => void, reject: (error: unknown) => void) => void} */ ((resolve, reject) => {
             timer = setTimeout(() => resolve(null), 5000);
             Promise.resolve(promise).then(resolve, reject);
-          })).finally(() => clearTimeout(timer));
+          }))).finally(() => clearTimeout(timer));
         };
         const initialRange = async () => {
           // If the initial strong-ETag range times out or fails transiently,
@@ -282,7 +305,7 @@ export function createReaderPdfEngine(readerContext) {
             try { return await readerContext.awaitReader(pending); }
             catch (error) {
               readerContext.assertReaderActive();
-              if (error?.name === "AbortError" || error?.code === "READER_PDF_RATE_LIMIT" || !readerContext.retryableReaderProxyError(error) || attempt === 2) throw error;
+              if ((/** @type {{name?: string} | null | undefined} */ (error))?.name === "AbortError" || (/** @type {{code?: string} | null | undefined} */ (error))?.code === "READER_PDF_RATE_LIMIT" || !readerContext.retryableReaderProxyError(error) || attempt === 2) throw error;
               await readerContext.waitForReader(350 * (attempt + 1));
               readerContext.assertReaderActive();
               if (initial !== pending) return null;
@@ -336,7 +359,7 @@ export function createReaderPdfEngine(readerContext) {
         if (stagedCandidate && saved && !readerContext.restorationFailed &&
             navigation === readerContext.readerRuntime?.currentGeneration("navigation")) {
           workerPreloadOwner?.abort();
-          await workerPreload.catch(error => { if (error?.name !== "AbortError") throw error; });
+          await workerPreload.catch(error => { if ((/** @type {{name?: string} | null | undefined} */ (error))?.name !== "AbortError") throw error; });
           readerContext.releasePdfWorker?.();
           await readerContext.preparePdfWorker(pdfjs, true);
           return pdfjs;
@@ -348,6 +371,7 @@ export function createReaderPdfEngine(readerContext) {
     return readerContext.measurePdf(openingEngine, "engine").then(pdfjs => {
       readerContext.assertReaderActive();
       const stagedWorker = readerContext.pdfWorker?.readerFirstPageWorker;
+      /** @param {string} url @returns {PdfOptions} */
       const options = (url) => ({
         url,
         worker: readerContext.pdfWorker,
@@ -365,8 +389,8 @@ export function createReaderPdfEngine(readerContext) {
       return readerContext.measurePdf(readerContext.loadPdfWithTimeout(pdfjs, options, target, proxyUrl, takeInitial), "document")
         .catch(async error => {
           readerContext.assertReaderActive();
-          if (!stagedWorker || error?.name === "AbortError" || readerContext.retryableReaderProxyError(error) ||
-              /PDF_SOURCE_CHANGED|PDF_RANGE_INVALID|READER_RESOURCE_LIMIT/i.test(`${error?.code || ""} ${error?.message || ""}`))
+          if (!stagedWorker || (/** @type {{name?: string} | null | undefined} */ (error))?.name === "AbortError" || readerContext.retryableReaderProxyError(error) ||
+              /PDF_SOURCE_CHANGED|PDF_RANGE_INVALID|READER_RESOURCE_LIMIT/i.test(`${(/** @type {{code?: string} | null | undefined} */ (error))?.code || ""} ${(/** @type {{message?: string} | null | undefined} */ (error))?.message || ""}`))
             throw error;
           // A document requiring full PDF.js recovery must reopen through the
           // original worker, not silently accept provisional page identities.

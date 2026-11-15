@@ -1,8 +1,11 @@
+/** @param {import('../../../typings/reader-foliate-format-strict').FoliateFormatContext} readerContext */
 export function createReaderFoliateFormat(readerContext) {
+  /** @param {Element} article */
   function foliateSectionRoot(article) {
     return article?.shadowRoot || article;
   }
 
+  /** @param {Element} article @param {string} selector */
   function foliateSectionQuery(article, selector) {
     return readerContext.foliateSectionRoot(article)?.querySelector(selector) || null;
   }
@@ -20,6 +23,15 @@ export function createReaderFoliateFormat(readerContext) {
     ]);
   }
 
+  /** @param {unknown} entry @returns {entry is {sectionIndex: number, anchor?: import('../../../typings/reader-foliate-format-strict').FoliateAnchor | null, fragment?: string, target?: {getBoundingClientRect(): {top: number}} | null}} */
+  function isFoliateLocationEntry(entry) {
+    if (typeof entry !== "object" || entry === null || !("sectionIndex" in entry) || typeof entry.sectionIndex !== "number") return false;
+    if ("anchor" in entry && entry.anchor != null && typeof entry.anchor !== "function") return false;
+    if ("fragment" in entry && entry.fragment !== undefined && typeof entry.fragment !== "string") return false;
+    if ("target" in entry && entry.target != null && (typeof entry.target !== "object" || !("getBoundingClientRect" in entry.target) || typeof entry.target.getBoundingClientRect !== "function")) return false;
+    return true;
+  }
+
   function syncFoliateScrollLocation() {
     if (!readerContext.foliateContinuous || !readerContext.navigationState.tocEntries.length) return;
     const rows = [...document.querySelectorAll(".foliate-continuous article[data-section]")].map(row => /** @type {HTMLElement} */ (row)),
@@ -35,7 +47,7 @@ export function createReaderFoliateFormat(readerContext) {
     let best = -1;
     let bestPosition = -Infinity;
     for (const [index, entry] of readerContext.navigationState.tocEntries.entries()) {
-      if (entry.sectionIndex !== sectionIndex) continue;
+      if (!isFoliateLocationEntry(entry) || entry.sectionIndex !== sectionIndex) continue;
       let position = sectionNode.getBoundingClientRect().top;
       if (entry.anchor) {
         const root = readerContext.foliateSectionRoot(sectionNode);
@@ -60,9 +72,9 @@ export function createReaderFoliateFormat(readerContext) {
     if (best < 0) {
       let firstPosition = Infinity;
       for (const [index, entry] of readerContext.navigationState.tocEntries.entries()) {
-        if (entry.sectionIndex !== sectionIndex) continue;
+        if (!isFoliateLocationEntry(entry) || entry.sectionIndex !== sectionIndex) continue;
         const position = entry.target?.getBoundingClientRect?.().top;
-        if (Number.isFinite(position) && position < firstPosition) {
+        if (position !== undefined && Number.isFinite(position) && position < firstPosition) {
           best = index;
           firstPosition = position;
         }
@@ -105,6 +117,7 @@ export function createReaderFoliateFormat(readerContext) {
     });
   }
 
+  /** @param {import('../../../typings/reader-foliate-format-strict').FoliateTocEntry} entry @param {number} [generation] @param {{closePanel?: boolean}} [options] */
   async function activateFoliateTocEntry(entry, generation = readerContext.beginReaderNavigation(), { closePanel = true } = {}) {
     const book = readerContext.epubRendition?.book,
       href = String(entry.href || ""),
@@ -122,6 +135,7 @@ export function createReaderFoliateFormat(readerContext) {
     if (!node?.isConnected) node = await readerContext.foliateSectionLoader(visibleIndex);
     if (!node?.isConnected || !readerContext.isReaderGenerationCurrent("navigation", generation)) return false;
     const root = readerContext.foliateSectionRoot(node),
+      /** @type {import('../../../typings/reader-foliate-format-strict').FoliateAnchorDocument} */
       anchorDocument = {
         getElementById: (id) => root.querySelector(`[id="${CSS.escape(id)}"]`),
         querySelector: (selector) => root.querySelector(selector)
@@ -151,27 +165,31 @@ export function createReaderFoliateFormat(readerContext) {
     return true;
   }
 
+  /** @param {Document} source */
   function cloneFoliateDocument(source) {
-    const doc = source.cloneNode(true),
+    const doc = /** @type {Document} */ (source.cloneNode(true)),
       original = source.createTreeWalker(source, NodeFilter.SHOW_TEXT),
       cloned = doc.createTreeWalker(doc, NodeFilter.SHOW_TEXT);
+    /** @type {WeakMap<Node, Node>} */
     const sourceNodes = new WeakMap();
     while (original.nextNode() && cloned.nextNode())
       sourceNodes.set(cloned.currentNode, original.currentNode);
     return { doc: readerContext.sanitizeEpubDocument(doc, { keepBlobImports: true }), sourceNodes };
   }
 
+  /** @param {Document} source @param {WeakMap<Node, Node>} sourceNodes @param {Element} body @param {Element} renderedBody */
   function foliateSearchAnchor(source, sourceNodes, body, renderedBody) {
     const sourceWalker = body.ownerDocument.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    /** @type {{original: Text; offset: number}[]} */
     const pairs = [];
     let offset = 0;
     while (sourceWalker.nextNode()) {
-      const node = sourceWalker.currentNode;
+      const node = /** @type {Text} */ (sourceWalker.currentNode);
       const original = sourceNodes.get(node);
-      if (original) pairs.push({ original, offset });
+      if (original) pairs.push({ original: /** @type {Text} */ (original), offset });
       offset += node.length;
     }
-    return (anchor) => {
+    return (/** @type {import('../../../typings/reader-foliate-format-strict').SearchAnchor} */ anchor) => {
       const range = anchor(source);
       if (!range || typeof range.intersectsNode !== "function") return null;
       const intervals = [];
@@ -200,11 +218,13 @@ export function createReaderFoliateFormat(readerContext) {
     };
   }
 
+  /** @param {ParentNode} root @param {number} [timeoutMs] */
   async function settleReaderImages(root, timeoutMs = 2500) {
     readerContext.assertReaderActive();
-    const images = [...root.querySelectorAll("img[src],img[srcset]")];
+    const images = [...root.querySelectorAll(/** @type {'img'} */ ("img[src],img[srcset]"))];
     if (!images.length) return;
     let timeout = 0, active = true;
+    /** @type {Set<() => void>} */
     const cleanups = new Set();
     const decoded = Promise.allSettled(
       images.map(async (image) => {
@@ -244,9 +264,12 @@ export function createReaderFoliateFormat(readerContext) {
     }
   }
 
+  /** @param {Document} doc @param {import('../../../typings/reader-foliate-format-strict').FoliateSection} section */
   function rewriteFoliateResources(doc, section) {
+    /** @param {string | null | undefined} value */
     const safeEmbeddedValue = (value) =>
       /^(?:blob:|data:image\/(?:gif|png|jpe?g|webp);)/i.test(String(value || "").trim());
+    /** @param {string | null | undefined} value */
     const archiveResourceUrl = (value) => {
       const raw = String(value || "").trim();
       if (!raw || raw.startsWith("#") || raw.includes("#") || safeEmbeddedValue(raw))
@@ -322,7 +345,7 @@ export function createReaderFoliateFormat(readerContext) {
         else element.removeAttributeNode(attribute);
       }
     }
-    for (const link of doc.querySelectorAll("a[href]")) {
+    for (const link of doc.querySelectorAll(/** @type {'a'} */ ("a[href]"))) {
       const href = link.getAttribute("href") || "";
       // An in-book link to a packaged image opens the image itself, not a dead chapter URL.
       if (/\.(?:gif|png|jpe?g|webp)$/i.test(href)) {
@@ -340,9 +363,10 @@ export function createReaderFoliateFormat(readerContext) {
     }
   }
 
-  async function createFoliateSection(section, index) {
-    const signal = arguments[2] || readerContext.readerAbortController.signal;
-    const priority = arguments[3] || "high";
+  /** @param {import('../../../typings/reader-foliate-format-strict').FoliateSection} section @param {number} index @param {AbortSignal} [signal] @param {'high' | 'low'} [priority] */
+  async function createFoliateSection(section, index, signal, priority) {
+    signal = signal || readerContext.readerAbortController.signal;
+    priority = priority || "high";
     const source = await readerContext.awaitReader(section.createDocument(), signal);
     const { doc, sourceNodes } = readerContext.cloneFoliateDocument(source);
     readerContext.assertReaderActive();
@@ -400,10 +424,13 @@ export function createReaderFoliateFormat(readerContext) {
     return article;
   }
 
+  /** @param {HTMLElement} stream @param {import('../../../typings/reader-foliate-format-strict').FoliateSection[]} sections */
   function setupFoliateWindow(stream, sections) {
     let focus = readerContext.initialReaderTargetSection ?? 0, targetPending = false;
     stream.style.overflowAnchor = "none";
-    const existing = index => stream.querySelector(`article[data-section="${index}"]:not(.foliate-section-placeholder)`);
+    /** @param {number} index */
+    const existing = index => /** @type {import('../../../typings/reader-foliate-format-strict').FoliateArticle | null} */ (stream.querySelector(`article[data-section="${index}"]:not(.foliate-section-placeholder)`));
+    /** @param {number} index */
     const ensurePlaceholder = index => {
       if (!sections[index] || stream.querySelector(`article[data-section="${index}"]`)) return;
       const placeholder = document.createElement("article");
@@ -411,7 +438,7 @@ export function createReaderFoliateFormat(readerContext) {
       placeholder.dataset.section = String(index);
       placeholder.style.setProperty("--foliate-placeholder-height", `${Math.max(400, readerContext.viewport.clientHeight)}px`);
       placeholder.setAttribute("aria-label", `加载第 ${index + 1} 节`);
-      const next = [...stream.children].find(node => Number(node.dataset.section) > index);
+      const next = [...stream.children].find(node => Number(/** @type {HTMLElement} */ (node).dataset.section) > index);
       readerContext.foliateScrollAnchors.preserve(() => stream.insertBefore(placeholder, next || null));
       observer.observe(placeholder);
     };
@@ -431,7 +458,7 @@ export function createReaderFoliateFormat(readerContext) {
         const rect = node.getBoundingClientRect();
         return rect.top <= marker && rect.bottom > marker;
       }) || rows.find(node => node.getBoundingClientRect().top > marker);
-      const index = current ? Number(current.dataset.section) : focus;
+      const index = current ? Number(/** @type {HTMLElement} */ (current).dataset.section) : focus;
       if (targetPending && index !== focus && !readerContext.foliateScrollAnchors.scrolling) return;
       targetPending = false;
       focus = index;
@@ -442,13 +469,14 @@ export function createReaderFoliateFormat(readerContext) {
     const observer = new IntersectionObserver(readerContext.scheduleFoliateWindowRefresh,
       { root: readerContext.viewport, rootMargin: `${readerContext.FOLIATE_PREFETCH_MARGIN}px` });
     readerContext.foliateSectionObserver = observer;
+    /** @param {number} index @param {import('../../../typings/reader-foliate-format-strict').FoliateArticle} article */
     const commitSection = (index, article) =>
         readerContext.foliateScrollAnchors.preserve(() => {
           const placeholder = stream.querySelector(
               `article.foliate-section-placeholder[data-section="${index}"]`
             ),
             next = [...stream.querySelectorAll("article[data-section]")].find(
-              (item) => Number(item.dataset.section) > index
+              (item) => Number(/** @type {HTMLElement} */ (item).dataset.section) > index
             );
           if (placeholder) {
             observer.unobserve(placeholder);
@@ -474,7 +502,7 @@ export function createReaderFoliateFormat(readerContext) {
     readerContext.foliateSectionVirtualizer = VoiceOfMLReaderVirtual.createSectionVirtualizer({
       limit: readerContext.FOLIATE_LOADED_SECTION_LIMIT,
       getLoaded: () => [
-        ...stream.querySelectorAll("article[data-section]:not(.foliate-section-placeholder)")
+        .../** @type {NodeListOf<import('../../../typings/reader-foliate-format-strict').FoliateArticle>} */ (stream.querySelectorAll("article[data-section]:not(.foliate-section-placeholder)"))
       ],
       getIndex: (article) => Number(article.dataset.section),
       getHeight: (article) => article.getBoundingClientRect().height,
@@ -486,7 +514,7 @@ export function createReaderFoliateFormat(readerContext) {
           rect.top > viewportRect.bottom + readerContext.FOLIATE_PREFETCH_MARGIN
         ) && !article.contains(document.activeElement) && !article.shadowRoot?.activeElement &&
           !readerContext.foliateSectionRoot(article).querySelector("mark.full-search-highlight") &&
-          ![window.getSelection(), article.shadowRoot?.getSelection?.()].some(selection =>
+          ![window.getSelection(), /** @type {(ShadowRoot & {getSelection?: () => Selection | null}) | null} */ (article.shadowRoot)?.getSelection?.()].some(selection =>
             selection && !selection.isCollapsed && (selection.containsNode(article, true) ||
               selection.anchorNode?.getRootNode() === article.shadowRoot));
       },
@@ -510,13 +538,13 @@ export function createReaderFoliateFormat(readerContext) {
       release: (index) => readerContext.foliateChapterRepository.release(index),
       preserve: (change) => readerContext.foliateScrollAnchors.preserve(change)
     });
-    readerContext.foliateSectionLoader = index => {
+    readerContext.foliateSectionLoader = /** @type {import('../../../typings/reader-foliate-format-strict').FoliateLoader} */ (index => {
       focus = index;
       targetPending = true;
       const task = existing(index) ? Promise.resolve(existing(index)) : scheduler.load(index, true, true);
       warm();
       return task;
-    };
+    });
     readerContext.foliateSectionLoader.refresh = refresh;
     readerContext.foliateSectionSettler = () => readerContext.waitForReader(0, true);
     const scroll = readerContext.scheduleFoliateWindowRefresh;
@@ -528,9 +556,12 @@ export function createReaderFoliateFormat(readerContext) {
     });
   }
 
+  /** @param {import('../../../typings/reader-foliate-format-strict').FoliateView} view @param {import('../../../typings/reader-foliate-format-strict').FoliateSection[]} sections */
   async function foliateTocEntries(view, sections) {
     readerContext.assertReaderActive();
+    /** @type {import('../../../typings/reader-foliate-format-strict').FoliateTocEntry[]} */
     const entries = [];
+    /** @param {import('../../../typings/reader-foliate-format-strict').FoliateTocItem[] | undefined} items @param {number} [depth] */
     const append = (items, depth = 0) => {
       for (const item of items || []) {
         const href = item?.href ? String(item.href) : "";
@@ -546,10 +577,13 @@ export function createReaderFoliateFormat(readerContext) {
       }
     };
     append(view.book.toc);
+    /** @type {Map<import('../../../typings/reader-foliate-format-strict').FoliateSection, number>} */
     const sectionIndices = new Map();
     for (const [index, section] of sections.entries())
       if (!sectionIndices.has(section)) sectionIndices.set(section, index);
-    let next = 0, yieldDeadline = performance.now() + 8, yieldTask = null;
+    let next = 0, yieldDeadline = performance.now() + 8;
+    /** @type {Promise<void> | null} */
+    let yieldTask = null;
     const resolveEntries = async () => {
       while (next < entries.length) {
         readerContext.assertReaderActive();
@@ -588,13 +622,14 @@ export function createReaderFoliateFormat(readerContext) {
   }
 
   async function renderFoliate() {
-    const prepared = readerContext.prepareReaderDocument([import("/search/static/foliate-reader/view.js?reader-v1")]);
+    const foliateModuleUrl = "/search/static/foliate-reader/view.js?reader-v1";
+    const prepared = readerContext.prepareReaderDocument([import(foliateModuleUrl)]);
     const [response, bytes] = await Promise.all([prepared.response,readerContext.readPreparedBytes(
       prepared.response,prepared.engines,VoiceOfMLReaderSecurity.LIMITS.archiveCompressedBytes)]);
     readerContext.assertReaderActive();
     if (VoiceOfMLReaderSecurity.isZipContainer(readerContext.extension, bytes))
       VoiceOfMLReaderSecurity.inspectZip(bytes);
-    const view = document.createElement("foliate-view"),
+    const view = /** @type {import('../../../typings/reader-foliate-format-strict').FoliateView} */ (/** @type {unknown} */ (document.createElement("foliate-view"))),
       stream = document.createElement("div");
     view.className = "foliate-reader-view";
     stream.className = "foliate-continuous";
