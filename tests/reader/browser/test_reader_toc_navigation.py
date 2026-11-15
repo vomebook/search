@@ -479,6 +479,116 @@ class TocNavigationTests(unittest.TestCase):
             self.assertEqual(self.landed_chapter(), index+1)
             if not self.panel_open(): self.page.locator('#history').click()
 
+    def test_virtualized_directory_reuses_rows_and_keeps_keyboard_focus(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.set_viewport_size({'width':1200,'height':800})
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.evaluate('''async()=>{
+          const s=__toc.state(), view=s.panelView;
+          const top=s.list.getBoundingClientRect().top-view.getBoundingClientRect().top+view.scrollTop;
+          view.scrollTop=top+700*40+5;
+          view.dispatchEvent(new Event('scroll'));
+          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        }''')
+        self.page.locator('#toc-list [data-toc-index="705"] [role=link]').focus()
+        self.page.keyboard.press('Tab')
+        self.assertEqual(self.page.evaluate('document.activeElement.closest(".toc-item").dataset.tocIndex'),'706')
+        results=self.page.evaluate('''async()=>{
+          const s=__toc.state(), list=s.list, view=s.panelView, base=view.scrollTop;
+          const focused=document.activeElement, original=[...list.children];
+          const observer=new MutationObserver(records=>mutations.push(...records));
+          let mutations=[];
+          observer.observe(list,{childList:true});
+          const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          const results=[];
+          try {
+            for (const offset of [1,41,1]) {
+              const before=[...list.children];
+              mutations=[];
+              view.scrollTop=base+offset;
+              view.dispatchEvent(new Event('scroll'));
+              await frame();
+              mutations.push(...observer.takeRecords());
+              const after=[...list.children], indices=after.map(row=>Number(row.dataset.tocIndex));
+              results.push({
+                added:mutations.reduce((n,r)=>n+r.addedNodes.length,0),
+                removed:mutations.reduce((n,r)=>n+r.removedNodes.length,0),
+                fresh:after.filter(row=>!before.includes(row)).length,
+                retained:before.filter(row=>indices.includes(Number(row.dataset.tocIndex)))
+                  .every(row=>after.includes(row)),
+                focused:document.activeElement===focused,
+                indices, tops:after.map(row=>parseFloat(row.style.top)),
+                originalIndices:original.map(row=>Number(row.dataset.tocIndex))
+              });
+            }
+          } finally { observer.disconnect(); }
+          return results;
+        }''')
+        for result, shift, changed in zip(results,(0,1,0),(0,1,1)):
+            self.assertEqual(result['added'],changed)
+            self.assertEqual(result['removed'],changed)
+            self.assertEqual(result['fresh'],changed)
+            self.assertTrue(result['retained'])
+            self.assertTrue(result['focused'])
+            self.assertEqual(result['indices'],[i+shift for i in result['originalIndices']])
+            self.assertEqual(result['tops'],[i*40 for i in result['indices']])
+        # Enter must still activate the retained, keyboard-focused link.
+        self.page.keyboard.press('Enter')
+        self.page.wait_for_function('()=>__toc.nav().currentChapterIndex===706')
+        self.assertFalse(self.errors,self.errors)
+
+    def test_virtualized_directory_row_cache_invalidates_labels_and_highlights(self):
+        self.page.emulate_media(reduced_motion='reduce')
+        self.open_chapters(2100)
+        if not self.panel_open(): self.page.locator('#history').click()
+        self.page.locator('#toc-tab').click()
+        self.page.locator('#toc-panel .panel-search-toggle').click()
+        field=self.page.locator('#toc-panel .panel-search')
+        # Both queries keep the same indices, so range/index caching alone is insufficient.
+        for query in ('第','章',''):
+            field.fill(query)
+            rows=self.page.locator('#toc-list .toc-item').evaluate_all('''rows=>rows.map(row=>({
+              index:Number(row.dataset.tocIndex),label:row.querySelector('.panel-item-main').textContent,
+              marks:[...row.querySelectorAll('mark.search-match')].map(mark=>mark.textContent)
+            }))''')
+            self.assertGreater(len(rows),1)
+            for row in rows:
+                self.assertEqual(row['label'],f"第{row['index']+1}章")
+                self.assertEqual(row['marks'],[query] if query else [])
+        # Replace entries on the same state, keeping query and indices unchanged.
+        field.fill('第')
+        replacement=self.page.evaluate('''()=>{
+          const s=__toc.state(), old=listRows();
+          function listRows(){return [...s.list.children]}
+          s.entries=s.entries.map(entry=>({...entry,label:entry.label+' 新标签'}));
+          s.render();
+          return {fresh:listRows().every(row=>!old.includes(row)),
+            labels:listRows().map(row=>row.querySelector('.panel-item-main').textContent),
+            marks:listRows().map(row=>[...row.querySelectorAll('mark.search-match')].map(m=>m.textContent))};
+        }''')
+        self.assertTrue(replacement['fresh'])
+        self.assertTrue(all(label.endswith(' 新标签') for label in replacement['labels']))
+        self.assertTrue(all(marks==['第'] for marks in replacement['marks']))
+        # setToc replaces the state/list; the new directory must not reuse old rows.
+        replaced=self.page.evaluate('''()=>{
+          const old=__toc.state();
+          __toc.set(old.entries.map(entry=>({...entry,label:entry.label.replace('新标签','替换目录')})));
+          return old!==__toc.state();
+        }''')
+        self.assertTrue(replaced)
+        labels=self.page.locator('#toc-list .panel-item-main').all_text_contents()
+        self.assertGreater(len(labels),1)
+        self.assertTrue(all(label.endswith(' 替换目录') for label in labels))
+        self.assertEqual(self.page.locator('#toc-list mark.search-match').all_text_contents(),['第']*len(labels))
+        field.fill('')
+        rows=self.page.locator('#toc-list .panel-item-main').all_text_contents()
+        self.assertGreater(len(rows),1)
+        self.assertTrue(all(label.endswith(' 替换目录') for label in rows))
+        self.assertEqual(self.page.locator('#toc-list mark.search-match').count(),0)
+        self.assertFalse(self.errors,self.errors)
+
     def test_virtualized_directory_searches_all_entries_and_clears(self):
         self.open_chapters(2100)
         if not self.panel_open(): self.page.locator('#history').click()
