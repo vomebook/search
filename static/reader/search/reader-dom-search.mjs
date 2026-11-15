@@ -230,6 +230,41 @@ export function createReaderDomSearch({
     /** @type {{start: number, label: string}[]} */
     const boundaries = [];
     const headings = entries.filter(isTocEntry).filter(/** @returns {entry is typeof entry & { target: Element }} */ (entry) => !!entry.target);
+    // For a large in-root TOC, walk the same DOM order once. Repeated
+    // compareDocumentPosition on distant siblings can otherwise dominate search.
+    if (headings.length >= 256 && headings.every(entry => entry.target.isConnected &&
+        (entry.target === root || root.contains(entry.target)))) {
+      const targets = new Set(headings.map(entry => entry.target));
+      /** @type {Map<Element, {index: number, order: number}>} */
+      const positions = new Map();
+      const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+      let cursor = 0, order = 0;
+      if (root.nodeType === Node.ELEMENT_NODE && targets.has(/** @type {Element} */ (root)))
+        positions.set(/** @type {Element} */ (root), { index: 0, order: order++ });
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (node.nodeType === Node.ELEMENT_NODE && targets.has(/** @type {Element} */ (node)))
+          positions.set(/** @type {Element} */ (node), { index: cursor, order: order++ });
+        else if (offsets[cursor]?.node === node) cursor++;
+      }
+      let previous = -1;
+      for (const entry of headings) {
+        const position = positions.get(entry.target);
+        if (position === undefined || position.order < previous) return null;
+        previous = position.order;
+        boundaries.push({ start: offsets[position.index]?.start ?? Infinity, label: entry.label });
+      }
+      return (offset) => {
+        if (getTocEntries() !== entries) return null;
+        let low = 0, high = boundaries.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          if (boundaries[middle].start <= offset) low = middle + 1;
+          else high = middle;
+        }
+        return { label: boundaries[low - 1]?.label };
+      };
+    }
     let previous = null;
     for (const entry of headings) {
       const target = entry.target;
