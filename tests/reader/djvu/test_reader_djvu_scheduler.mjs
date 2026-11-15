@@ -178,4 +178,117 @@ await assert.rejects(scheduler.request(1), { name: "AbortError" });
     await tick();assert.equal((await s.request(2)).image.data[0],2);s.close();
   }
 }
+{
+  // Reservations drop only scheduler references, before demanded decoding.
+  const gates=new Map(), starts=[];
+  const s=createDjvuScheduler({page:n=>{starts.push(n);return new Promise((resolve,reject)=>gates.set(n,{resolve,reject}))},close(){}},
+    {maxBytes:8,maxPages:2});
+  const geo={geometry:{width:1,height:1}};
+  const load=async n=>{const p=s.request(n,3,geo);await tick();gates.get(n).resolve(image(n));const v=await p;await tick();return v};
+  const held=await load(1);await load(2);
+  const demand=s.request(3,3,geo),duplicate=s.request(3,3,geo);await tick();
+  assert.deepEqual(s.stats().pages,[2]);assert.equal(s.stats().retainedBytes,4);
+  assert.equal(held.image.data[0],1,'caller reference remains valid after eviction');
+  gates.get(3).resolve(image(3));assert.strictEqual(await demand,await duplicate);await tick();
+  assert.equal(starts.filter(n=>n===3).length,1);
+  await load(1);assert.deepEqual(s.stats().pages,[3,1],'back navigation redecodes evicted page');
+  const prefetch=s.request(4,0,geo);await tick();assert.deepEqual(s.stats().pages,[3,1]);
+  gates.get(4).resolve(image(4));await prefetch;await tick();
+  const failure=s.request(5,3,geo);failure.catch(()=>{});await tick();
+  assert.deepEqual(s.stats().pages,[4]);gates.get(5).reject(Error('failure'));await assert.rejects(failure,/failure/);await tick();
+  const cancel=new AbortController();const cancelled=s.request(6,3,{...geo,signal:cancel.signal});cancelled.catch(()=>{});
+  await tick();cancel.abort();await assert.rejects(cancelled,{name:'AbortError'});gates.get(6).resolve(image(6));await tick();
+  assert.ok(!s.stats().pages.includes(6));
+  await load(7);
+  const huge=s.request(8,3,{geometry:{width:3,height:1}});await tick();
+  assert.equal(s.stats().retainedBytes,0);gates.get(8).resolve({image:{data:new Uint8ClampedArray(12)}});
+  assert.equal((await huge).image.data.byteLength,12);await tick();assert.equal(s.stats().retainedBytes,0);
+  await load(9);
+  const unknown=s.request(10,3,{geometry:{width:Infinity,height:1}});await tick();
+  assert.deepEqual(s.stats().pages,[9],'invalid geometry must not reserve');
+  s.close();await assert.rejects(unknown,{name:'AbortError'});gates.get(10).resolve(image(10));await tick();
+  assert.equal(s.stats().retainedBytes,0);
+}
+{
+  // A canceled foreground client must not turn remaining speculation into demand.
+  let release;const s=createDjvuScheduler({page:n=>new Promise(resolve=>release=resolve),close(){}},{maxBytes:4,maxPages:1});
+  const first=s.request(1,3);await tick();release(image(1));await first;await tick();
+  const hold=s.request(2,0);await tick();
+  const ac=new AbortController();const foreground=s.request(3,3,{signal:ac.signal,geometry:{width:1,height:1}});foreground.catch(()=>{});
+  const speculative=s.request(3,0);ac.abort();await assert.rejects(foreground,{name:'AbortError'});
+  release(image(2));await hold;await tick();assert.deepEqual(s.stats().pages,[2]);
+  release(image(3));await speculative;s.close();
+}
+{
+  // Retry in the rejection microtask must enqueue behind the failed task.
+  for (const operation of ['page','geometry','text','outline']) {
+    let calls=0;
+    const work=()=>++calls===1 ? Promise.reject(Error('immediate')) : Promise.resolve(operation === 'page' ? image(1) : {});
+    const s=createDjvuScheduler({page:work,geometry:work,text:work,outline:work,close(){}},{maxBytes:8,maxPages:2});
+    const request=()=>operation==='page' ? s.request(1) : operation==='outline' ? s.requestOutline() : s.requestMetadata(operation,1);
+    const result=request().catch(()=>request());
+    const timer=AbortSignal.timeout(1000);
+    await Promise.race([result,new Promise((_,reject)=>timer.addEventListener('abort',()=>reject(Error('retry timed out'))))]);
+    assert.equal(calls,2);s.close();
+  }
+}
+{
+  // Queued priority is the maximum of surviving clients, not historical demand.
+  const starts=[];let release;
+  const s=createDjvuScheduler({page:n=>{starts.push(n);return new Promise(resolve=>release=resolve)},close(){}},{maxBytes:16,maxPages:4});
+  const first=s.request(1,3);await tick();
+  const ac=new AbortController();const demand=s.request(2,3,{signal:ac.signal});demand.catch(()=>{});
+  const prefetch=s.request(2,0),other=s.request(3,2);ac.abort();await assert.rejects(demand,{name:'AbortError'});
+  release(image(1));await first;await tick();assert.deepEqual(starts,[1,3]);
+  release(image(3));await other;await tick();assert.deepEqual(starts,[1,3,2]);release(image(2));await prefetch;s.close();
+}
+{
+  // Conflicting live demand estimates disable reservation; canceled clients are excluded.
+  let release;const s=createDjvuScheduler({page:n=>new Promise(resolve=>release=resolve),close(){}},{maxBytes:12,maxPages:3});
+  for (const n of [1,2,3]) {const p=s.request(n);await tick();release(image(n));await p;await tick();}
+  const blocker=s.request(4,0);await tick();
+  const large=s.request(5,3,{geometry:{width:2,height:1}}),small=s.request(5,2,{geometry:{width:1,height:1}});
+  release(image(4));await blocker;await tick();assert.equal(s.stats().retainedBytes,12);
+  release(image(5));await Promise.all([large,small]);await tick();
+  const ac=new AbortController();const hold=s.request(6,0);await tick();
+  const canceled=s.request(7,3,{signal:ac.signal,geometry:{width:3,height:1}});canceled.catch(()=>{});
+  const remaining=s.request(7,2,{geometry:{width:1,height:1}});ac.abort();await assert.rejects(canceled,{name:'AbortError'});
+  release(image(6));await hold;await tick();assert.equal(s.stats().retainedBytes,8);
+  release(image(7));await remaining;s.close();
+}
+{
+  // Aborting before dispatch neither evicts nor starts orphaned decoding.
+  const starts=[];const s=createDjvuScheduler({page:async n=>{starts.push(n);return image(n)},close(){}},{maxBytes:4,maxPages:1});
+  await s.request(1);await tick();const ac=new AbortController();
+  const p=s.request(2,3,{signal:ac.signal,geometry:{width:1,height:1}});ac.abort();await assert.rejects(p,{name:'AbortError'});await tick();
+  assert.deepEqual(starts,[1]);assert.deepEqual(s.stats().pages,[1]);s.close();
+}
+{
+  // A demand joining an already running prefetch cannot reserve retroactively.
+  let release;const s=createDjvuScheduler({page:()=>new Promise(resolve=>release=resolve),close(){}},{maxBytes:4,maxPages:1});
+  const first=s.request(1);await tick();release(image(1));await first;await tick();
+  const prefetch=s.request(2,0,{geometry:{width:1,height:1}});await tick();
+  const demand=s.request(2,3,{geometry:{width:1,height:1}});
+  assert.deepEqual(s.stats().pages,[1]);release(image(2));assert.strictEqual(await prefetch,await demand);s.close();
+}
+{
+  // Conflicting speculation and demand do not evict, in either admission order;
+  // canceling the conflicting client before dispatch makes demand safe again.
+  for (const reverse of [false,true]) for (const cancel of [false,true]) {
+    let release;const s=createDjvuScheduler({page:()=>new Promise(resolve=>release=resolve),close(){}},{maxBytes:4,maxPages:1});
+    const cached=s.request(1);await tick();release(image(1));await cached;await tick();
+    // Keep the worker occupied without replacing the completed cache entry.
+    const hold=s.request(2,0);await tick();
+    const ac=new AbortController();
+    const spec=()=>s.request(3,0,{signal:ac.signal,geometry:{width:100,height:100}});
+    const demand=()=>s.request(3,3,{geometry:{width:1,height:1}});
+    let speculative,foreground;
+    if (reverse) {foreground=demand();speculative=spec();} else {speculative=spec();foreground=demand();}
+    speculative.catch(()=>{});
+    if (cancel) {ac.abort();await assert.rejects(speculative,{name:'AbortError'});}
+    release(image(2));await hold;await tick();
+    assert.deepEqual(s.stats().pages,cancel?[]:[2]);
+    release(image(3));await foreground;if (!cancel) await speculative;s.close();
+  }
+}
 console.log("DjVu scheduler cancellation, ordering, deduplication, LRU and closure passed");
