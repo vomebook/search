@@ -4869,32 +4869,77 @@ function buildResultHTML(rec, idx) {
   );
 }
 
+let refreshedReaderAssets = null;
+function readerActionForRefresh(record, assets = readerAssets) {
+  const fields = assets !== readerAssets && VoiceOfMLReader.assetFields(
+    assets && assets[(record.Repo || "") + "\0" + buildRecordRelativePath(record)],
+    API_BASE + "/api/reader-bucket-resource", String(record.Extension || record.extension || ""));
+  const readerRecord = assets === readerAssets
+    ? applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record))
+    : (fields ? Object.assign({}, record, fields, { DownloadLink: getRecordLink(record) }) : record);
+  const actionRecord = isReadableRecord(readerRecord) ? readerRecord : (isDefaultReadableRecord(record) ? record : null);
+  const label = actionRecord ? (["audio", "video", "swf"].includes(
+    VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读") : "";
+  return { record: actionRecord, label };
+}
+
 function refreshResultReaderActions() {
-  VSCROLL.templateCache.clear();
-  for (const row of DOM.resultsList.querySelectorAll(".result-item[data-index]")) {
-    const index = Number(row.dataset.index), record = STATE.results[index];
+  const visible = new Map(Array.from(DOM.resultsList.querySelectorAll(".result-item[data-index]"),
+    row => [Number(row.dataset.index), row]));
+  // Templates retain the actual old button even when their row is offscreen.
+  const rows = new Map(VSCROLL.templateCache);
+  for (const [index, row] of visible) rows.set(index, row);
+  let layoutChanged = false, heightsInvalidated = false;
+  const invalidateHeight = (index, record) => {
+    VSCROLL.measuredRowKeys[index] = null;
+    VSCROLL.heightCache.delete(getResultStableId(record));
+    heightsInvalidated = true;
+    if (visible.has(index)) layoutChanged = true;
+  };
+  for (const [index, row] of rows) {
+    const record = STATE.results[index];
     if (!record) continue;
-    const readerRecord = applyReaderAsset(record, record.Repo || "", buildRecordRelativePath(record), getRecordLink(record));
-    const readerReady = isReadableRecord(readerRecord);
+    const action = readerActionForRefresh(record);
     let button = row.querySelector('[data-action="read"]');
-    if (!readerReady && !isDefaultReadableRecord(record)) {
-      if (button) { button.remove(); VSCROLL.measuredRowKeys[index] = null; }
+    if ((button ? button.textContent : "") !== action.label) invalidateHeight(index, record);
+    if (!visible.has(index)) continue;
+    if (!action.record) {
+      if (button) {
+        const focused = document.activeElement === button;
+        button.remove();
+        if (focused) row.focus({ preventScroll: true });
+      }
       continue;
     }
-    const actionRecord = readerReady ? readerRecord : record;
     if (!button) {
       button = document.createElement("button"); button.className = "result-action-btn"; button.dataset.action = "read";
       row.querySelector(".result-actions").appendChild(button);
-      VSCROLL.measuredRowKeys[index] = null;
     }
-    button.dataset.readerUrl = getReaderLink(actionRecord);
-    const label = ["audio", "video", "swf"].includes(VoiceOfMLReader.capability(actionRecord.ReaderExtension || actionRecord.Extension).mode) ? "在线播放" : "在线阅读";
-    if (button.textContent !== label) { button.textContent = label; VSCROLL.measuredRowKeys[index] = null; }
-    button.setAttribute('aria-label', label + '：' + record.File + (record.Extension ? '.' + record.Extension : ''));
+    const url = getReaderLink(action.record, undefined, false);
+    if (button.dataset.readerUrl !== url) button.dataset.readerUrl = url;
+    if (button.textContent !== action.label) button.textContent = action.label;
+    const ariaLabel = action.label + '：' + record.File + (record.Extension ? '.' + record.Extension : '');
+    if (button.getAttribute('aria-label') !== ariaLabel) button.setAttribute('aria-label', ariaLabel);
   }
-  VSCROLL.measuredWindowKey = "";
-  VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
-  scheduleVirtualRender();
+  // A measured row may outlive the bounded template cache. Compare catalog
+  // snapshots for those rows as well, retaining old heights as anchor estimates.
+  if (refreshedReaderAssets !== readerAssets) {
+    for (const key of Object.keys(VSCROLL.measuredRowKeys)) {
+      const index = Number(key), record = STATE.results[index];
+      if (!record || rows.has(index) || !VSCROLL.measuredRowKeys[index]) continue;
+      if (readerActionForRefresh(record, refreshedReaderAssets).label !== readerActionForRefresh(record).label)
+        invalidateHeight(index, record);
+    }
+  }
+  refreshedReaderAssets = readerAssets;
+  // Do not bump contentVersion: existing rows, focus and selection stay intact.
+  VSCROLL.templateCache.clear();
+  if (heightsInvalidated) measuredHeightRevision++;
+  if (layoutChanged) {
+    VSCROLL.measuredWindowKey = "";
+    VSCROLL.renderStart = -1; VSCROLL.renderEnd = -1;
+    scheduleVirtualRender();
+  }
 }
 
 function getResultsHTMLCacheKey() {
