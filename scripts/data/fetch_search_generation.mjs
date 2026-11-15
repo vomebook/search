@@ -1,5 +1,5 @@
 import {createHash} from "node:crypto";
-import {lstat, mkdir, rename, rm, writeFile} from "node:fs/promises";
+import {lstat, mkdir, readFile, readdir, rename, rm, writeFile} from "node:fs/promises";
 import {dirname, join, resolve} from "node:path";
 import {pathToFileURL} from "node:url";
 
@@ -85,7 +85,8 @@ function validateManifest(manifest, generation, surface) {
     total += item.bytes;
     if (total > MAX_SURFACE_BYTES) throw new Error("search surface exceeds size limit");
   }
-  return names.map(name => ({name, ...assets[name]}));
+  return names.map(name => ({name, sha256: assets[name].sha256,
+    bytes: assets[name].bytes, object: assets[name].object}));
 }
 
 export async function fetchSearchGeneration(generation, surface, target) {
@@ -118,6 +119,41 @@ export async function fetchSearchGeneration(generation, surface, target) {
     await rm(temporary, {recursive: true, force: true});
     throw error;
   }
+}
+
+// Test checkouts may reuse already materialized bytes, but never trust a receipt
+// alone or silently replace a different/damaged generation. Reader sidecars are
+// independent and are deliberately outside the search manifest's member set.
+export async function ensureSearchGeneration(generation, surface, target) {
+  if (!GEN_RE.test(generation) || !["pages", "space"].includes(surface)) throw new Error("invalid generation or surface");
+  const out = resolve(target);
+  let existing;
+  try { existing = await lstat(out); }
+  catch (error) { if (error?.code !== "ENOENT") throw error; }
+  if (!existing) return fetchSearchGeneration(generation, surface, out);
+  if (!existing.isDirectory()) throw new Error("search output must be a directory");
+  async function readMember(name, limit) {
+    const file = join(out, name), stat = await lstat(file);
+    if (!stat.isFile() || stat.size > limit) throw new Error(`invalid local search member: ${name}`);
+    return readFile(file);
+  }
+  const raw = await readMember("generation-manifest.json", MAX_MANIFEST_BYTES);
+  const members = validateManifest(JSON.parse(raw.toString("utf8")), generation, surface);
+  const allowed = new Set(["generation-manifest.json", "reader_assets.json.gz", "reader_v3_receipt.json",
+    ...members.map(item => item.name)]);
+  async function checkEntries(directory = "") {
+    for (const entry of await readdir(join(out, directory), {withFileTypes: true})) {
+      const name = directory ? `${directory}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && members.some(item => item.name.startsWith(name + "/"))) await checkEntries(name);
+      else if (!entry.isFile() || !allowed.has(name)) throw new Error(`unexpected local search member: ${name}`);
+    }
+  }
+  await checkEntries();
+  for (const item of members) {
+    const bytes = await readMember(item.name, item.bytes);
+    if (bytes.length !== item.bytes || hash(bytes) !== item.sha256) throw new Error(`search member mismatch: ${item.name}`);
+  }
+  return {generation, surface, files: members.length};
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

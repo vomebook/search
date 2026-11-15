@@ -6,8 +6,6 @@ on:
     - cron: "17 2 * * *"
   push:
     branches: ["main"]
-    paths-ignore:
-      - "data/**"
 
 concurrency:
   group: reader-refactor-sites
@@ -78,6 +76,9 @@ jobs:
       - name: Install pinned Reader vendors
         timeout-minutes: 5
         run: node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
+      - name: Materialize pinned Pages test data and independent Reader sidecar
+        timeout-minutes: 10
+        run: npm run data:prepare
       - name: Check source and exercise static gates
         run: |
           npm run check:static
@@ -277,6 +278,7 @@ jobs:
           node tests/reader/pdf-search/test_reader_embedded_text_fallback.mjs
           node tests/reader/transport/test_reader_sidecar_fetch.mjs
           node tests/search/ui/test_folder_selection.js
+          node --test tests/search/data/test_search_generation_fetch.mjs
           node tests/search/data/test_corpus_oracle.js
           node tests/search/data/test_data_integrity.js
       - name: Check Reader request timeout in Chromium
@@ -376,6 +378,9 @@ jobs:
       - name: Install pinned Reader vendors
         timeout-minutes: 5
         run: node scripts/build/copy_reader_vendor.mjs static/vendor --foliate-output static/foliate-reader/vendor
+      - name: Materialize pinned Pages test data and independent Reader sidecar
+        timeout-minutes: 10
+        run: npm run data:prepare
       - name: Check staged PDF opening in Firefox
         env:
           READER_TEST_BROWSER: firefox
@@ -467,6 +472,19 @@ jobs:
         timeout-minutes: 10
         working-directory: huggingface-search
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare Hugging Face data when supported by the captured revision
+        timeout-minutes: 10
+        working-directory: huggingface-search
+        run: |
+          set -euo pipefail
+          prepare=$(node -p 'Object.hasOwn(require("./package.json").scripts || {}, "data:prepare")')
+          if [[ "$prepare" == true ]]; then
+            npm run data:prepare
+          else
+            # Older revisions keep their LFS-verified checkout data and run
+            # the same complete data/backend/browser gates below.
+            echo "Captured HF revision uses checkout data"
+          fi
       - name: Check source and exercise static gates
         working-directory: huggingface-search
         run: |

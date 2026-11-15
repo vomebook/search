@@ -676,9 +676,13 @@
     },
     "tests/search/data/test_corpus_oracle.js": {
       "kind": "direct",
-      "source": ".github/workflows/reader-refactor.yml"
+      "source": ".github/workflows/static.yml"
     },
     "tests/search/data/test_data_integrity.js": {
+      "kind": "direct",
+      "source": ".github/workflows/static.yml"
+    },
+    "tests/search/data/test_search_generation_fetch.mjs": {
       "kind": "direct",
       "source": ".github/workflows/reader-refactor.yml"
     },
