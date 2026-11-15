@@ -68,7 +68,7 @@ let repoExtensionCounts = {};
 let repoList = [];
 let extensionList = [];
 let readerMetadata = { available: false, count: 0, byRepo: {} };
-const folderTreeCache = new Map();
+
 
 let keepalivePending = null;
 let lastKeepaliveAt = 0;
@@ -931,61 +931,19 @@ function scheduleBackgroundLocalDataLoad() {
   }, delay);
 }
 
-let repoApiCache = null;
-let repoApiPending = null;
-const extensionApiCache = new Map();
-const extensionApiPending = new Map();
-
-async function fetchRepos() {
-  if (repoApiCache) return repoApiCache;
-  if (repoApiPending) return repoApiPending;
-  if (!apiAvailable) return null;
-  repoApiPending = fetchMetadataList(API_BASE + "/api/repos")
-    .then(function(data) {
-      noteApiSuccess();
-      repoApiCache = data;
-      return data;
-    })
-    .catch(function(error) {
-      if (!error || error.name !== "AbortError") noteApiFailure();
-      return null;
-    })
-    .finally(function() { repoApiPending = null; });
-  return repoApiPending;
-}
-
-async function fetchExtensions(repo) {
-  var key = repo || "__global__";
-  // The renderer augments its result with selected-only types. Keep that
-  // mutable array separate from the reusable API inventory.
-  if (extensionApiCache.has(key)) return extensionApiCache.get(key).slice();
-  if (extensionApiPending.has(key)) return extensionApiPending.get(key);
-  if (!apiAvailable) return null;
-  var url = repo ? API_BASE + "/api/extensions?repo=" + encodeURIComponent(repo) : API_BASE + "/api/extensions";
-  var pending = fetchMetadataList(url)
-    .then(function(data) { noteApiSuccess(); extensionApiCache.set(key, data.slice()); return data; })
-    .catch(function(error) { if (!error || error.name !== "AbortError") noteApiFailure(); return null; })
-    .finally(function() { extensionApiPending.delete(key); });
-  extensionApiPending.set(key, pending);
-  return pending;
-}
-
-async function fetchFolderTree(repo, cacheKey) {
-  cacheKey = cacheKey || repo;
-  if (cacheKey && folderTreeCache.has(cacheKey)) return folderTreeCache.get(cacheKey);
-  if (!apiAvailable) return null;
-  try {
-    var data = await fetchMetadataList(API_BASE + "/api/folders/" + encodeURIComponent(repo));
-    noteApiSuccess();
-    if (cacheKey && data) folderTreeCache.set(cacheKey, data);
-    return data;
-  } catch (e) { if (!e || e.name !== "AbortError") noteApiFailure(); return null; }
-}
-const BROWSER_API_CACHE_MAX = 200;
-const browserApiCache = new BoundedResponseCache(BROWSER_API_CACHE_MAX, 5 * 60 * 1000);
-const browserApiPending = new Map();
-const sidebarInitialCache = new Map();
-const sidebarInitialPending = new Map();
+const catalog = VoiceOfMLCatalogClient.create({
+  apiBase: API_BASE, apiAvailable: () => apiAvailable,
+  fetchJSON: (url, timeout, requireOK) => fetchJsonWithTimeout(url, timeout, requireOK),
+  noteApiSuccess: () => noteApiSuccess(), noteApiFailure: () => noteApiFailure(),
+  localWorker: (repo, path) => corpusWorkerRequest("folder-contents", { repo, path }, WORKER_REQUEST_TIMEOUT),
+});
+const { folderTreeCache, folderContentsCache, browserApiPending } = catalog;
+function fetchRepos() { return catalog.fetchRepos(); }
+function fetchExtensions(repo) { return catalog.fetchExtensions(repo); }
+function fetchFolderTree(repo, cacheKey) { return catalog.fetchFolderTree(repo, cacheKey); }
+function fetchFolderContents(repo, path) { return catalog.fetchFolderContents(repo, path); }
+function loadSidebarInitial(repo) { return catalog.loadSidebarInitial(repo); }
+function getFolderContents(repo, path) { return catalog.getFolderContents(repo, path); }
 let sidebarScroll;
 function getSidebarScroll() {
   return sidebarScroll || (sidebarScroll = VoiceOfMLSidebarScroll.create({
@@ -1006,12 +964,6 @@ async function fetchJsonWithTimeout(url, timeoutMs, requireOK = false) {
   } finally {
     clearTimeout(timeoutId);
   }
-}
-
-async function fetchMetadataList(url) {
-  const data = await fetchJsonWithTimeout(url, 5000, true);
-  if (!Array.isArray(data)) throw new Error("Invalid metadata response");
-  return data;
 }
 
 async function fetchWithTimeout(url, timeoutMs) {
@@ -1037,92 +989,6 @@ function warmConnection(force) {
   return keepalivePending;
 }
 
-function normalizeSidebarPayload(data, path) {
-  path = path || "";
-  if (!data || typeof data !== "object") return data;
-  if (Array.isArray(data.repos)) return data;
-  return {
-    repo: data.repo || "",
-    path: data.path || path,
-    folders: (data.folders || []).map(function(item) {
-      var name = item.n || "";
-      return {
-        name: name,
-        path: path ? path + "/" + name : name,
-        count: item.c || 0,
-      };
-    }),
-    files: (data.files || []).map(function(item) {
-      return {
-        name: item.n || "",
-        ext: item.e || "",
-        hasTxt: !!item.t,
-        size: item.s === undefined ? "" : item.s,
-        link: "",
-      };
-    }),
-  };
-}
-
-function setBrowserApiCache(cacheKey, data) {
-  browserApiCache.set(cacheKey, data);
-}
-
-async function fetchFolderContents(repo, path) {
-  if (!apiAvailable) return null;
-  var cacheKey = repo + "|" + (path || "");
-  if (browserApiCache.has(cacheKey)) return browserApiCache.get(cacheKey);
-  if (browserApiPending.has(cacheKey)) return browserApiPending.get(cacheKey);
-  try {
-    var qs = path ? "?path=" + encodeURIComponent(path) : "";
-    var controller = new AbortController();
-    var timeoutId = setTimeout(function() { controller.abort(); }, 12000);
-    var promise = fetch(API_BASE + "/api/folders/" + encodeURIComponent(repo) + "/contents" + qs, { signal: controller.signal })
-      .then(function(resp) {
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        return resp.json();
-      })
-      .then(function(data) {
-        if (data) {
-          noteApiSuccess();
-          setBrowserApiCache(cacheKey, data);
-        }
-        return data;
-      })
-      .catch(function(error) {
-        if (!error || error.name !== "AbortError") noteApiFailure();
-        return null;
-      })
-      .finally(function() {
-        clearTimeout(timeoutId);
-        browserApiPending.delete(cacheKey);
-      });
-    browserApiPending.set(cacheKey, promise);
-    return await promise;
-  } catch (e) { return null; }
-}
-
-function sidebarInitialUrlForRepo(repo) {
-  return repo ? "/search/data/sidebar/repos/" + encodeURIComponent(repo) + ".json" : "/search/data/sidebar/global.json";
-}
-
-async function loadSidebarInitial(repo) {
-  var key = repo || "__global__";
-  if (sidebarInitialCache.has(key)) return sidebarInitialCache.get(key);
-  if (sidebarInitialPending.has(key)) return sidebarInitialPending.get(key);
-  var pending = fetchJsonWithTimeout(sidebarInitialUrlForRepo(repo), 4000)
-    .then(function(raw) {
-      if (!raw) return null;
-      var data = normalizeSidebarPayload(raw);
-      sidebarInitialCache.set(key, data);
-      return data;
-    })
-    .catch(function() { return null; })
-    .finally(function() { sidebarInitialPending.delete(key); });
-  sidebarInitialPending.set(key, pending);
-  return pending;
-}
-
 function getCurrentExtensionCounts() {
   if (STATE.mode === "repo" && STATE.repoFull) {
     const counts = {};
@@ -1130,19 +996,6 @@ function getCurrentExtensionCounts() {
     return counts;
   }
   return extensionCounts;
-}
-
-const folderContentsCache = new BoundedResponseCache(100, 5 * 60 * 1000);
-
-async function getFolderContents(repo, path) {
-  const cacheKey = repo + "|" + (path || "");
-  if (folderContentsCache.has(cacheKey)) {
-    const val = folderContentsCache.get(cacheKey);
-    return val;
-  }
-  const result = await corpusWorkerRequest("folder-contents", { repo: repo, path: path || "" }, WORKER_REQUEST_TIMEOUT);
-  folderContentsCache.set(cacheKey, result);
-  return result;
 }
 
 const STATE = {

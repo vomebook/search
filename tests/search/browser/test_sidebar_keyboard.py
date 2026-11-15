@@ -25,7 +25,7 @@ class SidebarKeyboardTests(unittest.TestCase):
         # The fixture's first result page can finish before startup metadata.
         # A still-pending fetchExtensions() writes to the shared cache when it
         # resolves, so settle it before installing a synthetic inventory.
-        self.page.wait_for_function('getSidebarFilters().status().done === getSidebarFilters().status().token && extensionApiPending.size === 0')
+        self.page.wait_for_function('getSidebarFilters().status().done === getSidebarFilters().status().token && catalog.extensionApiPending.size === 0')
 
     def test_deep_sidebar_toggles_skip_full_result_snapshots(self):
         result = self.page.evaluate('''async () => {
@@ -447,7 +447,7 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_metadata_deadline_covers_body_and_allows_retry_without_breaker_failure(self):
         self.page.clock.install()
         self.page.evaluate('''() => {
-          repoApiCache=null;repoApiPending=null;extensionApiCache.clear();folderTreeCache.clear();
+          catalog.repoApiCache=null;catalog.repoApiPending=null;catalog.extensionApiCache.clear();folderTreeCache.clear();
           apiAvailable=true;noteApiSuccess();window.metadataResults=[];window.metadataCalls=0;
           const native=window.fetch;
           window.fetch=(url,options)=>String(url).includes('/api/repos') || String(url).includes('metadata-refactor')
@@ -463,7 +463,7 @@ class SidebarKeyboardTests(unittest.TestCase):
         self.page.clock.fast_forward(5001)
         self.page.wait_for_timeout(20)
         self.assertEqual(self.page.evaluate('metadataResults'), [None] * 4)
-        self.assertEqual(self.page.evaluate('[apiFailureCount,repoApiPending,extensionApiPending.size]'), [0, None, 0])
+        self.assertEqual(self.page.evaluate('[apiFailureCount,catalog.repoApiPending,catalog.extensionApiPending.size]'), [0, None, 0])
         result = self.page.evaluate('''async () => {
           window.fetch=()=>Promise.resolve(new Response('[]'));
           return Promise.all([fetchRepos(),fetchExtensions('metadata-refactor'),fetchFolderTree('metadata-refactor')]);
@@ -477,7 +477,7 @@ class SidebarKeyboardTests(unittest.TestCase):
           STATE.mode='global';STATE.repo=null;STATE.repoFull=null;STATE.useLocalMode=false;
           apiAvailable=true;extensionList=[];extensionCounts={};
           window.testExtensionInventory=[{name:'txt',count:2}];
-          extensionApiCache.clear();extensionApiCache.set('__global__',testExtensionInventory);
+          catalog.extensionApiCache.clear();catalog.extensionApiCache.set('__global__',testExtensionInventory);
           STATE.filterExtensions=['ghost'];await renderExtensionFilter(routeRenderId);
         }''')
         self.assertEqual(self.page.evaluate('testExtensionInventory.map(x=>x.name)'),['txt'])
@@ -497,14 +497,14 @@ class SidebarKeyboardTests(unittest.TestCase):
           apiAvailable=true;extensionList=[];extensionCounts={};
           window.oldExtensionInventory=[{name:'txt',count:2}];
           window.newExtensionInventory=[{name:'txt',count:4},{name:'ghost',count:3}];
-          extensionApiCache.clear();extensionApiCache.set('__global__',oldExtensionInventory);
+          catalog.extensionApiCache.clear();catalog.extensionApiCache.set('__global__',oldExtensionInventory);
           STATE.filterExtensions=['ghost'];await renderExtensionFilter(routeRenderId);
         }''')
         row=self.page.locator('#filter-ext-list input[value="ghost"]')
         self.assertTrue(row.is_checked())
         self.assertEqual(row.locator('..').locator('.folder-count').text_content(),'0')
         self.page.evaluate('''async () => {
-          extensionApiCache.set('__global__',newExtensionInventory);
+          catalog.extensionApiCache.set('__global__',newExtensionInventory);
           await renderExtensionFilter(routeRenderId);
         }''')
         row=self.page.locator('#filter-ext-list input[value="ghost"]')
@@ -521,7 +521,7 @@ class SidebarKeyboardTests(unittest.TestCase):
     def test_extension_cache_retains_clean_data_with_shared_inflight_request(self):
         self.await_initial_extension_metadata()
         outcome=self.page.evaluate('''async () => {
-          extensionApiCache.clear();extensionApiPending.clear();noteApiSuccess();
+          catalog.extensionApiCache.clear();catalog.extensionApiPending.clear();noteApiSuccess();
           const original=window.fetch;let calls=0,finish;
           try {
             window.fetch=(input,options)=>String(input).includes('repo=fresh-test')
@@ -536,7 +536,7 @@ class SidebarKeyboardTests(unittest.TestCase):
             cached.push({name:'stale',count:0});
             const later=await fetchExtensions('fresh-test');
             return {calls,sameInflightResult,concurrent:concurrent.map(x=>x.name),
-              later:later.map(x=>x.name),source:extensionApiCache.get('fresh-test').map(x=>x.name)};
+              later:later.map(x=>x.name),source:catalog.extensionApiCache.get('fresh-test').map(x=>x.name)};
           } finally {window.fetch=original;}
         }''')
         self.assertEqual(outcome,dict(calls=1,sameInflightResult=True,concurrent=['txt','ghost'],
@@ -934,7 +934,7 @@ class SidebarKeyboardTests(unittest.TestCase):
 
     def test_metadata_errors_are_not_cached_and_retain_circuit_breaker(self):
         result = self.page.evaluate('''async () => {
-          repoApiCache=null;repoApiPending=null;extensionApiCache.clear();folderTreeCache.clear();
+          catalog.repoApiCache=null;catalog.repoApiPending=null;catalog.extensionApiCache.clear();folderTreeCache.clear();
           const request=()=>Promise.all([fetchRepos(),fetchExtensions('invalid-metadata'),fetchFolderTree('invalid-metadata')]);
           const outcomes=[];
           for(const status of [503,200]) {

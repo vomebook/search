@@ -134,6 +134,8 @@ const PRECACHE_URLS = [
   "/search/static/search/requests/infrastructure/shared-transport.js",
   "/search/static/search/requests/application/prefetch-controller.js",
   "/search/static/search/requests/application/response-store.js",
+  "/search/static/search/catalog/domain/sidebar-payload.js",
+  "/search/static/search/catalog/application/client.js",
   "/search/static/search/results/presentation/paging-status.js",
   "/search/static/search/results/window/application/page-loader.js",
   "/search/static/search/results/window/presentation/status.js",
