@@ -911,10 +911,11 @@ function acknowledgeUncertainDownload(link) {
   uncertainDownloads.splice(index, 1);
   saveUncertainDownloads();
   if (downloadBatch) {
-    const blocked = downloadBatch.blockedFailures.filter(item => item.link === link);
+    const acknowledged = [...downloadBatch.blockedFailures, ...downloadBatch.skippedUncertain]
+      .filter(item => item.link === link);
     downloadBatch.blockedFailures = downloadBatch.blockedFailures.filter(item => item.link !== link);
     downloadBatch.skippedUncertain = downloadBatch.skippedUncertain.filter(item => item.link !== link);
-    for (const item of blocked) {
+    for (const item of acknowledged) {
       if (!downloadBatch.failed.some(failed => failed.link === item.link)) downloadBatch.failed.push(item);
     }
   }
@@ -1633,13 +1634,17 @@ function deferSearchAppend() {
 function checkSearchPageAppend(data) {
   const expected = searchPageMetadata.get(STATE.results[0]);
   const generation = data.generation ?? searchPageMetadata.get(data.results?.[0])?.generation;
-  if (data.total === STATE.total && (!expected?.generation || generation === expected.generation)) return true;
+  // Static initial pages may have no comparable generation. Reacquire the
+  // anchor's window before appending; an unchanged total cannot prove identity.
+  if (!expected?.unverifiedInitial && data.total === STATE.total && (!expected?.generation || generation === expected.generation)) return true;
   const key = getSearchViewKey(), scroll = captureReaderReturnScroll();
   const record = STATE.results[scroll.index] || STATE.results[0];
   const position = { version: 1, key, index: scroll.index, offset: scroll.offset,
     anchorId: getResultStableId(record), loadedPage: STATE._loadedPage, savedAt: Date.now() };
   const returnTarget = getReturnPositionTarget(key);
-  const backend = STATE._resultBackend;
+  // A prefetched initial continuation reaches this guard before the ordinary
+  // append assigns its API backend; keep recovery on that same backend.
+  const backend = STATE._resultBackend || "api";
   searchResponseCache.clear();
   searchViewSnapshots.delete(key);
   STATE._pageCache = {};
@@ -1745,7 +1750,12 @@ function prefetchSearchPages(base, template) {
         scheduleBottomLoad(0, page);
         setCachedSearchResponse(cacheKey, data, true);
       })().catch(error => {
-        if (current()) noteSearchApiFailure(error);
+        if (!current()) return;
+        if (error.message === "RESTORE_PAGE_CHANGED") {
+          // A changed generation is a healthy API response. Foreground demand
+          // still chooses the backend, including a now-ready local Worker.
+          noteApiSuccess();
+        } else noteSearchApiFailure(error);
       }).finally(() => { controller.active.delete(page); pump(); });
       controller.active.set(page, task);
     }
@@ -2952,7 +2962,7 @@ const RECENT_SEARCH_PAGE_BYTES_MAX = 256 * 1024;
 const RECENT_SEARCH_PAGE_TTL = 7 * 24 * 60 * 60 * 1000;
 
 function rememberSearchPageMetadata(data) {
-  if (data?.results?.[0] && typeof data.generation === "string") searchPageMetadata.set(data.results[0], {
+  if (data?.results?.[0] && typeof data.generation === "string" && data.generation) searchPageMetadata.set(data.results[0], {
     generation: data.generation, total: data.total, page: data.page, page_size: data.page_size });
 }
 
@@ -4117,7 +4127,12 @@ function applyInitialSearchPayload(data, intent = searchIntentId) {
     total: STATE.total,
     page: 1,
     page_size: STATE.pageSize,
+    generation: data.generation,
   });
+  if (STATE.results[0] && !(typeof data.generation === "string" && data.generation)) {
+    searchPageMetadata.set(STATE.results[0], { unverifiedInitial: true,
+      total: STATE.total, page: 1, page_size: STATE.pageSize });
+  }
   resetVirtualScrollState();
   clearResultsSkeleton();
   if (STATE.results.length === 0) {
