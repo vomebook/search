@@ -103,6 +103,8 @@ const PRECACHE_URLS = [
   "/search/static/search/results/presentation/row.js",
   "/search/static/search/results/application/interactions.js",
   "/search/static/search/discovery/application/random.js",
+  "/search/static/search/shell/presentation/view.js",
+  "/search/static/search/shell/application/controller.js",
   "/search/static/search/history/infrastructure/store.js",
   "/search/static/search/history/application/controller.js",
   "/search/static/search/ambient/application/quotation.js",
