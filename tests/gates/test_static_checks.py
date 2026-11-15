@@ -257,7 +257,7 @@ class StaticGateTests(unittest.TestCase):
                  "preloads are single-owner and fall back on failure or mismatched identity",
                  "document preparation preserves failure and byte-limit ownership",
                  "script load releases timers, handlers and resources on success, error and close",
-                 "image fallback is not used for budget failures or closed readers"]
+                 "image load stays on the proxy when the dataset host is unreachable"]
         for name in names:
             anchor = 'test("' + name + '"'
             self.assertEqual(original.count(anchor), 1)
@@ -427,7 +427,7 @@ class StaticGateTests(unittest.TestCase):
         source = gate.read_text()
         self.assertEqual(source.count("const minimum = [100, 94.20, 97.22];"), 1)
         gate.write_text(source.replace("const minimum = [100, 94.20, 97.22];",
-                                       "const minimum = [100, 94.99, 97.22];"))
+                                       "const minimum = [100, 97.99, 97.22];"))
         self.assert_check(self.run_check("node", paths[1]), False,
                           "above each minimum")
 
@@ -2670,18 +2670,21 @@ class StaticGateTests(unittest.TestCase):
             shutil.copyfile(ROOT / path, target)
         check = ['node', paths[1]]
         message = 'Reader media requires named contracts and exactly one source row'
-        self.assert_check(self.run_check(*check, timeout=120), True, '# pass 15')
+        self.assert_check(self.run_check(*check, timeout=120), True, '# pass 16')
         source = self.root / paths[4]
         original = source.read_text()
         name = 'resource cleanup rejects pending metadata and removes listeners'
         anchor = "test('" + name + "'"
-        self.assertEqual(original.count(anchor), 1)
-        for replacement in ("test('renamed contract'", "test.skip('" + name + "'", "test.todo('" + name + "'"):
-            source.write_text(original.replace(anchor, replacement))
-            self.assert_check(self.run_check(*check), False, message)
+        for contract_name in (name, 'stalled proxy retries the proxy instead of the blocked dataset host'):
+            contract_anchor = "test('" + contract_name + "'"
+            self.assertEqual(original.count(contract_anchor), 1)
+            for replacement in ("test('renamed contract'", "test.skip('" + contract_name + "'",
+                                "test.todo('" + contract_name + "'"):
+                source.write_text(original.replace(contract_anchor, replacement))
+                self.assert_check(self.run_check(*check), False, message)
         for extra in ("test('" + name + "', () => {});", "test.skip('extra skip', () => {});",
                       "test.todo('extra todo');", 'console.log("skipped 0");', 'console.log("todo 0");',
-                      'console.log("pass 15");', 'console.log("end of coverage report");'):
+                      'console.log("pass 16");', 'console.log("end of coverage report");'):
             source.write_text(original + '\n' + extra + '\n')
             self.assert_check(self.run_check(*check), False, message)
         source.write_text(original.replace(anchor + ', async () => {',
@@ -2693,7 +2696,8 @@ class StaticGateTests(unittest.TestCase):
         gate = self.root / paths[1]
         gate_original = gate.read_text()
         self.assertEqual(gate_original.count('[100, 90.77, 100]'), 1)
-        for minimum in ('[100.01, 90.77, 100]', '[100, 90.78, 100]', '[100, 90.77, 100.01]'):
+        # Each injected minimum must exceed measured coverage, including improved branches.
+        for minimum in ('[100.01, 90.77, 100]', '[100, 100.01, 100]', '[100, 90.77, 100.01]'):
             gate.write_text(gate_original.replace('[100, 90.77, 100]', minimum))
             self.assert_check(self.run_check(*check), False, message)
         self.assertEqual(gate_original.count('reader-media-format\\.mjs'), 1)

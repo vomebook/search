@@ -25,7 +25,7 @@ const required = [
   "preloads are single-owner and fall back on failure or mismatched identity",
   "document preparation preserves failure and byte-limit ownership",
   "script load releases timers, handlers and resources on success, error and close",
-  "image fallback is not used for budget failures or closed readers"
+  "image load stays on the proxy when the dataset host is unreachable"
 ].map(name => ({name}));
 required.push({name: "tests/reader/transport/test_reader_pdf_rate_outer.mjs",
   marker: "PDF rate-limit retry boundary and generic retry preserved"});
