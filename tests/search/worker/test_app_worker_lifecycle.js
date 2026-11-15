@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const {installClassicSearchModules} = require('../../support/classic_search_modules');
 const source = fs.readFileSync('static/app.js', 'utf8');
 function section(from, to) {
   return source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)));
@@ -32,6 +33,7 @@ function harness() {
     setTimeout(fn) { const id = ++timerId; timers.set(id, fn); return id; },
     clearTimeout(id) { timers.delete(id); },
   });
+  installClassicSearchModules(process.cwd(), context);
   vm.runInContext(`
     const WORKER_PROTOCOL_VERSION = 1, WORKER_REQUEST_TIMEOUT = 100, WORKER_LOAD_TIMEOUT = 200;
     const DATA_URL = 'data/search_data.json.gz';
@@ -97,9 +99,10 @@ function callerHarness() {
     function prefetchNextPage() {}
     function warmConnection() {}
     ensureLocalDataLoaded = () => { loadCalls++; return new Promise(resolve => { finishLoad = resolve; }); };
-    showSearchBackendUnavailable = waiting => { backendStates.push(waiting); STATE.isLoading = waiting; };
+    clearUnavailableSearchResults = () => {};
+    renderSearchBackendUnavailable = waiting => { backendStates.push(waiting); STATE.isLoading = waiting; };
     ${section('function cancelActiveSearch()', 'function prefetchSearchPages(')}
-    ${section('function doSearch(append,', 'function doSearchFallbackLocal(')}
+    ${section('function doSearch(append,', 'function renderSearchPage(')}
     ${section('  DOM.localModeToggle.addEventListener("change",', '  DOM.sortSelect.addEventListener(')}
     const startSearch = doSearch;
     doSearch = () => { searches++; };
@@ -113,6 +116,41 @@ function callerHarness() {
     }
   `);
   return h;
+}
+
+test('synchronous abort reentry owns the only attempt and outer search cannot replace it', async () => {
+  const h = callerHarness();
+  h.run(`searchAbortController = new AbortController();
+    const retired = searchAbortController;
+    retired.signal.addEventListener('abort', () => startSearch(false), {once:true});
+    startSearch(false);`);
+  assert.equal(h.run('loadCalls'), 1);
+  assert.equal(h.run('searchId'), 3);
+  assert.equal(h.run('searchRequestId'), 2);
+  assert.equal(h.run('searchIntentId'), 3);
+  assert.equal(h.run('retired.signal.aborted'), true);
+  assert.equal(h.run('searchAbortController.signal.aborted'), false);
+  h.run('finishLoad(true);');
+  await h.flush();
+  assert.equal(h.run('searches'), 1);
+});
+
+for (const dragging of [false, true]) {
+  test(`cached append checks drag before consuming and never starts transport (${dragging})`, () => {
+    const h = callerHarness();
+    h.run(`STATE._loadedPage=1;STATE.page=2;STATE._pageCache[2]=[];
+      let consumed=0, deferred=0;
+      function deferSearchAppend() { deferred++; return ${dragging}; }
+      function consumeCachedAppendPage() { consumed++; }
+      startSearch(true);`);
+    assert.equal(h.run('deferred'), 1);
+    assert.equal(h.run('consumed'), dragging ? 0 : 1);
+    assert.equal(h.run('loadCalls'), 0);
+    assert.equal(h.run('searchRequestId'), 0);
+    assert.equal(h.run('searchIntentId'), 1);
+    assert.equal(h.run('searchId'), 1);
+    assert.equal(h.run('STATE.isLoading'), undefined);
+  });
 }
 
 for (const ok of [true, false]) {

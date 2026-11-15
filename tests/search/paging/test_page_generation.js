@@ -4,8 +4,111 @@ const vm = require("vm");
 const assert = require("assert");
 const {test, run} = require("../../support/test_harness");
 const {searchTestProjects} = require("../../support/search_test_projects");
+const {installClassicSearchModules} = require("../../support/classic_search_modules");
+
+function executionFixture(root, pages) {
+  const calls = [], effects = [];
+  const view = {searchId:1,intent:1,requestId:1,page:2,_loadedPage:1,loadedPage:1,_pendingPage:0,
+    _resultBackend:"api",_initialActive:false,_deferredAppendWhileDragging:false,
+    dataLoaded:true,useLocalMode:false,resultCount:1,apiAvailable:true,isLoading:true};
+  const context = vm.createContext({console:{error(){},warn(){}},AbortController});
+  installClassicSearchModules(root, context);
+  const request = () => new Promise((resolve,reject)=>calls.push({resolve,reject}));
+  const deps = {readView:()=>({...view}),update:patch=>Object.assign(view,patch),signal:()=>new AbortController().signal,
+    setLocalMode:value=>{view.useLocalMode=value;effects.push(['mode',value]);},clearPrefetch:()=>effects.push('clear-prefetch'),
+    pendingLocal:()=>false,loadLocal:()=>{effects.push('load-local');return request();},searchLocal:()=>{effects.push('local');return request();},
+    searchAPI:()=>{effects.push('api');return request();},search:request,
+    retry:()=>effects.push('retry'),applyPage:()=>{effects.push('apply');return true;},
+    clearUnavailableResults:()=>effects.push('clear-results'),renderUnavailable:value=>effects.push(['unavailable',value]),
+    renderPage:()=>effects.push('render'),visualLoading:()=>effects.push('visual'),prefetch:()=>effects.push('prefetch'),
+    warmConnection:()=>effects.push('warm'),syncURL:()=>effects.push('url'),notify:()=>effects.push('toast'),
+    updateStatus:()=>effects.push('status'),finishPaging:(ok,error)=>effects.push(['finish',ok,error?.message]),
+    updatePaging:()=>effects.push('paging'),hideLoading:()=>effects.push('hide'),
+    finishPresentation:()=>effects.push('presentation'),updateLoadInfo:()=>effects.push('load-info')};
+  const service=context.VoiceOfMLSearchExecution.create(deps);
+  return {view,calls,effects,deps,service,context,
+    start(append=true,recovery=false){return pages ? service.execute({page:view.page},append,view.searchId,view.intent)
+      : service.execute({page:view.page,page_size:1},append,recovery,view.requestId);},
+    async flush(){for(let i=0;i<20;i++) await Promise.resolve();}};
+}
 
 for (const {name: project, root} of searchTestProjects()) {
+  const pages = project === 'github-Search';
+  for (const outcome of ['success','failure','abort']) {
+    for (const identity of pages ? ['searchId','intent'] : ['requestId']) {
+      test(project + ` stale ${outcome} cannot render or settle newer ${identity}`, async () => {
+        const f=executionFixture(root,pages);f.start();
+        f.view[identity]++;f.view._pendingPage=9;f.view.isLoading=true;f.view.resultsSkeletonActive=true;
+        const effects=f.effects.length;
+        if(outcome==='success') f.calls[0].resolve(pages ? true : {results:[{}],total:2,page:2});
+        else f.calls[0].reject(Object.assign(Error('held failure'),{name:outcome==='abort'?'AbortError':'Error'}));
+        await f.flush();
+        assert.strictEqual(f.effects.length,effects);
+        assert.strictEqual(f.view._pendingPage,9);assert.strictEqual(f.view.isLoading,true);
+        assert.strictEqual(f.view.resultsSkeletonActive,true);
+      });
+    }
+  }
+  test(project + ' deferred append completion does not claim paging success', async () => {
+    const f=executionFixture(root,pages);f.start();
+    f.view._deferredAppendWhileDragging=true;f.deps.applyPage=()=>false;
+    f.calls[0].resolve(pages ? true : {results:[{}],total:2,page:2});await f.flush();
+    assert(!f.effects.includes('render'));assert(!f.effects.some(e=>Array.isArray(e)&&e[0]==='finish'));
+    assert.strictEqual(f.view._pendingPage,0);assert.strictEqual(f.view.isLoading,false);
+  });
+  test(project + ' current abort rolls append back and skips failure recovery', async () => {
+    const f=executionFixture(root,pages);f.start();f.calls[0].reject(Object.assign(Error('abort'),{name:'AbortError'}));
+    await f.flush();assert.strictEqual(f.view.page,1);assert.strictEqual(f.view.isLoading,false);
+    assert(!f.effects.includes('toast'));assert(!f.effects.some(e=>Array.isArray(e)&&e[0]==='finish'));
+  });
+  if(pages) {
+    test(project + ' append backend and initial continuity override changed mode preferences', () => {
+      const f=executionFixture(root,true), policy=f.context.VoiceOfMLSearchExecutionPolicy;
+      for(const apiAvailable of [false,true]) for(const useLocalMode of [false,true]) {
+        Object.assign(f.view,{apiAvailable,useLocalMode,_resultBackend:'local'});
+        assert.strictEqual(policy.backend(f.view,true,null),'local');
+        f.view._resultBackend='api';
+        assert.strictEqual(policy.backend(f.view,true,'mixed'),apiAvailable?'api':'unavailable');
+      }
+      Object.assign(f.view,{apiAvailable:true,useLocalMode:true,_resultBackend:null,_initialActive:true,dataLoaded:false});
+      assert.strictEqual(policy.backend(f.view,true,null),'api');
+      assert.strictEqual(policy.backend(f.view,true,'mixed'),'local');
+    });
+    test(project + ' mixed Worker failure cannot escape to API; plain failure reentry keeps newer state', async () => {
+      for(const mixed of [false,true]) {
+        const f=executionFixture(root,true);f.view._resultBackend='local';f.view.useLocalMode=true;
+        f.deps.retry=()=>{f.effects.push('retry');f.view.searchId++;f.view.isLoading=true;f.view._pendingPage=9;};
+        f.service.execute({page:1,folderMatchMode:mixed?'mixed':null},false,1,1);
+        f.calls[0].reject(Error('worker failed'));await f.flush();
+        assert.strictEqual(f.view.dataLoaded,false);
+        assert.strictEqual(f.effects.includes('retry'),!mixed);
+        assert.strictEqual(f.view.isLoading,!mixed);
+        if(!mixed) assert.strictEqual(f.view._pendingPage,9);
+        else assert(f.effects.some(e=>Array.isArray(e)&&e[0]==='unavailable'&&!e[1]));
+      }
+    });
+    test(project + ' API fallback reentry cannot be cleared by the preceding finally', async () => {
+      const f=executionFixture(root,true);f.start(false);f.calls[0].reject(Error('API_TIMEOUT'));await f.flush();
+      assert(f.effects.includes('load-local'));
+      f.deps.retry=()=>{f.view.searchId++;f.view.intent++;f.view._pendingPage=9;f.view.isLoading=true;};
+      f.calls[1].resolve(true);await f.flush();
+      assert.strictEqual(f.view.useLocalMode,true);assert.strictEqual(f.view.isLoading,true);assert.strictEqual(f.view._pendingPage,9);
+    });
+    test(project + ' stale Worker success and failure cannot apply or settle replacement', async () => {
+      for(const failure of [false,true]) {
+        const f=executionFixture(root,true);f.view._resultBackend='local';f.start();f.view.searchId++;
+        f.view._pendingPage=9;const effects=f.effects.length;
+        if(failure) f.calls[0].reject(Error('worker failed'));else f.calls[0].resolve({results:[{}],total:2});
+        await f.flush();assert.strictEqual(f.effects.length,effects);assert.strictEqual(f.view.isLoading,true);assert.strictEqual(f.view._pendingPage,9);
+      }
+    });
+  } else {
+    test(project + ' first-page recovery failure uses paging feedback without duplicate toast', async () => {
+      const f=executionFixture(root,false);f.start(false,true);f.calls[0].reject(Error('offline'));await f.flush();
+      assert.strictEqual(f.view.hasMore,true);assert(!f.effects.includes('toast'));
+      assert(f.effects.some(e=>Array.isArray(e)&&e[0]==='finish'&&!e[1]&&e[2]==='offline'));
+    });
+  }
   function pagingFixture() {
     const context = vm.createContext({});
     for (const file of ["domain/paging-policy.js", "application/paging-controller.js", "presentation/paging-status.js"]) {

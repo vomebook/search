@@ -116,6 +116,8 @@ const PRECACHE_URLS = [
   "/search/static/search/results/presentation/paging-status.js",
   "/search/static/search/results/window/application/page-loader.js",
   "/search/static/search/results/window/presentation/status.js",
+  "/search/static/search/execution/domain/policy.js",
+  "/search/static/search/execution/application/controller.js",
   "/search/static/search/downloads/application/batch.js",
   "/search/static/search/downloads/presentation/queue.js",
   "/search/static/app.js",

@@ -245,6 +245,8 @@
       ...readerFiles,
       "search/search-session.js",
       "search/download-controller.js",
+      "search/execution/domain/policy.js",
+      "search/execution/application/controller.js",
       "search/downloads/application/batch.js",
       "search/downloads/presentation/queue.js",
       "search/size-format.js",
