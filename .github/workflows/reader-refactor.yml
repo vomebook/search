@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 45
     env:
       READER_TEST_TIMEOUT_MS: "15000"
+      HF_SW_SOURCE: ${{ runner.temp }}/hf-service-worker/sw.js
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -79,6 +80,17 @@ jobs:
       - name: Materialize pinned Pages test data and independent Reader sidecar
         timeout-minutes: 10
         run: npm run data:prepare
+      - name: Fetch reviewed HF worker for cross-site cache tests
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          revision=$(python3 -I -B -c 'import json; print(json.load(open(".github/hf-source-revision.json"))["revision"])')
+          python3 -I -B scripts/verify_hf_source_revision.py "$revision"
+          mkdir -p "$(dirname "$HF_SW_SOURCE")"
+          curl --fail --location --silent --show-error --max-time 60 \
+            "https://huggingface.co/spaces/VoiceOfML/Search/resolve/$revision/static/sw.js" \
+            --output "$HF_SW_SOURCE"
+          test -s "$HF_SW_SOURCE"
       - name: Check source and exercise static gates
         run: |
           npm run check:static

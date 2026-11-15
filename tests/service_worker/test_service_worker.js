@@ -4,6 +4,9 @@ const vm = require("vm");
 const { test, run } = require("../support/test_harness");
 
 const source = fs.readFileSync("static/sw.js", "utf8");
+// CI supplies the reviewed HF worker; local two-repo checkouts keep their default.
+// An explicit missing/invalid source must fail, never fall back or omit HF cases.
+const hfSource = fs.readFileSync(process.env.HF_SW_SOURCE ?? "../hf-search/static/sw.js", "utf8");
 function cacheName(text = source) {
   return new RegExp('const CACHE_PREFIX = "([^"]+)"').exec(text)[1] +
     new RegExp('const CACHE_VERSION = "([^"]+)"').exec(text)[1];
@@ -259,7 +262,7 @@ test("retains only the actual previous cache for one release without copying bod
 });
 for (const [site, workerSource, prefix] of [
   ['Pages', source, '/search/static/'],
-  ['HF', fs.readFileSync('../hf-search/static/sw.js', 'utf8'), '/static/'],
+  ['HF', hfSource, '/static/'],
 ]) {
   test(`${site} previous Ruffle cache retains retired assets and promotes current assets for one release`, async () => {
     const files = ['ruffle.js', 'core.ruffle.0123456789abcdefabcd.js', '0123456789abcdefabcd.wasm'];
@@ -560,7 +563,7 @@ test("reader warming and navigations reuse cache immediately while refreshing on
 test("a stalled shell revalidation cannot block repeated Reader navigation", async () => {
   for (const [text, prefix, currentCache] of [
     [source, '/search/static/', CACHE_NAME],
-    ...(fs.existsSync('../hf-search/static/sw.js') ? [[fs.readFileSync('../hf-search/static/sw.js', 'utf8'), '/static/', cacheName(fs.readFileSync('../hf-search/static/sw.js', 'utf8'))]] : [])
+    [hfSource, '/static/', cacheName(hfSource)],
   ]) {
     let release;
     const cached = response('reader-ready');

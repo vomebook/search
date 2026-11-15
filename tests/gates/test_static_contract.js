@@ -650,6 +650,31 @@ test("Pages test jobs materialize pinned data before consumers and preserve inde
   assert.equal(JSON.parse(fs.readFileSync("package.json", "utf8")).scripts["data:prepare"], "node scripts/data/prepare_test_data.mjs");
   assert.match(fs.readFileSync(".gitignore", "utf8"), /^\/data\/$/m);
 });
+test("Pages cross-site cache gates receive the reviewed HF worker before any static or browser tests", () => {
+  const readerWorkflow = fs.readFileSync(".github/workflows/reader-refactor.yml", "utf8");
+  const pages = readerWorkflow.split("\n  github-search:\n")[1].split("\n  firefox-staged-pdf:\n")[0];
+  const fetchStep = pages.split("      - name: Fetch reviewed HF worker for cross-site cache tests\n")[1].split("      - name:")[0];
+  assert.match(pages, /env:\s*\n\s*READER_TEST_TIMEOUT_MS: "15000"\s*\n\s*HF_SW_SOURCE: \$\{\{ runner\.temp \}\}\/hf-service-worker\/sw\.js/);
+  assert.match(fetchStep, /set -euo pipefail/);
+  assert.ok(fetchStep.includes('json.load(open(".github/hf-source-revision.json"))["revision"]'));
+  assert.ok(fetchStep.indexOf('scripts/verify_hf_source_revision.py "$revision"') < fetchStep.indexOf('curl --fail'));
+  assert.match(fetchStep, /python3 -I -B scripts\/verify_hf_source_revision\.py "\$revision"/);
+  assert.match(fetchStep, /curl --fail --location --silent --show-error --max-time 60/);
+  assert.ok(fetchStep.includes('https://huggingface.co/spaces/VoiceOfML/Search/resolve/$revision/static/sw.js'));
+  assert.ok(fetchStep.includes('--output "$HF_SW_SOURCE"'));
+  assert.ok(fetchStep.includes('test -s "$HF_SW_SOURCE"'));
+  assert.doesNotMatch(fetchStep, /continue-on-error:|\bif:|\|\| true|resolve\/main/);
+  assert.ok(pages.indexOf("name: Fetch reviewed HF worker") < pages.indexOf("name: Check source and exercise static gates"));
+  assert.match(pages, /node tests\/service_worker\/test_service_worker\.js/);
+  const hf = readerWorkflow.split("\n  huggingface-search:\n")[1];
+  assert.match(hf, /node tests\/service_worker\/test_service_worker\.js\s+node tests\/service_worker\/test_service_worker_pruning\.js/);
+  const suite = fs.readFileSync("tests/service_worker/test_service_worker.js", "utf8");
+  assertCode(suite, 'const hfSource = fs.readFileSync(process.env.HF_SW_SOURCE ?? "../hf-search/static/sw.js", "utf8")');
+  assertCode(suite, "['HF', hfSource, '/static/']");
+  assertCode(suite, "[hfSource, '/static/', cacheName(hfSource)]");
+  assert.equal((suite.match(/\.\.\/hf-search\/static\/sw\.js/g) || []).length, 1);
+  assert.doesNotMatch(suite, /existsSync|test\.skip/);
+});
 test("PDF release gate separates and bounds dependency installation and always runs nine tests", () => {
   const deploy = workflow.slice(workflow.indexOf("\n  deploy:\n"));
   for (const [name, timeout] of [
