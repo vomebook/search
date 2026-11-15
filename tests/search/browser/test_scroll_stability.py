@@ -100,6 +100,44 @@ class ScrollStabilityTests(unittest.TestCase):
                                       invalidated=True,highlighted=True,count=60,ids=list(range(60))))
         self.assertEqual(self.fixture.errors, [])
 
+    def test_short_same_window_has_no_dom_writes_and_restores_reader_position(self):
+        result = self.page.evaluate('''async () => {
+          cancelSearchPrefetch();STATE.results=STATE.results.slice(0,100);
+          STATE.total=100;STATE.hasMore=false;resetVirtualScrollState();renderResults();await scrollFrames();
+          const rows=[...DOM.resultsList.querySelectorAll('.result-item')];
+          const observer=new MutationObserver(()=>{});
+          observer.observe(DOM.resultsList,{attributes:true,childList:true,subtree:true});
+          const updates=[];
+          for(let i=0;i<8;i++) {DOM.resultsContainer.scrollTop=i*2;updates.push(renderVisible());}
+          const writes=observer.takeRecords().length;observer.disconnect();
+          const stable=rows.every(row=>row.isConnected);
+          setResultScrollTop(getVirtualOffset(4)+11);renderVisible();
+          const saved=captureReaderReturnScroll();
+          setResultScrollTop(0);renderVisible();
+          readerReturnScrollState=saved;restoreReaderReturnScroll();await scrollFrames();
+          return {writes,stable,updates,index:findVirtualIndex(getResultScrollTop()),
+            offset:getResultScrollTop()-getVirtualOffset(4)};
+        }''')
+        self.assertEqual(result['writes'], 0)
+        self.assertTrue(result['stable'])
+        self.assertEqual(result['updates'], [False] * 8)
+        self.assertEqual(result['index'], 4)
+        self.assertAlmostEqual(result['offset'], 11, delta=1)
+        self.assertEqual(self.fixture.errors, [])
+
+    def test_resize_remeasures_same_window_with_a_fresh_layout_key(self):
+        before = self.page.evaluate('''() => {
+          cancelSearchPrefetch();
+          window.beforeMeasureKey=getHeightMeasurementKey();
+          rowStyle.textContent='.result-item {height:80px!important;min-height:0!important;box-sizing:border-box}';
+          return beforeMeasureKey;
+        }''')
+        self.page.set_viewport_size({'width': 1100, 'height': 800})
+        self.page.wait_for_function('''getHeightMeasurementKey()!==beforeMeasureKey &&
+          VSCROLL.measuredRowKeys[0]===getHeightMeasurementKey() && VSCROLL.heights[0]===80''')
+        self.assertNotEqual(self.page.evaluate('getHeightMeasurementKey()'), before)
+        self.assertEqual(self.fixture.errors, [])
+
     def test_far_append_preserves_rows_without_render_then_new_page_is_accessible(self):
         result = self.page.evaluate('''async () => {
           cancelSearchPrefetch();STATE.total=1100;STATE._loadedPage=10;
